@@ -36,6 +36,7 @@ Closing every path by which an original could be lost.
 - [#704](https://github.com/Capsulsaurus/Capsule/issues/704) A trusted client address; per-source-IP limits on share serve and drop creation
 - [#706](https://github.com/Capsulsaurus/Capsule/issues/706) Signed storage attestation for the durability verdict
 - [#707](https://github.com/Capsulsaurus/Capsule/issues/707) Client cache budget driven by the connection class
+- [#754](https://github.com/Capsulsaurus/Capsule/issues/754) Connection-class cache budget wired into the client sweep and bulk scheduling
 - Also: [#409](https://github.com/Capsulsaurus/Capsule/issues/409), [#440](https://github.com/Capsulsaurus/Capsule/issues/440), [#452](https://github.com/Capsulsaurus/Capsule/issues/452), [#621](https://github.com/Capsulsaurus/Capsule/issues/621), [#646](https://github.com/Capsulsaurus/Capsule/issues/646)
 
 ## R. Restructure

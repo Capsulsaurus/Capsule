@@ -34,7 +34,10 @@
 //! | create `403 error.quota.suspended` | the link owner's quota is suspended by the operator (#705) |
 //! | create `429 error.drop.rate_limited` / `error.drop.at_capacity` | invariant 31: the per-source or per-link budget is spent, or its limiter partition is full, with a `retry_after` |
 //! | adopt `404` / `409` | the row is not the caller's, or another adoption holds it |
-//! | `500` | a store could not answer, the limiter's included |
+//! | chunk `507 error.drop.storage_full` | the server's disk is full; nothing of the chunk was kept, so the same chunk at the same offset lands later. Carries a `retry_after`, and so `Retry-After` |
+//! | chunk `503 error.drop.chunk_unavailable` | a collaborator could not answer before the chunk was recorded. Carries a `retry_after`; the guest resends the same chunk at the same offset |
+//! | chunk `500` | the stage is shorter than the session's counter, or filing the finished drop failed — neither is repaired by a retry |
+//! | `500` | elsewhere, a store could not answer, the limiter's included |
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -54,7 +57,10 @@ use crate::drop::{
     Admission, DropContext, InboxEntry, LinkCaps, LinkProvisionOutcome, UploadLinkRecord,
     is_opaque_id,
 };
-use crate::store::{BlobRole, OwnerId, UploadId, UploadSessionRecord, UploadSessionStatus, UserId};
+use crate::routes::upload::{STORAGE_FULL_RETRY, UNAVAILABLE_RETRY, retry_at};
+use crate::store::{
+    BlobRole, Clock, OwnerId, UploadId, UploadSessionRecord, UploadSessionStatus, UserId,
+};
 use crate::upload::body::ChunkBody;
 use crate::upload::chunk::{self, parse_checksum, parse_offset};
 
@@ -318,13 +324,42 @@ pub enum DropChunkRejection {
         code: &'static str,
     },
 
-    /// A store could not answer.
+    /// A failure a retry of this chunk cannot repair, so it is not a wait: the stage is shorter
+    /// than the session's counter, or the drop's last chunk was recorded and filing the finished
+    /// drop then failed. A re-sent final chunk is answered as a replay and never files it again,
+    /// so telling the guest to wait and resend would promise a deposit nothing will make.
     #[error("the chunk could not be accepted")]
     #[problem(status = 500, title = "Internal server error")]
+    Internal {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
+    /// The server's disk is full. Nothing of this chunk was kept, so the same chunk at the same
+    /// offset lands once space is freed.
+    #[error("the server has no space left for this chunk")]
+    #[problem(status = 507, title = "Insufficient storage")]
+    StorageFull {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+        /// When the guest may retry, as Unix seconds.
+        #[problem(extension)]
+        retry_after: u64,
+    },
+
+    /// A collaborator could not answer. Retryable: the guest waits out `Retry-After` and sends
+    /// the same chunk at the same offset.
+    #[error("the chunk could not be accepted")]
+    #[problem(status = 503, title = "Service unavailable")]
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
         code: &'static str,
+        /// When the guest may retry, as Unix seconds.
+        #[problem(extension)]
+        retry_after: u64,
     },
 }
 
@@ -345,9 +380,25 @@ impl DropChunkRejection {
         }
     }
 
-    /// A store could not answer.
-    fn unavailable() -> Self {
+    /// A collaborator could not answer; the guest retries after a short wait.
+    fn unavailable(clock: &dyn Clock) -> Self {
         Self::Unavailable {
+            code: error_codes::DROP_CHUNK_UNAVAILABLE,
+            retry_after: retry_at(clock, UNAVAILABLE_RETRY),
+        }
+    }
+
+    /// The disk is full; the guest retries once space has had time to come back.
+    fn storage_full(clock: &dyn Clock) -> Self {
+        Self::StorageFull {
+            code: error_codes::DROP_STORAGE_FULL,
+            retry_after: retry_at(clock, STORAGE_FULL_RETRY),
+        }
+    }
+
+    /// A failure a retry of the chunk cannot repair.
+    fn internal() -> Self {
+        Self::Internal {
             code: error_codes::DROP_UNAVAILABLE,
         }
     }
@@ -907,7 +958,7 @@ pub async fn append_drop_chunk(
         .await
         .map_err(|error| {
             tracing::error!(%error, "the drop store could not resolve a link");
-            DropChunkRejection::unavailable()
+            DropChunkRejection::unavailable(drops.clock())
         })?;
     // A revoked link stops accepting chunks for sessions already open under it. That is the
     // point of revoking: a guest mid-upload is exactly who the owner is revoking against.
@@ -918,7 +969,7 @@ pub async fn append_drop_chunk(
     let id = UploadId::new(&path.upload_id);
     let record = drops.sessions().read(&id).await.map_err(|error| {
         tracing::error!(%error, "the upload session store could not answer for a drop");
-        DropChunkRejection::unavailable()
+        DropChunkRejection::unavailable(drops.clock())
     })?;
     // The session must belong to *this* link's owner, or a guest holding one link could append
     // to another's session by guessing its id.
@@ -966,7 +1017,7 @@ pub async fn append_drop_chunk(
     .await
     .map_err(|error| {
         tracing::error!(%error, "a drop chunk could not be appended");
-        DropChunkRejection::unavailable()
+        DropChunkRejection::unavailable(drops.clock())
     })?;
 
     let next_offset = match accepted {
@@ -1001,10 +1052,15 @@ pub async fn append_drop_chunk(
         chunk::Accepted::NotActive => {
             return Err(DropChunkRejection::refused("this session is not active"));
         }
-        // The guest surface keeps its one storage answer for now: a full disk is reported as the
-        // store failing, exactly as it was before the album path learned to say `507`.
-        chunk::Accepted::StorageInconsistent | chunk::Accepted::StorageFull => {
-            return Err(DropChunkRejection::unavailable());
+        // The album path's answers, verbatim: a full disk is a wait, the server's own
+        // inconsistency is not.
+        chunk::Accepted::StorageFull => {
+            tracing::warn!("a drop chunk met a full disk");
+            return Err(DropChunkRejection::storage_full(drops.clock()));
+        }
+        chunk::Accepted::StorageInconsistent => {
+            tracing::error!("a drop's stage and its session disagree");
+            return Err(DropChunkRejection::internal());
         }
         chunk::Accepted::SessionGone => return Err(DropChunkRejection::NotFound),
     };
@@ -1467,13 +1523,17 @@ pub async fn discard_drop(
 }
 
 /// File a finished drop in its owner's inbox.
+///
+/// Every failure here is a `500`, never the chunk path's `503`: the last chunk is already
+/// recorded, so the guest's retry of it is answered as a replay and would not reach this
+/// function again.
 async fn deposit(
     drops: &DropContext,
     link: &UploadLinkRecord,
     record: &UploadSessionRecord,
 ) -> Result<(), DropChunkRejection> {
-    let address = ContentAddress::parse(&record.expected_hash)
-        .map_err(|_| DropChunkRejection::unavailable())?;
+    let address =
+        ContentAddress::parse(&record.expected_hash).map_err(|_| DropChunkRejection::internal())?;
 
     // The staged bytes are what the guest declared, or nothing is committed. Same check the
     // album path's finalization runs, and for the same reason: the hash is the only thing that
@@ -1482,9 +1542,9 @@ async fn deposit(
         .blobs()
         .staged_len(&record.upload_id)
         .await
-        .map_err(|_| DropChunkRejection::unavailable())?;
+        .map_err(|_| DropChunkRejection::internal())?;
     if staged != Some(record.total_size) {
-        return Err(DropChunkRejection::unavailable());
+        return Err(DropChunkRejection::internal());
     }
 
     drops
@@ -1493,7 +1553,7 @@ async fn deposit(
         .await
         .map_err(|error| {
             tracing::error!(%error, "a drop could not be committed");
-            DropChunkRejection::unavailable()
+            DropChunkRejection::internal()
         })?;
 
     let pending = drops
@@ -1502,12 +1562,12 @@ async fn deposit(
         .await
         .map_err(|error| {
             tracing::error!(%error, "a drop declaration could not be read back");
-            DropChunkRejection::unavailable()
+            DropChunkRejection::internal()
         })?
         // A finished session with no held declaration is a server-side inconsistency, never a
         // guest's fault — and filing an inbox row with an empty `kem_ct` would hand the owner a
         // drop they can never decrypt.
-        .ok_or_else(DropChunkRejection::unavailable)?;
+        .ok_or_else(DropChunkRejection::internal)?;
 
     drops
         .drops()
@@ -1526,7 +1586,7 @@ async fn deposit(
         .await
         .map_err(|error| {
             tracing::error!(%error, "a drop could not be filed in an inbox");
-            DropChunkRejection::unavailable()
+            DropChunkRejection::internal()
         })?;
 
     drops
@@ -1535,7 +1595,7 @@ async fn deposit(
         .await
         .map_err(|error| {
             tracing::error!(%error, "a finished drop's session could not be closed");
-            DropChunkRejection::unavailable()
+            DropChunkRejection::internal()
         })?;
     Ok(())
 }

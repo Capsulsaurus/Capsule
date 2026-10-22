@@ -4,7 +4,8 @@
 //! byte budget by evicting least-recently-accessed representations first, with tier order
 //! (original → preview → thumbnail) breaking recency ties. Pinned representations, device-owned
 //! originals, the canonical `media/` files, and the `library.sqlite` index are never touched.
-//! The budget is a plain parameter so `capsule-sdk` connection-class detection can drive it.
+//! The budget is a plain parameter: `capsule-sdk::cache_budget` derives it from the current
+//! connection class and passes it in, so this sweep stays a pure function of the index and budget.
 //!
 //! SSoT: design/filesystem/client § Space Recovery.
 

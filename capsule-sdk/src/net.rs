@@ -10,7 +10,8 @@
 //! ([`AdverseDetector`]) on top, and exposes the two gate surfaces the class
 //! feeds — the **staged-upload tier gates** ([`ConnectionClass::permits_tier`],
 //! over the canonical [`UploadTier`]) and the **cache-eviction byte budget**
-//! ([`ConnectionClass::cache_retention_budget`]). Detection is signal-driven,
+//! ([`ConnectionClass::cache_retention_budget`], which [`crate::cache_budget`] feeds to the
+//! eviction sweep). Detection is signal-driven,
 //! never a live NIC probe, so every rule is a deterministic unit test.
 
 use std::collections::VecDeque;

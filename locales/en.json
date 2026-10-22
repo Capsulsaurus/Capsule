@@ -8483,6 +8483,10 @@
     "message": "That part of the upload could not be accepted. It will be retried.",
     "context": "HTTP 409 on PATCH /d/{opaque-id}/{upload-id} (slice S-C5, threat-model invariants 9-12): the chunk is at the wrong offset, carries different bytes for an offset already accepted, is unaligned, or would exceed the declared size. The same rules the album chunk path runs, through the same function."
   },
+  "error.drop.chunk_unavailable": {
+    "message": "Capsule couldn't reach the upload service. The upload will resume shortly.",
+    "context": "HTTP 503 on PATCH /d/{opaque-id}/{upload-id}: a collaborator the chunk needs (the drop store, the session store, or the blob store) could not answer before the chunk was recorded. Nothing of the chunk was kept; the response carries Retry-After and the guest's browser resends the same chunk at the same offset after it. The drop counterpart of error.upload.unavailable."
+  },
   "error.drop.file_too_large": {
     "message": "That file is larger than this link accepts.",
     "context": "HTTP 413 on POST /d/{opaque-id} (slice S-C5, threat-model invariant 28): the single file exceeds the link's max_file_size. Answered before the cumulative caps, so a guest is told to shrink the file rather than to ask for a new link."
@@ -8515,9 +8519,13 @@
     "message": "Too many attempts. Please wait and try again.",
     "context": "HTTP 429 on POST /u/{opaque-id}/drop (web-upload, invariant 31): the per-{opaque-id} or per-source-IP drop-session rate limit engaged."
   },
+  "error.drop.storage_full": {
+    "message": "The server is out of storage space. Uploading will resume once space is freed.",
+    "context": "HTTP 507 on PATCH /d/{opaque-id}/{upload-id}: the server's disk is full (ENOSPC). Nothing of the chunk was kept, so the guest's browser waits per Retry-After, then resends the same chunk at the same offset. Not the link owner's quota: that is error.quota.exceeded. The drop counterpart of error.upload.storage_full."
+  },
   "error.drop.unavailable": {
     "message": "Capsule couldn't reach the upload service. Please try again.",
-    "context": "HTTP 500 on the drop surface (slice S-C5): a store could not answer. Retryable; a drop session that failed to open has its link reservation refunded so an outage does not burn a guest's link down."
+    "context": "HTTP 500 on the drop surface (slice S-C5): a store could not answer. Retryable; a drop session that failed to open has its link reservation refunded so an outage does not burn a guest's link down. On PATCH /d/{opaque-id}/{upload-id} it is only the failures a resent chunk cannot repair (a stage shorter than the session, or filing the finished drop failing); an outage there is error.drop.chunk_unavailable and a full disk error.drop.storage_full."
   },
   "error.enrollment.channel_not_found": {
     "message": "This device-add session has ended. Start again.",

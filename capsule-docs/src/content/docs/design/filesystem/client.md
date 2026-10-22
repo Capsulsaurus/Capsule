@@ -49,7 +49,7 @@ The reclaimable set is held within a user-configurable budget ([`capsule-core::l
 - At equal recency, evict original → preview → thumbnail. The metadata tier (sidecar + LQIP) is never reclaimed, so an asset always stays listable.
 - Pinned representations and device-owned originals are exempt from automatic eviction.
 
-Driving the budget from [connection class](/design/networking/#connection-classes) is not yet enforced; tracked by #707.
+The budget follows the [connection class](/design/networking/#connection-classes) ([`capsule-sdk::cache_budget`](https://github.com/Capsulsaurus/Capsule/blob/master/capsule-sdk/src/cache_budget.rs)). The user's base budget (default 2 GiB) is retained as-is on `unmetered`, doubled on `metered` and `constrained`, tripled on `adverse` and quadrupled on `offline`, because re-fetching an evicted representation grows costlier in that order. Every class but `unmetered` also defers bulk transfers. The client samples the class through a port before each sweep and re-plans when it changes; a desktop with no OS signal reports `unmetered`. Not yet enforced; tracked by #754: no client runs its sweep or schedules bulk transfers through this budget, and the base budget is not yet read from a user setting.
 
 **Releasing a device-owned original** (via the user-driven path or [streaming import](/design/import/pipeline/#import-upload-streaming-mode)) MUST pass the [verify-before-destroy](/design/transfer/durability/#verify-before-destroy) gate. Once released it is an ordinary server-only, re-fetchable asset.
 
@@ -65,4 +65,5 @@ The client surfaces the largest consumers and lets the user delete selectively, 
 - **Sandbox placement (smoke, per platform).** Library in app-private storage; survives cold start.
 - **Index rebuild (smoke).** Drop `library.sqlite`; re-open; queries match.
 - **Eviction (unit).** LRU order, tier order at equal recency, recency promotion, pin exemption; no canonical file touched; metadata tier never reclaimed.
+- **Connection-class budget (unit).** Each class yields its budget and bulk deferral; a class change mid-session re-plans without evicting pinned or device-owned originals.
 - **Release gate (smoke).** Non-`durable` verdict retains the original and surfaces it; `durable` releases.
