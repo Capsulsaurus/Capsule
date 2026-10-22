@@ -59,6 +59,8 @@ sea-orm = { workspace = true, features = ["sqlx-sqlite", "runtime-tokio-rustls"]
 # The backup drill (`tests/backup_restore_drill.rs`) runs the durable profile: a Postgres and a
 # Valkey per host, behind `CAPSULE_TEST_POSTGRES=1` and `CAPSULE_TEST_VALKEY=1` like the server's
 # own container tiers, and the migration `capsule-server-migration up` applies before `serve`.
+# The kill-anywhere suite (`tests/kill_anywhere.rs`) needs the same, because a server that is
+# SIGKILLed and restarted keeps nothing in the `--memory` profile.
 capsule-server-migration = { path = "../capsule-server/migration" }
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true, features = ["valkey"] }
