@@ -360,10 +360,8 @@ async fn dispatch(cli: Cli) -> Result<()> {
             println!(
                 "{}",
                 format!(
-                    "Plan: {} to import, {} duplicate(s) skipped, {} unsupported or errored.",
-                    counts.to_import,
-                    counts.duplicates,
-                    counts.unsupported + counts.errors
+                    "Plan: {} to import, {} duplicate(s) skipped, {} unreadable.",
+                    counts.to_import, counts.duplicates, counts.errors
                 )
                 .cyan()
             );

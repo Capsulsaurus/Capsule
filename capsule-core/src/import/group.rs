@@ -34,10 +34,6 @@ pub(crate) fn is_xmp(ext: &str) -> bool {
     ext.to_lowercase() == XMP_EXT
 }
 
-pub fn is_supported_extension(ext: &str) -> bool {
-    is_raw(ext) || is_primary(ext) || is_video(ext) || is_xmp(ext)
-}
-
 // ── Grouping ─────────────────────────────────────────────────────────────────
 
 /// Group a flat list of files by directory+stem, assigning member roles.
@@ -181,7 +177,8 @@ pub fn group_by_stem(files: &[PathBuf]) -> Vec<ImportCandidate> {
             }
         }
 
-        // Unsupported extensions → each becomes a standalone Sidecar
+        // Unrecognised extensions → each is kept as its own standalone candidate. The
+        // extension lists above decide grouping only, never whether a file is backed up.
         for other in &others {
             candidates.push(ImportCandidate {
                 source_paths: vec![other.clone()],
