@@ -27,7 +27,7 @@
 
 use jiff::{SignedDuration, Timestamp};
 
-use super::{AlbumKeyRecord, EscrowRecord, EscrowStore, Replaced};
+use super::{AlbumKeyRecord, AlbumKeysStored, EscrowRecord, EscrowStore, Replaced};
 use crate::store::{AlbumId, StoreError, UserId};
 
 /// The store under test.
@@ -291,12 +291,56 @@ fn album_keys(user: &UserId, album: &AlbumId, blob: &[u8], at: Timestamp) -> Alb
     }
 }
 
-/// Store `record` as an album key escrow, expecting it to work.
+/// Store `record` as an album key escrow, expecting it to be stored.
 async fn store_album_keys(h: &dyn Harness, record: AlbumKeyRecord) -> Replaced {
+    match try_store_album_keys(h, record).await {
+        AlbumKeysStored::Stored(replaced) => replaced,
+        AlbumKeysStored::Full => panic!("an album key escrow within the bound was refused as full"),
+    }
+}
+
+/// Store `record` as an album key escrow, whatever the answer.
+async fn try_store_album_keys(h: &dyn Harness, record: AlbumKeyRecord) -> AlbumKeysStored {
     ok(
         h.escrows().store_album_keys(record).await,
         "store an album key escrow",
     )
+}
+
+/// An account's album key escrows are bounded in total bytes: slots fill up to the bound, the
+/// next new slot is refused with nothing written, a replacement that keeps the total within the
+/// bound is still stored, and another account is unaffected.
+pub async fn album_keys_are_bounded_per_account(h: &dyn Harness) {
+    let alice = user("album-keys-bounded", "alice");
+    let largest = vec![0x3c; super::MAX_ALBUM_KEY_ESCROW_BYTES];
+    let fill = super::MAX_ALBUM_KEY_ESCROW_TOTAL_BYTES / super::MAX_ALBUM_KEY_ESCROW_BYTES;
+    for n in 0..fill {
+        store_album_keys(
+            h,
+            album_keys(&alice, &album(0x1000 + n as u128), &largest, at(1)),
+        )
+        .await;
+    }
+    let past = album(0x1000 + fill as u128);
+    assert_eq!(
+        try_store_album_keys(h, album_keys(&alice, &past, b"one byte too many", at(2))).await,
+        AlbumKeysStored::Full
+    );
+    assert_eq!(
+        list_album_keys(h, &alice).await.len(),
+        fill,
+        "nothing was written"
+    );
+    assert_eq!(
+        try_store_album_keys(h, album_keys(&alice, &album(0x1000), b"shrunk", at(3))).await,
+        AlbumKeysStored::Stored(Replaced::Yes),
+        "replacing a slot counts it at its new size"
+    );
+    let bob = user("album-keys-bounded", "bob");
+    assert_eq!(
+        store_album_keys(h, album_keys(&bob, &past, b"bob's keys", at(4))).await,
+        Replaced::No
+    );
 }
 
 /// Every album key escrow held for `user`.
@@ -415,6 +459,7 @@ pub async fn run_all(h: &dyn Harness) {
     album_keys_replace_per_album_and_list_in_album_order(h).await;
     album_keys_do_not_leak_and_leave_the_other_slots_alone(h).await;
     the_album_keys_instant_reads_back_at_microsecond_precision(h).await;
+    album_keys_are_bounded_per_account(h).await;
 }
 
 #[cfg(test)]
@@ -463,6 +508,7 @@ mod tests {
         album_keys_replace_per_album_and_list_in_album_order,
         album_keys_do_not_leak_and_leave_the_other_slots_alone,
         the_album_keys_instant_reads_back_at_microsecond_precision,
+        album_keys_are_bounded_per_account,
     }
 
     /// The whole suite, in one pass on one store — the entry point the container case uses.

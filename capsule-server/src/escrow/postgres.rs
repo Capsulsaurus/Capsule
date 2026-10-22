@@ -15,11 +15,13 @@
 //! what was written, which a separate `SELECT` beforehand could under a concurrent store.
 //!
 //! `album_key_escrows` (#741) holds one row per `(user_id, album_id)` and is written by the same
-//! statement shape over that composite key.
+//! statement shape over that composite key, inside a transaction holding a per-account advisory
+//! lock so the per-account bound ([`super::album_keys_fit`]) is checked against the rows the
+//! upsert lands beside.
 
-use sea_orm::{ConnectionTrait, DatabaseConnection, DbBackend, Statement, Value};
+use sea_orm::{ConnectionTrait, DatabaseConnection, DbBackend, Statement, TransactionTrait, Value};
 
-use super::{AlbumKeyRecord, EscrowRecord, EscrowStore, Replaced};
+use super::{AlbumKeyRecord, AlbumKeysStored, EscrowRecord, EscrowStore, Replaced, album_keys_fit};
 use crate::postgres::error::Port;
 use crate::postgres::time::{from_micros, to_micros};
 use crate::store::{AlbumId, StoreError, StoreFuture, UserId};
@@ -147,13 +149,61 @@ impl PostgresEscrow {
 impl PostgresEscrow {
     /// Upsert one album's key escrow into `album_key_escrows`, keyed `(user_id, album_id)`, by
     /// the same one-statement replace as the per-account slots.
-    async fn upsert_album_keys(&self, record: AlbumKeyRecord) -> Result<Replaced, StoreError> {
+    async fn upsert_album_keys(
+        &self,
+        record: AlbumKeyRecord,
+    ) -> Result<AlbumKeysStored, StoreError> {
         const DOING: &str = "storing an album key escrow";
         let user = record.user_id.clone();
         let album = record.album_id.as_str().to_owned();
         let bytes = record.blob.len();
-        let row = self
+        let transaction = self
             .connection
+            .begin()
+            .await
+            .map_err(PORT.failing("opening a transaction"))?;
+
+        // The account's critical section starts here and ends with the transaction, so the
+        // bound below is read and the slot written as one step against every concurrent store
+        // for the same account.
+        transaction
+            .execute_raw(Statement::from_sql_and_values(
+                DbBackend::Postgres,
+                "SELECT pg_advisory_xact_lock(hashtext('album_key_escrows:' || $1))",
+                [Value::from(user.as_str().to_owned())],
+            ))
+            .await
+            .map_err(PORT.failing("locking an account's album key escrows"))?;
+        let held = transaction
+            .query_one_raw(Statement::from_sql_and_values(
+                DbBackend::Postgres,
+                "SELECT count(*) AS slots, coalesce(sum(octet_length(blob)), 0)::BIGINT AS bytes \
+                 FROM album_key_escrows WHERE user_id = $1 AND album_id <> $2",
+                [
+                    Value::from(user.as_str().to_owned()),
+                    Value::from(album.clone()),
+                ],
+            ))
+            .await
+            .map_err(PORT.failing(DOING))?
+            .ok_or_else(|| PORT.undecodable("an aggregate returned no row".to_owned()))?;
+        let other_slots: i64 = held.try_get("", "slots").map_err(PORT.failing(DOING))?;
+        let other_bytes: i64 = held.try_get("", "bytes").map_err(PORT.failing(DOING))?;
+        let other_slots = usize::try_from(other_slots).unwrap_or(usize::MAX);
+        let other_bytes = usize::try_from(other_bytes).unwrap_or(usize::MAX);
+        if !album_keys_fit(other_slots, other_bytes, bytes) {
+            tracing::warn!(
+                %user,
+                %album,
+                bytes,
+                other_slots,
+                other_bytes,
+                "album key escrow refused: the account's slots are full"
+            );
+            return Ok(AlbumKeysStored::Full);
+        }
+
+        let row = transaction
             .query_one_raw(Statement::from_sql_and_values(
                 DbBackend::Postgres,
                 "INSERT INTO album_key_escrows (user_id, album_id, blob, stored_at) \
@@ -172,12 +222,16 @@ impl PostgresEscrow {
             .map_err(PORT.failing(DOING))?
             .ok_or_else(|| PORT.undecodable("an upsert returned no row".to_owned()))?;
         let inserted: bool = row.try_get("", "inserted").map_err(PORT.failing(DOING))?;
+        transaction
+            .commit()
+            .await
+            .map_err(PORT.failing("committing a transaction"))?;
         if inserted {
             tracing::info!(%user, %album, bytes, "album key escrow stored for the first time");
-            Ok(Replaced::No)
+            Ok(AlbumKeysStored::Stored(Replaced::No))
         } else {
             tracing::info!(%user, %album, bytes, "album key escrow replaced");
-            Ok(Replaced::Yes)
+            Ok(AlbumKeysStored::Stored(Replaced::Yes))
         }
     }
 
@@ -230,7 +284,7 @@ impl EscrowStore for PostgresEscrow {
         Box::pin(self.select(SEALED_IDENTITY, user))
     }
 
-    fn store_album_keys(&self, record: AlbumKeyRecord) -> StoreFuture<'_, Replaced> {
+    fn store_album_keys(&self, record: AlbumKeyRecord) -> StoreFuture<'_, AlbumKeysStored> {
         Box::pin(self.upsert_album_keys(record))
     }
 

@@ -4148,6 +4148,29 @@ async fn album_keys_block(
         .send()
         .await
         .assert_status(StatusCode::OK);
+
+    // 409: the account's album key escrows at their byte bound, filled with ceiling-sized slots
+    // under album ids of their own; the next new slot is refused.
+    let largest = vec![6_u8; capsule_server::escrow::MAX_ALBUM_KEY_ESCROW_BYTES];
+    let fill = capsule_server::escrow::MAX_ALBUM_KEY_ESCROW_TOTAL_BYTES
+        / capsule_server::escrow::MAX_ALBUM_KEY_ESCROW_BYTES;
+    for n in 0..=fill {
+        let path = format!("/v1/auth/escrow/albums/0198f3c2-0000-7000-8000-{n:012x}");
+        let response = client
+            .put(&path)
+            .header("authorization", bearer)
+            .header("accept", "application/json")
+            .body("application/octet-stream", largest.clone())
+            .send()
+            .await;
+        if n < fill - 1 {
+            response.assert_status(StatusCode::OK);
+        } else if n == fill {
+            response.assert_status(StatusCode::CONFLICT);
+            let problem: serde_json::Value = response.json();
+            assert_eq!(problem["code"], "error.escrow.album_keys_full");
+        }
+    }
 }
 
 async fn totp_block(client: &support::Client, fixture: &Fixture) {

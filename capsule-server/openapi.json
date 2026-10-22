@@ -3833,7 +3833,7 @@
     "/v1/auth/escrow/albums/{album_id}": {
       "put": {
         "summary": "Store the caller's key escrow for one album, replacing whatever that album's slot held.",
-        "description": "The album's whole key state — every epoch's content key, its signing seeds and its\nauthority — sealed by the client under the account master key, so a device recovered from the\nescrow can open the album (#741). Opaque here: one slot per album, replaced in one operation,\nnever versioned, and refused only empty or past its coarse ceiling. The album id is the\nslot's name and nothing more; the server does not check the album exists, because a client\nescrows an album's keys **before** the album's first asset reaches the server.",
+        "description": "The album's whole key state — every epoch's content key, its signing seeds and its\nauthority — sealed by the client under the account master key, so a device recovered from the\nescrow can open the album (#741). Opaque here: one slot per album, replaced in one operation,\nnever versioned, and refused only empty, past its coarse ceiling, or past the account's bound\non escrowed albums (`409 error.escrow.album_keys_full`, [`crate::escrow::album_keys_fit`]):\nslots are never deleted, so without a bound an account could grow them, and the listing\nevery push reads, without limit. The album id is the\nslot's name and nothing more; the server does not check the album exists, because a client\nescrows an album's keys **before** the album's first asset reaches the server.",
         "operationId": "store_album_keys",
         "parameters": [
           {
@@ -4074,6 +4074,42 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/StoreAlbumKeysResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Album key escrows full",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
                 }
               }
             }

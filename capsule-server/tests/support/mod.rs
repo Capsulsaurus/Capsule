@@ -67,7 +67,8 @@ use capsule_server::drop::{
 };
 use capsule_server::enrollment::EnrollmentContext;
 use capsule_server::escrow::{
-    AlbumKeyRecord, EscrowContext, EscrowRecord, EscrowStore, InMemoryEscrow, Replaced,
+    AlbumKeyRecord, AlbumKeysStored, EscrowContext, EscrowRecord, EscrowStore, InMemoryEscrow,
+    Replaced,
 };
 use capsule_server::federation::{
     CapabilityCodec, CapabilityFilter, CapabilityRecord, CapabilityStore, FederationCollaborators,
@@ -1870,7 +1871,7 @@ impl EscrowStore for SwitchableEscrow {
         self.inner.fetch_identity(user)
     }
 
-    fn store_album_keys(&self, record: AlbumKeyRecord) -> StoreFuture<'_, Replaced> {
+    fn store_album_keys(&self, record: AlbumKeyRecord) -> StoreFuture<'_, AlbumKeysStored> {
         if self.is_down() {
             return Box::pin(async { Self::refuse() });
         }

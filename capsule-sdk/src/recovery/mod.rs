@@ -133,6 +133,15 @@ pub enum RecoveryError {
         /// English detail from the problem body.
         detail: String,
     },
+    /// The account's album key escrows are at the server's per-account bound (`409`, coded
+    /// `error.escrow.album_keys_full`): nothing was stored, and resending will not fit either.
+    #[error("the account's album key escrows are full: {detail}")]
+    AlbumKeysFull {
+        /// The stable `error.*` catalog code the refusal carried.
+        code: Option<String>,
+        /// English detail from the problem body.
+        detail: String,
+    },
     /// The escrow store could not answer (`500`). Transient, and coded
     /// `error.escrow.unavailable` — which is why it is not folded into
     /// [`Transport`](RecoveryError::Transport): a caller that localizes codes has one to show.
@@ -179,6 +188,7 @@ impl RecoveryError {
         match self {
             Self::Unauthorized { code, .. }
             | Self::Malformed { code, .. }
+            | Self::AlbumKeysFull { code, .. }
             | Self::Unavailable { code, .. }
             | Self::Unexpected { code, .. } => code.as_deref(),
             Self::UpgradeRequired(refusal) => Some(refusal.error_code()),
@@ -957,6 +967,10 @@ fn store_album_keys_error(error: rest::Error<rest::StoreAlbumKeysError>) -> Reco
             rest::StoreAlbumKeysError::Status426(problem) => RecoveryError::Unexpected {
                 status: 426,
                 code: Some(problem.code.clone()),
+            },
+            rest::StoreAlbumKeysError::Status409(problem) => RecoveryError::AlbumKeysFull {
+                code: Some(problem.code.clone()),
+                detail: detail(&problem),
             },
             rest::StoreAlbumKeysError::Status401(problem)
             | rest::StoreAlbumKeysError::Status403(problem) => refused(&problem),

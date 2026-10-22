@@ -151,6 +151,24 @@ fn a_body_past_the_ceiling_is_refused() {
     );
 }
 
+/// The per-account bound on album key escrows: the slot count after the store stays within
+/// `MAX_ESCROWED_ALBUMS` and the total within `MAX_ALBUM_KEY_ESCROW_TOTAL_BYTES`.
+#[test]
+fn album_key_escrows_fit_within_the_per_account_bound() {
+    assert!(album_keys_fit(0, 0, MAX_ALBUM_KEY_ESCROW_BYTES));
+    assert!(album_keys_fit(MAX_ESCROWED_ALBUMS - 1, 0, 1));
+    assert!(
+        !album_keys_fit(MAX_ESCROWED_ALBUMS, 0, 1),
+        "one slot past the count"
+    );
+    assert!(album_keys_fit(1, MAX_ALBUM_KEY_ESCROW_TOTAL_BYTES - 10, 10));
+    assert!(
+        !album_keys_fit(1, MAX_ALBUM_KEY_ESCROW_TOTAL_BYTES - 10, 11),
+        "one byte past the total"
+    );
+    assert!(!album_keys_fit(0, usize::MAX, 1), "no overflow");
+}
+
 /// An album key escrow is held to its own, larger ceiling: past the escrow's and inside its
 /// own is admissible, and one byte past its own is refused naming it.
 #[test]

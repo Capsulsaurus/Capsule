@@ -105,6 +105,41 @@ const _: () = assert!(
     "an album key escrow at the ceiling must fit under the bounded body cap"
 );
 
+/// The most album key escrows one account may hold.
+///
+/// Album key slots are never deleted (a delete would be a way to remove an album's last
+/// recovery path with a stolen session token), so without a bound an account could grow its
+/// rows without limit, one canonical album id at a time. Far past any personal library's album
+/// count; a store that would open slot `MAX_ESCROWED_ALBUMS + 1` is refused, while replacing an
+/// existing slot never is on count.
+pub const MAX_ESCROWED_ALBUMS: usize = 4096;
+
+/// The most bytes one account's album key escrows may hold together.
+///
+/// Bounds the listing a client fetches before every push as well as the storage: 32 MiB of blobs
+/// is about 43 MiB of base64 JSON, and a typical album escrow is a few KiB, so a library reaches
+/// it only with thousands of long-lived, often-rotated albums. Counted after the store — the
+/// slot being replaced counts at its new size, so shrinking one always fits.
+pub const MAX_ALBUM_KEY_ESCROW_TOTAL_BYTES: usize = 32 * 1024 * 1024;
+
+/// Whether an account whose **other** album key slots number `other_slots` and hold
+/// `other_bytes` may store a slot of `new_bytes`: the count and total after the store stay
+/// within [`MAX_ESCROWED_ALBUMS`] and [`MAX_ALBUM_KEY_ESCROW_TOTAL_BYTES`].
+pub fn album_keys_fit(other_slots: usize, other_bytes: usize, new_bytes: usize) -> bool {
+    other_slots < MAX_ESCROWED_ALBUMS
+        && other_bytes.saturating_add(new_bytes) <= MAX_ALBUM_KEY_ESCROW_TOTAL_BYTES
+}
+
+/// What storing an album key escrow did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AlbumKeysStored {
+    /// The slot holds the new blob; whether it displaced an earlier one.
+    Stored(Replaced),
+    /// Refused, with nothing written: the account's album key escrows would pass
+    /// [`MAX_ESCROWED_ALBUMS`] or [`MAX_ALBUM_KEY_ESCROW_TOTAL_BYTES`].
+    Full,
+}
+
 /// One account's escrowed master key, or its sealed user identity key — the two blobs share
 /// one shape, and which one a record is follows from the [`EscrowStore`] method it went through.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -213,7 +248,12 @@ pub trait EscrowStore: std::fmt::Debug + Send + Sync {
     /// The same one-operation replace [`store`](Self::store) owes, in a slot per
     /// `(user, album)`: it never touches another album's slot, the escrow or the sealed
     /// identity.
-    fn store_album_keys(&self, record: AlbumKeyRecord) -> StoreFuture<'_, Replaced>;
+    ///
+    /// Bounded per account: a store that would take the account's slots past
+    /// [`album_keys_fit`] is [`AlbumKeysStored::Full`] and writes nothing. The bound is checked
+    /// and the slot written in one critical section per account, so two concurrent stores cannot
+    /// both pass a check only one of them fits.
+    fn store_album_keys(&self, record: AlbumKeyRecord) -> StoreFuture<'_, AlbumKeysStored>;
 
     /// Every album key escrow held for `user`, sorted by album id; empty when there is none.
     fn list_album_keys<'a>(&'a self, user: &'a UserId) -> StoreFuture<'a, Vec<AlbumKeyRecord>>;
@@ -305,21 +345,38 @@ impl EscrowStore for InMemoryEscrow {
         Box::pin(async move { Ok(lock(&self.identities).get(user).cloned()) })
     }
 
-    fn store_album_keys(&self, record: AlbumKeyRecord) -> StoreFuture<'_, Replaced> {
+    fn store_album_keys(&self, record: AlbumKeyRecord) -> StoreFuture<'_, AlbumKeysStored> {
         Box::pin(async move {
             let mut album_keys = lock(&self.album_keys);
             let user = record.user_id.clone();
             let album = record.album_id.as_str().to_owned();
             let bytes = record.blob.len();
+            let (other_slots, other_bytes) = album_keys
+                .iter()
+                .filter(|((owner, slot), _)| *owner == user && *slot != album)
+                .fold((0, 0), |(slots, total), (_, held)| {
+                    (slots + 1, total + held.blob.len())
+                });
+            if !album_keys_fit(other_slots, other_bytes, bytes) {
+                tracing::warn!(
+                    %user,
+                    %album,
+                    bytes,
+                    other_slots,
+                    other_bytes,
+                    "an album key escrow was refused: the account's slots are full"
+                );
+                return Ok(AlbumKeysStored::Full);
+            }
             if album_keys
                 .insert((user.clone(), album.clone()), record)
                 .is_some()
             {
                 tracing::info!(%user, %album, bytes, "an album key escrow was replaced");
-                return Ok(Replaced::Yes);
+                return Ok(AlbumKeysStored::Stored(Replaced::Yes));
             }
             tracing::info!(%user, %album, bytes, "an album key escrow was stored for the first time");
-            Ok(Replaced::No)
+            Ok(AlbumKeysStored::Stored(Replaced::No))
         })
     }
 

@@ -44,6 +44,7 @@
 //! | identity fetch `404 error.escrow.identity_not_stored` | this account has stored no sealed identity |
 //! | album keys store `400 error.album.invalid_id` | the path's album id is not a canonical UUID |
 //! | album keys store `400 error.escrow.malformed` | empty, or past the album keys' own ceiling |
+//! | album keys store `409 error.escrow.album_keys_full` | the account's album key escrows are at their slot or byte bound |
 //! | album keys list `200` | every album escrowed, possibly none |
 //! | `401` / `403` | the framework's, through `Auth` |
 //! | `500 error.escrow.unavailable` | the store could not answer |
@@ -64,8 +65,8 @@ use crate::album::is_canonical_album_id;
 use crate::auth::AccessToken;
 use crate::body::{CodedMedia, OpaqueBody};
 use crate::escrow::{
-    AlbumKeyRecord, EscrowContext, EscrowRecord, MalformedEscrow, Replaced, admissible,
-    admissible_album_keys,
+    AlbumKeyRecord, AlbumKeysStored, EscrowContext, EscrowRecord, MalformedEscrow, Replaced,
+    admissible, admissible_album_keys,
 };
 use crate::store::{AlbumId, UserId};
 
@@ -405,6 +406,16 @@ pub enum StoreAlbumKeysRejection {
         code: &'static str,
     },
 
+    /// The account's album key escrows are at their bound: storing this one would pass the slot
+    /// count or the total bytes an account may hold. Nothing was written.
+    #[error("this account's album key escrows are full")]
+    #[problem(status = 409, title = "Album key escrows full")]
+    Full {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
     /// The store could not answer.
     #[error("the album key escrow could not be stored")]
     #[problem(status = 500, title = "Internal server error")]
@@ -452,7 +463,10 @@ pub enum ListAlbumKeysRejection {
 /// The album's whole key state — every epoch's content key, its signing seeds and its
 /// authority — sealed by the client under the account master key, so a device recovered from the
 /// escrow can open the album (#741). Opaque here: one slot per album, replaced in one operation,
-/// never versioned, and refused only empty or past its coarse ceiling. The album id is the
+/// never versioned, and refused only empty, past its coarse ceiling, or past the account's bound
+/// on escrowed albums (`409 error.escrow.album_keys_full`, [`crate::escrow::album_keys_fit`]):
+/// slots are never deleted, so without a bound an account could grow them, and the listing
+/// every push reads, without limit. The album id is the
 /// slot's name and nothing more; the server does not check the album exists, because a client
 /// escrows an album's keys **before** the album's first asset reaches the server.
 #[kynos::put(
@@ -486,7 +500,7 @@ pub async fn store_album_keys(
     // Truncated to the microsecond for the escrow's reason: the instant echoed is the instant
     // every adapter keeps.
     let stored_at = crate::postgres::time::stored(escrow.clock().now());
-    let replaced = escrow
+    let stored = escrow
         .escrows()
         .store_album_keys(AlbumKeyRecord {
             user_id: user.clone(),
@@ -501,6 +515,11 @@ pub async fn store_album_keys(
                 code: error_codes::ESCROW_UNAVAILABLE,
             }
         })?;
+    let AlbumKeysStored::Stored(replaced) = stored else {
+        return Err(StoreAlbumKeysRejection::Full {
+            code: error_codes::ESCROW_ALBUM_KEYS_FULL,
+        });
+    };
 
     Ok(Json(StoreAlbumKeysResponse {
         album_id: album.as_str().to_owned(),
