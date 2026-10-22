@@ -113,10 +113,12 @@ accepted it. The **owner ledger** carries those facts:
   against the head at the backup.
 - The ledger is never rewritten. A retention purge appends a `lifecycle` entry with action
   `purge` before the index drops the asset's references, and a second one with action `purged`
-  for the same asset once the index answers that the purge committed; the purged blobs go
-  through [GC](#deletion-and-garbage-collection) as before. The `purged` entry is what resolves
-  a purge: rebuild pairs it with the latest unconfirmed `purge` of that asset before it, and
-  empties a tombstone only for a confirmed purge, at the `purge` entry's position. A purge the
+  for the same asset once the index answers that the purge committed, naming the `purge`
+  entry's ledger position; the purged blobs go through
+  [GC](#deletion-and-garbage-collection) as before. The `purged` entry is what resolves a
+  purge: rebuild confirms exactly the `purge` entry it names, so two concurrent purge runs
+  cannot confirm each other's refused purge, and empties a tombstone only for a confirmed
+  purge, at the `purge` entry's position. A purge the
   index refused (the asset was restored, or re-deleted under a later floor, after the worker
   listed it) is never confirmed, so a rebuild keeps every reference the live row kept, whatever
   order the purge and the concurrent op reached the ledger in. The confirmation is
