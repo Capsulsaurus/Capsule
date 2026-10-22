@@ -39,7 +39,9 @@ use super::delta::{
 use super::discovery::{
     Discovery, MockDiscovery, OpaqueAdvertisement, SERVICE_TYPE, rotation_epoch,
 };
-use super::session::{DirectoryVersions, HandshakeLimiter, MemoryDirectoryVersions, PeerSession};
+use super::session::{
+    DirectoryVersions, HandshakeLimiter, MAX_TRACKED_SOURCES, MemoryDirectoryVersions, PeerSession,
+};
 use super::transfer::{
     ArtifactBlobSource, DeltaExport, LocalLibrary, artifact_address, build_delta_artifact, ingest,
     pull_artifact,
@@ -534,6 +536,37 @@ fn handshake_limiter_is_per_source_and_slides() {
         limiter.admit(ip(1), t0 + Duration::from_secs(10)),
         "the first attempt has aged out"
     );
+}
+
+/// A flood of distinct live sources never grows the table past its cap: a new source that finds
+/// it full of live ones is refused, a tracked source keeps its budget, and once the flood ages
+/// out a new source is admitted again.
+#[test]
+fn handshake_limiter_caps_tracked_sources() {
+    let limiter = HandshakeLimiter::new(2, Duration::from_secs(10));
+    let t0 = Instant::now();
+    let source = |n: usize| IpAddr::from((n as u32 + 0x0A00_0000).to_be_bytes());
+    for n in 0..MAX_TRACKED_SOURCES {
+        assert!(limiter.admit(source(n), t0));
+    }
+    assert_eq!(limiter.tracked(), MAX_TRACKED_SOURCES);
+
+    assert!(
+        !limiter.admit(source(MAX_TRACKED_SOURCES), t0),
+        "a new source is refused while the table is full of live ones"
+    );
+    assert_eq!(limiter.tracked(), MAX_TRACKED_SOURCES, "the cap holds");
+    assert!(
+        limiter.admit(source(0), t0 + Duration::from_secs(1)),
+        "a tracked source keeps its budget"
+    );
+
+    let later = t0 + Duration::from_secs(11);
+    assert!(
+        limiter.admit(source(MAX_TRACKED_SOURCES), later),
+        "idle sources are pruned to make room"
+    );
+    assert!(limiter.tracked() <= MAX_TRACKED_SOURCES);
 }
 
 /// The application-layer check in isolation (deterministic, no socket): the full rejection

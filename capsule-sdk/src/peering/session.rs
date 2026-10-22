@@ -61,8 +61,9 @@ pub const DEFAULT_HANDSHAKES_PER_WINDOW: usize = 8;
 /// The default rate-limit window.
 pub const DEFAULT_HANDSHAKE_WINDOW: Duration = Duration::from_secs(60);
 
-/// Source addresses tracked before idle ones are pruned, bounding the limiter's memory.
-const MAX_TRACKED_SOURCES: usize = 1024;
+/// The most source addresses the limiter tracks at once, bounding its memory. Idle sources are
+/// pruned when the table is full; a new source that still finds it full is refused.
+pub const MAX_TRACKED_SOURCES: usize = 1024;
 
 /// A sliding-window handshake rate limit per source address.
 #[derive(Debug)]
@@ -90,15 +91,21 @@ impl HandshakeLimiter {
     }
 
     /// Whether a handshake from `source` at `now` is admitted. An admitted attempt counts against
-    /// the window; a refused one does not extend it. A poisoned lock refuses (fail closed).
+    /// the window; a refused one does not extend it. The table never holds more than
+    /// [`MAX_TRACKED_SOURCES`] sources: when it is full, idle sources are pruned, and a new source
+    /// that still finds it full of live ones is refused. A poisoned lock refuses too (fail closed).
     pub fn admit(&self, source: IpAddr, now: Instant) -> bool {
         let Ok(mut attempts) = self.attempts.lock() else {
             return false;
         };
         let window = self.window;
         let live = |at: &Instant| now.saturating_duration_since(*at) < window;
-        if attempts.len() >= MAX_TRACKED_SOURCES {
+        if !attempts.contains_key(&source) && attempts.len() >= MAX_TRACKED_SOURCES {
             attempts.retain(|_, seen| seen.iter().any(live));
+            if attempts.len() >= MAX_TRACKED_SOURCES {
+                tracing::warn!(%source, "handshake limiter full of live sources; refusing");
+                return false;
+            }
         }
         let seen = attempts.entry(source).or_default();
         while seen.front().is_some_and(|at| !live(at)) {
@@ -110,6 +117,12 @@ impl HandshakeLimiter {
         }
         seen.push_back(now);
         true
+    }
+
+    /// How many sources the table tracks — the bound tests assert.
+    #[cfg(test)]
+    pub(crate) fn tracked(&self) -> usize {
+        self.attempts.lock().map_or(0, |attempts| attempts.len())
     }
 }
 
