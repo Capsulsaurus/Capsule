@@ -1195,7 +1195,9 @@ mod admission {
                 dek_public: None,
                 added_at: "2026-10-01T00:00:00Z".into(),
                 revoked_at: None,
+                unknown: Default::default(),
             }],
+            unknown: Default::default(),
         }
         .sign(&HybridSigningKey::from_seed_bytes(&[10; 32], &[11; 32]))
     }

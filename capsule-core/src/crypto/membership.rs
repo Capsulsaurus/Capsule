@@ -219,7 +219,9 @@ mod tests {
                 dek_public: None,
                 added_at: "2026-09-01T00:00:00Z".into(),
                 revoked_at: revoked.then(|| "2026-09-02T00:00:00Z".to_owned()),
+                unknown: Default::default(),
             }],
+            unknown: Default::default(),
         }
         .sign(&ik())
     }

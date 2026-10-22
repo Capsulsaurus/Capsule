@@ -368,6 +368,7 @@ mod tests {
             // Must precede any manifest it signs; the workspace stamps `now`.
             added_at: "2020-01-01T00:00:00Z".into(),
             revoked_at: None,
+            unknown: Default::default(),
         };
         ws.directory = match account {
             // A second device of the *same* account: appended to the account's own directory,
@@ -385,6 +386,7 @@ mod tests {
                     directory_version: 1,
                     updated_at: now_rfc3339(),
                     devices: vec![entry],
+                    unknown: Default::default(),
                 }
                 .sign(ik);
                 ws.account.user_id = user_id;

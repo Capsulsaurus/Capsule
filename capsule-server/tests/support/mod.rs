@@ -184,6 +184,7 @@ pub(crate) fn signed_directory_by(ik: &HybridSigningKey, version: u64) -> Vec<u8
         directory_version: version,
         updated_at: "2026-01-01T00:00:00Z".to_owned(),
         devices: Vec::new(),
+        unknown: Default::default(),
     }
     .sign(ik);
     capsule_core::cbor::to_canonical_vec(&directory).expect("a directory serializes")
@@ -4315,7 +4316,9 @@ pub(crate) fn signed_directory_with_device(
             dek_public: None,
             added_at: added_at.to_owned(),
             revoked_at: None,
+            unknown: Default::default(),
         }],
+        unknown: Default::default(),
     }
     .sign(ik);
     capsule_core::cbor::to_canonical_vec(&directory).expect("a directory serializes")

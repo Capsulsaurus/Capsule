@@ -110,12 +110,14 @@ fn directory(
         dek_public: None,
         added_at: added_at.to_owned(),
         revoked_at: revoked_at.map(str::to_owned),
+        unknown: Default::default(),
     };
     let directory: DeviceDirectory = DirectoryCore {
         user_id: uuid::Uuid::parse_str(user.as_str()).expect("a uuid"),
         directory_version: 1,
         updated_at: "2026-01-01T00:00:00Z".to_owned(),
         devices: vec![entry],
+        unknown: Default::default(),
     }
     .sign(&signing);
     capsule_core::cbor::to_canonical_vec(&directory).expect("a directory serializes")

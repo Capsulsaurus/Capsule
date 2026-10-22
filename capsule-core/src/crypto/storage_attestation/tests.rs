@@ -196,6 +196,7 @@ fn a_custody_receipt_signature_does_not_verify_as_an_attestation() {
         uploaded_by_user: "x".to_owned(),
         uploaded_by_device: None,
         received_at: "2026-10-21T00:00:00Z".to_owned(),
+        unknown: Default::default(),
     };
     let receipt = CustodyReceipt {
         server_sig: key.sign(&receipt_core.signing_bytes()),
