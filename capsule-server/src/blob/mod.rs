@@ -168,6 +168,19 @@ pub enum BlobError {
         actual: u64,
     },
 
+    /// The backend has no room left for `operation` (`ENOSPC`).
+    ///
+    /// A variant of its own rather than a [`Self::Backend`] detail, because it is the one
+    /// storage failure a client can do something about: wait. The upload surface answers it
+    /// `507 error.upload.storage_full` rather than the `503` an outage gets, and an append that
+    /// meets it has already been truncated back to where it started, so the client's retry at
+    /// the same offset succeeds once space is freed.
+    #[error("the blob store has no space left to {operation}")]
+    StorageFull {
+        /// What was being attempted, for the log line.
+        operation: &'static str,
+    },
+
     /// An upload identifier that cannot name a file.
     ///
     /// Every adapter refuses one, not only the filesystem: an identifier that is a path segment
@@ -274,12 +287,32 @@ pub trait BlobStore: fmt::Debug + Send + Sync {
     /// The append is durable before this returns, which is what makes [`Self::staged_len`] the
     /// truth the session's cached counter is reconciled *up* to
     /// ([`UploadSessionStore::reconcile_received_bytes`](crate::store::UploadSessionStore::reconcile_received_bytes)).
+    ///
+    /// **A failed append leaves the stage at `offset`.** Whatever part of `bytes` reached the
+    /// backend before the failure — a short write on a full disk, an I/O error mid-flush — is cut
+    /// away again before the error is returned, so the stage never ends somewhere no session
+    /// offset names and the caller's retry at the same `offset` is an ordinary append
+    /// (transfer/upload.md, Hostile Clients: "a session never wedges"). A full backend is
+    /// [`BlobError::StorageFull`].
     fn append<'a>(
         &'a self,
         upload: &'a UploadId,
         offset: u64,
         bytes: &'a [u8],
     ) -> BlobFuture<'a, u64>;
+
+    /// Cut `upload`'s staged file back to `len` bytes, returning its length afterwards.
+    ///
+    /// Shrinks only: a stage already at or below `len` is left exactly as it is, because bytes
+    /// the stage does not hold cannot be invented. `None` when nothing is staged.
+    ///
+    /// The repair for a stage that has run **ahead** of its session's acknowledged offset — an
+    /// append that landed durably and then lost the session write that records it, or one a
+    /// crash interrupted. Those bytes were never acknowledged, so the client will send them
+    /// again at the session's offset; cutting them away is what lets that append land rather
+    /// than meet [`BlobError::OffsetMismatch`] on every retry until the session expires.
+    fn truncate_staged<'a>(&'a self, upload: &'a UploadId, len: u64)
+    -> BlobFuture<'a, Option<u64>>;
 
     /// The staged file's length, or `None` when nothing is staged.
     fn staged_len<'a>(&'a self, upload: &'a UploadId) -> BlobFuture<'a, Option<u64>>;

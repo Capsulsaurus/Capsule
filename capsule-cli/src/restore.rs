@@ -29,7 +29,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use capsule_core::cbor;
 use capsule_core::crypto::provenance::ProvenanceRecord;
 use capsule_core::lifecycle::{
     QuarantineReason, RemoteEntry, RemoteOriginal, SyncApplyOutcome, Workspace,
@@ -424,7 +423,7 @@ impl<B: BlobSource + Sync> AssetRestore<'_, B> {
         // A restore verifies the head the feed serves against the chain position it names: this
         // client holds no earlier record of the asset to place it after. Its signatures, its
         // signer's directory membership and the bytes it commits to are still all checked.
-        let local_chain_head = cbor::from_slice::<ProvenanceRecord>(&entry.manifest_cbor)
+        let local_chain_head = ProvenanceRecord::decode(&entry.manifest_cbor)
             .ok()
             .and_then(|record| record.prior_provenance_hash);
         let opened = self

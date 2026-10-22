@@ -604,12 +604,25 @@ async fn every_declared_response_is_exercised() {
         .send()
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
+    // Another account's session is the same 404 as one nobody opened ("foreign is unknown",
+    // transfer/upload.md); the 403 is the bearer scheme's, for a credential that is not an
+    // access token.
     let stranger = fixture
         .other_bearer("01937b7c-0000-7000-8000-0000000000ff")
         .await;
     client
         .head(&session)
         .header("authorization", &stranger)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    client
+        .head(&session)
+        .header(
+            "authorization",
+            &format!("Bearer {}", rotated.refresh_token),
+        )
         .header("x-capsule-protocol", PROTOCOL_VERSION)
         .send()
         .await
@@ -651,6 +664,19 @@ async fn every_declared_response_is_exercised() {
     client
         .patch(&session)
         .header("authorization", &stranger)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .header("x-capsule-offset", "4096")
+        .header("x-capsule-checksum", &checksum(&second))
+        .body("application/octet-stream", second.clone())
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    client
+        .patch(&session)
+        .header(
+            "authorization",
+            &format!("Bearer {}", rotated.refresh_token),
+        )
         .header("x-capsule-protocol", PROTOCOL_VERSION)
         .header("x-capsule-offset", "4096")
         .header("x-capsule-checksum", &checksum(&second))
@@ -709,6 +735,16 @@ async fn every_declared_response_is_exercised() {
     client
         .delete(&session)
         .header("authorization", &stranger)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    client
+        .delete(&session)
+        .header(
+            "authorization",
+            &format!("Bearer {}", rotated.refresh_token),
+        )
         .header("x-capsule-protocol", PROTOCOL_VERSION)
         .send()
         .await
@@ -797,7 +833,7 @@ async fn every_declared_response_is_exercised() {
         .await
         .assert_status(StatusCode::CONFLICT);
 
-    // The four 500s: one collaborator, broken for four requests and repaired.
+    // The four 503s: one collaborator, broken for four requests and repaired.
     fixture.uploads.set_unavailable(true);
     client
         .post("/v1/upload")
@@ -806,14 +842,14 @@ async fn every_declared_response_is_exercised() {
         .json(&create_request(&fixture.clock, &whole, "original"))
         .send()
         .await
-        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+        .assert_status(StatusCode::SERVICE_UNAVAILABLE);
     client
         .head(&session)
         .header("authorization", &bearer)
         .header("x-capsule-protocol", PROTOCOL_VERSION)
         .send()
         .await
-        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+        .assert_status(StatusCode::SERVICE_UNAVAILABLE);
     client
         .patch(&session)
         .header("authorization", &bearer)
@@ -823,15 +859,131 @@ async fn every_declared_response_is_exercised() {
         .body("application/octet-stream", first.clone())
         .send()
         .await
-        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+        .assert_status(StatusCode::SERVICE_UNAVAILABLE);
     client
         .delete(&session)
         .header("authorization", &bearer)
         .header("x-capsule-protocol", PROTOCOL_VERSION)
         .send()
         .await
-        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+        .assert_status(StatusCode::SERVICE_UNAVAILABLE);
     fixture.uploads.set_unavailable(false);
+
+    // POST and PATCH 507: the disk is full. Nothing is kept, so neither leaves a session or a
+    // byte behind.
+    let full = payload(b'd', 4096);
+    fixture.blobs.fill_disk_on_next_begin();
+    client
+        .post("/v1/upload")
+        .header("authorization", &bearer)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .json(&create_request(&fixture.clock, &full, "derivative"))
+        .send()
+        .await
+        .assert_status(StatusCode::INSUFFICIENT_STORAGE);
+    let filling: serde_json::Value = client
+        .post("/v1/upload")
+        .header("authorization", &bearer)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .json(&create_request(&fixture.clock, &full, "derivative"))
+        .send()
+        .await
+        .assert_status(StatusCode::CREATED)
+        .json();
+    let filling = format!(
+        "/v1/upload/{}",
+        filling["id"].as_str().expect("a session id")
+    );
+    fixture.blobs.fill_disk_on_next_append();
+    client
+        .patch(&filling)
+        .header("authorization", &bearer)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .header("x-capsule-offset", "0")
+        .header("x-capsule-checksum", &checksum(&full))
+        .body("application/octet-stream", full.clone())
+        .send()
+        .await
+        .assert_status(StatusCode::INSUFFICIENT_STORAGE);
+
+    // PATCH 500: the one state the server cannot explain — a chunk it acknowledged is not on
+    // disk, so the stage is shorter than the session's counter.
+    let partial = payload(b'e', 4096);
+    let rest = payload(b'f', 4096);
+    let both: Vec<u8> = partial.iter().chain(rest.iter()).copied().collect();
+    let diverging: serde_json::Value = client
+        .post("/v1/upload")
+        .header("authorization", &bearer)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .json(&create_request(&fixture.clock, &both, "derivative"))
+        .send()
+        .await
+        .assert_status(StatusCode::CREATED)
+        .json();
+    let diverging = format!(
+        "/v1/upload/{}",
+        diverging["id"].as_str().expect("a session id")
+    );
+    fixture.blobs.swallow_next_append();
+    client
+        .patch(&diverging)
+        .header("authorization", &bearer)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .header("x-capsule-offset", "0")
+        .header("x-capsule-checksum", &checksum(&partial))
+        .body("application/octet-stream", partial.clone())
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    client
+        .patch(&diverging)
+        .header("authorization", &bearer)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .header("x-capsule-offset", "4096")
+        .header("x-capsule-checksum", &checksum(&rest))
+        .body("application/octet-stream", rest.clone())
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+
+    // POST and PATCH 429: an account whose budgets are spent. A second account, so the seeded
+    // one's budgets stay whole for the rest of the walk.
+    let throttled_user = "01937b7c-0000-7000-8000-0000000000fe";
+    let throttled = fixture.other_bearer(throttled_user).await;
+    fixture
+        .spend_budget(
+            &capsule_server::counter::CounterKey::UploadSessions(
+                capsule_server::store::UserId::new(throttled_user),
+            ),
+            capsule_server::counter::budgets::UPLOAD_SESSIONS,
+        )
+        .await;
+    client
+        .post("/v1/upload")
+        .header("authorization", &throttled)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .json(&create_request(&fixture.clock, &whole, "original"))
+        .send()
+        .await
+        .assert_status(StatusCode::TOO_MANY_REQUESTS);
+    fixture
+        .spend_budget(
+            &capsule_server::counter::CounterKey::UploadChunks(capsule_server::store::UserId::new(
+                throttled_user,
+            )),
+            capsule_server::counter::budgets::UPLOAD_CHUNKS,
+        )
+        .await;
+    client
+        .patch(&session)
+        .header("authorization", &throttled)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .header("x-capsule-offset", "0")
+        .header("x-capsule-checksum", &checksum(&first))
+        .body("application/octet-stream", first.clone())
+        .send()
+        .await
+        .assert_status(StatusCode::TOO_MANY_REQUESTS);
 
     // ── GET /v1/sync ───────────────────────────────────────────────────────────────────────
     // 401 first: the framework's, with the `WWW-Authenticate` challenge the operation declares.

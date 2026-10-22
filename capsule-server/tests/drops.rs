@@ -190,6 +190,56 @@ async fn a_guest_drop_lands_in_the_owners_inbox_and_never_in_an_album() {
     );
 }
 
+/// A full disk under a guest's chunk keeps the guest surface's one storage answer, `500
+/// error.drop.unavailable`, rather than the album path's `507` (the drop wire contract is
+/// unchanged). Nothing of the refused chunk was kept, so the same chunk at the same offset lands.
+#[tokio::test]
+async fn a_full_disk_under_a_guest_chunk_is_unavailable_and_the_retry_lands() {
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let bytes = payload(b'f', 4096);
+    let id = opaque(40);
+    provision(
+        &fixture,
+        &bearer,
+        &link_body(&id, json!({})),
+        StatusCode::CREATED,
+    )
+    .await;
+    let opened = create_drop(&fixture, &id, &bytes, StatusCode::CREATED).await;
+    let upload_id = opened["upload_id"].as_str().expect("a session id");
+
+    fixture.blobs.fill_disk_on_next_append();
+    let problem: Value = fixture
+        .client
+        .patch(&format!("/d/{id}/{upload_id}"))
+        .header("x-capsule-offset", "0")
+        .header("x-capsule-checksum", &checksum(&bytes))
+        .body("application/octet-stream", bytes.clone())
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR)
+        .json();
+    assert_eq!(problem["code"], "error.drop.unavailable");
+    assert!(
+        inbox(&fixture, &bearer).await["drops"]
+            .as_array()
+            .expect("drops")
+            .is_empty(),
+        "a refused chunk deposits nothing"
+    );
+
+    send(&fixture, &id, upload_id, &bytes, StatusCode::NO_CONTENT).await;
+    assert_eq!(
+        inbox(&fixture, &bearer).await["drops"]
+            .as_array()
+            .expect("drops")
+            .len(),
+        1,
+        "the retry at the same offset completes the drop"
+    );
+}
+
 #[tokio::test]
 async fn a_drop_that_names_an_album_is_refused_rather_than_ignored() {
     // The other half of invariant 30. A field the server quietly dropped would let a guest

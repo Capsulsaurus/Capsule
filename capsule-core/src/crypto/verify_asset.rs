@@ -474,6 +474,7 @@ mod tests {
                 action,
                 prior_provenance_hash: prior,
                 upgraded_from: None,
+                unknown: Default::default(),
                 retention_until: None,
             }
         }

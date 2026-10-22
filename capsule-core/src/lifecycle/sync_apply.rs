@@ -61,16 +61,16 @@
 //! used — [provenance.md § Chained, Append-Only Structure] calls the pair "a checked invariant,
 //! not trusted redundancy", and this is the wire path where nothing else would check it.
 //!
-//! # Why the payload carries no version
+//! # The payload leads with its version
 //!
-//! `manifest_cbor` is decoded as a [`ProvenanceRecord`] directly: there is no envelope
-//! version, and nothing negotiates one with the sending server. That is a recorded decision
-//! (ADR-0008), and it rests on there being **no released peer** — every
-//! server and client that speaks this feed is built from this tree, so there is no older shape
-//! to stay compatible with. A bytes string that is not a record is quarantined as
-//! `MalformedManifest`, never guessed at. The first change to this shape after a release must
-//! introduce the version rather than assume one; the sealed sidecar inside already carries its
-//! own (`sidecar_schema`, refused forward below).
+//! `manifest_cbor` is decoded through [`ProvenanceRecord::decode`], which reads the record's
+//! leading `version` before anything else (ADR-0009, superseding ADR-0008). A record from a
+//! newer writer is quarantined as `UnsupportedRecordVersion` — kept for the caller to store
+//! verbatim and retry after an update, never applied and never dropped. A byte string that is
+//! not a record is quarantined as `MalformedManifest`, never guessed at. Within a version the
+//! manifest keeps keys this build does not know under its signatures, so a newer writer that
+//! only adds a field still verifies here. The sealed sidecar inside carries its own version
+//! (`sidecar_schema`, refused forward below).
 //!
 //! [download & sync]: https://docs/design/sync/
 //! [provenance.md § Asset Manifest]: https://docs/design/cryptography/provenance/#asset-manifest
@@ -82,11 +82,10 @@
 use uuid::Uuid;
 
 use super::{Result, Workspace};
-use crate::cbor;
 use crate::crypto::encryption::{blob_ciphertext_hash, blob_nonce, open_blob};
 use crate::crypto::hash::Hash32;
 use crate::crypto::keys::Amk;
-use crate::crypto::provenance::{Action, AssetManifest, ProvenanceRecord};
+use crate::crypto::provenance::{Action, AssetManifest, ProvenanceRecord, RecordDecodeError};
 use crate::crypto::verify_asset::{
     BindingReject, PendingReason, RejectReason, VerifyOutcome, diagnose_misattributed_signer,
     verify_asset,
@@ -127,6 +126,15 @@ pub struct RemoteEntry<'a> {
 pub enum QuarantineReason {
     /// The manifest bytes are not a decodable `AssetManifest`.
     MalformedManifest(String),
+    /// The provenance record declares a version newer than this build reads. Nothing about it
+    /// was checked or applied; the caller keeps the entry verbatim and retries it once the user
+    /// updates (versioning invariants 3 and 5).
+    UnsupportedRecordVersion {
+        /// The version the record declares.
+        found: u64,
+        /// The newest version this build reads.
+        max_known: u16,
+    },
     /// This workspace holds no key material or authority for the album the entry names, so
     /// there is nothing to verify it against. Not a rejection of the entry — a statement that
     /// this device cannot adjudicate it.
@@ -245,19 +253,28 @@ impl Workspace {
     pub fn apply_remote_entry(&self, entry: RemoteEntry<'_>) -> Result<SyncApplyOutcome> {
         use QuarantineReason::{
             Binding, LegacyInheritedDevice, MalformedManifest, MalformedSidecar, Rejected,
-            SidecarSignature, UnknownAlbum,
+            SidecarSignature, UnknownAlbum, UnsupportedRecordVersion,
         };
 
         // The feed serves the provenance blob's bytes, which are a *record* — see the module
         // docs. Decoding them as a bare manifest is why a correctly pushed asset used to be
         // quarantined by every receiving device.
-        let record: ProvenanceRecord = match cbor::from_slice(entry.manifest_cbor) {
+        let record = match ProvenanceRecord::decode(entry.manifest_cbor) {
             Ok(record) => record,
-            Err(e) => {
+            Err(RecordDecodeError::UnsupportedVersion { found, max_known }) => {
+                tracing::warn!(
+                    found,
+                    max_known,
+                    "sync-apply: provenance record from a newer writer; quarantined until update"
+                );
+                return Ok(SyncApplyOutcome::Quarantined(UnsupportedRecordVersion {
+                    found,
+                    max_known,
+                }));
+            }
+            Err(RecordDecodeError::Malformed(e)) => {
                 tracing::warn!(error = %e, "sync-apply: provenance record CBOR did not decode");
-                return Ok(SyncApplyOutcome::Quarantined(MalformedManifest(
-                    e.to_string(),
-                )));
+                return Ok(SyncApplyOutcome::Quarantined(MalformedManifest(e)));
             }
         };
         // The two copies of the chain link, checked before either is used. A record that
@@ -326,12 +343,9 @@ impl Workspace {
                     authority,
                     entry.local_chain_head,
                 ) {
-                    let record_hash = ProvenanceRecord {
-                        asset_id: core.file_id,
-                        manifest,
-                        prior_provenance_hash: core.prior_provenance_hash,
-                    }
-                    .record_hash();
+                    let record_hash =
+                        ProvenanceRecord::new(core.file_id, manifest, core.prior_provenance_hash)
+                            .record_hash();
                     tracing::warn!(
                         asset_id = %core.file_id,
                         named_device = %core.created_by_device,
@@ -431,12 +445,8 @@ impl Workspace {
         };
 
         // The record hash this entry establishes — the caller's next `local_chain_head`.
-        let provenance_head = ProvenanceRecord {
-            asset_id: core.file_id,
-            manifest,
-            prior_provenance_hash: core.prior_provenance_hash,
-        }
-        .record_hash();
+        let provenance_head =
+            ProvenanceRecord::new(core.file_id, manifest, core.prior_provenance_hash).record_hash();
 
         tracing::info!(
             asset_id = %core.file_id,
@@ -485,7 +495,7 @@ impl Workspace {
         };
         // The apply decoded these exact bytes a moment ago, so this cannot fail; answered as a
         // verdict rather than unwrapped all the same.
-        let Ok(record) = cbor::from_slice::<ProvenanceRecord>(entry.manifest_cbor) else {
+        let Ok(record) = ProvenanceRecord::decode(entry.manifest_cbor) else {
             return Ok(RemoteOriginal::Undecryptable { facts });
         };
         let core = &record.manifest.core;
@@ -557,6 +567,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::cbor;
     use crate::lifecycle::fast_workspace;
 
     /// The three byte strings a feed entry carries for one asset, exactly as `upload_bundle`
@@ -844,11 +855,8 @@ mod tests {
         let manifest = core
             .sign(ws.device_signer.as_ref(), keys.write_tier_signer().unwrap())
             .unwrap();
-        ProvenanceRecord {
-            asset_id: manifest.core.file_id,
-            prior_provenance_hash: manifest.core.prior_provenance_hash,
-            manifest,
-        }
+        let (asset_id, prior) = (manifest.core.file_id, manifest.core.prior_provenance_hash);
+        ProvenanceRecord::new(asset_id, manifest, prior)
     }
 
     /// **A chain an old client already wrote** (issue #475): the creator's device imports, a
@@ -1021,6 +1029,75 @@ mod tests {
             RemoteOriginal::Refused(SyncApplyOutcome::Quarantined(
                 QuarantineReason::UnknownAlbum(album)
             )),
+        );
+    }
+
+    /// A record from a newer writer is quarantined under its own signal — never applied, never
+    /// reported as malformed, never an `Err` (versioning invariants 3 and 5).
+    #[test]
+    fn a_record_of_an_unknown_version_is_quarantined_not_applied() {
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let (ws, album, _asset, wire) = seeded(&lib, &src);
+
+        let value: ciborium::Value = cbor::from_slice(&wire.manifest_cbor).unwrap();
+        let entries = value
+            .into_map()
+            .unwrap()
+            .into_iter()
+            .map(|(k, v)| {
+                if k.as_text() == Some("version") {
+                    (k, ciborium::Value::from(2u16))
+                } else {
+                    (k, v)
+                }
+            })
+            .collect();
+        let future = Wire {
+            manifest_cbor: cbor::value_to_canonical_vec(&ciborium::Value::Map(entries)),
+            metadata_blob: wire.metadata_blob.clone(),
+            ciphertext: wire.ciphertext.clone(),
+        };
+        assert_eq!(
+            ws.apply_remote_entry(entry(album, &future, None)).unwrap(),
+            SyncApplyOutcome::Quarantined(QuarantineReason::UnsupportedRecordVersion {
+                found: 2,
+                max_known: crate::crypto::provenance::PROVENANCE_RECORD_VERSION,
+            })
+        );
+    }
+
+    /// A newer writer's manifest that only adds a field applies here: the field is kept, signed
+    /// over, and the record's hash covers it, so the head a later op chains onto is the served
+    /// blob's digest.
+    #[test]
+    fn a_manifest_with_an_unknown_field_applies_and_keeps_it() {
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let (ws, album, _asset, wire) = seeded(&lib, &src);
+
+        let record = ProvenanceRecord::decode(&wire.manifest_cbor).unwrap();
+        let mut core = record.manifest.core;
+        core.unknown.insert(
+            "future_field".into(),
+            ciborium::Value::from("from a newer writer"),
+        );
+        let future = signed_record(&ws, album, core);
+        let future_wire = Wire {
+            manifest_cbor: cbor::to_canonical_vec(&future).unwrap(),
+            metadata_blob: wire.metadata_blob.clone(),
+            ciphertext: wire.ciphertext.clone(),
+        };
+        let facts = ws
+            .apply_remote_entry(entry(album, &future_wire, None))
+            .unwrap();
+        let facts = facts
+            .facts()
+            .expect("an added field does not refuse the entry");
+        assert_eq!(
+            facts.provenance_head,
+            crate::crypto::hash::hash_bytes(&future_wire.manifest_cbor),
+            "the head covers the preserved field"
         );
     }
 }

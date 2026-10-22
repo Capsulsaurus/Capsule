@@ -157,14 +157,11 @@ impl Fx {
                 action,
                 prior_provenance_hash: prior,
                 upgraded_from: None,
+                unknown: Default::default(),
                 retention_until: None,
             };
             let manifest = core.sign(&self.dev_a, &self.write).unwrap();
-            let record = ProvenanceRecord {
-                asset_id: file_id,
-                manifest,
-                prior_provenance_hash: prior,
-            };
+            let record = ProvenanceRecord::new(file_id, manifest, prior);
             prior = Some(record.record_hash());
             chain.push(record);
         }

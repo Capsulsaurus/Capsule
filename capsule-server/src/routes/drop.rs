@@ -977,7 +977,14 @@ pub async fn append_drop_chunk(
                 "the chunk would exceed the declared size",
             ));
         }
-        chunk::Accepted::StorageInconsistent => return Err(DropChunkRejection::unavailable()),
+        chunk::Accepted::NotActive => {
+            return Err(DropChunkRejection::refused("this session is not active"));
+        }
+        // The guest surface keeps its one storage answer for now: a full disk is reported as the
+        // store failing, exactly as it was before the album path learned to say `507`.
+        chunk::Accepted::StorageInconsistent | chunk::Accepted::StorageFull => {
+            return Err(DropChunkRejection::unavailable());
+        }
         chunk::Accepted::SessionGone => return Err(DropChunkRejection::NotFound),
     };
 

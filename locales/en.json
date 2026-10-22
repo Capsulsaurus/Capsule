@@ -8847,6 +8847,10 @@
     "message": "You can't upload on behalf of this user.",
     "context": "HTTP 403: owner_id differs from the uploader without a verified relationship."
   },
+  "error.upload.rate_limited": {
+    "message": "Uploading is paused for a moment. It'll resume on its own.",
+    "context": "HTTP 429 on POST /v1/upload and PATCH /v1/upload/{id}: the account's session-creation or chunk-append rate limit engaged, or it already holds as many live upload sessions as the server allows. The response carries Retry-After; the client waits that long, then resumes from HEAD."
+  },
   "error.upload.receipt_not_available": {
     "message": "The upload hasn't finished, so its storage receipt isn't available yet.",
     "context": "HTTP 409, invariant 33: GET /upload/{id}/receipt before the session reached Completed. The receipt is signed inside the finalization transaction; the client retries after Completed."
@@ -8871,6 +8875,10 @@
     "message": "This change is based on an out-of-date version of the item.",
     "context": "HTTP 409 on POST /albums/{album_id}/ops, invariant 17: the manifest's prior_provenance_hash does not match the asset's current provenance-chain head (a stale or forked position, e.g. a peer replaying an old manifest to revive a deleted asset)."
   },
+  "error.upload.storage_full": {
+    "message": "The server is out of storage space. Uploading will resume once space is freed.",
+    "context": "HTTP 507 on POST /v1/upload and PATCH /v1/upload/{id}: the server's disk is full (ENOSPC). Nothing partial was kept, so the client waits per Retry-After, then resumes from HEAD at the same offset. Not the user's quota: that is error.quota.exceeded."
+  },
   "error.upload.storage_inconsistent": {
     "message": "The server hit a storage problem. Please try again.",
     "context": "HTTP 500: the upload file's on-disk length diverged from the session's expected offset. Server-side inconsistency, never the client's fault."
@@ -8881,7 +8889,7 @@
   },
   "error.upload.unavailable": {
     "message": "The upload couldn't be completed. Please try again.",
-    "context": "HTTP 500: a collaborator the upload needs — the session store, the blob store, or the album/device authority — could not answer. Server-side, never the client's fault; the client retries the same request."
+    "context": "HTTP 503 on the upload operations: a collaborator the upload needs — the session store, the blob store, the rate limiter, or the album/device authority — could not answer. Server-side, never the client's fault; the response carries Retry-After and the client resumes from HEAD after it."
   },
   "error.upload.unknown_crypto_suite": {
     "message": "This app version uses an encryption suite the server doesn't recognize.",

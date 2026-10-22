@@ -28,6 +28,7 @@ use crate::crypto::verify_asset::{
 use crate::db::{AssetRow, CachedRepresentationRow};
 use crate::exif::{extract_exif, resolve_timezone};
 use crate::metadata::crdt::{Lww, OrSet};
+use crate::sidecar::normalize_label;
 use crate::sidecar::sidecar_v1::{
     Gps, GpsSource, SIDECAR_SCHEMA_V1, SidecarV1, StackMembership, StackRole,
 };
@@ -601,10 +602,24 @@ impl Workspace {
         if let Some(stars) = enrichment.and_then(|e| e.rating) {
             rating.set(stars, stamp.clone(), device_id);
         }
+        // Each exporter tag becomes an asset label, so it passes through the one label rule
+        // (`normalize_label`: NFC, trimmed, 1–256 bytes) exactly as `tag_add` does. A title the
+        // rule refuses is dropped rather than failing the import: the photo itself is the thing
+        // being imported, and an unusable album title must not cost the user the asset.
         let mut tags_user = OrSet::new();
         for tag in enrichment.map_or(&[][..], |e| e.tags.as_slice()) {
-            let add_id = self.counter.issue();
-            tags_user.add(tag.clone(), add_id);
+            match normalize_label(tag) {
+                Ok(label) => {
+                    let add_id = self.counter.issue();
+                    tags_user.add(label, add_id);
+                }
+                Err(error) => tracing::warn!(
+                    asset_id = %asset_id,
+                    tag_bytes = tag.len(),
+                    %error,
+                    "import: exporter tag refused by the label rule; dropped"
+                ),
+            }
         }
         // Logged for *every* import, enriched or not: which side each contested field came from
         // is what makes a surprising capture time or location explainable after the fact. User
@@ -738,17 +753,14 @@ impl Workspace {
             action: Action::Create,
             prior_provenance_hash: None,
             upgraded_from: None,
+            unknown: Default::default(),
             retention_until: None,
         };
         let manifest = core.sign(self.device_signer.as_ref(), album.write_tier_signer()?)?;
 
         let mut chain = ProvenanceChain::new();
         chain
-            .append(ProvenanceRecord {
-                asset_id,
-                manifest: manifest.clone(),
-                prior_provenance_hash: None,
-            })
+            .append(ProvenanceRecord::new(asset_id, manifest.clone(), None))
             .map_err(|e| LifecycleError::Cbor(format!("chain: {e}")))?;
 
         // Self-check: the asset must verify through the one chokepoint, and the sealed metadata
@@ -1403,6 +1415,52 @@ mod tests {
         assert!(ws.db().query_timeline(0, 100).unwrap().is_empty());
         ws.restore(&id).unwrap();
         assert_eq!(ws.db().query_timeline(0, 100).unwrap().len(), 1);
+    }
+
+    /// Exporter tags reach `tags_user` through the label rule: padded and NFD titles land
+    /// normalized (and an NFD title collapses onto its NFC twin), while empty, whitespace-only
+    /// and over-long titles are dropped without failing the import.
+    #[test]
+    fn enrichment_tags_follow_the_label_rule() {
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let img = src.path().join("photo.jpg");
+        fs::write(&img, b"\xFF\xD8\xFF enriched tag photo").unwrap();
+
+        let mut ws = fast_workspace(lib.path());
+        let album = ws.create_album("Trip").unwrap();
+        let opts = SignedImportOptions {
+            enrichment: Some(SidecarEnrichment {
+                tags: vec![
+                    "  Vacation 2021 ".to_string(),
+                    "Cafe\u{301}".to_string(),
+                    "Caf\u{e9}".to_string(),
+                    String::new(),
+                    " \t ".to_string(),
+                    "x".repeat(257),
+                    "y".repeat(256),
+                ],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let id = ws
+            .import_asset_with(album, &img, &opts)
+            .expect("an unusable tag must not fail the import")
+            .asset_id;
+
+        let tags = ws.asset(&id).unwrap().sidecar.tags_user.value();
+        let expected: std::collections::BTreeSet<String> = [
+            "Vacation 2021".to_string(),
+            "Caf\u{e9}".to_string(),
+            "y".repeat(256),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(
+            tags.into_iter().collect::<std::collections::BTreeSet<_>>(),
+            expected
+        );
     }
 
     // ── The index projection of capture time (S-B17 precondition) ───────────────

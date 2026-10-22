@@ -228,7 +228,9 @@ async fn an_unreachable_moderation_store_refuses_the_upload_rather_than_admittin
     let bearer = fixture.bearer().await;
     fixture.moderation.set_unavailable(true);
 
-    upload(&fixture, &bearer, StatusCode::INTERNAL_SERVER_ERROR).await;
+    // The upload surface answers an outage `503` with a retry hint (transfer/upload.md, Hostile
+    // Clients); the moderation record's own surface still answers `500`.
+    upload(&fixture, &bearer, StatusCode::SERVICE_UNAVAILABLE).await;
     record(&fixture, &bearer, StatusCode::INTERNAL_SERVER_ERROR).await;
 }
 

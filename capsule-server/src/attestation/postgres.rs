@@ -96,7 +96,7 @@ async fn issued_for<C: ConnectionTrait>(
 ) -> Result<Option<CustodyReceipt>, StoreError> {
     let doing = "reading an upload's receipt";
     connection
-        .query_one(Statement::from_sql_and_values(
+        .query_one_raw(Statement::from_sql_and_values(
             DbBackend::Postgres,
             "SELECT receipt_seq, receipt FROM custody_receipts WHERE upload_id = $1",
             [Value::from(upload.as_str().to_owned())],
@@ -122,7 +122,7 @@ pub(crate) async fn issue_in(
 ) -> Result<CustodyReceipt, StoreError> {
     // The critical section starts here and ends with the caller's transaction.
     transaction
-        .execute(Statement::from_string(
+        .execute_raw(Statement::from_string(
             DbBackend::Postgres,
             "LOCK TABLE custody_receipts IN SHARE ROW EXCLUSIVE MODE",
         ))
@@ -142,7 +142,7 @@ pub(crate) async fn issue_in(
 
     let doing = "reading the receipt chain's head";
     let head = transaction
-        .query_one(Statement::from_string(
+        .query_one_raw(Statement::from_string(
             DbBackend::Postgres,
             "SELECT receipt_seq, receipt FROM custody_receipts \
              ORDER BY receipt_seq DESC LIMIT 1",
@@ -164,7 +164,7 @@ pub(crate) async fn issue_in(
     let upload_id = draft.upload_id.clone();
     let receipt = sign_receipt(draft, signer, receipt_seq, prior_receipt_hash);
     transaction
-        .execute(Statement::from_sql_and_values(
+        .execute_raw(Statement::from_sql_and_values(
             DbBackend::Postgres,
             "INSERT INTO custody_receipts (receipt_seq, upload_id, asset_id, receipt) \
              VALUES ($1, $2, $3, $4)",
@@ -220,7 +220,7 @@ impl ReceiptLog for PostgresReceipts {
             let doing = "reading an asset's receipts";
             let rows = self
                 .connection
-                .query_all(Statement::from_sql_and_values(
+                .query_all_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "SELECT receipt_seq, receipt FROM custody_receipts WHERE asset_id = $1 \
                      ORDER BY receipt_seq ASC",
@@ -275,7 +275,7 @@ mod tests {
                 "TRUNCATE custody_receipts",
             ] {
                 let refused = connection
-                    .execute(Statement::from_string(DbBackend::Postgres, statement))
+                    .execute_raw(Statement::from_string(DbBackend::Postgres, statement))
                     .await;
                 assert!(
                     refused.is_err(),

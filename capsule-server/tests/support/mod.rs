@@ -2038,6 +2038,40 @@ impl SwitchableUploads {
             "the test must be the one that wins the claim it is simulating"
         );
     }
+
+    /// Open `count` live sessions for `uploader`, each for a different blob, as a client that
+    /// leaks sessions would leave them.
+    pub(crate) async fn fill_live_sessions_for_test(
+        &self,
+        uploader: &UserId,
+        count: usize,
+        now: jiff::Timestamp,
+    ) {
+        for index in 0..count {
+            self.inner
+                .open(UploadSessionRecord {
+                    upload_id: UploadId::new(format!("leaked-{index:06}")),
+                    asset_id: AssetId::new(format!("leaked-asset-{index:06}")),
+                    owner_id: OwnerId::new(uploader.as_str()),
+                    upload_user_id: uploader.clone(),
+                    album_id: None,
+                    content_type: None,
+                    expected_hash: format!("{index:064x}"),
+                    crypto_suite_id: 1,
+                    protocol_version: PROTOCOL_VERSION.to_owned(),
+                    blob_role: capsule_server::store::BlobRole::Original,
+                    intent_id: None,
+                    manifest_envelope: "{}".to_owned(),
+                    received_bytes: 0,
+                    total_size: 4096,
+                    status: UploadSessionStatus::Pending,
+                    created_at: now,
+                    last_progress_at: now,
+                })
+                .await
+                .expect("the in-memory store opens");
+        }
+    }
 }
 
 impl UploadSessionStore for SwitchableUploads {
@@ -2181,6 +2215,13 @@ impl UploadSessionStore for SwitchableUploads {
 pub(crate) struct SwallowingBlobs {
     inner: InMemoryBlobStore,
     swallow: AtomicBool,
+    /// Answer the next append as a full disk would, writing nothing — an adapter that honours
+    /// the port's "a failed append leaves the stage at its offset" rule.
+    full_next_append: AtomicBool,
+    /// Answer the next `begin` as a full disk would, staging nothing.
+    full_next_begin: AtomicBool,
+    /// Park every append until the test lets it go, the way [`Self::hold_puts`] parks a `put`.
+    held_appends: Mutex<Option<PutHold>>,
     /// Refuse every [`BlobStore::put`], as a full or read-only disk would.
     puts_unavailable: AtomicBool,
     /// Park every [`BlobStore::put`] until the test lets it go.
@@ -2205,6 +2246,9 @@ impl SwallowingBlobs {
         Self {
             inner: InMemoryBlobStore::new(),
             swallow: AtomicBool::new(false),
+            full_next_append: AtomicBool::new(false),
+            full_next_begin: AtomicBool::new(false),
+            held_appends: Mutex::new(None),
             puts_unavailable: AtomicBool::new(false),
             held_puts: Mutex::new(None),
         }
@@ -2226,6 +2270,29 @@ impl SwallowingBlobs {
     /// Drop the next append on the floor while telling the caller it landed.
     pub(crate) fn swallow_next_append(&self) {
         self.swallow.store(true, Ordering::SeqCst);
+    }
+
+    /// Fail the next append with `ENOSPC`, as a disk that filled mid-write would.
+    pub(crate) fn fill_disk_on_next_append(&self) {
+        self.full_next_append.store(true, Ordering::SeqCst);
+    }
+
+    /// Fail the next `begin` with `ENOSPC`, as a disk with no room for a new stage would.
+    pub(crate) fn fill_disk_on_next_begin(&self) {
+        self.full_next_begin.store(true, Ordering::SeqCst);
+    }
+
+    /// Park every subsequent append until the returned hold releases it.
+    pub(crate) fn hold_appends(&self) -> PutHold {
+        let hold = PutHold {
+            entered: Arc::new(tokio::sync::Notify::new()),
+            release: Arc::new(tokio::sync::Semaphore::new(0)),
+        };
+        *self
+            .held_appends
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(hold.clone());
+        hold
     }
 
     /// Make every subsequent `put` fail, or stop.
@@ -2288,6 +2355,13 @@ impl SwallowingBlobs {
 
 impl BlobStore for SwallowingBlobs {
     fn begin<'a>(&'a self, upload: &'a UploadId) -> BlobFuture<'a, ()> {
+        if self.full_next_begin.swap(false, Ordering::SeqCst) {
+            return Box::pin(async move {
+                Err(BlobError::StorageFull {
+                    operation: "create a staging file",
+                })
+            });
+        }
         self.inner.begin(upload)
     }
 
@@ -2300,7 +2374,37 @@ impl BlobStore for SwallowingBlobs {
         if self.swallow.swap(false, Ordering::SeqCst) {
             return Box::pin(async move { Ok(offset + bytes.len() as u64) });
         }
-        self.inner.append(upload, offset, bytes)
+        if self.full_next_append.swap(false, Ordering::SeqCst) {
+            return Box::pin(async move {
+                Err(BlobError::StorageFull {
+                    operation: "append to a staging file",
+                })
+            });
+        }
+        let hold = self
+            .held_appends
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        Box::pin(async move {
+            if let Some(hold) = hold {
+                hold.entered.notify_one();
+                let _permit = hold
+                    .release
+                    .acquire()
+                    .await
+                    .expect("the hold is never closed");
+            }
+            self.inner.append(upload, offset, bytes).await
+        })
+    }
+
+    fn truncate_staged<'a>(
+        &'a self,
+        upload: &'a UploadId,
+        len: u64,
+    ) -> BlobFuture<'a, Option<u64>> {
+        self.inner.truncate_staged(upload, len)
     }
 
     fn staged_len<'a>(&'a self, upload: &'a UploadId) -> BlobFuture<'a, Option<u64>> {
@@ -3723,6 +3827,29 @@ impl Fixture {
             .await
             .assert_status(kynos::http::StatusCode::OK)
             .json()
+    }
+
+    /// The server's clock reading, for an assertion about an instant the server computed.
+    pub(crate) fn now(&self) -> Timestamp {
+        self.clock.now()
+    }
+
+    /// Spend every hit `budget` allows against `key`, so the next request charging it is refused.
+    ///
+    /// Through the store the server charges, at the server's own clock, so the window it opens
+    /// is the one the next request meets.
+    pub(crate) async fn spend_budget(
+        &self,
+        key: &capsule_server::counter::CounterKey,
+        budget: capsule_server::counter::Budget,
+    ) {
+        use capsule_server::counter::CounterStore as _;
+        for _ in 0..budget.limit {
+            self.counters
+                .hit(key, budget, self.clock.now())
+                .await
+                .expect("the in-memory counters answer");
+        }
     }
 
     /// An access token for the seeded account, as the `Authorization` header carries it.

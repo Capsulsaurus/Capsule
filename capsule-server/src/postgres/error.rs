@@ -202,13 +202,13 @@ mod tests {
             };
             database
                 .connection()
-                .execute(insert())
+                .execute_raw(insert())
                 .await
                 .expect("the first row is new");
 
             let duplicate = database
                 .connection()
-                .execute(insert())
+                .execute_raw(insert())
                 .await
                 .map_err(PORT.failing("inserting a held key"))
                 .expect_err("the primary key holds the second row");
@@ -221,7 +221,7 @@ mod tests {
             // conflict arm is the SQLSTATE, not "the database said no".
             let missing = database
                 .connection()
-                .execute(Statement::from_string(
+                .execute_raw(Statement::from_string(
                     DbBackend::Postgres,
                     "INSERT INTO no_such_table (id) VALUES (1)",
                 ))

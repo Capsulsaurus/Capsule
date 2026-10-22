@@ -76,7 +76,7 @@ impl CollectionStore for PostgresCollection {
             // which is the "was it already marked" answer, in the same statement as the write.
             let row = self
                 .connection
-                .query_one(Statement::from_sql_and_values(
+                .query_one_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "INSERT INTO collection_marks (address, marked_at) VALUES ($1, $2) \
                      ON CONFLICT (address) DO UPDATE SET marked_at = EXCLUDED.marked_at \
@@ -105,7 +105,7 @@ impl CollectionStore for PostgresCollection {
         Box::pin(async move {
             let result = self
                 .connection
-                .execute(Statement::from_sql_and_values(
+                .execute_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "DELETE FROM collection_marks WHERE address = $1",
                     [Value::from(address.as_str().to_owned())],
@@ -127,7 +127,7 @@ impl CollectionStore for PostgresCollection {
         Box::pin(async move {
             let Some(row) = self
                 .connection
-                .query_one(Statement::from_sql_and_values(
+                .query_one_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "SELECT marked_at FROM collection_marks WHERE address = $1",
                     [Value::from(address.as_str().to_owned())],
@@ -148,7 +148,7 @@ impl CollectionStore for PostgresCollection {
         Box::pin(async move {
             let rows = self
                 .connection
-                .query_all(Statement::from_string(
+                .query_all_raw(Statement::from_string(
                     DbBackend::Postgres,
                     "SELECT address, marked_at FROM collection_marks \
                      ORDER BY address COLLATE \"C\"",
