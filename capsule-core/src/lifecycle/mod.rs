@@ -60,6 +60,7 @@ pub use self::migrate_unsigned::{
 pub use self::open::HardwareDekBinding;
 pub use self::sync_apply::{
     QuarantineReason, RemoteAssetFacts, RemoteEntry, RemoteHead, RemoteOriginal, SyncApplyOutcome,
+    hash_ciphertext_from,
 };
 pub use self::upload::{DerivativeBlob, OriginalCiphertext, UploadBundle};
 use crate::backup::BackupError;
