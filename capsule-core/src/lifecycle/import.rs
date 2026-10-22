@@ -170,6 +170,27 @@ const SNIFF_LEN: u64 = 64;
 /// still by its header is streamed like any other original and gets no derivatives.
 const MAX_HELD_STILL_BYTES: u64 = MAX_DECODE_PIXELS * 8;
 
+/// The EXIF of the `size`-byte file at `src`, or nothing for a file over
+/// [`MAX_HELD_STILL_BYTES`].
+///
+/// The EXIF reader can buffer a whole file whatever its container: a TIFF always (its IFD
+/// offsets may point anywhere), and a HEIF, PNG or WebP whose box or chunk sizes claim more than
+/// they hold. So the scan is bounded by the file's size, the same bound the decoder is held to,
+/// and every container is treated alike. Nothing real is lost: no camera still is that large, and
+/// the reader parses no video container, which is what files that large are.
+fn scan_exif(src: &Path, size: u64) -> ExifExtract {
+    if size > MAX_HELD_STILL_BYTES {
+        tracing::debug!(
+            path = %src.display(),
+            size,
+            limit = MAX_HELD_STILL_BYTES,
+            "import: file too large to scan for EXIF; capture time and GPS fall back"
+        );
+        return ExifExtract::default();
+    }
+    extract_exif(src).unwrap_or_default()
+}
+
 /// Read the first [`SNIFF_LEN`] bytes of `file` (fewer for a shorter file) and rewind it.
 fn read_head(file: &mut fs::File) -> io::Result<Vec<u8>> {
     let mut head = Vec::with_capacity(SNIFF_LEN as usize);
@@ -713,23 +734,7 @@ impl Workspace {
 
         // Scan & extract: capture time, dimensions, and GPS from the file's EXIF. Missing values
         // degrade cleanly (capture → now; dimensions/GPS → absent).
-        //
-        // The EXIF reader buffers a TIFF-structured file whole (its IFD offsets may point
-        // anywhere), so a TIFF-headed file over the held-still cap is not scanned: no real
-        // camera file is that large, and scanning it would hold the file the stream avoids.
-        let exif = if size > MAX_HELD_STILL_BYTES
-            && StillFormat::from_bytes(&head) == Some(StillFormat::Tiff)
-        {
-            tracing::warn!(
-                asset_id = %asset_id,
-                size,
-                "import: a TIFF-structured file too large to scan for EXIF; capture time and GPS \
-                 fall back"
-            );
-            ExifExtract::default()
-        } else {
-            extract_exif(src).unwrap_or_default()
-        };
+        let exif = scan_exif(src, size);
         let tz = resolve_timezone(&exif);
         // `S-B10`: a third-party import arrives with the adapter's folded exporter record. Its
         // capture time and GPS are *fallbacks* — the file's own EXIF wins wherever it yields a
@@ -1182,6 +1187,9 @@ fn release_blob_hashes(asset: &AssetState) -> Vec<Hash32> {
 }
 
 #[cfg(test)]
+mod stream_tests;
+
+#[cfg(test)]
 mod tests {
     use std::path::PathBuf;
 
@@ -1202,84 +1210,6 @@ mod tests {
 
     fn ts(secs: i64) -> Timestamp {
         Timestamp::from_second(secs).expect("in-range timestamp")
-    }
-
-    // ── The streamed original ──────────────────────────────────────────────
-
-    /// The head read identifies a file without consuming it: the stream that follows starts
-    /// at byte 0, and a file shorter than the sniff window is read whole.
-    #[test]
-    fn read_head_rewinds_and_stops_at_the_sniff_window() {
-        let dir = TempDir::new().unwrap();
-        let long = dir.path().join("long.bin");
-        let bytes: Vec<u8> = (0..200u8).collect();
-        fs::write(&long, &bytes).unwrap();
-        let mut file = fs::File::open(&long).unwrap();
-        assert_eq!(read_head(&mut file).unwrap(), &bytes[..SNIFF_LEN as usize]);
-        let mut rest = Vec::new();
-        file.read_to_end(&mut rest).unwrap();
-        assert_eq!(rest, bytes, "the head read rewinds");
-
-        let short = dir.path().join("short.bin");
-        fs::write(&short, b"tiny").unwrap();
-        assert_eq!(
-            read_head(&mut fs::File::open(&short).unwrap()).unwrap(),
-            b"tiny"
-        );
-    }
-
-    /// The tee hands the encryptor every byte unchanged, hashes exactly those bytes, and copies
-    /// exactly those bytes.
-    #[test]
-    fn tee_hashes_and_copies_what_it_passes() {
-        let dir = TempDir::new().unwrap();
-        let copy_path = dir.path().join("copy");
-        let bytes: Vec<u8> = (0..100_000u32).map(|i| (i % 253) as u8).collect();
-        let mut tee = Tee {
-            inner: bytes.as_slice(),
-            hasher: Sha256Hasher::new(),
-            copy: Some(fs::File::create(&copy_path).unwrap()),
-        };
-        let mut passed = Vec::new();
-        tee.read_to_end(&mut passed).unwrap();
-        let Tee { hasher, copy, .. } = tee;
-        drop(copy);
-        assert_eq!(passed, bytes);
-        assert_eq!(hasher.finalize(), hash::hash_bytes(&bytes));
-        assert_eq!(fs::read(&copy_path).unwrap(), bytes);
-    }
-
-    /// A staged original that is never committed — the import failed after the copy began —
-    /// takes its `.tmp` with it; a committed one lands at its media path.
-    #[test]
-    fn a_staged_original_is_removed_unless_committed() {
-        let dir = TempDir::new().unwrap();
-        let target = dir.path().join("asset.mp4");
-        let tmp = tmp_path(&target);
-
-        fs::write(&tmp, b"plaintext").unwrap();
-        drop(StagedOriginal(Some(Staged {
-            tmp: tmp.clone(),
-            target: target.clone(),
-        })));
-        assert!(
-            !tmp.exists(),
-            "an abandoned copy leaves no plaintext behind"
-        );
-        assert!(!target.exists());
-
-        fs::write(&tmp, b"plaintext").unwrap();
-        StagedOriginal(Some(Staged {
-            tmp: tmp.clone(),
-            target: target.clone(),
-        }))
-        .commit()
-        .unwrap();
-        assert!(!tmp.exists());
-        assert_eq!(fs::read(&target).unwrap(), b"plaintext");
-
-        // In place: nothing staged, nothing to commit.
-        StagedOriginal(None).commit().unwrap();
     }
 
     fn point(lat: f64, lon: f64, source: GpsSource) -> Gps {
