@@ -61,7 +61,10 @@ pub use self::open::HardwareDekBinding;
 pub use self::sync_apply::{
     QuarantineReason, RemoteAssetFacts, RemoteEntry, RemoteOriginal, SyncApplyOutcome,
 };
-pub use self::upload::{DerivativeBlob, OriginalCiphertext, UploadBundle};
+pub use self::upload::{
+    DerivativeBlob, OPAQUE_CONTENT_TYPE, OriginalCiphertext, UploadBundle,
+    WIRE_ORIGINAL_CONTENT_TYPES, wire_content_type,
+};
 use crate::backup::BackupError;
 use crate::crypto::CryptoError;
 use crate::crypto::authority::Authority;

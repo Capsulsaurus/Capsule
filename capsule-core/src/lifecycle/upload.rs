@@ -30,6 +30,45 @@ use crate::crypto::hash::{self, Hash32};
 use crate::crypto::provenance::{Action, DerivativeManifest, DerivativeRole, KeyMode};
 use crate::derivative_format::{DerivativeFormat, verify_still_format};
 
+/// The original media types the upload protocol's closed `content_type` enum names for this
+/// protocol version (server-side validation, invariant 5). Every other blob — and every
+/// original whose type is not here — declares [`OPAQUE_CONTENT_TYPE`], which the enum also
+/// names.
+///
+/// The enum is closed per protocol version, so it cannot name every format a user owns. An
+/// original is never refused for its type (SSoT: thumbnails § Media Is Rawshift's): a RAW, an
+/// AVI, a Matroska video or a file of no known kind uploads as opaque bytes, and its true type
+/// travels inside the encrypted sidecar, where a restore reads it back. The E2E suite fails if
+/// this list names a type the server's default enum does not.
+pub const WIRE_ORIGINAL_CONTENT_TYPES: &[&str] = &[
+    "image/jpeg",
+    "image/png",
+    "image/heic",
+    "image/heif",
+    "image/webp",
+    "image/avif",
+    "image/jxl",
+    "image/gif",
+    "image/tiff",
+    "video/mp4",
+    "video/quicktime",
+    "video/webm",
+];
+
+/// The `content_type` of a blob the server is not told the kind of.
+pub const OPAQUE_CONTENT_TYPE: &str = "application/octet-stream";
+
+/// The `content_type` an original of media type `content_type` declares on the wire: itself
+/// when the protocol's closed enum names it, [`OPAQUE_CONTENT_TYPE`] otherwise.
+#[must_use]
+pub fn wire_content_type(content_type: &str) -> &str {
+    if WIRE_ORIGINAL_CONTENT_TYPES.contains(&content_type) {
+        content_type
+    } else {
+        OPAQUE_CONTENT_TYPE
+    }
+}
+
 /// One derivative blob of an asset bundle: the **ciphertext** plus the content address its
 /// signed [`DerivativeManifest`] committed to.
 #[derive(Debug, Clone)]
@@ -79,7 +118,10 @@ pub struct UploadBundle {
     pub plaintext_size: u64,
     /// Plaintext bytes per STREAM chunk.
     pub chunk_size: u32,
-    /// The original's MIME type, from the signed sidecar.
+    /// The original's `content_type` **as declared on the wire**: the signed sidecar's MIME
+    /// type when the upload protocol's closed enum names it, otherwise the opaque
+    /// `application/octet-stream` ([`wire_content_type`]). The sidecar keeps the true type;
+    /// this is only what the server is told.
     pub content_type: String,
     /// How the file key is obtained (`derived` / `wrapped`).
     pub key_mode: KeyMode,
@@ -309,7 +351,7 @@ impl Workspace {
             ciphertext_hash,
             plaintext_size: head.plaintext_size,
             chunk_size: head.chunk_size,
-            content_type: asset.sidecar.content_type.clone(),
+            content_type: wire_content_type(&asset.sidecar.content_type).to_owned(),
             key_mode: head.key_mode,
             metadata_blob: asset.metadata_blob.clone(),
             metadata_blob_hash: head.metadata_blob_hash,
