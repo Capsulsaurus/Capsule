@@ -231,11 +231,13 @@ fn execute_candidate(
         let is_primary = *role == MemberRole::Primary || seq == 0;
         let membership = stack_membership(stack, *role, is_primary, seq);
         let enrichment = member_enrichment(source, path);
-        // Offline import: release the Move source on the local durable commit. The online /
-        // streaming path (S-B3) sets `defer_source_release` and gates on the server verdict.
+        // A Move source is never deleted on the local commit: until the server holds the asset
+        // it may be the only other copy (invariant 7). The caller releases it through
+        // `Workspace::release_move_source` once the server's custody clears the gate, using the
+        // asset id each `Imported` outcome carries.
         let opts = SignedImportOptions {
             move_source,
-            defer_source_release: false,
+            defer_source_release: true,
             stack: membership,
             enrichment,
         };
@@ -246,6 +248,7 @@ fn execute_candidate(
                 outcomes.push((
                     path.clone(),
                     ImportOutcome::Imported {
+                        asset_id: receipt.asset_id,
                         derivatives: receipt.derivatives,
                         deferred_formats: receipt.deferred_formats,
                     },
@@ -533,6 +536,7 @@ mod tests {
             ImportOutcome::Imported {
                 derivatives: DerivativeStatus::DeferredNoCodec,
                 deferred_formats: 0,
+                ..
             }
         ));
 
@@ -566,28 +570,121 @@ mod tests {
         assert_eq!(ws.db().query_timeline(0, 100).unwrap().len(), 1);
     }
 
-    #[test]
-    fn move_mode_deletes_source() {
-        let src = TempDir::new().unwrap();
-        let lib_dir = TempDir::new().unwrap();
-        let photo = src.path().join("move_me.jpg");
-        fs::write(&photo, b"jpeg to move").unwrap();
-
-        let mut ws = signed_workspace(lib_dir.path());
-        let scan_result = scan(&[src.path().to_path_buf()]).unwrap();
+    /// Run a Move-mode import of `src` into a fresh signed library at `lib`.
+    fn move_import(src: &Path, lib: &Path) -> (Workspace, ImportExecutionSummary) {
+        let mut ws = signed_workspace(lib);
+        let scan_result = scan(&[src.to_path_buf()]).unwrap();
         let config = ImportConfig {
             import_mode: ImportMode::Move,
             ..Default::default()
         };
         let plan_result = plan(&scan_result, ws.db(), &config).unwrap();
         let token = CancellationToken::new();
-        execute(&plan_result, &mut ws, &config, noop_event, &token).unwrap();
+        let summary = execute(&plan_result, &mut ws, &config, noop_event, &token).unwrap();
+        (ws, summary)
+    }
 
-        assert!(
-            !photo.exists(),
-            "source file should be deleted in move mode"
+    /// Invariant 7: the local commit is not custody, so a Move import keeps every source and
+    /// reports which asset holds it, for the caller to release through the server gate.
+    #[test]
+    fn move_mode_keeps_the_source_until_the_server_holds_it() {
+        let src = TempDir::new().unwrap();
+        let lib_dir = TempDir::new().unwrap();
+        let photo = src.path().join("move_me.jpg");
+        fs::write(&photo, b"jpeg to move").unwrap();
+
+        let (ws, summary) = move_import(src.path(), lib_dir.path());
+
+        assert_eq!(
+            fs::read(&photo).unwrap(),
+            b"jpeg to move",
+            "the local commit alone never deletes a Move source"
         );
         let ids = ws.asset_ids();
+        assert_eq!(ws.verify(&ids[0]).unwrap(), VerifyOutcome::Accept);
+        assert_eq!(summary.held_sources(), vec![(photo, ids[0])]);
+    }
+
+    /// The child half of [`sigkill_after_the_library_write_loses_neither_copy`]: run only when
+    /// that test re-executes this binary with `CAPSULE_TEST_SIGKILL_CHILD` naming the source
+    /// and library directories. It imports in Move mode, says so on stdout, then blocks on stdin
+    /// — the point between the library write and any source release — until it is killed.
+    #[test]
+    fn sigkill_child_imports_then_waits_to_be_killed() {
+        let Ok(dirs) = std::env::var("CAPSULE_TEST_SIGKILL_CHILD") else {
+            return;
+        };
+        let (src, lib) = dirs.split_once('\n').expect("source and library dirs");
+        let (_ws, summary) = move_import(Path::new(src), Path::new(lib));
+        assert_eq!(summary.imported_count(), 1);
+        println!("CAPSULE-SIGKILL-READY");
+        let mut line = String::new();
+        let _ = std::io::stdin().read_line(&mut line);
+    }
+
+    /// The issue's crash case: a process SIGKILLed between the library write and the source
+    /// delete never loses both copies. The child is this test binary, re-executed to run
+    /// [`sigkill_child_imports_then_waits_to_be_killed`], and killed with `SIGKILL` once it has
+    /// written the library — so nothing in it gets to run a destructor or flush a buffer. The
+    /// source must be intact, and a fresh process must open the library and verify the asset.
+    #[cfg(unix)]
+    #[test]
+    fn sigkill_after_the_library_write_loses_neither_copy() {
+        use std::io::BufRead as _;
+        use std::process::{Command, Stdio};
+
+        if std::env::var_os("CAPSULE_TEST_SIGKILL_CHILD").is_some() {
+            return;
+        }
+        let src = TempDir::new().unwrap();
+        let lib_dir = TempDir::new().unwrap();
+        let photo = src.path().join("only_copy.jpg");
+        fs::write(&photo, b"bytes that exist nowhere else").unwrap();
+
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "import::executor::tests::sigkill_child_imports_then_waits_to_be_killed",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(
+                "CAPSULE_TEST_SIGKILL_CHILD",
+                format!("{}\n{}", src.path().display(), lib_dir.path().display()),
+            )
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let stdout = std::io::BufReader::new(child.stdout.take().unwrap());
+        let ready = stdout
+            .lines()
+            .map_while(std::result::Result::ok)
+            .any(|line| line.contains("CAPSULE-SIGKILL-READY"));
+        assert!(ready, "the child never reached the post-write point");
+        // `Child::kill` is SIGKILL on Unix.
+        child.kill().unwrap();
+        let status = child.wait().unwrap();
+        assert!(!status.success(), "the child was killed, not finished");
+
+        assert_eq!(
+            fs::read(&photo).unwrap(),
+            b"bytes that exist nowhere else",
+            "the source survives the kill"
+        );
+        let ws = Workspace::open(
+            lib_dir.path(),
+            b"passphrase",
+            Argon2Params {
+                mem_kib: 64,
+                t_cost: 1,
+                p_cost: 1,
+            },
+        )
+        .unwrap();
+        let ids = ws.asset_ids();
+        assert_eq!(ids.len(), 1, "the library copy survives the kill");
         assert_eq!(ws.verify(&ids[0]).unwrap(), VerifyOutcome::Accept);
     }
 
