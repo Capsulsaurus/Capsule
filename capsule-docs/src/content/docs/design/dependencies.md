@@ -55,7 +55,9 @@ Every Rust version is pinned once in the root `[workspace.dependencies]`; member
 | CLI | `clap` (derive) | — |
 | Tooling image processing | `image` (`jpeg`, `png`) | xtask screenshot tooling only; no product crate may depend on it. |
 | Test runner | `cargo-nextest`; `testcontainers` for backing services | Binary smokes use `CARGO_BIN_EXE_<name>`; no `assert_cmd`. |
-| Property tests | `proptest` (dev-dependency, `std` only) | CRDT merge laws and generated inputs, per the [testing plan](/development/testing/). |
+| Property tests | `proptest` (dev-dependency, `std` only) | CRDT merge laws, canonical codecs and SDK fault schedules, per the [testing plan](/development/testing/). Seeded and printed; `PROPTEST_RNG_SEED` replays. |
+| Snapshot tests | `insta` (dev-dependency, no default features) | The CLI `--json` and exit-code contract; plain-string snapshots under `tests/snapshots/`. |
+| Fuzzing and mutation testing | `cargo-fuzz` (`libfuzzer-sys`), `cargo-mutants` | Tools, not dependencies of any shipped crate: the fuzz harness is its own workspace under `capsule-core/fuzz`. |
 | Unicode normalization | `unicode-normalization` | NFC for user labels ([Organization — Labels](/design/organization/#labels)); already transitive. |
 | FFI bindings | `uniffi` | One workspace version. |
 | Browser FFI (WASM) | `wasm-bindgen` + `wasm-bindgen-cli` at the same version | `capsule-wasm`; not wasm-pack (breaks the offline gate). |
