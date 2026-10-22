@@ -1263,12 +1263,30 @@ impl SwitchableSessions {
 pub(crate) struct SwitchableDrops {
     inner: InMemoryDrops,
     unavailable: AtomicBool,
+    file_fault: Mutex<Option<FileFault>>,
+}
+
+/// How the next [`DropStore::file`] goes wrong.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FileFault {
+    /// The move commits and its answer is lost: the caller sees an error.
+    AnswerLost,
+    /// The move never happens and the caller sees an error.
+    Refused,
 }
 
 impl SwitchableDrops {
     /// A working store.
     pub(crate) fn new() -> Self {
         Self::default()
+    }
+
+    /// Make the next `file` go wrong as `fault` says; every later one works.
+    pub(crate) fn fault_next_file(&self, fault: FileFault) {
+        *self
+            .file_fault
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(fault);
     }
 
     /// Make every subsequent operation fail, or stop.
@@ -1356,6 +1374,30 @@ impl DropStore for SwitchableDrops {
             return Box::pin(async { Self::refuse() });
         }
         self.inner.deposit(entry)
+    }
+
+    fn file<'a>(
+        &'a self,
+        upload: &'a UploadId,
+        address: &'a ContentAddress,
+        received_at: Timestamp,
+    ) -> StoreFuture<'a, Option<InboxEntry>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        let fault = self
+            .file_fault
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        match fault {
+            None => self.inner.file(upload, address, received_at),
+            Some(FileFault::Refused) => Box::pin(async { Self::refuse() }),
+            Some(FileFault::AnswerLost) => Box::pin(async move {
+                self.inner.file(upload, address, received_at).await?;
+                Self::refuse()
+            }),
+        }
     }
 
     fn inbox<'a>(&'a self, owner: &'a UserId) -> StoreFuture<'a, Vec<InboxEntry>> {

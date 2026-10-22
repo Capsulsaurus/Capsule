@@ -357,6 +357,64 @@ mod tests {
         );
     }
 
+    /// A replay says whether the session it lands on is full and unclaimed — the one state in
+    /// which the replay is the request left to finish it — and only then.
+    #[tokio::test]
+    async fn a_replay_names_a_full_session_nobody_has_finished() {
+        use crate::store::UploadSessionStore as _;
+
+        let (sessions, blobs, clock, stale) = opened_session("replayed-when-full", 8192).await;
+        let id = stale.upload_id.clone();
+        let first = [1u8; 4096];
+        let last = [2u8; 4096];
+
+        append(&sessions, &blobs, &clock, &stale, 0, &first, "a")
+            .await
+            .expect("the first chunk lands");
+        assert_eq!(
+            append(&sessions, &blobs, &clock, &stale, 0, &first, "a")
+                .await
+                .expect("the replay is answered"),
+            Accepted::Replayed {
+                next_offset: 4096,
+                unfinished: false
+            },
+            "a session still short of its size is not unfinished, merely in progress"
+        );
+
+        append(&sessions, &blobs, &clock, &stale, 4096, &last, "b")
+            .await
+            .expect("the completing chunk lands");
+        for (offset, bytes, hash, next_offset) in [(4096, &last, "b", 8192), (0, &first, "a", 4096)]
+        {
+            assert_eq!(
+                append(&sessions, &blobs, &clock, &stale, offset, bytes, hash)
+                    .await
+                    .expect("the replay is answered"),
+                Accepted::Replayed {
+                    next_offset,
+                    unfinished: true
+                },
+                "any replay on a full, unclaimed session names it unfinished"
+            );
+        }
+
+        sessions
+            .claim_finalize(&id)
+            .await
+            .expect("finalization claims the session");
+        assert_eq!(
+            append(&sessions, &blobs, &clock, &stale, 4096, &last, "b")
+                .await
+                .expect("the replay is answered"),
+            Accepted::Replayed {
+                next_offset: 8192,
+                unfinished: false
+            },
+            "a claimed session has a finisher"
+        );
+    }
+
     /// Finalization claimed the session before this chunk's turn came, with the offset still at
     /// the head the caller read. Nothing may land on a stage the finalizer is reading.
     #[tokio::test]
@@ -406,6 +464,14 @@ pub enum Accepted {
     Replayed {
         /// The offset that chunk already advanced to.
         next_offset: u64,
+        /// Whether the session holds every declared byte and nobody has claimed its finish.
+        ///
+        /// The state a session is left in when the request that completed it went away before
+        /// claiming finalization or the deposit — or the process did. The replay is then the
+        /// one request that can still finish it, so the caller runs the finish as it would for
+        /// [`Accepted::Advanced`] with `complete` set; the claim it takes makes a replay that
+        /// races the original request harmless.
+        unfinished: bool,
     },
     /// The same offset carried *different* bytes. Corruption, not a retry.
     Conflict,
@@ -556,9 +622,24 @@ pub async fn append(
             let recorded = sessions.chunk_at(id, offset).await?;
             return Ok(match recorded {
                 Some(chunk) if chunk.chunk_hash == received_hash => {
-                    tracing::debug!(upload_id = %id, offset, "an accepted chunk was replayed");
+                    let unfinished = record.received_bytes == record.total_size
+                        && matches!(
+                            record.status,
+                            crate::store::UploadSessionStatus::Pending
+                                | crate::store::UploadSessionStatus::Uploading
+                        );
+                    if unfinished {
+                        tracing::info!(
+                            upload_id = %id,
+                            offset,
+                            "a chunk was replayed on a full session nobody has finished"
+                        );
+                    } else {
+                        tracing::debug!(upload_id = %id, offset, "an accepted chunk was replayed");
+                    }
                     Accepted::Replayed {
                         next_offset: chunk.next_offset,
+                        unfinished,
                     }
                 }
                 Some(_) => Accepted::Conflict,
