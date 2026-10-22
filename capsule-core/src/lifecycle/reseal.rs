@@ -109,7 +109,14 @@ pub struct ResealOutcome {
 
 impl Workspace {
     /// Re-seal a never-published `create` at the album's current epoch, replacing its genesis
-    /// record (see the [module docs](self)).
+    /// record, so a create the server refused because the album's epoch moved past it can be
+    /// pushed again instead of being stranded on the device.
+    ///
+    /// An epoch rotation is a confidentiality boundary, so everything sealed under the old epoch
+    /// is sealed again under the current one: the original under a fresh `nonce_prefix`, the
+    /// unchanged signed sidecar under a fresh metadata-blob nonce, and the derivatives
+    /// regenerated as fresh chains. No prefix or nonce the asset has spent is drawn again, and
+    /// the old derivative bundle is removed before the new one is written.
     ///
     /// The caller is a push that the server refused with an epoch regression; this re-checks
     /// every precondition locally rather than trusting it, and refuses with

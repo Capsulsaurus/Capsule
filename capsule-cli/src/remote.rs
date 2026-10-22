@@ -1553,7 +1553,7 @@ impl AssetPusher<'_> {
                 );
                 let resealed = self.workspace.reseal_create(&asset_id).map_err(|error| {
                     AssetError::Reseal {
-                        refused: source,
+                        refused: *source,
                         error,
                     }
                 })?;
@@ -2376,7 +2376,7 @@ mod tests {
         let failure = AssetError::from(PushError::CreateRefused {
             asset_id: Uuid::from_u128(7).to_string(),
             amk_version: 2,
-            source: refused_create(),
+            source: Box::new(refused_create()),
         })
         .failure();
         assert_eq!(failure.kind, "create_refused");

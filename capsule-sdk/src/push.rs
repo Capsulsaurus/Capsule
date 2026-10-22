@@ -440,9 +440,9 @@ pub enum PushError {
         asset_id: String,
         /// The album epoch the refused manifest names.
         amk_version: u32,
-        /// The server's refusal.
+        /// The server's refusal, boxed to keep `PushError` small.
         #[source]
-        source: UploadError,
+        source: Box<UploadError>,
     },
     /// The scheduler planned a blob the bundle does not contain — an internal inconsistency
     /// between [`staged_asset`] and [`bundle_blobs`], surfaced rather than panicked on.
@@ -506,11 +506,11 @@ impl PushError {
     #[must_use]
     pub fn error_code(&self) -> Option<&str> {
         match self {
-            Self::Upload(UploadError::Rejected { code, .. })
-            | Self::CreateRefused {
-                source: UploadError::Rejected { code, .. },
-                ..
-            } => code.as_deref(),
+            Self::Upload(UploadError::Rejected { code, .. }) => code.as_deref(),
+            Self::CreateRefused { source, .. } => match source.as_ref() {
+                UploadError::Rejected { code, .. } => code.as_deref(),
+                _ => None,
+            },
             Self::Upload(UploadError::UpgradeRequired { .. }) => {
                 Some(capsule_i18n::error_codes::PROTOCOL_VERSION_UNSUPPORTED)
             }
@@ -673,7 +673,7 @@ fn classify_refusal(bundle: &UploadBundle, blob: &BundleBlob<'_>, error: UploadE
         return PushError::CreateRefused {
             asset_id: bundle.asset_id.to_string(),
             amk_version: bundle.amk_version,
-            source: error,
+            source: Box::new(error),
         };
     }
     PushError::Upload(error)

@@ -246,8 +246,10 @@ impl From<PushError> for FfiError {
     fn from(err: PushError) -> Self {
         // A transfer failure keeps the upload mapping (and with it the auth identity of a
         // refused credential); everything else a push can say is an upload-flow failure.
-        if let PushError::Upload(upload) | PushError::CreateRefused { source: upload, .. } = err {
-            return upload.into();
+        match err {
+            PushError::Upload(upload) => return upload.into(),
+            PushError::CreateRefused { source, .. } => return (*source).into(),
+            _ => {}
         }
         Self::Upload {
             code: err.error_code().map(str::to_string),
