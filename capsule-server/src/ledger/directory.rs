@@ -23,6 +23,11 @@
 //! An offer whose copy is missing or unusable is still in force from its position if its version
 //! advances (the store may have accepted it), but nothing verifies against it: a manifest that
 //! falls under it is refused as [`Refusal::DirectoryUnavailable`], and the copy is reported.
+//! When such an offer comes before any identity key is known, it may be the one that anchored
+//! the account, so no later offer can be judged against the anchor: every later offer is
+//! [`DirectoryFault::AnchorUnknown`] and vouches for nothing either. Taking the first usable copy
+//! as the anchor instead would let a foreign-key offer the store refused stand in for the
+//! account's own versions.
 //!
 //! # Which version is in force for a manifest
 //!
@@ -160,6 +165,10 @@ pub enum DirectoryFault {
     /// The document's version is not the one the entry recorded.
     #[error("the directory copy's version is not the one the ledger recorded")]
     VersionMismatch,
+    /// The copy is usable, but an earlier version with no usable copy came before any identity
+    /// key was known, so which key is the account's cannot be told.
+    #[error("the account's identity key is unknown: an earlier directory copy is unusable")]
+    AnchorUnknown,
 }
 
 /// Why a replayed manifest is not restored.
@@ -255,6 +264,8 @@ impl DirectoryHistory {
         verified: &[LedgerEntry],
     ) -> Result<(), LedgerError> {
         let mut anchor: Option<Vec<u8>> = None;
+        // Set when an offer with no usable copy came before any anchor was known.
+        let mut anchor_unknown = false;
         let mut stored: Option<u64> = None;
         let mut points = Vec::new();
         let mut faults = Vec::new();
@@ -271,6 +282,19 @@ impl DirectoryHistory {
             }
             let recorded_at = offer.recorded_at.parse::<Timestamp>().ok();
             match copy(ledger, owner, &offer).await? {
+                Ok(_) if anchor.is_none() && anchor_unknown => {
+                    // An earlier offer the store may have accepted, and so anchored on, has no
+                    // usable copy: which key is the account's is unknowable, and a copy under a
+                    // foreign key would otherwise become the anchor and discard the account's own
+                    // versions. Nothing after it is vouched for.
+                    tracing::warn!(%owner, seq = offer.ledger_seq, version = offer.directory_version, "a ledgered directory version follows one with no usable copy; its identity anchor is unknown");
+                    faults.push((offer.ledger_seq, DirectoryFault::AnchorUnknown));
+                    points.push(Point {
+                        seq: offer.ledger_seq,
+                        recorded_at,
+                        directory: None,
+                    });
+                }
                 Ok((identity_key, directory)) => {
                     if anchor.as_ref().is_some_and(|held| *held != identity_key) {
                         tracing::debug!(%owner, seq = offer.ledger_seq, "a ledgered directory offer was under another identity key; the store refused it");
@@ -285,6 +309,8 @@ impl DirectoryHistory {
                 }
                 Err(fault) => {
                     tracing::warn!(%owner, seq = offer.ledger_seq, version = offer.directory_version, %fault, "a ledgered directory version cannot be verified against");
+                    // Before any anchor, this offer may be the one that set it.
+                    anchor_unknown |= anchor.is_none();
                     faults.push((offer.ledger_seq, fault));
                     points.push(Point {
                         seq: offer.ledger_seq,

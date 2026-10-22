@@ -455,6 +455,65 @@ async fn a_version_with_no_usable_copy_vouches_for_nothing_and_is_reported() {
     );
 }
 
+/// When the earliest version has no usable copy, the account's identity key is unknown: a later
+/// copy under a foreign key does not become the anchor, and nothing after it is vouched for.
+#[tokio::test]
+async fn an_unusable_first_copy_leaves_the_anchor_unknown() {
+    let fixture = Fixture::new();
+    let ik = HybridSigningKey::generate();
+    let foreign = HybridSigningKey::generate();
+    let (key, intruder) = (HybridSigningKey::generate(), HybridSigningKey::generate());
+    let (a, x) = (Uuid::from_u128(0xA), Uuid::from_u128(0xE));
+    let owner = owner_of(USER);
+    // Version 1, the account's own and so its anchor, has no copy (an entry from before copies).
+    let missing = fixture
+        .ledger
+        .append(
+            &owner,
+            LedgerEvent::Directory {
+                user_id: USER.to_string(),
+                directory_version: 1,
+                document_hash: Hash32::from_bytes([7; 32]),
+            },
+            at(0),
+            &fixture.signer,
+        )
+        .await
+        .expect("an append")
+        .core
+        .seq;
+    // A foreign-key offer the store refused, then the account's own next version.
+    fixture
+        .publish(&foreign, 2, vec![device(x, &intruder, ADDED, None)])
+        .await;
+    fixture
+        .publish(&ik, 3, vec![device(a, &key, ADDED, None)])
+        .await;
+    let seq = fixture.other(USER).await;
+
+    let history = fixture.history(&[USER]).await;
+    assert_eq!(
+        history.faults(&owner),
+        &[
+            (missing, DirectoryFault::Missing),
+            (missing + 1, DirectoryFault::AnchorUnknown),
+            (missing + 2, DirectoryFault::AnchorUnknown),
+        ]
+    );
+    for signed in [
+        manifest(USER, x, &intruder, SIGNED),
+        manifest(USER, a, &key, SIGNED),
+    ] {
+        assert_eq!(
+            history.verify(&signed, position(&owner, seq)),
+            Err(Refusal::DirectoryUnavailable {
+                directory_seq: missing + 2
+            }),
+            "nothing after an unknown anchor is vouched for"
+        );
+    }
+}
+
 /// An oversized copy on disk is damage the history reports, not a failure that stops the walk.
 #[tokio::test]
 async fn an_oversized_copy_is_reported_not_read() {

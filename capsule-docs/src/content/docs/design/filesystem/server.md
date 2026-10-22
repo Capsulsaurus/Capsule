@@ -150,7 +150,9 @@ when it finds a fault ([`capsule-server::ledger::rebuild`](https://github.com/Ca
    and otherwise the last one the server's clock recorded no later than it, since two ledgers
    share no order. The versions come from the copies beside the ledger, replayed through the
    store's own checks (a version that does not strictly advance, or that is signed under
-   another identity key than the account's first, was refused and is not in force). A device
+   another identity key than the account's first, was refused and is not in force; when a
+   version with no usable copy comes before any key is known, the account's key is unknown and
+   no later version vouches for anything). A device
    the version in force does not list, or lists as revoked, or that was added after the
    manifest's timestamp, fails; a device a later version revoked does not. A manifest that
    fails, or that falls under a version whose copy is missing or does not match its entry, is
