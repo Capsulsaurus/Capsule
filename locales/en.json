@@ -7531,6 +7531,10 @@
     "message": "Capsule couldn't produce that response format.",
     "context": "HTTP 406 (slice S-C36): the `Accept` header names no representation the operation can produce."
   },
+  "error.request.range_not_satisfiable": {
+    "message": "Capsule couldn't send that part of the file.",
+    "context": "HTTP 416 on a blob read: the requested byte range starts past the end of the blob. A client resuming a download with a stale offset reaches it; re-fetching from the start recovers."
+  },
   "error.request.too_large": {
     "message": "That request was too large to accept.",
     "context": "HTTP 413 (slice S-C36): the request body passed the server's transport backstop and was abandoned before a handler saw it. Distinct from error.upload.chunk_too_large, which is the upload protocol's own bound and tells a client its chunking is wrong."

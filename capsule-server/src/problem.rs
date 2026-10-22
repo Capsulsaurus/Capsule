@@ -18,6 +18,7 @@
 //! | `413` | the body-size interceptor (`S-C33`) |
 //! | `400` | a `Path` or `Headers` extractor that could not decode |
 //! | `415`, `422` | the `Json` extractor |
+//! | `416` | a blob read's `Delivery`, for a range past the end |
 //! | `404`, `405`, `501` | the router's own fallbacks, for a request no operation answers |
 //!
 //! Between them those are a large share of what a client actually sees, and each one reached a
@@ -111,6 +112,8 @@ pub fn code_for(status: u16) -> &'static str {
         406 => error_codes::REQUEST_NOT_ACCEPTABLE,
         413 => error_codes::REQUEST_TOO_LARGE,
         415 => error_codes::REQUEST_UNSUPPORTED_MEDIA_TYPE,
+        // The blob reads' `Delivery`, for a range that starts past the last byte.
+        416 => error_codes::REQUEST_RANGE_NOT_SATISFIABLE,
         422 => error_codes::REQUEST_UNPROCESSABLE,
         501 => error_codes::REQUEST_NOT_IMPLEMENTED,
         _ => UNMAPPED,
@@ -339,7 +342,7 @@ mod tests {
     /// mapping that quietly falls through to `UNMAPPED` for a status the surface renders is not.
     #[test]
     fn every_status_the_surface_renders_has_its_own_code() {
-        for status in [400_u16, 401, 403, 404, 405, 406, 413, 415, 422, 501] {
+        for status in [400_u16, 401, 403, 404, 405, 406, 413, 415, 416, 422, 501] {
             assert_ne!(
                 code_for(status),
                 UNMAPPED,

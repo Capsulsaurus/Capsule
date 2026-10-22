@@ -380,6 +380,9 @@ pub mod error_codes {
     /// `error.request.not_implemented`
     pub const REQUEST_NOT_IMPLEMENTED: &str = "error.request.not_implemented";
 
+    /// `error.request.range_not_satisfiable`
+    pub const REQUEST_RANGE_NOT_SATISFIABLE: &str = "error.request.range_not_satisfiable";
+
     /// `error.request.too_large`
     pub const REQUEST_TOO_LARGE: &str = "error.request.too_large";
 

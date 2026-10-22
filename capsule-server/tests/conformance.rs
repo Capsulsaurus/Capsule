@@ -1277,13 +1277,18 @@ async fn every_declared_response_is_exercised() {
         .send()
         .await
         .assert_status(StatusCode::PRECONDITION_FAILED);
-    client
+    let unsatisfiable = client
         .get(&format!("/v1/blob/{address}"))
         .header("authorization", &bearer)
         .header("range", "bytes=1000000000-")
         .send()
-        .await
-        .assert_status(StatusCode::RANGE_NOT_SATISFIABLE);
+        .await;
+    unsatisfiable.assert_status(StatusCode::RANGE_NOT_SATISFIABLE);
+    let body: serde_json::Value = unsatisfiable.json();
+    assert_eq!(
+        body["code"], "error.request.range_not_satisfiable",
+        "{body}"
+    );
 
     // 500: the index could not answer, which must never look like a missing blob.
     fixture.index.set_unavailable(true);

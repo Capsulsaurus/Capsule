@@ -39379,6 +39379,16 @@
         }
       }
     },
+    "error.request.range_not_satisfiable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule couldn't send that part of the file."
+          }
+        }
+      }
+    },
     "error.request.too_large": {
       "localizations": {
         "en": {

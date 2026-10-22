@@ -1882,6 +1882,7 @@
   "error.request.not_acceptable": "Capsule couldn't produce that response format.",
   "error.request.not_found": "Capsule couldn't find that.",
   "error.request.not_implemented": "Capsule couldn't handle that request.",
+  "error.request.range_not_satisfiable": "Capsule couldn't send that part of the file.",
   "error.request.too_large": "That request was too large to accept.",
   "error.request.unauthenticated": "Please sign in again.",
   "error.request.unprocessable": "Some of that request didn't make sense.",
