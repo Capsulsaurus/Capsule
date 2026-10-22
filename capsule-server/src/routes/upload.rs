@@ -1553,7 +1553,7 @@ async fn finish_if_full(
 /// all three on headers.
 ///
 /// A session that holds every byte and whose finalization nobody claimed is finalized before it
-/// is reported (#830): a client resuming at an offset equal to the size sends nothing more, so
+/// is reported: a client resuming at an offset equal to the size sends nothing more, so
 /// this is the last request it makes about the session, and the state it reads is the one the
 /// finalization left.
 #[kynos::head("/v1/upload/{id}", operation_id = "head_upload", tag = UploadTag)]

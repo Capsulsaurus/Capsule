@@ -12163,7 +12163,7 @@
       },
       "head": {
         "summary": "Report a session's progress and state.",
-        "description": "The resumption primitive: a client that lost a connection, an acknowledgement, or a process\nasks here and learns the authoritative offset, the declared length and the session's state.\nThe answer carries **no body** — HTTP forbids one on `HEAD`, which is why the protocol puts\nall three on headers.",
+        "description": "The resumption primitive: a client that lost a connection, an acknowledgement, or a process\nasks here and learns the authoritative offset, the declared length and the session's state.\nThe answer carries **no body** — HTTP forbids one on `HEAD`, which is why the protocol puts\nall three on headers.\n\nA session that holds every byte and whose finalization nobody claimed is finalized before it\nis reported: a client resuming at an offset equal to the size sends nothing more, so\nthis is the last request it makes about the session, and the state it reads is the one the\nfinalization left.",
         "operationId": "head_upload",
         "parameters": [
           {
