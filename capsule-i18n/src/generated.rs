@@ -419,6 +419,18 @@ pub mod error_codes {
     /// `error.sync.cursor_stale`
     pub const SYNC_CURSOR_STALE: &str = "error.sync.cursor_stale";
 
+    /// `error.sync.reannounce_deleted`
+    pub const SYNC_REANNOUNCE_DELETED: &str = "error.sync.reannounce_deleted";
+
+    /// `error.sync.reannounce_denied`
+    pub const SYNC_REANNOUNCE_DENIED: &str = "error.sync.reannounce_denied";
+
+    /// `error.sync.reannounce_invalid`
+    pub const SYNC_REANNOUNCE_INVALID: &str = "error.sync.reannounce_invalid";
+
+    /// `error.sync.reannounce_malformed`
+    pub const SYNC_REANNOUNCE_MALFORMED: &str = "error.sync.reannounce_malformed";
+
     /// `error.sync.unauthenticated`
     pub const SYNC_UNAUTHENTICATED: &str = "error.sync.unauthenticated";
 

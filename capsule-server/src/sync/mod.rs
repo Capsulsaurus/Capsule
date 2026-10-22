@@ -33,6 +33,7 @@
 //! directory's public keys, and that is a slice of its own.
 
 pub mod cursor;
+pub mod reannounce;
 
 use std::sync::Arc;
 
