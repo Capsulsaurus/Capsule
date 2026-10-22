@@ -86,10 +86,16 @@ pub fn attestations_path(root: &Path, uuid: &Uuid, capture_utc: Option<i64>) -> 
     media_dir(root, year, month).join(format!("{}.attestations.cbor", uuid.simple()))
 }
 
-/// The `.cbor` logs the library keeps beside an asset's sidecar. They share the sidecar's
-/// suffix, so every walk that reads `{uuid}.cbor` sidecars must skip them by name.
-pub(crate) const SIBLING_LOG_SUFFIXES: [&str; 3] =
-    [".provenance.cbor", ".receipts.cbor", ".attestations.cbor"];
+/// The `.cbor` files the library keeps under `media/` that are not an asset's sidecar: the
+/// provenance, receipt and attestation logs beside it, and the derivative bundle the lifecycle
+/// writes as `derivatives/{uuid}.derivatives.cbor`. They share the sidecar's suffix, so every
+/// walk that reads `{uuid}.cbor` sidecars must skip them by name.
+pub(crate) const SIBLING_LOG_SUFFIXES: [&str; 4] = [
+    ".provenance.cbor",
+    ".receipts.cbor",
+    ".attestations.cbor",
+    ".derivatives.cbor",
+];
 
 /// Whether a file name under `media/` names an asset's sidecar: exactly `{uuid}.cbor`, never one
 /// of the [sibling logs](SIBLING_LOG_SUFFIXES). The one filter `rebuild_index`, `Workspace::open`
@@ -242,10 +248,10 @@ mod tests {
     fn only_the_bare_cbor_file_is_a_sidecar() {
         let id = test_uuid().simple().to_string();
         assert!(is_sidecar_file_name(&format!("{id}.cbor")));
-        for sibling in ["provenance", "receipts", "attestations"] {
+        for sibling in ["provenance", "receipts", "attestations", "derivatives"] {
             assert!(
                 !is_sidecar_file_name(&format!("{id}.{sibling}.cbor")),
-                "{sibling} is a sibling log, not a sidecar"
+                "{sibling} is a sibling file, not a sidecar"
             );
         }
         assert!(!is_sidecar_file_name(&format!(
