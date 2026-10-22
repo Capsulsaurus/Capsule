@@ -151,7 +151,9 @@ number of devices converge deterministically, and every change is a signed `meta
   `album_id`) are signed, versioned documents sealed under the album's current AMK, following
   the same rules as the sidecar: version first, unknown keys preserved under the signature,
   CRDT fields only. `AlbumDocV1` also carries the album's name (LWW), so a restored or newly
-  joined device sees it. Every member of a stack belongs to the same container album; moving
+  joined device sees it; the name follows the label rule at creation and at every rename.
+  On the device the records are plaintext at rest like sidecars
+  ([layout](/design/filesystem/client/#desktop-library-layout)). Every member of a stack belongs to the same container album; moving
   one member out removes it from the stack.
 - **Privacy.** Region labels can name people, so regions are stripped by default on export and
   from [share links](/design/share-links/), and kept only when the user opts in for that export

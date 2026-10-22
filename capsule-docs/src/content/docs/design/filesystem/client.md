@@ -18,6 +18,7 @@ Clients hold keys, so a client stores plaintext. A library routinely holds asset
 ├── index/library.sqlite        # rebuildable query + vector index
 └── .library/
     ├── version, config, lock
+    ├── docs/{albums,stacks}/{uuid}.cbor  # signed album and stack label records
     ├── trash/{uuid}.{ext}
     └── quarantine/{uuid}.{ext} + {uuid}.reason.json
 ```
@@ -26,7 +27,7 @@ Clients hold keys, so a client stores plaintext. A library routinely holds asset
 - The date bucket is fixed at import from the capture timestamp then known. A later capture-date correction does not move the bundle; the sidecar is authoritative and [maintenance](/design/filesystem/maintenance/#self-validation) repairs drift opportunistically.
 - **`cache/`** is derived and deletable at any time; never a source of truth. Formats: [Thumbnails](/design/thumbnails/#thumbnail-and-preview-formats).
 - **`index/library.sqlite`** is a query cache over the sidecars, the `sqlite-vec` index for [AI](/design/ai/), and the substrate for [view albums](/design/organization/#system--smart-albums-views). It is **migrated forward in place**, not dropped: a rebuild cannot recover projections never written to disk ([Versioning](/design/versioning/#client-catalog-migration)).
-- **`.library/`**: the `lock` file MUST prevent two processes opening one library. `quarantine/` preserves irreplaceable bytes that failed validation, verbatim, with the rejection reason ([Quarantine Surfaces](/design/threat-model/scenarios/#quarantine-surfaces)). A `version` bump rebuilds derived structures only and never touches canonical files.
+- **`.library/`**: the `lock` file MUST prevent two processes opening one library. `quarantine/` preserves irreplaceable bytes that failed validation, verbatim, with the rejection reason ([Quarantine Surfaces](/design/threat-model/scenarios/#quarantine-surfaces)). A `version` bump rebuilds derived structures only and never touches canonical files. `docs/` holds each album's and stack's signed [label record](/design/organization/#labels) as canonical CBOR, plaintext at rest like a sidecar and sealed under the album's AMK whenever it leaves the device.
 
 ## Mobile Clients
 
