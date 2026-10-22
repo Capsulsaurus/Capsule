@@ -605,6 +605,30 @@ mod tests {
         assert_eq!(summary.held_sources(), vec![(photo, ids[0])]);
     }
 
+    /// A re-run over sources the first run kept finds them as duplicates and still names the
+    /// asset that holds each, so the release can run then.
+    #[test]
+    fn a_rerun_lists_kept_sources_as_held_by_their_existing_asset() {
+        let src = TempDir::new().unwrap();
+        let lib_dir = TempDir::new().unwrap();
+        let photo = src.path().join("kept.jpg");
+        fs::write(&photo, b"kept by the first run").unwrap();
+        let (mut ws, first) = move_import(src.path(), lib_dir.path());
+        let asset = first.held_sources()[0].1;
+
+        let scan_result = scan(&[src.path().to_path_buf()]).unwrap();
+        let config = ImportConfig {
+            import_mode: ImportMode::Move,
+            ..Default::default()
+        };
+        let plan_result = plan(&scan_result, ws.db(), &config).unwrap();
+        let token = CancellationToken::new();
+        let again = execute(&plan_result, &mut ws, &config, noop_event, &token).unwrap();
+
+        assert_eq!(again.duplicate_count(), 1);
+        assert_eq!(again.held_sources(), vec![(photo, asset)]);
+    }
+
     /// The child half of [`sigkill_after_the_library_write_loses_neither_copy`]: run only when
     /// that test re-executes this binary with `CAPSULE_TEST_SIGKILL_CHILD` naming the source
     /// and library directories. It imports in Move mode, says so on stdout, then blocks on stdin
