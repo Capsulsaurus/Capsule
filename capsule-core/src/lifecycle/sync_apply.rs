@@ -109,7 +109,8 @@ use crate::sidecar::sidecar_v1::{SIDECAR_SCHEMA_V1, SidecarV1};
 #[derive(Debug, Clone, Copy)]
 pub struct RemoteEntry<'a> {
     /// The album the feed says this entry belongs to. Cross-checked against the manifest by
-    /// [`verify_asset`] itself ([`RejectReason::WrongAlbum`]), never trusted on its own.
+    /// [`verify_asset`](crate::crypto::verify_asset::verify_asset) itself
+    /// ([`RejectReason::WrongAlbum`]), never trusted on its own.
     pub album_id: Uuid,
     /// The signed `AssetManifest` as **opaque canonical CBOR**, carried verbatim.
     pub manifest_cbor: &'a [u8],
@@ -118,7 +119,8 @@ pub struct RemoteEntry<'a> {
     /// The asset's original ciphertext — required for the chokepoint's content-integrity step.
     pub original_ciphertext: &'a [u8],
     /// The provenance head **the receiving catalog** holds for this asset, or `None` if it has
-    /// never seen it. Passed straight through to [`verify_asset`]'s parameter of the same name,
+    /// never seen it. Passed straight through to
+    /// [`verify_asset`](crate::crypto::verify_asset::verify_asset)'s parameter of the same name,
     /// which is what decides replay ([`RejectReason::Replayed`]) and fork
     /// ([`RejectReason::ForgedChain`]).
     ///
@@ -130,8 +132,9 @@ pub struct RemoteEntry<'a> {
 }
 
 impl<'a> RemoteEntry<'a> {
-    /// This entry with its original named by the SHA-256 of [`original_ciphertext`]
-    /// (Self::original_ciphertext) — a digest these bytes back, so the head is no weaker.
+    /// This entry with its original named by the SHA-256 of
+    /// [`original_ciphertext`](Self::original_ciphertext) — a digest these bytes back, so the
+    /// head is no weaker.
     #[must_use]
     pub fn head(&self) -> RemoteHead<'a> {
         RemoteHead {
@@ -188,9 +191,11 @@ pub enum QuarantineReason {
     /// there is nothing to verify it against. Not a rejection of the entry — a statement that
     /// this device cannot adjudicate it.
     UnknownAlbum(Uuid),
-    /// [`verify_asset`] terminally rejected the manifest.
+    /// [`verify_asset`](crate::crypto::verify_asset::verify_asset) terminally rejected the
+    /// manifest.
     Rejected(RejectReason),
-    /// [`verify_asset`] rejected the manifest as [`RejectReason::BadDeviceSig`], and the
+    /// [`verify_asset`](crate::crypto::verify_asset::verify_asset) rejected the manifest as
+    /// [`RejectReason::BadDeviceSig`], and the
     /// rejection is the **legacy inherited-device defect** (issue #475), not a forgery: an older
     /// client's continuation names `named_device` (inherited from the chain head) but was signed
     /// by `signing_device`, another device of the same account, and every other step of the
@@ -224,7 +229,8 @@ pub enum QuarantineReason {
 
 /// The verified facts one remote entry contributes to the receiving catalog.
 ///
-/// Every field is downstream of an `Accept` from [`verify_asset`] plus — when the action carries
+/// Every field is downstream of an `Accept` from
+/// [`verify_asset`](crate::crypto::verify_asset::verify_asset) plus — when the action carries
 /// metadata — a bound, correctly signed sidecar, so a client may persist all of it without
 /// re-checking anything.
 #[derive(Debug, Clone, PartialEq)]
@@ -286,7 +292,8 @@ impl SyncApplyOutcome {
 }
 
 impl Workspace {
-    /// Apply one remote feed entry: verify it through the [`verify_asset`] chokepoint, bind and
+    /// Apply one remote feed entry: verify it through the
+    /// [`verify_asset`](crate::crypto::verify_asset::verify_asset) chokepoint, bind and
     /// open its metadata blob, and project the result into [`RemoteAssetFacts`].
     ///
     /// Read-only with respect to this workspace — it decides *what is true* and leaves *what to
