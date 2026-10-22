@@ -1312,6 +1312,7 @@ fn ffi_apply_and_open_from_disk_surface_bad_arguments_as_errors() {
     let album = workspace.create_album("Trip".into()).unwrap();
     let synced = synced_original(&workspace, &album, original_plaintext(1024), blobs.path());
     let missing = path_string(&blobs.path().join("missing.blob"));
+    let missing_path = missing.clone();
     let ciphertext = path_string(&synced.ciphertext_path);
 
     match workspace.apply_sync_entry_from_file(synced.head.clone(), missing.clone()) {
@@ -1332,11 +1333,31 @@ fn ffi_apply_and_open_from_disk_surface_bad_arguments_as_errors() {
     }
     let bad_head = FfiSyncHead {
         local_chain_head: Some(vec![0; 31]),
-        ..synced.head
+        ..synced.head.clone()
     };
-    match workspace.apply_sync_entry_from_file(bad_head, ciphertext) {
+    match workspace.apply_sync_entry_from_file(bad_head.clone(), ciphertext) {
         Err(FfiError::InvalidArgument { .. }) => {}
         other => panic!("expected InvalidArgument, got {other:?}"),
+    }
+    // A malformed argument is refused before any file is touched: paired with a ciphertext
+    // path that does not exist, it is still InvalidArgument, never the file's error.
+    let bad_album = FfiSyncHead {
+        album_id: vec![0; 3],
+        ..synced.head
+    };
+    for head in [bad_head, bad_album] {
+        match workspace.apply_sync_entry_from_file(head.clone(), missing_path.clone()) {
+            Err(FfiError::InvalidArgument { .. }) => {}
+            other => panic!("expected InvalidArgument before the file is read, got {other:?}"),
+        }
+        match workspace.open_synced_original(
+            head,
+            missing_path.clone(),
+            path_string(&blobs.path().join("out.jpg")),
+        ) {
+            Err(FfiError::InvalidArgument { .. }) => {}
+            other => panic!("expected InvalidArgument before the file is read, got {other:?}"),
+        }
     }
     assert!(!blobs.path().join("out.jpg").exists());
 }

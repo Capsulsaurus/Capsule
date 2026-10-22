@@ -462,14 +462,24 @@ impl<W> From<RemoteOriginal<W>> for FfiOpenedOriginal {
 }
 
 impl FfiSyncHead {
+    /// The entry's structural arguments, parsed: the album id and the caller's chain head.
+    /// Cheap, so a verb checks them before it reads any file.
+    fn parsed(&self) -> Result<(Uuid, Option<Hash32>), FfiError> {
+        Ok((
+            uuid_from_bytes("album_id", &self.album_id)?,
+            chain_head(self.local_chain_head.as_deref())?,
+        ))
+    }
+
     /// The core head for this entry, its original named by `original_ciphertext_hash`.
     fn remote(&self, original_ciphertext_hash: Hash32) -> Result<RemoteHead<'_>, FfiError> {
+        let (album_id, local_chain_head) = self.parsed()?;
         Ok(RemoteHead {
-            album_id: uuid_from_bytes("album_id", &self.album_id)?,
+            album_id,
             manifest_cbor: &self.manifest_cbor,
             metadata_blob: &self.metadata_blob,
             original_ciphertext_hash,
-            local_chain_head: chain_head(self.local_chain_head.as_deref())?,
+            local_chain_head,
         })
     }
 }
@@ -1126,19 +1136,27 @@ impl FfiWorkspace {
     /// not the committed ciphertext is quarantined as `Rejected.CiphertextHashMismatch`, as
     /// `apply_sync_entry` quarantines those bytes. Nothing is written anywhere.
     ///
-    /// The file is hashed before the workspace is locked, so other verbs are not held up while
-    /// a large original is read.
+    /// A malformed `album_id` or `local_chain_head` is refused before the file is opened, so a
+    /// bad argument never costs a read of the original. The file is hashed before the workspace
+    /// is locked, so other verbs are not held up while a large original is read.
     pub fn apply_sync_entry_from_file(
         &self,
         entry: FfiSyncHead,
         ciphertext_path: String,
     ) -> Result<FfiSyncApplyOutcome, FfiError> {
+        let (album_id, local_chain_head) = entry.parsed()?;
         let path = PathBuf::from(ciphertext_path);
         let file = std::fs::File::open(&path)
             .map_err(|e| local_io("opening the ciphertext file", &path, &e))?;
         let (digest, bytes) = hash_ciphertext_from(file)?;
         tracing::debug!(path = %path.display(), bytes, "ffi: synced original hashed from disk");
-        let head = entry.remote(digest)?;
+        let head = RemoteHead {
+            album_id,
+            manifest_cbor: &entry.manifest_cbor,
+            metadata_blob: &entry.metadata_blob,
+            original_ciphertext_hash: digest,
+            local_chain_head,
+        };
         self.with(|ws| Ok(ws.apply_remote_head(head)?.into()))
     }
 
