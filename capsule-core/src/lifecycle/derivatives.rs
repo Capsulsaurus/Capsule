@@ -53,10 +53,12 @@ use crate::sidecar::sidecar_v1::{Dimensions, Lqip as SidecarLqip};
 /// hidden that the signature had grown two *kinds* of input (the file, and the crypto identity
 /// it commits under) without saying so.
 pub(super) struct StillSource<'a> {
-    /// The file's bytes — or, for a file the import knows from its head is no still this build
-    /// decodes, only that head: the decoder's gate reads no further before refusing, so the
-    /// derivative status is the same, and an original of any size is never held to learn it.
+    /// The file's bytes — or only its head, when the import did not hold the file: one whose
+    /// head names no still this build decodes (the decoder's gate reads no further before
+    /// refusing, so the status is the same), or a decodable still too large to hold.
     pub(super) plaintext: &'a [u8],
+    /// The file's full size. Larger than `plaintext` exactly when only the head was passed.
+    pub(super) size: u64,
     /// Its lowercase extension without the dot, `""` when it has none.
     pub(super) ext: &'a str,
     /// Where it came from — for logs only; the bytes above are authoritative. An adopted guest
@@ -398,6 +400,7 @@ impl Workspace {
     ) -> Result<PreparedStill> {
         let StillSource {
             plaintext,
+            size,
             ext,
             src,
             exif,
@@ -410,6 +413,24 @@ impl Workspace {
         // header-derived even for a format with no codec: a HEIC is `image/heic` in the sidecar
         // whether or not this build can read its pixels.
         let sniffed = StillFormat::detect(plaintext, ext);
+        if (plaintext.len() as u64) < size && sniffed.is_some_and(StillFormat::is_decodable) {
+            // The importer declined to hold a file this large for the decoder. Reported as a
+            // failed decode, the bucket a still over the pixel budget lands in too: a
+            // supported format that produced no derivative, worth someone looking at.
+            tracing::warn!(
+                asset_id = %asset_id,
+                path = %src.display(),
+                format = ?sniffed,
+                size,
+                "derivatives: a still too large to hold for decoding; the original is imported \
+                 signed and encrypted, but without a thumbnail or LQIP"
+            );
+            return Ok(PreparedStill::undecoded(
+                sniffed,
+                exif_dimensions,
+                DerivativeStatus::DecodeFailed,
+            ));
+        }
 
         let decoded = match decode_guarded(&RawshiftDecoder, plaintext, ext) {
             Ok(decoded) => decoded,
@@ -1331,6 +1352,61 @@ mod tests {
                 crate::crypto::verify_asset::VerifyOutcome::Accept
             );
         }
+    }
+
+    /// A still the importer declined to hold — only its head was passed, for a file larger
+    /// than that head — is not decoded, even when the head alone is a whole decodable JPEG: it
+    /// reports `DecodeFailed` with the header-derived format and EXIF dimensions, and nothing
+    /// is generated. Passed whole, the same bytes decode.
+    #[test]
+    fn a_still_passed_by_its_head_alone_is_not_decoded() {
+        let lib = TempDir::new().unwrap();
+        let (ws, album) = workspace(lib.path());
+        let keys = ws.album(&album).unwrap();
+        let amk = Amk::from_bytes(keys.amks[&keys.current_epoch]);
+        let asset_id = Uuid::from_u128(0xB16);
+        let bytes = jpeg(32, 24, None);
+        let (original, _, _) =
+            crate::crypto::encryption::encrypt_asset_rekey(&amk, &asset_id, &bytes, None).unwrap();
+        let exif = ExifExtract {
+            width: Some(32),
+            height: Some(24),
+            ..ExifExtract::default()
+        };
+        let prepare = |size: u64| {
+            ws.prepare_still(
+                &StillSource {
+                    plaintext: &bytes,
+                    size,
+                    ext: "jpg",
+                    src: Path::new("big.jpg"),
+                    exif: &exif,
+                },
+                asset_id,
+                album,
+                0,
+                &amk,
+                &original,
+            )
+            .unwrap()
+        };
+
+        let declined = prepare(bytes.len() as u64 + 1);
+        assert_eq!(declined.status, DerivativeStatus::DecodeFailed);
+        assert_eq!(declined.format, Some(StillFormat::Jpeg));
+        assert_eq!(
+            declined.dimensions,
+            Some(Dimensions {
+                width: 32,
+                height: 24
+            })
+        );
+        assert!(declined.lqip.is_none());
+        assert!(declined.derivatives.is_empty());
+
+        let whole = prepare(bytes.len() as u64);
+        assert_eq!(whole.status, DerivativeStatus::Decoded);
+        assert!(whole.lqip.is_some());
     }
 }
 

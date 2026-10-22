@@ -33,7 +33,7 @@ use crate::crypto::verify_asset::{
 use crate::db::{AssetRow, CachedRepresentationRow};
 use crate::exif::{extract_exif, resolve_timezone};
 use crate::library::{ReleaseDecision, RetainReason, StorageVerifier, release_move_source};
-use crate::media::StillFormat;
+use crate::media::{MAX_DECODE_PIXELS, StillFormat};
 use crate::metadata::crdt::{Lww, OrSet};
 use crate::sidecar::normalize_label;
 use crate::sidecar::sidecar_v1::{
@@ -163,6 +163,12 @@ fn sync_dir_entries(dir: &Path) -> Result<()> {
 /// How much of a source's head is read to identify it: [`StillFormat::detect`] looks at the
 /// first 12 bytes, so this is headroom, not a format's requirement.
 const SNIFF_LEN: u64 = 64;
+
+/// The largest still an import holds in memory for the decoder: an uncompressed frame at the
+/// pixel budget, four 16-bit channels per pixel. No still the decoder would accept is larger
+/// (its pixels would exceed [`MAX_DECODE_PIXELS`]), so a file over this that names itself a
+/// still by its header is streamed like any other original and gets no derivatives.
+const MAX_HELD_STILL_BYTES: u64 = MAX_DECODE_PIXELS * 8;
 
 /// Read the first [`SNIFF_LEN`] bytes of `file` (fewer for a shorter file) and rewind it.
 fn read_head(file: &mut fs::File) -> io::Result<Vec<u8>> {
@@ -682,14 +688,15 @@ impl Workspace {
         // **Bounded memory, whatever the file's size.** The original is never read whole for
         // its own sake: it is hashed, encrypted and copied into the library in one streamed
         // pass below. The one exception is a still this build can decode, which the decoder
-        // takes as a buffer — its pixel budget (`MAX_DECODE_PIXELS`), not the file, bounds that
-        // — and which is then streamed from that same buffer, so the pixels and the signed hash
-        // come from the same bytes. Whether a file is such a still is settled from its head
-        // alone, exactly as the decoder's own gate settles it.
+        // takes as a buffer — at most `MAX_HELD_STILL_BYTES` — and which is then streamed from
+        // that same buffer, so the pixels and the signed hash come from the same bytes. Whether
+        // a file is such a still is settled from its head alone, exactly as the decoder's own
+        // gate settles it.
         let mut source = fs::File::open(src).map_err(read_err)?;
+        let size = source.metadata().map_err(read_err)?.len();
         let head = read_head(&mut source).map_err(read_err)?;
         let decodable = StillFormat::detect(&head, &ext).is_some_and(StillFormat::is_decodable);
-        let held = if decodable {
+        let held = if decodable && size <= MAX_HELD_STILL_BYTES {
             let mut whole = Vec::new();
             source.read_to_end(&mut whole).map_err(read_err)?;
             Some(whole)
@@ -699,6 +706,7 @@ impl Workspace {
         tracing::debug!(
             asset_id = %asset_id,
             decodable,
+            size,
             held_bytes = held.as_ref().map_or(0, Vec::len),
             "import: source identified; streaming the original"
         );
@@ -864,9 +872,10 @@ impl Workspace {
             status: derivative_status,
         } = self.prepare_still(
             &StillSource {
-                // The whole file for a decodable still; for anything else its head, which is
-                // all the decoder's gate reads before it refuses.
+                // The whole file for a held still; for anything else its head, which is all
+                // the decoder's gate reads before it refuses.
                 plaintext: held.as_deref().unwrap_or(&head),
+                size,
                 ext: &ext,
                 src,
                 exif: &exif,

@@ -332,6 +332,7 @@ impl crate::drop::DropAdopter for Workspace {
             .prepare_still(
                 &StillSource {
                     plaintext: &plaintext,
+                    size: plaintext.len() as u64,
                     ext: &ext,
                     src: &source_label,
                     exif: &ExifExtract::default(),
