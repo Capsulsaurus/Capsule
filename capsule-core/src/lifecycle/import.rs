@@ -31,7 +31,7 @@ use crate::crypto::verify_asset::{
     MetadataBinding, VerifyOutcome, verify_asset_hashed, verify_metadata_binding,
 };
 use crate::db::{AssetRow, CachedRepresentationRow};
-use crate::exif::{extract_exif, resolve_timezone};
+use crate::exif::{ExifExtract, extract_exif, resolve_timezone};
 use crate::library::{ReleaseDecision, RetainReason, StorageVerifier, release_move_source};
 use crate::media::{MAX_DECODE_PIXELS, StillFormat};
 use crate::metadata::crdt::{Lww, OrSet};
@@ -713,7 +713,23 @@ impl Workspace {
 
         // Scan & extract: capture time, dimensions, and GPS from the file's EXIF. Missing values
         // degrade cleanly (capture → now; dimensions/GPS → absent).
-        let exif = extract_exif(src).unwrap_or_default();
+        //
+        // The EXIF reader buffers a TIFF-structured file whole (its IFD offsets may point
+        // anywhere), so a TIFF-headed file over the held-still cap is not scanned: no real
+        // camera file is that large, and scanning it would hold the file the stream avoids.
+        let exif = if size > MAX_HELD_STILL_BYTES
+            && StillFormat::from_bytes(&head) == Some(StillFormat::Tiff)
+        {
+            tracing::warn!(
+                asset_id = %asset_id,
+                size,
+                "import: a TIFF-structured file too large to scan for EXIF; capture time and GPS \
+                 fall back"
+            );
+            ExifExtract::default()
+        } else {
+            extract_exif(src).unwrap_or_default()
+        };
         let tz = resolve_timezone(&exif);
         // `S-B10`: a third-party import arrives with the adapter's folded exporter record. Its
         // capture time and GPS are *fallbacks* — the file's own EXIF wins wherever it yields a

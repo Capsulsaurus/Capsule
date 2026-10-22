@@ -1144,10 +1144,16 @@ fn empty_library(lib: &TempDir) -> (Workspace, Uuid) {
 /// Import a sparse `size`-byte original named `name` and return the peak heap the import alone
 /// took, after checking that what it committed is the file. The source costs no disk; the
 /// library copy the import writes does.
-fn import_peak(name: &str, size: u64) -> usize {
+fn import_peak(name: &str, head: &[u8], size: u64) -> usize {
     let (lib, src) = (TempDir::new().unwrap(), TempDir::new().unwrap());
     let path = src.path().join(name);
-    fs::File::create(&path).unwrap().set_len(size).unwrap();
+    fs::write(&path, head).unwrap();
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_len(size)
+        .unwrap();
     let (mut ws, album) = empty_library(&lib);
     let (asset_id, peak) = crate::test_heap::peak_during(|| ws.import_asset(album, &path).unwrap());
 
@@ -1189,7 +1195,7 @@ fn import_peak(name: &str, size: u64) -> usize {
 #[test]
 fn import_holds_a_chunk_not_the_file() {
     const CEILING: usize = 4 << 20;
-    let peak = import_peak("clip.mp4", 32 << 20);
+    let peak = import_peak("clip.mp4", b"", 32 << 20);
     assert!(
         peak < CEILING,
         "peak heap {peak} B exceeds the {CEILING} B ceiling"
@@ -1203,7 +1209,21 @@ fn import_holds_a_chunk_not_the_file() {
 #[ignore = "encrypts 4 GiB and writes a 4 GiB library copy; run with --release -- --ignored"]
 fn four_gib_original_imports_in_bounded_memory() {
     const CEILING: usize = 4 << 20;
-    let peak = import_peak("clip.mp4", 4 << 30);
+    let peak = import_peak("clip.mp4", b"", 4 << 30);
+    assert!(
+        peak < CEILING,
+        "peak heap {peak} B exceeds the {CEILING} B ceiling"
+    );
+}
+
+/// A file that *names itself* a decodable still by its header — here a TIFF, which the EXIF
+/// reader would also buffer whole — is held neither for the decoder nor for the EXIF scan once
+/// it is past the held-still cap. Ignored for the same cost as the case above.
+#[test]
+#[ignore = "encrypts 4 GiB and writes a 4 GiB library copy; run with --release -- --ignored"]
+fn four_gib_file_with_a_still_header_imports_in_bounded_memory() {
+    const CEILING: usize = 4 << 20;
+    let peak = import_peak("scan.tif", b"II\x2A\x00\x08\x00\x00\x00", 4 << 30);
     assert!(
         peak < CEILING,
         "peak heap {peak} B exceeds the {CEILING} B ceiling"
