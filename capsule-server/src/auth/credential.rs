@@ -50,8 +50,8 @@
 use std::fmt;
 use std::time::Instant;
 
-use argon2::Argon2;
 use argon2::password_hash::{PasswordHash, PasswordHasher as _, PasswordVerifier as _, SaltString};
+use argon2::{Algorithm, Argon2, Params, Version};
 
 /// How many bytes of salt every hash carries.
 ///
@@ -109,6 +109,22 @@ impl Credentials {
     /// cannot authenticate anybody and must refuse to start.
     pub fn new() -> Result<Self, CredentialError> {
         let argon = Argon2::default();
+        let decoy = hash_with(&argon, DECOY_PASSWORD)?;
+        Ok(Self { argon, decoy })
+    }
+
+    /// A verifier at the smallest Argon2id cost the crate accepts (8 KiB, one pass), for tests.
+    ///
+    /// `#[cfg(test)]`, so it does not exist in a production build and [`crate::boot`] cannot
+    /// reach it: the one constructor a running server uses is [`Credentials::new`]. The suites
+    /// that exercise an account store hash hundreds of passwords, and at production cost that is
+    /// minutes of CPU that proves nothing about the store.
+    #[cfg(test)]
+    pub(crate) fn with_reduced_cost() -> Result<Self, CredentialError> {
+        let params = Params::new(8, 1, 1, None).map_err(|error| CredentialError {
+            detail: error.to_string(),
+        })?;
+        let argon = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
         let decoy = hash_with(&argon, DECOY_PASSWORD)?;
         Ok(Self { argon, decoy })
     }
@@ -366,6 +382,31 @@ mod tests {
                 .expect("the task finished")
                 .expect("it reads")
         );
+    }
+
+    #[tokio::test]
+    async fn the_production_constructor_keeps_the_documented_argon2id_parameters() {
+        let stored = Credentials::new()
+            .expect("the platform hashes")
+            .hash("pw")
+            .await
+            .expect("it hashes");
+        assert!(
+            stored.starts_with("$argon2id$v=19$m=19456,t=2,p=1$"),
+            "{stored}"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_reduced_cost_constructor_is_cheaper_and_still_verifies() {
+        let credentials = Credentials::with_reduced_cost().expect("the platform hashes");
+        let stored = credentials.hash("pw").await.expect("it hashes");
+        assert!(
+            stored.starts_with("$argon2id$v=19$m=8,t=1,p=1$"),
+            "{stored}"
+        );
+        assert!(credentials.verify("pw", &stored).await.expect("it reads"));
+        assert!(!credentials.verify("no", &stored).await.expect("it reads"));
     }
 
     #[test]
