@@ -72,6 +72,19 @@
 //! chain, its feed position — is untouched. Applying first would be worse and unrecoverably so:
 //! it would point the feed at bytes the store might never receive.
 //!
+//! # The owner ledger brackets the index call
+//!
+//! Every op is a [`LedgerEvent::Lifecycle`] in the album owner's [ledger](crate::ledger)
+//! before the index is asked to apply it, carrying the asset, the action and the manifest hash
+//! — and no `sync_seq`, which the index has not minted yet. A ledger that cannot append refuses
+//! the op with the surface's `500` and nothing is applied, so the index never holds a change
+//! the blob root cannot account for. Once the index answers `Applied` or `Replayed`, a second
+//! `Lifecycle` entry carries the sequence number it holds; that one is best-effort, as
+//! finalization's `indexed` entry is. An op the index refuses (a stale chain, a regressed
+//! epoch, an asset that is not there) leaves only the first entry, and a rebuild replaying it
+//! re-runs the same checks and refuses it again — the ledger is the record of what was
+//! attempted in what order, and the index's checks are what decide it.
+//!
 //! # Idempotency without remembering any bytes
 //!
 //! The contract says a replayed manifest returns the **byte-identical** prior response. The
@@ -104,10 +117,12 @@ use capsule_i18n::error_codes;
 use kynos::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::attestation::AttestationContext;
 use crate::auth::AccessToken;
 use crate::blob::ContentAddress;
 use crate::index::{LifecycleOp, OpAction, OpOutcome};
-use crate::store::{AlbumId, AssetId};
+use crate::ledger::LedgerEvent;
+use crate::store::{AlbumId, AssetId, OwnerId};
 use crate::upload::envelope::{GateContext, GateReject, ManifestEnvelope, check_op};
 use crate::upload::{AlbumWriteAccess, UploadContext};
 
@@ -284,6 +299,7 @@ pub enum OpRejection {
 )]
 pub async fn apply_op(
     Inject(upload): Inject<UploadContext>,
+    Inject(attestation): Inject<AttestationContext>,
     Inject(quota): Inject<crate::quota::QuotaContext>,
     Inject(moderation): Inject<crate::moderation::ModerationContext>,
     Auth(credential): Auth<AccessToken>,
@@ -454,6 +470,12 @@ pub async fn apply_op(
     let manifest_hash = hash_bytes(&manifest);
     let provenance = parse_address(&manifest_hash.to_hex())?;
 
+    // The last two envelope fields the index needs, parsed before anything is stored or
+    // ledgered: a malformed one is the client's `400`, and refusing it after the ledger append
+    // would leave an entry for an op that never reached the index's checks.
+    let prior_provenance_hash = prior_hash(&request.manifest_envelope)?;
+    let retention_until = retention_floor(&request.manifest_envelope)?;
+
     // The bundle's bytes land before the op is applied, and the ordering is deliberate.
     //
     // The authorization doc says a rejection "writes nothing". Read literally that would forbid
@@ -472,20 +494,39 @@ pub async fn apply_op(
         store(&upload, address, bytes).await?;
     }
 
+    // The owner ledger, before the index is touched (#753): an op the ledger cannot record is
+    // refused, so no lifecycle change exists that a rebuild from the blob root would miss.
+    let asset_id = AssetId::new(&request.manifest_envelope.file_id);
+    let op_action = wire_action(action);
+    attestation
+        .append_to_ledger(
+            &owner,
+            lifecycle_event(&asset_id, op_action, manifest_hash, None),
+            now,
+        )
+        .await
+        .map_err(|error| {
+            tracing::error!(
+                %error, %owner, asset = %asset_id,
+                "the owner ledger could not record a lifecycle write; nothing was applied"
+            );
+            OpRejection::unavailable()
+        })?;
+
     let outcome = upload
         .index()
         .apply_op(LifecycleOp {
-            asset_id: AssetId::new(&request.manifest_envelope.file_id),
+            asset_id: asset_id.clone(),
             owner_id: owner.clone(),
             album_id: album,
-            action: wire_action(action),
+            action: op_action,
             manifest_hash,
-            prior_provenance_hash: prior_hash(&request.manifest_envelope)?,
+            prior_provenance_hash,
             amk_version: u64::from(request.manifest_envelope.amk_version),
             provenance,
             original: None,
             metadata: metadata_address,
-            retention_until: retention_floor(&request.manifest_envelope)?,
+            retention_until,
             at: now,
         })
         .await
@@ -494,8 +535,24 @@ pub async fn apply_op(
             OpRejection::unavailable()
         })?;
 
+    // What the write committed, for the rebuild that has to reproduce its sequence number. A
+    // replay records it too: the client is retrying because an answer was lost, which is exactly
+    // when this entry may have been lost with it.
+    if let OpOutcome::Applied { sync_seq, .. } | OpOutcome::Replayed { sync_seq } = &outcome {
+        ledger_committed(
+            &attestation,
+            &owner,
+            &asset_id,
+            op_action,
+            manifest_hash,
+            *sync_seq,
+            now,
+        )
+        .await;
+    }
+
     let asset_id = request.manifest_envelope.file_id.clone();
-    let action_wire = wire_action(action).as_str().to_owned();
+    let action_wire = op_action.as_str().to_owned();
     match outcome {
         OpOutcome::Applied { sync_seq, .. } => Ok(Json(OpResponse {
             asset_id,
@@ -539,6 +596,47 @@ async fn store(
             tracing::error!(%error, %address, "the blob store could not hold a lifecycle bundle");
             OpRejection::unavailable()
         })
+}
+
+/// The owner-ledger entry for a lifecycle op: before the index call `sync_seq` is `None`, and
+/// once the index has answered it is the position the op holds.
+fn lifecycle_event(
+    asset_id: &AssetId,
+    action: OpAction,
+    manifest_hash: Hash32,
+    sync_seq: Option<u64>,
+) -> LedgerEvent {
+    LedgerEvent::Lifecycle {
+        asset_id: asset_id.as_str().to_owned(),
+        action: action.as_str().to_owned(),
+        manifest_hash: Some(manifest_hash),
+        sync_seq,
+    }
+}
+
+/// Append the entry that carries the sequence number an applied (or replayed) op holds.
+///
+/// Best-effort, as finalization's `indexed` entry is: the op has committed and the client is
+/// about to be told so. A lost entry leaves the op's first entry unresolved, and a rebuild
+/// replays it through the index's own replay key (the manifest hash) and cannot prove the
+/// sequence number, which it handles like a lost tail.
+async fn ledger_committed(
+    attestation: &AttestationContext,
+    owner: &OwnerId,
+    asset_id: &AssetId,
+    action: OpAction,
+    manifest_hash: Hash32,
+    sync_seq: u64,
+    now: jiff::Timestamp,
+) {
+    let event = lifecycle_event(asset_id, action, manifest_hash, Some(sync_seq));
+    if let Err(error) = attestation.append_to_ledger(owner, event, now).await {
+        tracing::error!(
+            %error, %owner, asset = %asset_id, sync_seq,
+            "the owner ledger could not record a lifecycle write that committed; \
+             a rebuild will not be able to prove this owner's sequence"
+        );
+    }
 }
 
 /// Decode one base64 member of the bundle.
