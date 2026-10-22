@@ -140,6 +140,10 @@ pub const EXPECTED_MIGRATIONS: &[ExpectedMigration] = &[
         name: "m20260902_000021_owner_sync_epochs",
         checksum: "09189a91cf219a53db34c8d0a87a9487adb5c5aa188ae31e2a9b1bd1753ed3a2",
     },
+    ExpectedMigration {
+        name: "m20260902_000022_owner_ledger_heads",
+        checksum: "cd50fc0244c5839915f2e4f302b4e345799369dd56c4c6b5e5d32382d1b8a238",
+    },
 ];
 
 /// The command an operator runs to apply them.

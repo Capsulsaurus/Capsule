@@ -2329,6 +2329,82 @@ async fn finalization_ledgers_custody_then_the_index_write() {
     assert_eq!(indexed.core.prior_entry_hash, Some(custody.chain_hash()));
 }
 
+/// Every append records the ledger's head in the index, so a later tail cut at an entry
+/// boundary is caught against it (#757).
+#[tokio::test]
+async fn finalization_anchors_the_ledger_head_in_the_index() {
+    use capsule_server::index::AssetIndex as _;
+    use capsule_server::ledger::LedgerHead;
+
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    transfer(&fixture, &bearer).await;
+
+    let entries = verified_ledger(&fixture).await;
+    let last = entries.last().expect("the finalization ledgered");
+    assert_eq!(
+        fixture
+            .index
+            .ledger_head(&owner())
+            .await
+            .expect("the index answers"),
+        Some(LedgerHead {
+            seq: last.core.seq,
+            hash: last.chain_hash(),
+        }),
+        "the anchor is the ledger's last entry"
+    );
+}
+
+/// An index that cannot record the head does not fail an append that is already durable: the
+/// anchor stays behind, which weakens the check and never fakes a fault.
+#[tokio::test]
+async fn an_index_that_cannot_anchor_does_not_fail_the_append() {
+    use std::sync::Arc;
+
+    use capsule_server::index::AssetIndex as _;
+    use capsule_server::ledger::{AnchoredLedger, InMemoryLedger, LedgerEvent, OwnerLedger as _};
+
+    let fixture = Fixture::working();
+    let inner = Arc::new(InMemoryLedger::new());
+    let index = Arc::new(support::SwitchableIndex::new());
+    let ledger = AnchoredLedger::new(inner.clone(), index.clone());
+    index.set_unavailable(true);
+
+    let entry = ledger
+        .append(
+            &owner(),
+            LedgerEvent::Directory {
+                user_id: "user-1".to_owned(),
+                directory_version: 1,
+                document_hash: capsule_core::crypto::hash::hash_bytes(b"directory"),
+            },
+            jiff::Timestamp::UNIX_EPOCH,
+            fixture.attestation_key.as_ref(),
+        )
+        .await
+        .expect("the append is not failed by the anchor");
+    assert_eq!(entry.core.seq, 1);
+    assert_eq!(
+        inner
+            .scan(&owner())
+            .await
+            .expect("the ledger reads")
+            .entries,
+        vec![entry]
+    );
+
+    index.set_unavailable(false);
+    assert_eq!(
+        index
+            .ledger_head(&owner())
+            .await
+            .expect("the index answers"),
+        None,
+        "nothing was anchored while the index was down"
+    );
+}
+
 /// A crash between the ledger append and the index commit leaves a replayable entry and no row:
 /// the entry names the blob and the asset, and nothing was indexed.
 #[tokio::test]

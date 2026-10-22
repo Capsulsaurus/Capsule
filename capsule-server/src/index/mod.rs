@@ -67,6 +67,7 @@ use jiff::Timestamp;
 
 use crate::attestation::{ReceiptDraft, ReceiptSigner};
 use crate::blob::ContentAddress;
+use crate::ledger::LedgerHead;
 use crate::store::{AlbumId, AssetId, BlobRole, OwnerId, StoreFuture};
 
 /// The future every index operation returns.
@@ -897,6 +898,39 @@ pub trait AssetIndex: std::fmt::Debug + Send + Sync {
     /// never goes backwards: an epoch a client has seen must never be reachable again, or a
     /// cursor from it would be accepted against numbers it never saw.
     fn bump_sync_epoch<'a>(&'a self, owner: &'a OwnerId) -> IndexFuture<'a, u64>;
+
+    /// The head of `owner`'s ledger as last recorded, or `None` when nothing was
+    /// ([Server Filesystem § The Owner Ledger]).
+    ///
+    /// The anchor rebuild and the scrub verify the ledger against: a ledger that ends below it
+    /// lost a tail cut at an entry boundary, which the chain cannot show on its own.
+    ///
+    /// [Server Filesystem § The Owner Ledger]: https://github.com/Capsulsaurus/Capsule/blob/master/capsule-docs/src/content/docs/design/filesystem/server.md#the-owner-ledger
+    fn ledger_head<'a>(&'a self, owner: &'a OwnerId) -> IndexFuture<'a, Option<LedgerHead>>;
+
+    /// Record `head` as `owner`'s ledger head if it is past the one recorded.
+    ///
+    /// Raise-only, in one critical section: appends for one owner may record out of order, and
+    /// a lower head arriving late must not pull the anchor back below an entry the ledger
+    /// durably holds. A head at the recorded position is ignored, so a second entry claiming
+    /// that position cannot replace the first one's hash.
+    fn record_ledger_head<'a>(
+        &'a self,
+        owner: &'a OwnerId,
+        head: LedgerHead,
+    ) -> IndexFuture<'a, ()>;
+
+    /// Set `owner`'s ledger head to `head`, lower or not; `None` clears it.
+    ///
+    /// Only an index rebuild under `--apply` calls this, after it has reported a ledger that
+    /// ends below its anchor and moved the owner to a new sync epoch: the loss is acknowledged,
+    /// and the anchor follows the ledger that is left so the next append is not judged against
+    /// entries that are gone.
+    fn reset_ledger_head<'a>(
+        &'a self,
+        owner: &'a OwnerId,
+        head: Option<LedgerHead>,
+    ) -> IndexFuture<'a, ()>;
 
     /// Insert `row`, reconstructed by an index rebuild, unless a row for its asset exists.
     ///

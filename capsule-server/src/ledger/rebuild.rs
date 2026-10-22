@@ -2,8 +2,11 @@
 //!
 //! [Server Filesystem § Rebuild] is the contract. Per owner:
 //!
-//! 1. Verify the ledger chain ([`LedgerKeys::verify`]). A break stops that owner's replay at
-//!    the last good entry and is reported; other owners continue.
+//! 1. Verify the ledger chain ([`LedgerKeys::verify`]) against the head the index recorded
+//!    ([`AssetIndex::ledger_head`]), so a tail cut at an entry boundary is a break too. A break
+//!    stops that owner's replay at the last good entry and is reported; other owners continue.
+//!    Under `--apply` the recorded head is then raised to the verified one, or, after a cut,
+//!    moved down to it ([`super`]'s "Where the anchor lives").
 //! 2. Replay the verified entries in ledger order: each custody entry the index did not refuse
 //!    (an upload or a drop adoption) and each lifecycle op (a delete, a restore, a metadata
 //!    update, a derivative, a retention purge). Read each named blob's presence, decode each
@@ -305,7 +308,10 @@ async fn rebuild_owner(
     named: &mut BTreeSet<ContentAddress>,
 ) -> Result<OwnerReport, RebuildError> {
     let scan = context.ledger.scan(owner).await?;
-    let chain = context.keys.verify(owner, &scan);
+    let anchor = context.index.ledger_head(owner).await?;
+    let chain = context.keys.verify(owner, &scan, anchor);
+    let cut = matches!(chain.fault, Some(ChainFault::BehindAnchor { .. }));
+    let verified_head = chain.head;
     let mut report = OwnerReport {
         owner: owner.clone(),
         verified: chain.verified,
@@ -399,7 +405,32 @@ async fn rebuild_owner(
     if mode == Mode::Apply && report.epoch_bump_needed {
         report.epoch = Some(context.index.bump_sync_epoch(owner).await?);
     }
+    if mode == Mode::Apply {
+        reanchor(context, owner, cut, verified_head).await?;
+    }
     Ok(report)
+}
+
+/// Bring `owner`'s recorded ledger head in line with what this pass verified.
+///
+/// A cut the pass reported (the ledger ends below its anchor) has been acknowledged by the
+/// epoch bump just made, so the anchor is moved **down** to the head that is left: otherwise the
+/// next append would land at a position the stale anchor names, and every later pass would
+/// report a rewrite there and stop replaying. Every other outcome only **raises** it, so a
+/// rebuild into an empty schema anchors the chain it verified, and a rewrite the anchor caught
+/// ([`ChainFault::AnchorMismatch`]) keeps its evidence.
+async fn reanchor(
+    context: &RebuildContext,
+    owner: &OwnerId,
+    cut: bool,
+    verified: Option<super::LedgerHead>,
+) -> Result<(), RebuildError> {
+    if cut {
+        context.index.reset_ledger_head(owner, verified).await?;
+    } else if let Some(head) = verified {
+        context.index.record_ledger_head(owner, head).await?;
+    }
+    Ok(())
 }
 
 /// Fold one custody entry into its asset's facts.

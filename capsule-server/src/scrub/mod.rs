@@ -767,7 +767,10 @@ async fn ledger_agrees(context: &ScrubContext, report: &mut ScrubReport) -> Resu
     report.ledger_links_only = !keys.checks_signatures();
     for owner in ledger.owners().await.map_err(ledger_failure)? {
         let scan = ledger.scan(&owner).await.map_err(ledger_failure)?;
-        let chain = keys.verify(&owner, &scan);
+        // The head the index recorded: without it a tail cut at an entry boundary reads as a
+        // shorter, valid ledger.
+        let anchor = context.index.ledger_head(&owner).await?;
+        let chain = keys.verify(&owner, &scan, anchor);
         if let Some(fault) = chain.fault {
             report.findings.push(Finding::LedgerBroken {
                 owner: owner.clone(),

@@ -66,10 +66,23 @@
 //! frame that does not decode). The one thing a chain cannot see on its own is a tail cut
 //! exactly at an entry boundary: what is left is a valid shorter chain. That is detected
 //! against an **anchor** — a head recorded outside the ledger — which is why [`verify_chain`]
-//! takes one. No store records one yet: neither an index row nor a receipt carries a ledger
-//! position or hash, and recording the head is #757's. Until then the weaker check available
-//! is the index's own: an owner row whose `sync_seq` is above every [`LedgerEvent::Indexed`]
-//! entry's means the ledger lost a tail, or the append after that write failed.
+//! and [`verify_links`] take one.
+//!
+//! # Where the anchor lives
+//!
+//! In the asset index, one `(seq, hash)` per owner ([`crate::index::AssetIndex::ledger_head`]).
+//! [`AnchoredLedger`] wraps the ledger every producer appends to and records each entry's head
+//! there once the append is durable, raising it and never lowering it. So the anchor is never
+//! ahead of what the ledger durably held, and a ledger that later ends below it lost a tail
+//! ([`ChainFault::BehindAnchor`]). Rebuild and the scrub read it per owner and pass it to the
+//! verifier. Recording is best-effort, as the `indexed` entry is: a lost record leaves the
+//! anchor behind the ledger, which weakens the check and never fakes a fault.
+//!
+//! The anchor survives exactly when the index does. A rebuild into an empty schema has none and
+//! checks the chain alone; one alongside a restored backup checks against the head as it stood
+//! at the backup. The one write that lowers it is a rebuild under `--apply` that has reported a
+//! cut and moved the owner to a new sync epoch: it re-anchors at the head it verified, so the
+//! loss is reported once and appends after it are not judged against entries that are gone.
 //!
 //! # The byte format
 //!
@@ -103,6 +116,7 @@
 //!
 //! [Server Filesystem § The Owner Ledger]: https://github.com/Capsulsaurus/Capsule/blob/master/capsule-docs/src/content/docs/design/filesystem/server.md#the-owner-ledger
 
+pub mod anchored;
 pub mod conformance;
 pub mod fs;
 pub mod manifest;
@@ -122,6 +136,7 @@ use jiff::Timestamp;
 use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
 
+pub use self::anchored::AnchoredLedger;
 pub use self::fs::FilesystemLedger;
 pub use self::memory::InMemoryLedger;
 use crate::attestation::ReceiptSigner;
@@ -721,45 +736,23 @@ fn link_one(
 }
 
 /// Verify `owner`'s scanned ledger as far as it can be without the attestation key: positions,
-/// links, owner, and the decode damage the scan met.
+/// links, owner, the decode damage the scan met, and the anchor.
 ///
 /// What a maintenance host holding no key material can establish. It finds a removed,
-/// reordered, moved or torn entry, and a dropped head; it cannot find an entry edited by
-/// someone who also re-linked every successor, which only the signatures catch. The report says
-/// nothing about which of the two ran: a caller that has the published keys uses
-/// [`verify_chain`].
-pub fn verify_links(owner: &OwnerId, scan: &LedgerScan) -> ChainReport {
-    let mut head: Option<LedgerHead> = None;
-    let mut verified = 0;
-    let mut fault = None;
-    for entry in &scan.entries {
-        if let Err(found) = link_one(owner, head, entry) {
-            fault = Some(found);
-            break;
-        }
-        head = Some(LedgerHead {
-            seq: entry.core.seq,
-            hash: entry.chain_hash(),
-        });
-        verified += 1;
-    }
-    let fault = fault.or_else(|| scan.damage.clone());
-    if let Some(fault) = &fault {
-        tracing::warn!(%owner, verified, %fault, "an owner ledger's links do not hold to its end");
-    }
-    ChainReport {
-        verified,
-        head,
-        fault,
-    }
+/// reordered, moved or torn entry, a dropped head, and — given an anchor — a tail cut at an
+/// entry boundary; it cannot find an entry edited by someone who also re-linked every
+/// successor, which only the signatures catch. The report says nothing about which of the two
+/// ran: a caller that has the published keys uses [`verify_chain`].
+pub fn verify_links(owner: &OwnerId, scan: &LedgerScan, anchor: Option<LedgerHead>) -> ChainReport {
+    walk(owner, scan, anchor, |_| None)
 }
 
 /// Verify `owner`'s scanned ledger: structure, links, signatures, and the anchor.
 ///
 /// `resolve` maps a `server_key_id` to the published key it names
-/// ([`crate::attestation::AttestationContext::resolve`]). `anchor` is a head known from
-/// elsewhere; without one, a tail cut at an entry boundary is indistinguishable from a shorter
-/// ledger (see the module docs).
+/// ([`crate::attestation::AttestationContext::resolve`]). `anchor` is the head recorded outside
+/// the ledger ([`crate::index::AssetIndex::ledger_head`]); without one, a tail cut at an entry
+/// boundary is indistinguishable from a shorter ledger (see the module docs).
 ///
 /// The report's `verified` prefix is what a replay may trust; everything after the first fault
 /// is not, however well it decodes.
@@ -768,6 +761,29 @@ pub fn verify_chain(
     scan: &LedgerScan,
     resolve: &dyn Fn(&Hash32) -> Option<HybridVerifyingKey>,
     anchor: Option<LedgerHead>,
+) -> ChainReport {
+    walk(owner, scan, anchor, |entry| {
+        let Some(key) = resolve(&entry.core.server_key_id) else {
+            return Some(ChainFault::UnknownKey {
+                seq: entry.core.seq,
+            });
+        };
+        (!entry.verify_under(&key)).then_some(ChainFault::BadSignature {
+            seq: entry.core.seq,
+        })
+    })
+}
+
+/// The walk both verifiers share: links, then `check` on each linked entry, then the anchor.
+///
+/// One walk, so a key-less host and a keyed one judge an anchor the same way: an entry at the
+/// anchor's position that is not the anchored one is [`ChainFault::AnchorMismatch`], and a chain
+/// that ends below it is [`ChainFault::BehindAnchor`].
+fn walk(
+    owner: &OwnerId,
+    scan: &LedgerScan,
+    anchor: Option<LedgerHead>,
+    check: impl Fn(&LedgerEntry) -> Option<ChainFault>,
 ) -> ChainReport {
     let mut head: Option<LedgerHead> = None;
     let mut verified = 0;
@@ -778,16 +794,8 @@ pub fn verify_chain(
             fault = Some(found);
             break;
         }
-        let Some(key) = resolve(&entry.core.server_key_id) else {
-            fault = Some(ChainFault::UnknownKey {
-                seq: entry.core.seq,
-            });
-            break;
-        };
-        if !entry.verify_under(&key) {
-            fault = Some(ChainFault::BadSignature {
-                seq: entry.core.seq,
-            });
+        if let Some(found) = check(entry) {
+            fault = Some(found);
             break;
         }
         let here = LedgerHead {
@@ -816,9 +824,9 @@ pub fn verify_chain(
     });
 
     if let Some(fault) = &fault {
-        tracing::warn!(%owner, verified, %fault, "an owner ledger does not verify to its end");
+        tracing::warn!(%owner, verified, anchored = ?anchor.map(|anchor| anchor.seq), %fault, "an owner ledger does not verify to its end");
     } else {
-        tracing::debug!(%owner, verified, "an owner ledger verified");
+        tracing::debug!(%owner, verified, anchored = ?anchor.map(|anchor| anchor.seq), "an owner ledger verified");
     }
 
     ChainReport {

@@ -119,8 +119,9 @@ impl Server {
         )
     }
 
+    /// Append as a deployment does: through the anchor, so the index records each head.
     async fn append(&self, owner: &OwnerId, event: LedgerEvent) {
-        self.ledger
+        crate::ledger::AnchoredLedger::new(self.ledger.clone(), self.index.clone())
             .append(owner, event, at(), &self.signer)
             .await
             .expect("an append lands");
@@ -402,6 +403,145 @@ async fn a_lost_ledger_tail_bumps_the_epoch_and_numbers_the_row_above_the_head()
         restored.sync_seq,
         Some(2),
         "an unprovable row is numbered above every number the owner has used"
+    );
+}
+
+/// Cut `owner`'s ledger after its first `keep` entries, exactly at an entry boundary: what is
+/// left is a valid, shorter chain.
+fn cut_at_boundary(server: &Server, owner: &OwnerId, keep: usize) -> crate::ledger::LedgerHead {
+    let mut bytes = server.ledger.raw(owner);
+    let entries = crate::ledger::decode_frames(&bytes).entries;
+    let kept: usize = entries[..keep]
+        .iter()
+        .map(|entry| crate::ledger::encode_frame(entry).len())
+        .sum();
+    bytes.truncate(kept);
+    server.ledger.replace_raw(owner, bytes);
+    let last = &entries[keep - 1];
+    crate::ledger::LedgerHead {
+        seq: last.core.seq,
+        hash: last.chain_hash(),
+    }
+}
+
+/// The acceptance case of #757: on a deployment whose index survived, a ledger cut at an entry
+/// boundary is reported as `BehindAnchor`, moves the owner's epoch, and is re-anchored so the
+/// loss is reported once.
+#[tokio::test]
+async fn a_boundary_cut_is_behind_the_anchor_and_is_reanchored_under_apply() {
+    let server = Server::new();
+    let alice = owner("alice");
+    server.publish(&alice, "kept", false).await;
+    server.publish(&alice, "cut", false).await;
+    let anchored = server
+        .index
+        .ledger_head(&alice)
+        .await
+        .expect("read")
+        .expect("the appends anchored the head");
+    assert_eq!(anchored.seq, 8, "two publishes are eight entries");
+    let left = cut_at_boundary(&server, &alice, 4);
+
+    // A dry run reports the cut and moves nothing.
+    let context = server.rebuild_into(server.index.clone());
+    let dry = rebuild(&context, Mode::DryRun).await.expect("a pass");
+    let expected = Some(ChainFault::BehindAnchor {
+        found: 4,
+        anchored: 8,
+    });
+    assert_eq!(dry.owners[0].chain_fault, expected);
+    assert!(dry.has_faults());
+    assert_eq!(
+        server.index.ledger_head(&alice).await.expect("read"),
+        Some(anchored),
+        "a dry run moved the anchor"
+    );
+
+    let applied = rebuild(&context, Mode::Apply).await.expect("a pass");
+    let report = &applied.owners[0];
+    assert_eq!(report.chain_fault, expected);
+    assert_eq!(report.verified, 4);
+    assert!(report.epoch_bump_needed);
+    assert_eq!(report.epoch, Some(1));
+    assert_eq!(
+        server.index.ledger_head(&alice).await.expect("read"),
+        Some(left),
+        "the acknowledged cut re-anchors at the head that is left"
+    );
+
+    // Reported once: the next pass verifies, and the next append extends the new anchor.
+    let again = rebuild(&context, Mode::Apply).await.expect("a pass");
+    assert_eq!(again.owners[0].chain_fault, None);
+    server.publish(&alice, "after", false).await;
+    assert_eq!(
+        server
+            .index
+            .ledger_head(&alice)
+            .await
+            .expect("read")
+            .map(|head| head.seq),
+        Some(8)
+    );
+    let after = rebuild(&context, Mode::DryRun).await.expect("a pass");
+    assert_eq!(after.owners[0].chain_fault, None);
+}
+
+/// Without the surviving index's anchor the same cut reads as a shorter ledger; a rebuild into an
+/// empty schema anchors the chain it verified.
+#[tokio::test]
+async fn a_rebuild_into_an_empty_index_anchors_the_chain_it_verified() {
+    let server = Server::new();
+    let alice = owner("alice");
+    server.publish(&alice, "kept", false).await;
+    server.publish(&alice, "cut", false).await;
+    let left = cut_at_boundary(&server, &alice, 4);
+
+    let empty = Arc::new(InMemoryAssetIndex::new());
+    let context = server.rebuild_into(empty.clone());
+    let dry = rebuild(&context, Mode::DryRun).await.expect("a pass");
+    assert_eq!(
+        dry.owners[0].chain_fault, None,
+        "no anchor: a boundary cut is a shorter ledger"
+    );
+    assert_eq!(empty.ledger_head(&alice).await.expect("read"), None);
+
+    rebuild(&context, Mode::Apply).await.expect("a pass");
+    assert_eq!(empty.ledger_head(&alice).await.expect("read"), Some(left));
+}
+
+/// A rewrite the anchor caught keeps its evidence: `--apply` does not move the anchor down to
+/// the entry before it.
+#[tokio::test]
+async fn an_anchor_mismatch_is_not_reanchored() {
+    let server = Server::new();
+    let alice = owner("alice");
+    server.publish(&alice, "one", false).await;
+    let anchored = server
+        .index
+        .ledger_head(&alice)
+        .await
+        .expect("read")
+        .expect("anchored");
+    let rival = crate::ledger::LedgerHead {
+        seq: anchored.seq,
+        hash: hash_bytes(b"another entry"),
+    };
+    server
+        .index
+        .reset_ledger_head(&alice, Some(rival))
+        .await
+        .expect("reset");
+
+    let context = server.rebuild_into(server.index.clone());
+    let report = rebuild(&context, Mode::Apply).await.expect("a pass");
+    assert_eq!(
+        report.owners[0].chain_fault,
+        Some(ChainFault::AnchorMismatch { seq: anchored.seq })
+    );
+    assert_eq!(
+        server.index.ledger_head(&alice).await.expect("read"),
+        Some(rival),
+        "a caught rewrite was re-anchored away"
     );
 }
 

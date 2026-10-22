@@ -23,6 +23,7 @@ use super::{
 };
 use crate::attestation::InMemoryReceipts;
 use crate::blob::ContentAddress;
+use crate::ledger::LedgerHead;
 use crate::store::{AlbumId, AssetId, BlobRole, OwnerId};
 
 /// Take a lock, recovering rather than propagating a poisoned one — see
@@ -47,6 +48,8 @@ struct Inner {
     minted: BTreeMap<OwnerId, u64>,
     /// Each owner's sync epoch. Absent means 0.
     epochs: BTreeMap<OwnerId, u64>,
+    /// Each owner's recorded ledger head. Absent means none was recorded.
+    ledger_heads: BTreeMap<OwnerId, LedgerHead>,
 }
 
 impl Inner {
@@ -620,6 +623,41 @@ impl AssetIndex for InMemoryAssetIndex {
             *epoch = epoch.saturating_add(1);
             tracing::info!(%owner, epoch = *epoch, "an owner moved to a new sync epoch");
             Ok(*epoch)
+        })
+    }
+
+    fn ledger_head<'a>(&'a self, owner: &'a OwnerId) -> IndexFuture<'a, Option<LedgerHead>> {
+        Box::pin(async move { Ok(lock(&self.inner).ledger_heads.get(owner).copied()) })
+    }
+
+    fn record_ledger_head<'a>(
+        &'a self,
+        owner: &'a OwnerId,
+        head: LedgerHead,
+    ) -> IndexFuture<'a, ()> {
+        Box::pin(async move {
+            let mut inner = lock(&self.inner);
+            let recorded = inner.ledger_heads.get(owner).map(|recorded| recorded.seq);
+            if recorded.is_none_or(|seq| seq < head.seq) {
+                inner.ledger_heads.insert(owner.clone(), head);
+            }
+            Ok(())
+        })
+    }
+
+    fn reset_ledger_head<'a>(
+        &'a self,
+        owner: &'a OwnerId,
+        head: Option<LedgerHead>,
+    ) -> IndexFuture<'a, ()> {
+        Box::pin(async move {
+            let mut inner = lock(&self.inner);
+            match head {
+                Some(head) => inner.ledger_heads.insert(owner.clone(), head),
+                None => inner.ledger_heads.remove(owner),
+            };
+            tracing::info!(%owner, ledger_seq = ?head.map(|head| head.seq), "re-anchored an owner ledger");
+            Ok(())
         })
     }
 
