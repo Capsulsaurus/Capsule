@@ -129,12 +129,20 @@ fn spawn(scratch: &Scratch, args: &[&str], rust_log: &str) -> Output {
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn capsule");
-    child
+    let written = child
         .stdin
         .as_mut()
         .expect("stdin piped")
-        .write_all(format!("{PASSPHRASE}\n").as_bytes())
-        .expect("write passphrase");
+        .write_all(format!("{PASSPHRASE}\n").as_bytes());
+    // A run that exits before reading stdin (a usage error) closes the pipe first: the write
+    // then fails with a broken pipe, and the exit status is what the case asserts on.
+    if let Err(e) = written {
+        assert_eq!(
+            e.kind(),
+            std::io::ErrorKind::BrokenPipe,
+            "write passphrase: {e}"
+        );
+    }
     child.wait_with_output().expect("wait for capsule")
 }
 
