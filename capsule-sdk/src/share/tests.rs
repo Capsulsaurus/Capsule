@@ -306,7 +306,7 @@ async fn every_declared_issue_refusal_maps_to_its_class() {
             426,
             "Upgrade Required",
             Some(error_codes::PROTOCOL_VERSION_UNSUPPORTED),
-            |e| matches!(e, ShareError::Unexpected { status: 426, .. }),
+            |e| matches!(e, ShareError::UpgradeRequired(_)),
         ),
         (413, "Payload Too Large", None, |e| {
             matches!(
@@ -351,7 +351,7 @@ async fn every_declared_revoke_refusal_maps_to_its_class() {
             426,
             "Upgrade Required",
             Some(error_codes::PROTOCOL_VERSION_UNSUPPORTED),
-            |e| matches!(e, ShareError::Unexpected { status: 426, .. }),
+            |e| matches!(e, ShareError::UpgradeRequired(_)),
         ),
         (413, "Payload Too Large", None, |e| {
             matches!(

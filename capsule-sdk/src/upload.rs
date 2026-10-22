@@ -360,11 +360,11 @@ impl UploadTransport {
                 Err(other) => Err(other.into()),
             },
             UploadAuth::Static { http, token } => {
-                let request = build(http).bearer_auth(token).build()?;
-                let protocol = negotiation::protocol_of(request.headers());
-                negotiation::preflight(request.method(), request.url(), &protocol)?;
-                let response = http.execute(request).await?;
-                Ok(negotiation::screen(&protocol, response).await?)
+                match negotiation::send_negotiated(build(http).bearer_auth(token)).await {
+                    Ok(response) => Ok(response),
+                    Err(negotiation::SendError::Upgrade(refusal)) => Err(refusal.into()),
+                    Err(negotiation::SendError::Transport(error)) => Err(error.into()),
+                }
             }
         }
     }

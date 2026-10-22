@@ -275,6 +275,63 @@ pub async fn screen(
     Err(refusal)
 }
 
+/// Drop whatever window `url`'s origin latched. A server that comes back on a reused address
+/// (a test's ephemeral port, a redeployed host) starts from nothing rather than from the window
+/// a previous server there advertised.
+pub fn forget(url: &Url) {
+    latch()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .remove(&origin_of(url));
+}
+
+/// Why a [`send_negotiated`] or [`send_screened`] did not yield a response to read.
+#[derive(Debug)]
+pub(crate) enum SendError {
+    /// The window refused it, before it left or with the server's `426`.
+    Upgrade(UpgradeRequired),
+    /// The request could not be built or did not reach an answer.
+    Transport(reqwest::Error),
+}
+
+impl From<reqwest::Error> for SendError {
+    fn from(error: reqwest::Error) -> Self {
+        Self::Transport(error)
+    }
+}
+
+impl From<UpgradeRequired> for SendError {
+    fn from(refusal: UpgradeRequired) -> Self {
+        Self::Upgrade(refusal)
+    }
+}
+
+/// Send a data request through the window: a write the latched window refuses never leaves,
+/// the response's window is latched, and a `426` is [`SendError::Upgrade`]. Every hand-written
+/// data path's send goes through here.
+pub(crate) async fn send_negotiated(
+    builder: reqwest::RequestBuilder,
+) -> Result<reqwest::Response, SendError> {
+    let (client, request) = builder.build_split();
+    let request = request?;
+    let protocol = protocol_of(request.headers());
+    preflight(request.method(), request.url(), &protocol)?;
+    let response = client.execute(request).await?;
+    Ok(screen(&protocol, response).await?)
+}
+
+/// [`send_negotiated`] without the pre-flight: for session upkeep, which only the server's own
+/// `426` refuses (a read needs a live session, and reads keep working against any server).
+pub(crate) async fn send_screened(
+    builder: reqwest::RequestBuilder,
+) -> Result<reqwest::Response, SendError> {
+    let (client, request) = builder.build_split();
+    let request = request?;
+    let protocol = protocol_of(request.headers());
+    let response = client.execute(request).await?;
+    Ok(screen(&protocol, response).await?)
+}
+
 /// The English detail of a problem body: `detail`, else the legacy `error`, else the text.
 #[must_use]
 pub fn problem_detail(text: &str) -> String {

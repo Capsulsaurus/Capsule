@@ -74,6 +74,10 @@ pub enum FederationError {
     /// The feed answered, and the page did not survive validation.
     #[error(transparent)]
     Feed(#[from] SyncError),
+    /// The home server will not take this peer's writes: its `426`, or a window it advertised
+    /// that already refuses this build (issue #674).
+    #[error(transparent)]
+    UpgradeRequired(Box<crate::net::negotiation::UpgradeRequired>),
 }
 
 /// The revocation list as the home server last published it.
@@ -293,23 +297,10 @@ impl FederationPull {
         let refreshed = client
             .refresh_capability(capsule_core::crypto::primitives::PROTOCOL_VERSION, None)
             .await
-            .map_err(|error| match error {
-                rest::Error::Api(response) => match response.into_inner() {
-                    rest::RefreshCapabilityError::Status403(problem)
-                    | rest::RefreshCapabilityError::Status429(problem)
-                    | rest::RefreshCapabilityError::Status400(problem)
-                    | rest::RefreshCapabilityError::Status500(problem) => {
-                        FederationError::Refused {
-                            code: problem.code.clone(),
-                            detail: problem.detail.clone().unwrap_or_default(),
-                        }
-                    }
-                    other => FederationError::Refused {
-                        code: String::new(),
-                        detail: other.to_string(),
-                    },
-                },
-                other => FederationError::Transport(other.to_string()),
+            .map_err(|error| match crate::client::upgrade_required_of(&error) {
+                // The gate's `426`, or the typed transport's local one (issue #674).
+                Some(refusal) => FederationError::UpgradeRequired(Box::new(refusal)),
+                None => refresh_refusal(error),
             })?
             .into_inner();
 
@@ -327,6 +318,26 @@ impl FederationPull {
         *write(&self.snapshot) = None;
         tracing::info!(jti = %refreshed.jti, replayed = refreshed.replayed, "refreshed the capability");
         Ok(refreshed.token)
+    }
+}
+
+/// Map a capability refresh refusal that is not an upgrade refusal.
+fn refresh_refusal(error: rest::Error<rest::RefreshCapabilityError>) -> FederationError {
+    match error {
+        rest::Error::Api(response) => match response.into_inner() {
+            rest::RefreshCapabilityError::Status403(problem)
+            | rest::RefreshCapabilityError::Status429(problem)
+            | rest::RefreshCapabilityError::Status400(problem)
+            | rest::RefreshCapabilityError::Status500(problem) => FederationError::Refused {
+                code: problem.code.clone(),
+                detail: problem.detail.clone().unwrap_or_default(),
+            },
+            other => FederationError::Refused {
+                code: String::new(),
+                detail: other.to_string(),
+            },
+        },
+        other => FederationError::Transport(other.to_string()),
     }
 }
 
@@ -358,7 +369,7 @@ impl Held {
 /// A generated client for `base_url` carrying `token` under the bearer scheme.
 fn client_for(base_url: &str, token: &str) -> Result<rest::Client, FederationError> {
     let http = net::http_client().map_err(|error| FederationError::Transport(error.to_string()))?;
-    Ok(rest::Client::with_client(http, base_url)
+    Ok(crate::client::negotiated_client(http, base_url)
         .map_err(|error| FederationError::Transport(error.to_string()))?
         .with_credential(
             BEARER_SCHEME,

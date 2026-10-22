@@ -49,6 +49,10 @@ pub enum AlbumError {
     /// The response body was missing a field or otherwise unparsable.
     #[error("malformed album response: {0}")]
     Malformed(String),
+    /// The server will not take this client's writes: its `426`, or a window it advertised
+    /// that already refuses this build (issue #674). Update the app.
+    #[error(transparent)]
+    UpgradeRequired(Box<crate::net::negotiation::UpgradeRequired>),
 }
 
 impl AlbumError {
@@ -58,6 +62,7 @@ impl AlbumError {
     pub fn error_code(&self) -> Option<&str> {
         match self {
             AlbumError::Status { code, .. } => code.as_deref(),
+            AlbumError::UpgradeRequired(refusal) => Some(refusal.error_code()),
             _ => None,
         }
     }
@@ -65,7 +70,25 @@ impl AlbumError {
 
 impl From<crate::auth::AuthError> for AlbumError {
     fn from(err: crate::auth::AuthError) -> Self {
-        AlbumError::Transport(err.to_string())
+        match err {
+            crate::auth::AuthError::UpgradeRequired(refusal) => {
+                AlbumError::UpgradeRequired(refusal)
+            }
+            other => AlbumError::Transport(other.to_string()),
+        }
+    }
+}
+
+impl From<crate::net::negotiation::SendError> for AlbumError {
+    fn from(err: crate::net::negotiation::SendError) -> Self {
+        match err {
+            crate::net::negotiation::SendError::Upgrade(refusal) => {
+                AlbumError::UpgradeRequired(Box::new(refusal))
+            }
+            crate::net::negotiation::SendError::Transport(error) => {
+                AlbumError::Transport(error.to_string())
+            }
+        }
     }
 }
 
@@ -127,11 +150,10 @@ impl AlbumTransport {
     {
         match &self.auth {
             AlbumAuth::Session(session) => Ok(session.execute(build).await?),
-            AlbumAuth::Static { http, token } => build(http)
-                .bearer_auth(token)
-                .send()
-                .await
-                .map_err(|e| AlbumError::Transport(e.to_string())),
+            AlbumAuth::Static { http, token } => Ok(crate::net::negotiation::send_negotiated(
+                build(http).bearer_auth(token),
+            )
+            .await?),
         }
     }
 
@@ -177,7 +199,7 @@ impl AlbumTransport {
                 crate::rest::Credential::Bearer(token.clone().into()),
             ),
         };
-        Ok(crate::rest::Client::with_client(http, root)
+        Ok(crate::client::negotiated_client(http, root)
             .map_err(|error| AlbumError::Transport(error.to_string()))?
             .with_credential(BEARER_SCHEME, credential))
     }
@@ -424,6 +446,13 @@ fn is_unauthenticated(error: &crate::rest::Error<crate::rest::PublishAlbumRoster
 /// caller can re-sign one above what the server holds.
 fn publish_refusal(error: crate::rest::Error<crate::rest::PublishAlbumRosterError>) -> AlbumError {
     use crate::rest::PublishAlbumRosterError as Refusal;
+
+    // The gate's `426`, or the typed transport's local one, is the SDK's one upgrade refusal
+    // (issue #674), not a status a caller has to recognise.
+    if let Some(refusal) = crate::client::upgrade_required_of(&error) {
+        tracing::warn!("roster publish refused: {refusal}");
+        return AlbumError::UpgradeRequired(Box::new(refusal));
+    }
 
     let crate::rest::Error::Api(response) = error else {
         return AlbumError::Transport(error.to_string());

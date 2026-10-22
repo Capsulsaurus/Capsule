@@ -624,7 +624,7 @@ fn build_client(base_url: &str, credential: rest::Credential) -> Result<rest::Cl
     // The SDK's one HTTP client, so the feed pull carries the protocol handshake.
     let http =
         crate::net::http_client().map_err(|error| SyncError::Transport(error.to_string()))?;
-    let client = rest::Client::with_client(http, base_url)
+    let client = crate::client::negotiated_client(http, base_url)
         .map_err(|error| SyncError::Transport(error.to_string()))?
         .with_credential(BEARER_SCHEME, credential);
     Ok(client)

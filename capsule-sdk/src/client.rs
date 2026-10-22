@@ -407,6 +407,19 @@ impl rest::HttpBackend for Negotiate {
     }
 }
 
+/// A generated client for `base_url` that executes on `http` under the window screen — the
+/// one way this crate builds a generated client outside [`AuthenticatedClient`], so a write
+/// through any of them is pre-flighted and a read through any of them latches the window.
+pub(crate) fn negotiated_client(
+    http: reqwest::Client,
+    base_url: &str,
+) -> Result<Client, rest::Error<std::convert::Infallible>> {
+    Client::with_backend(
+        Arc::new(Negotiate::over(Arc::new(rest::ReqwestBackend::new(http)))),
+        base_url,
+    )
+}
+
 /// The `426` [`Negotiate`] answers a refused write with: the window it was refused under, as
 /// headers, and an RFC 9457 problem coded `error.protocol.version_unsupported`.
 fn local_upgrade_required(refusal: &negotiation::UpgradeRequired) -> reqwest::Response {

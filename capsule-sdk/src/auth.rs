@@ -86,20 +86,20 @@ trait NegotiatedSend {
 
 impl NegotiatedSend for reqwest::RequestBuilder {
     async fn send_negotiated(self) -> Result<reqwest::Response, AuthError> {
-        let (client, request) = self.build_split();
-        let request = request?;
-        let protocol = negotiation::protocol_of(request.headers());
-        negotiation::preflight(request.method(), request.url(), &protocol)?;
-        let response = client.execute(request).await?;
-        Ok(negotiation::screen(&protocol, response).await?)
+        Ok(negotiation::send_negotiated(self).await?)
     }
 
     async fn send_screened(self) -> Result<reqwest::Response, AuthError> {
-        let (client, request) = self.build_split();
-        let request = request?;
-        let protocol = negotiation::protocol_of(request.headers());
-        let response = client.execute(request).await?;
-        Ok(negotiation::screen(&protocol, response).await?)
+        Ok(negotiation::send_screened(self).await?)
+    }
+}
+
+impl From<negotiation::SendError> for AuthError {
+    fn from(error: negotiation::SendError) -> Self {
+        match error {
+            negotiation::SendError::Upgrade(refusal) => refusal.into(),
+            negotiation::SendError::Transport(error) => Self::Transport(error),
+        }
     }
 }
 
