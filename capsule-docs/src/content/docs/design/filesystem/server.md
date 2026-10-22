@@ -97,7 +97,10 @@ accepted it. The **owner ledger** carries those facts:
   entry the ledger did not hold; recording it is best-effort, so a lost record leaves it behind
   the ledger, which weakens the check and never fakes a fault. Rebuild and the scrub verify each
   ledger against it: a ledger that ends below it lost its tail (`BehindAnchor`), and one holding
-  a different entry at its position was rewritten (`AnchorMismatch`). It lives in the index
+  a different entry at its position was rewritten (`AnchorMismatch`). The server checks the
+  same before its first append per owner after a start, and refuses that owner's writes while
+  the ledger disagrees with its anchor, so a cut is never buried under new entries; a rebuild
+  under `--apply` clears it (below). It lives in the index
   rather than beside the ledger because a cut that took `BLOB_ROOT`'s tail would take a head
   file with it, and rather than in the custody receipt because receipts are client-held signed
   evidence with a frozen format. The anchor survives exactly when the index does: a rebuild
