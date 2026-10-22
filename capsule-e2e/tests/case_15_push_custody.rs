@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 
 use capsule_cli::remote::{self, AssetPushStatus, PushOptions, RemoteConfig, RemoteError};
 use capsule_cli::session::SessionStore;
-use capsule_core::crypto::keys::HybridSigningKey;
+use capsule_core::crypto::keys::{HybridSigningKey, HybridVerifyingKey};
 use capsule_core::library::{
     KeyPinError, attestation_key_pins_path, load_pinned_attestation_keys, load_receipts,
     pin_attestation_keys,
@@ -162,7 +162,10 @@ async fn e2e_case_15_push_verifies_custody_persists_receipts_and_carries_on_past
         .expect("the pin reads")
         .expect("the pin is still there");
     assert_eq!(
-        still.iter().map(|k| k.to_bytes()).collect::<Vec<_>>(),
+        still
+            .iter()
+            .map(HybridVerifyingKey::to_bytes)
+            .collect::<Vec<_>>(),
         [foreign.to_bytes()],
         "a refused run leaves the pin as it was"
     );
