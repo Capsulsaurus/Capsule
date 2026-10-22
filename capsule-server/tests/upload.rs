@@ -2202,7 +2202,7 @@ async fn a_claim_whose_process_died_after_its_commit_is_recovered_at_boot() {
         recovery
             .completed
             .iter()
-            .map(|id| id.as_str())
+            .map(capsule_server::store::UploadId::as_str)
             .collect::<Vec<_>>(),
         vec![id.as_str()],
         "the stranded claim is driven to completion: {recovery:?}"

@@ -1030,9 +1030,19 @@ pub async fn the_claimed_listing_is_exactly_the_sessions_awaiting_their_finalize
             .collect()
     };
 
-    let newer = upload(CASE, "newer", "uploader", 400);
+    // Two of them filed into an album, so the album view is read beside the claimed one: the
+    // scripts that maintain the claimed view also maintain the album view, and a key the one
+    // writes must not be the key the other reads.
+    let album = super::AlbumId::new(format!("{CASE}-album"));
+    let in_album = |tag: &str, offset: i64| {
+        let mut record = upload(CASE, tag, "uploader", offset);
+        record.album_id = Some(album.clone());
+        record
+    };
+    let in_flight = || async { ok(store.in_flight_for_album(&album).await, "in_flight") };
+    let newer = in_album("newer", 400);
     let older = upload(CASE, "older", "uploader", 300);
-    let idle = upload(CASE, "idle", "uploader", 350);
+    let idle = in_album("idle", 350);
     let done = upload(CASE, "done", "uploader", 360);
     let dropped = upload(CASE, "dropped", "uploader", 370);
     for record in [&newer, &older, &idle, &done, &dropped] {
@@ -1042,6 +1052,7 @@ pub async fn the_claimed_listing_is_exactly_the_sessions_awaiting_their_finalize
         mine(ok(store.claimed().await, "claimed")).is_empty(),
         "an unclaimed session is not listed"
     );
+    assert_eq!(in_flight().await, 2, "both album sessions are in flight");
 
     for record in [&newer, &older, &done, &dropped] {
         match ok(
@@ -1064,6 +1075,11 @@ pub async fn the_claimed_listing_is_exactly_the_sessions_awaiting_their_finalize
         vec![older.upload_id.clone(), newer.upload_id.clone()],
         "the claimed sessions, oldest first; a completed or discarded one has left"
     );
+    assert_eq!(
+        in_flight().await,
+        2,
+        "a claimed session is still in flight against its album"
+    );
 
     ok(
         store
@@ -1076,6 +1092,7 @@ pub async fn the_claimed_listing_is_exactly_the_sessions_awaiting_their_finalize
         vec![older.upload_id.clone()],
         "a failed session has left the listing"
     );
+    assert_eq!(in_flight().await, 1, "and its album's in-flight count");
 
     // A session opened as claimed is listed, and re-opened as pending is not: the listing
     // follows the status written, whichever operation wrote it.
@@ -1089,6 +1106,11 @@ pub async fn the_claimed_listing_is_exactly_the_sessions_awaiting_their_finalize
         mine(ok(store.claimed().await, "claimed")),
         vec![idle.upload_id.clone()],
         "the listing follows the status a re-open wrote"
+    );
+    assert_eq!(
+        in_flight().await,
+        1,
+        "and a re-open as claimed keeps its album entry"
     );
 
     // And a claim that outlives its session's lifetime is not recovered: the record is gone.
