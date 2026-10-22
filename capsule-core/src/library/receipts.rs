@@ -269,7 +269,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         append_receipt(dir.path(), None, &receipt).unwrap();
         let log = load_receipts(dir.path(), &asset, None).unwrap();
-        assert_eq!(log, [receipt.clone()]);
+        assert_eq!(log, std::slice::from_ref(&receipt));
         assert_eq!(log[0].to_canonical_cbor(), wire);
         assert!(verify_receipt(&log[0], &[key.verifying_key()], &expect(ct, 4096), NOW).is_ok());
 
