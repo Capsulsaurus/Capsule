@@ -31,6 +31,7 @@
 //! | create `413 error.drop.file_too_large` | invariant 28 |
 //! | create `400 error.drop.malformed` | invariants 27 and 30 |
 //! | create `403 error.quota.exceeded` | invariant 29, charged to the **link owner** |
+//! | create `403 error.quota.suspended` | the link owner's quota is suspended by the operator (#705) |
 //! | create `429 error.drop.rate_limited` / `error.drop.at_capacity` | invariant 31: the per-source or per-link budget is spent, or its limiter partition is full, with a `retry_after` |
 //! | adopt `404` / `409` | the row is not the caller's, or another adoption holds it |
 //! | `500` | a store could not answer, the limiter's included |
@@ -397,6 +398,18 @@ pub enum DropRejection {
         code: &'static str,
     },
 
+    /// The link owner's quota is suspended by the server's operator (#705).
+    ///
+    /// Distinct from [`Self::QuotaExceeded`] because waiting for the owner to free space will not
+    /// lift it, which is what the guest needs to know.
+    #[error("the link owner's storage is suspended")]
+    #[problem(status = 403, title = "Quota suspended")]
+    QuotaSuspended {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
     /// A cumulative cap on an otherwise-live link (invariant 26).
     ///
     /// Deliberately **not** the indistinguishable `404`: the guest was handed a real link by
@@ -655,7 +668,9 @@ async fn charge_drop_limiter(
 /// Open a drop session through a link.
 ///
 /// Invariants 26–30 in order: the link admits the file and reserves its caps in one store
-/// operation, then the owner's quota is charged, then the declaration is checked.
+/// operation, then the owner's quota is charged, then the declaration is checked. A drop the
+/// owner's quota will not admit is `403 error.quota.exceeded`, or `403 error.quota.suspended`
+/// while the operator has suspended the owner's quota.
 #[kynos::post("/d/{opaque_id}", operation_id = "create_drop", tag = DropsTag)]
 pub async fn create_drop(
     Inject(drops): Inject<DropContext>,
@@ -776,7 +791,7 @@ pub async fn create_drop(
         tracing::error!(%error, %owner, "the quota ledger could not answer for a drop");
         DropRejection::unavailable()
     })?;
-    let state = crate::quota::state_of(usage.used, usage.over_since, now, quota.limits());
+    let state = crate::quota::classify(usage, now, quota.limits());
     if !crate::quota::admits(
         state,
         crate::quota::WriteClass::Upload,
@@ -787,6 +802,12 @@ pub async fn create_drop(
         // The reservation goes back: a drop the quota refused never happened, and leaving the
         // cap spent would let a full account burn a guest's link down.
         refund(&drops, &path.opaque_id, request.size).await;
+        if state == crate::quota::QuotaState::Suspended {
+            tracing::info!(%owner, "a drop was refused: the link owner's quota is suspended");
+            return Err(DropRejection::QuotaSuspended {
+                code: error_codes::QUOTA_SUSPENDED,
+            });
+        }
         return Err(DropRejection::QuotaExceeded {
             code: error_codes::QUOTA_EXCEEDED,
         });

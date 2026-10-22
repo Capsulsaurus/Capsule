@@ -287,6 +287,7 @@
   "error.quota.exceeded": "Seu armazenamento está cheio.",
   "error.quota.grace_locked": "Seu armazenamento ficou cheio além do período de tolerância, então as edições estão pausadas até você liberar espaço.",
   "error.quota.peer_budget_exceeded": "Esta fonte atingiu o limite de cache na sua conta.",
+  "error.quota.suspended": "Seu armazenamento está suspenso, então nada novo pode ser adicionado. Você ainda pode ver e excluir o que já tem.",
   "error.quota.unavailable": "O Capsule não conseguiu verificar seu uso de armazenamento. Tente novamente.",
   "error.share.rate_limited": "Muitas tentativas. Aguarde e tente novamente.",
   "error.storage.asset_not_found": "That item was not found.",

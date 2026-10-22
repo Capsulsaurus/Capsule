@@ -1120,6 +1120,10 @@
     "message": "Diese Quelle hat ihr Caching-Limit für Ihr Konto erreicht.",
     "context": "Machine-translated seed pending human review."
   },
+  "error.quota.suspended": {
+    "message": "Dein Speicher ist gesperrt, daher kann nichts Neues hinzugefügt werden. Du kannst deine Inhalte weiterhin ansehen und löschen.",
+    "context": "Machine-translated seed pending human review."
+  },
   "error.quota.unavailable": {
     "message": "Capsule konnte deine Speichernutzung nicht prüfen. Bitte versuche es erneut.",
     "context": "Machine-translated seed pending human review."

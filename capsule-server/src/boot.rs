@@ -198,7 +198,7 @@ pub enum BootError {
     },
 }
 
-/// The two operator workers' collaborators.
+/// The operator workers' collaborators, and the quota ledger the operator suspends through.
 ///
 /// Assembled **without any key material**, which is what makes `config`'s claim that
 /// `gc`/`purge`/`scrub` need none structural rather than a promise: there is no signing key in
@@ -206,7 +206,7 @@ pub enum BootError {
 /// token-signing key to sweep a directory would be a reason to put the key on a maintenance
 /// host.
 ///
-/// Neither worker has a wire surface, so neither is reachable through the router — which is why
+/// None of them has a wire surface, so none is reachable through the router — which is why
 /// they are a separate assembly rather than fields on [`App`].
 #[derive(Debug)]
 pub struct Maintenance {
@@ -214,6 +214,11 @@ pub struct Maintenance {
     pub collection: CollectionContext,
     /// The integrity scrub's collaborators (`scrub`).
     pub scrub: ScrubContext,
+    /// The quota ledger, for the operator's suspension (`quota suspend`, `quota unsuspend`).
+    ///
+    /// The same ledger the server charges. Its limits are the unlimited default because a
+    /// suspension reads none: it is set by an operator, not reached by bytes.
+    pub quota: QuotaContext,
 }
 
 /// A server, ready to serve.
@@ -447,6 +452,11 @@ impl Stores {
                 self.uploads.clone(),
                 self.shares.clone(),
                 self.clock.clone(),
+            ),
+            quota: QuotaContext::new(
+                self.quotas.clone(),
+                self.clock.clone(),
+                QuotaLimits::unlimited(),
             ),
         }
     }

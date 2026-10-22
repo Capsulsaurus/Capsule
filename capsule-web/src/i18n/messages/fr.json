@@ -287,6 +287,7 @@
   "error.quota.exceeded": "Votre espace de stockage est plein.",
   "error.quota.grace_locked": "Votre stockage est resté plein au-delà du délai de grâce ; les modifications sont suspendues jusqu'à ce que vous libériez de l'espace.",
   "error.quota.peer_budget_exceeded": "Cette source a atteint sa limite de mise en cache sur votre compte.",
+  "error.quota.suspended": "Votre stockage est suspendu : rien de nouveau ne peut être ajouté. Vous pouvez toujours consulter et supprimer ce que vous avez.",
   "error.quota.unavailable": "Capsule n'a pas pu vérifier votre utilisation du stockage. Veuillez réessayer.",
   "error.share.rate_limited": "Trop de tentatives. Veuillez patienter et réessayer.",
   "error.storage.asset_not_found": "That item was not found.",

@@ -1120,6 +1120,10 @@
     "message": "بلغ هذا المصدر حدّ التخزين المؤقت على حسابك.",
     "context": "Machine-translated seed pending human review."
   },
+  "error.quota.suspended": {
+    "message": "تم تعليق مساحة التخزين لديك، لذا لا يمكن إضافة أي شيء جديد. لا يزال بإمكانك عرض ما لديك وحذفه.",
+    "context": "Machine-translated seed pending human review."
+  },
   "error.quota.unavailable": {
     "message": "تعذّر على Capsule التحقق من استخدام مساحة التخزين. يُرجى المحاولة مرة أخرى.",
     "context": "Machine-translated seed pending human review."

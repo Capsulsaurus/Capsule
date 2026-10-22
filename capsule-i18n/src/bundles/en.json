@@ -2156,6 +2156,7 @@
   "error.quota.exceeded": "Your storage is full.",
   "error.quota.grace_locked": "Your storage has been full past the grace period, so edits are paused until you free space.",
   "error.quota.peer_budget_exceeded": "This source has reached its caching limit on your account.",
+  "error.quota.suspended": "Your storage is suspended, so nothing new can be added. You can still view and delete what you have.",
   "error.quota.unavailable": "Capsule couldn't check your storage use. Please try again.",
   "error.request.failed": "Something went wrong with that request.",
   "error.request.forbidden": "That credential isn't enough for this action.",

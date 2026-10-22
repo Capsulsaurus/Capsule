@@ -25,6 +25,7 @@
 //! | issue `400 error.share.malformed` | a body that cannot be a link record, including a `metadata_blob` that is not base64, exceeds 8 MiB, or does not hash to `metadata_hash` |
 //! | issue `403 error.quota.grace_locked` | any link from an account past its quota grace window (`S-C6`) |
 //! | issue `403 error.quota.exceeded` | a `metadata_blob` whose new bytes would carry the account to its hard limit (`S-C6`) |
+//! | issue `403 error.quota.suspended` | any link from an account whose quota the operator suspended (#705) |
 //! | serve `200` / `206` / `416` | the metadata, the wrapped secret, and ranged ciphertext |
 //! | serve `404` | **one answer** for a malformed id, an unknown link, a revoked one, an expired one, a blob the link does not name, and a link with no wrapped secret |
 //! | serve `429 error.share.rate_limited` / `error.share.at_capacity` | the per-source or per-link budget is spent, or its limiter partition is full, with a `retry_after` |
@@ -198,6 +199,18 @@ pub enum IssueShareRejection {
         code: &'static str,
     },
 
+    /// The account's quota is suspended by the server's operator (#705).
+    ///
+    /// A link is metadata growth, which a suspension refuses as the grace window does. Never
+    /// returned by a revocation.
+    #[error("this account's storage is suspended")]
+    #[problem(status = 403, title = "Quota suspended")]
+    QuotaSuspended {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
     /// The store could not answer.
     #[error("the share link could not be issued")]
     #[problem(status = 500, title = "Internal server error")]
@@ -262,6 +275,10 @@ pub enum ShareRejection {
 }
 
 /// Register a share link the caller's client has issued.
+///
+/// A link is metadata growth: an account past its quota grace window is refused
+/// `403 error.quota.grace_locked`, and one whose quota the operator suspended
+/// `403 error.quota.suspended`.
 #[kynos::post("/v1/shares", operation_id = "issue_share", tag = SharesTag)]
 pub async fn issue_share(
     Inject(share): Inject<ShareContext>,
@@ -618,7 +635,8 @@ fn metadata_record(
     Ok(record)
 }
 
-/// Refuse a share link from an account past its quota grace window (`S-C6`).
+/// Refuse a share link from an account past its quota grace window (`S-C6`), or whose quota the
+/// operator suspended (#705).
 async fn admit_metadata_growth(
     quota: &QuotaContext,
     owner: &UserId,
@@ -633,6 +651,12 @@ async fn admit_metadata_growth(
         })?;
     if crate::quota::admits(state, WriteClass::MetadataGrowth, 0, 0, quota.limits()) {
         return Ok(());
+    }
+    if state == crate::quota::QuotaState::Suspended {
+        tracing::info!(%owner, "a share link was refused: the account's quota is suspended");
+        return Err(IssueShareRejection::QuotaSuspended {
+            code: error_codes::QUOTA_SUSPENDED,
+        });
     }
     tracing::info!(%owner, ?state, "a share link was refused: past the quota grace window");
     Err(IssueShareRejection::QuotaGraceExpired {
@@ -710,6 +734,13 @@ async fn charge_metadata(
             tracing::info!(%owner, size, "a share link was refused: its record would cross the hard quota limit");
             Err(IssueShareRejection::QuotaExceeded {
                 code: error_codes::QUOTA_EXCEEDED,
+            })
+        }
+        // Suspended after `admit_metadata_growth` read the state: the charge's own check refuses.
+        crate::quota::UploadCharge::Suspended => {
+            tracing::info!(%owner, size, "a share link was refused: the account's quota is suspended");
+            Err(IssueShareRejection::QuotaSuspended {
+                code: error_codes::QUOTA_SUSPENDED,
             })
         }
     }
