@@ -11,6 +11,14 @@
 //! | `the_latch_is_per_origin` | one server's floor never refuses a write to another |
 //! | `the_read_side_signal_reports_without_refusing` | `upgrade_required_for` reports what a served read revealed |
 //! | `the_problem_detail_is_the_message` | a `426` body's `detail` (or `error`, or text) becomes the message |
+//! | `a_refusal_names_the_rule_its_window_gives` | a `426` names the bound it broke, else `Refused` |
+//! | `route_classes::a_read_is_served_and_reports_the_floor` | read (typed client): served, and the floor it revealed is reported |
+//! | `route_classes::a_read_426_is_the_typed_refusal` | read (typed client): a `426` is `UpgradeRequired` |
+//! | `route_classes::a_typed_write_is_refused_before_it_leaves` | write (typed client): refused locally with a `426` that maps to `UpgradeRequired` |
+//! | `route_classes::a_session_write_is_refused_before_it_leaves` | write (session path): refused before sending, as `AuthError::UpgradeRequired` |
+//! | `route_classes::a_session_write_426_is_the_typed_refusal` | write (session path): the server's `426` is the same refusal |
+//!
+//! The upload route class is covered in `upload/tests.rs`.
 
 use reqwest::header::{HeaderMap, HeaderValue};
 
@@ -135,7 +143,6 @@ fn the_latch_refuses_writes_and_never_reads() {
             "{write}"
         );
         assert_eq!(refusal.protocol, PROTOCOL_VERSION);
-        assert_eq!(refusal.build, CLIENT_BUILD);
         assert_eq!(refusal.window.protocol_min.as_deref(), Some("2099-01-01"));
         assert_eq!(
             refusal.error_code(),
@@ -186,4 +193,213 @@ fn the_problem_detail_is_the_message() {
     );
     assert_eq!(problem_detail(r#"{"error":"legacy","code":"c"}"#), "legacy");
     assert_eq!(problem_detail("plain text"), "plain text");
+}
+
+#[test]
+fn a_refusal_names_the_rule_its_window_gives() {
+    let below = UpgradeRequired::refused(
+        &headers("2099-01-01", "2099-12-31", "0.0.0"),
+        PROTOCOL_VERSION,
+        "old",
+    );
+    assert_eq!(below.reason, UpgradeReason::ProtocolBelowWindow);
+    assert_eq!(below.message, "old");
+
+    let bare = UpgradeRequired::refused(&HeaderMap::new(), PROTOCOL_VERSION, "no window");
+    assert_eq!(bare.reason, UpgradeReason::Refused);
+    assert_eq!(*bare.window, ServerWindow::default());
+}
+
+// ─── Route classes over a mock server ───────────────────────────────────────
+//
+// The upload route class is covered beside its client (`upload/tests.rs`); these are the read
+// and write classes, over the typed (generated) client and the session's hand-written path.
+
+mod route_classes {
+    use std::sync::{Arc, Mutex};
+
+    use super::*;
+    use crate::auth::{AuthClient, AuthError, PersistedSession, Session};
+    use crate::client::{AuthenticatedClient, Negotiate, upgrade_required_of};
+    use crate::rest::{self, HttpBackend as _};
+    use crate::testmock::{MockRequest, MockResponse, MockServer};
+
+    fn session_for(base: &str) -> Session {
+        AuthClient::new(base)
+            .expect("a base url")
+            .resume(PersistedSession {
+                access_token: "test-access".to_string().into(),
+                refresh_token: "test-refresh".to_string().into(),
+                access_expires_at_unix: jiff::Timestamp::now().as_second() + 3_600,
+            })
+            .expect("a session resumes from any pair")
+    }
+
+    /// Every answer advertises a window this build's protocol is inside and a client-build
+    /// floor it is below; every request's method is recorded.
+    async fn floored_server() -> (MockServer, Arc<Mutex<Vec<String>>>) {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let log = seen.clone();
+        let server = MockServer::start(move |req: &MockRequest| {
+            log.lock().unwrap().push(req.method.clone());
+            MockResponse::new(200, "OK")
+                .header(PROTOCOL_MIN_HEADER, "2026-01-01")
+                .header(PROTOCOL_MAX_HEADER, "2099-12-31")
+                .header(MIN_CLIENT_BUILD_HEADER, "999.0.0")
+                .json_body(r#"{"state":"ok","used":0}"#)
+        })
+        .await;
+        (server, seen)
+    }
+
+    fn refusing_server(status: u16) -> impl Fn(&MockRequest) -> MockResponse + Send + Sync {
+        move |_req: &MockRequest| {
+            MockResponse::new(status, "Upgrade Required")
+                .header(PROTOCOL_MIN_HEADER, "2099-01-01")
+                .header(PROTOCOL_MAX_HEADER, "2099-12-31")
+                .header("Content-Type", "application/problem+json")
+                .json_body(
+                    r#"{"type":"about:blank","status":426,"detail":"too old","code":"error.protocol.version_unsupported"}"#,
+                )
+        }
+    }
+
+    /// **Read, typed client.** A read is served whatever the window says ("reads of any past
+    /// version succeed"), and the floor it revealed is what the client then reports.
+    #[tokio::test]
+    async fn a_read_is_served_and_reports_the_floor() {
+        let (server, seen) = floored_server().await;
+        let client =
+            AuthenticatedClient::new(&server.base_url(), session_for(&server.base_url())).unwrap();
+        assert!(
+            client.upgrade_required().is_none(),
+            "nothing advertised yet"
+        );
+
+        client
+            .get_quota(PROTOCOL_VERSION, None)
+            .await
+            .expect("the read is served");
+
+        let signal = client.upgrade_required().expect("the floor was latched");
+        assert_eq!(signal.reason, UpgradeReason::BuildBelowFloor);
+        assert_eq!(signal.window.min_client_build.as_deref(), Some("999.0.0"));
+        assert_eq!(*seen.lock().unwrap(), vec!["GET".to_owned()]);
+    }
+
+    /// **Read, typed client, server refusal.** A `426` on a read, documented or not, is the
+    /// one typed refusal too.
+    #[tokio::test]
+    async fn a_read_426_is_the_typed_refusal() {
+        let server = MockServer::start(refusing_server(426)).await;
+        let client =
+            AuthenticatedClient::new(&server.base_url(), session_for(&server.base_url())).unwrap();
+        let error = client
+            .get_quota(PROTOCOL_VERSION, None)
+            .await
+            .expect_err("refused");
+        let refusal = upgrade_required_of(&error).expect("a 426 is UpgradeRequired");
+        assert_eq!(refusal.reason, UpgradeReason::ProtocolBelowWindow);
+        assert_eq!(refusal.window.protocol_min.as_deref(), Some("2099-01-01"));
+    }
+
+    /// **Write, typed client.** Once a response latched the floor, a write through the typed
+    /// client's transport is answered locally with a `426` carrying that window, and never
+    /// reaches the server.
+    #[tokio::test]
+    async fn a_typed_write_is_refused_before_it_leaves() {
+        let (server, seen) = floored_server().await;
+        let backend = Negotiate::over(Arc::new(rest::ReqwestBackend::new(
+            crate::net::http_client().unwrap(),
+        )));
+        let url = Url::parse(&server.base_url()).unwrap();
+
+        let read = reqwest::Request::new(Method::GET, url.join("/v1/quota").unwrap());
+        assert_eq!(
+            backend.execute(read).await.unwrap().status(),
+            StatusCode::OK
+        );
+
+        let write = reqwest::Request::new(Method::DELETE, url.join("/v1/sessions/x").unwrap());
+        let answered = backend.execute(write).await.unwrap();
+        assert_eq!(answered.status(), StatusCode::UPGRADE_REQUIRED);
+        assert_eq!(
+            answered
+                .headers()
+                .get(MIN_CLIENT_BUILD_HEADER)
+                .and_then(|v| v.to_str().ok()),
+            Some("999.0.0")
+        );
+        let body = answered.text().await.unwrap();
+        assert!(
+            body.contains(error_codes::PROTOCOL_VERSION_UNSUPPORTED),
+            "{body}"
+        );
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec!["GET".to_owned()],
+            "the write never left"
+        );
+
+        // And the shape the generated operation maps that answer to is the typed refusal.
+        let mut headers = HeaderMap::new();
+        headers.insert(MIN_CLIENT_BUILD_HEADER, HeaderValue::from_static("999.0.0"));
+        let error: rest::Error<std::io::Error> = rest::Error::UnexpectedStatus {
+            status: StatusCode::UPGRADE_REQUIRED,
+            headers,
+            body: body.into_bytes().into(),
+        };
+        let refusal = upgrade_required_of(&error).expect("typed");
+        assert_eq!(refusal.reason, UpgradeReason::BuildBelowFloor);
+    }
+
+    /// **Write, session path.** The hand-written surfaces (albums, verify, upgrade, upload)
+    /// send through `Session::execute`: a write after a floored read is refused before it
+    /// leaves, as [`AuthError::UpgradeRequired`].
+    #[tokio::test]
+    async fn a_session_write_is_refused_before_it_leaves() {
+        let (server, seen) = floored_server().await;
+        let session = session_for(&server.base_url());
+        let base = server.base_url();
+
+        session
+            .execute(|http| http.get(format!("{base}/v1/anything")))
+            .await
+            .expect("the read is served");
+        let error = session
+            .execute(|http| http.post(format!("{base}/v1/anything")))
+            .await
+            .expect_err("the write is refused");
+        let AuthError::UpgradeRequired(refusal) = error else {
+            panic!("expected UpgradeRequired, got {error:?}");
+        };
+        assert_eq!(refusal.reason, UpgradeReason::BuildBelowFloor);
+        assert_eq!(
+            error_codes::PROTOCOL_VERSION_UNSUPPORTED,
+            AuthError::UpgradeRequired(refusal).error_code().unwrap()
+        );
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec!["GET".to_owned()],
+            "the write never left"
+        );
+    }
+
+    /// **Write, session path, server refusal.** The server's own `426` is the same typed
+    /// refusal, with its detail as the message.
+    #[tokio::test]
+    async fn a_session_write_426_is_the_typed_refusal() {
+        let server = MockServer::start(refusing_server(426)).await;
+        let session = session_for(&server.base_url());
+        let base = server.base_url();
+        let error = session
+            .execute(|http| http.post(format!("{base}/v1/anything")))
+            .await
+            .expect_err("refused");
+        let AuthError::UpgradeRequired(refusal) = error else {
+            panic!("expected UpgradeRequired, got {error:?}");
+        };
+        assert_eq!(refusal.reason, UpgradeReason::ProtocolBelowWindow);
+        assert_eq!(refusal.message, "too old");
+    }
 }

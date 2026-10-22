@@ -42,6 +42,7 @@ use reqwest::header::{AUTHORIZATION, HeaderValue};
 use secrecy::ExposeSecret;
 
 use crate::auth::Session;
+use crate::net::negotiation;
 use crate::rest::{self, Client, Credential};
 
 /// The security-scheme key the server declares for its bearer JWT (see
@@ -94,6 +95,15 @@ impl AuthenticatedClient {
     #[must_use]
     pub fn base_url(&self) -> &str {
         &self.base_url
+    }
+
+    /// Whether this build is outside the window this client's server last advertised — the
+    /// read-side signal: reads keep being served, writes are refused with a `426`, and this is
+    /// what a UI asks to tell the user to update. `None` before any response, and inside it.
+    #[must_use]
+    pub fn upgrade_required(&self) -> Option<negotiation::UpgradeRequired> {
+        let url = reqwest::Url::parse(&self.base_url).ok()?;
+        negotiation::upgrade_required_for(&url)
     }
 
     /// The session backing this client's bearer credential.
@@ -297,10 +307,10 @@ fn build_client(base_url: &str, session: Session) -> Result<Client, ClientError>
     // `with_backend` builds requests on a default `reqwest::Client` and *executes* them
     // through the backend, so the executing client — and with it the TLS stack, the redirect
     // policy and the timeouts — is still `reqwest_client()`, one layer down.
-    let backend: Arc<dyn rest::HttpBackend> = Arc::new(RefreshOn401 {
+    let backend: Arc<dyn rest::HttpBackend> = Arc::new(Negotiate::over(Arc::new(RefreshOn401 {
         inner: Arc::new(rest::ReqwestBackend::new(reqwest_client())),
         session,
-    });
+    })));
     let client = Client::with_backend(backend, base_url)
         .map_err(|e| ClientError::InvalidBaseUrl {
             url: base_url.to_string(),
@@ -337,6 +347,114 @@ fn reqwest_client() -> reqwest::Client {
                 .expect("a default rustls reqwest client is always constructible")
         })
         .clone()
+}
+
+/// The protocol window on the generated client's transport (issue #674): every response's
+/// advertised window is latched ([`negotiation::observe`]), and a write the latched window
+/// already refuses is answered here, before it leaves, with a local `426`.
+///
+/// # Why a synthesized `426` and not an error
+///
+/// The backend seam's error type wraps a `reqwest::Error` and nothing else, so a typed refusal
+/// cannot cross it. A `426` can: the generated operation maps it exactly as it maps the
+/// server's own, and [`upgrade_required_of`] turns either into the one
+/// [`UpgradeRequired`](negotiation::UpgradeRequired). The synthesized response carries the
+/// latched window headers and a coded problem, so it is indistinguishable at the caller from
+/// the refusal the server would have sent — minus the request the server never sees.
+#[derive(Debug)]
+pub(crate) struct Negotiate {
+    inner: Arc<dyn rest::HttpBackend>,
+}
+
+impl Negotiate {
+    /// Put the window screen over `inner`.
+    pub(crate) fn over(inner: Arc<dyn rest::HttpBackend>) -> Self {
+        Self { inner }
+    }
+}
+
+impl rest::HttpBackend for Negotiate {
+    fn execute(&self, request: reqwest::Request) -> rest::ExecuteFuture<'_> {
+        let inner = self.inner.clone();
+        Box::pin(async move {
+            let protocol = negotiation::protocol_of(request.headers());
+            if let Err(refusal) = negotiation::preflight(request.method(), request.url(), &protocol)
+            {
+                return Ok(local_upgrade_required(&refusal));
+            }
+            let response = inner.execute(request).await?;
+            negotiation::observe(response.url(), response.headers());
+            Ok(response)
+        })
+    }
+}
+
+/// The `426` [`Negotiate`] answers a refused write with: the window it was refused under, as
+/// headers, and an RFC 9457 problem coded `error.protocol.version_unsupported`.
+fn local_upgrade_required(refusal: &negotiation::UpgradeRequired) -> reqwest::Response {
+    let problem = serde_json::json!({
+        "type": "about:blank",
+        "title": "Upgrade Required",
+        "status": 426,
+        "detail": refusal.message,
+        "code": refusal.error_code(),
+    });
+    let mut response = http::Response::new(problem.to_string());
+    *response.status_mut() = reqwest::StatusCode::UPGRADE_REQUIRED;
+    let headers = response.headers_mut();
+    headers.insert(
+        reqwest::header::CONTENT_TYPE,
+        HeaderValue::from_static("application/problem+json"),
+    );
+    for (name, value) in [
+        (
+            negotiation::PROTOCOL_MIN_HEADER,
+            &refusal.window.protocol_min,
+        ),
+        (
+            negotiation::PROTOCOL_MAX_HEADER,
+            &refusal.window.protocol_max,
+        ),
+        (
+            negotiation::MIN_CLIENT_BUILD_HEADER,
+            &refusal.window.min_client_build,
+        ),
+    ] {
+        if let Some(value) = value.as_deref().and_then(|v| HeaderValue::from_str(v).ok()) {
+            headers.insert(name, value);
+        }
+    }
+    reqwest::Response::from(response)
+}
+
+/// The one typed [`UpgradeRequired`](negotiation::UpgradeRequired) a generated-client failure
+/// carries, if it is one: a `426` — the server's, or [`Negotiate`]'s local refusal — documented
+/// or not. `None` for every other failure.
+pub fn upgrade_required_of<E>(error: &rest::Error<E>) -> Option<negotiation::UpgradeRequired>
+where
+    E: std::error::Error + 'static,
+{
+    let (headers, message) = match error {
+        rest::Error::Api(response)
+            if response.status() == reqwest::StatusCode::UPGRADE_REQUIRED =>
+        {
+            (response.headers(), error.to_string())
+        }
+        rest::Error::UnexpectedStatus {
+            status,
+            headers,
+            body,
+        } if *status == reqwest::StatusCode::UPGRADE_REQUIRED => (
+            headers,
+            negotiation::problem_detail(&String::from_utf8_lossy(body)),
+        ),
+        _ => return None,
+    };
+    Some(negotiation::UpgradeRequired::refused(
+        headers,
+        negotiation::PROTOCOL_VERSION,
+        message,
+    ))
 }
 
 /// Whether a generated-client failure is the session failing to produce a bearer.

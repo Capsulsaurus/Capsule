@@ -133,17 +133,17 @@ pub enum UpgradeReason {
      >= {floor:?}; this client speaks {protocol} at build {build}: {message}",
     min = window.protocol_min,
     max = window.protocol_max,
-    floor = window.min_client_build
+    floor = window.min_client_build,
+    build = CLIENT_BUILD
 )]
 pub struct UpgradeRequired {
     /// Which rule refused.
     pub reason: UpgradeReason,
     /// What the server advertised.
-    pub window: ServerWindow,
-    /// The protocol date the refused request carried.
+    pub window: Box<ServerWindow>,
+    /// The protocol date the refused request carried. The build compared against the floor is
+    /// always [`CLIENT_BUILD`].
     pub protocol: String,
-    /// The client build compared against the floor.
-    pub build: String,
     /// The English detail: the server's, for a `426`; this module's, for a local refusal.
     pub message: String,
 }
@@ -155,14 +155,17 @@ impl UpgradeRequired {
         error_codes::PROTOCOL_VERSION_UNSUPPORTED
     }
 
-    /// A `426` the server answered, carrying whatever window it advertised beside it.
+    /// A `426` the server answered, carrying whatever window it advertised beside it. The
+    /// reason is the rule that window names for `protocol`, else [`UpgradeReason::Refused`].
     #[must_use]
     pub fn refused(headers: &HeaderMap, protocol: &str, message: impl Into<String>) -> Self {
+        let window = ServerWindow::from_headers(headers);
         Self {
-            reason: UpgradeReason::Refused,
-            window: ServerWindow::from_headers(headers),
+            reason: window
+                .verdict(protocol, CLIENT_BUILD)
+                .unwrap_or(UpgradeReason::Refused),
+            window: Box::new(window),
             protocol: protocol.to_owned(),
-            build: CLIENT_BUILD.to_owned(),
             message: message.into(),
         }
     }
@@ -288,9 +291,8 @@ pub fn problem_detail(text: &str) -> String {
 fn local_refusal(reason: UpgradeReason, window: ServerWindow, protocol: &str) -> UpgradeRequired {
     UpgradeRequired {
         reason,
-        window,
+        window: Box::new(window),
         protocol: protocol.to_owned(),
-        build: CLIENT_BUILD.to_owned(),
         message: "the server's advertised window does not admit this client's writes; \
                   update Capsule"
             .to_owned(),

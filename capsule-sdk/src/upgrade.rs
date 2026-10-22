@@ -266,7 +266,17 @@ impl UpgradeClient {
                     .header(reqwest::header::ACCEPT, JSON)
                     .body(body.clone())
             })
-            .await?;
+            .await
+            .map_err(|error| match error {
+                // The session screens every send through the protocol window (issue #674), so
+                // the gate's `426` — or a write the advertised window already refuses — arrives
+                // here typed rather than as a status; it keeps this module's own variant.
+                AuthError::UpgradeRequired(refusal) => UpgradeError::ProtocolUnsupported {
+                    code: Some(refusal.error_code().to_owned()),
+                    detail: refusal.message,
+                },
+                other => UpgradeError::Auth(other),
+            })?;
 
         let status = response.status();
         if !status.is_success() {
