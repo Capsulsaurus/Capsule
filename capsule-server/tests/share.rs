@@ -1305,19 +1305,33 @@ async fn a_spoofed_forwarded_for_from_an_untrusted_peer_is_ignored() {
 }
 
 #[tokio::test]
+async fn a_trusted_proxy_networks_forwarded_for_is_honoured() {
+    assert_forwarded_for_is_honoured_behind(&ProxyTrust {
+        hops: 0,
+        networks: ProxyTrust::parse_networks("10.0.0.0/8").expect("it parses"),
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn a_trusted_proxy_hops_forwarded_for_is_honoured() {
-    // Behind a proxy the deployment names, the client is the address the proxy appended: two
-    // clients behind one proxy are two sources, and a client cannot escape its own bucket by
-    // prepending a spoofed element of its own.
+    // One hop trusted by count rather than by address: the proxy's own address is never named.
+    assert_forwarded_for_is_honoured_behind(&ProxyTrust {
+        hops: 1,
+        networks: Vec::new(),
+    })
+    .await;
+}
+
+/// Behind a proxy `trust` names, the client is the address the proxy appended: two clients
+/// behind one proxy are two sources, and a client cannot escape its own bucket by prepending a
+/// spoofed element of its own.
+async fn assert_forwarded_for_is_honoured_behind(trust: &ProxyTrust) {
     let fixture = Fixture::working();
     let bearer = fixture.bearer().await;
     let (id, _, _) = live_link(&fixture, &bearer, 1).await;
-    let trust = ProxyTrust {
-        hops: 0,
-        networks: ProxyTrust::parse_networks("10.0.0.0/8").expect("it parses"),
-    };
     let behind = support::Client::new(TestClient::new(
-        capsule_server::service_behind(fixture.app(), &trust).expect("the router builds"),
+        capsule_server::service_behind(fixture.app(), trust).expect("the router builds"),
     ));
 
     spend_source_budget(&behind, "10.0.0.1", |tag| {
