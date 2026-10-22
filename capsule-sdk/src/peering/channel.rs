@@ -18,11 +18,28 @@
 //!    directory *is* the trust anchor: a device not in it — revoked, or a foreign user entirely —
 //!    cannot pass this check, and it runs **before any payload byte**.
 //!
+//! Around that core the channel enforces the rest of the peering trust model:
+//!
+//! - **Version window.** Each hello advertises a `[Min, Max]` peering-protocol window and the
+//!   pair speaks the highest common version; only disjoint windows end the connection, with a
+//!   typed [`PeeringError::VersionDisjoint`] naming which device must update.
+//! - **Directory anti-rollback.** The highest `directory_version` this device has verified is
+//!   persisted behind [`DirectoryVersions`]; a pinned directory below it is refused (a stale
+//!   directory cannot readmit a revoked device), and so is a peer presenting a lower version.
+//! - **Handshake rate limit.** [`accept`] admits a source address only through a
+//!   [`HandshakeLimiter`], so the LAN cannot probe a device for membership.
+//! - **Artifact secret.** A second exporter label yields the per-session [`ArtifactSecret`]
+//!   that seals a sync artifact: fresh per session, never stored, never a user passphrase.
+//!
 //! [device directory]: https://docs/design/cryptography/keys/#device-directory
 
+use std::fmt;
 use std::sync::Arc;
+use std::time::Instant;
 
-use capsule_core::crypto::keys::{DeviceDirectory, HybridSignature, HybridVerifyingKey, Signer};
+use capsule_core::crypto::keys::{
+    DeviceDirectory, DeviceEntry, HybridSignature, HybridVerifyingKey, Signer,
+};
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::crypto::{CryptoProvider, verify_tls12_signature, verify_tls13_signature};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName, UnixTime};
@@ -38,13 +55,20 @@ use tracing::instrument;
 use uuid::Uuid;
 
 use super::PeeringError;
+use super::session::{DirectoryVersions, HandshakeLimiter};
+use crate::net::negotiation::is_protocol_date;
 
-/// The peering **transport protocol** version, date-based (`YYYY-MM-DD`) and exchanged in the
-/// hello at channel establishment. It shares the date grammar with the client-server protocol
-/// but is its **own version space** — peering values compare only against peering values, and the
-/// transport revs independently of the server protocol. A mismatch tears the channel down before
-/// any payload byte (there is no degraded-mode fallback); the device proceeds to server sync.
-pub const PEERING_PROTOCOL: &str = "2026-07-10";
+/// The newest peering **transport protocol** version this build speaks — the top of its
+/// [`VersionWindow`]. Date-based (`YYYY-MM-DD`), it shares the date grammar with the
+/// client-server protocol but is its **own version space**: peering values compare only against
+/// peering values, and the transport revs independently of the server protocol.
+pub const PEERING_PROTOCOL: &str = "2026-10-22";
+
+/// The oldest peering transport protocol version this build still speaks — the bottom of its
+/// [`VersionWindow`]. `2026-10-22` added the directory version, the window itself and the
+/// exporter-derived artifact secret to the handshake; a peer older than that cannot satisfy the
+/// anti-rollback rule, so it is outside the window.
+pub const PEERING_PROTOCOL_MIN: &str = "2026-10-22";
 
 /// Length of the exported channel-binding material the hybrid proof covers.
 const EXPORTER_LEN: usize = 32;
@@ -52,6 +76,10 @@ const EXPORTER_LEN: usize = 32;
 /// The RFC 5705 exporter label. Distinct from any other exporter use so the derived material is
 /// domain-separated to peering's hybrid check.
 const EXPORTER_LABEL: &[u8] = b"EXPORTER-capsule-peering-hybrid-v1";
+
+/// The RFC 5705 exporter label the [`ArtifactSecret`] is derived under — distinct from
+/// [`EXPORTER_LABEL`], so the value that seals an artifact is never the value either side signed.
+const ARTIFACT_EXPORTER_LABEL: &[u8] = b"EXPORTER-capsule-peering-artifact-v1";
 
 /// The DNS name the client presents. The server verifier accepts any name — trust is the
 /// app-layer hybrid check — so this is only a syntactically-valid placeholder.
@@ -72,38 +100,215 @@ pub struct PinnedTrust {
     pub directory: DeviceDirectory,
 }
 
-/// A peer whose hybrid identity was verified over the established channel.
+impl PinnedTrust {
+    /// The `directory_version` of the pinned directory.
+    #[must_use]
+    pub fn directory_version(&self) -> u64 {
+        self.directory.core.directory_version
+    }
+}
+
+/// Admit the pinned directory: it must chain to the pinned User IK, and its version must not be
+/// below the highest this device has already verified (anti-rollback). An admitted version is
+/// recorded, so the floor only ever rises.
+pub(crate) fn admit_directory(
+    trust: &PinnedTrust,
+    versions: &dyn DirectoryVersions,
+) -> Result<(), PeeringError> {
+    if !trust.directory.verify(&trust.user_ik) {
+        return Err(PeeringError::ForeignIdentity);
+    }
+    let pinned = trust.directory_version();
+    let highest = versions.highest()?;
+    if pinned < highest {
+        tracing::warn!(
+            pinned,
+            highest,
+            "pinned device directory is older than one already verified; refusing"
+        );
+        return Err(PeeringError::DirectoryRollback { pinned, highest });
+    }
+    versions.record(pinned)?;
+    Ok(())
+}
+
+/// The directory entry for `device_id`, which must be present and un-revoked.
+pub(crate) fn admit_device(
+    trust: &PinnedTrust,
+    device_id: Uuid,
+) -> Result<&DeviceEntry, PeeringError> {
+    let entry = trust
+        .directory
+        .device(&device_id)
+        .ok_or(PeeringError::UnknownDevice(device_id))?;
+    if entry.revoked_at.is_some() {
+        return Err(PeeringError::RevokedDevice(device_id));
+    }
+    Ok(entry)
+}
+
+/// A device's supported peering-protocol window, `[min, max]`, both `YYYY-MM-DD`.
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VersionWindow {
+    /// The oldest peering protocol version spoken.
+    pub min: String,
+    /// The newest peering protocol version spoken.
+    pub max: String,
+}
+
+/// Which device must update for two disjoint windows to meet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpdateDevice {
+    /// This device's window lies wholly below the peer's: update this device.
+    ThisDevice,
+    /// The peer's window lies wholly below this device's: update the peer.
+    Peer,
+}
+
+impl VersionWindow {
+    /// This build's window, [`PEERING_PROTOCOL_MIN`]`..=`[`PEERING_PROTOCOL`].
+    #[must_use]
+    pub fn ours() -> Self {
+        Self {
+            min: PEERING_PROTOCOL_MIN.to_string(),
+            max: PEERING_PROTOCOL.to_string(),
+        }
+    }
+
+    /// A window over two protocol dates. Refuses a value that is not `YYYY-MM-DD`, or a
+    /// `min` above `max`, as a codec error: such a hello cannot be negotiated against.
+    pub fn new(min: &str, max: &str) -> Result<Self, PeeringError> {
+        if !is_protocol_date(min) || !is_protocol_date(max) || min > max {
+            return Err(PeeringError::Codec(format!(
+                "malformed peering protocol window {min:?}..={max:?}"
+            )));
+        }
+        Ok(Self {
+            min: min.to_string(),
+            max: max.to_string(),
+        })
+    }
+
+    /// The highest version both windows contain, or [`PeeringError::VersionDisjoint`] naming
+    /// which device must update. Dates in `YYYY-MM-DD` order lexically.
+    pub fn negotiate(&self, theirs: &Self) -> Result<String, PeeringError> {
+        let high = self.max.as_str().min(theirs.max.as_str());
+        let low = self.min.as_str().max(theirs.min.as_str());
+        if high < low {
+            let update = if self.max < theirs.min {
+                UpdateDevice::ThisDevice
+            } else {
+                UpdateDevice::Peer
+            };
+            return Err(PeeringError::VersionDisjoint {
+                ours: self.clone(),
+                theirs: theirs.clone(),
+                update,
+            });
+        }
+        Ok(high.to_string())
+    }
+}
+
+impl fmt::Display for VersionWindow {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}..={}", self.min, self.max)
+    }
+}
+
+/// The 256-bit secret that seals a peering sync artifact, derived from the channel's TLS exporter
+/// under its own peering label. Fresh per session, never stored, never a user passphrase; its
+/// `Debug` never prints the bytes.
+#[derive(Clone)]
+pub struct ArtifactSecret([u8; 32]);
+
+impl ArtifactSecret {
+    /// The secret's bytes, as the backup wrap takes them.
+    pub(crate) fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+
+    /// A secret over explicit bytes — only tests, which have no TLS session to export from.
+    #[cfg(test)]
+    pub(crate) fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+}
+
+impl fmt::Debug for ArtifactSecret {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("ArtifactSecret(..)")
+    }
+}
+
+/// What this device brings to a handshake: who it is, the key it proves that with, the trust it
+/// pins, and where it keeps the highest directory version it has verified.
+#[derive(Clone, Copy)]
+pub struct LocalPeer<'a> {
+    /// This device's directory id.
+    pub device_id: Uuid,
+    /// This device's hybrid device-key signer.
+    pub signer: &'a dyn Signer,
+    /// The trust this device pins.
+    pub trust: &'a PinnedTrust,
+    /// The persisted anti-rollback floor.
+    pub versions: &'a dyn DirectoryVersions,
+}
+
+/// A peer whose hybrid identity was verified over the established channel.
+#[derive(Debug, Clone)]
 pub struct VerifiedPeer {
     /// The peer's directory `device_id`, proven to hold the matching device key.
     pub device_id: Uuid,
+    /// The peering protocol version the pair negotiated: the highest both windows contain.
+    pub protocol: String,
     /// The channel-binding exporter material the proof covered (returned for provenance/tests).
     pub exporter: [u8; EXPORTER_LEN],
+    /// The secret that seals this session's sync artifacts.
+    pub artifact_secret: ArtifactSecret,
 }
 
 /// The handshake hello each side sends over the encrypted channel: who it claims to be, the
-/// peering protocol it speaks, and a hybrid signature over the channel-binding exporter material.
+/// peering protocol window it speaks, the directory version it pins, and a hybrid signature over
+/// the channel-binding exporter material.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PeerHello {
     /// The sender's directory device id.
     pub device_id: Uuid,
-    /// The sender's peering transport protocol version.
+    /// The newest peering transport protocol version the sender speaks (its window's max).
     pub peering_protocol: String,
+    /// The oldest version the sender speaks. Absent from a hello older than the window, which
+    /// spoke exactly `peering_protocol`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peering_protocol_min: Option<String>,
+    /// The `directory_version` of the directory the sender pins. Absent (`0`) from a hello older
+    /// than the window.
+    #[serde(default)]
+    pub directory_version: u64,
     /// A hybrid signature over the TLS exporter material — the proof this device holds the key
     /// published for `device_id`.
     pub proof: HybridSignature,
 }
 
+impl PeerHello {
+    /// The window this hello advertises.
+    pub fn window(&self) -> Result<VersionWindow, PeeringError> {
+        let max = self.peering_protocol.as_str();
+        VersionWindow::new(self.peering_protocol_min.as_deref().unwrap_or(max), max)
+    }
+}
+
 /// Build this device's hello: sign the channel-binding `exporter` with the device `signer`.
 fn build_hello(
-    device_id: Uuid,
-    signer: &dyn Signer,
+    local: &LocalPeer<'_>,
     exporter: &[u8; EXPORTER_LEN],
 ) -> Result<PeerHello, PeeringError> {
-    let proof = signer.sign(exporter)?;
+    let proof = local.signer.sign(exporter)?;
     Ok(PeerHello {
-        device_id,
+        device_id: local.device_id,
         peering_protocol: PEERING_PROTOCOL.to_string(),
+        peering_protocol_min: Some(PEERING_PROTOCOL_MIN.to_string()),
+        directory_version: local.trust.directory_version(),
         proof,
     })
 }
@@ -111,38 +316,48 @@ fn build_hello(
 /// The application-layer hybrid check — the whole security of the channel. Run **before any
 /// payload byte** against the locally-pinned trust. In order:
 ///
-/// 1. **Protocol.** A peering-protocol mismatch aborts (no degraded mode) — `426`-class.
+/// 1. **Version window.** The pair speaks the highest common version; disjoint windows abort
+///    with [`PeeringError::VersionDisjoint`] before any identity check.
 /// 2. **Directory chains to our IK.** The pinned directory must verify under our pinned User IK;
 ///    a directory signed by a foreign IK is rejected outright.
-/// 3. **Enrolled + not revoked.** The claimed `device_id` must be present and un-revoked.
-/// 4. **Hybrid proof.** The peer's published device key must verify the hybrid signature over the
+/// 3. **Anti-rollback.** The pinned directory must not be older than the highest this device has
+///    verified, and the peer must not present a version older than the one we pin.
+/// 4. **Enrolled + not revoked.** The claimed `device_id` must be present and un-revoked.
+/// 5. **Hybrid proof.** The peer's published device key must verify the hybrid signature over the
 ///    exact exporter material *we* derived — binding the hybrid identity to this TLS session.
+///
+/// Returns the verified device id and the negotiated protocol version.
 pub fn verify_hello(
     hello: &PeerHello,
     exporter: &[u8; EXPORTER_LEN],
     trust: &PinnedTrust,
-) -> Result<Uuid, PeeringError> {
-    if hello.peering_protocol != PEERING_PROTOCOL {
-        return Err(PeeringError::ProtocolMismatch {
-            theirs: hello.peering_protocol.clone(),
-            ours: PEERING_PROTOCOL.to_string(),
+    versions: &dyn DirectoryVersions,
+) -> Result<(Uuid, String), PeeringError> {
+    let protocol = VersionWindow::ours().negotiate(&hello.window()?)?;
+    admit_directory(trust, versions)?;
+    let ours = trust.directory_version();
+    if hello.directory_version < ours {
+        tracing::warn!(
+            device = %hello.device_id,
+            theirs = hello.directory_version,
+            ours,
+            "peer presented an older device directory; refusing"
+        );
+        return Err(PeeringError::PeerDirectoryStale {
+            theirs: hello.directory_version,
+            ours,
         });
     }
-    if !trust.directory.verify(&trust.user_ik) {
-        return Err(PeeringError::ForeignIdentity);
-    }
-    let entry = trust
-        .directory
-        .device(&hello.device_id)
-        .ok_or(PeeringError::UnknownDevice(hello.device_id))?;
-    if entry.revoked_at.is_some() {
-        return Err(PeeringError::RevokedDevice(hello.device_id));
-    }
+    let entry = admit_device(trust, hello.device_id)?;
     if !entry.dsk_public.verify(exporter, &hello.proof) {
         return Err(PeeringError::HybridCheckFailed);
     }
-    tracing::debug!(device = %hello.device_id, "peer hybrid identity verified over the channel");
-    Ok(hello.device_id)
+    tracing::debug!(
+        device = %hello.device_id,
+        %protocol,
+        "peer hybrid identity verified over the channel"
+    );
+    Ok((hello.device_id, protocol))
 }
 
 // ── mTLS config (CA-less; accept-any classical verifiers) ─────────────────────
@@ -348,68 +563,85 @@ fn decode(bytes: &[u8]) -> Result<PeerHello, PeeringError> {
     serde_json::from_slice(bytes).map_err(|e| PeeringError::Codec(e.to_string()))
 }
 
-/// **Server side** of the peering handshake. Completes a real mutual TLS 1.3 handshake over
-/// `tcp`, derives the channel-binding exporter, exchanges hellos (read-then-write, so the pair
-/// never deadlocks), and runs the [`verify_hello`] hybrid check. Returns the verified peer or the
-/// specific rejection — a wrong/revoked/foreign peer fails the whole handshake before any payload.
-#[instrument(skip(tcp, signer, trust), fields(local = %device_id))]
-pub async fn accept(
-    tcp: TcpStream,
-    device_id: Uuid,
-    signer: &dyn Signer,
-    trust: &PinnedTrust,
+/// Derive both exporter values from an established TLS session: the channel-binding material the
+/// hybrid proof signs, and the [`ArtifactSecret`] under its own label.
+fn derive_exporters(
+    export: impl Fn(&[u8]) -> Result<[u8; EXPORTER_LEN], rustls::Error>,
+) -> Result<([u8; EXPORTER_LEN], ArtifactSecret), PeeringError> {
+    let tls = |e: rustls::Error| PeeringError::Tls(e.to_string());
+    let binding = export(EXPORTER_LABEL).map_err(tls)?;
+    let secret = ArtifactSecret(export(ARTIFACT_EXPORTER_LABEL).map_err(tls)?);
+    Ok((binding, secret))
+}
+
+/// Verify the peer's hello and assemble the [`VerifiedPeer`].
+fn finish(
+    peer_bytes: &[u8],
+    exporter: [u8; EXPORTER_LEN],
+    artifact_secret: ArtifactSecret,
+    local: &LocalPeer<'_>,
 ) -> Result<VerifiedPeer, PeeringError> {
-    let acceptor = TlsAcceptor::from(Arc::new(server_config()?));
-    let mut tls = acceptor.accept(tcp).await.map_err(io_err)?;
-
-    let exporter = {
-        let (_io, conn) = tls.get_ref();
-        conn.export_keying_material([0u8; EXPORTER_LEN], EXPORTER_LABEL, None)
-            .map_err(|e| PeeringError::Tls(e.to_string()))?
-    };
-
-    let peer_bytes = read_frame(&mut tls).await?;
-    let our_hello = build_hello(device_id, signer, &exporter)?;
-    write_frame(&mut tls, &encode(&our_hello)?).await?;
-
-    let peer_hello = decode(&peer_bytes)?;
-    let peer_device = verify_hello(&peer_hello, &exporter, trust)?;
+    let peer_hello = decode(peer_bytes)?;
+    let (device_id, protocol) = verify_hello(&peer_hello, &exporter, local.trust, local.versions)?;
     Ok(VerifiedPeer {
-        device_id: peer_device,
+        device_id,
+        protocol,
         exporter,
+        artifact_secret,
     })
 }
 
-/// **Client side** of the peering handshake. The dialing (behind) device connects, drives the
-/// TLS 1.3 handshake to completion, derives the same exporter, exchanges hellos (write-then-read),
-/// and runs the hybrid check. See [`accept`] for the security contract.
-#[instrument(skip(tcp, signer, trust), fields(local = %device_id))]
-pub async fn connect(
+/// **Server side** of the peering handshake. Admits the source address through `limiter`
+/// (refusing with [`PeeringError::RateLimited`] before any TLS byte), completes a real mutual
+/// TLS 1.3 handshake over `tcp`, derives the channel-binding exporter, exchanges hellos
+/// (read-then-write, so the pair never deadlocks), and runs the [`verify_hello`] check. Returns
+/// the verified peer or the specific rejection — a wrong/revoked/foreign/stale peer fails the
+/// whole handshake before any payload.
+#[instrument(skip(tcp, local, limiter), fields(local = %local.device_id))]
+pub async fn accept(
     tcp: TcpStream,
-    device_id: Uuid,
-    signer: &dyn Signer,
-    trust: &PinnedTrust,
+    local: LocalPeer<'_>,
+    limiter: &HandshakeLimiter,
 ) -> Result<VerifiedPeer, PeeringError> {
+    let source = tcp.peer_addr().map_err(io_err)?.ip();
+    if !limiter.admit(source, Instant::now()) {
+        tracing::warn!(%source, "peering handshake rate limit reached; refusing");
+        return Err(PeeringError::RateLimited(source));
+    }
+    let acceptor = TlsAcceptor::from(Arc::new(server_config()?));
+    let mut tls = acceptor.accept(tcp).await.map_err(io_err)?;
+
+    let (exporter, secret) = {
+        let (_io, conn) = tls.get_ref();
+        derive_exporters(|label| conn.export_keying_material([0u8; EXPORTER_LEN], label, None))?
+    };
+
+    let peer_bytes = read_frame(&mut tls).await?;
+    let our_hello = build_hello(&local, &exporter)?;
+    write_frame(&mut tls, &encode(&our_hello)?).await?;
+
+    finish(&peer_bytes, exporter, secret, &local)
+}
+
+/// **Client side** of the peering handshake. The dialing (behind) device connects, drives the
+/// TLS 1.3 handshake to completion, derives the same exporters, exchanges hellos
+/// (write-then-read), and runs the hybrid check. See [`accept`] for the security contract.
+#[instrument(skip(tcp, local), fields(local = %local.device_id))]
+pub async fn connect(tcp: TcpStream, local: LocalPeer<'_>) -> Result<VerifiedPeer, PeeringError> {
     let connector = TlsConnector::from(Arc::new(client_config()?));
     let name = ServerName::try_from(PEER_SNI)
         .map_err(|e| PeeringError::Tls(e.to_string()))?
         .to_owned();
     let mut tls = connector.connect(name, tcp).await.map_err(io_err)?;
 
-    let exporter = {
+    let (exporter, secret) = {
         let (_io, conn) = tls.get_ref();
-        conn.export_keying_material([0u8; EXPORTER_LEN], EXPORTER_LABEL, None)
-            .map_err(|e| PeeringError::Tls(e.to_string()))?
+        derive_exporters(|label| conn.export_keying_material([0u8; EXPORTER_LEN], label, None))?
     };
 
-    let our_hello = build_hello(device_id, signer, &exporter)?;
+    let our_hello = build_hello(&local, &exporter)?;
     write_frame(&mut tls, &encode(&our_hello)?).await?;
     let peer_bytes = read_frame(&mut tls).await?;
 
-    let peer_hello = decode(&peer_bytes)?;
-    let peer_device = verify_hello(&peer_hello, &exporter, trust)?;
-    Ok(VerifiedPeer {
-        device_id: peer_device,
-        exporter,
-    })
+    finish(&peer_bytes, exporter, secret, &local)
 }

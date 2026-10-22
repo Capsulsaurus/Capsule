@@ -375,7 +375,7 @@ fn origin_of(url: &Url) -> String {
 }
 
 /// `YYYY-MM-DD`, the grammar in which lexical order is date order.
-fn is_protocol_date(value: &str) -> bool {
+pub(crate) fn is_protocol_date(value: &str) -> bool {
     let bytes = value.as_bytes();
     bytes.len() == 10
         && bytes.iter().enumerate().all(|(index, byte)| {
