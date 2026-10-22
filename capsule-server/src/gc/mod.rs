@@ -87,8 +87,8 @@
 //! one, and a dry run, which writes nothing, needs none.
 //!
 //! Once the index answers that the purge committed, the worker appends a second `lifecycle`
-//! entry, action [`PURGED_ACTION`], for the same asset (#811). Rebuild empties a tombstone only
-//! for a purge so confirmed. An entry whose index call answers that the row is no longer
+//! entry, action [`PURGED_ACTION`], for the same asset, naming the purge entry's ledger position
+//! (#811). Rebuild empties a tombstone only for a purge so confirmed. An entry whose index call answers that the row is no longer
 //! purgeable (restored, re-deleted under a later floor, or gone) is never confirmed, so a
 //! rebuild keeps the references the live row kept even when the restore reached the ledger
 //! *after* the purge entry but the index *before* the purge. The confirmation is best-effort:
@@ -570,13 +570,13 @@ pub async fn purge_expired(
         // `None` is refused above for an applied pass; were it reached, it reads as an append
         // that failed, which keeps the bytes.
         let recorded = match attestation {
-            Some(attestation) => ledger_purge(attestation, &row, PURGE_ACTION, now).await,
-            None => false,
+            Some(attestation) => ledger_purge(attestation, &row, None, now).await,
+            None => None,
         };
-        if !recorded {
+        let Some(purge_seq) = recorded else {
             report.unrecorded.push(row.asset_id);
             continue;
-        }
+        };
         // The listing is a snapshot; the index re-checks state and retention under the row
         // lock, because a restore that committed since the listing must keep its bytes. So the
         // purge is logged once the re-check has answered, not before: a line saying "purging"
@@ -591,9 +591,11 @@ pub async fn purge_expired(
                 );
                 // The confirmation rebuild applies the purge on (#811). Losing it is logged
                 // and not counted against the pass: the purge stands, and a rebuild that never
-                // sees it keeps references rather than dropping them.
+                // sees it keeps references rather than dropping them. It names the purge entry
+                // it confirms, so a concurrent pass's refused purge of the same asset is never
+                // the one confirmed.
                 if let Some(attestation) = attestation {
-                    ledger_purge(attestation, &row, PURGED_ACTION, now).await;
+                    ledger_purge(attestation, &row, Some(purge_seq), now).await;
                 }
                 report.purged.push(row.asset_id);
             }
@@ -622,25 +624,33 @@ pub async fn purge_expired(
     Ok(report)
 }
 
-/// Append one of `row`'s purge entries to its owner's ledger: [`PURGE_ACTION`] before the index
-/// is touched, [`PURGED_ACTION`] once the index answered that the purge committed. `false` when
-/// the ledger could not take it; for the first, that leaves the asset unpurged for this pass.
+/// Append one of `row`'s purge entries to its owner's ledger and return its ledger position, or
+/// `None` when the ledger could not take it. With `confirms: None` it is the [`PURGE_ACTION`]
+/// entry, appended before the index is touched; a failure leaves the asset unpurged for this
+/// pass. With `confirms: Some(seq)` it is the [`PURGED_ACTION`] entry confirming the purge
+/// entry at `seq`, appended once the index answered that the purge committed.
 ///
-/// Both carry no manifest hash and no `sync_seq`: the purge is authorised by the retention
-/// floor the delete manifest already signed, and it mints no sequence number. If the index
-/// answers that the row is no longer purgeable, no confirmation follows, and rebuild keeps the
-/// asset's references.
+/// Neither carries a manifest hash: the purge is authorised by the retention floor the delete
+/// manifest already signed, and it mints no sequence number. The confirmation carries the
+/// purge entry's ledger position in `sync_seq` (see [`crate::ledger::rebuild::PURGED`]). If the
+/// index answers that the row is no longer purgeable, no confirmation follows, and rebuild
+/// keeps the asset's references.
 async fn ledger_purge(
     attestation: &AttestationContext,
     row: &AssetRow,
-    action: &str,
+    confirms: Option<u64>,
     now: Timestamp,
-) -> bool {
+) -> Option<u64> {
+    let action = if confirms.is_some() {
+        PURGED_ACTION
+    } else {
+        PURGE_ACTION
+    };
     let event = LedgerEvent::Lifecycle {
         asset_id: row.asset_id.as_str().to_owned(),
         action: action.to_owned(),
         manifest_hash: None,
-        sync_seq: None,
+        sync_seq: confirms,
     };
     match attestation
         .append_to_ledger(&row.owner_id, event, now)
@@ -652,11 +662,12 @@ async fn ledger_purge(
                 owner = %row.owner_id,
                 action,
                 ledger_seq = entry.core.seq,
+                confirms,
                 "ledgered a retention purge entry"
             );
-            true
+            Some(entry.core.seq)
         }
-        Err(error) if action == PURGE_ACTION => {
+        Err(error) if confirms.is_none() => {
             tracing::error!(
                 %error,
                 asset = %row.asset_id,
@@ -664,17 +675,18 @@ async fn ledger_purge(
                 "the owner ledger could not record a retention purge; the asset keeps its \
                  references until a later pass"
             );
-            false
+            None
         }
         Err(error) => {
             tracing::error!(
                 %error,
                 asset = %row.asset_id,
                 owner = %row.owner_id,
+                confirms,
                 "the owner ledger could not confirm an applied retention purge; a rebuild will \
                  keep the asset's references and report any blob GC sweeps as dangling"
             );
-            false
+            None
         }
     }
 }

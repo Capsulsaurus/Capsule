@@ -1322,20 +1322,21 @@ impl OwnerLedger for RefusingLedger {
 
 /// The purge entry `purge_expired` writes for `asset` before the index call.
 fn purge_event(asset: &str) -> LedgerEvent {
-    purge_entry(asset, PURGE_ACTION)
+    purge_entry(asset, PURGE_ACTION, None)
 }
 
-/// The entry `purge_expired` writes for `asset` once the index applied its purge (#811).
-fn purged_event(asset: &str) -> LedgerEvent {
-    purge_entry(asset, PURGED_ACTION)
+/// The entry `purge_expired` writes for `asset` once the index applied the purge ledgered at
+/// `purge_seq` (#811).
+fn purged_event(asset: &str, purge_seq: u64) -> LedgerEvent {
+    purge_entry(asset, PURGED_ACTION, Some(purge_seq))
 }
 
-fn purge_entry(asset: &str, action: &str) -> LedgerEvent {
+fn purge_entry(asset: &str, action: &str, sync_seq: Option<u64>) -> LedgerEvent {
     LedgerEvent::Lifecycle {
         asset_id: asset.to_owned(),
         action: action.to_owned(),
         manifest_hash: None,
-        sync_seq: None,
+        sync_seq,
     }
 }
 
@@ -1367,7 +1368,7 @@ async fn a_purge_appends_its_ledger_entry_before_the_index_write() {
     assert_eq!(entries[0].core.event, purge_event("ledgered"));
     assert_eq!(
         entries[1].core.event,
-        purged_event("ledgered"),
+        purged_event("ledgered", 1),
         "the confirmation follows the index's answer"
     );
     assert_eq!(entries[0].core.recorded_at, h.clock.now().to_string());
@@ -1462,7 +1463,7 @@ async fn the_owners_chain_verifies_after_a_delete_followed_by_a_purge() {
         "the delete, the purge and its confirmation all verify"
     );
     assert_eq!(scan.entries[1].core.event, purge_event("chained"));
-    assert_eq!(scan.entries[2].core.event, purged_event("chained"));
+    assert_eq!(scan.entries[2].core.event, purged_event("chained", 2));
 
     // Replay reads the purge as a lifecycle op of its own, confirmed, which rebuild empties the
     // tombstone for; the confirmation is not an op.

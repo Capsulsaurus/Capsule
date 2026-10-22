@@ -251,8 +251,13 @@ pub const PURGE: &str = "purge";
 /// The lifecycle action that confirms a retention purge the index applied (#811).
 ///
 /// The purge worker appends it, for the same asset, once the index answers that the purge
-/// committed; [`replay::lifecycle`] pairs it with the latest unconfirmed [`PURGE`] entry before
-/// it, and a rebuild empties a tombstone only for a confirmed purge. A purge the index refused
+/// committed. It names the [`PURGE`] entry it confirms by that entry's ledger position, carried
+/// in the event's `sync_seq` (a purge mints no sequence number, so the field is otherwise
+/// unused here); [`replay::lifecycle`] confirms exactly that entry, and a rebuild empties a
+/// tombstone only for a confirmed purge. Naming the entry, rather than taking the latest
+/// unconfirmed purge of the asset, keeps two concurrent purge passes from confirming the one the
+/// index refused. A reader that predates the confirmation pairs it as a lifecycle op's second
+/// entry, which a purge ignores, so the entry is tolerated by older replays. A purge the index refused
 /// (the asset was restored, or re-deleted under a later floor, after the worker listed it) is
 /// never confirmed, so a rebuild cannot drop references the live row kept, whatever order the
 /// purge and the concurrent op reached the ledger in.

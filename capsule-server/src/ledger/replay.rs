@@ -146,8 +146,8 @@ pub struct Lifecycle {
 ///
 /// An entry that already carries a `sync_seq` with no open op before it (a server that wrote
 /// one entry per op) stands on its own. A [`PURGED`] entry is never an op of its own: it
-/// confirms the latest unconfirmed [`PURGE`] of the same asset before it, and one with no such
-/// purge confirms nothing.
+/// confirms the [`PURGE`] of the same asset at the ledger position its `sync_seq` names, and
+/// one that names no such purge (or names none) confirms nothing.
 pub fn lifecycle(entries: &[LedgerEntry]) -> Vec<Lifecycle> {
     let mut out: Vec<Lifecycle> = Vec::new();
     for entry in entries {
@@ -161,12 +161,12 @@ pub fn lifecycle(entries: &[LedgerEntry]) -> Vec<Lifecycle> {
             continue;
         };
         if action == PURGED {
-            if let Some(open) = out
-                .iter_mut()
-                .rev()
-                .find(|op| op.action == PURGE && !op.confirmed && op.asset_id == *asset_id)
+            if let Some(purge_seq) = sync_seq
+                && let Some(purge) = out.iter_mut().rev().find(|op| {
+                    op.ledger_seq == *purge_seq && op.action == PURGE && op.asset_id == *asset_id
+                })
             {
-                open.confirmed = true;
+                purge.confirmed = true;
             }
             continue;
         }

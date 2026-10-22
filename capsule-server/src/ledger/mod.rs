@@ -296,7 +296,9 @@ pub enum LedgerEvent {
         /// The manifest that authorised it, when one did.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         manifest_hash: Option<Hash32>,
-        /// The asset's `sync_seq` after the action.
+        /// The asset's `sync_seq` after the action. On a retention purge's confirmation
+        /// ([`rebuild::PURGED`]), which mints no sequence number, the ledger position of the
+        /// purge entry it confirms.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         sync_seq: Option<u64>,
     },
