@@ -13,11 +13,15 @@
 
 mod support;
 
+use std::time::{Duration, Instant};
+
 use kynos::http::StatusCode;
 use support::{
     Fixture, PROTOCOL_VERSION, album, checksum, create_request, device, owner, payload,
     second_album,
 };
+use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+use tokio::net::TcpStream;
 
 /// The blob every happy-path case transfers: two 4 KiB chunks.
 const CHUNK: usize = 4096;
@@ -2413,4 +2417,152 @@ async fn a_ledger_that_cannot_append_fails_finalization_before_the_index() {
             .entries
             .is_empty()
     );
+}
+
+// ===========================================================================================
+// The chunk read deadline, on a socket (#717)
+// ===========================================================================================
+
+/// A `PATCH` head for `chunk` at `offset`, declaring the whole chunk's length.
+fn chunk_head(id: &str, offset: u64, chunk: &[u8], bearer: &str) -> String {
+    format!(
+        "PATCH /v1/upload/{id} HTTP/1.1\r\n\
+         Host: capsule.test\r\n\
+         Authorization: {bearer}\r\n\
+         X-Capsule-Protocol: {PROTOCOL_VERSION}\r\n\
+         X-Capsule-Offset: {offset}\r\n\
+         X-Capsule-Checksum: {}\r\n\
+         Content-Type: application/octet-stream\r\n\
+         Content-Length: {}\r\n\
+         \r\n",
+        checksum(chunk),
+        chunk.len()
+    )
+}
+
+/// A fixture with `deadline` on its chunk reads, serving on a socket, and an open session.
+async fn deadline_fixture(deadline: Duration) -> (Fixture, std::net::SocketAddr, String, String) {
+    let fixture = Fixture::working();
+    fixture.chunk_deadline.set(deadline);
+    let bearer = fixture.bearer().await;
+    let (_, _, whole) = blob();
+    let id = fixture.open_session(&whole, "original", &bearer).await;
+    let address = support::serve_on_socket(fixture.app(), Duration::from_secs(30)).await;
+    (fixture, address, id, bearer)
+}
+
+#[tokio::test]
+async fn a_chunk_body_that_stalls_is_refused_and_the_connection_closed() {
+    let deadline = Duration::from_millis(300);
+    let (fixture, address, id, bearer) = deadline_fixture(deadline).await;
+    let (first, _, _) = blob();
+
+    let mut stream = TcpStream::connect(address).await.expect("it connects");
+    let started = Instant::now();
+    stream
+        .write_all(chunk_head(&id, 0, &first, &bearer).as_bytes())
+        .await
+        .expect("the head writes");
+    // A hundred bytes of the 4 KiB the head declares, and then nothing.
+    stream.write_all(&first[..100]).await.expect("it writes");
+
+    let answer = support::read_until_closed(&mut stream).await;
+    assert!(answer.starts_with("HTTP/1.1 408"), "{answer}");
+    assert!(answer.contains("error.upload.chunk_timeout"), "{answer}");
+    assert!(
+        started.elapsed() >= deadline,
+        "refused before the deadline passed"
+    );
+
+    // Nothing of the chunk was kept, so the client's retry at the same offset is the right one.
+    let record = fixture
+        .uploads
+        .read_for_test(&id)
+        .await
+        .expect("the session survives");
+    assert_eq!(record.received_bytes, 0);
+    assert_eq!(fixture.blobs.staged_len_for_test(&id).await, Some(0));
+}
+
+#[tokio::test]
+async fn a_chunk_body_that_trickles_past_the_deadline_is_refused() {
+    let deadline = Duration::from_millis(300);
+    let (fixture, address, id, bearer) = deadline_fixture(deadline).await;
+    let (first, _, _) = blob();
+
+    let stream = TcpStream::connect(address).await.expect("it connects");
+    let (mut reader, mut writer) = stream.into_split();
+    let head = chunk_head(&id, 0, &first, &bearer);
+    // Every byte arrives, steadily — just too slowly: eight pieces a tenth of a second apart is
+    // most of a second for a body the deadline gives three tenths. Write errors are expected
+    // once the server has answered and stopped reading.
+    let trickle = tokio::spawn(async move {
+        if writer.write_all(head.as_bytes()).await.is_err() {
+            return;
+        }
+        for piece in first.chunks(512) {
+            if writer.write_all(piece).await.is_err() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    });
+
+    let mut received = Vec::new();
+    let mut buffer = [0_u8; 4096];
+    tokio::time::timeout(support::SOCKET_PATIENCE, async {
+        loop {
+            match reader.read(&mut buffer).await {
+                Ok(0) | Err(_) => break,
+                Ok(read) => received.extend_from_slice(&buffer[..read]),
+            }
+        }
+    })
+    .await
+    .expect("the server answered and closed within the patience bound");
+    let answer = String::from_utf8_lossy(&received);
+    assert!(answer.starts_with("HTTP/1.1 408"), "{answer}");
+    assert!(answer.contains("error.upload.chunk_timeout"), "{answer}");
+    trickle.await.expect("the writer ends");
+
+    let record = fixture
+        .uploads
+        .read_for_test(&id)
+        .await
+        .expect("the session survives");
+    assert_eq!(
+        record.received_bytes, 0,
+        "nothing of a refused chunk is kept"
+    );
+}
+
+#[tokio::test]
+async fn a_slow_but_steady_chunk_body_under_the_deadline_lands() {
+    let (fixture, address, id, bearer) = deadline_fixture(Duration::from_secs(5)).await;
+    let (first, _, _) = blob();
+
+    let mut stream = TcpStream::connect(address).await.expect("it connects");
+    stream
+        .write_all(chunk_head(&id, 0, &first, &bearer).as_bytes())
+        .await
+        .expect("the head writes");
+    for piece in first.chunks(1024) {
+        stream.write_all(piece).await.expect("it writes");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    let answer = support::read_response(&mut stream).await;
+    assert!(answer.starts_with("HTTP/1.1 204"), "{answer}");
+    assert!(
+        answer
+            .to_ascii_lowercase()
+            .contains("x-capsule-offset: 4096"),
+        "{answer}"
+    );
+    let record = fixture
+        .uploads
+        .read_for_test(&id)
+        .await
+        .expect("the session survives");
+    assert_eq!(record.received_bytes, 4096);
 }

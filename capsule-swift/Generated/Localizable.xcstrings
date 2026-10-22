@@ -40607,6 +40607,16 @@
         }
       }
     },
+    "error.upload.chunk_timeout": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "An upload chunk took too long to arrive."
+          }
+        }
+      }
+    },
     "error.upload.chunk_too_large": {
       "localizations": {
         "ar": {

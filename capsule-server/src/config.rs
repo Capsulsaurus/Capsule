@@ -60,6 +60,17 @@ const DEFAULT_SHUTDOWN_TIMEOUT: u64 = 25;
 /// The accepted-connection ceiling, matching Kynos's own default.
 const DEFAULT_MAX_CONNECTIONS: usize = 10_000;
 
+/// How long a client may take to send a request head, in seconds — and so, too, how long a
+/// kept-alive connection may sit idle waiting for its next one.
+///
+/// Thirty, Kynos's own default, now stated here rather than inherited: transfer/upload.md's
+/// Hostile Clients section makes the bound part of the contract, and a contract whose number
+/// lives in a dependency moves when the dependency does. One setting rather than two because
+/// the HTTP/1 driver arms one timer for both: it starts the moment the connection waits for a
+/// request head, whether that is the connection's first or the one after a kept-alive response
+/// ([`crate::limits::http1`]).
+const DEFAULT_HEADER_READ_TIMEOUT: u64 = 30;
+
 /// How long an account stays locked after enough failed credential presentations.
 ///
 /// Fifteen minutes. `design/authentication.md` names no figure — it says only that a locked
@@ -369,6 +380,15 @@ pub struct Config {
     pub shutdown_timeout: std::time::Duration,
     /// The accepted-connection ceiling.
     pub max_connections: NonZeroUsize,
+    /// How long a client may take to send a request head, which also bounds how long a
+    /// kept-alive connection may idle before its next one (`HEADER_READ_TIMEOUT_SECONDS`).
+    pub header_read_timeout: std::time::Duration,
+    /// How long one upload chunk's body may take to arrive (`CHUNK_READ_TIMEOUT_SECONDS`).
+    ///
+    /// The body-read half of the per-connection bound, applied by
+    /// [`ChunkBody`](crate::upload::body::ChunkBody) and therefore over before finalization
+    /// starts: see [`crate::upload::policy::DEFAULT_CHUNK_READ_TIMEOUT`].
+    pub chunk_read_timeout: std::time::Duration,
     /// Which reverse-proxy hops may name the client (`TRUSTED_PROXY_HOPS`, `TRUSTED_PROXIES`).
     ///
     /// Trusts nobody unless set, so every forwarding header is ignored and the socket peer is the
@@ -534,6 +554,8 @@ impl fmt::Debug for Config {
             oidc,
             shutdown_timeout,
             max_connections,
+            header_read_timeout,
+            chunk_read_timeout,
             trusted_proxies,
             log_format,
             backends,
@@ -568,6 +590,8 @@ impl fmt::Debug for Config {
             .field("oidc", oidc)
             .field("shutdown_timeout", shutdown_timeout)
             .field("max_connections", max_connections)
+            .field("header_read_timeout", header_read_timeout)
+            .field("chunk_read_timeout", chunk_read_timeout)
             .field("trusted_proxies", trusted_proxies)
             .field("log_format", log_format)
             .field("backends", backends)
@@ -826,6 +850,21 @@ impl Config {
                 NonZeroUsize::new(DEFAULT_MAX_CONNECTIONS)
                     .expect("the built-in connection ceiling is non-zero")
             });
+        // The per-connection bounds (transfer/upload.md, Hostile Clients; #717). Zero is refused
+        // for both: a zero header timeout closes every connection before its first request, and
+        // a zero chunk deadline refuses every chunk, so either is an outage spelled as a setting.
+        let header_read_timeout = parse_timeout(
+            env,
+            "HEADER_READ_TIMEOUT_SECONDS",
+            std::time::Duration::from_secs(DEFAULT_HEADER_READ_TIMEOUT),
+            &mut faults,
+        );
+        let chunk_read_timeout = parse_timeout(
+            env,
+            "CHUNK_READ_TIMEOUT_SECONDS",
+            crate::upload::policy::DEFAULT_CHUNK_READ_TIMEOUT,
+            &mut faults,
+        );
         // Which proxy hops may name the client (#704). Unset trusts nobody, the one default a
         // spoofed `X-Forwarded-For` cannot move; a malformed entry is a fault rather than an entry
         // quietly dropped, because a dropped proxy is every client sharing that proxy's bucket.
@@ -937,6 +976,8 @@ impl Config {
                 oidc,
                 shutdown_timeout,
                 max_connections,
+                header_read_timeout,
+                chunk_read_timeout,
                 trusted_proxies,
                 log_format,
                 backends,
@@ -1113,6 +1154,26 @@ where
     }
 }
 
+/// Read `key` as a whole number of seconds that must not be zero, or `default` when unset.
+fn parse_timeout(
+    env: &dyn Environment,
+    key: &'static str,
+    default: std::time::Duration,
+    faults: &mut Vec<ConfigFault>,
+) -> std::time::Duration {
+    match parse_number::<u64>(env, key, faults) {
+        None => default,
+        Some(0) => {
+            faults.push(ConfigFault::Invalid {
+                key,
+                detail: "zero would refuse every request it bounds".to_owned(),
+            });
+            default
+        }
+        Some(seconds) => std::time::Duration::from_secs(seconds),
+    }
+}
+
 /// Decode `key` from base64, accepting padded and unpadded input.
 ///
 /// Two alphabets rather than one because the documented way to produce `JWT_ED25519_DER` is
@@ -1211,6 +1272,7 @@ fn derive<const N: usize>(secret: &[u8], info: &[u8]) -> Option<[u8; N]> {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::time::Duration;
 
     use base64::Engine as _;
     use jiff::SignedDuration;
@@ -1271,6 +1333,36 @@ mod tests {
             config.min_client_build,
             crate::upload::policy::DEFAULT_MIN_CLIENT_BUILD
         );
+    }
+
+    #[test]
+    fn the_connection_bounds_are_explicit_and_configurable() {
+        let config = Config::load(&serveable(), &memory(), Demands::Serve).expect("it loads");
+        assert_eq!(config.header_read_timeout, Duration::from_secs(30));
+        assert_eq!(
+            config.chunk_read_timeout,
+            crate::upload::policy::DEFAULT_CHUNK_READ_TIMEOUT
+        );
+
+        let mut environment = serveable();
+        environment.insert("HEADER_READ_TIMEOUT_SECONDS".to_owned(), "7".to_owned());
+        environment.insert("CHUNK_READ_TIMEOUT_SECONDS".to_owned(), "45".to_owned());
+        let config = Config::load(&environment, &memory(), Demands::Serve).expect("it loads");
+        assert_eq!(config.header_read_timeout, Duration::from_secs(7));
+        assert_eq!(config.chunk_read_timeout, Duration::from_secs(45));
+    }
+
+    #[test]
+    fn a_connection_bound_of_zero_or_not_a_number_is_refused() {
+        for key in ["HEADER_READ_TIMEOUT_SECONDS", "CHUNK_READ_TIMEOUT_SECONDS"] {
+            for value in ["0", "-1", "thirty"] {
+                let mut environment = serveable();
+                environment.insert(key.to_owned(), value.to_owned());
+                let error =
+                    Config::load(&environment, &memory(), Demands::Serve).expect_err("it refuses");
+                assert!(error.names(key), "{key}={value}: {error}");
+            }
+        }
     }
 
     #[test]

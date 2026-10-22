@@ -14,7 +14,7 @@
 //! | The keyless invariants | [`capsule_core::validation`] | shared with the client's own `verify_asset`; a second implementation would be a second answer |
 //! | The durable asset row, and the sequence its changes mint | [`crate::index::AssetIndex`] (`S-C37`) | landed already; consumed, not re-declared |
 //! | Album capability, album pin, device floor | [`WriteAuthority`] | the two facts the request cannot carry |
-//! | The tunable half of the contract | [`UploadPolicy`] | protocol window, ceiling, closed content-type enum, drift |
+//! | The tunable half of the contract | [`UploadPolicy`] | protocol window, ceiling, closed content-type enum, drift, chunk-body read deadline |
 //!
 //! # The three things this port refuses to do
 //!
@@ -63,7 +63,7 @@ pub use self::authority::{
     AlbumWriteAccess, AuthorityError, AuthorityFuture, WriteAuthority, WriteRole,
 };
 pub use self::envelope::{DeclaredBlob, GateContext, GateReject, ManifestEnvelope};
-pub use self::policy::UploadPolicy;
+pub use self::policy::{ChunkReadDeadline, UploadPolicy};
 use crate::blob::BlobStore;
 use crate::index::AssetIndex;
 use crate::store::{Clock, UploadSessionStore};

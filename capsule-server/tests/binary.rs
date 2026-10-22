@@ -90,6 +90,8 @@ fn server(args: &[&str]) -> Command {
         "GC_GRACE_WINDOW_HOURS",
         "SHUTDOWN_TIMEOUT_SECONDS",
         "MAX_CONNECTIONS",
+        "HEADER_READ_TIMEOUT_SECONDS",
+        "CHUNK_READ_TIMEOUT_SECONDS",
         "LOG_FORMAT",
         "TRUSTED_PROXY_HOPS",
         "TRUSTED_PROXIES",

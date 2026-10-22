@@ -7619,6 +7619,10 @@
     "message": "An upload chunk was incorrectly sized.",
     "context": "HTTP 400, invariant 10: non-final chunk not a multiple of 4 KiB."
   },
+  "error.upload.chunk_timeout": {
+    "message": "An upload chunk took too long to arrive.",
+    "context": "HTTP 408 on PATCH /v1/upload/{id} and PATCH /d/{opaque-id}/{upload-id}: the chunk body did not finish arriving within the server's chunk read deadline (CHUNK_READ_TIMEOUT_SECONDS, two minutes by default). Nothing of the chunk was kept and the offset did not move; the client resends the same chunk at the same offset, smaller if its link is slow."
+  },
   "error.upload.chunk_too_large": {
     "message": "An upload chunk exceeded the maximum chunk size.",
     "context": "HTTP 413, invariant 10: chunk body larger than the 16 MiB protocol maximum."

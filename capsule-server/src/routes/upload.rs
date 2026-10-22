@@ -30,6 +30,7 @@
 //! | chunk `409` | kept — offset mismatch (carrying the authoritative offset), chunk conflict, session not active |
 //! | chunk `413` | kept — the 16 MiB protocol ceiling, reachable because the transport backstop sits above it (`S-C33`) |
 //! | chunk `415` | kept, and it keeps its code. Kynos's own `Binary` rejection declares `400`, `415` *and* a `422` a raw-bytes body cannot produce, and carries no `error.*` code; [`ChunkBody`] delegates the enforcement to `Binary` and replaces only the rejection, so the `415` is `error.upload.unsupported_media_type` and the phantom `422` is gone |
+//! | chunk `408` | **added** (#717) — a body that did not finish arriving within the chunk read deadline, `error.upload.chunk_timeout`. [`ChunkBody`] bounds the read and nothing after it, so finalization is never cut short by it |
 //! | chunk `409 finalize_in_progress` | **deleted.** Losing the finalize claim is a normal race and the chunk that triggered it was still accepted, so it answers `204`. Telling a client its accepted chunk failed was the Salvo behaviour and it was wrong |
 //! | chunk `500` | kept, narrowed — only a stage **shorter** than its counter, the one inconsistency the server cannot repair. A stage that ran ahead is cut back ([`chunk::append`]) and a collaborator failure is a `503` |
 //! | chunk `429` / `503` / `507` | **added** — the account's or its source address's chunk budget, a collaborator that could not answer, and a full disk. Each carries a retry instant, on the body and on `Retry-After` ([`crate::problem::RetryAfter`]) |
