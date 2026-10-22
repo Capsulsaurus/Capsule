@@ -22,7 +22,10 @@
 //!
 //! `gc`, `purge` and `scrub` need a blob root and **no key material** — demanding a signing key
 //! to sweep a directory would be a reason to keep a production key on a maintenance host. So
-//! the requirement set is a parameter ([`Demands`]) rather than a property of the type.
+//! the requirement set is a parameter ([`Demands`]) rather than a property of the type. The one
+//! exception is enforced where the key is used rather than here: `purge --apply` signs each
+//! purge into the owner ledger, so it uses `ATTESTATION_KEY_SEED` when set and refuses to apply
+//! without it, while its dry run, like `gc` and `scrub`, needs nothing.
 //!
 //! # Secrets
 //!

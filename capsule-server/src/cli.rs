@@ -274,8 +274,10 @@ impl Command {
     fn demands(&self) -> Demands {
         match self {
             Self::Serve { .. } => Demands::Serve,
-            // No key material. A maintenance host that had to hold the production
+            // No key material is demanded. A maintenance host that had to hold the production
             // token-signing key to sweep a directory would be a reason to put the key there.
+            // `purge --apply` alone uses `ATTESTATION_KEY_SEED` when set, to ledger each purge,
+            // and refuses without it (#767).
             Self::Gc { .. }
             | Self::Purge { .. }
             | Self::Scrub { .. }
@@ -389,8 +391,10 @@ async fn assemble(config: &Config) -> Result<Assembled> {
 /// Assemble only what the operator workers read.
 ///
 /// A separate entry point rather than reaching into [`Assembled`], because `gc`, `purge` and
-/// `scrub` need **no key material** and the way to make that true is for the assembly they use
-/// to have none in scope — not for it to build a token signer and then not use it.
+/// `scrub` need **no token-signing key** and the way to make that true is for the assembly they
+/// use to have none in scope — not for it to build a token signer and then not use it. The one
+/// signing key it may hold is the attestation key, and only when the host was given
+/// `ATTESTATION_KEY_SEED`, for `purge --apply` to ledger its purges (#767).
 async fn maintenance(config: &Config) -> Result<Maintenance> {
     tracing::debug!(?config, "loaded the configuration");
     Ok(boot::assemble_maintenance(config).await?)
@@ -571,14 +575,21 @@ async fn collect(config: &Config, mode: Mode) -> Result<ExitCode> {
 
 /// Drop the blob references of tombstoned assets past their retention window.
 ///
-/// An interrupted pass reports nothing, for the reason [`collect`] records.
+/// An interrupted pass reports nothing, for the reason [`collect`] records. An applied pass
+/// needs `ATTESTATION_KEY_SEED`, because every purge is appended to the owner ledger before it
+/// is applied (#767), and exits non-zero when the ledger could not take an entry: those assets
+/// were left unpurged, and that is a fault for an operator rather than a quiet pass.
 async fn purge(config: &Config, mode: Mode, limit: usize) -> Result<ExitCode> {
     let maintenance = maintenance(config).await?;
     let report = crate::gc::purge_expired(&maintenance.collection, mode, limit)
         .await
         .map_err(|error| eyre!("the retention purge could not finish: {error}"))?;
     print!("{}", render_purge(&report, mode));
-    Ok(ExitCode::SUCCESS)
+    if report.unrecorded.is_empty() {
+        Ok(ExitCode::SUCCESS)
+    } else {
+        Ok(ExitCode::FAILURE)
+    }
 }
 
 /// Compare the index against the store.
@@ -753,6 +764,7 @@ impl std::fmt::Display for Rendered<'_, PurgeReport> {
             ("purged", &report.purged),
             ("retained", &report.retained),
             ("skipped", &report.skipped),
+            ("unrecorded, kept", &report.unrecorded),
         ] {
             if assets.is_empty() {
                 continue;
@@ -1136,6 +1148,7 @@ mod tests {
             purged: vec![crate::store::AssetId::new("gone")],
             retained: vec![crate::store::AssetId::new("waiting")],
             skipped: vec![crate::store::AssetId::new("restored")],
+            unrecorded: vec![crate::store::AssetId::new("unledgered")],
         };
         let rendered = render_purge(&report, Mode::DryRun).to_string();
         assert!(rendered.contains("purged (1)"), "{rendered}");
@@ -1144,6 +1157,8 @@ mod tests {
         assert!(rendered.contains("waiting"), "{rendered}");
         assert!(rendered.contains("skipped (1)"), "{rendered}");
         assert!(rendered.contains("restored"), "{rendered}");
+        assert!(rendered.contains("unrecorded, kept (1)"), "{rendered}");
+        assert!(rendered.contains("unledgered"), "{rendered}");
     }
 
     #[test]
