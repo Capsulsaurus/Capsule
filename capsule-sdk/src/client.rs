@@ -364,21 +364,39 @@ fn reqwest_client() -> reqwest::Client {
 #[derive(Debug)]
 pub(crate) struct Negotiate {
     inner: Arc<dyn rest::HttpBackend>,
+    /// Whether a write the latched window refuses is answered locally. Off for the auth
+    /// client's session-upkeep operations, which only the server's own `426` refuses
+    /// (see `auth::NegotiatedSend`).
+    preflight: bool,
 }
 
 impl Negotiate {
-    /// Put the window screen over `inner`.
+    /// Put the window screen over `inner`: latch every window, refuse a write it refuses.
     pub(crate) fn over(inner: Arc<dyn rest::HttpBackend>) -> Self {
-        Self { inner }
+        Self {
+            inner,
+            preflight: true,
+        }
+    }
+
+    /// Latch every window `inner`'s responses advertise, and refuse nothing.
+    pub(crate) fn observing(inner: Arc<dyn rest::HttpBackend>) -> Self {
+        Self {
+            inner,
+            preflight: false,
+        }
     }
 }
 
 impl rest::HttpBackend for Negotiate {
     fn execute(&self, request: reqwest::Request) -> rest::ExecuteFuture<'_> {
         let inner = self.inner.clone();
+        let preflight = self.preflight;
         Box::pin(async move {
             let protocol = negotiation::protocol_of(request.headers());
-            if let Err(refusal) = negotiation::preflight(request.method(), request.url(), &protocol)
+            if preflight
+                && let Err(refusal) =
+                    negotiation::preflight(request.method(), request.url(), &protocol)
             {
                 return Ok(local_upgrade_required(&refusal));
             }

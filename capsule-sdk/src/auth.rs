@@ -63,13 +63,25 @@ use tracing::instrument;
 use crate::net::negotiation::{self, UpgradeRequired};
 use crate::rest;
 
-/// Every request this module sends — and every request a [`Session`] executes on behalf of
-/// the upload, album and verify paths — goes through the protocol window (issue #674): a write
-/// the latched window refuses never leaves, every response's window is latched, and a `426` is
-/// [`AuthError::UpgradeRequired`] rather than a status a caller has to recognise.
+/// Every request this module sends goes through the protocol window (issue #674): every
+/// response's window is latched, and a `426` is [`AuthError::UpgradeRequired`] rather than a
+/// status a caller has to recognise.
+///
+/// Two strengths, by what the request is for:
+///
+/// - [`send_negotiated`](NegotiatedSend::send_negotiated) — the data requests a [`Session`]
+///   executes on behalf of the upload, album, verify and upgrade paths: a write the latched
+///   window refuses also never leaves.
+/// - [`send_screened`](NegotiatedSend::send_screened) — the session's own upkeep (sign-in,
+///   second factor, registration, refresh, sign-out): never refused here, only by the server's
+///   own `426`. Reads keep working against any server (Versioning — Update Policy), and a read
+///   needs a session; refusing a refresh because the advisory build floor is above this build
+///   would make every read fail the moment its token expired.
 trait NegotiatedSend {
-    /// [`reqwest::RequestBuilder::send`], screened.
+    /// [`reqwest::RequestBuilder::send`], pre-flighted against the latched window and screened.
     async fn send_negotiated(self) -> Result<reqwest::Response, AuthError>;
+    /// [`reqwest::RequestBuilder::send`], screened only.
+    async fn send_screened(self) -> Result<reqwest::Response, AuthError>;
 }
 
 impl NegotiatedSend for reqwest::RequestBuilder {
@@ -78,6 +90,14 @@ impl NegotiatedSend for reqwest::RequestBuilder {
         let request = request?;
         let protocol = negotiation::protocol_of(request.headers());
         negotiation::preflight(request.method(), request.url(), &protocol)?;
+        let response = client.execute(request).await?;
+        Ok(negotiation::screen(&protocol, response).await?)
+    }
+
+    async fn send_screened(self) -> Result<reqwest::Response, AuthError> {
+        let (client, request) = self.build_split();
+        let request = request?;
+        let protocol = negotiation::protocol_of(request.headers());
         let response = client.execute(request).await?;
         Ok(negotiation::screen(&protocol, response).await?)
     }
@@ -677,9 +697,10 @@ impl AuthClient {
         refresh_skew_secs: i64,
     ) -> Result<Self, AuthError> {
         let base = AuthEndpoints::from_base(base_url)?;
-        // Executed on `http` (and so carrying its handshake headers) under the same window
-        // screen as the typed client (issue #674).
-        let backend: Arc<dyn rest::HttpBackend> = Arc::new(crate::client::Negotiate::over(
+        // Executed on `http` (and so carrying its handshake headers), latching the window like
+        // the typed client (issue #674). The OIDC legs are session upkeep, so only the server's
+        // own `426` refuses them — see `NegotiatedSend`.
+        let backend: Arc<dyn rest::HttpBackend> = Arc::new(crate::client::Negotiate::observing(
             Arc::new(rest::ReqwestBackend::new(http.clone())),
         ));
         let rest = rest::Client::with_backend(backend, &base.server_root).map_err(|e| {
@@ -736,7 +757,7 @@ impl AuthClient {
                 password,
                 cohort_hash: self.cohort(),
             })
-            .send_negotiated()
+            .send_screened()
             .await?;
 
         let outcome = self.read_login_outcome(Endpoint::Login, response).await?;
@@ -1074,7 +1095,7 @@ impl AuthClient {
                 totp_code,
                 cohort_hash: self.cohort(),
             })
-            .send_negotiated()
+            .send_screened()
             .await?;
         let tokens = read_tokens(Endpoint::VerifyTotp, response).await?;
         tracing::info!("second factor accepted; session established");
@@ -1094,7 +1115,7 @@ impl AuthClient {
             .http
             .post(&self.base.register)
             .json(&RegisterRequestBody { email, password })
-            .send_negotiated()
+            .send_screened()
             .await?;
         let tokens = read_tokens(Endpoint::Register, response).await?;
         tracing::info!("registration succeeded; session established");
@@ -1271,13 +1292,18 @@ impl Session {
             }
             Err(other) => return Err(other),
         };
-        let response = self
+        let sent = self
             .http
             .post(&self.base.logout)
             .bearer_auth(token.expose_secret())
-            .send_negotiated()
-            .await?;
-        *self.inner.tokens.write().await = None;
+            .send_screened()
+            .await;
+        // Any answer clears the local store, a `426` included: an out-of-window client can
+        // still sign out on this device, and the error says the server-side revoke did not land.
+        if matches!(sent, Ok(_) | Err(AuthError::UpgradeRequired(_))) {
+            *self.inner.tokens.write().await = None;
+        }
+        let response = sent?;
         let status = response.status();
         if status.is_success() || status == reqwest::StatusCode::UNAUTHORIZED {
             tracing::info!("session logged out; local tokens cleared");
@@ -1355,7 +1381,7 @@ impl Session {
             .json(&RefreshRequestBody {
                 refresh_token: refresh_token.expose_secret(),
             })
-            .send_negotiated()
+            .send_screened()
             .await?;
         read_tokens(Endpoint::Refresh, response).await
     }

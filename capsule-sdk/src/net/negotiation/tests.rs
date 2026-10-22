@@ -17,6 +17,7 @@
 //! | `route_classes::a_typed_write_is_refused_before_it_leaves` | write (typed client): refused locally with a `426` that maps to `UpgradeRequired` |
 //! | `route_classes::a_session_write_is_refused_before_it_leaves` | write (session path): refused before sending, as `AuthError::UpgradeRequired` |
 //! | `route_classes::a_session_write_426_is_the_typed_refusal` | write (session path): the server's `426` is the same refusal |
+//! | `route_classes::session_upkeep_is_never_refused_locally` | refresh and sign-out still leave under a floor this build is below |
 //!
 //! The upload route class is covered in `upload/tests.rs`.
 
@@ -401,5 +402,56 @@ mod route_classes {
         };
         assert_eq!(refusal.reason, UpgradeReason::ProtocolBelowWindow);
         assert_eq!(refusal.message, "too old");
+    }
+
+    /// **Session upkeep.** Refresh and sign-out are never refused locally: a read needs a live
+    /// session, and reads keep working against any server — only the server's own `426`
+    /// refuses them.
+    #[tokio::test]
+    async fn session_upkeep_is_never_refused_locally() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let log = seen.clone();
+        let server = MockServer::start(move |req: &MockRequest| {
+            log.lock()
+                .unwrap()
+                .push(format!("{} {}", req.method, req.path));
+            let response = match req.path.as_str() {
+                "/refresh" => MockResponse::new(200, "OK").json_body(
+                    serde_json::json!({
+                        "access_token": "fresh-access",
+                        "refresh_token": "fresh-refresh",
+                        "expires_by": jiff::Timestamp::now().as_second() + 3_600,
+                    })
+                    .to_string(),
+                ),
+                "/logout" => MockResponse::new(204, "No Content"),
+                _ => MockResponse::new(200, "OK").json_body("{}"),
+            };
+            response
+                .header(PROTOCOL_MIN_HEADER, "2026-01-01")
+                .header(PROTOCOL_MAX_HEADER, "2099-12-31")
+                .header(MIN_CLIENT_BUILD_HEADER, "999.0.0")
+        })
+        .await;
+        let base = server.base_url();
+        let session = session_for(&base);
+
+        session
+            .execute(|http| http.get(format!("{base}/v1/anything")))
+            .await
+            .expect("the read is served and latches the floor");
+        session
+            .refresh()
+            .await
+            .expect("a refresh is upkeep, not a data write");
+        session.logout().await.expect("and so is sign-out");
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![
+                "GET /v1/anything".to_owned(),
+                "POST /refresh".to_owned(),
+                "POST /logout".to_owned()
+            ]
+        );
     }
 }
