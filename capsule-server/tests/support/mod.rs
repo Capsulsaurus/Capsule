@@ -78,6 +78,9 @@ use capsule_server::index::{
     AssetIndex, AssetRow, BlobOutcome, BlobRecord, Custody, FeedEntry, HoldOutcome, IndexFuture,
     LifecycleOp, OpOutcome, PendingAsset, PurgeOutcome, Receipted, Reservation, ServingHold,
 };
+use capsule_server::ledger::{
+    InMemoryLedger, LedgerEntry, LedgerError, LedgerEvent, LedgerFuture, LedgerScan, OwnerLedger,
+};
 use capsule_server::membership::{
     InMemoryMembership, MemberRole, Membership, MembershipContext, MembershipStore, RosterOutcome,
     RosterRecord,
@@ -2693,6 +2696,51 @@ pub(crate) struct SwitchableIndex {
     unavailable: AtomicBool,
 }
 
+/// The owner ledger, with a switch that makes every append fail.
+///
+/// Delegation, as [`SwitchableIndex`] is: with the switch off this is the in-memory adapter the
+/// ledger conformance suite passes.
+#[derive(Debug, Default)]
+pub(crate) struct SwitchableLedger {
+    inner: InMemoryLedger,
+    unavailable: AtomicBool,
+}
+
+impl SwitchableLedger {
+    /// Make every subsequent append fail, or stop.
+    pub(crate) fn set_unavailable(&self, unavailable: bool) {
+        self.unavailable.store(unavailable, Ordering::SeqCst);
+    }
+}
+
+impl OwnerLedger for SwitchableLedger {
+    fn append<'a>(
+        &'a self,
+        owner: &'a OwnerId,
+        event: LedgerEvent,
+        recorded_at: Timestamp,
+        signer: &'a dyn capsule_server::attestation::ReceiptSigner,
+    ) -> LedgerFuture<'a, LedgerEntry> {
+        if self.unavailable.load(Ordering::SeqCst) {
+            return Box::pin(async {
+                Err(LedgerError::Backend {
+                    operation: "append",
+                    detail: REFUSAL.to_owned(),
+                })
+            });
+        }
+        self.inner.append(owner, event, recorded_at, signer)
+    }
+
+    fn scan<'a>(&'a self, owner: &'a OwnerId) -> LedgerFuture<'a, LedgerScan> {
+        self.inner.scan(owner)
+    }
+
+    fn owners(&self) -> LedgerFuture<'_, Vec<OwnerId>> {
+        self.inner.owners()
+    }
+}
+
 /// A quota ledger that can be made to fail on demand.
 #[derive(Debug, Default)]
 pub(crate) struct SwitchableQuota {
@@ -3417,6 +3465,9 @@ pub(crate) struct Fixture {
     /// The attestation key the server signs receipts with — the *same* one, so a test can
     /// verify a fetched receipt the way a client would.
     pub(crate) attestation_key: Arc<LocalAttestationKey>,
+    /// The owner ledger finalization appends to — the *same* one, so a test can read and verify
+    /// what was ledgered.
+    pub(crate) ledger: Arc<SwitchableLedger>,
     /// The federation capabilities this server issued, and the revocations it publishes.
     pub(crate) revocations: Arc<SwitchableRevocations>,
     /// The peers this server has pinned or blocked.
@@ -3547,6 +3598,7 @@ impl Fixture {
             SERVER_ORIGIN,
             capsule_core::crypto::keys::HybridSigningKey::generate(),
         ));
+        let ledger = Arc::new(SwitchableLedger::default());
         let revocations = Arc::new(SwitchableRevocations::new(clock.clone()));
         let peers = Arc::new(InMemoryPeers::new());
         let federation = Arc::new(SwitchableFederation::new(federating));
@@ -3622,7 +3674,8 @@ impl Fixture {
                 receipts.clone(),
                 attestation_key.clone(),
                 Timestamp::UNIX_EPOCH,
-            ),
+            )
+            .with_ledger(ledger.clone()),
             discovery: DiscoveryContext::new(Arc::new(server_info(&tokens)), revocations.clone()),
             escrow: EscrowContext::new(escrows.clone(), clock.clone()),
             // On unless the case asked otherwise ([`Fixture::without_federation`]).
@@ -3679,6 +3732,7 @@ impl Fixture {
             marks,
             receipts,
             attestation_key,
+            ledger,
             revocations,
             peers,
             federation,

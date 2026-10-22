@@ -75,6 +75,25 @@ accepted it. The **owner ledger** carries those facts:
 - An entry is appended and fsynced **after** the blobs it names are committed and **before** the
   index row commits. A crash between the two leaves an entry without a row, which the next
   rebuild or scrub replays; never a row without an entry.
+- The `sync_seq` and the custody receipt are minted inside the index transaction, so a
+  finalization writes two entries: a **custody** entry before the transaction (content hash,
+  size, role, uploader, `received_at`) whose failure fails the finalization, and an **indexed**
+  entry after it carrying the `sync_seq` and the receipt. A missing indexed entry is a sequence
+  the rebuild cannot prove, handled like a lost tail.
+- A write the index **refuses** after its custody entry is durable (a conflicting role, an
+  incomplete or stale replace, a vanished asset) appends a **refused** entry naming the upload
+  instead. A custody entry is resolved by an indexed or a refused entry; rebuild replays only
+  unresolved ones. A write the index could not answer (an outage) gets neither, and is replayed
+  like a crash. The refused append is best-effort: replay re-runs the checks that refused it.
+- Each entry carries its owner, its position (`seq`, from 1, contiguous) and the hash of its
+  predecessor inside the signed core. Edits, removals, a dropped head and a torn tail are
+  detected from the chain alone. A tail cut exactly at an entry boundary is detected only
+  against a head recorded outside the ledger; no store records one yet
+  ([#757](https://github.com/Capsulsaurus/Capsule/issues/757)), and until then the check is an
+  owner row whose `sync_seq` is above every indexed entry's. A segment is a sequence of
+  length-prefixed canonical-CBOR frames; the only bytes ever cut are those after the last whole
+  entry when no complete entry starts anywhere after it (a short frame, or zeroes a crash left),
+  which were never acknowledged. Damage followed by an entry refuses further appends.
 - The ledger is never rewritten. Purge appends a purge entry; the purged blobs go through
   [GC](#deletion-and-garbage-collection) as before.
 - Device-directory versions are in the ledger, so a rebuild verifies signatures against the

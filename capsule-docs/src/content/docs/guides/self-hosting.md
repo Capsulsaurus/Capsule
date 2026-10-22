@@ -14,7 +14,8 @@ never decodes media; clients do all processing and encryption.
   correctness state, not a cache. Run it with `--maxmemory-policy noeviction` (an evicting policy
   can make "revoke all sessions" revoke nothing) and persistence on.
 - **A blob directory** (`BLOB_ROOT`) on **one filesystem**. Finalization is an atomic rename, so
-  the tree cannot span volumes or Kubernetes PersistentVolumes.
+  the tree cannot span volumes or Kubernetes PersistentVolumes. It holds the blobs and, under
+  `ledger/`, each owner's signed ledger, which is what lets the index be rebuilt from it.
 - **A TLS-terminating reverse proxy** in front of the server.
 
 `capsule-server/compose.yaml` runs Postgres and Valkey with the right settings for local use
@@ -88,7 +89,7 @@ Schedule these one-shot commands (cron or a timer). They need `DATABASE_URL`, `V
 
 ## Backups
 
-Durable state is PostgreSQL plus `BLOB_ROOT`; back up both, together. Valkey holds only sessions and
+Durable state is PostgreSQL plus `BLOB_ROOT` (blobs and `ledger/`); back up both, together. Valkey holds only sessions and
 in-flight uploads, so losing it signs users out and restarts uploads but loses no library data.
 Keep the key variables above in your secret store as well: they are not in the database, and
 the server's signing and attestation identity depends on them.

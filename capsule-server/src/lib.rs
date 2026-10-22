@@ -81,6 +81,7 @@ pub mod escrow;
 pub mod federation;
 pub mod gc;
 pub mod index;
+pub mod ledger;
 pub mod limits;
 pub mod membership;
 pub mod moderation;
