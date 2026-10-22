@@ -36,9 +36,25 @@
 //! A write the index could not *answer* (an outage, where whether it committed is unknown) gets
 //! no entry: it is the crash case, and is replayed as one.
 //!
-//! [`LedgerEvent::Directory`] and [`LedgerEvent::Lifecycle`] are the other two entry kinds the
-//! design names; they are part of the signed shape now so the format does not change when their
-//! producers are wired.
+//! A drop adoption is the other path by which a blob becomes indexed, and it appends the same
+//! three kinds in the same order, under the drop id as its `upload_id`.
+//!
+//! # The other producers
+//!
+//! Every write that changes what a rebuild must reproduce appends before it commits, and a
+//! failed append refuses the write:
+//!
+//! - a **lifecycle op** (`POST /v1/albums/{album_id}/ops`) appends [`LedgerEvent::Lifecycle`]
+//!   with no `sync_seq` before the index call, and a second `Lifecycle` entry with the sequence
+//!   number once the index has applied (or recognised a replay of) it — best-effort, as the
+//!   `indexed` entry is. The manifest hash is the index's replay key, so replaying both entries
+//!   applies the op once;
+//! - a **device-directory publish** appends [`LedgerEvent::Directory`] before the directory
+//!   store commits, under the publishing account.
+//!
+//! An op or a publish the index or the store then refuses leaves its entry unresolved: whatever
+//! replays the ledger re-runs the checks that refused it. There is no entry kind for those
+//! refusals because the entries they would resolve carry no session to name.
 //!
 //! # What makes tampering detectable
 //!

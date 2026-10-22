@@ -21,6 +21,19 @@
 //! album. The document is public by construction — it carries device public keys and a
 //! signature, and nothing else.
 //!
+//! # Every accepted version is in the owner ledger
+//!
+//! A publish appends a [`LedgerEvent::Directory`] entry (the account, the version, the hash of
+//! the signed document) to the publishing account's [owner ledger](crate::ledger) before the
+//! store commits, so a rebuild can verify every manifest against the directory as it stood when
+//! that manifest was accepted. A ledger that cannot append refuses the publish with the
+//! surface's `500` and nothing is stored. A publish the store then refuses (a stale version, a
+//! foreign identity key) leaves its entry behind, unresolved, exactly as a refused lifecycle op
+//! does: the ledger records what was offered and in what order, and whatever replays it has to
+//! re-run the store's checks (strictly advancing version, the account's identity anchor) to
+//! learn which offers were in force. A stale offer is decidable from the ledger alone; an
+//! identity mismatch needs the document, which the entry names only by hash.
+//!
 //! # `S-C28` audit
 //!
 //! | Salvo status | Verdict |
@@ -44,18 +57,21 @@
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
+use capsule_core::crypto::hash::hash_bytes;
 use capsule_i18n::error_codes;
 use kynos::extract::body::binary::Binary;
 use kynos::extract::media::MediaType;
 use kynos::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::attestation::AttestationContext;
 use crate::auth::AccessToken;
 use crate::body::{CodedMedia, OpaqueBody};
 use crate::directory::{
     DeviceDirectoryContext, MalformedDirectory, PublishOutcome, PublishedDirectory,
 };
-use crate::store::UserId;
+use crate::ledger::LedgerEvent;
+use crate::store::{OwnerId, UserId};
 
 /// The device surface: who a user's devices are, and which keys to trust for them.
 #[derive(Tag)]
@@ -210,6 +226,7 @@ pub enum FetchRejection {
 )]
 pub async fn publish_device_directory(
     Inject(directories): Inject<DeviceDirectoryContext>,
+    Inject(attestation): Inject<AttestationContext>,
     Auth(credential): Auth<AccessToken>,
     Headers(headers): Headers<IdentityHeader>,
     body: DirectoryBody,
@@ -238,6 +255,30 @@ pub async fn publish_device_directory(
             PublishRejection::malformed(&error)
         })?;
 
+    // The owner ledger, before the store commits (#753): a rebuild verifies each manifest
+    // against the directory as it stood when the manifest was accepted, so a version the ledger
+    // cannot record is not published.
+    let now = directories.clock().now();
+    let document_hash = hash_bytes(&document);
+    attestation
+        .append_to_ledger(
+            &OwnerId::new(user.as_str()),
+            LedgerEvent::Directory {
+                user_id: user.as_str().to_owned(),
+                directory_version,
+                document_hash,
+            },
+            now,
+        )
+        .await
+        .map_err(|error| {
+            tracing::error!(
+                %error, %user, directory_version,
+                "the owner ledger could not record a device directory; nothing was published"
+            );
+            PublishRejection::unavailable()
+        })?;
+
     let outcome = directories
         .store()
         .publish(PublishedDirectory {
@@ -245,7 +286,7 @@ pub async fn publish_device_directory(
             directory_version,
             document,
             identity_key,
-            published_at: directories.clock().now(),
+            published_at: now,
         })
         .await
         .map_err(|error| {
@@ -257,14 +298,26 @@ pub async fn publish_device_directory(
         PublishOutcome::Published { directory_version } => {
             Ok(Json(PublishDirectoryResponse { directory_version }))
         }
-        PublishOutcome::Stale { stored } => Err(PublishRejection::VersionConflict {
-            stored,
-            submitted: directory_version,
-            code: error_codes::DIRECTORY_VERSION_CONFLICT,
-        }),
-        PublishOutcome::IdentityMismatch => Err(PublishRejection::IdentityMismatch {
-            code: error_codes::DIRECTORY_IDENTITY_MISMATCH,
-        }),
+        PublishOutcome::Stale { stored } => {
+            tracing::info!(
+                %user, stored, submitted = directory_version, %document_hash,
+                "a device directory publish was refused as stale after it was ledgered"
+            );
+            Err(PublishRejection::VersionConflict {
+                stored,
+                submitted: directory_version,
+                code: error_codes::DIRECTORY_VERSION_CONFLICT,
+            })
+        }
+        PublishOutcome::IdentityMismatch => {
+            tracing::info!(
+                %user, directory_version, %document_hash,
+                "a device directory publish was refused for its identity key after it was ledgered"
+            );
+            Err(PublishRejection::IdentityMismatch {
+                code: error_codes::DIRECTORY_IDENTITY_MISMATCH,
+            })
+        }
     }
 }
 
