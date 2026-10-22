@@ -338,8 +338,9 @@ fn stream_decryptor_stays_failed() {
     let (meta, mut ct) = encrypt_asset_vec_full(&KEY, &plaintext);
     ct[0] ^= 1;
     let mut decryptor = StreamDecryptor::new(&KEY, &meta.nonce_prefix, Vec::new());
-    assert!(decryptor.update(&ct[..CIPHERTEXT_CHUNK + 1]).is_err());
-    assert!(decryptor.update(&ct[CIPHERTEXT_CHUNK + 1..]).is_err());
+    let split = CIPHERTEXT_CHUNK + 1;
+    assert!(decryptor.update(&ct[..split]).is_err());
+    assert!(decryptor.update(&ct[split..]).is_err());
     assert!(decryptor.finish().is_err());
 }
 
