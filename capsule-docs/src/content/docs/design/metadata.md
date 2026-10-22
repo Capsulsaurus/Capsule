@@ -16,7 +16,8 @@ SidecarV1 {
   crypto_suite_id:       u16,             // matches the asset's manifest; see Cryptography
   uuid:                  UUIDv7,
   hash:                  bytes,           // canonical plaintext digest; algorithm + length fixed by crypto_suite_id
-  capture_timestamp:     RFC3339,
+  capture_timestamp:     RFC3339,         // as imported; never overwritten by a user edit
+  capture_timestamp_user: Lww<RFC3339>,   // the user's correction; wire-absent when never written
   import_timestamp:      RFC3339,
   content_type:          String,          // closed enum, below
   dimensions:            Option<{ width: u32, height: u32 }>,
@@ -42,9 +43,10 @@ SidecarV1 {
   device_id:             UUIDv4,
   session_id:            UUIDv7,
 
-  // geolocation
-  gps:                   Option<{ lat: f64, lon: f64, source: GpsSource,
-                                  datum: GpsDatum /* wire-absent ⇒ wgs84 */ }>,
+  // geolocation (Privacy on Export applies to both)
+  gps:                   Option<Gps>,     // as imported; never overwritten by a user edit
+  gps_user:              Lww<Option<Gps>>,  // the user's edit (source manual); a stamped None = no location
+  // Gps = { lat: f64, lon: f64, source: GpsSource, datum: GpsDatum /* wire-absent ⇒ wgs84 */ }
 
   // the PRIOR provenance chain head; absent only on create
   provenance_chain_hash: Option<[u8; 32]>,
@@ -63,6 +65,26 @@ Region {
 and the stack and album label records, are specified in [Organization — Labels](/design/organization/#labels).
 `regions` is added without a `sidecar_schema` bump: older readers keep it verbatim as an
 unknown key.
+
+### As-Imported and User Values
+
+Capture time and location each have two fields: the value the import recorded and the user's
+correction.
+
+- `capture_timestamp` and `gps` hold what the original said when it entered the library: its own
+  EXIF, else the exporter record folded with it. A user edit never overwrites them.
+- `capture_timestamp_user` and `gps_user` are LWW registers holding the user's correction. Both
+  are wire-absent until first written, so an uncorrected sidecar encodes byte-identically to one
+  written before they existed; older readers keep them verbatim as unknown keys. A `gps_user`
+  value always has `source = manual`. A stamped `None` means "no location": it hides the imported
+  fix without erasing it.
+- The **effective** value is the user's register when it was ever written, else the as-imported
+  field. The timeline, search and every client view use the effective value.
+- The `media/{YYYY}/{YYYY-MM}` shard is fixed at import from `capture_timestamp`. A correction
+  does not move the bundle.
+- Re-deriving the as-imported value from the original (the capture-time repair for libraries
+  imported before EXIF dates were read) rewrites `capture_timestamp` only, and never touches the
+  user's register.
 
 ### Schema Versioning Rules
 
@@ -136,20 +158,20 @@ When an asset crosses a trust boundary — a [share link](/design/share-links/) 
 | Camera serial number | Stripped | Full value |
 | Device identifier | Stripped | Full value |
 | Session ID | Stripped | Full value |
-| GPS coordinates | Rounded to 2 decimal places (≈1 km) | Full precision |
+| GPS coordinates (`gps` and every `gps_user` value, superseded ones included) | Rounded to 2 decimal places (≈1 km) | Full precision |
 | Personal contact tags (faces matched to a known person) | Stripped | Retained |
 | Image regions and their labels (`regions`) | Stripped | Retained |
 
 Stripping applies to the exported copy only; the library sidecar is untouched. Syncing the same user's own devices is not a boundary crossing. Stripping is the **issuing client's** obligation (the server holds no key); the server's half is containment — a share serves only the content addresses its record enumerates.
 
-Not implemented: only the region row exists, as a per-export strip over the sidecar (`sidecar_for_export`) that no boundary crossing calls yet — a share record carries no sidecar. The rest of the client-side strip is tracked by [#432](https://github.com/Capsulsaurus/Capsule/issues/432); the external-backup crossing waits on a post-v1 client export command.
+Not implemented: only the region and GPS rows exist, as a per-export strip over the sidecar (`sidecar_for_export`) that no boundary crossing calls yet — a share record carries no sidecar. The rest of the client-side strip is tracked by [#432](https://github.com/Capsulsaurus/Capsule/issues/432); the external-backup crossing waits on a post-v1 client export command.
 
 ## Collaborative Metadata
 
 User-editable fields may be edited concurrently and offline, so they are CRDTs:
 
 - **Tags:** OR-sets with [`add_id` binding](#add-id-binding).
-- **Single-value fields** (`caption_lww`, `rating_lww`, `stack_membership`, `cull`, `hidden`): LWW registers ordered by signed timestamp, `device_id` as lexicographic tiebreaker. `stack_membership` includes a stamped `None`, so join, move and leave are all one LWW write.
+- **Single-value fields** (`caption_lww`, `rating_lww`, `capture_timestamp_user`, `gps_user`, `stack_membership`, `cull`, `hidden`): LWW registers ordered by signed timestamp, `device_id` as lexicographic tiebreaker. `stack_membership` includes a stamped `None`, so join, move and leave are all one LWW write.
 
 ### Surfacing Concurrent Edits
 
@@ -191,7 +213,7 @@ This doc owns the envelope, keying, versioning and merge; section value schemas 
 | --- | --- | --- |
 | Tags (`tags_user` / `tags_ai`) | OR-set | Add/remove keyed by `add_id`; commutative, associative, idempotent |
 | Regions (`regions`) | Map of LWW registers, each holding an OR-set of labels | Merged as a semilattice: a delete is final, live writes keep the later shape and the union of labels |
-| Caption / rating / `stack_membership` / `cull` / `hidden` | LWW register | Total order on `(ts, device_id)`; replay is a no-op |
+| Caption / rating / `capture_timestamp_user` / `gps_user` / `stack_membership` / `cull` / `hidden` | LWW register | Total order on `(ts, device_id)`; replay is a no-op |
 | Smart albums, people clusters, [aggregated federated albums](/design/federation/) | Computed views | Nothing stored; membership is a deterministic function of inputs ([views](/design/organization/#system--smart-albums-views), [AI](/design/ai/#ai-output-containment)) |
 | Container-album membership | Single home + ordered lifecycle ops | One container per asset; a replayed move no-ops ([Organization](/design/organization/#container-albums)); concurrency ordered by MLS commits |
 
@@ -209,11 +231,11 @@ Any future ML field overlaying a user-editable one (face labels, location guesse
 
 ## Geolocation
 
-GPS is stored in the datum the source supplied ([`gps.datum`](#closed-enum-value-sets)): WGS-84 by default, or GCJ-02 for coordinates from Chinese maps. Datum conversion for display or search is deterministic and client-side, with GCJ-02 → WGS-84 marked approximate; display-side conversion is unscheduled. BD-09 exists only at the input edge. Map-provider choice is a client concern.
+GPS is stored in the datum the source supplied ([`gps.datum`](#closed-enum-value-sets)): WGS-84 by default, or GCJ-02 for coordinates from Chinese maps. Datum conversion for display or search is deterministic and client-side, with GCJ-02 → WGS-84 marked approximate; display-side conversion is unscheduled. BD-09 exists only at the input edge. Map-provider choice is a client concern. A user's location edit lands in `gps_user` beside the imported fix ([As-Imported and User Values](#as-imported-and-user-values)), stored verbatim in the datum the user entered it in.
 
 ## Validation
 
-Each MUST above is a unit test; the canonical-CBOR known-answer vectors are a **blocking cross-language gate**. Notable cases: add-id reseed never reuses a counter; OR-set and library-settings merges converge byte-identically in every permutation; a remove of an unobserved `add_id` is rejected; a near-simultaneous caption loser lands in `superseded_captions`; each privacy-table row strips by default and leaves the local sidecar unchanged; a WGS-84 sidecar encodes byte-identically to the pre-`datum` vector; a one-byte local mutation fails the local–server equivalence check.
+Each MUST above is a unit test; the canonical-CBOR known-answer vectors are a **blocking cross-language gate**. Notable cases: add-id reseed never reuses a counter; OR-set and library-settings merges converge byte-identically in every permutation; a remove of an unobserved `add_id` is rejected; a near-simultaneous caption loser lands in `superseded_captions`; a capture-time or location edit keeps the as-imported value through a re-import, a reopen and an index rebuild; each privacy-table row strips by default and leaves the local sidecar unchanged; a WGS-84 sidecar encodes byte-identically to the pre-`datum` vector; a one-byte local mutation fails the local–server equivalence check.
 
 ## Related
 
