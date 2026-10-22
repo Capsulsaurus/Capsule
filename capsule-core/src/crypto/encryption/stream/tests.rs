@@ -158,7 +158,10 @@ fn ciphertext_reader_windows_match_sequential() {
         let mut reader = CiphertextReader::new(KEY, prefix, Cursor::new(&plaintext), size as u64);
         assert_eq!(reader.ciphertext_size(), ct.len() as u64);
 
-        for window in [1, 15, 4096, CIPHERTEXT_CHUNK - 1, CIPHERTEXT_CHUNK, 200_000] {
+        // A tiny window re-encrypts a whole chunk per read, so it only runs on tiny inputs.
+        let tiny: &[usize] = if size <= 1 { &[1, 15] } else { &[] };
+        let windows = [4093, CIPHERTEXT_CHUNK - 1, CIPHERTEXT_CHUNK, 200_000];
+        for &window in tiny.iter().chain(&windows) {
             let mut offset = 0u64;
             let mut assembled = Vec::new();
             while offset < ct.len() as u64 {
