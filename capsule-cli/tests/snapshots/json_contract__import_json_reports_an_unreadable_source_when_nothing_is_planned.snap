@@ -1,0 +1,29 @@
+---
+source: capsule-cli/tests/json_contract.rs
+expression: "run(&scratch,\n&[\"import\", path(&missing), \"--library\", path(&scratch.library()),\n\"--passphrase-stdin\", \"--json\",],)"
+---
+status: 0
+--- stdout ---
+{
+  "candidates": 1,
+  "files": 1,
+  "planned": 0,
+  "planned_bytes": 0,
+  "imported": 0,
+  "duplicates": 0,
+  "errors": 1,
+  "derivatives_deferred": 0,
+  "derivatives_decode_failed": 0,
+  "formats_deferred": 0,
+  "outcomes": [
+    {
+      "path": "[SCRATCH]/not-there",
+      "status": "failed",
+      "asset_id": null,
+      "derivatives": null,
+      "deferred_formats": 0,
+      "error": "failed to hash [SCRATCH]/not-there: No such file or directory (os error 2)"
+    }
+  ]
+}
+--- stderr ---

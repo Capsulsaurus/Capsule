@@ -44,15 +44,16 @@ impl Default for ImportConfig {
 pub enum ImportDecision {
     Import,
     SkipDuplicate { existing_uuid: String },
-    SkipUnsupported,
     SkipError(String),
 }
 
+/// What the plan decided, counted. There is no "unsupported" bucket, by design: a file is
+/// imported, already held, or could not be read. Neither its format nor whether this build has
+/// a codec for it can keep it out of the library (issue #695).
 #[derive(Debug, Default, Clone)]
 pub struct PlanCounts {
     pub to_import: usize,
     pub duplicates: usize,
-    pub unsupported: usize,
     pub errors: usize,
     /// Total bytes the plan will bring into the library: the summed on-disk size of every
     /// source file of every `Import` candidate (skips contribute nothing). This is the
@@ -177,7 +178,6 @@ pub fn plan(
                 counts.total_size = counts.total_size.saturating_add(candidate_size(candidate));
             }
             ImportDecision::SkipDuplicate { .. } => counts.duplicates += 1,
-            ImportDecision::SkipUnsupported => counts.unsupported += 1,
             ImportDecision::SkipError(_) => counts.errors += 1,
         }
         actions.push((candidate.clone(), decision));
@@ -428,32 +428,31 @@ mod tests {
     ///
     /// Capsule is a backup tool: declining to back up every HEIC because we cannot thumbnail it
     /// turns a cosmetic gap into data loss. Formats with no decoder in this build —
-    /// HEIC/AVIF/TIFF and every RAW flavour — plan as `Import` exactly like JPEG, and the
-    /// plan's `unsupported` bucket stays empty. That bucket means "not an importable file at
-    /// all", never "we cannot thumbnail it".
+    /// HEIC/AVIF/TIFF and every RAW flavour — plan as `Import` exactly like JPEG, and so do
+    /// video, unrecognised extensions, extensionless and zero-byte files (issue #695). There is
+    /// no "unsupported" decision to land in.
     ///
-    /// If someone reintroduces an admission-time codec gate, this test is what fails.
+    /// If someone reintroduces an admission-time codec or extension gate, this test fails.
     #[test]
     fn undecodable_stills_are_never_skipped_at_plan_time() {
         let tmp = TempDir::new().unwrap();
         let db = make_db();
+        fs::write(tmp.path().join("empty.dat"), b"").unwrap();
         // Distinct stems: same-stem files are grouped into a single candidate.
         let scan = make_scan(
             tmp.path(),
             &[
-                "a.jpg", "b.png", "c.heic", "d.avif", "e.tiff", "f.ARW", "g.dng", "h.CR2",
+                "a.jpg", "b.png", "c.heic", "d.avif", "e.tiff", "f.ARW", "g.dng", "h.CR2", "i.mp4",
+                "j.mov", "k.pdf", "l.xyz", "README",
             ],
         );
 
         let plan = plan(&scan, &db, &ImportConfig::default()).unwrap();
 
+        assert_eq!(plan.counts.errors, 0);
         assert_eq!(
-            plan.counts.unsupported, 0,
-            "a missing codec must never make a file unimportable"
-        );
-        assert_eq!(
-            plan.counts.to_import, 8,
-            "every still is admitted regardless of codec coverage"
+            plan.counts.to_import, 14,
+            "every file is admitted regardless of codec coverage or extension"
         );
         assert!(
             plan.actions

@@ -8,9 +8,10 @@
 //! redacted, and stderr stops at color-eyre's `Location:` section, whose line numbers are not
 //! part of the contract.
 //!
-//! The `--json` subcommands today are `push`, `restore` and `verify`; each has its offline cases here, and
-//! every `--json` subcommand that lands joins this file the same way. What needs a live server
-//! (a push or restore that reaches its assets) is the end-to-end suites' to cover.
+//! The `--json` subcommands today are `import`, `push`, `restore` and `verify`; each has its
+//! offline cases here, and every `--json` subcommand that lands joins this file the same way.
+//! What needs a live server (a push or restore that reaches its assets) is the end-to-end
+//! suites' to cover.
 //!
 //! ## Test list
 //!
@@ -24,6 +25,12 @@
 //! - `verify_json_without_a_session_prints_nothing_on_stdout` — a run-level failure, as for
 //!   push: non-zero exit, empty stdout, the reason on stderr, and no attestation stored.
 //! - `verify_json_without_a_library_is_a_usage_error` — the parser's exit status 2.
+//! - `import_json_reports_every_file_and_its_deferred_derivatives` — exit 0, one JSON document:
+//!   a HEIC, a video, a document and a zero-byte file all imported, with each one's
+//!   derivative status and the run's deferred count.
+//! - `import_json_reports_an_unreadable_source_when_nothing_is_planned` — exit 0, one JSON
+//!   document naming the unreadable source as a failed file and counting it as an error.
+//! - `import_json_with_push_is_a_usage_error` — the parser's exit status 2.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -230,6 +237,85 @@ fn restore_json_without_a_session_prints_nothing_on_stdout() {
     ));
     let written = std::fs::read_dir(&out).map_or(0, Iterator::count);
     assert_eq!(written, 0, "a restore that never ran wrote into --out");
+}
+
+/// `text` with the value of every `"asset_id"` line replaced: asset ids are minted fresh by
+/// each import, so they are not part of the contract.
+fn redact_asset_ids(text: &str) -> String {
+    text.lines()
+        .map(|line| match line.split_once("\"asset_id\": \"") {
+            Some((head, _)) => format!("{head}\"asset_id\": \"[ASSET_ID]\","),
+            None => line.to_owned(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Every file is kept whatever the build can decode (issue #695): a HEIC, a video, a document
+/// and a zero-byte file all import, and the report says which arrived without derivatives and
+/// why.
+#[test]
+fn import_json_reports_every_file_and_its_deferred_derivatives() {
+    let scratch = Scratch::new();
+    library(&scratch, 0);
+    let source = scratch.0.join("source");
+    std::fs::create_dir_all(&source).expect("create source dir");
+    let mut heic = vec![0, 0, 0, 0x18];
+    heic.extend_from_slice(b"ftypheic\0\0\0\0heicmif1");
+    std::fs::write(source.join("iphone.heic"), heic).expect("write heic");
+    let mut mp4 = vec![0, 0, 0, 0x18];
+    mp4.extend_from_slice(b"ftypmp42\0\0\0\0mp42isom");
+    std::fs::write(source.join("clip.mp4"), mp4).expect("write mp4");
+    std::fs::write(source.join("scan.pdf"), b"%PDF-1.4 contract").expect("write pdf");
+    std::fs::write(source.join("empty"), b"").expect("write empty");
+
+    insta::assert_snapshot!(redact_asset_ids(&run(
+        &scratch,
+        &[
+            "import",
+            path(&source),
+            "--library",
+            path(&scratch.library()),
+            "--passphrase-stdin",
+            "--json",
+        ],
+    )));
+}
+
+/// A source that cannot be read plans nothing, and the report still names it as a failed file
+/// and counts it as an error rather than claiming an empty success.
+#[test]
+fn import_json_reports_an_unreadable_source_when_nothing_is_planned() {
+    let scratch = Scratch::new();
+    library(&scratch, 0);
+    let missing = scratch.0.join("not-there");
+    insta::assert_snapshot!(run(
+        &scratch,
+        &[
+            "import",
+            path(&missing),
+            "--library",
+            path(&scratch.library()),
+            "--passphrase-stdin",
+            "--json",
+        ],
+    ));
+}
+
+#[test]
+fn import_json_with_push_is_a_usage_error() {
+    let scratch = Scratch::new();
+    insta::assert_snapshot!(run(
+        &scratch,
+        &[
+            "import",
+            path(&scratch.0),
+            "--library",
+            path(&scratch.library()),
+            "--push",
+            "--json",
+        ],
+    ));
 }
 
 #[test]

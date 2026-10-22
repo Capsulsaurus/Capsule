@@ -1,0 +1,53 @@
+---
+source: capsule-cli/tests/json_contract.rs
+expression: "redact_asset_ids(&run(&scratch,\n&[\"import\", path(&source), \"--library\", path(&scratch.library()),\n\"--passphrase-stdin\", \"--json\",],))"
+---
+status: 0
+--- stdout ---
+{
+  "candidates": 4,
+  "files": 4,
+  "planned": 4,
+  "planned_bytes": 65,
+  "imported": 4,
+  "duplicates": 0,
+  "errors": 0,
+  "derivatives_deferred": 2,
+  "derivatives_decode_failed": 0,
+  "formats_deferred": 0,
+  "outcomes": [
+    {
+      "path": "[SCRATCH]/source/clip.mp4",
+      "status": "imported",
+      "asset_id": "[ASSET_ID]",
+      "derivatives": "deferred",
+      "deferred_formats": 0,
+      "error": null
+    },
+    {
+      "path": "[SCRATCH]/source/empty",
+      "status": "imported",
+      "asset_id": "[ASSET_ID]",
+      "derivatives": "not_applicable",
+      "deferred_formats": 0,
+      "error": null
+    },
+    {
+      "path": "[SCRATCH]/source/iphone.heic",
+      "status": "imported",
+      "asset_id": "[ASSET_ID]",
+      "derivatives": "deferred",
+      "deferred_formats": 0,
+      "error": null
+    },
+    {
+      "path": "[SCRATCH]/source/scan.pdf",
+      "status": "imported",
+      "asset_id": "[ASSET_ID]",
+      "derivatives": "not_applicable",
+      "deferred_formats": 0,
+      "error": null
+    }
+  ]
+}
+--- stderr ---

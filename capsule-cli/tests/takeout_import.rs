@@ -415,7 +415,7 @@ fn a_takeout_export_imports_through_the_cli_with_its_exporter_metadata() {
         "the adapter must collapse the edited pair and pair every sidecar\nstdout:\n{out}"
     );
     assert!(
-        out.contains("Plan: 6 to import, 0 duplicate(s) skipped, 0 unsupported or errored."),
+        out.contains("Plan: 6 to import, 0 duplicate(s) skipped, 0 unreadable."),
         "stdout:\n{out}"
     );
     assert!(

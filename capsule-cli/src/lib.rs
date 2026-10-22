@@ -18,7 +18,7 @@ use capsule_core::import::{
     execute_with_source_metadata, plan, scan_paths as scan_files,
 };
 use capsule_core::library::{Library, LibraryError, init_library, open_library, rebuild_index};
-use capsule_core::lifecycle::{Workspace, unmigrated_sidecars};
+use capsule_core::lifecycle::{DerivativeStatus, Workspace, unmigrated_sidecars};
 use capsule_core::metadata::FileMetadata;
 use capsule_sdk::net::ConnectionClass;
 use cli::{
@@ -38,6 +38,7 @@ pub mod cull;
 pub mod db;
 pub mod demo;
 pub mod i18n;
+pub mod import_report;
 pub mod migrate;
 pub mod oidc;
 pub mod remote;
@@ -138,6 +139,7 @@ fn display_paths(paths: &[PathBuf]) -> String {
 fn read_import_source(
     provider: Option<ImportProviderArg>,
     paths: &[PathBuf],
+    human: bool,
 ) -> Result<(ScanResult, SourceMetadataIndex)> {
     match provider {
         None => {
@@ -146,14 +148,16 @@ fn read_import_source(
             Ok((scanned, SourceMetadataIndex::empty()))
         }
         Some(provider @ ImportProviderArg::Takeout) => {
-            println!(
-                "{}",
-                format!(
-                    "Reading the source as a {} export.",
-                    provider.display_name()
-                )
-                .cyan()
-            );
+            if human {
+                println!(
+                    "{}",
+                    format!(
+                        "Reading the source as a {} export.",
+                        provider.display_name()
+                    )
+                    .cyan()
+                );
+            }
             let extracted = TakeoutAdapter::new()
                 .extract(paths)
                 .map_err(|e| eyre!("Reading the export failed: {e}"))?;
@@ -167,6 +171,28 @@ fn read_import_source(
             );
             Ok((extracted.to_scan_result(), index))
         }
+    }
+}
+
+/// The per-file line `capsule import` prints as each file lands. An original imported without
+/// its derivatives says so, so a gap is visible where it happens rather than only in the total.
+fn progress_line(path: &Path, outcome: &ImportOutcome) -> ColoredString {
+    let msg = format!("  {}", path.display());
+    match outcome {
+        ImportOutcome::Imported {
+            derivatives: DerivativeStatus::DeferredNoCodec,
+            ..
+        } => format!("✓ {msg} (previews deferred: no codec in this build)").green(),
+        ImportOutcome::Imported {
+            derivatives: DerivativeStatus::DecodeFailed,
+            ..
+        } => format!("✓ {msg} (original kept; its previews did not decode)").yellow(),
+        ImportOutcome::Imported { .. } => format!("✓ {msg}").green(),
+        ImportOutcome::DuplicateSkipped { .. } => format!("= {msg} (duplicate)").yellow(),
+        ImportOutcome::CorruptTransfer => format!("✗ {msg} (corrupt transfer)").red(),
+        ImportOutcome::CorruptUnreadable(e) => format!("✗ {msg} (unreadable: {e})").red(),
+        ImportOutcome::PermissionDenied(e) => format!("✗ {msg} (permission denied: {e})").red(),
+        _ => format!("- {msg}").dimmed(),
     }
 }
 
@@ -313,32 +339,37 @@ async fn dispatch(cli: Cli) -> Result<()> {
             passphrase_stdin,
             push,
             staged,
+            json,
         } => {
-            println!(
-                "{}",
-                format!(
-                    "Importing {} into library {}…",
-                    display_paths(&paths),
-                    library.to_string_lossy()
-                )
-                .green()
-            );
+            // With `--json` stdout carries exactly one document, the report, so every progress
+            // line below is for a person only.
+            let human = !json;
+            if human {
+                println!(
+                    "{}",
+                    format!(
+                        "Importing {} into library {}…",
+                        display_paths(&paths),
+                        library.to_string_lossy()
+                    )
+                    .green()
+                );
+            }
 
             let mut ws = open_workspace(&library, passphrase_stdin)?;
 
             // Phase 1: Scan (plain tree) or extract (third-party export, S-B11).
-            println!("{}", "Scanning source files…".cyan());
-            let (scan_result, source_metadata) = read_import_source(provider, &paths)?;
-
-            println!(
-                "{}",
-                format!(
-                    "Found {} candidate(s) ({} file(s) total).",
-                    scan_result.candidates.len(),
-                    scan_result.total_files()
-                )
-                .green()
-            );
+            if human {
+                println!("{}", "Scanning source files…".cyan());
+            }
+            let (scan_result, source_metadata) = read_import_source(provider, &paths, human)?;
+            let (candidates, files) = (scan_result.candidates.len(), scan_result.total_files());
+            if human {
+                println!(
+                    "{}",
+                    format!("Found {candidates} candidate(s) ({files} file(s) total).").green()
+                );
+            }
 
             // Phase 2: Plan
             let config = ImportConfig {
@@ -358,20 +389,32 @@ async fn dispatch(cli: Cli) -> Result<()> {
                 .map_err(|e| eyre!("Planning the import failed: {e}"))?;
 
             let counts = &plan_result.counts;
-            println!(
-                "{}",
-                format!(
-                    "Plan: {} to import, {} duplicate(s) skipped, {} unsupported or errored.",
-                    counts.to_import,
-                    counts.duplicates,
-                    counts.unsupported + counts.errors
-                )
-                .cyan()
-            );
+            if human {
+                println!(
+                    "{}",
+                    format!(
+                        "Plan: {} to import, {} duplicate(s) skipped, {} unreadable.",
+                        counts.to_import, counts.duplicates, counts.errors
+                    )
+                    .cyan()
+                );
+            }
 
             // A Move run goes on to execute even with nothing new to import: its duplicates are
             // sources the library already holds, which the release below may now delete.
             if plan_result.counts.to_import == 0 && !r#move {
+                // Nothing executes, so the plan's own skips are the run's outcomes: a source
+                // that could not be read is reported, never an empty success.
+                let skipped = import_report::skipped_by_plan(&plan_result);
+                if json {
+                    let report =
+                        import_report::ImportReport::new(candidates, files, counts, &skipped);
+                    println!("{}", serde_json::to_string_pretty(&report)?);
+                    return Ok(());
+                }
+                for (path, outcome) in &skipped.outcomes {
+                    println!("{}", progress_line(path, outcome));
+                }
                 println!("{}", "Nothing to import.".yellow());
                 // `--push` is still honored: an unchanged library is exactly the
                 // re-runnable case push exists to make cheap.
@@ -382,7 +425,9 @@ async fn dispatch(cli: Cli) -> Result<()> {
             }
 
             // Phase 3: Execute
-            println!("{}", "Importing…".cyan());
+            if human {
+                println!("{}", "Importing…".cyan());
+            }
             let token = CancellationToken::new();
 
             // The one execute path: a plain filesystem import reaches it with an empty index
@@ -394,26 +439,11 @@ async fn dispatch(cli: Cli) -> Result<()> {
                 &config,
                 &source_metadata,
                 |event| {
-                    if let ImportProgressEvent::CandidateCompleted { outcomes, .. } = event {
+                    if let ImportProgressEvent::CandidateCompleted { outcomes, .. } = event
+                        && human
+                    {
                         for (path, outcome) in &outcomes {
-                            let msg = format!("  {}", path.display());
-                            match outcome {
-                                ImportOutcome::Imported { .. } => {
-                                    println!("{}", format!("✓ {msg}").green());
-                                }
-                                ImportOutcome::DuplicateSkipped { .. } => {
-                                    println!("{}", format!("= {msg} (duplicate)").yellow());
-                                }
-                                ImportOutcome::CorruptTransfer => {
-                                    println!("{}", format!("✗ {msg} (corrupt transfer)").red());
-                                }
-                                ImportOutcome::CorruptUnreadable(e) => {
-                                    println!("{}", format!("✗ {msg} (unreadable: {e})").red());
-                                }
-                                _ => {
-                                    println!("{}", format!("- {msg}").dimmed());
-                                }
-                            }
+                            println!("{}", progress_line(path, outcome));
                         }
                     }
                 },
@@ -421,16 +451,12 @@ async fn dispatch(cli: Cli) -> Result<()> {
             )
             .map_err(|e| eyre!("The import failed: {e}"))?;
 
-            println!(
-                "{}",
-                format!(
-                    "Done: {} imported, {} duplicate(s), {} error(s).",
-                    summary.imported_count(),
-                    summary.duplicate_count(),
-                    summary.error_count()
-                )
-                .green()
-            );
+            let report = import_report::ImportReport::new(candidates, files, counts, &summary);
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("{}", import_report::summary_line(&report).green());
+            }
 
             // The executor never deletes a Move source: the local copy is not custody
             // (invariant 7). Each one waits for the server, below.
@@ -455,10 +481,13 @@ async fn dispatch(cli: Cli) -> Result<()> {
                 pushed?;
                 released?;
             } else if !moved.is_empty() {
-                println!(
-                    "{}",
-                    remote::sources_kept_offline_line(moved.len()).yellow()
-                );
+                // On stderr under `--json`, which owns stdout.
+                let line = remote::sources_kept_offline_line(moved.len());
+                if human {
+                    println!("{}", line.yellow());
+                } else {
+                    eprintln!("{line}");
+                }
             }
         }
 
