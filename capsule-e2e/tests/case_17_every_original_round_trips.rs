@@ -1,4 +1,4 @@
-//! **E2E case 16** — every original round-trips byte for byte, whatever the codecs support
+//! **E2E case 17** — every original round-trips byte for byte, whatever the codecs support
 //! (issue #695; SSoT: thumbnails § Media Is Rawshift's).
 //!
 //! A fixture corpus with one file per kind no codec in the build handles, or that Capsule does
@@ -89,7 +89,7 @@ fn corpus() -> Vec<(&'static str, Vec<u8>, DerivativeStatus)> {
 }
 
 #[tokio::test]
-async fn e2e_case_16_every_original_round_trips_whatever_the_codecs_support() {
+async fn e2e_case_17_every_original_round_trips_whatever_the_codecs_support() {
     let server = Server::boot().await;
     let mut device = Device::register(&server, "every-original").await;
 
@@ -226,7 +226,7 @@ async fn e2e_case_16_every_original_round_trips_whatever_the_codecs_support() {
 /// The original types the client declares by name must stay inside the server's default closed
 /// enum, or an original the client thinks is declarable would be refused at upload.
 #[test]
-fn e2e_case_16_every_declared_original_type_is_in_the_servers_enum() {
+fn e2e_case_17_every_declared_original_type_is_in_the_servers_enum() {
     use capsule_core::lifecycle::{OPAQUE_CONTENT_TYPE, WIRE_ORIGINAL_CONTENT_TYPES};
     use capsule_server::upload::policy::DEFAULT_CONTENT_TYPES;
 

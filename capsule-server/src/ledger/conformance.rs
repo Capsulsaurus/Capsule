@@ -8,7 +8,8 @@
 //! - **Concurrent appends never fork a chain.**
 //! - **Tampering is detected**: an edited entry, a removed one, a dropped head, a torn tail, and —
 //!   against an anchor — a tail cut at an entry boundary.
-//! - **A torn tail is cut before the next append; any other damage refuses appends.**
+//! - **A torn tail is cut before the next append; any other damage refuses appends.** An intact
+//!   entry this server cannot read is never a torn tail, so it refuses appends and is not cut.
 //! - **An owner identifier that cannot name a ledger is refused** by every operation.
 //!
 //! Tampering goes through [`Harness::raw`] and [`Harness::replace_raw`], the two things a suite
@@ -17,13 +18,15 @@
 //!
 //! Every case scopes its owners to itself, so cases may share one harness and [`run_all`] does.
 
+use capsule_core::cbor::to_canonical_vec;
 use capsule_core::crypto::hash::Hash32;
-use capsule_core::crypto::keys::{HybridSigningKey, HybridVerifyingKey};
+use capsule_core::crypto::keys::{HybridSignature, HybridSigningKey, HybridVerifyingKey};
 use jiff::Timestamp;
+use serde::Serialize;
 
 use super::{
-    ChainFault, LedgerError, LedgerEvent, LedgerFuture, LedgerHead, OwnerLedger, encode_frame,
-    verify_chain,
+    ChainFault, LedgerEntryCore, LedgerError, LedgerEvent, LedgerFuture, LedgerHead, OwnerLedger,
+    encode_frame, sign_entry, verify_chain,
 };
 use crate::attestation::{LocalAttestationKey, ReceiptSigner as _};
 use crate::store::OwnerId;
@@ -111,6 +114,24 @@ fn frames(bytes: &[u8]) -> Vec<Vec<u8>> {
         at = end;
     }
     frames
+}
+
+/// The frame a newer server would write for `core`: signed by `signer` and framed as this
+/// server frames an entry, whatever shape `core` has.
+pub(crate) fn newer_frame<C: Serialize>(core: &C, signer: &LocalAttestationKey) -> Vec<u8> {
+    #[derive(Serialize)]
+    struct Newer<'a, C> {
+        core: &'a C,
+        server_sig: HybridSignature,
+    }
+    let server_sig = signer.sign(&to_canonical_vec(core).expect("a core serializes"));
+    let body = to_canonical_vec(&Newer { core, server_sig }).expect("an entry serializes");
+    let mut frame = u32::try_from(body.len())
+        .expect("an entry is far smaller than 4 GiB")
+        .to_be_bytes()
+        .to_vec();
+    frame.extend_from_slice(&body);
+    frame
 }
 
 /// Verify `owner`'s ledger as it now stands.
@@ -359,6 +380,67 @@ pub async fn a_zero_filled_tail_is_cut_by_the_next_append(harness: &dyn Harness)
     assert_eq!(report.verified, 3);
 }
 
+/// An intact entry this server cannot read — one a newer server wrote, with a field this server
+/// does not know — is not a torn tail even at the very end: it is reported, the next append is
+/// refused, and its bytes are left exactly where they were.
+pub async fn an_entry_from_a_newer_server_is_refused_not_cut(harness: &dyn Harness) {
+    #[derive(Serialize)]
+    struct WithNewField<'a> {
+        #[serde(flatten)]
+        core: &'a LedgerEntryCore,
+        replicated_to: Vec<String>,
+    }
+
+    let signer = key();
+    let owner = owner("newer", "a");
+    let entries = fill(harness, &owner, &signer, 2).await;
+    let head = LedgerHead {
+        seq: 2,
+        hash: entries[1].chain_hash(),
+    };
+    let next = sign_entry(
+        &owner,
+        Some(head),
+        custody(9),
+        Timestamp::UNIX_EPOCH,
+        &signer,
+    );
+    let newer = newer_frame(
+        &WithNewField {
+            core: &next.core,
+            replicated_to: vec!["peer".to_owned()],
+        },
+        &signer,
+    );
+    let mut raw = ok(harness.raw(&owner).await, "read raw");
+    raw.extend_from_slice(&newer);
+    ok(harness.replace_raw(&owner, raw.clone()).await, "upgrade");
+
+    let report = verify(harness, &owner, &signer, None).await;
+    assert_eq!(report.fault, Some(ChainFault::Unrecognised { entries: 2 }));
+    assert_eq!(report.verified, 2);
+
+    let refused = harness
+        .ledger()
+        .append(&owner, custody(10), Timestamp::UNIX_EPOCH, &signer)
+        .await;
+    assert!(
+        matches!(
+            refused,
+            Err(LedgerError::Damaged {
+                fault: ChainFault::Unrecognised { entries: 2 },
+                ..
+            })
+        ),
+        "an acknowledged entry is refused, never cut: {refused:?}"
+    );
+    assert_eq!(
+        ok(harness.raw(&owner).await, "read raw"),
+        raw,
+        "the newer server's entry is still there"
+    );
+}
+
 /// A tail cut exactly at an entry boundary verifies as a shorter chain, and an anchor catches it.
 pub async fn a_tail_cut_at_a_boundary_is_caught_by_an_anchor(harness: &dyn Harness) {
     let signer = key();
@@ -453,6 +535,7 @@ pub async fn run_all(harness: &dyn Harness) {
     a_dropped_head_is_detected(harness).await;
     a_torn_tail_is_reported_and_cut_by_the_next_append(harness).await;
     a_zero_filled_tail_is_cut_by_the_next_append(harness).await;
+    an_entry_from_a_newer_server_is_refused_not_cut(harness).await;
     a_tail_cut_at_a_boundary_is_caught_by_an_anchor(harness).await;
     an_unpublished_key_is_detected(harness).await;
     a_damaged_ledger_refuses_appends(harness).await;

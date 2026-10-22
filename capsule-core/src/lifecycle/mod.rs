@@ -59,7 +59,7 @@ pub use self::migrate_unsigned::{
 };
 pub use self::open::HardwareDekBinding;
 pub use self::sync_apply::{
-    QuarantineReason, RemoteAssetFacts, RemoteEntry, RemoteOriginal, SyncApplyOutcome,
+    QuarantineReason, RemoteAssetFacts, RemoteEntry, RemoteHead, RemoteOriginal, SyncApplyOutcome,
 };
 pub use self::upload::{
     DerivativeBlob, OPAQUE_CONTENT_TYPE, OriginalCiphertext, UploadBundle,

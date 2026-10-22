@@ -57,6 +57,11 @@ struct Fixture {
 }
 
 fn fixture(name: &str, count: u8) -> Fixture {
+    fixture_sized(name, count, 150_000)
+}
+
+/// As [`fixture`], with originals of about `len` bytes each.
+fn fixture_sized(name: &str, count: u8, len: usize) -> Fixture {
     let lib = Scratch::new(&format!("{name}-lib"));
     let src = Scratch::new(&format!("{name}-src"));
     let mut workspace = Workspace::create_with_params(lib.path(), b"passphrase", FAST_KDF)
@@ -67,7 +72,7 @@ fn fixture(name: &str, count: u8) -> Fixture {
     let mut blobs = HashMap::new();
     for i in 0..count {
         let path = src.path().join(format!("photo-{i}.jpg"));
-        std::fs::write(&path, original_bytes(i, 150_000)).expect("the source writes");
+        std::fs::write(&path, original_bytes(i, len)).expect("the source writes");
         let asset = workspace.import_asset(album, &path).expect("the import");
         let bundle = workspace.upload_bundle(&asset).expect("a bundle");
         let original_hash = bundle.ciphertext_hash.to_hex();
@@ -402,6 +407,126 @@ async fn a_restore_writes_byte_identical_originals() {
     );
 }
 
+/// Heap accounting for the bounded-memory test: every allocation and free made **on the calling
+/// thread** is tallied, so a test reads its own peak without interference from the tests
+/// running beside it. It wraps the system allocator and changes nothing else.
+mod heap {
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::cell::Cell;
+
+    struct Counting;
+
+    thread_local! {
+        static LIVE: Cell<isize> = const { Cell::new(0) };
+        static PEAK: Cell<isize> = const { Cell::new(0) };
+    }
+
+    fn track(delta: isize) {
+        // `try_with`: an allocation during thread teardown must not panic.
+        let _ = LIVE.try_with(|live| {
+            let now = live.get() + delta;
+            live.set(now);
+            let _ = PEAK.try_with(|peak| peak.set(peak.get().max(now)));
+        });
+    }
+
+    // SAFETY: every method delegates to `System` with the caller's own arguments and only adds
+    // thread-local bookkeeping, so `System`'s guarantees pass through unchanged.
+    unsafe impl GlobalAlloc for Counting {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            // SAFETY: forwarded verbatim; the caller upholds `alloc`'s contract.
+            let ptr = unsafe { System.alloc(layout) };
+            if !ptr.is_null() {
+                track(layout.size() as isize);
+            }
+            ptr
+        }
+
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            // SAFETY: forwarded verbatim; the caller upholds `dealloc`'s contract.
+            unsafe { System.dealloc(ptr, layout) };
+            track(-(layout.size() as isize));
+        }
+
+        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+            // SAFETY: forwarded verbatim; the caller upholds `realloc`'s contract.
+            let new = unsafe { System.realloc(ptr, layout, new_size) };
+            if !new.is_null() {
+                track(new_size as isize - layout.size() as isize);
+            }
+            new
+        }
+    }
+
+    #[global_allocator]
+    static COUNTING: Counting = Counting;
+
+    /// Run `f` and return its result with the peak heap it grew this thread by, in bytes.
+    pub(super) fn peak_during<T>(f: impl FnOnce() -> T) -> (T, usize) {
+        let base = LIVE.with(Cell::get);
+        PEAK.with(|peak| peak.set(base));
+        let out = f();
+        let peak = PEAK.with(Cell::get);
+        (out, usize::try_from(peak - base).unwrap_or(0))
+    }
+}
+
+/// **Bounded memory.** Restoring an original many fetch windows and STREAM chunks long holds a
+/// few windows and chunks of it, not the original: the peak heap of the whole restore (fetch,
+/// verification, decryption, the atomic write) stays under a ceiling that is a fraction of the
+/// original's size, where buffering it — let alone its ciphertext and plaintext both — would
+/// exceed it several times over. The runtime is single-threaded, so every allocation the
+/// restore makes is counted.
+#[test]
+fn a_restore_holds_a_window_not_the_original() {
+    const ORIGINAL: usize = 4 << 20;
+    const WINDOW: u64 = 64 * 1024;
+    const CEILING: usize = 1 << 20;
+    let fx = fixture_sized("bounded", 1, ORIGINAL);
+    let out = Scratch::new("bounded-out");
+    let asset = fx.assets[0];
+    let original = fx.entries[0].blobs.original.clone().expect("an original");
+    assert!(
+        original.size > 4 * CEILING as u64,
+        "the original dwarfs the ceiling"
+    );
+    let mut run_options = options(out.path(), RestoreScope::Library);
+    run_options.range_window = WINDOW;
+    let source = MockSource::new(fx.blobs.clone());
+    let entries = fx.entries.clone();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a runtime");
+
+    let (summary, peak) = heap::peak_during(|| {
+        runtime.block_on(restore_entries(
+            &fx.workspace,
+            &source,
+            entries,
+            &run_options,
+        ))
+    });
+    let summary = summary.expect("the run completes");
+    let restored = outcome_of(&summary, asset);
+    assert_eq!(
+        restored.status,
+        AssetRestoreStatus::Restored,
+        "{summary:#?}"
+    );
+    assert_eq!(
+        restored_bytes(restored),
+        fx.workspace
+            .read_plaintext(&asset)
+            .expect("the library's copy")
+    );
+    assert!(
+        peak < CEILING,
+        "peak heap {peak} B exceeds the {CEILING} B ceiling for a {} B original",
+        original.size
+    );
+}
+
 /// The resume property: a run cut off mid-original leaves the bytes it received in a part
 /// file, and the next run asks the server only for the bytes after them.
 #[tokio::test]
@@ -593,6 +718,13 @@ async fn a_library_without_the_album_keys_restores_nothing() {
         "no file is written"
     );
     assert_eq!(
+        std::fs::read_dir(out.path().join(STAGING_DIR))
+            .expect("the staging directory exists")
+            .count(),
+        0,
+        "the unopened original leaves no staging or part file behind"
+    );
+    assert_eq!(
         failed_run_reason(&summary).as_deref(),
         Some("1 of 1 assets were not restored")
     );
@@ -701,7 +833,7 @@ async fn a_part_file_longer_than_its_blob_is_started_over() {
     let part = dir.path().join("x.part");
     std::fs::write(&part, vec![7u8; 32]).expect("the part file writes");
     let source = MockSource::new(HashMap::new());
-    let persisting = PersistingSource::open(&source, &part, 16).expect("it opens");
+    let persisting = ResumingSource::open(&source, &part, 16).expect("it opens");
     assert_eq!(persisting.held_len(), 0);
     assert_eq!(std::fs::metadata(&part).expect("it exists").len(), 0);
 }

@@ -432,6 +432,14 @@ pub enum RangeOutcome {
         /// The stable `error.*` code from the body, when present.
         code: Option<String>,
     },
+    /// The session could not authorize the request: its refresh was refused or it holds no
+    /// tokens. Retrying cannot help; the user has to sign in again.
+    Unauthenticated {
+        /// The stable `error.*` code, when the refusal carried one.
+        code: Option<String>,
+        /// English detail (developer/log message).
+        message: String,
+    },
 }
 
 /// The ranged blob transport. Abstracted so the resume loop and degrade ladder are
@@ -499,6 +507,16 @@ pub enum FetchError {
         /// The requested content address.
         expected: String,
     },
+    /// The session could not authorize the fetch — a refused refresh, no tokens, or a `401`
+    /// that survived the session's one refresh-and-retry. Not transient: the caller signs in
+    /// again rather than retrying.
+    #[error("blob fetch unauthenticated ({code:?}): {message}")]
+    Unauthenticated {
+        /// Stable `error.*` code, when the refusal carried one.
+        code: Option<String>,
+        /// English detail (developer/log message).
+        message: String,
+    },
     /// The bounded resume budget was spent without completing the transfer.
     #[error("fetch gave up after exhausting the resume budget: {0}")]
     Exhausted(String),
@@ -522,7 +540,9 @@ impl FetchError {
     pub fn error_code(&self) -> Option<&str> {
         match self {
             Self::PendingUpload => Some(error_codes::BLOB_PENDING_UPLOAD),
-            Self::AuthorizationChanged { code } | Self::Rejected { code, .. } => code.as_deref(),
+            Self::AuthorizationChanged { code }
+            | Self::Rejected { code, .. }
+            | Self::Unauthenticated { code, .. } => code.as_deref(),
             _ => None,
         }
     }
@@ -541,6 +561,11 @@ fn classify_status(status: u16, code: Option<String>) -> FetchError {
         return FetchError::PendingUpload;
     }
     match status {
+        // The session already refreshed once and retried; a second `401` is the credential.
+        401 => FetchError::Unauthenticated {
+            code,
+            message: "the server refused the refreshed credential".to_string(),
+        },
         403 => FetchError::AuthorizationChanged { code },
         404 | 410 => FetchError::Gone,
         0 => FetchError::Transient("transport error".to_string()),
@@ -749,6 +774,10 @@ impl<S: Sleeper, C: MonotonicClock> RangedFetcher<S, C> {
                 }
                 RangeOutcome::Status { status, code } => {
                     return Err(classify_status(status, code));
+                }
+                RangeOutcome::Unauthenticated { code, message } => {
+                    tracing::warn!(hash, ?code, %message, "blob fetch unauthenticated; not retrying");
+                    return Err(FetchError::Unauthenticated { code, message });
                 }
             }
         }
@@ -1144,13 +1173,7 @@ impl BlobSource for HttpBlobSource {
             .await
         {
             Ok(response) => response,
-            Err(error) => {
-                tracing::debug!(%error, "blob range request transport error");
-                return RangeOutcome::Status {
-                    status: 0,
-                    code: None,
-                };
-            }
+            Err(error) => return session_failure(&error),
         };
 
         let status = response.status().as_u16();
@@ -1172,6 +1195,42 @@ impl BlobSource for HttpBlobSource {
                 .and_then(|value| value.to_str().ok())
                 .map(str::to_string);
             RangeOutcome::Status { status, code }
+        }
+    }
+}
+
+/// How a session that could not send a range request reads to the fetch loop.
+///
+/// Only a session that is over — refresh refused or revoked, no tokens, or a `401`-class
+/// answer from the refresh — is [`RangeOutcome::Unauthenticated`], which tells the app to sign
+/// in again. Everything else (a transport drop, an unreachable or rate-limited refresh, a
+/// refresh `5xx`, a malformed refresh body) is temporary: it reads as a transient status, so a
+/// blip never costs the user their session.
+fn session_failure(error: &crate::auth::AuthError) -> RangeOutcome {
+    use crate::auth::AuthError;
+    match error {
+        AuthError::SessionExpired
+        | AuthError::NotAuthenticated
+        | AuthError::Unexpected { status: 401, .. } => {
+            tracing::debug!(%error, "blob range request could not be authorized");
+            RangeOutcome::Unauthenticated {
+                code: error.error_code().map(str::to_string),
+                message: error.to_string(),
+            }
+        }
+        AuthError::Unexpected { status, code, .. } if (500..600).contains(status) => {
+            tracing::debug!(%error, "blob range request: the session's refresh failed server-side");
+            RangeOutcome::Status {
+                status: *status,
+                code: code.clone(),
+            }
+        }
+        _ => {
+            tracing::debug!(%error, "blob range request: transient session or transport failure");
+            RangeOutcome::Status {
+                status: 0,
+                code: None,
+            }
         }
     }
 }

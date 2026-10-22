@@ -42,7 +42,7 @@ use capsule_core::crypto::keys::{
 use capsule_core::crypto::primitives::DeviceTier;
 use capsule_core::crypto::verify_asset::VerifyOutcome;
 use capsule_core::lifecycle::{
-    QuarantineReason, RemoteAssetFacts, RemoteEntry, SyncApplyOutcome, Workspace,
+    QuarantineReason, RemoteAssetFacts, RemoteEntry, SyncApplyOutcome, UploadBundle, Workspace,
 };
 use capsule_core::sidecar::SidecarV1;
 use uuid::Uuid;
@@ -338,6 +338,11 @@ impl From<VerifyOutcome> for FfiVerifyOutcome {
 ///
 /// The blobs come back in **ladder order**: the metadata blob (T0 — the index tier that makes
 /// the asset visible), then derivatives (T1), then the original (T2).
+///
+/// [`bytes`](Self::bytes) holds each blob whole, the original included, so an original costs
+/// its full size in memory here. [`FfiSession::push_asset`](crate::ffi::FfiSession::push_asset)
+/// pushes the same blobs with the original streamed, and is the path for an original of any
+/// size.
 #[derive(uniffi::Record)]
 pub struct FfiUploadBlob {
     /// The ladder tier this blob occupies (`index` / `preview` / `original`).
@@ -369,6 +374,10 @@ pub struct FfiSyncEntry {
     /// The asset's original ciphertext. Required: the chokepoint's content-integrity step
     /// hashes it against the manifest's declared content address, and there is no variant of
     /// that check which skips it — so fetch the original blob before applying.
+    ///
+    /// It crosses whole because the chokepoint hashes it as one slice. Receiving it does not
+    /// need to: [`FfiSession::fetch_blob_to_path`](crate::ffi::FfiSession::fetch_blob_to_path)
+    /// lands it on disk in bounded memory, content address checked.
     pub original_ciphertext: Vec<u8>,
     /// The 32-byte provenance head your catalog already holds for this asset, or `None` if it
     /// has never seen it. This is what decides replay and fork; feed back
@@ -576,6 +585,14 @@ impl FfiWorkspace {
             inner: Mutex::new(workspace),
         })
     }
+
+    /// The asset's upload bundle, built under the lock and returned owned, so a push drives it
+    /// across the network without holding the workspace. Its original is a re-derivable
+    /// source, never a buffer.
+    pub(super) fn bundle(&self, asset_id: &str) -> Result<UploadBundle, FfiError> {
+        let asset_id = parse_uuid("asset_id", asset_id)?;
+        self.with(|ws| Ok(ws.upload_bundle(&asset_id)?))
+    }
 }
 
 /// Parse a UUID from foreign code into a typed error rather than panicking at the boundary.
@@ -595,7 +612,7 @@ fn uuid_from_bytes(field: &str, bytes: &[u8]) -> Result<Uuid, FfiError> {
 /// The ladder tier's stable lowercase name (`index` / `preview` / `original`) — the same three
 /// rungs the transfer download tier ladder names, so an app's progress UI can key on one vocabulary
 /// in both directions.
-fn tier_name(tier: capsule_core::import::UploadTier) -> String {
+pub(super) fn tier_name(tier: capsule_core::import::UploadTier) -> String {
     use capsule_core::import::UploadTier;
     match tier {
         UploadTier::Index => "index",
@@ -820,6 +837,9 @@ impl FfiWorkspace {
     /// The original's ciphertext is re-derived from the manifest's recorded nonce prefix and
     /// gated on the manifest's own content address, so what reaches the network is what the
     /// signed manifest vouches for.
+    ///
+    /// Every blob comes back whole, the original included. To push without holding the
+    /// original in memory, use [`FfiSession::push_asset`](crate::ffi::FfiSession::push_asset).
     pub fn upload_blobs(&self, asset_id: String) -> Result<Vec<FfiUploadBlob>, FfiError> {
         let asset_id = parse_uuid("asset_id", &asset_id)?;
         self.with(|ws| {
