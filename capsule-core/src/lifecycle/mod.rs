@@ -58,7 +58,9 @@ pub use self::migrate_unsigned::{
     UnsignedMigrationReport, unmigrated_sidecars,
 };
 pub use self::open::HardwareDekBinding;
-pub use self::sync_apply::{QuarantineReason, RemoteAssetFacts, RemoteEntry, SyncApplyOutcome};
+pub use self::sync_apply::{
+    QuarantineReason, RemoteAssetFacts, RemoteEntry, RemoteOriginal, SyncApplyOutcome,
+};
 pub use self::upload::{DerivativeBlob, UploadBundle};
 use crate::backup::BackupError;
 use crate::crypto::CryptoError;

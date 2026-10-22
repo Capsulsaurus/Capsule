@@ -31,9 +31,10 @@ A `capsule` invocation reads at most two pieces of durable state, and it helps t
   user's configuration directory. Every networked command reads it, and `capsule reset` removes
   it.
 
-Five commands unseal a library, and all five take its passphrase: `capsule import`,
-`capsule push`, `capsule cull`, `capsule show`, and `capsule repair capture-time`. Each
-accepts `--passphrase-stdin` as well as prompting, so each runs unattended. The
+Six commands unseal a library, and all six take its passphrase: `capsule import`,
+`capsule push`, `capsule restore`, `capsule cull`, `capsule show`, and
+`capsule repair capture-time`. Each accepts `--passphrase-stdin` as well as prompting, so each
+runs unattended. The
 `capsule library` subcommands are not among them — `info` and `rebuild` read the version
 file, the sidecars, and the index, none of which is sealed, so they need no passphrase and
 offer no flag for one.
@@ -42,7 +43,11 @@ offer no flag for one.
 
 - The behaviour of the import pipeline is [Import Pipeline](/design/import/pipeline/); what
   `capsule push` speaks is the [Transfer — Upload](/design/transfer/upload/), and what
-  `capsule sync` drains is [Sync](/design/sync/).
+  `capsule sync` drains is [Sync](/design/sync/). `capsule restore` fetches originals over
+  [Transfer — Download](/design/transfer/download/) and opens them with the library's album keys:
+  it writes an original only once its ciphertext matches the signed manifest and its plaintext
+  matches the signed metadata's digest, and an interrupted run resumes from the part files it
+  left in `OUT/.capsule-restore/`.
 - The server endpoints behind the networked commands are the
   [REST API](/reference/api/) reference.
 - The CLI and TUI are English-only. The shared `error.*` codes render through the English
