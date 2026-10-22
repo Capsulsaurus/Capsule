@@ -205,6 +205,11 @@ pub(crate) enum Commands {
         #[command(subcommand)]
         command: LibraryCommands,
     },
+    /// Keep a library's cache within the budget the current connection class allows
+    Cache {
+        #[command(subcommand)]
+        command: CacheCommands,
+    },
     /// Repair a local library in place, one signed correction per affected asset
     Repair {
         #[command(subcommand)]
@@ -301,6 +306,35 @@ pub(crate) enum LibraryCommands {
             value_parser = clap::value_parser!(i64).range(0..)
         )]
         retain_days: i64,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum CacheCommands {
+    /// Evict cached thumbnails, previews and fetched originals, least recently viewed first,
+    /// until the cache fits the budget the current connection class allows. Pinned
+    /// representations, device-owned originals and the library's own media are never evicted.
+    Sweep {
+        /// Path to the Capsule library
+        #[arg(long, value_name = "PATH")]
+        library: PathBuf,
+        /// Print the run as one JSON document on stdout: the plan it ran under and each
+        /// evicted representation
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show the cache budget for the current connection class, or change the base budget
+    /// every class scales from (2 GiB unless set)
+    Budget {
+        /// Store this many bytes as the base budget
+        #[arg(long, value_name = "BYTES", conflicts_with = "reset")]
+        set: Option<u64>,
+        /// Clear the stored base budget, returning to the 2 GiB default
+        #[arg(long)]
+        reset: bool,
+        /// Print the plan as one JSON document on stdout
+        #[arg(long)]
+        json: bool,
     },
 }
 

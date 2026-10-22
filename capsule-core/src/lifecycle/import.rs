@@ -3,6 +3,7 @@
 
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
 use ciborium::value::Value;
@@ -13,23 +14,26 @@ use super::derivatives::{PreparedStill, StillSource};
 use super::{
     AssetState, DerivativeStatus, LifecycleError, Result, SidecarEnrichment, SignedImport,
     SignedImportOptions, StackPlacement, StreamedImport, Workspace, asset_is_deleted, media_dir,
-    now_rfc3339,
+    media_file_path, now_rfc3339,
 };
 use crate::cbor;
-use crate::crypto::encryption::{blob_ciphertext_hash, encrypt_asset_rekey, seal_metadata_blob};
+use crate::crypto::encryption::{
+    RekeyStreamError, blob_ciphertext_hash, encrypt_asset_rekey_stream, seal_metadata_blob,
+};
 use crate::crypto::hash;
-use crate::crypto::hash::Hash32;
+use crate::crypto::hash::{Hash32, Sha256Hasher};
 use crate::crypto::keys::{Amk, AmkVersion};
 use crate::crypto::primitives::{CRYPTO_SUITE_ID, PROTOCOL_VERSION};
 use crate::crypto::provenance::{
     ASSET_MANIFEST_VERSION, Action, KeyMode, ManifestCore, ProvenanceChain, ProvenanceRecord,
 };
 use crate::crypto::verify_asset::{
-    MetadataBinding, VerifyOutcome, verify_asset, verify_metadata_binding,
+    MetadataBinding, VerifyOutcome, verify_asset_hashed, verify_metadata_binding,
 };
 use crate::db::{AssetRow, CachedRepresentationRow};
-use crate::exif::{extract_exif, resolve_timezone};
+use crate::exif::{ExifExtract, extract_exif, resolve_timezone};
 use crate::library::{ReleaseDecision, RetainReason, StorageVerifier, release_move_source};
+use crate::media::{MAX_DECODE_PIXELS, StillFormat};
 use crate::metadata::crdt::{Lww, OrSet};
 use crate::sidecar::normalize_label;
 use crate::sidecar::sidecar_v1::{
@@ -154,6 +158,88 @@ fn create_dir_durable(dir: &Path) -> Result<()> {
 /// Fsync `dir`, making the entries just written or renamed into it durable.
 fn sync_dir_entries(dir: &Path) -> Result<()> {
     sync_dir(dir).map_err(|e| LifecycleError::Io(format!("fsync {}: {e}", dir.display())))
+}
+
+/// How much of a source's head is read to identify it: [`StillFormat::detect`] looks at the
+/// first 12 bytes, so this is headroom, not a format's requirement.
+const SNIFF_LEN: u64 = 64;
+
+/// The largest still an import holds in memory for the decoder: an uncompressed frame at the
+/// pixel budget, four 16-bit channels per pixel. No still the decoder would accept is larger
+/// (its pixels would exceed [`MAX_DECODE_PIXELS`]), so a file over this that names itself a
+/// still by its header is streamed like any other original and gets no derivatives.
+const MAX_HELD_STILL_BYTES: u64 = MAX_DECODE_PIXELS * 8;
+
+/// The EXIF of the `size`-byte file at `src`, or nothing for a file over
+/// [`MAX_HELD_STILL_BYTES`].
+///
+/// The EXIF reader can buffer a whole file whatever its container: a TIFF always (its IFD
+/// offsets may point anywhere), and a HEIF, PNG or WebP whose box or chunk sizes claim more than
+/// they hold. So the scan is bounded by the file's size, the same bound the decoder is held to,
+/// and every container is treated alike. Nothing real is lost: no camera still is that large, and
+/// the reader parses no video container, which is what files that large are.
+fn scan_exif(src: &Path, size: u64) -> ExifExtract {
+    if size > MAX_HELD_STILL_BYTES {
+        tracing::debug!(
+            path = %src.display(),
+            size,
+            limit = MAX_HELD_STILL_BYTES,
+            "import: file too large to scan for EXIF; capture time and GPS fall back"
+        );
+        return ExifExtract::default();
+    }
+    extract_exif(src).unwrap_or_default()
+}
+
+/// Read the first [`SNIFF_LEN`] bytes of `file` (fewer for a shorter file) and rewind it.
+fn read_head(file: &mut fs::File) -> io::Result<Vec<u8>> {
+    let mut head = Vec::with_capacity(SNIFF_LEN as usize);
+    Read::by_ref(file).take(SNIFF_LEN).read_to_end(&mut head)?;
+    file.seek(SeekFrom::Start(0))?;
+    Ok(head)
+}
+
+/// The plaintext on its way into the encryptor: hashed as it passes and, unless the original
+/// already lies at its media path, copied into the staged library file — so one read of the
+/// source yields the signed `hash`, the ciphertext address and the library copy, and holds one
+/// STREAM chunk at a time.
+struct Tee<R> {
+    inner: R,
+    hasher: Sha256Hasher,
+    copy: Option<fs::File>,
+}
+
+impl<R: Read> Read for Tee<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        let passed = &buf[..n];
+        self.hasher.update(passed);
+        if let Some(copy) = self.copy.as_mut() {
+            copy.write_all(passed)?;
+        }
+        Ok(n)
+    }
+}
+
+/// An import's library copy of its original, written to `{media}.tmp` while it is encrypted
+/// and renamed into place only once the asset has self-verified. Dropped uncommitted — the
+/// import failed after the copy began — it removes the `.tmp`, so a failed import leaves no
+/// plaintext behind; a crash leaves it to the startup scrub.
+struct StagedOriginal(Option<Staged>);
+
+impl StagedOriginal {
+    /// Rename the copy into place; a no-op for an original already at its media path.
+    fn commit(mut self) -> Result<()> {
+        self.0.take().map_or(Ok(()), Staged::commit)
+    }
+}
+
+impl Drop for StagedOriginal {
+    fn drop(&mut self) {
+        if let Some(staged) = self.0.take() {
+            let _ = fs::remove_file(&staged.tmp);
+        }
+    }
 }
 
 /// Render a Unix-second capture time as the sidecar's RFC 3339 `capture_timestamp`.
@@ -392,11 +478,13 @@ impl Workspace {
     /// costs one read of the original and no write.
     ///
     /// **Caller rule.** `plaintext` must be either the bytes read from the media path
-    /// (`append_lifecycle`) or the file about to become it (`commit_signed_create`; for the
-    /// migration that is the media path itself). A caller whose buffer may legitimately differ
-    /// from a *same-length* file already at the media path is not covered by this guard and
-    /// must decide the overwrite itself; `import_backup` restores into a workspace where the
-    /// media path does not exist, so it never meets that case.
+    /// (`append_lifecycle`) or the file about to become it (a restored backup, an adopted drop).
+    /// An import does not come through here: `commit_signed_create` streams its original into
+    /// the library without a buffer and then calls
+    /// [`write_signed_artifacts`](Self::write_signed_artifacts). A caller whose buffer may
+    /// legitimately differ from a *same-length* file already at the media path is not covered
+    /// by this guard and must decide the overwrite itself; `import_backup` restores into a
+    /// workspace where the media path does not exist, so it never meets that case.
     pub(super) fn write_asset_files(&self, asset: &AssetState, plaintext: &[u8]) -> Result<()> {
         let dir = media_dir(&self.root, asset.capture_utc);
         create_dir_durable(&dir)?;
@@ -571,7 +659,8 @@ impl Workspace {
     /// As [`import_asset`](Self::import_asset) but with executor-supplied [`SignedImportOptions`]
     /// (Move-mode source release + stack placement). This is the single signed write path the
     /// import executor drives (S-B2): every imported member lands as a signed `SidecarV1` +
-    /// manifest + append-only provenance, self-verified through [`verify_asset`], and — when the
+    /// manifest + append-only provenance, self-verified through
+    /// [`verify_asset`](crate::crypto::verify_asset::verify_asset), and — when the
     /// still decodes — with a chromahash `lqip` in the sidecar and signed thumbnail derivatives
     /// on disk (the private `prepare_still`, slices `S-B1`/`S-B14`).
     ///
@@ -612,15 +701,40 @@ impl Workspace {
         let asset_id = req.asset_id;
         let album_id = req.album_id;
         let opts = req.opts;
-        let plaintext = fs::read(src)
-            .map_err(|e| LifecycleError::Io(format!("read {}: {e}", src.display())))?;
+        let read_err = |e: io::Error| LifecycleError::Io(format!("read {}: {e}", src.display()));
         let ext = src
             .extension()
             .map_or_else(|| "bin".into(), |e| e.to_string_lossy().to_lowercase());
 
+        // **Bounded memory, whatever the file's size.** The original is never read whole for
+        // its own sake: it is hashed, encrypted and copied into the library in one streamed
+        // pass below. The one exception is a still this build can decode, which the decoder
+        // takes as a buffer — at most `MAX_HELD_STILL_BYTES` — and which is then streamed from
+        // that same buffer, so the pixels and the signed hash come from the same bytes. Whether
+        // a file is such a still is settled from its head alone, exactly as the decoder's own
+        // gate settles it.
+        let mut source = fs::File::open(src).map_err(read_err)?;
+        let size = source.metadata().map_err(read_err)?.len();
+        let head = read_head(&mut source).map_err(read_err)?;
+        let decodable = StillFormat::detect(&head, &ext).is_some_and(StillFormat::is_decodable);
+        let held = if decodable && size <= MAX_HELD_STILL_BYTES {
+            let mut whole = Vec::new();
+            source.read_to_end(&mut whole).map_err(read_err)?;
+            Some(whole)
+        } else {
+            None
+        };
+        tracing::debug!(
+            asset_id = %asset_id,
+            decodable,
+            size,
+            held_bytes = held.as_ref().map_or(0, Vec::len),
+            "import: source identified; streaming the original"
+        );
+
         // Scan & extract: capture time, dimensions, and GPS from the file's EXIF. Missing values
         // degrade cleanly (capture → now; dimensions/GPS → absent).
-        let exif = extract_exif(src).unwrap_or_default();
+        let exif = scan_exif(src, size);
         let tz = resolve_timezone(&exif);
         // `S-B10`: a third-party import arrives with the adapter's folded exporter record. Its
         // capture time and GPS are *fallbacks* — the file's own EXIF wins wherever it yields a
@@ -692,18 +806,73 @@ impl Workspace {
         let album = self.album(&album_id)?;
         let epoch = album.current_epoch;
         let amk = Amk::from_bytes(album.amks[&epoch]);
+        // The media bucket every file of this asset resolves to. A fresh import buckets by the
+        // resolved capture time; the migration pins the bucket the files already sit in, and
+        // the sidecar's `capture_timestamp` below still carries the resolved truth.
+        let bucket = req.media_bucket.unwrap_or(capture_utc);
+        let media_path = media_file_path(&self.root, bucket, asset_id, &ext);
+        // Bytes already at their own media path (the migration) are signed where they lie:
+        // nothing is copied, and the Move-mode release below must not delete what is now the
+        // asset. Anything else is copied to `{media}.tmp` in the same pass that encrypts it.
+        let in_place = is_same_file(src, &media_path);
+        let (staged, copy) = if in_place {
+            (StagedOriginal(None), None)
+        } else {
+            create_dir_durable(&media_dir(&self.root, bucket))?;
+            let tmp = tmp_path(&media_path);
+            let staged = StagedOriginal(Some(Staged {
+                tmp: tmp.clone(),
+                target: media_path.clone(),
+            }));
+            let copy = fs::File::create(&tmp)
+                .map_err(|e| LifecycleError::Io(format!("stage {}: {e}", tmp.display())))?;
+            (staged, Some(copy))
+        };
+        let mut held_reader = held.as_deref().unwrap_or_default();
+        let reader: &mut dyn Read = if held.is_some() {
+            &mut held_reader
+        } else {
+            &mut source
+        };
+        let mut tee = Tee {
+            inner: reader,
+            hasher: Sha256Hasher::new(),
+            copy,
+        };
         // First write: draw a fresh nonce prefix and derive the folded file key together
         // (nothing to replace on a create).
         //
         // **Before** the derivatives, and that ordering is load-bearing: the `original`
         // sentinel is a signed *reference* to this blob, so it commits to this ciphertext's
         // address and this nonce prefix, neither of which exists until now.
-        let (enc, ciphertext, _file_key) = encrypt_asset_rekey(&amk, &asset_id, &plaintext, None)?;
-
-        // The media bucket every file of this asset resolves to. A fresh import buckets by the
-        // resolved capture time; the migration pins the bucket the files already sit in, and
-        // the sidecar's `capture_timestamp` below still carries the resolved truth.
-        let bucket = req.media_bucket.unwrap_or(capture_utc);
+        //
+        // The ciphertext goes to a sink: the manifest commits to its address, which the
+        // encryptor hashes as the chunks pass, and an upload re-derives it from the library
+        // copy and the recorded prefix.
+        let (enc, _file_key) =
+            encrypt_asset_rekey_stream(&amk, &asset_id, &mut tee, io::sink(), None).map_err(
+                |e| match e {
+                    RekeyStreamError::Crypto(e) => LifecycleError::Crypto(e),
+                    RekeyStreamError::Stream(e) => {
+                        LifecycleError::Io(format!("encrypt {}: {e}", src.display()))
+                    }
+                },
+            )?;
+        let Tee { hasher, copy, .. } = tee;
+        let plaintext_hash = hasher.finalize();
+        if let Some(copy) = copy {
+            // Fsynced before the rename can publish it: the library copy is what a Move source
+            // is checked against before it is deleted, so it must be on disk rather than in the
+            // page cache.
+            copy.sync_all()
+                .map_err(|e| LifecycleError::Io(format!("fsync {}: {e}", media_path.display())))?;
+        }
+        tracing::debug!(
+            asset_id = %asset_id,
+            plaintext_size = enc.plaintext_size,
+            in_place,
+            "import: original hashed, encrypted and staged in one pass"
+        );
 
         // Still-derived sidecar metadata, from one decode pass over the plaintext: the
         // header-derived `content_type`, pixel `dimensions`, the chromahash `lqip`, and the
@@ -724,7 +893,10 @@ impl Workspace {
             status: derivative_status,
         } = self.prepare_still(
             &StillSource {
-                plaintext: &plaintext,
+                // The whole file for a held still; for anything else its head, which is all
+                // the decoder's gate reads before it refuses.
+                plaintext: held.as_deref().unwrap_or(&head),
+                size,
                 ext: &ext,
                 src,
                 exif: &exif,
@@ -735,6 +907,7 @@ impl Workspace {
             &amk,
             &enc,
         )?;
+        drop(held);
         // Header-derived wherever the bytes name a still Capsule models; the extension table is
         // the fallback for everything else (video, unknown suffixes).
         let content_type = format.map_or_else(|| content_type_for(&ext), |f| f.mime().to_string());
@@ -746,7 +919,7 @@ impl Workspace {
             sidecar_schema: SIDECAR_SCHEMA_V1,
             crypto_suite_id: CRYPTO_SUITE_ID,
             uuid: asset_id,
-            hash: hash::hash_bytes(&plaintext),
+            hash: plaintext_hash,
             capture_timestamp: capture_rfc3339(capture_utc),
             import_timestamp: req.import_timestamp.clone().unwrap_or_else(now_rfc3339),
             content_type,
@@ -820,7 +993,15 @@ impl Workspace {
         // Self-check: the asset must verify through the one chokepoint, and the sealed metadata
         // blob must round-trip to the signed sidecar and the committed hash, before we accept it.
         let authority = self.authority(&album_id)?;
-        let outcome = verify_asset(&manifest, &ciphertext, &self.directory, authority, None);
+        // Over the address the encryptor computed from every chunk it produced: the ciphertext
+        // itself was never held.
+        let outcome = verify_asset_hashed(
+            &manifest,
+            &enc.ciphertext_hash,
+            &self.directory,
+            authority,
+            None,
+        );
         if outcome != VerifyOutcome::Accept {
             return Err(LifecycleError::SelfVerify(outcome));
         }
@@ -846,17 +1027,17 @@ impl Workspace {
             // reaches `AssetState::stack` by any other route.
             stack: opts.stack.as_ref().map(StackPlacement::from_membership),
         };
-        // Bytes already at their own media path (the migration) are signed where they lie:
-        // `write_asset_files` sees the signed hash already on disk and leaves the original
-        // alone, and the Move-mode release below must not delete what is now the asset.
-        let in_place = is_same_file(src, &self.media_path(&asset));
-        self.write_asset_files(&asset, &plaintext)?;
+        debug_assert_eq!(media_path, self.media_path(&asset));
+        // The library copy lands first, then the signed artifacts, whose directory fsync makes
+        // the copy's rename durable with theirs.
+        staged.commit()?;
+        self.write_signed_artifacts(&asset)?;
         // After the asset's own files, and deliberately: a derivative is regenerable, so a
         // failure to write one must never fail an import whose signed original is already
         // durable. `persist_derivatives` logs and continues rather than returning.
         self.persist_derivatives(&asset, &derivatives);
         self.index_asset_row(&asset)?;
-        self.index_original_representation(&asset, plaintext.len())?;
+        self.index_original_representation(&asset, enc.plaintext_size as usize)?;
 
         // Move mode: release the source only after the durable, self-verified commit — unless
         // the caller defers release to its server-side verify-before-destroy gate (S-D4/S-B3),
@@ -1004,6 +1185,9 @@ fn release_blob_hashes(asset: &AssetState) -> Vec<Hash32> {
     }
     blob_hashes
 }
+
+#[cfg(test)]
+mod stream_tests;
 
 #[cfg(test)]
 mod tests {

@@ -14,15 +14,16 @@ use capsule_core::crypto::primitives::DeviceTier;
 use capsule_core::domain::ImportMode;
 use capsule_core::import::{
     CancellationToken, DefaultAlbumContext, ImportConfig, ImportOutcome, ImportProgressEvent,
-    ScanResult, SourceAdapter, SourceMetadataIndex, TakeoutAdapter, UploadPolicy,
-    execute_with_source_metadata, plan, scan_paths as scan_files,
+    ScanResult, SourceAdapter, SourceMetadataIndex, TakeoutAdapter, execute_with_source_metadata,
+    plan, scan_paths as scan_files,
 };
 use capsule_core::library::{Library, LibraryError, init_library, open_library, rebuild_index};
 use capsule_core::lifecycle::{DerivativeStatus, Workspace, unmigrated_sidecars};
 use capsule_core::metadata::FileMetadata;
-use capsule_sdk::net::ConnectionClass;
+use capsule_sdk::cache_budget::DesktopConnectionClass;
 use cli::{
-    AuthCommands, Cli, Commands, ImportProviderArg, LibraryCommands, RepairCommands, ShareCommands,
+    AuthCommands, CacheCommands, Cli, Commands, ImportProviderArg, LibraryCommands, RepairCommands,
+    ShareCommands,
 };
 use colored::*;
 use dialoguer::{Confirm, Input, Password};
@@ -33,6 +34,7 @@ use crate::utils::directories::{
     get_cache_dir, get_config_dir, get_data_dir, get_session_file_path,
 };
 
+pub mod cache;
 pub mod cli;
 pub mod cull;
 pub mod db;
@@ -249,6 +251,12 @@ async fn dispatch(cli: Cli) -> Result<()> {
                     Err(e) => println!("{}", format!("Error checking auth status: {e}").red()),
                 }
             }
+        },
+
+        // ── Cache ─────────────────────────────────────────────────────────
+        Commands::Cache { command } => match command {
+            CacheCommands::Sweep { library, json } => cache_sweep_library(&library, json)?,
+            CacheCommands::Budget { set, reset, json } => cache_budget(set, reset, json)?,
         },
 
         // ── Library ───────────────────────────────────────────────────────
@@ -522,9 +530,9 @@ async fn dispatch(cli: Cli) -> Result<()> {
             let options = restore::RestoreOptions {
                 scope,
                 out,
-                // As for push: the CLI has no link-quality probe, so it reports the class a
-                // desktop or server run is on.
-                connection: ConnectionClass::Unmetered,
+                // Sampled through the same port as a push. A restore is a foreground request
+                // for the originals, so the class sizes its range windows but never defers it.
+                connection: cache::transfer_plan(&DesktopConnectionClass::new()).class,
                 range_window: restore::RESTORE_RANGE_WINDOW,
             };
             restore_workspace(&ws, &options, json).await?;
@@ -1341,21 +1349,106 @@ fn open_workspace_quiet(library: &Path, passphrase_stdin: bool) -> Result<Worksp
     Ok(ws)
 }
 
-/// The push configuration behind the CLI's three push flags. A `--staged` run opens the tier
-/// sessions in ladder order gated by the connection class; the default `Full` policy opens them
-/// all eagerly. The CLI has no link-quality probe, so it reports the honest default —
-/// `Unmetered`, the class a desktop/server run is on.
+/// The push configuration behind the CLI's three push flags, on the connection class the
+/// desktop source reports now. A `--staged` run opens the tier sessions in ladder order gated by
+/// the class; the default `Full` policy opens them all eagerly unless the class defers bulk
+/// transfers, which stages the push ([`cache::push_options`]). The desktop source has no OS
+/// probe, so it reports `unmetered`.
 fn push_options(dry_run: bool, force: bool, staged: bool) -> remote::PushOptions {
-    remote::PushOptions {
+    cache::push_options(
+        &cache::transfer_plan(&DesktopConnectionClass::new()),
         dry_run,
         force,
-        policy: if staged {
-            UploadPolicy::Staged
+        staged,
+    )
+}
+
+/// The CLI settings store, erroring if the config directory cannot be determined.
+fn cache_settings() -> Result<cache::CacheSettingsStore> {
+    let dir = get_config_dir().ok_or_else(|| eyre!("Failed to resolve config directory"))?;
+    Ok(cache::CacheSettingsStore::new(
+        dir.join(cache::SETTINGS_FILE_NAME),
+    ))
+}
+
+/// The base cache budget from the user's setting, or the default.
+fn base_cache_budget() -> Result<cache::BaseBudget> {
+    cache_settings()?
+        .base_budget()
+        .map_err(|e| eyre!("Failed to read the cache budget setting: {e}"))
+}
+
+/// A byte count for a human: `2 GiB`.
+fn human_bytes(bytes: u64) -> String {
+    humansize::format_size(bytes, humansize::BINARY)
+}
+
+/// The plan lines `capsule cache budget` and `capsule cache sweep` print.
+fn print_cache_plan(plan: &cache::PlanReport) {
+    let source = match plan.base_budget_source {
+        cache::BudgetSource::Default => "default",
+        cache::BudgetSource::Setting => "set",
+    };
+    println!("  Connection class:  {}", plan.connection_class);
+    println!(
+        "  Base budget:       {} ({source})",
+        human_bytes(plan.base_budget_bytes)
+    );
+    println!("  Cache budget:      {}", human_bytes(plan.budget_bytes));
+    println!(
+        "  Bulk transfers:    {}",
+        if plan.defer_bulk {
+            "deferred until an unmetered link"
         } else {
-            UploadPolicy::Full
-        },
-        connection: ConnectionClass::Unmetered,
+            "allowed"
+        }
+    );
+}
+
+/// `capsule cache sweep`: evict down to the budget the current class allows.
+fn cache_sweep_library(library: &Path, json: bool) -> Result<()> {
+    let base = base_cache_budget()?;
+    let lib = open_library_or_err(library)?;
+    let report = cache::sweep(DesktopConnectionClass::new(), base, |budget| {
+        capsule_core::library::cache_sweep(&lib.db, budget)
+    })
+    .map_err(|e| eyre!("Cache sweep failed: {e}"))?;
+    lib.close()
+        .map_err(|e| eyre!("Failed to close library: {e}"))?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
     }
+    println!("{}", "Cache sweep:".green());
+    print_cache_plan(&report.plan);
+    let reclaimed = u64::try_from(report.bytes_reclaimed).unwrap_or_default();
+    println!(
+        "{}",
+        format!(
+            "Evicted {} cached representation(s), reclaiming {}.",
+            report.evicted_count,
+            human_bytes(reclaimed)
+        )
+        .cyan()
+    );
+    Ok(())
+}
+
+/// `capsule cache budget`: show the current plan, after storing or clearing the base budget.
+fn cache_budget(set: Option<u64>, reset: bool, json: bool) -> Result<()> {
+    if set.is_some() || reset {
+        cache_settings()?
+            .set_base_budget(set)
+            .map_err(|e| eyre!("Failed to write the cache budget setting: {e}"))?;
+    }
+    let plan = cache::current_plan(DesktopConnectionClass::new(), base_cache_budget()?);
+    if json {
+        println!("{}", serde_json::to_string_pretty(&plan)?);
+        return Ok(());
+    }
+    println!("{}", "Cache budget:".green());
+    print_cache_plan(&plan);
+    Ok(())
 }
 
 /// `capsule push`: upload every managed asset of `workspace` over the SDK.

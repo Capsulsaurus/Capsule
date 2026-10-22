@@ -30,7 +30,8 @@ pub use keywrap::{
     unseal_file_key,
 };
 pub use rekey::{
-    encrypt_asset_rekey, encrypt_asset_rekey_with_prefix, seal_metadata_blob,
+    RekeyStreamError, encrypt_asset_rekey, encrypt_asset_rekey_stream,
+    encrypt_asset_rekey_stream_with_prefix, encrypt_asset_rekey_with_prefix, seal_metadata_blob,
     seal_metadata_blob_with_nonce,
 };
 pub use stream::{

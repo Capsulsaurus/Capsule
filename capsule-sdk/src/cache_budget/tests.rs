@@ -95,6 +95,56 @@ fn plan_is_reused_until_the_class_changes() {
     assert!(!budget.defer_bulk());
 }
 
+/// A bulk-deferring plan demotes a full push to staged and keeps a staged one; a plan that
+/// permits bulk work keeps whatever was requested.
+#[test]
+fn upload_policy_stages_exactly_when_bulk_defers() {
+    for class in ALL {
+        let plan = plan_for(class, 1);
+        for requested in [UploadPolicy::Full, UploadPolicy::Staged] {
+            let expected = if plan.defer_bulk {
+                UploadPolicy::Staged
+            } else {
+                requested
+            };
+            assert_eq!(
+                plan.upload_policy(requested),
+                expected,
+                "{class:?} {requested:?}"
+            );
+        }
+    }
+}
+
+/// The staged scheduler a plan's policy and class drive opens a bulk tier exactly when the plan
+/// does not defer bulk work, whatever policy the user asked for; the index tier is gated only
+/// on a usable path.
+#[test]
+fn a_plans_scheduler_opens_bulk_tiers_exactly_when_bulk_is_not_deferred() {
+    use capsule_core::import::UploadTier;
+
+    use crate::staged::StagedScheduler;
+
+    for class in ALL {
+        let plan = plan_for(class, 1);
+        for requested in [UploadPolicy::Full, UploadPolicy::Staged] {
+            let scheduler = StagedScheduler::new(plan.upload_policy(requested), plan.class);
+            for tier in [UploadTier::Preview, UploadTier::Original] {
+                assert_eq!(
+                    scheduler.tier_opens_now(tier),
+                    !plan.defer_bulk,
+                    "{class:?} {requested:?} {tier:?}"
+                );
+            }
+            assert_eq!(
+                scheduler.tier_opens_now(UploadTier::Index),
+                class != ConnectionClass::Offline,
+                "{class:?} {requested:?} index"
+            );
+        }
+    }
+}
+
 #[test]
 fn sweep_error_is_returned_and_plan_kept() {
     let mut budget = CacheBudget::new(InMemoryConnectionClass::new(ConnectionClass::Adverse), 5);

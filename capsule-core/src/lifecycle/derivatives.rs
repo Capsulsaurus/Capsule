@@ -53,8 +53,12 @@ use crate::sidecar::sidecar_v1::{Dimensions, Lqip as SidecarLqip};
 /// hidden that the signature had grown two *kinds* of input (the file, and the crypto identity
 /// it commits under) without saying so.
 pub(super) struct StillSource<'a> {
-    /// The file's bytes.
+    /// The file's bytes — or only its head, when the import did not hold the file: one whose
+    /// head names no still this build decodes (the decoder's gate reads no further before
+    /// refusing, so the status is the same), or a decodable still too large to hold.
     pub(super) plaintext: &'a [u8],
+    /// The file's full size. Larger than `plaintext` exactly when only the head was passed.
+    pub(super) size: u64,
     /// Its lowercase extension without the dot, `""` when it has none.
     pub(super) ext: &'a str,
     /// Where it came from — for logs only; the bytes above are authoritative. An adopted guest
@@ -396,6 +400,7 @@ impl Workspace {
     ) -> Result<PreparedStill> {
         let StillSource {
             plaintext,
+            size,
             ext,
             src,
             exif,
@@ -408,6 +413,24 @@ impl Workspace {
         // header-derived even for a format with no codec: a HEIC is `image/heic` in the sidecar
         // whether or not this build can read its pixels.
         let sniffed = StillFormat::detect(plaintext, ext);
+        if (plaintext.len() as u64) < size && sniffed.is_some_and(StillFormat::is_decodable) {
+            // The importer declined to hold a file this large for the decoder. Reported as a
+            // failed decode, the bucket a still over the pixel budget lands in too: a
+            // supported format that produced no derivative, worth someone looking at.
+            tracing::warn!(
+                asset_id = %asset_id,
+                path = %src.display(),
+                format = ?sniffed,
+                size,
+                "derivatives: a still too large to hold for decoding; the original is imported \
+                 signed and encrypted, but without a thumbnail or LQIP"
+            );
+            return Ok(PreparedStill::undecoded(
+                sniffed,
+                exif_dimensions,
+                DerivativeStatus::DecodeFailed,
+            ));
+        }
 
         let decoded = match decode_guarded(&RawshiftDecoder, plaintext, ext) {
             Ok(decoded) => decoded,
@@ -640,6 +663,9 @@ impl Workspace {
 }
 
 #[cfg(test)]
+mod head_tests;
+
+#[cfg(test)]
 mod tests {
     use rawshift_image::core::metadata::{ImageInfo, ImageMetadata};
     use rawshift_image::core::{BitDepth, MetadataEmbedOptions};
@@ -698,7 +724,7 @@ mod tests {
 
     /// A JPEG carrying an EXIF orientation tag, so the decode path has a transform to apply and
     /// the sidecar's dimensions have to disagree with the stored ones.
-    fn jpeg(width: u32, height: u32, orientation: Option<u16>) -> Vec<u8> {
+    pub(super) fn jpeg(width: u32, height: u32, orientation: Option<u16>) -> Vec<u8> {
         let metadata = ImageMetadata {
             image: ImageInfo {
                 orientation,
@@ -734,7 +760,7 @@ mod tests {
     }
 
     /// A workspace with fast Argon2 params and its default album created.
-    fn workspace(dir: &Path) -> (Workspace, Uuid) {
+    pub(super) fn workspace(dir: &Path) -> (Workspace, Uuid) {
         let mut ws = fast_workspace(dir);
         let album = ws.default_album_id();
         ws.create_album_with_id(album, "Imports").unwrap();
