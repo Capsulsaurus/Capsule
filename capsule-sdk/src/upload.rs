@@ -35,7 +35,9 @@ use std::time::Duration;
 use capsule_i18n::error_codes;
 use serde::{Deserialize, Serialize};
 
-use crate::net::{ConnectionClass, RetryClass, RetryDecision, RetryEngine, Sleeper, TokioSleeper};
+use crate::net::{
+    ConnectionClass, RetryClass, RetryDecision, RetryEngine, Sleeper, TokioSleeper, negotiation,
+};
 
 // Constants for chunk sizes (4KB aligned)
 const KB: u64 = 1024;
@@ -348,10 +350,33 @@ impl UploadTransport {
     where
         F: Fn(&reqwest::Client) -> reqwest::RequestBuilder,
     {
+        // Both paths go through the protocol window (issue #674): the session's `execute`
+        // screens its own sends, and the static path screens here, so a refusal from either is
+        // the same `UpgradeRequired`.
         match &self.auth {
-            UploadAuth::Session(session) => Ok(session.execute(build).await?),
-            UploadAuth::Static { http, token } => Ok(build(http).bearer_auth(token).send().await?),
+            UploadAuth::Session(session) => match session.execute(build).await {
+                Ok(response) => Ok(response),
+                Err(crate::auth::AuthError::UpgradeRequired(refusal)) => Err((*refusal).into()),
+                Err(other) => Err(other.into()),
+            },
+            UploadAuth::Static { http, token } => {
+                match negotiation::send_negotiated(build(http).bearer_auth(token)).await {
+                    Ok(response) => Ok(response),
+                    Err(negotiation::SendError::Upgrade(refusal)) => Err(refusal.into()),
+                    Err(negotiation::SendError::Transport(error)) => Err(error.into()),
+                }
+            }
         }
+    }
+
+    /// The upgrade refusal an error response carrying `error.protocol.version_unsupported`
+    /// answers, with the window its headers advertise.
+    fn upgrade_required(
+        &self,
+        headers: &reqwest::header::HeaderMap,
+        message: String,
+    ) -> UploadError {
+        negotiation::UpgradeRequired::refused(headers, &self.protocol_version, message).into()
     }
 
     fn session_url(&self, id: &str) -> String {
@@ -574,15 +599,24 @@ pub enum UploadError {
         /// The English detail message.
         message: String,
     },
-    /// `426 Upgrade Required` — this client speaks a protocol the server no longer
-    /// accepts. Carries the advertised window so the UI can show an actionable
-    /// "update Capsule to keep uploading" message. Abort-with-upgrade.
-    #[error("protocol upgrade required (server accepts {min:?}..={max:?}): {message}")]
+    /// The server will not take this client's uploads: it answered `426 Upgrade Required`, or
+    /// the window it advertised already refuses this build, so the request never left. The
+    /// SDK's one [`UpgradeRequired`](crate::net::negotiation::UpgradeRequired), flattened:
+    /// carries the advertised window so the UI can show an actionable "update Capsule to keep
+    /// uploading" message. Abort-with-upgrade.
+    #[error(
+        "protocol upgrade required ({reason:?}; server accepts {min:?}..={max:?}, client build \
+         >= {min_client_build:?}): {message}"
+    )]
     UpgradeRequired {
+        /// Which rule refused.
+        reason: crate::net::negotiation::UpgradeReason,
         /// `X-Capsule-Protocol-Min`.
         min: Option<String>,
         /// `X-Capsule-Protocol-Max`.
         max: Option<String>,
+        /// `X-Capsule-Min-Client-Build`.
+        min_client_build: Option<String>,
         /// The English detail message.
         message: String,
     },
@@ -648,6 +682,24 @@ impl<T: UploadSource + ?Sized> UploadSource for &T {
 impl From<reqwest::Error> for UploadError {
     fn from(err: reqwest::Error) -> Self {
         UploadError::Transport(err.to_string())
+    }
+}
+
+impl From<crate::net::negotiation::UpgradeRequired> for UploadError {
+    fn from(refusal: crate::net::negotiation::UpgradeRequired) -> Self {
+        let crate::net::negotiation::UpgradeRequired {
+            reason,
+            window,
+            message,
+            ..
+        } = refusal;
+        UploadError::UpgradeRequired {
+            reason,
+            min: window.protocol_min,
+            max: window.protocol_max,
+            min_client_build: window.min_client_build,
+            message,
+        }
     }
 }
 
@@ -863,9 +915,9 @@ impl UploadClient {
         }
 
         let after = retry_after(resp.headers());
-        let (code, message, min, max) = read_error(resp).await?;
+        let (code, message, headers) = read_error(resp).await?;
         if is_upgrade_required(status, code.as_deref()) {
-            return Err(UploadError::UpgradeRequired { min, max, message });
+            return Err(self.transport.upgrade_required(&headers, message));
         }
         if code.as_deref() == Some(error_codes::UPLOAD_DUPLICATE_BLOB) {
             let asset_ref = duplicate_asset_ref(&message);
@@ -917,11 +969,11 @@ impl UploadClient {
         }
         if !(200..300).contains(&status) {
             let after = retry_after(resp.headers());
-            let (code, message, min, max) = read_error(resp).await?;
+            let (code, message, headers) = read_error(resp).await?;
             // A HEAD answer carries no body, so the bare `426` is all there is to switch on;
             // it is the same refusal a create or a chunk gets, and surfaces as the same error.
             if is_upgrade_required(status, code.as_deref()) {
-                return Err(UploadError::UpgradeRequired { min, max, message });
+                return Err(self.transport.upgrade_required(&headers, message));
             }
             if answer_asks_to_wait(status, code.as_deref()) {
                 tracing::debug!(status, ?code, ?after, "HEAD: the server asked for a wait");
@@ -1007,7 +1059,7 @@ impl UploadClient {
         if (200..300).contains(&status) || status == 404 {
             return Ok(());
         }
-        let (code, message, _, _) = read_error(resp).await?;
+        let (code, message, _) = read_error(resp).await?;
         Err(UploadError::Rejected {
             status,
             code,
@@ -1030,7 +1082,7 @@ impl UploadClient {
 
         let status = resp.status().as_u16();
         if !(200..300).contains(&status) {
-            let (code, message, _, _) = read_error(resp).await?;
+            let (code, message, _) = read_error(resp).await?;
             return Err(UploadError::Rejected {
                 status,
                 code,
@@ -1077,7 +1129,7 @@ impl UploadClient {
         // capture it before consuming the body.
         let authoritative = header_u64(resp.headers(), "X-Capsule-Offset");
         let wait = retry_after(resp.headers());
-        let (code, message, min, max) = read_error(resp).await?;
+        let (code, message, headers) = read_error(resp).await?;
 
         // Recovery matrix — switch on the stable error.* code, never the status.
         match code.as_deref() {
@@ -1098,7 +1150,7 @@ impl UploadClient {
                 Ok(ChunkAck::Backoff(wait))
             }
             _ if is_upgrade_required(status, code.as_deref()) => {
-                Err(UploadError::UpgradeRequired { min, max, message })
+                Err(self.transport.upgrade_required(&headers, message))
             }
             _ => Err(UploadError::Rejected {
                 status,
@@ -1352,14 +1404,13 @@ fn guard_budget(recoveries: u32, action: &str) -> Result<(), UploadError> {
     }
 }
 
-/// Read an error response into `(code, message, protocol_min, protocol_max)`.
-/// Tolerates a non-JSON (plain-text) body — such responses simply carry no code.
+/// Read an error response into `(code, message, headers)` — the headers for the window an
+/// upgrade refusal carries. Tolerates a non-JSON (plain-text) body — such responses simply
+/// carry no code.
 async fn read_error(
     resp: reqwest::Response,
-) -> Result<(Option<String>, String, Option<String>, Option<String>), UploadError> {
+) -> Result<(Option<String>, String, reqwest::header::HeaderMap), UploadError> {
     let headers = resp.headers().clone();
-    let min = header_str(&headers, "X-Capsule-Protocol-Min");
-    let max = header_str(&headers, "X-Capsule-Protocol-Max");
     let text = resp.text().await?;
     match serde_json::from_str::<ApiErrorBody>(&text) {
         Ok(body) => {
@@ -1368,9 +1419,9 @@ async fn read_error(
             } else {
                 body.error
             };
-            Ok((body.code, message, min, max))
+            Ok((body.code, message, headers))
         }
-        Err(_) => Ok((None, text, min, max)),
+        Err(_) => Ok((None, text, headers)),
     }
 }
 

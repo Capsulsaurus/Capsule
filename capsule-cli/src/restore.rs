@@ -115,8 +115,8 @@ pub enum AssetRestoreStatus {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AssetRestoreFailure {
     /// A stable name for where the asset stopped: `no_original`, `awaiting_original`,
-    /// `metadata_missing`, `malformed_feed`, `fetch`, `keys_unavailable`, `quarantined`,
-    /// `undecryptable`, `digest_mismatch`, `workspace` or `write`.
+    /// `malformed_feed`, `fetch`, `keys_unavailable`, `quarantined`, `undecryptable`,
+    /// `digest_mismatch`, `workspace` or `write`.
     pub kind: &'static str,
     /// The server's stable `error.*` code, when it supplied one.
     pub code: Option<String>,
@@ -499,22 +499,23 @@ impl<B: BlobSource + Sync> AssetRestore<'_, B> {
             return Ok(Vec::new());
         }
         let hash = String::from_utf8_lossy(&entry.metadata_blob).into_owned();
-        let Some(size) = entry
+        // The feed names the metadata blob by address only: its blob list carries the original
+        // and the derivatives, so a size is there only when a server chose to list it.
+        let listed = entry
             .blobs
             .derivatives
             .iter()
             .find(|blob| blob.ciphertext_hash == hash)
-            .map(|blob| blob.size)
-        else {
-            return Err(AssetRestoreFailure::new(
-                "metadata_missing",
-                format!("the feed lists no size for metadata blob {hash}"),
-            ));
+            .map(|blob| blob.size);
+        let fetched = match listed {
+            Some(size) => self.fetcher.fetch(self.source, &hash, size).await,
+            None => {
+                self.fetcher
+                    .fetch_unsized(self.source, &hash, MAX_METADATA_BLOB_BYTES)
+                    .await
+            }
         };
-        self.fetcher
-            .fetch(self.source, &hash, size)
-            .await
-            .map_err(|error| AssetRestoreFailure::fetch("metadata blob", &error))
+        fetched.map_err(|error| AssetRestoreFailure::fetch("metadata blob", &error))
     }
 
     /// Fetch the original's ciphertext into its part file, resuming from whatever an earlier
@@ -631,6 +632,11 @@ fn refusal(verdict: &SyncApplyOutcome) -> AssetRestoreFailure {
         }
     }
 }
+
+/// The most a restore reads of a metadata blob whose size the feed does not list (16 MiB, the
+/// upload protocol's largest chunk). A sealed sidecar is a few KiB; the cap only stops a
+/// server that keeps answering full windows from growing the buffer without bound.
+pub const MAX_METADATA_BLOB_BYTES: u64 = capsule_sdk::upload::PROTOCOL_MAX_CHUNK;
 
 /// A file extension for a media type, for naming a restored original. Cosmetic: the bytes are
 /// the original's whatever the name says, and an unlisted type is written as `.bin`.
