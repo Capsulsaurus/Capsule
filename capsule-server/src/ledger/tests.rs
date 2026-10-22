@@ -483,6 +483,35 @@ async fn a_reader_without_write_access_still_scans() {
     read_only(&dir, false, &dir.join(fs::LOCK_FILE));
 }
 
+/// A scrub or rebuild may run as another user than the server; a lock file it created would be
+/// one the server could not open for writing, refusing that owner's appends.
+#[tokio::test]
+async fn a_scan_never_creates_the_lock_file() {
+    let disk = Disk::open().await;
+    let signer = key();
+    let owner = OwnerId::new("no-lock-yet");
+    disk.ledger
+        .append(&owner, event(1), Timestamp::UNIX_EPOCH, &signer)
+        .await
+        .expect("append");
+    let lock_file = disk.ledger.owner_dir(&owner).join(fs::LOCK_FILE);
+    // A ledger written before the lock file existed.
+    std::fs::remove_file(&lock_file).expect("remove");
+
+    assert_one_chain(&disk.ledger, &owner, &signer, 1).await;
+    assert!(
+        !lock_file.exists(),
+        "a scan reads unlocked rather than create the lock file"
+    );
+
+    disk.ledger
+        .append(&owner, event(2), Timestamp::UNIX_EPOCH, &signer)
+        .await
+        .expect("append");
+    assert!(lock_file.is_file(), "the next append creates it");
+    assert_one_chain(&disk.ledger, &owner, &signer, 2).await;
+}
+
 #[tokio::test]
 async fn a_scan_of_an_owner_with_no_directory_creates_nothing() {
     let disk = Disk::open().await;

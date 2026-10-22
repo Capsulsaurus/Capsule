@@ -116,8 +116,10 @@ accepted it. The **owner ledger** carries those facts:
 - Two processes append to one ledger: the server and an operator's `purge --apply`. An append
   holds an exclusive file lock on `.lock`, an empty file in the owner's ledger directory opened
   for writing, from reading the tail to the fsync, and reads the tail from disk whenever another
-  process has appended since. A scan holds the lock shared. The lock file is not a segment, so
-  rebuild and the scrub never read it. It is a file rather than the directory because a
+  process has appended since. A scan holds the lock shared through a read-only descriptor and
+  never creates the file: where no append has made it yet, the scan reads unlocked, so a scrub
+  or rebuild leaves no file in `ledger/`, whatever user it runs as. The lock file is not a
+  segment, so rebuild and the scrub never read it. It is a file rather than the directory because a
   directory opens read-only, and where `flock` is emulated with byte-range locks (Linux on NFS)
   an exclusive lock on a read-only descriptor is refused.
 - Device-directory versions are in the ledger, so a rebuild verifies signatures against the
