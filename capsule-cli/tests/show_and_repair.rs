@@ -322,7 +322,14 @@ fn show_prints_the_signed_sidecar_by_hash_prefix_or_id() {
         page.contains("Provenance:      1 signed record(s)"),
         "a fresh import on this build is a chain of one:\n{page}"
     );
-    assert!(!page.contains("cli.show."), "no raw catalog key:\n{page}");
+    for row in [
+        "  Content type:    image/jpeg\n",
+        "  Cull flag:       neutral\n",
+        "  Hidden:          no\n",
+        "  In trash:        no\n",
+    ] {
+        assert!(page.contains(row), "the labelled row {row:?}:\n{page}");
+    }
 
     let ws = fx.reopen();
     let id = fx.asset_for(&ws, image);

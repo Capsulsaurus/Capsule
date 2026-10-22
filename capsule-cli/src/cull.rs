@@ -23,13 +23,11 @@
 
 use capsule_core::lifecycle::Workspace;
 use capsule_core::sidecar::CullFlag;
-use capsule_i18n::Bundle;
 use colored::Colorize as _;
 use thiserror::Error;
 use uuid::Uuid;
 
 use crate::cli::CullFlagArg;
-use crate::i18n::{Value, keys};
 
 /// The retention window a reject sweep stamps when none is given, in days. Matches the design's
 /// default trash retention ([Organization — Recycling]).
@@ -150,33 +148,25 @@ pub fn apply(ws: &mut Workspace, request: &CullRequest) -> Result<CullSummary, C
     Ok(summary)
 }
 
-/// The catalog key naming a flag in prose.
-const fn flag_key(flag: CullFlag) -> &'static str {
+/// The name of a flag in prose.
+const fn flag_name(flag: CullFlag) -> &'static str {
     match flag {
-        CullFlag::Pick => keys::CULL_FLAG_PICK,
-        CullFlag::Neutral => keys::CULL_FLAG_NEUTRAL,
-        CullFlag::Reject => keys::CULL_FLAG_REJECT,
+        CullFlag::Pick => "pick",
+        CullFlag::Neutral => "neutral",
+        CullFlag::Reject => "reject",
     }
 }
 
-/// The localized name of a flag, for interpolation into the other messages.
-fn flag_name(bundle: &Bundle, flag: CullFlag) -> String {
-    bundle.format(flag_key(flag), &[])
-}
-
-/// Localize a [`CullError`] for the user-facing failure line.
-pub fn describe_error(bundle: &Bundle, error: &CullError) -> String {
+/// A human-readable reason for a [`CullError`], for the user-facing failure line.
+pub fn describe_error(error: &CullError) -> String {
     match error {
-        CullError::UnknownAsset(id) => bundle.format(
-            keys::CULL_UNKNOWN_ASSET,
-            &[("asset_id", Value::Str(&id.to_string()))],
-        ),
+        CullError::UnknownAsset(id) => format!("Unknown asset {id} in this library."),
         CullError::Lifecycle(detail) => detail.clone(),
     }
 }
 
 /// Print what the invocation did: the flags written, the view, and the sweep result.
-pub fn render(bundle: &Bundle, request: &CullRequest, summary: &CullSummary) {
+pub fn render(request: &CullRequest, summary: &CullSummary) {
     for (flag, ids) in [
         (CullFlag::Pick, &request.pick),
         (CullFlag::Neutral, &request.neutral),
@@ -185,33 +175,18 @@ pub fn render(bundle: &Bundle, request: &CullRequest, summary: &CullSummary) {
         if ids.is_empty() {
             continue;
         }
-        let name = flag_name(bundle, flag);
-        println!(
-            "{}",
-            bundle
-                .format(
-                    keys::CULL_FLAGGED,
-                    &[
-                        ("count", Value::Int(ids.len() as i64)),
-                        ("flag", Value::Str(&name)),
-                    ],
-                )
-                .green()
-        );
+        let (count, name) = (ids.len(), flag_name(flag));
+        println!("{}", format!("Flagged {count} asset(s) as {name}.").green());
     }
 
+    let (pick, neutral, reject) = (
+        summary.picks.len(),
+        summary.neutrals.len(),
+        summary.rejects.len(),
+    );
     println!(
         "{}",
-        bundle
-            .format(
-                keys::CULL_VIEW,
-                &[
-                    ("pick", Value::Int(summary.picks.len() as i64)),
-                    ("neutral", Value::Int(summary.neutrals.len() as i64)),
-                    ("reject", Value::Int(summary.rejects.len() as i64)),
-                ],
-            )
-            .cyan()
+        format!("Cull view: {pick} pick, {neutral} neutral, {reject} reject.").cyan()
     );
 
     if let Some(filter) = request.filter {
@@ -220,52 +195,28 @@ pub fn render(bundle: &Bundle, request: &CullRequest, summary: &CullSummary) {
             CullFlag::Neutral => &summary.neutrals,
             CullFlag::Reject => &summary.rejects,
         };
-        let name = flag_name(bundle, filter);
+        let name = flag_name(filter);
         if ids.is_empty() {
-            println!(
-                "{}",
-                bundle
-                    .format(keys::CULL_FILTER_EMPTY, &[("flag", Value::Str(&name))])
-                    .yellow()
-            );
+            println!("{}", format!("No assets are flagged {name}.").yellow());
         } else {
-            println!(
-                "{}",
-                bundle.format(
-                    keys::CULL_FILTER_HEADER,
-                    &[
-                        ("count", Value::Int(ids.len() as i64)),
-                        ("flag", Value::Str(&name)),
-                    ],
-                )
-            );
+            println!("{} asset(s) flagged {name}:", ids.len());
             for id in ids {
-                println!(
-                    "{}",
-                    bundle.format(keys::CULL_ROW, &[("asset_id", Value::Str(&id.to_string()))])
-                );
+                println!("  {id}");
             }
         }
     }
 
     if request.sweep {
         if summary.swept.is_empty() {
-            println!(
-                "{}",
-                bundle.format(keys::CULL_NOTHING_TO_SWEEP, &[]).yellow()
-            );
+            println!("{}", "No rejected assets to sweep.".yellow());
         } else {
+            let (count, retain_days) = (summary.swept.len(), request.retain_days);
             println!(
                 "{}",
-                bundle
-                    .format(
-                        keys::CULL_SWEPT,
-                        &[
-                            ("count", Value::Int(summary.swept.len() as i64)),
-                            ("retain_days", Value::Int(request.retain_days)),
-                        ],
-                    )
-                    .green()
+                format!(
+                    "Swept {count} rejected asset(s) to trash; recoverable for {retain_days} day(s)."
+                )
+                .green()
             );
         }
     }

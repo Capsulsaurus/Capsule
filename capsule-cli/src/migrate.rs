@@ -2,7 +2,7 @@
 //! assets (issue `#456`, over slice `S-D24`).
 //!
 //! The verb itself is [`Workspace::migrate_unsigned_sidecars`]; this module is only the CLI's
-//! half of it: the options the command line resolves ([`options`]), the localized rendering of
+//! half of it: the options the command line resolves ([`options`]), the rendering of
 //! the [`UnsignedMigrationReport`] it returns ([`render`], [`describe_skip`]), and the notice
 //! every workspace-opening verb prints while sidecars are still waiting ([`unmigrated_notice`]),
 //! so the count is visible before the user runs the migration.
@@ -15,10 +15,7 @@ use capsule_core::lifecycle::{
     LifecycleError, MigrationSkip, UnmigratedSidecar, UnsignedMigrationOptions,
     UnsignedMigrationReport, Workspace,
 };
-use capsule_i18n::Bundle;
 use colored::Colorize as _;
-
-use crate::i18n::{Value, keys};
 
 /// The retention window, in days, stamped on the `delete` record of a legacy asset whose record
 /// says it was deleted. The same default trash retention every other soft delete in this CLI
@@ -63,78 +60,67 @@ pub fn run(
 /// The line a workspace-opening verb prints when `open` found sidecars no provenance chain
 /// anchors; `None` for a library written entirely on the signed path.
 #[must_use]
-pub fn unmigrated_notice(bundle: &Bundle, unmigrated: &[UnmigratedSidecar]) -> Option<String> {
-    (!unmigrated.is_empty()).then(|| {
-        bundle.format(
-            keys::LIBRARY_MIGRATE_UNMIGRATED_NOTICE,
-            &[("count", Value::Int(unmigrated.len() as i64))],
-        )
-    })
+pub fn unmigrated_notice(unmigrated: &[UnmigratedSidecar]) -> Option<String> {
+    match unmigrated.len() {
+        0 => None,
+        1 => Some(
+            "1 sidecar in this library is unsigned, so its asset is hidden. Run `capsule library \
+             migrate` to admit it."
+                .to_owned(),
+        ),
+        count => Some(format!(
+            "{count} sidecars in this library are unsigned, so their assets are hidden. Run \
+             `capsule library migrate` to admit them."
+        )),
+    }
 }
 
-/// Localize why the migration refused one sidecar.
+/// The line a run that found nothing to do prints.
+const NOTHING_TO_MIGRATE: &str = "No unsigned sidecars to migrate.";
+
+/// Why the migration refused one sidecar.
 #[must_use]
-pub fn describe_skip(bundle: &Bundle, skip: &MigrationSkip) -> String {
-    let id = |asset_id: &uuid::Uuid| asset_id.to_string();
+pub fn describe_skip(skip: &MigrationSkip) -> String {
     match skip {
-        MigrationSkip::InvalidAssetId(name) => bundle.format(
-            keys::LIBRARY_MIGRATE_SKIP_INVALID_ASSET_ID,
-            &[("name", Value::Str(name))],
-        ),
-        MigrationSkip::UnknownShape => bundle.format(keys::LIBRARY_MIGRATE_SKIP_UNKNOWN_SHAPE, &[]),
-        MigrationSkip::Undecodable(detail) => bundle.format(
-            keys::LIBRARY_MIGRATE_SKIP_UNDECODABLE,
-            &[("detail", Value::Str(detail))],
-        ),
-        MigrationSkip::IdCollision(asset_id) => bundle.format(
-            keys::LIBRARY_MIGRATE_SKIP_ID_COLLISION,
-            &[("asset_id", Value::Str(&id(asset_id)))],
-        ),
-        MigrationSkip::OriginalMissing(asset_id) => bundle.format(
-            keys::LIBRARY_MIGRATE_SKIP_ORIGINAL_MISSING,
-            &[("asset_id", Value::Str(&id(asset_id)))],
-        ),
+        MigrationSkip::InvalidAssetId(name) => format!("the file name {name} is not an asset id"),
+        MigrationSkip::UnknownShape => {
+            "the sidecar is neither a signed nor an old unsigned record".to_owned()
+        }
+        MigrationSkip::Undecodable(detail) => {
+            format!("the old record does not decode: {detail}")
+        }
+        MigrationSkip::IdCollision(asset_id) => {
+            format!("asset {asset_id} is already a signed asset in this library")
+        }
+        MigrationSkip::OriginalMissing(asset_id) => {
+            format!("asset {asset_id}: no original media file beside the sidecar")
+        }
         MigrationSkip::HashMismatch {
             asset_id,
             recorded,
             actual,
-        } => bundle.format(
-            keys::LIBRARY_MIGRATE_SKIP_HASH_MISMATCH,
-            &[
-                ("asset_id", Value::Str(&id(asset_id))),
-                ("recorded", Value::Str(recorded)),
-                ("actual", Value::Str(actual)),
-            ],
+        } => format!(
+            "asset {asset_id}: the original's SHA-256 is {actual}, but the old record says \
+             {recorded}"
         ),
-        MigrationSkip::QuarantineConflict(asset_id) => bundle.format(
-            keys::LIBRARY_MIGRATE_SKIP_QUARANTINE_CONFLICT,
-            &[("asset_id", Value::Str(&id(asset_id)))],
+        MigrationSkip::QuarantineConflict(asset_id) => format!(
+            "asset {asset_id}: the quarantine folder already holds a different copy of this \
+             sidecar"
         ),
-        MigrationSkip::OutsideMonthBucket { asset_id, dir } => bundle.format(
-            keys::LIBRARY_MIGRATE_SKIP_OUTSIDE_MONTH_BUCKET,
-            &[
-                ("asset_id", Value::Str(&id(asset_id))),
-                ("dir", Value::Str(&dir.to_string_lossy())),
-            ],
+        MigrationSkip::OutsideMonthBucket { asset_id, dir } => format!(
+            "asset {asset_id}: {} is not a media/YYYY/YYYY-MM folder",
+            dir.to_string_lossy()
         ),
-        MigrationSkip::UnusualExtension { asset_id, ext } => bundle.format(
-            keys::LIBRARY_MIGRATE_SKIP_UNUSUAL_EXTENSION,
-            &[
-                ("asset_id", Value::Str(&id(asset_id))),
-                ("ext", Value::Str(ext)),
-            ],
+        MigrationSkip::UnusualExtension { asset_id, ext } => format!(
+            "asset {asset_id}: the original's extension {ext} is not a lowercase single segment"
         ),
-        MigrationSkip::AlbumReadOnly { asset_id, album_id } => bundle.format(
-            keys::LIBRARY_MIGRATE_SKIP_ALBUM_READ_ONLY,
-            &[
-                ("asset_id", Value::Str(&id(asset_id))),
-                ("album_id", Value::Str(&album_id.to_string())),
-            ],
+        MigrationSkip::AlbumReadOnly { asset_id, album_id } => format!(
+            "asset {asset_id}: album {album_id} is read-only on this device, so its pending \
+             delete could not be recorded"
         ),
-        MigrationSkip::Stranded(asset_id) => bundle.format(
-            keys::LIBRARY_MIGRATE_SKIP_STRANDED,
-            &[("asset_id", Value::Str(&id(asset_id)))],
-        ),
+        MigrationSkip::Stranded(asset_id) => {
+            format!("asset {asset_id}: signed sidecar without a provenance chain cannot be resumed")
+        }
     }
 }
 
@@ -142,7 +128,7 @@ pub fn describe_skip(bundle: &Bundle, skip: &MigrationSkip) -> String {
 /// per asset moved to trash, per derived stack, and per refused sidecar with its reason, then
 /// the summary. `remaining` is how many unanchored sidecars the closing rescan still found.
 #[must_use]
-pub fn render(bundle: &Bundle, report: &UnsignedMigrationReport, remaining: usize) -> String {
+pub fn render(report: &UnsignedMigrationReport, remaining: usize) -> String {
     let mut out = String::new();
     let mut line = |text: String| {
         out.push_str(&text);
@@ -150,39 +136,22 @@ pub fn render(bundle: &Bundle, report: &UnsignedMigrationReport, remaining: usiz
     };
 
     for asset_id in &report.migrated {
-        line(
-            bundle
-                .format(
-                    keys::LIBRARY_MIGRATE_MIGRATED_ROW,
-                    &[("asset_id", Value::Str(&asset_id.to_string()))],
-                )
-                .green()
-                .to_string(),
-        );
+        line(format!("Migrated {asset_id}").green().to_string());
     }
     for asset_id in &report.trashed {
-        line(bundle.format(
-            keys::LIBRARY_MIGRATE_TRASHED_ROW,
-            &[("asset_id", Value::Str(&asset_id.to_string()))],
+        line(format!(
+            "Moved {asset_id} to trash, as the old library had deleted it"
         ));
     }
     for stack_id in &report.stacks {
-        line(bundle.format(
-            keys::LIBRARY_MIGRATE_STACK_ROW,
-            &[("stack_id", Value::Str(&stack_id.to_string()))],
+        line(format!(
+            "Stack {stack_id} rebuilt from the old library's stack hints"
         ));
     }
     for (path, skip) in &report.skipped {
-        let reason = describe_skip(bundle, skip);
+        let reason = describe_skip(skip);
         line(
-            bundle
-                .format(
-                    keys::LIBRARY_MIGRATE_SKIPPED_ROW,
-                    &[
-                        ("path", Value::Str(&path.to_string_lossy())),
-                        ("reason", Value::Str(&reason)),
-                    ],
-                )
+            format!("Skipped {}: {reason}", path.to_string_lossy())
                 .yellow()
                 .to_string(),
         );
@@ -193,22 +162,15 @@ pub fn render(bundle: &Bundle, report: &UnsignedMigrationReport, remaining: usiz
         && report.skipped.is_empty()
         && remaining == 0;
     if nothing {
-        line(
-            bundle
-                .format(keys::LIBRARY_MIGRATE_NOTHING, &[])
-                .green()
-                .to_string(),
-        );
+        line(NOTHING_TO_MIGRATE.green().to_string());
     } else {
-        line(bundle.format(
-            keys::LIBRARY_MIGRATE_SUMMARY,
-            &[
-                ("migrated", Value::Int(report.migrated.len() as i64)),
-                ("trashed", Value::Int(report.trashed.len() as i64)),
-                ("stacks", Value::Int(report.stacks.len() as i64)),
-                ("skipped", Value::Int(report.skipped.len() as i64)),
-                ("remaining", Value::Int(remaining as i64)),
-            ],
+        line(format!(
+            "Migration: {} migrated, {} moved to trash, {} stack(s), {} skipped, {remaining} \
+             still unmigrated.",
+            report.migrated.len(),
+            report.trashed.len(),
+            report.stacks.len(),
+            report.skipped.len(),
         ));
     }
     out
@@ -222,10 +184,6 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-
-    fn en() -> Bundle {
-        Bundle::for_locale("en")
-    }
 
     /// One instance of every skip reason. (A variant added to `MigrationSkip` already fails
     /// to compile in [`describe_skip`]'s exhaustive `match`; add its row here with it.)
@@ -260,13 +218,11 @@ mod tests {
     }
 
     #[test]
-    fn every_skip_reason_renders_a_catalog_message_carrying_its_facts() {
-        let bundle = en();
+    fn every_skip_reason_renders_a_distinct_message_carrying_its_facts() {
         let mut seen = std::collections::BTreeSet::new();
         for skip in every_skip() {
-            let text = describe_skip(&bundle, &skip);
+            let text = describe_skip(&skip);
             assert!(!text.is_empty(), "{skip:?}");
-            assert!(!text.contains("cli.library"), "a raw key leaked: {text}");
             assert!(!text.contains('{'), "an unfilled placeholder: {text}");
             assert!(
                 seen.insert(text.clone()),
@@ -274,47 +230,42 @@ mod tests {
             );
         }
         let a = Uuid::from_u128(0xA1).to_string();
-        let mismatch = describe_skip(
-            &bundle,
-            &MigrationSkip::HashMismatch {
-                asset_id: Uuid::from_u128(0xA1),
-                recorded: "aa".into(),
-                actual: "bb".into(),
-            },
-        );
+        let mismatch = describe_skip(&MigrationSkip::HashMismatch {
+            asset_id: Uuid::from_u128(0xA1),
+            recorded: "aa".into(),
+            actual: "bb".into(),
+        });
         assert!(mismatch.contains(&a) && mismatch.contains("aa") && mismatch.contains("bb"));
-        let ext = describe_skip(
-            &bundle,
-            &MigrationSkip::UnusualExtension {
-                asset_id: Uuid::from_u128(0xA1),
-                ext: "JPG".into(),
-            },
-        );
+        let ext = describe_skip(&MigrationSkip::UnusualExtension {
+            asset_id: Uuid::from_u128(0xA1),
+            ext: "JPG".into(),
+        });
         assert!(ext.contains("JPG"), "{ext}");
     }
 
     #[test]
     fn the_notice_is_silent_for_a_signed_library_and_counts_otherwise() {
-        let bundle = en();
-        assert_eq!(unmigrated_notice(&bundle, &[]), None);
+        assert_eq!(unmigrated_notice(&[]), None);
         let one = UnmigratedSidecar {
             path: PathBuf::from("media/1970/1970-01/x.cbor"),
             asset_id: None,
             shape: UnmigratedShape::LegacyUnsigned,
         };
-        let text = unmigrated_notice(&bundle, &[one.clone(), one]).expect("a notice");
-        assert!(text.contains('2'), "{text}");
+        let single = unmigrated_notice(std::slice::from_ref(&one)).expect("a notice");
+        assert!(
+            single.starts_with("1 sidecar in this library is"),
+            "{single}"
+        );
+        let text = unmigrated_notice(&[one.clone(), one]).expect("a notice");
+        assert!(text.starts_with("2 sidecars in this library are"), "{text}");
         assert!(text.contains("capsule library migrate"), "{text}");
     }
 
     #[test]
     fn an_empty_run_with_nothing_remaining_says_there_was_nothing_to_do() {
-        let page = render(&en(), &UnsignedMigrationReport::default(), 0);
+        let page = render(&UnsignedMigrationReport::default(), 0);
         assert_eq!(page.lines().count(), 1, "{page}");
-        assert!(
-            page.contains(&en().format(keys::LIBRARY_MIGRATE_NOTHING, &[])),
-            "{page}"
-        );
+        assert!(page.contains(NOTHING_TO_MIGRATE), "{page}");
     }
 
     #[test]
@@ -331,7 +282,7 @@ mod tests {
                 MigrationSkip::InvalidAssetId("bad".into()),
             )],
         };
-        let page = render(&en(), &report, 1);
+        let page = render(&report, 1);
         let lines: Vec<&str> = page.lines().collect();
         assert_eq!(lines.len(), 6, "{page}");
         assert!(lines[0].contains(&migrated.to_string()), "{page}");
@@ -340,24 +291,12 @@ mod tests {
         assert!(lines[3].contains(&stack.to_string()), "{page}");
         assert!(
             lines[4].contains("bad.cbor")
-                && lines[4].contains(&describe_skip(
-                    &en(),
-                    &MigrationSkip::InvalidAssetId("bad".into())
-                )),
+                && lines[4].contains(&describe_skip(&MigrationSkip::InvalidAssetId("bad".into()))),
             "{page}"
         );
         assert_eq!(
             lines[5],
-            en().format(
-                keys::LIBRARY_MIGRATE_SUMMARY,
-                &[
-                    ("migrated", Value::Int(2)),
-                    ("trashed", Value::Int(1)),
-                    ("stacks", Value::Int(1)),
-                    ("skipped", Value::Int(1)),
-                    ("remaining", Value::Int(1)),
-                ],
-            )
+            "Migration: 2 migrated, 1 moved to trash, 1 stack(s), 1 skipped, 1 still unmigrated."
         );
     }
 
@@ -387,11 +326,8 @@ mod tests {
 
     #[test]
     fn a_run_that_left_sidecars_behind_reports_a_summary_not_nothing() {
-        let page = render(&en(), &UnsignedMigrationReport::default(), 3);
-        assert!(
-            !page.contains(&en().format(keys::LIBRARY_MIGRATE_NOTHING, &[])),
-            "{page}"
-        );
+        let page = render(&UnsignedMigrationReport::default(), 3);
+        assert!(!page.contains(NOTHING_TO_MIGRATE), "{page}");
         assert!(page.contains('3'), "{page}");
     }
 }

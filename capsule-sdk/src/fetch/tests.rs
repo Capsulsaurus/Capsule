@@ -1324,3 +1324,128 @@ mod admission {
         );
     }
 }
+
+// ─── Streamed fetch into a sink ──────────────────────────────────────────────
+
+/// A source serving `data`, recording every `max_len` the client asked for.
+struct RecordingSource {
+    data: Vec<u8>,
+    asked: Mutex<Vec<Option<u64>>>,
+}
+
+impl RecordingSource {
+    fn new(data: Vec<u8>) -> Self {
+        Self {
+            data,
+            asked: Mutex::new(Vec::new()),
+        }
+    }
+}
+
+impl BlobSource for RecordingSource {
+    async fn get_range(&self, _hash: &str, start: u64, max_len: Option<u64>) -> RangeOutcome {
+        self.asked.lock().unwrap().push(max_len);
+        let start = start as usize;
+        let end = max_len.map_or(self.data.len(), |m| {
+            (start + m as usize).min(self.data.len())
+        });
+        RangeOutcome::Complete {
+            bytes: self.data[start..end].to_vec(),
+        }
+    }
+}
+
+/// An original streams through `fetch_into` and a `StreamDecryptor` back to its plaintext,
+/// every request bounded by the class's window — the restore path, in bounded memory.
+#[tokio::test]
+async fn fetch_into_restores_an_original_in_bounded_windows() {
+    use capsule_core::crypto::encryption::{
+        PLAINTEXT_CHUNK, StreamDecryptor, encrypt_asset_vec_full,
+    };
+
+    let key = [0x24; 32];
+    let plaintext = bytes(PLAINTEXT_CHUNK * 6 + 99);
+    let (meta, ciphertext) = encrypt_asset_vec_full(&key, &plaintext);
+    let source = RecordingSource::new(ciphertext.clone());
+
+    let mut restore = StreamDecryptor::new(&key, &meta.nonce_prefix, Vec::new());
+    RangedFetcher::new(ConnectionClass::Adverse)
+        .fetch_into(
+            &source,
+            &sha(&ciphertext),
+            ciphertext.len() as u64,
+            &mut restore,
+        )
+        .await
+        .expect("the original fetches");
+    assert_eq!(restore.finish().unwrap(), plaintext);
+
+    let asked = source.asked.lock().unwrap().clone();
+    assert!(asked.len() > 1, "more than one window: {asked:?}");
+    assert!(
+        asked
+            .iter()
+            .all(|m| m.is_some_and(|m| m <= crate::net::ADVERSE_RANGE_WINDOW)),
+        "every request is bounded by the adverse window: {asked:?}"
+    );
+}
+
+/// An unmetered link fetches the open-ended remainder into a buffer, but a streamed fetch
+/// still bounds every request by [`SINK_WINDOW`]: one HTTP response is what the client holds.
+#[tokio::test]
+async fn fetch_into_bounds_an_unmetered_request() {
+    let data = bytes(10_000);
+    let source = RecordingSource::new(data.clone());
+    let mut sink = Vec::new();
+    fetch_blob_into(&source, &sha(&data), data.len() as u64, &mut sink)
+        .await
+        .unwrap();
+    assert_eq!(sink, data);
+    assert_eq!(*source.asked.lock().unwrap(), vec![Some(10_000)]);
+
+    // The buffered path is unchanged: the open-ended remainder.
+    let buffered = RecordingSource::new(data.clone());
+    fetch_blob(&buffered, &sha(&data), data.len() as u64)
+        .await
+        .unwrap();
+    assert_eq!(*buffered.asked.lock().unwrap(), vec![None]);
+}
+
+#[tokio::test]
+async fn fetch_into_checks_the_content_address() {
+    let source = CorruptingSource { len: 512 };
+    let mut sink = Vec::new();
+    let err = fetch_blob_into(&source, &sha(&bytes(512)), 512, &mut sink)
+        .await
+        .expect_err("integrity failure");
+    assert!(matches!(err, FetchError::IntegrityFailed { .. }), "{err:?}");
+}
+
+/// A sink that refuses bytes — here a decryptor meeting a chunk that does not authenticate —
+/// stops the fetch with [`FetchError::Sink`].
+#[tokio::test]
+async fn fetch_into_surfaces_a_refusing_sink() {
+    use capsule_core::crypto::encryption::{
+        PLAINTEXT_CHUNK, StreamDecryptor, encrypt_asset_vec_full,
+    };
+
+    let key = [0x24; 32];
+    let (meta, mut ciphertext) = encrypt_asset_vec_full(&key, &bytes(PLAINTEXT_CHUNK * 3));
+    ciphertext[7] ^= 1;
+    // Addressed as the tampered bytes, so only the AEAD can catch it.
+    let source = RecordingSource::new(ciphertext.clone());
+    let mut restore = StreamDecryptor::new(&key, &meta.nonce_prefix, Vec::new());
+    let err = RangedFetcher::new(ConnectionClass::Adverse)
+        .fetch_into(
+            &source,
+            &sha(&ciphertext),
+            ciphertext.len() as u64,
+            &mut restore,
+        )
+        .await
+        .expect_err("the decryptor refuses the chunk");
+    let FetchError::Sink(io) = err else {
+        panic!("expected a sink error, got {err:?}");
+    };
+    assert_eq!(io.kind(), std::io::ErrorKind::InvalidData);
+}
