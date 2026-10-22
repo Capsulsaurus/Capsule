@@ -34,6 +34,12 @@
 //! (the T2 rung of the tier ladder). A client that has pulled only the T0 index rung *holds*
 //! the entry; it does not yet *apply* it.
 //!
+//! An original too large to hold is applied as a [`RemoteHead`], which names the ciphertext by
+//! its SHA-256 instead of carrying it, through [`verify_asset_hashed`] — the same twelve steps
+//! over a digest. The digest is a claim until the bytes are read:
+//! [`Workspace::open_remote_original_from`] hashes the ciphertext it streams and opens nothing
+//! unless that hash is the one the chokepoint accepted.
+//!
 //! # Transport independence
 //!
 //! Nothing below names a transport. The gRPC sync feed, a REST re-fronting of the same feed, a
@@ -77,18 +83,23 @@
 //! [provenance.md § Chained, Append-Only Structure]: https://docs/design/cryptography/provenance/#chained-append-only-structure
 //! [provenance.md § Physical Storage]: https://docs/design/cryptography/provenance/#physical-storage
 //! [`verify_asset`]: crate::crypto::verify_asset::verify_asset
+//! [`verify_asset_hashed`]: crate::crypto::verify_asset::verify_asset_hashed
 //! [`VerifyOutcome`]: crate::crypto::verify_asset::VerifyOutcome
+
+use std::io::{Read, Write};
 
 use uuid::Uuid;
 
-use super::{Result, Workspace};
-use crate::crypto::encryption::{blob_ciphertext_hash, blob_nonce, open_blob};
-use crate::crypto::hash::Hash32;
+use super::{LifecycleError, Result, Workspace};
+use crate::crypto::encryption::{
+    CIPHERTEXT_CHUNK, StreamDecryptor, StreamError, blob_ciphertext_hash, blob_nonce, open_blob,
+};
+use crate::crypto::hash::{Hash32, Sha256Hasher, hash_bytes};
 use crate::crypto::keys::Amk;
 use crate::crypto::provenance::{Action, AssetManifest, ProvenanceRecord, RecordDecodeError};
 use crate::crypto::verify_asset::{
     BindingReject, PendingReason, RejectReason, VerifyOutcome, diagnose_misattributed_signer,
-    verify_asset,
+    verify_asset_hashed,
 };
 use crate::sidecar::sidecar_v1::{SIDECAR_SCHEMA_V1, SidecarV1};
 
@@ -98,7 +109,8 @@ use crate::sidecar::sidecar_v1::{SIDECAR_SCHEMA_V1, SidecarV1};
 #[derive(Debug, Clone, Copy)]
 pub struct RemoteEntry<'a> {
     /// The album the feed says this entry belongs to. Cross-checked against the manifest by
-    /// [`verify_asset`] itself ([`RejectReason::WrongAlbum`]), never trusted on its own.
+    /// [`verify_asset`](crate::crypto::verify_asset::verify_asset) itself
+    /// ([`RejectReason::WrongAlbum`]), never trusted on its own.
     pub album_id: Uuid,
     /// The signed `AssetManifest` as **opaque canonical CBOR**, carried verbatim.
     pub manifest_cbor: &'a [u8],
@@ -107,7 +119,8 @@ pub struct RemoteEntry<'a> {
     /// The asset's original ciphertext — required for the chokepoint's content-integrity step.
     pub original_ciphertext: &'a [u8],
     /// The provenance head **the receiving catalog** holds for this asset, or `None` if it has
-    /// never seen it. Passed straight through to [`verify_asset`]'s parameter of the same name,
+    /// never seen it. Passed straight through to
+    /// [`verify_asset`](crate::crypto::verify_asset::verify_asset)'s parameter of the same name,
     /// which is what decides replay ([`RejectReason::Replayed`]) and fork
     /// ([`RejectReason::ForgedChain`]).
     ///
@@ -115,6 +128,45 @@ pub struct RemoteEntry<'a> {
     /// catalog that tracks synced assets is the client's, not this workspace's asset map — an
     /// iOS gallery, a CLI report, and a peering reconciler each hold their own head. Feed back
     /// [`RemoteAssetFacts::provenance_head`] after applying.
+    pub local_chain_head: Option<Hash32>,
+}
+
+impl<'a> RemoteEntry<'a> {
+    /// This entry with its original named by the SHA-256 of
+    /// [`original_ciphertext`](Self::original_ciphertext) — a digest these bytes back, so the
+    /// head is no weaker.
+    #[must_use]
+    pub fn head(&self) -> RemoteHead<'a> {
+        RemoteHead {
+            album_id: self.album_id,
+            manifest_cbor: self.manifest_cbor,
+            metadata_blob: self.metadata_blob,
+            original_ciphertext_hash: hash_bytes(self.original_ciphertext),
+            local_chain_head: self.local_chain_head,
+        }
+    }
+}
+
+/// A [`RemoteEntry`] whose original ciphertext is named by its SHA-256 rather than carried: what
+/// a caller holds when the original is too large to keep in memory — a restore that streams it
+/// to disk, say.
+///
+/// [`original_ciphertext_hash`](Self::original_ciphertext_hash) stands in for the bytes at the
+/// chokepoint's content-integrity step, so on its own it is a claim. Applying a head therefore
+/// vouches for the ciphertext only once something has hashed the bytes and found this digest:
+/// [`Workspace::open_remote_original_from`] does, over exactly the bytes it decrypts.
+#[derive(Debug, Clone, Copy)]
+pub struct RemoteHead<'a> {
+    /// As [`RemoteEntry::album_id`].
+    pub album_id: Uuid,
+    /// As [`RemoteEntry::manifest_cbor`].
+    pub manifest_cbor: &'a [u8],
+    /// As [`RemoteEntry::metadata_blob`].
+    pub metadata_blob: &'a [u8],
+    /// The SHA-256 of the asset's original ciphertext: the content address the chokepoint checks
+    /// against the manifest's `ciphertext_hash`.
+    pub original_ciphertext_hash: Hash32,
+    /// As [`RemoteEntry::local_chain_head`].
     pub local_chain_head: Option<Hash32>,
 }
 
@@ -139,9 +191,11 @@ pub enum QuarantineReason {
     /// there is nothing to verify it against. Not a rejection of the entry — a statement that
     /// this device cannot adjudicate it.
     UnknownAlbum(Uuid),
-    /// [`verify_asset`] terminally rejected the manifest.
+    /// [`verify_asset`](crate::crypto::verify_asset::verify_asset) terminally rejected the
+    /// manifest.
     Rejected(RejectReason),
-    /// [`verify_asset`] rejected the manifest as [`RejectReason::BadDeviceSig`], and the
+    /// [`verify_asset`](crate::crypto::verify_asset::verify_asset) rejected the manifest as
+    /// [`RejectReason::BadDeviceSig`], and the
     /// rejection is the **legacy inherited-device defect** (issue #475), not a forgery: an older
     /// client's continuation names `named_device` (inherited from the chain head) but was signed
     /// by `signing_device`, another device of the same account, and every other step of the
@@ -175,7 +229,8 @@ pub enum QuarantineReason {
 
 /// The verified facts one remote entry contributes to the receiving catalog.
 ///
-/// Every field is downstream of an `Accept` from [`verify_asset`] plus — when the action carries
+/// Every field is downstream of an `Accept` from
+/// [`verify_asset`](crate::crypto::verify_asset::verify_asset) plus — when the action carries
 /// metadata — a bound, correctly signed sidecar, so a client may persist all of it without
 /// re-checking anything.
 #[derive(Debug, Clone, PartialEq)]
@@ -237,7 +292,8 @@ impl SyncApplyOutcome {
 }
 
 impl Workspace {
-    /// Apply one remote feed entry: verify it through the [`verify_asset`] chokepoint, bind and
+    /// Apply one remote feed entry: verify it through the
+    /// [`verify_asset`](crate::crypto::verify_asset::verify_asset) chokepoint, bind and
     /// open its metadata blob, and project the result into [`RemoteAssetFacts`].
     ///
     /// Read-only with respect to this workspace — it decides *what is true* and leaves *what to
@@ -249,8 +305,24 @@ impl Workspace {
     /// A refused **entry** is never an `Err` — it is a [`SyncApplyOutcome::Quarantined`],
     /// because a hostile feed must not be able to abort a whole sync by handing over one bad
     /// row.
-    #[tracing::instrument(skip_all, fields(album_id = %entry.album_id))]
     pub fn apply_remote_entry(&self, entry: RemoteEntry<'_>) -> Result<SyncApplyOutcome> {
+        self.apply_remote_head(entry.head())
+    }
+
+    /// [`apply_remote_entry`](Self::apply_remote_entry) for an entry whose original is named by
+    /// its SHA-256 ([`RemoteHead`]): the same chokepoint, metadata binding and verdicts, with
+    /// the content-integrity step run against the digest.
+    ///
+    /// An `Applied` verdict here attests the manifest and its metadata, and that the manifest
+    /// commits to `original_ciphertext_hash`; it says nothing about any bytes until the caller
+    /// has hashed them to that digest. [`open_remote_original_from`](Self::open_remote_original_from)
+    /// is the caller that does.
+    ///
+    /// # Errors
+    ///
+    /// As [`apply_remote_entry`](Self::apply_remote_entry).
+    #[tracing::instrument(skip_all, fields(album_id = %entry.album_id))]
+    pub fn apply_remote_head(&self, entry: RemoteHead<'_>) -> Result<SyncApplyOutcome> {
         use QuarantineReason::{
             Binding, LegacyInheritedDevice, MalformedManifest, MalformedSidecar, Rejected,
             SidecarSignature, UnknownAlbum, UnsupportedRecordVersion,
@@ -322,9 +394,9 @@ impl Workspace {
         let authority = self.authority(&entry.album_id)?;
 
         // ── The chokepoint. Not re-implemented, not partially applied. ─────────────────
-        match verify_asset(
+        match verify_asset_hashed(
             &manifest,
-            entry.original_ciphertext,
+            &entry.original_ciphertext_hash,
             &self.directory,
             authority,
             entry.local_chain_head,
@@ -338,7 +410,7 @@ impl Workspace {
                 // Tell the pre-#475 continuation apart from a forgery. Either way it is refused.
                 if let Some(signing_device) = diagnose_misattributed_signer(
                     &manifest,
-                    entry.original_ciphertext,
+                    &entry.original_ciphertext_hash,
                     &self.directory,
                     authority,
                     entry.local_chain_head,
@@ -487,9 +559,40 @@ impl Workspace {
     /// As [`apply_remote_entry`](Self::apply_remote_entry): only a failure of this workspace
     /// itself. A file key that cannot be recovered or bytes that do not open are verdicts
     /// ([`RemoteOriginal::Undecryptable`], [`RemoteOriginal::DigestMismatch`]), never errors.
-    #[tracing::instrument(skip_all, fields(album_id = %entry.album_id))]
     pub fn open_remote_original(&self, entry: RemoteEntry<'_>) -> Result<RemoteOriginal> {
-        let facts = match self.apply_remote_entry(entry)? {
+        self.open_remote_original_from(entry.head(), entry.original_ciphertext, Vec::new())
+    }
+
+    /// [`open_remote_original`](Self::open_remote_original) in bounded memory: the original's
+    /// ciphertext is read from `ciphertext` and its plaintext written to `plaintext` one STREAM
+    /// chunk at a time, so opening an original of any size holds a few chunks of it.
+    ///
+    /// The checks are [`open_remote_original`](Self::open_remote_original)'s, in an order a
+    /// stream allows. The head goes through the chokepoint first
+    /// ([`apply_remote_head`](Self::apply_remote_head)), against its claimed
+    /// `original_ciphertext_hash`; then every ciphertext byte read is hashed while it is
+    /// decrypted, and the original opens only if that hash is the manifest's `ciphertext_hash`,
+    /// every chunk authenticated, and the plaintext hashes to the signed sidecar's digest.
+    /// Bytes that are not the committed ciphertext are refused as the chokepoint refuses them
+    /// ([`RejectReason::CiphertextHashMismatch`]), whichever check they fail first.
+    ///
+    /// Plaintext reaches `plaintext` before those checks finish, so the writer holds
+    /// **unverified** bytes until this returns [`RemoteOriginal::Opened`], which hands the writer
+    /// back. On any other outcome the caller must discard what it wrote. An entry that does not
+    /// apply is refused before anything is read or written.
+    ///
+    /// # Errors
+    ///
+    /// As [`open_remote_original`](Self::open_remote_original), plus [`LifecycleError::Io`] when
+    /// `ciphertext` cannot be read or `plaintext` cannot be written.
+    #[tracing::instrument(skip_all, fields(album_id = %entry.album_id))]
+    pub fn open_remote_original_from<R: Read, W: Write>(
+        &self,
+        entry: RemoteHead<'_>,
+        mut ciphertext: R,
+        plaintext: W,
+    ) -> Result<RemoteOriginal<W>> {
+        let facts = match self.apply_remote_head(entry)? {
             SyncApplyOutcome::Applied(facts) => facts,
             refused => return Ok(RemoteOriginal::Refused(refused)),
         };
@@ -507,19 +610,73 @@ impl Workspace {
                 return Ok(RemoteOriginal::Undecryptable { facts });
             }
         };
-        let plaintext = match crate::crypto::encryption::decrypt_asset_vec(
+        // One pass over the ciphertext: every byte read is hashed, and fed to the decryptor
+        // until a chunk fails authentication. The rest is still read and hashed, so bytes that
+        // are not the committed ciphertext earn the chokepoint's verdict, not a decrypt failure.
+        let mut ciphertext_hash = Sha256Hasher::new();
+        let mut decryptor = Some(StreamDecryptor::new(
             &file_key,
             &core.nonce_prefix,
-            entry.original_ciphertext,
-        ) {
-            Ok(plaintext) => plaintext,
-            Err(error) => {
-                tracing::warn!(asset_id = %facts.asset_id, %error, "open-remote: the original failed authentication");
+            DigestWriter::new(plaintext),
+        ));
+        let mut window = vec![0u8; CIPHERTEXT_CHUNK];
+        let mut read: u64 = 0;
+        loop {
+            let n = match ciphertext.read(&mut window) {
+                Ok(0) => break,
+                Ok(n) => n,
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(error) => {
+                    return Err(LifecycleError::Io(format!(
+                        "reading the original's ciphertext: {error}"
+                    )));
+                }
+            };
+            ciphertext_hash.update(&window[..n]);
+            read += n as u64;
+            if let Some(open) = decryptor.as_mut() {
+                match open.update(&window[..n]) {
+                    Ok(()) => {}
+                    Err(StreamError::Auth(chunk)) => {
+                        tracing::warn!(asset_id = %facts.asset_id, chunk, "open-remote: a chunk of the original failed authentication");
+                        decryptor = None;
+                    }
+                    Err(StreamError::Io(error)) => {
+                        return Err(LifecycleError::Io(format!(
+                            "writing the original's plaintext: {error}"
+                        )));
+                    }
+                }
+            }
+        }
+        if ciphertext_hash.finalize() != core.ciphertext_hash {
+            tracing::warn!(
+                asset_id = %facts.asset_id,
+                bytes = read,
+                "open-remote: the streamed ciphertext does not hash to the manifest's content address"
+            );
+            return Ok(RemoteOriginal::Refused(SyncApplyOutcome::Quarantined(
+                QuarantineReason::Rejected(RejectReason::CiphertextHashMismatch),
+            )));
+        }
+        let Some(decryptor) = decryptor else {
+            return Ok(RemoteOriginal::Undecryptable { facts });
+        };
+        let opened = match decryptor.finish() {
+            Ok(opened) => opened,
+            Err(StreamError::Auth(chunk)) => {
+                tracing::warn!(asset_id = %facts.asset_id, chunk, "open-remote: the original's last chunk failed authentication");
                 return Ok(RemoteOriginal::Undecryptable { facts });
             }
+            Err(StreamError::Io(error)) => {
+                return Err(LifecycleError::Io(format!(
+                    "writing the original's plaintext: {error}"
+                )));
+            }
         };
+        let (plaintext, digest, written) = opened.into_parts();
         if let Some(sidecar) = &facts.sidecar
-            && crate::crypto::hash::hash_bytes(&plaintext) != sidecar.hash
+            && digest != sidecar.hash
         {
             tracing::warn!(
                 asset_id = %facts.asset_id,
@@ -529,25 +686,64 @@ impl Workspace {
         }
         tracing::debug!(
             asset_id = %facts.asset_id,
-            bytes = plaintext.len(),
+            ciphertext_bytes = read,
+            plaintext_bytes = written,
             "open-remote: original verified and decrypted"
         );
         Ok(RemoteOriginal::Opened { facts, plaintext })
     }
 }
 
-/// How [`Workspace::open_remote_original`] resolved.
+/// A writer that hashes and counts what passes through it to `inner`.
+struct DigestWriter<W> {
+    inner: W,
+    hasher: Sha256Hasher,
+    written: u64,
+}
+
+impl<W> DigestWriter<W> {
+    fn new(inner: W) -> Self {
+        Self {
+            inner,
+            hasher: Sha256Hasher::new(),
+            written: 0,
+        }
+    }
+
+    /// The inner writer, the SHA-256 of everything written, and its length.
+    fn into_parts(self) -> (W, Hash32, u64) {
+        (self.inner, self.hasher.finalize(), self.written)
+    }
+}
+
+impl<W: Write> Write for DigestWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let n = self.inner.write(buf)?;
+        self.hasher.update(&buf[..n]);
+        self.written += n as u64;
+        Ok(n)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+/// How [`Workspace::open_remote_original`] (`P` = `Vec<u8>`) or
+/// [`Workspace::open_remote_original_from`] (`P` = the caller's writer) resolved.
 #[derive(Debug, Clone, PartialEq)]
-pub enum RemoteOriginal {
-    /// Verified end to end and decrypted; when the head carries a sidecar, `plaintext` hashes
+pub enum RemoteOriginal<P = Vec<u8>> {
+    /// Verified end to end and decrypted; when the head carries a sidecar, the plaintext hashes
     /// to its signed digest.
     Opened {
         /// The verified facts of the entry.
         facts: Box<RemoteAssetFacts>,
-        /// The original's bytes.
-        plaintext: Vec<u8>,
+        /// The original's bytes, or the writer they were streamed into.
+        plaintext: P,
     },
-    /// The entry did not apply (held pending or quarantined); nothing was decrypted.
+    /// The entry did not apply (held pending or quarantined), or the ciphertext streamed to
+    /// [`Workspace::open_remote_original_from`] is not the one its head named
+    /// ([`RejectReason::CiphertextHashMismatch`]). Nothing decrypted is to be kept.
     Refused(SyncApplyOutcome),
     /// The entry applied, but its file key could not be recovered or its ciphertext failed
     /// authentication under it.
@@ -1029,6 +1225,149 @@ mod tests {
             RemoteOriginal::Refused(SyncApplyOutcome::Quarantined(
                 QuarantineReason::UnknownAlbum(album)
             )),
+        );
+    }
+
+    /// A workspace holding one imported asset of `len` bytes — several STREAM chunks — plus its
+    /// wire bytes.
+    fn seeded_large(lib: &TempDir, src: &TempDir, len: usize) -> (Workspace, Uuid, Uuid, Wire) {
+        let img = src.path().join("large.jpg");
+        let mut bytes = b"\xFF\xD8\xFF".to_vec();
+        bytes.extend((0..len).map(|i| (i as u8).wrapping_mul(13)));
+        std::fs::write(&img, bytes).unwrap();
+        let mut ws = fast_workspace(lib.path());
+        let album = ws.create_album("Trip").unwrap();
+        let asset = ws.import_asset(album, &img).unwrap();
+        let bundle = ws.upload_bundle(&asset).unwrap();
+        let wire = Wire {
+            manifest_cbor: bundle.provenance_blob.clone(),
+            metadata_blob: bundle.metadata_blob.clone(),
+            ciphertext: bundle.original.to_vec().unwrap(),
+        };
+        (ws, album, asset, wire)
+    }
+
+    /// A reader that records the largest read it was asked for.
+    struct WidestRead<R> {
+        inner: R,
+        widest: usize,
+    }
+
+    impl<R: Read> Read for WidestRead<R> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            self.widest = self.widest.max(buf.len());
+            self.inner.read(buf)
+        }
+    }
+
+    /// A writer that records the largest write it was handed.
+    #[derive(Debug, Default, PartialEq)]
+    struct WidestWrite {
+        bytes: Vec<u8>,
+        widest: usize,
+    }
+
+    impl Write for WidestWrite {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.widest = self.widest.max(buf.len());
+            self.bytes.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// The streamed open: an original spanning several STREAM chunks is read and written one
+    /// chunk at a time, and the writer comes back holding exactly the imported bytes.
+    #[test]
+    fn a_streamed_original_opens_one_chunk_at_a_time() {
+        use crate::crypto::encryption::PLAINTEXT_CHUNK;
+
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let (ws, album, asset, wire) = seeded_large(&lib, &src, 4 * PLAINTEXT_CHUNK + 17);
+        let mut reader = WidestRead {
+            inner: wire.ciphertext.as_slice(),
+            widest: 0,
+        };
+
+        let opened = ws
+            .open_remote_original_from(
+                entry(album, &wire, None).head(),
+                &mut reader,
+                WidestWrite::default(),
+            )
+            .unwrap();
+        let RemoteOriginal::Opened { facts, plaintext } = opened else {
+            panic!("expected the original to open, got {opened:?}");
+        };
+        assert_eq!(facts.asset_id, asset);
+        assert_eq!(plaintext.bytes, ws.read_plaintext(&asset).unwrap());
+        assert!(
+            reader.widest <= CIPHERTEXT_CHUNK,
+            "read {} bytes at once",
+            reader.widest
+        );
+        assert!(
+            plaintext.widest <= PLAINTEXT_CHUNK,
+            "wrote {} bytes at once",
+            plaintext.widest
+        );
+    }
+
+    /// The head's digest is a claim the stream must honour: bytes other than the committed
+    /// ciphertext are refused with the chokepoint's own verdict, whether a chunk fails
+    /// authentication first (a flipped byte) or the stream simply ends early (truncation).
+    #[test]
+    fn a_stream_that_is_not_the_named_ciphertext_is_refused() {
+        use crate::crypto::encryption::PLAINTEXT_CHUNK;
+
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let (ws, album, _asset, wire) = seeded_large(&lib, &src, 3 * PLAINTEXT_CHUNK);
+        let head = entry(album, &wire, None).head();
+        let mismatch = RemoteOriginal::Refused(SyncApplyOutcome::Quarantined(
+            QuarantineReason::Rejected(RejectReason::CiphertextHashMismatch),
+        ));
+
+        let mut flipped = wire.ciphertext.clone();
+        flipped[CIPHERTEXT_CHUNK + 5] ^= 0x01;
+        let truncated = &wire.ciphertext[..wire.ciphertext.len() - CIPHERTEXT_CHUNK];
+        for (what, stream) in [("flipped", flipped.as_slice()), ("truncated", truncated)] {
+            assert_eq!(
+                ws.open_remote_original_from(head, stream, Vec::new())
+                    .unwrap(),
+                mismatch,
+                "{what}"
+            );
+        }
+    }
+
+    /// A head whose digest is not the manifest's is refused at the chokepoint, before a byte of
+    /// the stream is read.
+    #[test]
+    fn a_head_naming_other_bytes_is_refused_before_reading() {
+        struct Unread;
+        impl Read for Unread {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                panic!("a refused head reads nothing");
+            }
+        }
+
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let (ws, album, _asset, wire) = seeded(&lib, &src);
+        let mut head = entry(album, &wire, None).head();
+        head.original_ciphertext_hash = hash_bytes(b"some other blob");
+
+        assert_eq!(
+            ws.open_remote_original_from(head, Unread, Vec::new())
+                .unwrap(),
+            RemoteOriginal::Refused(SyncApplyOutcome::Quarantined(QuarantineReason::Rejected(
+                RejectReason::CiphertextHashMismatch
+            ))),
         );
     }
 
