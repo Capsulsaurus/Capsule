@@ -27,8 +27,9 @@ pub use cache::{EvictionReport, cache_sweep};
 pub use error::LibraryError;
 pub use init::init_library;
 pub use key_pins::{
-    KeyPinError, KeyPinOutcome, PinnedKeys, attestation_key_pins_path,
-    load_pinned_attestation_keys, pin_attestation_keys,
+    KeyPinError, KeyPinOutcome, KeyPinRestoreOutcome, PinnedKeys, attestation_key_pins_path,
+    load_pinned_attestation_keys, pin_attestation_keys, read_attestation_key_pins,
+    restore_attestation_key_pins,
 };
 pub use library::Library;
 pub use open::open_library;

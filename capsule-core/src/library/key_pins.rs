@@ -25,6 +25,15 @@
 //! versioned map from a server's canonical origin (`scheme://host[:port]`, as the caller
 //! derives it) to the pinned keys' raw bytes. It is rewritten through a temporary sibling and a
 //! rename, so a crash mid-write leaves the previous pin whole.
+//!
+//! # Backup and restore
+//!
+//! The pin rides the backup artifact verbatim ([`read_attestation_key_pins`]), so a restored
+//! library keeps checking receipts under the keys it pinned rather than trusting whatever the
+//! server publishes first after the restore. [`restore_attestation_key_pins`] folds a carried
+//! pin into the library by the same append-only rule a fetch obeys, per origin: the union is
+//! kept only where one history extends the other, and two histories that each hold a key the
+//! other lacks are [`KeyPinError::HistoriesDiverge`], with neither overwritten.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -97,6 +106,22 @@ pub enum KeyPinError {
         /// How many keys were pinned.
         pinned: usize,
     },
+    /// A backup carries a pinned history for an origin that neither extends nor is extended by
+    /// the one this library pins: each holds a key the other lacks. Neither pin is trusted over
+    /// the other, so the restore is refused and the library's pin is left exactly as it was.
+    #[error(
+        "the backup pins an attestation-key history for {origin} that diverges from this \
+         library's: the backup holds {only_carried} key(s) this library does not pin, and this \
+         library pins {only_local} key(s) the backup lacks"
+    )]
+    HistoriesDiverge {
+        /// The canonical origin whose two pinned histories diverge.
+        origin: String,
+        /// How many keys only the backup's pin holds.
+        only_carried: usize,
+        /// How many keys only this library's pin holds.
+        only_local: usize,
+    },
     /// The server published no attestation key at all, so there is nothing to pin and nothing
     /// a receipt could verify under.
     #[error("the server at {origin} publishes no attestation key")]
@@ -128,14 +153,26 @@ pub enum KeyPinError {
     Io(String),
 }
 
+/// The pin file's raw bytes, or `None` when it is absent or empty.
+fn read_pin_bytes(root: &Path) -> Result<Option<Vec<u8>>, KeyPinError> {
+    match fs::read(attestation_key_pins_path(root)) {
+        Ok(bytes) if bytes.is_empty() => Ok(None),
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(KeyPinError::Io(e.to_string())),
+    }
+}
+
 fn load_pin_file(root: &Path) -> Result<PinFile, KeyPinError> {
-    let path = attestation_key_pins_path(root);
-    let file: PinFile = match fs::read(&path) {
-        Ok(bytes) if bytes.is_empty() => return Ok(empty_pin_file()),
-        Ok(bytes) => cbor::from_slice(&bytes)?,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(empty_pin_file()),
-        Err(e) => return Err(KeyPinError::Io(e.to_string())),
-    };
+    match read_pin_bytes(root)? {
+        Some(bytes) => decode_pin_file(&bytes),
+        None => Ok(empty_pin_file()),
+    }
+}
+
+/// Decode pin-file bytes, refusing another schema version and any key that does not decode.
+fn decode_pin_file(bytes: &[u8]) -> Result<PinFile, KeyPinError> {
+    let file: PinFile = cbor::from_slice(bytes)?;
     if file.version != PIN_FILE_VERSION {
         return Err(KeyPinError::UnsupportedVersion {
             found: file.version,
@@ -153,13 +190,17 @@ fn empty_pin_file() -> PinFile {
 }
 
 fn store_pin_file(root: &Path, file: &PinFile) -> Result<(), KeyPinError> {
+    store_pin_bytes(root, &cbor::to_canonical_vec(file)?)
+}
+
+/// Write `bytes` as the pin file through a temporary sibling and a rename.
+fn store_pin_bytes(root: &Path, bytes: &[u8]) -> Result<(), KeyPinError> {
     let path = attestation_key_pins_path(root);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| KeyPinError::Io(e.to_string()))?;
     }
-    let bytes = cbor::to_canonical_vec(file)?;
     let tmp = tmp_path(&path);
-    fs::write(&tmp, &bytes).map_err(|e| KeyPinError::Io(e.to_string()))?;
+    fs::write(&tmp, bytes).map_err(|e| KeyPinError::Io(e.to_string()))?;
     fs::rename(&tmp, &path).map_err(|e| KeyPinError::Io(e.to_string()))?;
     Ok(())
 }
@@ -272,6 +313,130 @@ pub fn pin_attestation_keys(
     Ok(PinnedKeys {
         outcome: KeyPinOutcome::Extended { added: added_count },
         keys,
+    })
+}
+
+/// What folding a backup's pinned histories into this library did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyPinRestoreOutcome {
+    /// This library pinned nothing; the backup's pin file was written byte for byte.
+    Restored {
+        /// How many origins the restored pin covers.
+        origins: usize,
+    },
+    /// Every history the backup carries is already pinned here, or extended by the pin here:
+    /// nothing was written.
+    Unchanged,
+    /// This library's pin was extended with what the backup carries.
+    Merged {
+        /// Origins the backup pins that this library had never contacted.
+        origins_added: usize,
+        /// Keys appended to histories this library already pinned.
+        keys_added: usize,
+    },
+}
+
+/// Refuse a pin file holding a key that does not decode.
+fn check_pin_keys(file: &PinFile) -> Result<(), KeyPinError> {
+    for (origin, pinned) in &file.servers {
+        decode_pin(origin, pinned)?;
+    }
+    Ok(())
+}
+
+/// The pin file's bytes exactly as they are on disk, for the backup artifact to carry, or `None`
+/// when this library has pinned nothing.
+///
+/// The bytes are checked first — this build's schema, and every key decodes — so an artifact
+/// never carries a pin a restore would refuse.
+pub fn read_attestation_key_pins(root: &Path) -> Result<Option<Vec<u8>>, KeyPinError> {
+    let Some(bytes) = read_pin_bytes(root)? else {
+        return Ok(None);
+    };
+    check_pin_keys(&decode_pin_file(&bytes)?)?;
+    Ok(Some(bytes))
+}
+
+/// Fold the pin file a backup `carried` into this library's pin.
+///
+/// A library with no pin takes the carried file byte for byte
+/// ([`KeyPinRestoreOutcome::Restored`]). Otherwise each origin is merged by the rule a fetch
+/// obeys: an origin this library never contacted is pinned as carried; one whose pinned history
+/// holds every carried key is kept as it is; one whose pinned keys are all carried, plus more, is
+/// extended by the carried keys it lacks, in carried order. An origin where each side holds a key
+/// the other lacks is [`KeyPinError::HistoriesDiverge`]. Every origin is checked before anything
+/// is written, so a refusal — that one, or a carried file that does not decode — leaves the
+/// library's pin exactly as it was.
+#[tracing::instrument(skip_all, fields(carried = carried.len()))]
+pub fn restore_attestation_key_pins(
+    root: &Path,
+    carried: &[u8],
+) -> Result<KeyPinRestoreOutcome, KeyPinError> {
+    use std::collections::btree_map::Entry;
+
+    let carried_file = decode_pin_file(carried)?;
+    check_pin_keys(&carried_file)?;
+    if carried_file.servers.is_empty() {
+        tracing::debug!("attestation-key pin restore: the backup pins no origin");
+        return Ok(KeyPinRestoreOutcome::Unchanged);
+    }
+    let Some(local_bytes) = read_pin_bytes(root)? else {
+        store_pin_bytes(root, carried)?;
+        let origins = carried_file.servers.len();
+        tracing::info!(
+            origins,
+            "attestation-key pin restore: pin restored from the backup"
+        );
+        return Ok(KeyPinRestoreOutcome::Restored { origins });
+    };
+
+    let mut local = decode_pin_file(&local_bytes)?;
+    let (mut origins_added, mut keys_added) = (0usize, 0usize);
+    for (origin, keys) in carried_file.servers {
+        match local.servers.entry(origin) {
+            Entry::Vacant(slot) => {
+                slot.insert(keys);
+                origins_added += 1;
+            }
+            Entry::Occupied(mut slot) => {
+                let pinned = slot.get_mut();
+                let only_local = pinned.iter().filter(|key| !keys.contains(key)).count();
+                let only_carried: Vec<ByteBuf> = keys
+                    .into_iter()
+                    .filter(|key| !pinned.contains(key))
+                    .collect();
+                if only_local > 0 && !only_carried.is_empty() {
+                    tracing::warn!(
+                        origin = %slot.key(),
+                        only_local,
+                        only_carried = only_carried.len(),
+                        "attestation-key pin restore: the histories diverge; refusing"
+                    );
+                    return Err(KeyPinError::HistoriesDiverge {
+                        origin: slot.key().clone(),
+                        only_carried: only_carried.len(),
+                        only_local,
+                    });
+                }
+                keys_added += only_carried.len();
+                pinned.extend(only_carried);
+            }
+        }
+    }
+
+    if origins_added == 0 && keys_added == 0 {
+        tracing::debug!("attestation-key pin restore: the backup's pin is already held");
+        return Ok(KeyPinRestoreOutcome::Unchanged);
+    }
+    store_pin_file(root, &local)?;
+    tracing::info!(
+        origins_added,
+        keys_added,
+        "attestation-key pin restore: the backup's pin merged into this library's"
+    );
+    Ok(KeyPinRestoreOutcome::Merged {
+        origins_added,
+        keys_added,
     })
 }
 
