@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 
 use capsule_core::crypto::hash::Hash32;
 
+use super::rebuild::{PURGE, PURGED};
 use super::{
     ChainReport, LedgerEntry, LedgerEvent, LedgerHead, LedgerScan, verify_chain, verify_links,
 };
@@ -135,13 +136,18 @@ pub struct Lifecycle {
     pub sync_seq: Option<u64>,
     /// The server's clock when the first entry was written: when the op was accepted.
     pub recorded_at: String,
+    /// For a retention purge ([`PURGE`]), whether a [`PURGED`] entry confirmed the index applied
+    /// it (#811). Always `false` for every other action.
+    pub confirmed: bool,
 }
 
 /// Every lifecycle op in `entries`, in ledger order, paired with the entry that recorded its
 /// sequence number.
 ///
 /// An entry that already carries a `sync_seq` with no open op before it (a server that wrote
-/// one entry per op) stands on its own.
+/// one entry per op) stands on its own. A [`PURGED`] entry is never an op of its own: it
+/// confirms the latest unconfirmed [`PURGE`] of the same asset before it, and one with no such
+/// purge confirms nothing.
 pub fn lifecycle(entries: &[LedgerEntry]) -> Vec<Lifecycle> {
     let mut out: Vec<Lifecycle> = Vec::new();
     for entry in entries {
@@ -154,6 +160,16 @@ pub fn lifecycle(entries: &[LedgerEntry]) -> Vec<Lifecycle> {
         else {
             continue;
         };
+        if action == PURGED {
+            if let Some(open) = out
+                .iter_mut()
+                .rev()
+                .find(|op| op.action == PURGE && !op.confirmed && op.asset_id == *asset_id)
+            {
+                open.confirmed = true;
+            }
+            continue;
+        }
         if let Some(seq) = sync_seq
             && let Some(open) = out.iter_mut().rev().find(|op| {
                 op.sync_seq.is_none()
@@ -171,6 +187,7 @@ pub fn lifecycle(entries: &[LedgerEntry]) -> Vec<Lifecycle> {
             manifest_hash: *manifest_hash,
             sync_seq: *sync_seq,
             recorded_at: entry.core.recorded_at.clone(),
+            confirmed: false,
         });
     }
     out

@@ -111,8 +111,17 @@ accepted it. The **owner ledger** carries those facts:
   evidence with a frozen format. The anchor survives exactly when the index does: a rebuild
   into an empty schema checks the chain alone, and one alongside a restored backup checks
   against the head at the backup.
-- The ledger is never rewritten. Purge appends a purge entry; the purged blobs go through
-  [GC](#deletion-and-garbage-collection) as before.
+- The ledger is never rewritten. A retention purge appends a `lifecycle` entry with action
+  `purge` before the index drops the asset's references, and a second one with action `purged`
+  for the same asset once the index answers that the purge committed; the purged blobs go
+  through [GC](#deletion-and-garbage-collection) as before. The `purged` entry is what resolves
+  a purge: rebuild pairs it with the latest unconfirmed `purge` of that asset before it, and
+  empties a tombstone only for a confirmed purge, at the `purge` entry's position. A purge the
+  index refused (the asset was restored, or re-deleted under a later floor, after the worker
+  listed it) is never confirmed, so a rebuild keeps every reference the live row kept, whatever
+  order the purge and the concurrent op reached the ledger in. The confirmation is
+  best-effort: a lost one keeps references to blobs GC may since have swept, which a rebuild
+  reports as dangling rather than losing.
 - Two processes append to one ledger: the server and an operator's `purge --apply`. An append
   holds an exclusive file lock on the owner's ledger directory from reading the tail to the
   fsync, and reads the tail from disk whenever another process has appended since. A scan holds
@@ -142,7 +151,7 @@ when it finds a fault ([`capsule-server::ledger::rebuild`](https://github.com/Ca
    `rebuild --apply --accept-rewrites`, which re-anchors at the last entry before the mismatch
    and accepts the ledger as it stands; the next pass verifies and replays it.
 2. Replay entries in ledger order: uploads and drop adoptions (custody entries the index did
-   not refuse) and lifecycle ops, including retention purges. Decode each named manifest and
+   not refuse) and lifecycle ops, including confirmed retention purges. Decode each named manifest and
    write the rows they imply, the way the index's own writes would. An op with no recorded
    position is replayed only if it still chains onto the head the replay has reached. Each
    manifest's `device_sig` is verified against the signer's directory version in force at that
