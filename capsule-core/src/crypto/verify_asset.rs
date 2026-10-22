@@ -107,6 +107,27 @@ pub fn verify_asset(
     authority: &dyn AlbumAuthority,
     local_chain_head: Option<Hash32>,
 ) -> VerifyOutcome {
+    verify_asset_hashed(
+        manifest,
+        &hash::hash_bytes(ciphertext),
+        directory,
+        authority,
+        local_chain_head,
+    )
+}
+
+/// [`verify_asset`] over the ciphertext's SHA-256 rather than its bytes, for a caller that
+/// streams a ciphertext too large to hold. Step 5 compares `ciphertext_hash` with the manifest's
+/// content address, so it vouches for the bytes only as far as the caller's digest does: a
+/// caller that has not hashed them yet must hash what it then reads and refuse it unless the
+/// result equals this argument. Every other step is [`verify_asset`]'s, unchanged.
+pub fn verify_asset_hashed(
+    manifest: &AssetManifest,
+    ciphertext_hash: &Hash32,
+    directory: &DeviceDirectory,
+    authority: &dyn AlbumAuthority,
+    local_chain_head: Option<Hash32>,
+) -> VerifyOutcome {
     use RejectReason::{
         BadDeviceSig, BadTimestamp, CiphertextHashMismatch, DeviceAddedAfter, Structural,
         SuiteDowngrade, UnknownDevice, UntrustedAuthority, WrongAlbum,
@@ -131,7 +152,7 @@ pub fn verify_asset(
         return Reject(Structural);
     }
     // 5. Content integrity: the ciphertext must hash to the declared content address.
-    if hash::hash_bytes(ciphertext) != core.ciphertext_hash {
+    if *ciphertext_hash != core.ciphertext_hash {
         return Reject(CiphertextHashMismatch);
     }
     // 6. The signing device must be in this user's published directory.
@@ -261,14 +282,19 @@ pub(super) fn authorize_write(
 /// [provenance.md § Legacy Inherited-Device Records]: https://docs/design/cryptography/provenance/#legacy-inherited-device-records
 pub fn diagnose_misattributed_signer(
     manifest: &AssetManifest,
-    ciphertext: &[u8],
+    ciphertext_hash: &Hash32,
     directory: &DeviceDirectory,
     authority: &dyn AlbumAuthority,
     local_chain_head: Option<Hash32>,
 ) -> Option<Uuid> {
     let core = &manifest.core;
-    if verify_asset(manifest, ciphertext, directory, authority, local_chain_head)
-        != VerifyOutcome::TerminalReject(RejectReason::BadDeviceSig)
+    if verify_asset_hashed(
+        manifest,
+        ciphertext_hash,
+        directory,
+        authority,
+        local_chain_head,
+    ) != VerifyOutcome::TerminalReject(RejectReason::BadDeviceSig)
     {
         return None;
     }
@@ -431,7 +457,9 @@ mod tests {
                     dek_public: None,
                     added_at: "2026-05-30T00:00:00Z".into(),
                     revoked_at: None,
+                    unknown: Default::default(),
                 }],
+                unknown: Default::default(),
             }
             .sign(&ik);
 
@@ -673,7 +701,9 @@ mod tests {
                 dek_public: None,
                 added_at: "2026-05-30T00:00:00Z".into(),
                 revoked_at: None,
+                unknown: Default::default(),
             }],
+            unknown: Default::default(),
         }
         .sign(&ik);
 
@@ -787,7 +817,9 @@ mod tests {
                 dek_public: None,
                 added_at: "2026-05-30T00:00:00Z".into(),
                 revoked_at: None,
+                unknown: Default::default(),
             }],
+            unknown: Default::default(),
         }
         .sign(&ik);
         let mut authority = ReferenceAuthority::new(Uuid::from_u128(ALBUM), admin.verifying_key())
@@ -1036,13 +1068,20 @@ mod tests {
             dek_public: None,
             added_at: added_at.into(),
             revoked_at: None,
+            unknown: Default::default(),
         });
         f.directory = core.sign(&HybridSigningKey::from_seed_bytes(&[10; 32], &[11; 32]));
         second
     }
 
     fn diagnose(f: &Fixture, m: &AssetManifest, head: Option<Hash32>) -> Option<Uuid> {
-        diagnose_misattributed_signer(m, CIPHERTEXT, &f.directory, &f.authority, head)
+        diagnose_misattributed_signer(
+            m,
+            &hash::hash_bytes(CIPHERTEXT),
+            &f.directory,
+            &f.authority,
+            head,
+        )
     }
 
     /// The defect exactly as the old `sign_lifecycle` wrote it: a continuation that names the

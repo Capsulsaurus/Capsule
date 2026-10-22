@@ -266,6 +266,7 @@ impl Device {
                 dek_public: None,
                 added_at: library.added_at,
                 revoked_at: None,
+                unknown: Default::default(),
             })
             .expect("the proposer device cross-signs into the library's directory");
 

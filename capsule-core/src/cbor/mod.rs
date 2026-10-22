@@ -13,8 +13,10 @@
 //! [Metadata — Canonical CBOR Encoding]: https://docs/design/metadata/#canonical-cbor-encoding
 
 mod encode;
+mod open_map;
 
 use ciborium::value::Value;
+pub use open_map::OpenMap;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use thiserror::Error;
