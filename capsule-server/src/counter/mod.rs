@@ -92,8 +92,10 @@
 //! server-side `WARN` and inferring it. The distinction is the whole reason the ceiling refusal
 //! has a code of its own.
 //!
-//! What partitioning is *not* is a fix for the flood. A per-source key is what would bound it,
-//! and all three source keys wait on a trusted client address this server does not have.
+//! What partitioning is *not* is a fix for the flood. A per-source key is what bounds it: the
+//! share and drop paths charge [`CounterKey::ShareSource`] and [`CounterKey::DropSource`] first,
+//! keyed on the client address [`crate::client_addr`] resolves through the deployment's trusted
+//! proxies (#704), so one address cannot fill a partition faster than its own budget allows.
 //!
 //! # One lock, and what that does and does not cover
 //!
@@ -151,11 +153,17 @@ pub enum CounterKey {
     EnrollmentRedemptionMalformed,
     /// Requests against one share link's opaque id (`S-C4`).
     ShareLink(String),
-    /// Requests from one source address, on the public share path.
+    /// Requests from one source address, on the public share path (#704).
+    ///
+    /// Keyed on [`ClientAddr::source_key`](crate::client_addr::ClientAddr::source_key): the
+    /// client the router resolved through the trusted proxies, never a forwarding header taken on
+    /// its word.
     ShareSource(String),
     /// Drop-session creations against one upload link (`S-C5`, invariant 31).
     DropLink(String),
-    /// Drop-session creations from one source address (`S-C5`, invariant 31).
+    /// Drop-session creations from one source address (`S-C5`, invariant 31, #704).
+    ///
+    /// Keyed as [`Self::ShareSource`] is.
     DropSource(String),
     /// Deep storage verifications for one account (`S-C41`).
     DeepVerify(UserId),
@@ -169,11 +177,12 @@ pub enum CounterKey {
     SecondFactor(String),
     /// Account registrations from one source address (`S-C53`).
     ///
-    /// Declared and consumed nowhere, like its two siblings above, and for the same reason: the
-    /// key names a fact this server does not have behind an unconfigured proxy chain. Registration
-    /// is the one **unauthenticated write** on the surface, so it is the place that fact is most
-    /// missed — recorded here rather than replaced by an email-keyed limiter, which would bound
-    /// repeated probes against one address while doing nothing about a sweep across many.
+    /// Declared and consumed nowhere yet. The client address it needs now exists
+    /// ([`crate::client_addr`], #704) and the share and drop paths charge their source keys with
+    /// it; registration is the one **unauthenticated write** on the surface, so it is the next
+    /// place that fact is owed — recorded here rather than replaced by an email-keyed limiter,
+    /// which would bound repeated probes against one address while doing nothing about a sweep
+    /// across many.
     RegistrationSource(String),
     /// Begun OIDC ceremonies naming one **admitted** redirect host (`S-N1`).
     ///
@@ -491,9 +500,9 @@ pub mod ceilings {
 
     /// The three source-address keys — 1-minute and 1-hour windows, keyed on a client address.
     ///
-    /// Charged nowhere yet: all three wait on a trusted client address this server does not have
-    /// behind an unconfigured proxy chain. Sized for the day one arrives — distinct addresses in
-    /// the window, which for a self-hosted deployment is thousands, not millions.
+    /// Charged by the share and drop paths (#704); registration's is not yet charged. Sized for
+    /// distinct addresses in the window, which for a self-hosted deployment is thousands, not
+    /// millions — an IPv6 client counts once per `/64`, so walking a prefix does not grow it.
     pub const SOURCE_ADDRESS: usize = 10_000;
 
     /// [`CounterKey::OidcAuthorize`](super::CounterKey::OidcAuthorize) — 1-minute window, keyed

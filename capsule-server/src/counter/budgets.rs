@@ -76,7 +76,14 @@ pub const SHARE_SOURCE: Budget = Budget::new(120, SignedDuration::from_mins(1));
 /// filling somebody's quota makes thousands.
 pub const DROP_LINK: Budget = Budget::new(30, SignedDuration::from_hours(1));
 
-/// Drop-session creations from one source address (invariant 31).
+/// Drop-session creations from one source address (invariant 31, #704).
+///
+/// Sixty an hour, twice the per-link budget: one guest behind one address legitimately deposits
+/// through a couple of links, while a script spraying fabricated ids from one address is held to
+/// a minute's worth of honest use per hour. Keyed on
+/// [`ClientAddr::source_key`](crate::client_addr::ClientAddr::source_key), so behind a proxy the
+/// deployment must name it in `TRUSTED_PROXIES` or `TRUSTED_PROXY_HOPS`, or every guest shares
+/// the proxy's budget.
 pub const DROP_SOURCE: Budget = Budget::new(60, SignedDuration::from_hours(1));
 
 /// Code attempts against one second-factor challenge.
