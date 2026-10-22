@@ -448,7 +448,7 @@ async fn dispatch(cli: Cli) -> Result<()> {
                 // `--push` is still honored: an unchanged library is exactly the
                 // re-runnable case push exists to make cheap.
                 if push {
-                    return push_workspace(&ws, push_options(false, false, staged)).await;
+                    return push_workspace(&ws, push_options(false, false, staged), false).await;
                 }
                 return Ok(());
             }
@@ -549,7 +549,7 @@ async fn dispatch(cli: Cli) -> Result<()> {
             // determinism suite depends on that), and the push is a separate pass over
             // the committed library — byte-for-byte the same one `capsule push` runs.
             if push {
-                push_workspace(&ws, push_options(false, false, staged)).await?;
+                push_workspace(&ws, push_options(false, false, staged), false).await?;
             }
         }
 
@@ -560,9 +560,10 @@ async fn dispatch(cli: Cli) -> Result<()> {
             dry_run,
             force,
             staged,
+            json,
         } => {
             let ws = open_workspace(&library, passphrase_stdin)?;
-            push_workspace(&ws, push_options(dry_run, force, staged)).await?;
+            push_workspace(&ws, push_options(dry_run, force, staged), json).await?;
         }
 
         // ── Cull ──────────────────────────────────────────────────────────
@@ -1501,11 +1502,36 @@ fn push_options(dry_run: bool, force: bool, staged: bool) -> remote::PushOptions
 ///
 /// Re-runnable by construction: the outstanding work is derived from server truth (a sync-feed
 /// pull), so a second run against an unchanged library uploads nothing.
-async fn push_workspace(workspace: &Workspace, options: remote::PushOptions) -> Result<()> {
+///
+/// An asset that fails does not stop the run; every failure is reported once the run is done
+/// and the command exits non-zero. With `json`, a run that reaches its assets prints exactly one
+/// JSON document on stdout — the [`remote::PushSummary`], each asset's outcome included — and
+/// nothing else. A run-level failure (no session, no feed, no attestation keys) prints nothing
+/// on stdout; its error goes to stderr and the command exits non-zero.
+async fn push_workspace(
+    workspace: &Workspace,
+    options: remote::PushOptions,
+    json: bool,
+) -> Result<()> {
     let bundle = i18n::cli_bundle();
     let remote = remote::RemoteConfig::from_env();
     let store = session_store()?;
     let assets = workspace.asset_ids().len();
+
+    if json {
+        let summary = if assets == 0 {
+            remote::PushSummary {
+                dry_run: options.dry_run,
+                ..Default::default()
+            }
+        } else {
+            remote::push(&remote, &store, workspace, options)
+                .await
+                .map_err(|error| push_run_error(&bundle, &error))?
+        };
+        println!("{}", serde_json::to_string_pretty(&summary)?);
+        return push_failures(&bundle, &summary);
+    }
 
     if assets == 0 {
         println!(
@@ -1535,55 +1561,74 @@ async fn push_workspace(workspace: &Workspace, options: remote::PushOptions) -> 
     }
 
     match remote::push(&remote, &store, workspace, options).await {
-        Ok(summary) if summary.dry_run => {
-            println!(
-                "{}",
-                bundle
-                    .format(
-                        keys::PUSH_DRY_RUN_COMPLETE,
-                        &[
-                            ("planned", Value::Int(summary.uploaded_blobs as i64)),
-                            ("assets", Value::Int(summary.pushed_assets as i64)),
-                            ("bytes", Value::Int(summary.bytes as i64)),
-                        ],
-                    )
-                    .cyan()
-            );
-            Ok(())
-        }
-        Ok(summary) if summary.is_no_op() => {
-            println!("{}", bundle.format(keys::PUSH_UP_TO_DATE, &[]).cyan());
-            Ok(())
-        }
         Ok(summary) => {
-            println!(
-                "{}",
-                bundle
-                    .format(
-                        keys::PUSH_COMPLETE,
-                        &[
-                            ("uploaded", Value::Int(summary.uploaded_blobs as i64)),
-                            ("merged", Value::Int(summary.merged_blobs as i64)),
-                            ("held", Value::Int(summary.already_held_blobs as i64)),
-                            ("deferred", Value::Int(summary.deferred_blobs as i64)),
-                            ("bytes", Value::Int(summary.bytes as i64)),
-                        ],
-                    )
-                    .green()
-            );
-            Ok(())
+            if summary.dry_run {
+                println!(
+                    "{}",
+                    bundle
+                        .format(
+                            keys::PUSH_DRY_RUN_COMPLETE,
+                            &[
+                                ("planned", Value::Int(summary.uploaded_blobs as i64)),
+                                ("assets", Value::Int(summary.pushed_assets as i64)),
+                                ("bytes", Value::Int(summary.bytes as i64)),
+                            ],
+                        )
+                        .cyan()
+                );
+            } else if summary.is_no_op() && summary.failed_assets == 0 {
+                println!("{}", bundle.format(keys::PUSH_UP_TO_DATE, &[]).cyan());
+            } else {
+                println!(
+                    "{}",
+                    bundle
+                        .format(
+                            keys::PUSH_COMPLETE,
+                            &[
+                                ("uploaded", Value::Int(summary.uploaded_blobs as i64)),
+                                ("merged", Value::Int(summary.merged_blobs as i64)),
+                                ("held", Value::Int(summary.already_held_blobs as i64)),
+                                ("deferred", Value::Int(summary.deferred_blobs as i64)),
+                                ("bytes", Value::Int(summary.bytes as i64)),
+                            ],
+                        )
+                        .green()
+                );
+            }
+            if !summary.dry_run {
+                println!("{}", remote::custody_line(&summary).cyan());
+            }
+            for failed in summary.failures() {
+                eprintln!("{}", remote::failure_line(failed).red());
+            }
+            push_failures(&bundle, &summary)
         }
-        Err(remote::RemoteError::NotAuthenticated) => Err(eyre!(
+        Err(error) => Err(push_run_error(&bundle, &error)),
+    }
+}
+
+/// A push that could not run at all — no session, no feed, no attestation keys — as the error
+/// the command exits with.
+fn push_run_error(bundle: &capsule_i18n::Bundle, error: &remote::RemoteError) -> eyre::Report {
+    if matches!(error, remote::RemoteError::NotAuthenticated) {
+        return eyre!("{}", bundle.format(keys::AUTH_NOT_AUTHENTICATED, &[]));
+    }
+    let reason = describe_remote_error(bundle, error);
+    eyre!(
+        "{}",
+        bundle.format(keys::PUSH_FAILED, &[("reason", Value::Str(&reason))])
+    )
+}
+
+/// The exit status of a finished push: an error naming how many assets failed when any did,
+/// so the process exits non-zero after every asset has been tried and reported.
+fn push_failures(bundle: &capsule_i18n::Bundle, summary: &remote::PushSummary) -> Result<()> {
+    match remote::failed_run_reason(summary) {
+        Some(reason) => Err(eyre!(
             "{}",
-            bundle.format(keys::AUTH_NOT_AUTHENTICATED, &[])
+            bundle.format(keys::PUSH_FAILED, &[("reason", Value::Str(&reason))])
         )),
-        Err(error) => {
-            let reason = describe_remote_error(&bundle, &error);
-            Err(eyre!(
-                "{}",
-                bundle.format(keys::PUSH_FAILED, &[("reason", Value::Str(&reason))])
-            ))
-        }
+        None => Ok(()),
     }
 }
 

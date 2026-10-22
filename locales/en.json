@@ -7295,6 +7295,10 @@
     "message": "Re-drive every blob regardless of what the server already holds",
     "context": "clap --help: help for the `--force` flag of `capsule push`."
   },
+  "cli.help.push.arg.json": {
+    "message": "Print the run as one JSON document on stdout: the totals and each asset's outcome (verified, failed with its error, or planned on a dry run)",
+    "context": "clap --help: help for the `--json` flag of `capsule push`."
+  },
   "cli.help.push.arg.library": {
     "message": "Path to the Capsule library to push",
     "context": "clap --help: help for the `--library` option of `capsule push`."

@@ -24,8 +24,10 @@ use capsule_sdk::recovery::{MintedSecret, RecoveryClient, RecoveryError};
 use capsule_sdk::staged::{StagedScheduler, TierSessionOutcome, held_from_feed};
 use capsule_sdk::sync::{SyncConsumer, SyncCursor, SyncError, SyncState};
 use capsule_sdk::upload::{UploadClient, UploadTransport};
+use capsule_sdk::verify::{StorageVerifyClient, VerifyError, VerifyTransport};
 use sea_orm::{ConnectionTrait, TransactionTrait};
 use secrecy::SecretString;
+use serde::Serialize;
 use thiserror::Error;
 use tracing::instrument;
 use uuid::Uuid;
@@ -132,6 +134,10 @@ pub enum RemoteError {
     /// An asset's upload failed.
     #[error(transparent)]
     Push(#[from] PushError),
+    /// The server's published attestation keys could not be fetched, so no custody receipt
+    /// could be verified and a push could confirm nothing.
+    #[error("the server's attestation keys could not be fetched: {0}")]
+    AttestationKeys(#[source] VerifyError),
     /// A command needing an authenticated session found none stored.
     #[error("not authenticated")]
     NotAuthenticated,
@@ -167,11 +173,8 @@ impl RemoteError {
         match self {
             Self::Auth(error) => error.error_code(),
             Self::Sync(error) => error.error_code(),
-            Self::Push(PushError::Upload(capsule_sdk::upload::UploadError::Rejected {
-                code,
-                ..
-            })) => code.as_deref(),
-            Self::Push(PushError::Album(error)) => error.error_code(),
+            Self::Push(error) => error.error_code(),
+            Self::AttestationKeys(VerifyError::Status { code, .. }) => code.as_deref(),
             Self::Recovery(error) => error.error_code(),
             Self::Directory(error) => error.error_code(),
             _ => None,
@@ -900,13 +903,113 @@ impl Default for PushOptions {
     }
 }
 
+/// Where one asset ended up after a `capsule push` run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AssetPushStatus {
+    /// Dry run: the work was planned and nothing left the device.
+    Planned,
+    /// The server reported every blob durable and a verified custody receipt for each is
+    /// persisted in the library.
+    Verified,
+    /// The asset did not reach verified custody; `error` says where it stopped.
+    Failed,
+}
+
+/// Why an asset failed, in the shape `--json` reports it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AssetPushFailure {
+    /// A stable name for where the asset stopped: `bundle`, `album`, `upload`, `unknown_blob`,
+    /// `verify_unavailable`, `not_durable`, `receipt_missing`, `receipt_rejected` or
+    /// `receipt_store`.
+    pub kind: &'static str,
+    /// The server's stable `error.*` code, when it supplied one.
+    pub code: Option<String>,
+    /// The English detail.
+    pub message: String,
+}
+
+/// What a `capsule push` run did for one asset — one line of the `--json` report.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AssetPushOutcome {
+    /// The asset id.
+    pub asset_id: String,
+    /// Where the asset ended up.
+    pub status: AssetPushStatus,
+    /// Blobs transferred to completion this run (planned, on a dry run).
+    pub uploaded: usize,
+    /// Blobs the server already held and merged onto (`duplicate_blob`).
+    pub merged: usize,
+    /// Blobs skipped before any request because the feed says the server holds them.
+    pub already_held: usize,
+    /// Blobs a staged policy deferred to a later window.
+    pub deferred: usize,
+    /// Bytes handed to the upload client this run (planned, on a dry run).
+    pub bytes: u64,
+    /// Verified custody receipts persisted for the asset this run.
+    pub receipts: usize,
+    /// Why the asset failed, for a [`AssetPushStatus::Failed`] asset only.
+    pub error: Option<AssetPushFailure>,
+}
+
+impl AssetPushOutcome {
+    fn new(asset_id: Uuid, status: AssetPushStatus) -> Self {
+        Self {
+            asset_id: asset_id.to_string(),
+            status,
+            uploaded: 0,
+            merged: 0,
+            already_held: 0,
+            deferred: 0,
+            bytes: 0,
+            receipts: 0,
+            error: None,
+        }
+    }
+}
+
+/// Why one asset failed inside a run that carries on past it.
+#[derive(Debug, Error)]
+enum AssetError {
+    /// The library could not build the asset's upload bundle.
+    #[error(transparent)]
+    Bundle(#[from] LifecycleError),
+    /// The transfer or the custody check failed.
+    #[error(transparent)]
+    Push(#[from] PushError),
+    /// A verified receipt could not be written to the library.
+    #[error("the custody receipt could not be stored in the library: {0}")]
+    ReceiptStore(#[from] capsule_core::library::ReceiptStoreError),
+}
+
+impl AssetError {
+    fn failure(&self) -> AssetPushFailure {
+        let (kind, code) = match self {
+            Self::Bundle(_) => ("bundle", None),
+            Self::Push(error) => (error.kind(), error.error_code().map(str::to_owned)),
+            Self::ReceiptStore(_) => ("receipt_store", None),
+        };
+        AssetPushFailure {
+            kind,
+            code,
+            message: self.to_string(),
+        }
+    }
+}
+
 /// The outcome of a `capsule push` run.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct PushSummary {
     /// Managed assets considered.
     pub assets: usize,
     /// Assets for which at least one blob session was opened.
     pub pushed_assets: usize,
+    /// Assets that reached verified custody this run.
+    pub verified_assets: usize,
+    /// Assets that did not; each is in `outcomes` with its error.
+    pub failed_assets: usize,
+    /// Verified custody receipts persisted to the library this run.
+    pub receipts: usize,
     /// Blobs transferred to completion.
     pub uploaded_blobs: usize,
     /// Blobs the server already held and merged onto (`duplicate_blob`).
@@ -925,6 +1028,8 @@ pub struct PushSummary {
     pub created_albums: usize,
     /// Whether this was a dry run (nothing left the device).
     pub dry_run: bool,
+    /// One entry per asset considered, in library order.
+    pub outcomes: Vec<AssetPushOutcome>,
 }
 
 impl PushSummary {
@@ -932,6 +1037,13 @@ impl PushSummary {
     #[must_use]
     pub fn is_no_op(&self) -> bool {
         self.uploaded_blobs == 0 && self.merged_blobs == 0
+    }
+
+    /// The assets that did not reach verified custody.
+    pub fn failures(&self) -> impl Iterator<Item = &AssetPushOutcome> {
+        self.outcomes
+            .iter()
+            .filter(|outcome| outcome.status == AssetPushStatus::Failed)
     }
 }
 
@@ -984,9 +1096,20 @@ pub async fn held_blobs(
 /// because provisioning is idempotent, a second `capsule push` re-registers the same id, gets
 /// the same success, and still moves nothing.
 ///
-/// Re-runnable by construction. Nothing is written locally, so a second run against an
-/// unchanged library plans nothing (the feed says every blob is held) and makes no request
-/// beyond the idempotent album registration.
+/// **A transfer is not custody** (issue #670). After an asset's ladder, the run asks the server
+/// whether it durably holds every blob the asset relies on and requires a custody receipt per
+/// blob that verifies under the server's published attestation key
+/// (`capsule_sdk::push::verify_custody`); the verified receipts are appended to the asset's
+/// `{uuid}.receipts.cbor` log in the library. Only then is the asset `Verified`.
+///
+/// **One asset's failure is that asset's.** An asset whose bundle, album, transfer, custody
+/// check or receipt write fails is recorded as `Failed` with its error, and the run moves on to
+/// the next one; the caller reports every failure and exits non-zero. What fails the whole run
+/// is what every asset needs: the session, the feed read, and the attestation keys.
+///
+/// Re-runnable by construction. The outstanding transfer work comes from server truth, so a
+/// second run against an unchanged library uploads nothing; it re-confirms custody of every
+/// asset, and re-persisting a receipt already in the log is a no-op.
 #[instrument(skip(store, workspace), fields(endpoint = %remote.upload_endpoint))]
 pub async fn push(
     remote: &RemoteConfig,
@@ -1033,74 +1156,249 @@ async fn push_with(
     ))
     .with_connection_class(options.connection);
     let albums = AlbumClient::new(AlbumTransport::with_session(
-        session,
+        session.clone(),
         &remote.albums_endpoint,
     ));
+    // `sync_endpoint` is the bare server origin; the storage and receipt routes hang off `/v1`.
+    let verify = StorageVerifyClient::new(VerifyTransport::with_session(
+        session,
+        format!("{}/v1", remote.sync_endpoint.trim_end_matches('/')),
+    ));
     let scheduler = StagedScheduler::new(options.policy, options.connection);
-    // Albums already registered this run — provisioning is idempotent server-side, so this is
-    // only about not making the same request once per asset.
-    let mut provisioned = HashSet::new();
 
+    if options.dry_run {
+        for asset_id in asset_ids {
+            let outcome = plan_asset(workspace, &scheduler, &held, options.force, asset_id);
+            summary.record(outcome);
+        }
+        summary.log();
+        return Ok(summary);
+    }
+
+    // Every receipt is checked under the server's published key history, so without it no
+    // asset could be confirmed: that is a failure of the run, not of an asset.
+    let attestation_keys = verify
+        .fetch_attestation_keys()
+        .await
+        .map_err(RemoteError::AttestationKeys)?;
+    tracing::info!(
+        keys = attestation_keys.len(),
+        "push: attestation keys fetched"
+    );
+
+    let mut run = AssetPusher {
+        workspace,
+        upload,
+        albums,
+        verify,
+        attestation_keys,
+        scheduler,
+        held,
+        force: options.force,
+        provisioned: HashSet::new(),
+    };
     for asset_id in asset_ids {
-        let bundle = workspace.upload_bundle(&asset_id)?;
-        if options.dry_run {
-            let planned = push::plan(&scheduler, &bundle, &held, options.force);
-            summary.already_held_blobs += planned.already_held;
-            summary.deferred_blobs += planned.deferred;
-            summary.uploaded_blobs += planned.blobs.len();
-            summary.bytes += planned.bytes;
-            if !planned.blobs.is_empty() {
-                summary.pushed_assets += 1;
-            }
+        let mut outcome = AssetPushOutcome::new(asset_id, AssetPushStatus::Verified);
+        if let Err(error) = run.push(asset_id, &mut outcome, &mut summary).await {
+            tracing::warn!(%asset_id, %error, "push: asset failed; continuing with the next");
+            outcome.status = AssetPushStatus::Failed;
+            outcome.error = Some(error.failure());
+        }
+        summary.record(outcome);
+    }
+    summary.log();
+    Ok(summary)
+}
+
+/// A dry run's plan for one asset: what would be sent, from server truth, with nothing sent.
+fn plan_asset<H: std::hash::BuildHasher>(
+    workspace: &Workspace,
+    scheduler: &StagedScheduler,
+    held: &HashSet<String, H>,
+    force: bool,
+    asset_id: Uuid,
+) -> AssetPushOutcome {
+    let mut outcome = AssetPushOutcome::new(asset_id, AssetPushStatus::Planned);
+    match workspace.upload_bundle(&asset_id) {
+        Ok(bundle) => {
+            let planned = push::plan(scheduler, &bundle, held, force);
+            outcome.uploaded = planned.blobs.len();
+            outcome.already_held = planned.already_held;
+            outcome.deferred = planned.deferred;
+            outcome.bytes = planned.bytes;
             tracing::info!(
                 %asset_id,
                 planned = planned.blobs.len(),
                 "push: dry run — would open these tier sessions"
             );
-            continue;
         }
+        Err(error) => {
+            tracing::warn!(%asset_id, %error, "push: dry run could not build the bundle");
+            outcome.status = AssetPushStatus::Failed;
+            outcome.error = Some(AssetError::from(error).failure());
+        }
+    }
+    outcome
+}
+
+/// Everything a run shares across its assets.
+struct AssetPusher<'a> {
+    workspace: &'a Workspace,
+    upload: UploadClient,
+    albums: AlbumClient,
+    verify: StorageVerifyClient,
+    attestation_keys: Vec<capsule_core::crypto::keys::HybridVerifyingKey>,
+    scheduler: StagedScheduler,
+    held: HashSet<String>,
+    force: bool,
+    /// Albums registered this run. Provisioning is idempotent server-side, so this only saves
+    /// making the same request once per asset; an album whose registration failed is not in
+    /// it, so the next asset in that album tries again.
+    provisioned: HashSet<Uuid>,
+}
+
+impl AssetPusher<'_> {
+    /// Push one asset, confirm custody, and persist its receipts, filling `outcome` once each
+    /// step completes. A transfer that fails partway leaves `uploaded`, `merged` and `bytes` at
+    /// zero for the asset even when some of its blobs landed, because [`push::push_bundle`]
+    /// returns only its error; a re-run derives the remaining work from server truth.
+    #[instrument(skip(self, outcome, summary), fields(%asset_id))]
+    async fn push(
+        &mut self,
+        asset_id: Uuid,
+        outcome: &mut AssetPushOutcome,
+        summary: &mut PushSummary,
+    ) -> Result<(), AssetError> {
+        let bundle = self.workspace.upload_bundle(&asset_id)?;
 
         // Invariant 6 needs the album to exist and be writable before the first session
         // opens; a dry run deliberately reaches nothing, so it never provisions either.
-        if provisioned.insert(bundle.album_id) {
-            let album = push::ensure_album(&albums, bundle.album_id)
+        if !self.provisioned.contains(&bundle.album_id) {
+            let album = push::ensure_album(&self.albums, bundle.album_id)
                 .await
                 .map_err(PushError::Album)?;
+            self.provisioned.insert(bundle.album_id);
             summary.provisioned_albums += 1;
             if album.created {
                 summary.created_albums += 1;
             }
         }
 
-        let report = push::push_bundle(&upload, &scheduler, &bundle, &held, options.force).await?;
-        summary.already_held_blobs += report.already_held;
-        summary.deferred_blobs += report.deferred;
-        summary.bytes += report.bytes;
-        if !report.pushed.is_empty() {
-            summary.pushed_assets += 1;
-        }
+        let report = push::push_bundle(
+            &self.upload,
+            &self.scheduler,
+            &bundle,
+            &self.held,
+            self.force,
+        )
+        .await?;
+        outcome.already_held = report.already_held;
+        outcome.deferred = report.deferred;
+        outcome.bytes = report.bytes;
         for blob in &report.pushed {
             match blob.outcome {
-                TierSessionOutcome::Uploaded { .. } => summary.uploaded_blobs += 1,
-                TierSessionOutcome::AlreadyStored { .. } => summary.merged_blobs += 1,
+                TierSessionOutcome::Uploaded { .. } => outcome.uploaded += 1,
+                TierSessionOutcome::AlreadyStored { .. } => outcome.merged += 1,
             }
         }
+
+        let custody = push::verify_custody(
+            &self.verify,
+            &self.attestation_keys,
+            &bundle,
+            &report,
+            jiff::Timestamp::now().as_second(),
+        )
+        .await?;
+
+        // The receipt log lives beside the provenance chain, in the same capture-month shard.
+        let capture_utc = self
+            .workspace
+            .asset(&asset_id)
+            .map(|asset| asset.capture_utc);
+        for receipt in &custody.receipts {
+            capsule_core::library::append_receipt(self.workspace.root(), capture_utc, receipt)?;
+            outcome.receipts += 1;
+        }
+        tracing::info!(
+            receipts = outcome.receipts,
+            checked_at = %custody.checked_at,
+            "push: custody verified and receipts persisted"
+        );
+        Ok(())
+    }
+}
+
+impl PushSummary {
+    /// Fold one asset's outcome into the run's totals.
+    fn record(&mut self, outcome: AssetPushOutcome) {
+        self.uploaded_blobs += outcome.uploaded;
+        self.merged_blobs += outcome.merged;
+        self.already_held_blobs += outcome.already_held;
+        self.deferred_blobs += outcome.deferred;
+        self.bytes += outcome.bytes;
+        self.receipts += outcome.receipts;
+        if outcome.uploaded + outcome.merged > 0 {
+            self.pushed_assets += 1;
+        }
+        match outcome.status {
+            AssetPushStatus::Verified => self.verified_assets += 1,
+            AssetPushStatus::Failed => self.failed_assets += 1,
+            AssetPushStatus::Planned => {}
+        }
+        self.outcomes.push(outcome);
     }
 
-    tracing::info!(
-        assets = summary.assets,
-        provisioned_albums = summary.provisioned_albums,
-        created_albums = summary.created_albums,
-        pushed_assets = summary.pushed_assets,
-        uploaded = summary.uploaded_blobs,
-        merged = summary.merged_blobs,
-        already_held = summary.already_held_blobs,
-        deferred = summary.deferred_blobs,
-        bytes = summary.bytes,
-        dry_run = summary.dry_run,
-        "push complete"
-    );
-    Ok(summary)
+    /// Log the run's totals, one structured event.
+    fn log(&self) {
+        tracing::info!(
+            assets = self.assets,
+            provisioned_albums = self.provisioned_albums,
+            created_albums = self.created_albums,
+            pushed_assets = self.pushed_assets,
+            verified_assets = self.verified_assets,
+            failed_assets = self.failed_assets,
+            receipts = self.receipts,
+            uploaded = self.uploaded_blobs,
+            merged = self.merged_blobs,
+            already_held = self.already_held_blobs,
+            deferred = self.deferred_blobs,
+            bytes = self.bytes,
+            dry_run = self.dry_run,
+            "push complete"
+        );
+    }
+}
+
+/// The custody line after a push: how many assets reached verified custody, and how many
+/// receipts the run stored. English inline, as every CLI line is going to be (issue #680).
+#[must_use]
+pub fn custody_line(summary: &PushSummary) -> String {
+    format!(
+        "Custody verified for {} of {} assets; {} receipts stored in the library.",
+        summary.verified_assets, summary.assets, summary.receipts
+    )
+}
+
+/// One failed asset, as the line the human output prints for it.
+#[must_use]
+pub fn failure_line(outcome: &AssetPushOutcome) -> String {
+    let detail = outcome
+        .error
+        .as_ref()
+        .map_or("no detail", |error| error.message.as_str());
+    format!("asset {} failed: {detail}", outcome.asset_id)
+}
+
+/// Why a finished run exits non-zero, or `None` when every asset reached its goal.
+#[must_use]
+pub fn failed_run_reason(summary: &PushSummary) -> Option<String> {
+    (summary.failed_assets > 0).then(|| {
+        format!(
+            "{} of {} assets did not reach verified custody",
+            summary.failed_assets, summary.assets
+        )
+    })
 }
 
 /// Query the sync-fed local store — the client-side library `capsule list` renders.
@@ -1331,5 +1629,113 @@ mod tests {
             recovery_secret_candidates(&not_hex),
             vec![not_hex.as_bytes().to_vec()]
         );
+    }
+
+    /// A verified asset and a failed one, as a run that carried on past the failure records them.
+    fn mixed_run() -> PushSummary {
+        let mut summary = PushSummary {
+            assets: 2,
+            ..Default::default()
+        };
+        let mut verified = AssetPushOutcome::new(Uuid::from_u128(1), AssetPushStatus::Verified);
+        verified.uploaded = 3;
+        verified.bytes = 4096;
+        verified.receipts = 3;
+        summary.record(verified);
+
+        let mut failed = AssetPushOutcome::new(Uuid::from_u128(2), AssetPushStatus::Failed);
+        failed.uploaded = 2;
+        failed.error = Some(
+            AssetError::from(PushError::NotDurable {
+                asset_id: Uuid::from_u128(2).to_string(),
+                not_durable: vec!["ab".repeat(32)],
+            })
+            .failure(),
+        );
+        summary.record(failed);
+        summary
+    }
+
+    /// One asset's failure is that asset's: the run's totals count both, the failure is listed,
+    /// and the run is reported as failed — which is what makes the command exit non-zero.
+    #[test]
+    fn a_failed_asset_is_counted_listed_and_fails_the_run() {
+        let summary = mixed_run();
+        assert_eq!(summary.verified_assets, 1);
+        assert_eq!(summary.failed_assets, 1);
+        assert_eq!(summary.pushed_assets, 2, "both opened sessions");
+        assert_eq!(summary.uploaded_blobs, 5);
+        assert_eq!(summary.receipts, 3);
+
+        let failures: Vec<_> = summary.failures().collect();
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0].asset_id, Uuid::from_u128(2).to_string());
+        assert!(failure_line(failures[0]).contains("does not durably hold"));
+        assert_eq!(
+            failed_run_reason(&summary).as_deref(),
+            Some("1 of 2 assets did not reach verified custody")
+        );
+        assert_eq!(
+            custody_line(&summary),
+            "Custody verified for 1 of 2 assets; 3 receipts stored in the library."
+        );
+    }
+
+    /// A run with no failure exits zero.
+    #[test]
+    fn a_run_with_no_failure_is_not_failed() {
+        let mut summary = PushSummary {
+            assets: 1,
+            ..Default::default()
+        };
+        summary.record(AssetPushOutcome::new(
+            Uuid::from_u128(1),
+            AssetPushStatus::Verified,
+        ));
+        assert_eq!(failed_run_reason(&summary), None);
+    }
+
+    /// **The `--json` contract.** One document: the totals, and per asset its status, counts,
+    /// receipts, and — for a failed one — a stable `kind`, the server's code, and the detail.
+    #[test]
+    fn the_json_report_lists_each_assets_outcome() {
+        let json = serde_json::to_value(mixed_run()).expect("the summary serializes");
+        assert_eq!(json["assets"], 2);
+        assert_eq!(json["verified_assets"], 1);
+        assert_eq!(json["failed_assets"], 1);
+        assert_eq!(json["receipts"], 3);
+        assert_eq!(json["dry_run"], false);
+
+        let outcomes = json["outcomes"].as_array().expect("an outcome per asset");
+        assert_eq!(outcomes.len(), 2);
+        assert_eq!(outcomes[0]["asset_id"], Uuid::from_u128(1).to_string());
+        assert_eq!(outcomes[0]["status"], "verified");
+        assert_eq!(outcomes[0]["receipts"], 3);
+        assert!(outcomes[0]["error"].is_null());
+
+        assert_eq!(outcomes[1]["status"], "failed");
+        assert_eq!(outcomes[1]["error"]["kind"], "not_durable");
+        assert!(outcomes[1]["error"]["code"].is_null());
+        assert!(
+            outcomes[1]["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("does not durably hold 1 of its blobs")
+        );
+    }
+
+    /// A server's stable code rides the failure, so a client can localize it.
+    #[test]
+    fn a_rejected_upload_carries_the_servers_code() {
+        let failure = AssetError::from(PushError::Upload(
+            capsule_sdk::upload::UploadError::Rejected {
+                status: 500,
+                code: Some("error.upload.unavailable".into()),
+                message: "the asset index could not answer".into(),
+            },
+        ))
+        .failure();
+        assert_eq!(failure.kind, "upload");
+        assert_eq!(failure.code.as_deref(), Some("error.upload.unavailable"));
     }
 }
