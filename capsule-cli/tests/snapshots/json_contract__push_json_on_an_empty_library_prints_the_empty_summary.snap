@@ -17,6 +17,7 @@ status: 0
   "bytes": 0,
   "provisioned_albums": 0,
   "created_albums": 0,
+  "album_keys_escrowed": 0,
   "dry_run": false,
   "outcomes": []
 }
