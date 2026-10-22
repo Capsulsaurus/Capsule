@@ -44,7 +44,7 @@ use base64::engine::general_purpose::{STANDARD as BASE64, STANDARD_NO_PAD as BAS
 use jiff::SignedDuration;
 
 use crate::auth::oidc::{ClientSecret, RedirectPolicy};
-use crate::client_addr::ProxyTrust;
+use crate::client_addr::{DEFAULT_TRUSTED_PROXY_HEADER, ProxyTrust};
 use crate::sync::CURSOR_KEY_LEN;
 
 /// The bind address a deployment gets without saying anything.
@@ -392,7 +392,8 @@ pub struct Config {
     /// [`ChunkBody`](crate::upload::body::ChunkBody) and therefore over before finalization
     /// starts: see [`crate::upload::policy::DEFAULT_CHUNK_READ_TIMEOUT`].
     pub chunk_read_timeout: std::time::Duration,
-    /// Which reverse-proxy hops may name the client (`TRUSTED_PROXY_HOPS`, `TRUSTED_PROXIES`).
+    /// Which reverse-proxy hops may name the client, and through which forwarding field
+    /// (`TRUSTED_PROXY_HOPS`, `TRUSTED_PROXIES`, `TRUSTED_PROXY_HEADER`).
     ///
     /// Trusts nobody unless set, so every forwarding header is ignored and the socket peer is the
     /// client. A deployment behind a proxy must set it, or every per-source limiter counts the
@@ -886,6 +887,22 @@ impl Config {
                         .ok()
                 })
                 .unwrap_or_default(),
+            // A malformed field is a fault rather than the default: a deployment that named
+            // `Forwarded` and silently read `X-Forwarded-For` would believe a field its proxy
+            // passes through from the client.
+            header: env
+                .var("TRUSTED_PROXY_HEADER")
+                .and_then(|text| {
+                    ProxyTrust::parse_header(&text)
+                        .map_err(|detail| {
+                            faults.push(ConfigFault::Invalid {
+                                key: "TRUSTED_PROXY_HEADER",
+                                detail,
+                            });
+                        })
+                        .ok()
+                })
+                .unwrap_or(DEFAULT_TRUSTED_PROXY_HEADER),
         };
         let log_format = match env.var("LOG_FORMAT") {
             None => {
@@ -1279,6 +1296,7 @@ mod tests {
 
     use base64::Engine as _;
     use jiff::SignedDuration;
+    use kynos::http::forwarded::ProxyHeader;
 
     use super::{
         BASE64, Backends, Config, ConfigFault, Demands, LogFormat, Overrides, redacted_url,
@@ -1468,11 +1486,34 @@ mod tests {
     }
 
     #[test]
+    fn the_trusted_proxy_header_defaults_to_x_forwarded_for() {
+        let config = Config::load(&serveable(), &memory(), Demands::Serve).expect("it loads");
+        assert_eq!(config.trusted_proxies.header, ProxyHeader::XForwarded);
+    }
+
+    #[test]
+    fn the_trusted_proxy_header_is_read_from_the_environment() {
+        for (value, header) in [
+            ("forwarded", ProxyHeader::Forwarded),
+            (" Forwarded ", ProxyHeader::Forwarded),
+            ("x-forwarded-for", ProxyHeader::XForwarded),
+            ("X-Forwarded-For", ProxyHeader::XForwarded),
+        ] {
+            let mut environment = serveable();
+            environment.insert("TRUSTED_PROXY_HEADER".to_owned(), value.to_owned());
+            let config = Config::load(&environment, &memory(), Demands::Serve).expect("it loads");
+            assert_eq!(config.trusted_proxies.header, header, "{value}");
+        }
+    }
+
+    #[test]
     fn a_malformed_trusted_proxy_setting_is_refused() {
         for (key, value) in [
             ("TRUSTED_PROXIES", "10.0.0.0/40"),
             ("TRUSTED_PROXIES", "proxy.internal"),
             ("TRUSTED_PROXY_HOPS", "-1"),
+            ("TRUSTED_PROXY_HEADER", "x-real-ip"),
+            ("TRUSTED_PROXY_HEADER", "forwarded, x-forwarded-for"),
         ] {
             let mut environment = serveable();
             environment.insert(key.to_owned(), value.to_owned());

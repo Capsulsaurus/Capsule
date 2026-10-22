@@ -37,8 +37,8 @@
 use kynos::extract::FromRequest;
 use kynos::extract::body::binary::Binary;
 use kynos::extract::describe::Describe;
-use kynos::extract::media::MediaType;
 use kynos::http::Request;
+use kynos::http::media::MediaType;
 use kynos::prelude::*;
 use kynos::router::operation::OperationCx;
 

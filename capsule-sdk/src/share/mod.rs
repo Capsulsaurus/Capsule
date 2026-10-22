@@ -284,12 +284,11 @@ fn issue_refusal(status: u16, error: rest::IssueShareError) -> ShareError {
         Refusal::Status500(problem) => ShareError::Unavailable {
             code: Some(problem.code.clone()),
         },
-        // Unreachable: `refusal` takes every `426` as `UpgradeRequired` first.
-        Refusal::Status426(problem) => ShareError::Unexpected {
+        // `426` is unreachable: `refusal` takes every one as `UpgradeRequired` first.
+        Refusal::Status426(problem) | Refusal::Status413(problem) => ShareError::Unexpected {
             status,
             code: Some(problem.code.clone()),
         },
-        Refusal::Status413 => ShareError::Unexpected { status, code: None },
     }
 }
 
@@ -306,12 +305,11 @@ fn revoke_refusal(status: u16, error: rest::RevokeShareError) -> ShareError {
         Refusal::Status500(problem) => ShareError::Unavailable {
             code: Some(problem.code.clone()),
         },
-        // Unreachable: `refusal` takes every `426` as `UpgradeRequired` first.
-        Refusal::Status426(problem) => ShareError::Unexpected {
+        // `426` is unreachable: `refusal` takes every one as `UpgradeRequired` first.
+        Refusal::Status426(problem) | Refusal::Status413(problem) => ShareError::Unexpected {
             status,
             code: Some(problem.code.clone()),
         },
-        Refusal::Status413 => ShareError::Unexpected { status, code: None },
     }
 }
 

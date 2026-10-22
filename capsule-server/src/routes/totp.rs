@@ -301,9 +301,9 @@ pub enum VerifyLoginRejection {
 /// somebody out of their own account.
 #[kynos::post("/v1/auth/totp/enroll", operation_id = "totp_enroll", tag = TotpTag)]
 pub async fn totp_enroll(
+    Auth(credential): Auth<AccessToken>,
     Inject(auth): Inject<AuthContext>,
     Inject(totp): Inject<TotpContext>,
-    Auth(credential): Auth<AccessToken>,
 ) -> Result<Json<EnrollmentResponse>, EnrollRejection> {
     let user = UserId::new(credential.user.as_str());
     let secret = TotpCodes::generate_secret();
@@ -364,9 +364,9 @@ pub async fn totp_enroll(
     tag = TotpTag
 )]
 pub async fn totp_verify_enrollment(
+    Auth(credential): Auth<AccessToken>,
     Inject(auth): Inject<AuthContext>,
     Inject(totp): Inject<TotpContext>,
-    Auth(credential): Auth<AccessToken>,
     Json(request): Json<CodeRequest>,
 ) -> Result<NoContent, ConfirmRejection> {
     let user = UserId::new(credential.user.as_str());
@@ -440,9 +440,9 @@ pub async fn totp_verify_enrollment(
 /// that makes it insufficient.
 #[kynos::post("/v1/auth/totp/disable", operation_id = "totp_disable", tag = TotpTag)]
 pub async fn totp_disable(
+    Auth(credential): Auth<AccessToken>,
     Inject(auth): Inject<AuthContext>,
     Inject(totp): Inject<TotpContext>,
-    Auth(credential): Auth<AccessToken>,
     Json(request): Json<CodeRequest>,
 ) -> Result<NoContent, DisableRejection> {
     let user = UserId::new(credential.user.as_str());

@@ -26,11 +26,20 @@
 //!   read-only. The export names [`FAST_KDF`] explicitly, and the import needs no such argument:
 //!   the artifact records the cost it was wrapped under.
 //!
+//! A recovered device restores the account's originals over the wire as well (#741): every
+//! album's keys ride the escrow, so `capsule auth recover` then `capsule restore` brings back every
+//! original byte for byte, resuming an interrupted run from its part file.
+//!
 //! The crash half of the restore leg — `capsule restore` or its server `SIGKILL`ed mid-fetch, then
 //! rerun until the originals on disk are the imported files byte for byte — is
 //! `tests/kill_anywhere.rs`.
 
-use capsule_cli::remote::{self, RemoteConfig, RemoteError};
+use std::collections::BTreeMap;
+
+use capsule_cli::remote::{self, AssetPushStatus, PushOptions, RemoteConfig, RemoteError};
+use capsule_cli::restore::{
+    AssetRestoreStatus, RESTORE_RANGE_WINDOW, RestoreOptions, RestoreScope, STAGING_DIR,
+};
 use capsule_cli::session::SessionStore;
 use capsule_core::crypto::keys::MasterKey;
 use capsule_core::crypto::primitives::DeviceTier;
@@ -42,6 +51,7 @@ use capsule_e2e::{Device, FAST_KDF, PASSPHRASE, PASSWORD, PROTOCOL_VERSION, Serv
 use capsule_sdk::auth::{AuthClient, Session};
 use capsule_sdk::client::AuthenticatedClient;
 use capsule_sdk::directory::{DirectoryClient, DirectoryError};
+use capsule_sdk::net::ConnectionClass;
 use capsule_sdk::recovery::{MintedSecret, RecoveryClient, RecoveryError};
 use uuid::Uuid;
 
@@ -756,6 +766,289 @@ async fn e2e_case_6_the_cli_escrow_command_sets_up_what_recover_restores() {
         matches!(stale, RemoteError::WrongRecoverySecret),
         "got {stale:?}"
     );
+}
+
+/// **#741: the album keys ride the escrow**, so a device recovered with `capsule auth recover`
+/// restores the account's originals with `capsule restore` and nothing else.
+///
+/// Device A holds two albums — the default one and `Trip`, rotated twice — with an asset under
+/// every epoch of both. `capsule auth escrow` stores every album's keys beside the escrow; each
+/// rotation after that is re-escrowed by `capsule push` before the new epoch's asset is sent.
+/// `capsule auth recover` onto a fresh library B then holds A's albums whole, so resolving the
+/// default album mints nothing and B's own escrows match A's. A restore on B whose part file an
+/// earlier, interrupted run left half-written resumes from it, and every original comes back
+/// byte for byte.
+#[tokio::test]
+async fn e2e_case_6_a_recovered_device_restores_every_album_byte_for_byte() {
+    let server = Server::boot().await;
+    let mut a = Device::register(&server, "album-keys").await;
+    let default_album = a.workspace.default_album_id();
+    // Every imported original's bytes, by asset id: what the restore must write back.
+    let mut sources: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+    let resumed_asset = import_into(&mut a, &mut sources, default_album, "home.jpg", 1);
+    let trip = a
+        .workspace
+        .create_album("Trip")
+        .expect("a second album is created");
+    import_into(&mut a, &mut sources, trip, "trip-epoch-1.jpg", 2);
+
+    // A's CLI: its own session store, signed in as the account.
+    let home_a = tempfile::tempdir().expect("A's CLI home");
+    let store_a = SessionStore::new(home_a.path().join("session.json"));
+    store_a
+        .save(&a.session.export().await.expect("a live session exports"))
+        .expect("the session persists");
+    let remote = RemoteConfig {
+        auth_endpoint: server.auth_base(),
+        sync_endpoint: server.base_url().to_owned(),
+        upload_endpoint: server.upload_base(),
+        albums_endpoint: server.albums_base(),
+        protocol_version: PROTOCOL_VERSION.to_owned(),
+    };
+    let mut shown = String::new();
+    remote::auth_escrow(
+        &remote,
+        &store_a,
+        &mut a.workspace,
+        false,
+        DeviceTier::LowRam,
+        |secret| {
+            shown = secret.to_hex();
+            true
+        },
+    )
+    .await
+    .expect("`capsule auth escrow` stores the escrow and every album's keys");
+    let recovery =
+        RecoveryClient::new(a.session.clone(), server.base_url()).expect("the API root parses");
+    let escrowed = recovery
+        .list_album_keys()
+        .await
+        .expect("the album key escrows list");
+    let mut both = vec![default_album, trip];
+    both.sort();
+    assert_eq!(
+        escrowed.iter().map(|e| e.album_id).collect::<Vec<_>>(),
+        both,
+        "one escrow per album"
+    );
+
+    // Rotations after the setup: each push escrows the new epoch before its asset leaves. Each
+    // epoch is pushed before the album rotates past it, because invariant 18 refuses a create
+    // below the album's highest accepted epoch and no client path re-seals one yet (#822).
+    let pushed = remote::push(&remote, &store_a, &mut a.workspace, PushOptions::default())
+        .await
+        .expect("the push runs");
+    assert_eq!(
+        pushed.album_keys_escrowed, 0,
+        "the setup escrowed every album"
+    );
+    assert_eq!(pushed.verified_assets, sources.len(), "{pushed:#?}");
+    for (epoch, seed) in [(2_u8, 3_u8), (3, 4)] {
+        a.workspace.rotate_epoch(trip).expect("the album rotates");
+        import_into(
+            &mut a,
+            &mut sources,
+            trip,
+            &format!("trip-epoch-{epoch}.jpg"),
+            seed,
+        );
+        let pushed = remote::push(&remote, &store_a, &mut a.workspace, PushOptions::default())
+            .await
+            .expect("the push runs");
+        assert_eq!(
+            pushed.album_keys_escrowed, 1,
+            "epoch {epoch}: only the rotated album was stale"
+        );
+        assert_eq!(pushed.verified_assets, sources.len(), "{pushed:#?}");
+        assert!(
+            pushed
+                .outcomes
+                .iter()
+                .all(|o| o.status == AssetPushStatus::Verified),
+            "{pushed:#?}"
+        );
+    }
+    let again = remote::push(&remote, &store_a, &mut a.workspace, PushOptions::default())
+        .await
+        .expect("a second push runs");
+    assert_eq!(again.album_keys_escrowed, 0, "every escrow is current");
+
+    // Machine B: its own CLI home, signed in as the account, and `capsule auth recover`.
+    let home_b = tempfile::tempdir().expect("B's CLI home");
+    let store_b = SessionStore::new(home_b.path().join("session.json"));
+    store_b
+        .save(
+            &a.login_again(&server)
+                .await
+                .export()
+                .await
+                .expect("a live session exports"),
+        )
+        .expect("the session persists");
+    let recovered_root = home_b.path().join("library");
+    let mut b = remote::auth_recover(
+        &remote,
+        &store_b,
+        &recovered_root,
+        &shown,
+        PASSPHRASE,
+        FAST_KDF,
+    )
+    .await
+    .expect("`capsule auth recover` opens the account with its albums");
+    assert_eq!(b.albums(), a.workspace.albums(), "every album, by name");
+
+    // What every later command does first: resolve the default album. It is A's, not a new one.
+    b.ensure_album(default_album, "Imports")
+        .expect("the default album resolves");
+    let held: BTreeMap<Uuid, Vec<u8>> = recovery
+        .list_album_keys()
+        .await
+        .expect("the album key escrows list")
+        .into_iter()
+        .map(|e| (e.album_id, e.blob))
+        .collect();
+    let plan = b.plan_album_key_escrows(&held).expect("B's albums compare");
+    assert!(
+        plan.to_store.is_empty() && plan.uncovered.is_empty(),
+        "B holds exactly the keys A escrowed, every epoch of every album"
+    );
+
+    // An earlier restore on B was cut off halfway through one original: its part file holds
+    // the first half of that original's ciphertext.
+    let out = tempfile::tempdir().expect("a restore directory");
+    let bundle = a
+        .workspace
+        .upload_bundle(&resumed_asset)
+        .expect("the asset's bundle");
+    let ciphertext = bundle.original.to_vec().expect("the ciphertext reads");
+    let half = ciphertext.len() / 2;
+    let staging = out.path().join(STAGING_DIR);
+    std::fs::create_dir_all(&staging).expect("the staging directory");
+    std::fs::write(
+        staging.join(format!("{}.part", bundle.ciphertext_hash.to_hex())),
+        &ciphertext[..half],
+    )
+    .expect("the part file writes");
+
+    let options = RestoreOptions {
+        scope: RestoreScope::Library,
+        out: out.path().to_path_buf(),
+        connection: ConnectionClass::Unmetered,
+        range_window: RESTORE_RANGE_WINDOW,
+    };
+    let restored = remote::restore(&remote, &store_b, &b, &options)
+        .await
+        .expect("`capsule restore` runs on the recovered device");
+    assert_eq!(restored.assets, sources.len(), "{restored:#?}");
+    assert_eq!(restored.restored, sources.len(), "{restored:#?}");
+    assert_eq!(restored.failed, 0, "{restored:#?}");
+    assert_eq!(
+        restored.resumed_bytes, half as u64,
+        "the interrupted original resumed from its part file"
+    );
+    for outcome in &restored.outcomes {
+        assert_eq!(outcome.status, AssetRestoreStatus::Restored, "{outcome:#?}");
+        let written = std::fs::read(outcome.path.as_ref().expect("a restored path"))
+            .expect("the restored original reads");
+        assert!(
+            written == sources[&outcome.asset_id],
+            "{} did not restore byte for byte",
+            outcome.asset_id
+        );
+        if outcome.asset_id == resumed_asset.to_string() {
+            assert_eq!(outcome.resumed_bytes, half as u64);
+            assert_eq!(
+                outcome.fetched_bytes,
+                (ciphertext.len() - half) as u64,
+                "only the bytes past the part file were fetched"
+            );
+        }
+    }
+
+    // B falls behind: A rotates `Trip` once more and pushes. B's next push must not replace
+    // A's escrow with its shorter one — that would cost a later recovery the newest epoch.
+    a.workspace.rotate_epoch(trip).expect("the album rotates");
+    remote::push(&remote, &store_a, &mut a.workspace, PushOptions::default())
+        .await
+        .expect("A pushes the new epoch's escrow");
+    let behind = remote::push(&remote, &store_b, &mut b, PushOptions::default())
+        .await
+        .expect("B's push runs");
+    assert_eq!(
+        behind.album_keys_escrowed, 0,
+        "a device behind stores nothing"
+    );
+
+    // B then rotates on its own: its epoch 5 is not A's. The escrow is left as A wrote it, and
+    // B's asset in that album is held back rather than sent under a key no recovery could find.
+    b.rotate_epoch(trip).expect("B rotates on its own");
+    let staged = home_b.path().join("diverged.jpg");
+    std::fs::write(&staged, synthetic_jpeg()).expect("the fixture writes");
+    let held_back = b.import_asset(trip, &staged).expect("B imports");
+    let diverged = remote::push(&remote, &store_b, &mut b, PushOptions::default())
+        .await
+        .expect("B's push runs");
+    assert_eq!(diverged.album_keys_escrowed, 0);
+    let outcome = diverged
+        .outcomes
+        .iter()
+        .find(|o| o.asset_id == held_back.to_string())
+        .expect("B's asset is reported");
+    assert_eq!(outcome.status, AssetPushStatus::Failed, "{outcome:#?}");
+    assert_eq!(
+        outcome.error.as_ref().map(|e| e.kind),
+        Some("album_keys_not_escrowed")
+    );
+
+    // A recovery from what the server holds still has every one of A's epochs.
+    let home_c = tempfile::tempdir().expect("C's CLI home");
+    let c = remote::auth_recover(
+        &remote,
+        &store_b,
+        &home_c.path().join("library"),
+        &shown,
+        PASSPHRASE,
+        FAST_KDF,
+    )
+    .await
+    .expect("a second recovery opens the account");
+    let a_escrows: BTreeMap<Uuid, Vec<u8>> = a
+        .workspace
+        .albums()
+        .into_iter()
+        .map(|(id, _)| (id, a.workspace.album_key_escrow(&id).expect("A seals")))
+        .collect();
+    let plan = c
+        .plan_album_key_escrows(&a_escrows)
+        .expect("C's albums compare");
+    assert!(
+        plan.to_store.is_empty() && plan.uncovered.is_empty(),
+        "C holds exactly A's albums, its newest epoch included"
+    );
+}
+
+/// Import a distinct original seeded by `seed` into `album` on `device`, recording its bytes in
+/// `sources` under the new asset's id. Past one STREAM chunk, so a half-written part file is a
+/// real prefix to resume from.
+fn import_into(
+    device: &mut Device,
+    sources: &mut BTreeMap<String, Vec<u8>>,
+    album: Uuid,
+    name: &str,
+    seed: u8,
+) -> Uuid {
+    let mut bytes = synthetic_jpeg();
+    bytes.extend(std::iter::repeat_n(seed, 64 * 1024 + usize::from(seed)));
+    let path = device.staging.path().join(name);
+    std::fs::write(&path, &bytes).expect("the fixture writes");
+    let asset = device
+        .workspace
+        .import_asset(album, &path)
+        .expect("the file imports");
+    sources.insert(asset.to_string(), bytes);
+    asset
 }
 
 /// Register a fresh account and read its server id, publishing no device directory for it —

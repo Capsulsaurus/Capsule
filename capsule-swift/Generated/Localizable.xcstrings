@@ -37713,6 +37713,16 @@
         }
       }
     },
+    "error.escrow.album_keys_full": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This account's recovery backup has no room for another album's keys."
+          }
+        }
+      }
+    },
     "error.escrow.identity_not_stored": {
       "localizations": {
         "en": {
@@ -39355,6 +39365,36 @@
           "stringUnit": {
             "state": "translated",
             "value": "Capsule couldn't produce that response format."
+          }
+        }
+      }
+    },
+    "error.request.not_found": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule couldn't find that."
+          }
+        }
+      }
+    },
+    "error.request.not_implemented": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule couldn't handle that request."
+          }
+        }
+      }
+    },
+    "error.request.range_not_satisfiable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule couldn't send that part of the file."
           }
         }
       }

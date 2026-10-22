@@ -7383,6 +7383,10 @@
     "message": "The device-add request could not be read.",
     "context": "HTTP 400 on the enrollment relay channel (slice S-C7): the request named an unknown direction or carried a missing/oversized opaque payload. The server never inspects the payload contents; this is a structural rejection only."
   },
+  "error.escrow.album_keys_full": {
+    "message": "This account's recovery backup has no room for another album's keys.",
+    "context": "HTTP 409 on PUT /v1/auth/escrow/albums/{album_id} (#741): storing this album's key escrow would take the account past the server's per-account bound on escrowed albums (slot count or total bytes). Nothing was written; the album's assets are held back from upload until its keys can be escrowed. Client-neutral: every client shows this code."
+  },
   "error.escrow.identity_not_stored": {
     "message": "This account's recovery backup does not include its identity key, so this device cannot be recovered as the same account. Set recovery up again from a device where this account's library still opens, then recover with the new recovery secret.",
     "context": "HTTP 404 on GET /v1/auth/escrow/identity (#544): this account has never stored its user identity key sealed under the master key, so a recovered device cannot open as the same account even if the master-key escrow is present. Distinct from error.escrow.not_stored because the remedy differs: the escrow exists but is not enough on its own. Setting recovery up (the CLI's `capsule auth escrow`, #624) stores both under a new recovery secret, which is why the message says to recover with the new one. Client-neutral: every client shows this code."
@@ -7519,9 +7523,21 @@
     "message": "Capsule couldn't handle that request.",
     "context": "HTTP 405 (slice S-C36): the path exists and the method does not. Not a state a well-formed client reaches; carried so no response on the surface is codeless."
   },
+  "error.request.not_found": {
+    "message": "Capsule couldn't find that.",
+    "context": "HTTP 404 from the router itself: no operation is mounted at the requested path. Not a state a well-formed client reaches (a missing album, link or blob is answered by its own route with its own code); carried so no response on the surface is codeless."
+  },
+  "error.request.not_implemented": {
+    "message": "Capsule couldn't handle that request.",
+    "context": "HTTP 501 from the router itself: no operation anywhere on the server answers the request's method. Not a state a well-formed client reaches; carried so no response on the surface is codeless."
+  },
   "error.request.not_acceptable": {
     "message": "Capsule couldn't produce that response format.",
     "context": "HTTP 406 (slice S-C36): the `Accept` header names no representation the operation can produce."
+  },
+  "error.request.range_not_satisfiable": {
+    "message": "Capsule couldn't send that part of the file.",
+    "context": "HTTP 416 on a blob read: the requested byte range starts past the end of the blob. A client resuming a download with a stale offset reaches it; re-fetching from the start recovers."
   },
   "error.request.too_large": {
     "message": "That request was too large to accept.",

@@ -60,7 +60,7 @@ subtle = "2.6.1"
 # dependencies doc recorded while it was a git dependency. `openapi32` is a strict, purely
 # additive superset of the default `openapi31`, and Capsule emits a 3.2 document — see the
 # OpenAPI row in design/dependencies.md.
-kynos = { version = "0.1.0", features = ["openapi32"] }
+kynos = { version = "0.4.0", features = ["openapi32"] }
 base64 = "0.22.1"
 bb8 = "0.9.1"
 bb8-redis = "0.26.0"

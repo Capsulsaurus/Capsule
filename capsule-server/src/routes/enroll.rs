@@ -223,8 +223,8 @@ pub enum RelayRejection {
     tag = EnrollmentTag
 )]
 pub async fn issue_enrollment_code(
-    Inject(enrollment): Inject<EnrollmentContext>,
     Auth(credential): Auth<AccessToken>,
+    Inject(enrollment): Inject<EnrollmentContext>,
 ) -> Result<Json<EnrollmentCodeResponse>, IssueRejection> {
     let user = UserId::new(credential.user.as_str());
     let now = enrollment.clock().now();
@@ -488,8 +488,8 @@ pub async fn drain_enrollment_channel(
     tag = EnrollmentTag
 )]
 pub async fn close_enrollment_channel(
-    Inject(enrollment): Inject<EnrollmentContext>,
     Auth(credential): Auth<AccessToken>,
+    Inject(enrollment): Inject<EnrollmentContext>,
     Path(path): Path<ChannelPath>,
 ) -> Result<NoContent, RelayRejection> {
     let user = UserId::new(credential.user.as_str());

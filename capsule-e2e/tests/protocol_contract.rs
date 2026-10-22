@@ -1,4 +1,4 @@
-//! **E2E case 9** — the cross-version protocol gate, end to end — and the body-less `413`.
+//! **E2E case 9** — the cross-version protocol gate, end to end — and the coded `413`.
 //!
 //! Case 9's wording: a client whose `protocol_version` falls outside the server's range
 //! attempts an upload, receives `426`, and the UI surfaces an actionable error. The UI leg is
@@ -15,8 +15,8 @@
 //!    decision: reads of any grammatical protocol date are admitted), while a malformed
 //!    handshake is `400 error.request.malformed`.
 //!
-//! The `413` contract: Kynos's body-size backstop answers with no problem body, so the SDK
-//! reports it as `code: None` rather than minting a code the server never sent.
+//! The `413` contract: Kynos's body-size backstop answers with a problem body, the server codes
+//! it `error.request.too_large`, and the SDK relays that code.
 
 use capsule_core::crypto::pwkdf::WrappedSecret;
 use capsule_e2e::push::ensure_album;
@@ -165,10 +165,11 @@ async fn e2e_case_9_reads_at_an_old_protocol_succeed_and_carry_the_window() {
     assert_eq!(problem["code"], "error.request.malformed");
 }
 
-/// The body-less `413`: the transport backstop carries no problem body, so the SDK reports
-/// `code: None` rather than a code the server never sent.
+/// The transport backstop's `413` is a problem like any other refusal: Kynos renders it with a
+/// body, the server's coded-problem interceptor gives it `error.request.too_large`, and the SDK
+/// relays that code.
 #[tokio::test]
-async fn a_body_past_the_transport_limit_reaches_the_sdk_as_a_codeless_413() {
+async fn a_body_past_the_transport_limit_reaches_the_sdk_as_a_coded_413() {
     let server = Server::boot().await;
     let device = Device::register(&server, "escrow").await;
     let recovery = RecoveryClient::new(device.session.clone(), server.base_url())
@@ -190,13 +191,14 @@ async fn a_body_past_the_transport_limit_reaches_the_sdk_as_a_codeless_413() {
         .await
         .expect_err("a body past the transport limit is refused");
     match &refused {
-        RecoveryError::Malformed { code, .. } => assert!(
-            code.is_none(),
-            "a body-less 413 carries no code for the SDK to relay, got {code:?}"
+        RecoveryError::Malformed { code, .. } => assert_eq!(
+            code.as_deref(),
+            Some("error.request.too_large"),
+            "the 413's code reaches the SDK"
         ),
         other => panic!("expected Malformed, got {other:?}"),
     }
-    assert_eq!(refused.error_code(), None);
+    assert_eq!(refused.error_code(), Some("error.request.too_large"));
 
     // The account is otherwise healthy: the same client provisions and reads as before.
     let albums =

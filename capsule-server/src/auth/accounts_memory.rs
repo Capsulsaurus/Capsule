@@ -579,7 +579,7 @@ mod tests {
     /// A directory with one registered account, over a clock the test drives.
     async fn seeded_on(clock: Arc<ManualClock>) -> InMemoryAccounts {
         let accounts = InMemoryAccounts::new(
-            Credentials::new().expect("the platform hashes"),
+            Credentials::with_reduced_cost().expect("the platform hashes"),
             clock,
             MAX_FAILED_ATTEMPTS,
             WINDOW,

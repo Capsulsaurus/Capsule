@@ -157,8 +157,8 @@ fn parse_status(token: &str) -> Option<UploadSessionStatus> {
     tag = UploadTag
 )]
 pub async fn list_upload_sessions(
-    Inject(upload): Inject<UploadContext>,
     Auth(credential): Auth<AccessToken>,
+    Inject(upload): Inject<UploadContext>,
     Query(query): Query<SessionsQuery>,
 ) -> Result<Json<SessionsResponse>, SessionsRejection> {
     // Parsed before the store is reached, so a typo costs no round trip — and, more to the

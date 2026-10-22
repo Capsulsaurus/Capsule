@@ -1836,6 +1836,7 @@
     <string name="error_enrollment_local_auth_required">Confirm it\'s you on this device to add another device.</string>
     <string name="error_enrollment_rate_limited">Too many device-add attempts. Please wait and try again.</string>
     <string name="error_enrollment_relay_malformed">The device-add request could not be read.</string>
+    <string name="error_escrow_album_keys_full">This account\'s recovery backup has no room for another album\'s keys.</string>
     <string name="error_escrow_identity_not_stored">This account\'s recovery backup does not include its identity key, so this device cannot be recovered as the same account. Set recovery up again from a device where this account\'s library still opens, then recover with the new recovery secret.</string>
     <string name="error_escrow_malformed">The recovery backup could not be saved.</string>
     <string name="error_escrow_not_stored">No recovery backup is saved for this account.</string>
@@ -1871,6 +1872,9 @@
     <string name="error_request_malformed">Capsule couldn\'t read that request.</string>
     <string name="error_request_method_not_allowed">Capsule couldn\'t handle that request.</string>
     <string name="error_request_not_acceptable">Capsule couldn\'t produce that response format.</string>
+    <string name="error_request_not_found">Capsule couldn\'t find that.</string>
+    <string name="error_request_not_implemented">Capsule couldn\'t handle that request.</string>
+    <string name="error_request_range_not_satisfiable">Capsule couldn\'t send that part of the file.</string>
     <string name="error_request_too_large">That request was too large to accept.</string>
     <string name="error_request_unauthenticated">Please sign in again.</string>
     <string name="error_request_unprocessable">Some of that request didn\'t make sense.</string>

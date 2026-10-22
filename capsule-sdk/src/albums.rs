@@ -471,11 +471,10 @@ fn publish_refusal(error: crate::rest::Error<crate::rest::PublishAlbumRosterErro
                 .current_version
                 .and_then(|held| u64::try_from(held).ok()),
         ),
-        // The body-less refusal: a request past the transport's size backstop.
-        Refusal::Status413 => (None, None),
         Refusal::Status401(problem)
         | Refusal::Status403(problem)
         | Refusal::Status404(problem)
+        | Refusal::Status413(problem)
         | Refusal::Status415(problem)
         | Refusal::Status422(problem)
         | Refusal::Status426(problem)

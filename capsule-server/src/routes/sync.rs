@@ -360,10 +360,10 @@ enum Reader {
 /// harmless and a retry free.
 #[kynos::get("/v1/sync", operation_id = "sync_feed", tag = SyncTag)]
 pub async fn sync_feed(
+    Auth(principal): Auth<ReadBearer>,
     Inject(sync): Inject<SyncContext>,
     Inject(federation): Inject<FederationContext>,
     Inject(counters): Inject<CounterContext>,
-    Auth(principal): Auth<ReadBearer>,
     Query(query): Query<SyncQuery>,
 ) -> Result<Json<SyncPageResponse>, SyncRejection> {
     let requested = query.album_id.as_deref().map(AlbumId::new);

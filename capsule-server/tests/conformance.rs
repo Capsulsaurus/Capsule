@@ -186,6 +186,8 @@ async fn every_declared_response_is_exercised() {
         ("GET", "/v1/auth/escrow"),
         ("PUT", "/v1/auth/escrow/identity"),
         ("GET", "/v1/auth/escrow/identity"),
+        ("PUT", "/v1/auth/escrow/albums/anything"),
+        ("GET", "/v1/auth/escrow/albums"),
         ("GET", "/v1/auth/profile"),
         ("PATCH", "/v1/auth/profile"),
         ("POST", "/v1/auth/password"),
@@ -1268,6 +1270,27 @@ async fn every_declared_response_is_exercised() {
         .send()
         .await
         .assert_status(StatusCode::NOT_MODIFIED);
+    // 412 and 416 come from the same `Delivery`: a precondition naming another representation,
+    // and a range that starts past the last byte.
+    client
+        .get(&format!("/v1/blob/{address}"))
+        .header("authorization", &bearer)
+        .header("if-match", "\"some-other-representation\"")
+        .send()
+        .await
+        .assert_status(StatusCode::PRECONDITION_FAILED);
+    let unsatisfiable = client
+        .get(&format!("/v1/blob/{address}"))
+        .header("authorization", &bearer)
+        .header("range", "bytes=1000000000-")
+        .send()
+        .await;
+    unsatisfiable.assert_status(StatusCode::RANGE_NOT_SATISFIABLE);
+    let body: serde_json::Value = unsatisfiable.json();
+    assert_eq!(
+        body["code"], "error.request.range_not_satisfiable",
+        "{body}"
+    );
 
     // 500: the index could not answer, which must never look like a missing blob.
     fixture.index.set_unavailable(true);
@@ -3002,6 +3025,19 @@ async fn every_declared_response_is_exercised() {
         .send()
         .await
         .assert_status(StatusCode::NOT_MODIFIED);
+    // 412 from a precondition naming another representation, 416 from a range past the end.
+    client
+        .get(&format!("/s/{share_id}/blob/{share_address}"))
+        .header("if-match", "\"some-other-representation\"")
+        .send()
+        .await
+        .assert_status(StatusCode::PRECONDITION_FAILED);
+    client
+        .get(&format!("/s/{share_id}/blob/{share_address}"))
+        .header("range", "bytes=1000000000-")
+        .send()
+        .await
+        .assert_status(StatusCode::RANGE_NOT_SATISFIABLE);
 
     for path in [
         "/s/%FF".to_owned(),
@@ -3212,6 +3248,9 @@ async fn every_declared_response_is_exercised() {
 
     // ── The sealed identity beside the escrow (#544) ───────────────────────────────────────
     sealed_identity_block(client, &fixture, &bearer, &rotated.refresh_token).await;
+
+    // ── The album key escrows beside it (#741) ─────────────────────────────────────────────
+    album_keys_block(client, &fixture, &bearer, &rotated.refresh_token).await;
 
     // ── The profile surface (`S-C54`) ──────────────────────────────────────────────────────
     profile_block(client, &fixture).await;
@@ -3746,6 +3785,53 @@ async fn the_protocol_window_rides_every_response_on_the_wire() {
     assert_eq!(walked, operations(&json).len());
 }
 
+/// A request no operation answers carries the window too (issue #621).
+///
+/// The census above walks the operations the document describes, so it never reaches the
+/// router's own fallbacks: an unrouted `404`, and the `405` for a path that exists under another
+/// method. `Negotiation` is the root router's interceptor, which Kynos runs around those as well,
+/// and `CodedProblems` beside it gives each its catalog code rather than the unmapped fallback.
+#[tokio::test]
+async fn an_unrouted_404_and_405_carry_the_protocol_window() {
+    use capsule_server::upload::policy::{
+        DEFAULT_MIN_CLIENT_BUILD, DEFAULT_PROTOCOL_MAX, DEFAULT_PROTOCOL_MIN,
+    };
+
+    let fixture = Fixture::working();
+    for (method, path, status, code) in [
+        (
+            kynos::http::Method::GET,
+            "/v1/no-such-route",
+            StatusCode::NOT_FOUND,
+            "error.request.not_found",
+        ),
+        (
+            // `/v1/version` is mounted for `GET` only, and `DELETE` is a method other
+            // operations answer, so this is a `405` rather than a `501`.
+            kynos::http::Method::DELETE,
+            "/v1/version",
+            StatusCode::METHOD_NOT_ALLOWED,
+            "error.request.method_not_allowed",
+        ),
+    ] {
+        let response = fixture.client.method(method.clone(), path).send().await;
+        response.assert_status(status);
+        for (name, expected) in [
+            ("x-capsule-protocol-min", DEFAULT_PROTOCOL_MIN),
+            ("x-capsule-protocol-max", DEFAULT_PROTOCOL_MAX),
+            ("x-capsule-min-client-build", DEFAULT_MIN_CLIENT_BUILD),
+        ] {
+            assert_eq!(
+                response.header(name),
+                Some(expected),
+                "{method} {path} answered {status} without {name}"
+            );
+        }
+        let body: serde_json::Value = response.json();
+        assert_eq!(body["code"], code, "{method} {path}: {body}");
+    }
+}
+
 /// One gated route per module, held to the handshake before anything else is read (issue #404).
 ///
 /// The wire census above walks every operation; this is the same fact at reading size, in the
@@ -4047,6 +4133,125 @@ async fn sealed_identity_block(
         .send()
         .await
         .assert_status(StatusCode::OK);
+}
+
+/// Every declared answer of `PUT /v1/auth/escrow/albums/{album_id}` and
+/// `GET /v1/auth/escrow/albums`, in the escrow block's order.
+async fn album_keys_block(
+    client: &support::Client,
+    fixture: &Fixture,
+    bearer: &str,
+    refresh_token: &str,
+) {
+    const ALBUM: &str = "/v1/auth/escrow/albums/0198f3c2-9c4a-7b3d-8f21-4d7c9a1b2e35";
+    const LIST: &str = "/v1/auth/escrow/albums";
+    let refresh = format!("Bearer {refresh_token}");
+
+    // 401 without a credential; 403 with a refresh token where an access token belongs.
+    client
+        .put(ALBUM)
+        .body("application/octet-stream", vec![5_u8; 96])
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    client
+        .get(LIST)
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    client
+        .put(ALBUM)
+        .header("authorization", &refresh)
+        .body("application/octet-stream", vec![5_u8; 96])
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    client
+        .get(LIST)
+        .header("authorization", &refresh)
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+
+    // 415: not octet-stream. 400 twice: an empty body, and a path naming no album.
+    client
+        .put(ALBUM)
+        .header("authorization", bearer)
+        .body("application/json", "{}")
+        .send()
+        .await
+        .assert_status(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    client
+        .put(ALBUM)
+        .header("authorization", bearer)
+        .body("application/octet-stream", Vec::<u8>::new())
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    client
+        .put("/v1/auth/escrow/albums/not-an-album")
+        .header("authorization", bearer)
+        .body("application/octet-stream", vec![5_u8; 96])
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+
+    // 500 on both.
+    fixture.escrows.set_unavailable(true);
+    client
+        .put(ALBUM)
+        .header("authorization", bearer)
+        .body("application/octet-stream", vec![5_u8; 96])
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    client
+        .get(LIST)
+        .header("authorization", bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    fixture.escrows.set_unavailable(false);
+
+    // 200 on both.
+    client
+        .put(ALBUM)
+        .header("authorization", bearer)
+        .header("accept", "application/json")
+        .body("application/octet-stream", vec![5_u8; 96])
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+    client
+        .get(LIST)
+        .header("authorization", bearer)
+        .header("accept", "application/json")
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+
+    // 409: the account's album key escrows at their byte bound, filled with ceiling-sized slots
+    // under album ids of their own; the next new slot is refused.
+    let largest = vec![6_u8; capsule_server::escrow::MAX_ALBUM_KEY_ESCROW_BYTES];
+    let fill = capsule_server::escrow::MAX_ALBUM_KEY_ESCROW_TOTAL_BYTES
+        / capsule_server::escrow::MAX_ALBUM_KEY_ESCROW_BYTES;
+    for n in 0..=fill {
+        let path = format!("/v1/auth/escrow/albums/0198f3c2-0000-7000-8000-{n:012x}");
+        let response = client
+            .put(&path)
+            .header("authorization", bearer)
+            .header("accept", "application/json")
+            .body("application/octet-stream", largest.clone())
+            .send()
+            .await;
+        if n < fill - 1 {
+            response.assert_status(StatusCode::OK);
+        } else if n == fill {
+            response.assert_status(StatusCode::CONFLICT);
+            let problem: serde_json::Value = response.json();
+            assert_eq!(problem["code"], "error.escrow.album_keys_full");
+        }
+    }
 }
 
 async fn totp_block(client: &support::Client, fixture: &Fixture) {

@@ -178,10 +178,12 @@ impl FederationPull {
             .revoked_jti()
             .await
             .map_err(|error| {
-                // The list declares one coded refusal, so the generated error is a newtype
-                // over the problem rather than an enum of statuses.
+                // Every refusal the list declares is coded, so whichever status carried it the
+                // generated error has a problem body to read the code from.
                 let code = match &error {
-                    rest::Error::Api(response) => Some(response.inner().0.code.clone()),
+                    rest::Error::Api(response) => {
+                        response.inner().body().map(|problem| problem.code.clone())
+                    }
                     _ => None,
                 };
                 refusal("the revocation list", code, &error.to_string())
@@ -488,7 +490,9 @@ fn describe(error: rest::GetBlobError) -> (u16, Option<String>) {
         rest::GetBlobError::Status404(problem) => coded(404, problem),
         rest::GetBlobError::Status409(problem) => coded(409, problem),
         rest::GetBlobError::Status410(problem) => coded(410, problem),
-        rest::GetBlobError::Status413 => (413, None),
+        rest::GetBlobError::Status412 => (412, None),
+        rest::GetBlobError::Status413(problem) => coded(413, problem),
+        rest::GetBlobError::Status416(problem) => coded(416, problem),
         rest::GetBlobError::Status429(problem) => coded(429, problem),
         rest::GetBlobError::Status500(problem) => coded(500, problem),
     }

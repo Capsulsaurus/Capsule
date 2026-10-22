@@ -269,6 +269,9 @@ pub mod error_codes {
     /// `error.enrollment.relay_malformed`
     pub const ENROLLMENT_RELAY_MALFORMED: &str = "error.enrollment.relay_malformed";
 
+    /// `error.escrow.album_keys_full`
+    pub const ESCROW_ALBUM_KEYS_FULL: &str = "error.escrow.album_keys_full";
+
     /// `error.escrow.identity_not_stored`
     pub const ESCROW_IDENTITY_NOT_STORED: &str = "error.escrow.identity_not_stored";
 
@@ -373,6 +376,15 @@ pub mod error_codes {
 
     /// `error.request.not_acceptable`
     pub const REQUEST_NOT_ACCEPTABLE: &str = "error.request.not_acceptable";
+
+    /// `error.request.not_found`
+    pub const REQUEST_NOT_FOUND: &str = "error.request.not_found";
+
+    /// `error.request.not_implemented`
+    pub const REQUEST_NOT_IMPLEMENTED: &str = "error.request.not_implemented";
+
+    /// `error.request.range_not_satisfiable`
+    pub const REQUEST_RANGE_NOT_SATISFIABLE: &str = "error.request.range_not_satisfiable";
 
     /// `error.request.too_large`
     pub const REQUEST_TOO_LARGE: &str = "error.request.too_large";

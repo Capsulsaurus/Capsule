@@ -156,6 +156,60 @@ async fn each_lifecycle_op_is_paired_with_the_entry_that_recorded_its_position()
     );
 }
 
+fn purge(asset: &str) -> LedgerEvent {
+    LedgerEvent::Lifecycle {
+        asset_id: asset.to_owned(),
+        action: crate::ledger::rebuild::PURGE.to_owned(),
+        manifest_hash: None,
+        sync_seq: None,
+    }
+}
+
+fn purged(asset: &str, purge_seq: Option<u64>) -> LedgerEvent {
+    LedgerEvent::Lifecycle {
+        asset_id: asset.to_owned(),
+        action: crate::ledger::rebuild::PURGED.to_owned(),
+        manifest_hash: None,
+        sync_seq: purge_seq,
+    }
+}
+
+#[tokio::test]
+async fn a_purged_entry_confirms_exactly_the_purge_it_names() {
+    let key = signer(1);
+    let scan = ledger_of(
+        vec![
+            // 1: confirmed by 4, although 3 is the latest unconfirmed purge of the asset by then.
+            purge("asset-a"),
+            // 2
+            purge("asset-b"),
+            // 3: refused by the index; nothing names it.
+            purge("asset-a"),
+            purged("asset-a", Some(1)),
+            // A confirmation naming another asset's purge, one naming no entry, and one naming
+            // nothing confirm nothing.
+            purged("asset-c", Some(2)),
+            purged("asset-b", Some(99)),
+            purged("asset-b", None),
+        ],
+        &key,
+    )
+    .await;
+    let found = lifecycle(&scan.entries);
+    assert_eq!(
+        found
+            .iter()
+            .map(|op| (op.ledger_seq, op.asset_id.as_str(), op.confirmed))
+            .collect::<Vec<_>>(),
+        vec![
+            (1, "asset-a", true),
+            (2, "asset-b", false),
+            (3, "asset-a", false)
+        ],
+        "a confirmation is never an op of its own"
+    );
+}
+
 #[tokio::test]
 async fn keys_check_signatures_and_no_keys_check_links_only() {
     let key = signer(1);

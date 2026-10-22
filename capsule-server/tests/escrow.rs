@@ -359,3 +359,162 @@ async fn a_sealed_identity_is_scoped_to_its_account_and_refused_like_an_escrow()
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
 }
+
+// ===========================================================================================
+// The album key escrows beside it (#741)
+// ===========================================================================================
+
+/// Where the album key escrows are listed, and under which each album's is stored.
+const ALBUM_KEYS: &str = "/v1/auth/escrow/albums";
+
+/// A canonical album id.
+const ALBUM_B: &str = "0198f3c2-9c4a-7b3d-8f21-4d7c9a1b2e35";
+
+/// A canonical album id ordering before [`ALBUM_B`].
+const ALBUM_A: &str = "0198f3c2-0000-7000-8000-000000000001";
+
+/// Store `blob` as `album`'s key escrow and assert the status.
+async fn store_album_keys(
+    fixture: &Fixture,
+    bearer: &str,
+    album: &str,
+    blob: Vec<u8>,
+    expect: StatusCode,
+) -> kynos::test::TestResponse {
+    let response = fixture
+        .client
+        .put(&format!("{ALBUM_KEYS}/{album}"))
+        .header("authorization", bearer)
+        .header("accept", "application/json")
+        .body("application/octet-stream", blob)
+        .send()
+        .await;
+    response.assert_status(expect);
+    response
+}
+
+/// The caller's album key escrows as `(album_id, blob)`, in the order served.
+async fn list_album_keys(fixture: &Fixture, bearer: &str) -> Vec<(String, Vec<u8>)> {
+    use base64::Engine as _;
+    let response = fixture
+        .client
+        .get(ALBUM_KEYS)
+        .header("authorization", bearer)
+        .header("accept", "application/json")
+        .send()
+        .await;
+    response.assert_status(StatusCode::OK);
+    let body: Value = response.json();
+    body["albums"]
+        .as_array()
+        .expect("a listing")
+        .iter()
+        .map(|entry| {
+            assert!(entry["stored_at"].as_str().is_some(), "{entry}");
+            (
+                entry["album_id"].as_str().expect("an album id").to_owned(),
+                base64::engine::general_purpose::STANDARD
+                    .decode(entry["blob"].as_str().expect("a blob"))
+                    .expect("standard base64"),
+            )
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn album_key_escrows_list_byte_for_byte_one_per_album_in_album_order() {
+    // A recovered device opens each blob under the master key it recovered, so each comes back
+    // exactly as stored; a second store for one album replaces only that album's.
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    assert!(
+        list_album_keys(&fixture, &bearer).await.is_empty(),
+        "no album escrowed is an empty listing, not a 404"
+    );
+
+    let body: Value = store_album_keys(
+        &fixture,
+        &bearer,
+        ALBUM_B,
+        wrapped(0xC1, 200),
+        StatusCode::OK,
+    )
+    .await
+    .json();
+    assert_eq!(body["album_id"], ALBUM_B);
+    assert_eq!(body["replaced"], false);
+    let rotated = wrapped(0xC2, 260);
+    let body: Value = store_album_keys(&fixture, &bearer, ALBUM_B, rotated.clone(), StatusCode::OK)
+        .await
+        .json();
+    assert_eq!(body["replaced"], true, "one slot per album");
+    let other = wrapped(0xC3, 64);
+    store_album_keys(&fixture, &bearer, ALBUM_A, other.clone(), StatusCode::OK).await;
+
+    assert_eq!(
+        list_album_keys(&fixture, &bearer).await,
+        vec![(ALBUM_A.to_owned(), other), (ALBUM_B.to_owned(), rotated)]
+    );
+    fetch(&fixture, &bearer, StatusCode::NOT_FOUND).await;
+    fetch_identity(&fixture, &bearer, StatusCode::NOT_FOUND).await;
+}
+
+#[tokio::test]
+async fn album_key_escrows_are_scoped_to_their_account_and_refused_with_codes() {
+    let fixture = Fixture::working();
+    let mine = fixture.bearer().await;
+    let theirs = fixture
+        .other_bearer("01937b7c-0000-7000-8000-0000000000ff")
+        .await;
+    let held = wrapped(0xD1, 128);
+    store_album_keys(&fixture, &mine, ALBUM_A, held.clone(), StatusCode::OK).await;
+    assert!(list_album_keys(&fixture, &theirs).await.is_empty());
+
+    // Past the escrow's ceiling is still an album's keys; past their own is refused.
+    let large = wrapped(0xD2, capsule_server::escrow::MAX_ESCROW_BYTES + 1);
+    store_album_keys(&fixture, &mine, ALBUM_B, large.clone(), StatusCode::OK).await;
+    let huge = wrapped(0xD3, capsule_server::escrow::MAX_ALBUM_KEY_ESCROW_BYTES + 1);
+    let problem: Value = store_album_keys(&fixture, &mine, ALBUM_A, huge, StatusCode::BAD_REQUEST)
+        .await
+        .json();
+    assert_eq!(problem["code"], "error.escrow.malformed");
+    let problem: Value = store_album_keys(
+        &fixture,
+        &mine,
+        ALBUM_A,
+        Vec::new(),
+        StatusCode::BAD_REQUEST,
+    )
+    .await
+    .json();
+    assert_eq!(problem["code"], "error.escrow.malformed");
+    for album in ["not-an-album", "0198F3C2-0000-7000-8000-000000000001"] {
+        let problem: Value = store_album_keys(
+            &fixture,
+            &mine,
+            album,
+            held.clone(),
+            StatusCode::BAD_REQUEST,
+        )
+        .await
+        .json();
+        assert_eq!(problem["code"], "error.album.invalid_id", "{album}");
+    }
+    assert_eq!(
+        list_album_keys(&fixture, &mine).await,
+        vec![(ALBUM_A.to_owned(), held), (ALBUM_B.to_owned(), large)],
+        "a refusal is not a deletion"
+    );
+
+    fixture.escrows.set_unavailable(true);
+    let problem: Value = store_album_keys(
+        &fixture,
+        &mine,
+        ALBUM_A,
+        wrapped(0xD4, 8),
+        StatusCode::INTERNAL_SERVER_ERROR,
+    )
+    .await
+    .json();
+    assert_eq!(problem["code"], "error.escrow.unavailable");
+}

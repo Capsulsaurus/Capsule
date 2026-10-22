@@ -227,10 +227,10 @@ impl VerifyRejection {
     tag = StorageTag
 )]
 pub async fn verify_storage(
+    Auth(credential): Auth<AccessToken>,
     Inject(verify): Inject<VerifyContext>,
     Inject(counters): Inject<crate::counter::CounterContext>,
     Inject(attestation): Inject<AttestationContext>,
-    Auth(credential): Auth<AccessToken>,
     Json(request): Json<StorageVerifyRequest>,
 ) -> Result<Json<StorageVerifyResponse>, VerifyRejection> {
     let queries = parse(&request)?;

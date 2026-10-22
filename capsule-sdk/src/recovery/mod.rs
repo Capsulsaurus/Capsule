@@ -19,7 +19,11 @@
 //!   [`fetch_sealed_identity`](RecoveryClient::fetch_sealed_identity),
 //!   `/v1/auth/escrow/identity`, #544): the user identity key sealed under the master key,
 //!   which a recovered device opens beside the recovered master key to come up as the same
-//!   account.
+//!   account. And it stores and lists the account's **album key escrows**
+//!   ([`store_album_keys`](RecoveryClient::store_album_keys),
+//!   [`list_album_keys`](RecoveryClient::list_album_keys), `/v1/auth/escrow/albums`, #741):
+//!   each album's keys sealed under the master key, which a recovered device adopts so it can
+//!   open the account's assets.
 //!
 //! The escrow blob on the wire is the opaque canonical-CBOR encoding of a
 //! [`WrappedSecret`] — byte-identical to what the server stores verbatim and to what the
@@ -46,6 +50,8 @@ pub mod cadence;
 
 use std::sync::Arc;
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 pub use cadence::{
     BACKOFF_INTERVAL_SECS, CAP_INTERVAL_SECS, INITIAL_INTERVAL_SECS, MAX_CONSECUTIVE_SNOOZES,
     REWRAP_FAILURE_THRESHOLD, REWRAP_MIN_SESSIONS, RearmTrigger, RecoveryCadence, SnoozeDuration,
@@ -58,6 +64,7 @@ use capsule_core::crypto::rng;
 use capsule_i18n::error_codes;
 use jiff::Timestamp;
 use tracing::instrument;
+use uuid::Uuid;
 
 use crate::auth::Session;
 use crate::client::{
@@ -126,6 +133,15 @@ pub enum RecoveryError {
         /// English detail from the problem body.
         detail: String,
     },
+    /// The account's album key escrows are at the server's per-account bound (`409`, coded
+    /// `error.escrow.album_keys_full`): nothing was stored, and resending will not fit either.
+    #[error("the account's album key escrows are full: {detail}")]
+    AlbumKeysFull {
+        /// The stable `error.*` catalog code the refusal carried.
+        code: Option<String>,
+        /// English detail from the problem body.
+        detail: String,
+    },
     /// The escrow store could not answer (`500`). Transient, and coded
     /// `error.escrow.unavailable` — which is why it is not folded into
     /// [`Transport`](RecoveryError::Transport): a caller that localizes codes has one to show.
@@ -148,7 +164,7 @@ pub enum RecoveryError {
     #[error("re-wrapping the master key failed: {0}")]
     Wrap(String),
     /// The server returned a status this client does not model as an escrow outcome — an
-    /// unmodeled status, or the body-size backstop's body-less `413` on a read.
+    /// unmodeled status, or the body-size backstop's `413` on a read.
     #[error("unexpected {status} response from the escrow endpoint")]
     Unexpected {
         /// The HTTP status code the server returned.
@@ -172,6 +188,7 @@ impl RecoveryError {
         match self {
             Self::Unauthorized { code, .. }
             | Self::Malformed { code, .. }
+            | Self::AlbumKeysFull { code, .. }
             | Self::Unavailable { code, .. }
             | Self::Unexpected { code, .. } => code.as_deref(),
             Self::UpgradeRequired(refusal) => Some(refusal.error_code()),
@@ -220,6 +237,28 @@ pub struct SealedIdentityStored {
     /// Whether this displaced an earlier sealed identity. Unlike an escrow replacement it retires
     /// no secret: the identity key is the same one, sealed again.
     pub replaced: bool,
+}
+
+/// What storing an album key escrow did: the server's `StoreAlbumKeysResponse`, read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AlbumKeysStored {
+    /// When the server accepted the blob, on the server's clock.
+    pub stored_at: Timestamp,
+    /// Whether this displaced an earlier escrow of the same album's keys.
+    pub replaced: bool,
+}
+
+/// One album's key escrow as the server holds it: the album's whole key state, sealed under the
+/// master key by `Workspace::album_key_escrow`, and opened by
+/// `Workspace::adopt_album_key_escrows`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EscrowedAlbumKeys {
+    /// The album the keys are of.
+    pub album_id: Uuid,
+    /// The sealed keys, exactly as stored.
+    pub blob: Vec<u8>,
+    /// When the server accepted them.
+    pub stored_at: Timestamp,
 }
 
 /// A client-side cached copy of the server escrow blob.
@@ -558,6 +597,75 @@ impl RecoveryClient {
         Ok(bytes.to_vec())
     }
 
+    /// Store or replace one album's **key escrow** (`PUT /v1/auth/escrow/albums/{album_id}`,
+    /// #741): the album's whole key state sealed under the master key, as
+    /// `Workspace::album_key_escrow` returns it. One slot per album; storing it never touches
+    /// another album's, the escrow or the sealed identity.
+    ///
+    /// # Errors
+    ///
+    /// [`RecoveryError::Malformed`] for a blob the server refuses (empty, past the album keys'
+    /// ceiling, or an album id that is not canonical), the credential and store refusals
+    /// [`store_escrow`](Self::store_escrow) maps, and [`RecoveryError::InvalidResponse`] for an
+    /// unreadable `stored_at`.
+    #[instrument(skip(self, sealed), fields(len = sealed.len()))]
+    pub async fn store_album_keys(
+        &self,
+        album_id: Uuid,
+        sealed: &[u8],
+    ) -> Result<AlbumKeysStored, RecoveryError> {
+        let stored = self
+            .client
+            .store_album_keys(
+                album_id.to_string(),
+                capsule_core::crypto::primitives::PROTOCOL_VERSION,
+                rest::StoreAlbumKeysParams::default(),
+                &rest::types::RequestBody::from(sealed.to_vec()),
+            )
+            .await
+            .map_err(store_album_keys_error)?
+            .into_inner();
+        let stored_at = stored_instant(&stored.stored_at, "album key escrow")?;
+        tracing::info!(
+            %album_id,
+            %stored_at,
+            replaced = stored.replaced,
+            "album key escrow stored (one per album: any prior one replaced)"
+        );
+        Ok(AlbumKeysStored {
+            stored_at,
+            replaced: stored.replaced,
+        })
+    }
+
+    /// Every album key escrow the account holds (`GET /v1/auth/escrow/albums`), each blob
+    /// verbatim, in album order. Empty for an account that has escrowed no album.
+    ///
+    /// # Errors
+    ///
+    /// The credential and store refusals [`fetch_escrow`](Self::fetch_escrow) maps, and
+    /// [`RecoveryError::InvalidResponse`] when an entry's album id, blob or `stored_at` cannot
+    /// be read.
+    #[instrument(skip_all)]
+    pub async fn list_album_keys(&self) -> Result<Vec<EscrowedAlbumKeys>, RecoveryError> {
+        let listing = self
+            .client
+            .list_album_keys(
+                capsule_core::crypto::primitives::PROTOCOL_VERSION,
+                rest::ListAlbumKeysParams::default(),
+            )
+            .await
+            .map_err(list_album_keys_error)?
+            .into_inner();
+        let albums = listing
+            .albums
+            .into_iter()
+            .map(read_escrowed_album_keys)
+            .collect::<Result<Vec<_>, RecoveryError>>()?;
+        tracing::debug!(albums = albums.len(), "fetched the album key escrows");
+        Ok(albums)
+    }
+
     /// Local recovery-secret verification with the **stale-cache rule** (SSoT § Local
     /// Verification): run the offline derived-tag compare against the cached blob; if it
     /// does not verify, refresh the blob from the server **once** and retry before
@@ -712,9 +820,9 @@ fn fetch_escrow_error(error: rest::Error<rest::FetchEscrowError>) -> RecoveryErr
             rest::FetchEscrowError::Status500(problem) => unavailable(&problem),
             // Declared by the transport backstop and unreachable on a body-less `GET`; kept
             // honest rather than folded into a class it does not belong to.
-            rest::FetchEscrowError::Status413 => RecoveryError::Unexpected {
+            rest::FetchEscrowError::Status413(problem) => RecoveryError::Unexpected {
                 status: 413,
-                code: None,
+                code: Some(problem.code.clone()),
             },
         },
         other => wire_error(&other),
@@ -750,8 +858,8 @@ fn store_escrow_error(error: rest::Error<rest::StoreEscrowError>) -> RecoveryErr
             // something it did not — a client localizing it would be reading the SDK's guess
             // as the server's judgement. The English detail says what happened instead; the
             // variant already says "these bytes will not do, do not resend them".
-            rest::StoreEscrowError::Status413 => RecoveryError::Malformed {
-                code: None,
+            rest::StoreEscrowError::Status413(problem) => RecoveryError::Malformed {
+                code: Some(problem.code.clone()),
                 detail: "the escrow blob exceeds the server's request-body limit".to_owned(),
             },
         },
@@ -777,9 +885,9 @@ fn fetch_sealed_identity_error(
             rest::FetchSealedIdentityError::Status401(problem)
             | rest::FetchSealedIdentityError::Status403(problem) => refused(&problem),
             rest::FetchSealedIdentityError::Status500(problem) => unavailable(&problem),
-            rest::FetchSealedIdentityError::Status413 => RecoveryError::Unexpected {
+            rest::FetchSealedIdentityError::Status413(problem) => RecoveryError::Unexpected {
                 status: 413,
-                code: None,
+                code: Some(problem.code.clone()),
             },
         },
         other => wire_error(&other),
@@ -809,9 +917,91 @@ fn store_sealed_identity_error(
             rest::StoreSealedIdentityError::Status401(problem)
             | rest::StoreSealedIdentityError::Status403(problem) => refused(&problem),
             rest::StoreSealedIdentityError::Status500(problem) => unavailable(&problem),
-            rest::StoreSealedIdentityError::Status413 => RecoveryError::Malformed {
-                code: None,
+            rest::StoreSealedIdentityError::Status413(problem) => RecoveryError::Malformed {
+                code: Some(problem.code.clone()),
                 detail: "the sealed identity exceeds the server's request-body limit".to_owned(),
+            },
+        },
+        other => wire_error(&other),
+    }
+}
+
+/// Read one entry of the album key listing: a UUID album id, a standard-base64 blob and an
+/// RFC 3339 `stored_at`, or [`RecoveryError::InvalidResponse`] naming the one that is not.
+fn read_escrowed_album_keys(
+    entry: rest::types::EscrowedAlbumKeys,
+) -> Result<EscrowedAlbumKeys, RecoveryError> {
+    let album_id = Uuid::parse_str(&entry.album_id).map_err(|error| {
+        RecoveryError::InvalidResponse(format!(
+            "album id {:?} is not a UUID: {error}",
+            entry.album_id
+        ))
+    })?;
+    let blob = BASE64_STANDARD.decode(&entry.blob).map_err(|error| {
+        RecoveryError::InvalidResponse(format!(
+            "album {album_id}'s key escrow is not standard base64: {error}"
+        ))
+    })?;
+    let stored_at = stored_instant(&entry.stored_at, "album key escrow")?;
+    Ok(EscrowedAlbumKeys {
+        album_id,
+        blob,
+        stored_at,
+    })
+}
+
+/// Map a `PUT /v1/auth/escrow/albums/{album_id}` refusal onto its typed variant — the escrow
+/// store's table, status for status.
+fn store_album_keys_error(error: rest::Error<rest::StoreAlbumKeysError>) -> RecoveryError {
+    if let Some(refusal) = upgrade_required_of(&error) {
+        return RecoveryError::UpgradeRequired(Box::new(refusal));
+    }
+    match error {
+        rest::Error::Api(response) => match response.into_inner() {
+            rest::StoreAlbumKeysError::Status400(problem)
+            | rest::StoreAlbumKeysError::Status415(problem) => RecoveryError::Malformed {
+                code: Some(problem.code.clone()),
+                detail: detail(&problem),
+            },
+            // Unreachable: every `426` is taken as `UpgradeRequired` above.
+            rest::StoreAlbumKeysError::Status426(problem) => RecoveryError::Unexpected {
+                status: 426,
+                code: Some(problem.code.clone()),
+            },
+            rest::StoreAlbumKeysError::Status409(problem) => RecoveryError::AlbumKeysFull {
+                code: Some(problem.code.clone()),
+                detail: detail(&problem),
+            },
+            rest::StoreAlbumKeysError::Status401(problem)
+            | rest::StoreAlbumKeysError::Status403(problem) => refused(&problem),
+            rest::StoreAlbumKeysError::Status500(problem) => unavailable(&problem),
+            rest::StoreAlbumKeysError::Status413(problem) => RecoveryError::Malformed {
+                code: Some(problem.code.clone()),
+                detail: "the album key escrow exceeds the server's request-body limit".to_owned(),
+            },
+        },
+        other => wire_error(&other),
+    }
+}
+
+/// Map a `GET /v1/auth/escrow/albums` refusal onto its typed variant: the escrow fetch's table,
+/// with no `404` — an account with no album escrowed lists none.
+fn list_album_keys_error(error: rest::Error<rest::ListAlbumKeysError>) -> RecoveryError {
+    if let Some(refusal) = upgrade_required_of(&error) {
+        return RecoveryError::UpgradeRequired(Box::new(refusal));
+    }
+    match error {
+        rest::Error::Api(response) => match response.into_inner() {
+            rest::ListAlbumKeysError::Status400(problem) => RecoveryError::Malformed {
+                code: Some(problem.code.clone()),
+                detail: detail(&problem),
+            },
+            rest::ListAlbumKeysError::Status401(problem)
+            | rest::ListAlbumKeysError::Status403(problem) => refused(&problem),
+            rest::ListAlbumKeysError::Status500(problem) => unavailable(&problem),
+            rest::ListAlbumKeysError::Status413(problem) => RecoveryError::Unexpected {
+                status: 413,
+                code: Some(problem.code.clone()),
             },
         },
         other => wire_error(&other),
@@ -1871,6 +2061,7 @@ mod tests {
         for error in [
             store_escrow_error(gate_426()),
             store_sealed_identity_error(gate_426()),
+            store_album_keys_error(gate_426()),
         ] {
             let RecoveryError::UpgradeRequired(refusal) = &error else {
                 panic!("expected UpgradeRequired, got {error:?}");
@@ -1884,6 +2075,37 @@ mod tests {
                 error.error_code(),
                 Some(error_codes::PROTOCOL_VERSION_UNSUPPORTED)
             );
+        }
+    }
+
+    /// #741: a listing entry reads into its album id, its blob decoded and its instant, and an
+    /// entry whose id, blob or instant cannot be read is an `InvalidResponse`, never a guess.
+    #[test]
+    fn an_album_key_listing_entry_reads_or_names_what_is_unreadable() {
+        let entry = |album_id: &str, blob: &str, stored_at: &str| rest::types::EscrowedAlbumKeys {
+            album_id: album_id.to_owned(),
+            blob: blob.to_owned(),
+            stored_at: stored_at.to_owned(),
+        };
+        let album = "0198f3c2-9c4a-7b3d-8f21-4d7c9a1b2e35";
+        let read = read_escrowed_album_keys(entry(album, "AP8B", "2026-10-22T10:00:00Z"))
+            .expect("a well-formed entry reads");
+        assert_eq!(read.album_id, Uuid::parse_str(album).unwrap());
+        assert_eq!(read.blob, vec![0x00, 0xff, 0x01]);
+        assert_eq!(
+            read.stored_at,
+            "2026-10-22T10:00:00Z".parse::<Timestamp>().unwrap()
+        );
+
+        for bad in [
+            entry("not-a-uuid", "AP8B", "2026-10-22T10:00:00Z"),
+            entry(album, "not base64!", "2026-10-22T10:00:00Z"),
+            entry(album, "AP8B", "yesterday"),
+        ] {
+            assert!(matches!(
+                read_escrowed_album_keys(bad),
+                Err(RecoveryError::InvalidResponse(_))
+            ));
         }
     }
 }

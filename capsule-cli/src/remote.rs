@@ -8,7 +8,7 @@
 //! the SDK's, not re-implemented here. These functions are the testable core the
 //! binary's command arms call and the E2E round-trip drives directly.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 
 use capsule_core::crypto::keys::{HybridVerifyingKey, MasterKey};
@@ -390,34 +390,41 @@ pub(crate) async fn checkpoint(store: &SessionStore, session: &Session) {
 /// 1. resume the stored session and read the account's server id (`GET /v1/auth/profile`) —
 ///    the id the new library must carry, because the server refuses a directory or a manifest
 ///    that names any other;
-/// 2. fetch the escrow and the sealed identity (`GET /v1/auth/escrow`,
-///    `GET /v1/auth/escrow/identity`) — both before any key derivation, so an account that
-///    never stored its identity fails at once rather than after an Argon2id pass;
+/// 2. fetch the escrow, the sealed identity and the album key escrows (`GET /v1/auth/escrow`,
+///    `GET /v1/auth/escrow/identity`, `GET /v1/auth/escrow/albums`) — all before any key
+///    derivation, so an account that never stored its identity fails at once rather than after
+///    an Argon2id pass;
 /// 3. unwrap the master key with the recovery secret ([`recovery_secret_candidates`] says how
 ///    the typed secret is read);
 /// 4. create the library at `library` with `Workspace::create_from_master`, which opens the
 ///    sealed identity under the recovered master key and refuses before writing anything if it
 ///    does not open;
-/// 5. join the account's device directory (#625): fetch the
+/// 5. adopt every escrowed album with `Workspace::adopt_album_key_escrows` (#741), so the
+///    library holds the account's albums — every epoch, as the device that escrowed them held
+///    them — before any later command resolves its default album with `ensure_album`, which
+///    would otherwise mint a fresh key under an album id the account already wrote under;
+/// 6. join the account's device directory (#625): fetch the
 ///    account's signed directory (`GET /v1/auth/devices/directory/{user_id}`), verify it under
 ///    the identity key the sealed identity opened, append the new device with
 ///    `Workspace::extend_account_directory` and publish it at the stored version + 1. An
 ///    account that never published one gets the new library's own, at version 1.
 ///
-/// Step 5 is part of the recovery, not a follow-up: a device the directory does not list signs
-/// nothing the account's other devices accept. So a failure there **removes the library step 4
-/// created** — it holds nothing but the keys minted for it moments earlier — and returns the
-/// error, which leaves the path as it was and makes rerunning the command the retry. Every
-/// refusal before step 4 writes nothing.
+/// Steps 5 and 6 are part of the recovery, not a follow-up: a library missing an album would
+/// mint over it, and a device the directory does not list signs nothing the account's other
+/// devices accept. So a failure in either **removes the library step 4 created** — it holds
+/// nothing but the keys minted for it moments earlier — and returns the error, which leaves the
+/// path as it was and makes rerunning the command the retry. Every refusal before step 4 writes
+/// nothing.
 ///
 /// # Errors
 ///
 /// [`RemoteError::NotAuthenticated`] with no stored session; [`RemoteError::Recovery`] for an
-/// escrow or sealed-identity refusal (`IdentityNotStored` carries its own code);
+/// escrow, sealed-identity or album-key refusal (`IdentityNotStored` carries its own code);
 /// [`RemoteError::WrongRecoverySecret`] when no reading of the secret opens the escrow;
-/// [`RemoteError::Lifecycle`] when the library cannot be created, or when the account's
-/// directory cannot be extended with the new device; [`RemoteError::Directory`] when the
-/// account's directory cannot be fetched, does not verify, or the publish is refused.
+/// [`RemoteError::Lifecycle`] when the library cannot be created, an album key escrow opens
+/// under the recovered master key but is inconsistent (one sealed under another master key is
+/// skipped, not refused), or the account's directory cannot be extended with the new device; [`RemoteError::Directory`] when the account's directory cannot be fetched, does
+/// not verify, or the publish is refused.
 #[instrument(skip(store, recovery_secret, passphrase, params), fields(library = %library.display()))]
 pub async fn auth_recover(
     remote: &RemoteConfig,
@@ -456,7 +463,17 @@ async fn recover_with(
     let recovery = RecoveryClient::new(session.clone(), api_root)?;
     let escrow = recovery.fetch_escrow().await?;
     let sealed = recovery.fetch_sealed_identity().await?;
-    tracing::info!(%user_id, "recover: fetched the escrow and the sealed identity");
+    let album_keys: Vec<(Uuid, Vec<u8>)> = recovery
+        .list_album_keys()
+        .await?
+        .into_iter()
+        .map(|escrowed| (escrowed.album_id, escrowed.blob))
+        .collect();
+    tracing::info!(
+        %user_id,
+        albums = album_keys.len(),
+        "recover: fetched the escrow, the sealed identity and the album key escrows"
+    );
 
     let master = recovery_secret_candidates(recovery_secret)
         .into_iter()
@@ -486,7 +503,20 @@ async fn recover_with(
     );
 
     let directory = DirectoryClient::new(session, &remote.auth_endpoint);
-    match join_account_directory(&directory, &mut workspace).await {
+    let joined = match workspace.adopt_album_key_escrows(&album_keys) {
+        Ok(adopted) => {
+            tracing::info!(
+                %user_id,
+                albums = adopted.adopted,
+                epochs = adopted.epochs,
+                unopenable = adopted.unopenable,
+                "recover: the account's albums are held before anything resolves one"
+            );
+            join_account_directory(&directory, &mut workspace).await
+        }
+        Err(error) => Err(error.into()),
+    };
+    match joined {
         Ok(version) => {
             tracing::info!(
                 %user_id,
@@ -501,7 +531,8 @@ async fn recover_with(
                 %user_id,
                 device = %workspace.device_id(),
                 %error,
-                "recover: the new device could not join the account's directory; removing the library"
+                "recover: the new library could not adopt the account's albums or join its \
+                 directory; removing the library"
             );
             // Close the library's files before removing them.
             drop(workspace);
@@ -589,6 +620,76 @@ fn discard_new_library(root: &std::path::Path, existed: bool) {
     }
 }
 
+/// What [`escrow_album_keys`] left on the server.
+#[derive(Debug, Default)]
+struct AlbumKeyEscrows {
+    /// Albums whose escrow was stored this run.
+    stored: usize,
+    /// Albums whose epochs the server's escrow does not cover: it disagrees with this device,
+    /// does not open under its master key, or the account's escrows are full. Their assets must
+    /// not be sent.
+    uncovered: HashSet<Uuid>,
+}
+
+/// Bring the server's album key escrows (#741) level with `workspace`: list what the account
+/// holds (`GET /v1/auth/escrow/albums`), ask the workspace for its plan
+/// (`Workspace::plan_album_key_escrows`), and store each album the plan names
+/// (`PUT /v1/auth/escrow/albums/{album_id}`). An escrow is never shrunk: one that holds epochs
+/// this device lacks is left alone, and one that disagrees with it is left alone and the album
+/// reported uncovered.
+///
+/// Run before any asset leaves the device, so the server never holds an asset whose album key
+/// it does not also hold sealed under the master key — the property that lets
+/// `capsule auth recover` open every album the account has pushed.
+///
+/// # Errors
+///
+/// [`RemoteError::Recovery`] when the listing or a store is refused (except a full account,
+/// which leaves that album uncovered), and [`RemoteError::Lifecycle`] when an album cannot be
+/// sealed.
+async fn escrow_album_keys(
+    recovery: &RecoveryClient,
+    workspace: &Workspace,
+) -> Result<AlbumKeyEscrows, RemoteError> {
+    let held: BTreeMap<Uuid, Vec<u8>> = recovery
+        .list_album_keys()
+        .await?
+        .into_iter()
+        .map(|escrowed| (escrowed.album_id, escrowed.blob))
+        .collect();
+    let plan = workspace.plan_album_key_escrows(&held)?;
+    let mut outcome = AlbumKeyEscrows {
+        stored: 0,
+        uncovered: plan.uncovered.iter().copied().collect(),
+    };
+    for album_id in &plan.to_store {
+        let sealed = workspace.album_key_escrow(album_id)?;
+        match recovery.store_album_keys(*album_id, &sealed).await {
+            Ok(stored) => {
+                outcome.stored += 1;
+                tracing::info!(
+                    %album_id,
+                    replaced = stored.replaced,
+                    "album keys: the album's key escrow is current on the server"
+                );
+            }
+            Err(error @ RecoveryError::AlbumKeysFull { .. }) => {
+                tracing::warn!(%album_id, %error, "album keys: the account's escrows are full");
+                outcome.uncovered.insert(*album_id);
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+    tracing::info!(
+        escrowed = held.len(),
+        stored = outcome.stored,
+        current = plan.current,
+        uncovered = outcome.uncovered.len(),
+        "album keys: the server's album key escrows are brought level"
+    );
+    Ok(outcome)
+}
+
 /// The signed-in account's id, as the server assigned it.
 async fn account_id(api_root: &str, session: Session) -> Result<Uuid, RemoteError> {
     let client = AuthenticatedClient::new(api_root, session)
@@ -658,7 +759,9 @@ pub struct EscrowSetup {
 /// 4. bind the library to the server's id (`Workspace::bind_account_id`), which keeps its own
 ///    [`LifecycleError::AccountRebind`] refusal as the authority behind step 1's early one;
 /// 5. wrap the master key under the secret at `tier` and store it (`PUT /v1/auth/escrow`),
-///    then store the sealed identity beside it (`PUT /v1/auth/escrow/identity`).
+///    then store the sealed identity beside it (`PUT /v1/auth/escrow/identity`) and each
+///    album's key escrow the server does not hold current (`PUT /v1/auth/escrow/albums/{id}`,
+///    #741), so a recovery from this escrow opens the library's albums.
 ///
 /// Every refusal before step 4 writes nothing, locally or on the server. A failure after it
 /// leaves the library bound, which a rerun treats as already done.
@@ -743,11 +846,14 @@ async fn escrow_with(
     let identity = recovery
         .store_sealed_identity(&workspace.sealed_identity())
         .await?;
+    let albums = escrow_album_keys(&recovery, workspace).await?;
     tracing::info!(
         %user_id,
         escrow_replaced = stored.replaced,
         identity_replaced = identity.replaced,
-        "escrow: the escrow and the sealed identity are stored"
+        albums = albums.stored,
+        uncovered = albums.uncovered.len(),
+        "escrow: the escrow, the sealed identity and the album keys are stored"
     );
     Ok(EscrowSetup {
         user_id,
@@ -979,7 +1085,7 @@ pub enum AssetPushStatus {
 pub struct AssetPushFailure {
     /// A stable name for where the asset stopped: `bundle`, `album`, `upload`, `create_refused`,
     /// `epoch_key_missing`, `reseal`, `unknown_blob`, `verify_unavailable`, `not_durable`,
-    /// `receipt_missing`, `receipt_rejected` or `receipt_store`.
+    /// `receipt_missing`, `receipt_rejected`, `receipt_store` or `album_keys_not_escrowed`.
     pub kind: &'static str,
     /// The server's stable `error.*` code, when it supplied one.
     pub code: Option<String>,
@@ -1053,6 +1159,13 @@ enum AssetError {
         /// Why the re-seal did not happen.
         error: LifecycleError,
     },
+    /// The asset's album keys are not covered by the server's escrow, so the asset is held back:
+    /// sent, it would be one a recovered device could never open.
+    #[error(
+        "album {0}'s keys are not escrowed on the server (its escrow disagrees with this \
+         library's, or the account's escrows are full); the asset was not sent"
+    )]
+    KeysNotEscrowed(Uuid),
 }
 
 impl AssetError {
@@ -1075,6 +1188,7 @@ impl AssetError {
                 };
                 (kind, code)
             }
+            Self::KeysNotEscrowed(_) => ("album_keys_not_escrowed", None),
         };
         AssetPushFailure {
             kind,
@@ -1113,6 +1227,9 @@ pub struct PushSummary {
     /// How many of those registrations actually created a server-side album row. Zero on a
     /// re-run — the album was already bound.
     pub created_albums: usize,
+    /// Albums whose key escrow (#741) was stored this run because the server's was missing or
+    /// stale — a new album, or one rotated since. Zero on a re-run.
+    pub album_keys_escrowed: usize,
     /// Whether this was a dry run (nothing left the device).
     pub dry_run: bool,
     /// One entry per asset considered, in library order.
@@ -1357,6 +1474,21 @@ async fn push_with(
         dry_run: options.dry_run,
         ..Default::default()
     };
+    // The album keys go first (#741): an asset on the server whose album key the server does not
+    // also hold, sealed under the master key, is one a recovered device could never open. So a
+    // refused escrow fails the run before any byte of any asset is sent — and it runs even with
+    // no asset to push, so an album created here is escrowed before another device of the
+    // account can be recovered without it.
+    // An album whose escrow could not be made to cover this device's epochs (it disagrees with
+    // the server's, or the account's escrows are full) holds its assets back: each fails with
+    // `album_keys_not_escrowed` rather than landing where no recovery could open it.
+    let mut uncovered = HashSet::new();
+    if !options.dry_run {
+        let recovery = RecoveryClient::new(session.clone(), &remote.sync_endpoint)?;
+        let escrows = escrow_album_keys(&recovery, workspace).await?;
+        summary.album_keys_escrowed = escrows.stored;
+        uncovered = escrows.uncovered;
+    }
     if asset_ids.is_empty() {
         tracing::info!("push: the library holds no assets");
         return Ok(summary);
@@ -1410,6 +1542,7 @@ async fn push_with(
         held,
         force: options.force,
         provisioned: HashSet::new(),
+        uncovered,
     };
     for asset_id in asset_ids {
         let mut outcome = AssetPushOutcome::new(asset_id, AssetPushStatus::Verified);
@@ -1511,6 +1644,8 @@ struct AssetPusher<'a> {
     /// making the same request once per asset; an album whose registration failed is not in
     /// it, so the next asset in that album tries again.
     provisioned: HashSet<Uuid>,
+    /// Albums whose keys the server's escrow does not cover (#741); their assets are not sent.
+    uncovered: HashSet<Uuid>,
 }
 
 impl AssetPusher<'_> {
@@ -1526,6 +1661,9 @@ impl AssetPusher<'_> {
         summary: &mut PushSummary,
     ) -> Result<(), AssetError> {
         let bundle = self.workspace.upload_bundle(&asset_id)?;
+        if self.uncovered.contains(&bundle.album_id) {
+            return Err(AssetError::KeysNotEscrowed(bundle.album_id));
+        }
 
         // Invariant 6 needs the album to exist and be writable before the first session
         // opens; a dry run deliberately reaches nothing, so it never provisions either.
@@ -1648,6 +1786,7 @@ impl PushSummary {
             assets = self.assets,
             provisioned_albums = self.provisioned_albums,
             created_albums = self.created_albums,
+            album_keys_escrowed = self.album_keys_escrowed,
             pushed_assets = self.pushed_assets,
             verified_assets = self.verified_assets,
             failed_assets = self.failed_assets,
@@ -2612,5 +2751,253 @@ mod tests {
                 "{endpoint}"
             );
         }
+    }
+
+    // ── Album key escrow refusals (#741) ────────────────────────────────────
+
+    /// What the escrow mock saw, and which album it refuses.
+    #[derive(Clone)]
+    struct EscrowMock {
+        /// The album whose `PUT` answers `409 error.escrow.album_keys_full`.
+        full_for: Uuid,
+        /// Every `METHOD path` the mock answered, in order.
+        seen: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    impl EscrowMock {
+        /// The escrow `PUT`s the mock answered, as album ids.
+        fn stores(&self) -> Vec<String> {
+            self.seen
+                .lock()
+                .unwrap()
+                .iter()
+                .filter_map(|line| line.strip_prefix("PUT /v1/auth/escrow/albums/"))
+                .map(str::to_owned)
+                .collect()
+        }
+
+        /// The one response for `request_line` (`METHOD path`).
+        fn answer(&self, request_line: &str) -> (u16, &'static str, String) {
+            self.seen.lock().unwrap().push(request_line.to_owned());
+            if request_line == "GET /v1/auth/escrow/albums" {
+                return (200, "application/json", r#"{"albums":[]}"#.to_owned());
+            }
+            // The server truth every push reads before it sends a byte: an empty feed, and the
+            // attestation key the library pins on first contact.
+            if request_line.starts_with("GET /v1/sync") {
+                let page = serde_json::json!({
+                    "entries": [],
+                    "next_cursor": "",
+                    "has_more": false,
+                });
+                return (200, "application/json", page.to_string());
+            }
+            if request_line == "GET /.well-known/capsule/attestation-keys" {
+                use base64::Engine as _;
+                let public = base64::engine::general_purpose::STANDARD.encode(
+                    capsule_core::crypto::keys::HybridSigningKey::from_seed64(&[5u8; 64])
+                        .verifying_key()
+                        .to_bytes(),
+                );
+                let keys = serde_json::json!({
+                    "server_id": "capsule.example",
+                    "keys": [{
+                        "key_id": "11",
+                        "public": public,
+                        "algorithm": "hybrid-ed25519-mldsa65",
+                        "active_from": "2026-07-10T00:00:00Z",
+                        "active_to": null,
+                    }],
+                });
+                return (200, "application/json", keys.to_string());
+            }
+            if let Some(album_id) = request_line.strip_prefix("PUT /v1/auth/escrow/albums/") {
+                return if album_id == self.full_for.to_string() {
+                    let problem = serde_json::json!({
+                        "type": "about:blank",
+                        "title": "Conflict",
+                        "status": 409,
+                        "detail": "the account's album key escrows are full",
+                        "code": "error.escrow.album_keys_full",
+                    });
+                    (409, "application/problem+json", problem.to_string())
+                } else {
+                    let stored = serde_json::json!({
+                        "album_id": album_id,
+                        "stored_at": "2026-10-22T00:00:00Z",
+                        "replaced": false,
+                    });
+                    (200, "application/json", stored.to_string())
+                };
+            }
+            let problem = serde_json::json!({
+                "type": "about:blank",
+                "title": "Not Implemented",
+                "status": 501,
+                "detail": "the mock serves the escrow routes only",
+                "code": "error.unexpected",
+            });
+            (501, "application/problem+json", problem.to_string())
+        }
+    }
+
+    /// Serve `mock` on an ephemeral loopback port and return its origin. Each connection answers
+    /// one request and closes.
+    async fn serve_escrow_mock(mock: EscrowMock) -> String {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("a loopback port");
+        let origin = format!("http://{}", listener.local_addr().expect("an address"));
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    break;
+                };
+                let mock = mock.clone();
+                tokio::spawn(async move {
+                    let mut buf = Vec::new();
+                    let mut chunk = [0u8; 4096];
+                    let (head_end, length) = loop {
+                        let read = socket.read(&mut chunk).await.unwrap_or(0);
+                        if read == 0 {
+                            return;
+                        }
+                        buf.extend_from_slice(&chunk[..read]);
+                        let Some(end) = buf.windows(4).position(|w| w == b"\r\n\r\n") else {
+                            continue;
+                        };
+                        let head = String::from_utf8_lossy(&buf[..end]).to_lowercase();
+                        let length = head
+                            .lines()
+                            .find_map(|line| line.strip_prefix("content-length:"))
+                            .and_then(|value| value.trim().parse::<usize>().ok())
+                            .unwrap_or(0);
+                        break (end + 4, length);
+                    };
+                    while buf.len() < head_end + length {
+                        let read = socket.read(&mut chunk).await.unwrap_or(0);
+                        if read == 0 {
+                            return;
+                        }
+                        buf.extend_from_slice(&chunk[..read]);
+                    }
+                    let head = String::from_utf8_lossy(&buf[..head_end]).into_owned();
+                    let mut parts = head.split_whitespace();
+                    let line = format!(
+                        "{} {}",
+                        parts.next().unwrap_or_default(),
+                        parts.next().unwrap_or_default()
+                    );
+                    let (status, content_type, body) = mock.answer(&line);
+                    let response = format!(
+                        "HTTP/1.1 {status} X\r\ncontent-type: {content_type}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = socket.write_all(response.as_bytes()).await;
+                    let _ = socket.shutdown().await;
+                });
+            }
+        });
+        origin
+    }
+
+    /// A server answering `409 error.escrow.album_keys_full` for one album's key escrow does not
+    /// stop the run: that album's assets are held back with `album_keys_not_escrowed` (and never
+    /// reach the album or upload surfaces), while every other album's escrow is still stored and
+    /// its assets are not held back by it. This is the branch that differs from a refused store
+    /// (`RemoteError::Recovery`), which fails the whole run before any asset is sent.
+    #[tokio::test]
+    async fn a_full_escrow_holds_back_only_that_albums_assets() {
+        let scratch = Scratch::new();
+        let lib = scratch.0.join("library");
+        std::fs::create_dir_all(&lib).unwrap();
+        let mut ws = Workspace::create_with_params(
+            &lib,
+            b"passphrase",
+            capsule_core::crypto::primitives::Argon2Params {
+                mem_kib: 64,
+                t_cost: 1,
+                p_cost: 1,
+            },
+        )
+        .unwrap();
+        let full_album = ws.default_album_id();
+        let other_album = Uuid::now_v7();
+        ws.ensure_album(full_album, "Full").unwrap();
+        ws.ensure_album(other_album, "Other").unwrap();
+        let opts = capsule_core::lifecycle::SignedImportOptions {
+            move_source: false,
+            defer_source_release: false,
+            stack: None,
+            enrichment: None,
+        };
+        let mut import = |album: Uuid, name: &str, bytes: &[u8]| {
+            let source = scratch.0.join(name);
+            std::fs::write(&source, bytes).unwrap();
+            ws.import_asset_with(album, &source, &opts)
+                .unwrap()
+                .asset_id
+        };
+        let held_back = import(full_album, "full.jpg", b"full album photo");
+        let other = import(other_album, "other.jpg", b"other album photo");
+
+        let mock = EscrowMock {
+            full_for: full_album,
+            seen: std::sync::Arc::default(),
+        };
+        let origin = serve_escrow_mock(mock.clone()).await;
+        let remote = RemoteConfig {
+            auth_endpoint: format!("{origin}/v1/auth"),
+            sync_endpoint: origin.clone(),
+            upload_endpoint: format!("{origin}/v1/upload"),
+            albums_endpoint: format!("{origin}/v1/albums"),
+            protocol_version: capsule_core::crypto::primitives::PROTOCOL_VERSION.to_owned(),
+        };
+        let session = AuthClient::new(&remote.auth_endpoint)
+            .expect("a base url")
+            .resume(capsule_sdk::auth::PersistedSession {
+                access_token: "access".to_owned().into(),
+                refresh_token: "refresh".to_owned().into(),
+                access_expires_at_unix: jiff::Timestamp::now().as_second() + 3600,
+            })
+            .expect("a resumed session");
+
+        let summary = push_with(&remote, &mut ws, session, PushOptions::default())
+            .await
+            .expect("a full escrow holds assets back; it does not fail the run");
+
+        let stores = mock.stores();
+        assert_eq!(stores.len(), 2, "both albums were attempted: {stores:?}");
+        assert!(stores.contains(&full_album.to_string()));
+        assert!(stores.contains(&other_album.to_string()));
+        assert_eq!(
+            summary.album_keys_escrowed, 1,
+            "only the album the server accepted counts as escrowed"
+        );
+
+        let failure_of = |asset_id: Uuid| {
+            summary
+                .outcomes
+                .iter()
+                .find(|outcome| outcome.asset_id == asset_id.to_string())
+                .and_then(|outcome| outcome.error.as_ref())
+                .map(|error| error.kind)
+        };
+        assert_eq!(failure_of(held_back), Some("album_keys_not_escrowed"));
+        assert_ne!(
+            failure_of(other),
+            Some("album_keys_not_escrowed"),
+            "an album whose escrow was stored is not held back by another's"
+        );
+        assert!(
+            !mock
+                .seen
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|line| line.contains(&full_album.to_string()) && !line.contains("/escrow/")),
+            "nothing was sent for the held-back album"
+        );
     }
 }
