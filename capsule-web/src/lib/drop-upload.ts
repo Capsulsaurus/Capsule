@@ -86,24 +86,86 @@ function classifyFailure(status: number, code: string | null): DropFailureCode {
     return 'generic';
 }
 
-/** Read a rejection response's stable `error.*` code, if it carries a JSON `{ code }` body. */
-async function readErrorCode(res: Response): Promise<string | null> {
+/** The parts of a problem body this client reads. */
+interface ProblemBody {
+    code: string | null;
+    retryAfter: number | null;
+}
+
+/** Read a rejection's stable `error.*` code and `retry_after` instant, where it carries them. */
+async function readProblem(res: Response): Promise<ProblemBody> {
     try {
         const text = await res.text();
-        if (!text) return null;
-        const body = JSON.parse(text) as { code?: unknown };
-        return typeof body.code === 'string' ? body.code : null;
+        if (!text) return { code: null, retryAfter: null };
+        const body = JSON.parse(text) as {
+            code?: unknown;
+            retry_after?: unknown;
+        };
+        return {
+            code: typeof body.code === 'string' ? body.code : null,
+            retryAfter:
+                typeof body.retry_after === 'number' ? body.retry_after : null,
+        };
     } catch {
-        return null;
+        return { code: null, retryAfter: null };
     }
 }
 
 /** Turn any non-ok response into a typed `DropUploadError`. */
 async function toUploadError(res: Response): Promise<DropUploadError> {
     return new DropUploadError(
-        classifyFailure(res.status, await readErrorCode(res)),
+        classifyFailure(res.status, (await readProblem(res)).code),
     );
 }
+
+/**
+ * The chunk refusals that are waits rather than failures: `503` (a store could not answer) and
+ * `507` (the server's disk is full). Nothing of the refused chunk was kept, so the same chunk at
+ * the same offset lands once the wait is over — or is answered as the replay it is.
+ */
+const WAIT_STATUSES = new Set([503, 507]);
+
+/**
+ * How many times one chunk is resent after a wait before the upload gives up. Bounded so a
+ * server whose disk never frees cannot hold a guest's tab open forever: at the server's own
+ * five-minute full-disk wait this is twenty-five minutes.
+ */
+export const MAX_CHUNK_WAITS = 5;
+
+/** The wait used when a refusal names none: the server's own outage wait. */
+const DEFAULT_WAIT_MS = 30_000;
+
+/** The longest single wait honoured, so a hostile or broken `Retry-After` cannot park a tab. */
+export const MAX_WAIT_MS = 10 * 60_000;
+
+/**
+ * How long to wait before resending a refused chunk, in milliseconds.
+ *
+ * `Retry-After` first (delta-seconds, or an HTTP date), then the body's `retry_after` instant
+ * (Unix seconds), then {@link DEFAULT_WAIT_MS}; clamped to `[1 s, MAX_WAIT_MS]`.
+ */
+export function retryDelayMs(
+    header: string | null,
+    retryAfter: number | null,
+    nowMs: number,
+): number {
+    let ms: number | null = null;
+    if (header !== null && header.trim() !== '') {
+        const trimmed = header.trim();
+        if (/^\d+$/.test(trimmed)) {
+            ms = Number(trimmed) * 1000;
+        } else {
+            const at = Date.parse(trimmed);
+            if (Number.isFinite(at)) ms = at - nowMs;
+        }
+    }
+    if (ms === null && retryAfter !== null) ms = retryAfter * 1000 - nowMs;
+    if (ms === null || !Number.isFinite(ms)) ms = DEFAULT_WAIT_MS;
+    return Math.min(Math.max(ms, 1000), MAX_WAIT_MS);
+}
+
+const realSleep = (ms: number) =>
+    new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 /** Options for {@link uploadDrop}. `fetchImpl` is injectable for tests. */
 export interface UploadDropOptions {
@@ -119,13 +181,19 @@ export interface UploadDropOptions {
     onProgress?: (fraction: number) => void;
     /** Fetch implementation (defaults to the global `fetch`); injectable for tests. */
     fetchImpl?: typeof fetch;
+    /** Waits out a `503`/`507` before a chunk is resent (defaults to a timer); injectable. */
+    sleep?: (ms: number) => Promise<void>;
+    /** The wall clock in milliseconds, for an HTTP-date `Retry-After`; injectable for tests. */
+    now?: () => number;
 }
 
 /**
  * Open a drop session and upload the sealed ciphertext in aligned chunks. Resolves when the drop
  * has been finalized into the owner's inbox; rejects with a {@link DropUploadError} carrying the
  * failure class on any rejection (a mid-upload failure surfaces the class of the chunk that
- * failed).
+ * failed). A chunk refused with `503` or `507` is a wait, not a failure: the uploader waits out
+ * `Retry-After` and resends the same chunk at the same offset, up to {@link MAX_CHUNK_WAITS}
+ * times, and only then fails with that chunk's class.
  */
 export async function uploadDrop(opts: UploadDropOptions): Promise<void> {
     const {
@@ -135,6 +203,8 @@ export async function uploadDrop(opts: UploadDropOptions): Promise<void> {
         passphraseProof,
         onProgress,
         fetchImpl = fetch,
+        sleep = realSleep,
+        now = Date.now,
     } = opts;
 
     // 1. Open the drop session. The descriptor + declared size are validated server-side here.
@@ -166,6 +236,7 @@ export async function uploadDrop(opts: UploadDropOptions): Promise<void> {
     const ciphertext = sealed.ciphertext;
     const total = ciphertext.length;
     let offset = 0;
+    let waits = 0;
     while (offset < total) {
         const end = Math.min(offset + CHUNK_SIZE, total);
         const chunk = ciphertext.subarray(offset, end);
@@ -180,7 +251,23 @@ export async function uploadDrop(opts: UploadDropOptions): Promise<void> {
             },
             body: chunk as BodyInit,
         });
-        if (!chunkRes.ok) throw await toUploadError(chunkRes);
+        if (!chunkRes.ok) {
+            if (WAIT_STATUSES.has(chunkRes.status) && waits < MAX_CHUNK_WAITS) {
+                // Nothing of this chunk was kept: wait, then resend it at the same offset.
+                waits += 1;
+                const problem = await readProblem(chunkRes);
+                await sleep(
+                    retryDelayMs(
+                        chunkRes.headers.get('Retry-After'),
+                        problem.retryAfter,
+                        now(),
+                    ),
+                );
+                continue;
+            }
+            throw await toUploadError(chunkRes);
+        }
+        waits = 0;
 
         // The server echoes the authoritative new offset; fall back to our own bookkeeping.
         const nextHeader = chunkRes.headers.get('X-Capsule-Offset');
