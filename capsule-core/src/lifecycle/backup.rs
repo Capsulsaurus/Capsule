@@ -1019,6 +1019,45 @@ mod tests {
         assert!(b.album(&album).is_err(), "no album key was absorbed");
     }
 
+    /// An artifact whose pin has a schema newer than this build reads still restores its assets:
+    /// the pin is skipped with a warning, never a reason to refuse the backup.
+    #[test]
+    fn a_pin_of_a_newer_schema_does_not_block_the_restore() {
+        let (lib_a, lib_b, src) = (
+            TempDir::new().unwrap(),
+            TempDir::new().unwrap(),
+            TempDir::new().unwrap(),
+        );
+        let (a, asset, _) = exported_with_pins(lib_a.path(), src.path(), &[]);
+        #[derive(serde::Serialize)]
+        struct FuturePinFile {
+            version: u8,
+            servers: String,
+        }
+        let mut input = a.backup_input().unwrap();
+        // A pin file as a later build might write it: a newer version, a shape this one lacks.
+        input.attestation_key_pins = crate::cbor::to_canonical_vec(&FuturePinFile {
+            version: u8::MAX,
+            servers: "from the future".to_owned(),
+        })
+        .unwrap();
+        let archive = src.path().join("newer-pin.tar");
+        let bytes =
+            backup::export_with_params(&input, b"pw", FAST_PARAMS, a.device_signer.as_ref())
+                .unwrap();
+        fs::write(&archive, bytes).unwrap();
+        let mut b = same_account_device(&a, lib_b.path());
+
+        assert_eq!(
+            b.import_backup(&archive, b"pw", &a.exporter_verifying_key())
+                .unwrap(),
+            1
+        );
+
+        assert!(b.asset(&asset).is_some());
+        assert!(!crate::library::attestation_key_pins_path(lib_b.path()).exists());
+    }
+
     /// An artifact from a library that pinned nothing — or from before the pin rode the
     /// artifact — restores as before and leaves no pin behind.
     #[test]

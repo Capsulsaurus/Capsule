@@ -334,6 +334,20 @@ pub enum KeyPinRestoreOutcome {
         /// Keys appended to histories this library already pinned.
         keys_added: usize,
     },
+    /// The backup's pin file has a schema newer than this build reads, so it was left out and
+    /// nothing was written. A newer artifact still restores its assets on an older build; the
+    /// library re-pins each server on its next contact, as one that never pinned it would.
+    SkippedNewerSchema {
+        /// The schema version the carried pin file declares.
+        found: u8,
+    },
+}
+
+/// Just the schema version of a pin file, read before the rest so a newer schema whose shape
+/// this build cannot decode is recognised as newer rather than as corrupt.
+#[derive(Deserialize)]
+struct PinFileVersion {
+    version: u8,
 }
 
 /// Refuse a pin file holding a key that does not decode.
@@ -367,6 +381,11 @@ pub fn read_attestation_key_pins(root: &Path) -> Result<Option<Vec<u8>>, KeyPinE
 /// the other lacks is [`KeyPinError::HistoriesDiverge`]. Every origin is checked before anything
 /// is written, so a refusal — that one, or a carried file that does not decode — leaves the
 /// library's pin exactly as it was.
+///
+/// A carried file stamped with a schema **newer** than this build reads is not refused: it is
+/// skipped with a warning ([`KeyPinRestoreOutcome::SkippedNewerSchema`]), so a backup from a
+/// newer build still restores here. A pin is never worth more than the assets it travels with.
+/// Any other version, and anything that does not decode, is refused.
 #[tracing::instrument(skip_all, fields(carried = carried.len()))]
 pub fn restore_attestation_key_pins(
     root: &Path,
@@ -374,6 +393,15 @@ pub fn restore_attestation_key_pins(
 ) -> Result<KeyPinRestoreOutcome, KeyPinError> {
     use std::collections::btree_map::Entry;
 
+    let PinFileVersion { version } = cbor::from_slice(carried)?;
+    if version > PIN_FILE_VERSION {
+        tracing::warn!(
+            found = version,
+            supported = PIN_FILE_VERSION,
+            "attestation-key pin restore: the backup's pin has a newer schema; skipping it"
+        );
+        return Ok(KeyPinRestoreOutcome::SkippedNewerSchema { found: version });
+    }
     let carried_file = decode_pin_file(carried)?;
     check_pin_keys(&carried_file)?;
     if carried_file.servers.is_empty() {

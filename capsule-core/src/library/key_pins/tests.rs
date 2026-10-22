@@ -383,12 +383,12 @@ fn a_carried_pin_that_does_not_decode_is_refused_before_any_write() {
     let error = restore_attestation_key_pins(dir.path(), &corrupt).unwrap_err();
     assert!(matches!(error, KeyPinError::CorruptPin { .. }), "{error:?}");
 
-    let future = cbor::to_canonical_vec(&PinFile {
-        version: PIN_FILE_VERSION + 1,
+    let older = cbor::to_canonical_vec(&PinFile {
+        version: PIN_FILE_VERSION - 1,
         servers: BTreeMap::new(),
     })
     .unwrap();
-    let error = restore_attestation_key_pins(dir.path(), &future).unwrap_err();
+    let error = restore_attestation_key_pins(dir.path(), &older).unwrap_err();
     assert!(
         matches!(error, KeyPinError::UnsupportedVersion { .. }),
         "{error:?}"
@@ -397,4 +397,43 @@ fn a_carried_pin_that_does_not_decode_is_refused_before_any_write() {
     let error = restore_attestation_key_pins(dir.path(), b"not cbor").unwrap_err();
     assert!(matches!(error, KeyPinError::Codec(_)), "{error:?}");
     assert!(!attestation_key_pins_path(dir.path()).exists());
+}
+
+/// A pin from a newer build is skipped, not refused: the backup it rides still restores here.
+/// The newer schema is free to change its shape; only its `version` field is read.
+#[test]
+fn a_carried_pin_of_a_newer_schema_is_skipped_and_writes_nothing() {
+    #[derive(Serialize)]
+    struct FuturePinFile {
+        version: u8,
+        servers: Vec<String>,
+    }
+    let future = cbor::to_canonical_vec(&FuturePinFile {
+        version: PIN_FILE_VERSION + 1,
+        servers: vec!["a shape this build cannot decode".to_owned()],
+    })
+    .unwrap();
+
+    let empty = TempDir::new().unwrap();
+    assert_eq!(
+        restore_attestation_key_pins(empty.path(), &future).unwrap(),
+        KeyPinRestoreOutcome::SkippedNewerSchema {
+            found: PIN_FILE_VERSION + 1
+        }
+    );
+    assert!(!attestation_key_pins_path(empty.path()).exists());
+
+    let pinned_dir = TempDir::new().unwrap();
+    pin_attestation_keys(pinned_dir.path(), ORIGIN, &[key(1)]).unwrap();
+    let before = fs::read(attestation_key_pins_path(pinned_dir.path())).unwrap();
+    assert_eq!(
+        restore_attestation_key_pins(pinned_dir.path(), &future).unwrap(),
+        KeyPinRestoreOutcome::SkippedNewerSchema {
+            found: PIN_FILE_VERSION + 1
+        }
+    );
+    assert_eq!(
+        fs::read(attestation_key_pins_path(pinned_dir.path())).unwrap(),
+        before
+    );
 }
