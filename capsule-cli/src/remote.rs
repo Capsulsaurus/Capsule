@@ -43,10 +43,6 @@ use crate::session::{SessionError, SessionStore};
 use crate::syncstore::{self, SyncStoreError, SyncedAssetView};
 use crate::verify::{self, VerifyOptions, VerifySummary};
 
-/// The client's default max-known protocol version — the top of the dev sync
-/// server's negotiation window.
-pub const DEFAULT_PROTOCOL_VERSION: &str = "2026-12-31";
-
 /// The default sync page size (matches the server's `DEFAULT_PAGE_SIZE`).
 pub const DEFAULT_SYNC_PAGE_SIZE: u32 = 256;
 
@@ -66,6 +62,12 @@ pub struct RemoteConfig {
     pub albums_endpoint: String,
     /// The client's max-known protocol version (`YYYY-MM-DD`), sent on the
     /// handshake and used as the forward-version ceiling.
+    ///
+    /// [`RemoteConfig::from_env`] sets it to `capsule-core`'s
+    /// [`PROTOCOL_VERSION`](capsule_core::crypto::primitives::PROTOCOL_VERSION) and nothing
+    /// else: a binary sends one protocol version on every request (system invariant 8), and
+    /// the SDK's transport already sends that one as a default header. Only a test pins another
+    /// value, to play a client outside the server's window.
     pub protocol_version: String,
 }
 
@@ -74,8 +76,12 @@ pub const DEFAULT_ENDPOINT: &str = "http://127.0.0.1:3000";
 
 impl RemoteConfig {
     /// Build from `CAPSULE_ENDPOINT` (one origin for the whole server), with
-    /// `CAPSULE_AUTH_ENDPOINT` / `CAPSULE_SYNC_ENDPOINT` / `CAPSULE_PROTOCOL` as
-    /// per-surface overrides for split deployments.
+    /// `CAPSULE_AUTH_ENDPOINT` / `CAPSULE_SYNC_ENDPOINT` / `CAPSULE_UPLOAD_ENDPOINT` /
+    /// `CAPSULE_ALBUMS_ENDPOINT` as per-surface overrides for split deployments.
+    ///
+    /// The protocol version is not configurable: it is the build's (system invariant 8), so
+    /// the upload path can never send a different date from every other request this binary
+    /// makes.
     ///
     /// The previous defaults pointed at `127.0.0.1:8080` and `:8081` — two ports that only
     /// ever existed in the integration test, which spins the auth and sync routers on
@@ -97,8 +103,7 @@ impl RemoteConfig {
             albums_endpoint: std::env::var("CAPSULE_ALBUMS_ENDPOINT")
                 .unwrap_or_else(|_| Self::albums_endpoint_for(&base)),
             sync_endpoint: std::env::var("CAPSULE_SYNC_ENDPOINT").unwrap_or(base),
-            protocol_version: std::env::var("CAPSULE_PROTOCOL")
-                .unwrap_or_else(|_| DEFAULT_PROTOCOL_VERSION.to_string()),
+            protocol_version: capsule_core::crypto::primitives::PROTOCOL_VERSION.to_owned(),
         }
     }
 
@@ -1829,7 +1834,33 @@ mod tests {
         assert_eq!(cfg.auth_endpoint, "http://127.0.0.1:3000/v1/auth");
         assert_eq!(cfg.sync_endpoint, "http://127.0.0.1:3000");
         assert_eq!(cfg.upload_endpoint, "http://127.0.0.1:3000/v1/upload");
-        assert_eq!(cfg.protocol_version, DEFAULT_PROTOCOL_VERSION);
+        assert_eq!(
+            cfg.protocol_version,
+            capsule_core::crypto::primitives::PROTOCOL_VERSION
+        );
+    }
+
+    /// One protocol version per binary (system invariant 8, issue #674): the CLI speaks
+    /// `capsule-core`'s, the same date the SDK transport sends on every other request, and the
+    /// environment cannot move it.
+    #[test]
+    fn the_protocol_version_is_the_build_s_and_not_configurable() {
+        let cfg = with_clean_env(|| {
+            unsafe { std::env::set_var("CAPSULE_PROTOCOL", "2026-12-31") };
+            RemoteConfig::from_env()
+        });
+        assert_eq!(
+            cfg.protocol_version,
+            capsule_core::crypto::primitives::PROTOCOL_VERSION
+        );
+        let handshake = capsule_sdk::net::protocol_headers();
+        assert_eq!(
+            handshake
+                .get(capsule_sdk::net::negotiation::PROTOCOL_HEADER)
+                .and_then(|value| value.to_str().ok()),
+            Some(cfg.protocol_version.as_str()),
+            "the upload pin and the transport's default header are one value"
+        );
     }
 
     #[test]
