@@ -18,6 +18,15 @@
 //! Unset, nothing is trusted: the socket peer is the client and every forwarding header is
 //! ignored. That default is the one a spoofed header cannot move.
 //!
+//! # Which field is read
+//!
+//! Only `X-Forwarded-For` ([`TRUSTED_PROXY_HEADER`]). A proxy appends to one forwarding field
+//! and passes the other through from the client untouched, so believing both lets the client
+//! write the one the proxy does not and choose its own key. `X-Forwarded-For` is the field the
+//! proxies a deployment puts in front of this server write (nginx, an AWS ALB, Caddy, Traefik),
+//! and the one the [self-hosting guide](../../capsule-docs/src/content/docs/guides/self-hosting.md)
+//! configures. A client-sent `Forwarded` is ignored whoever passes it on.
+//!
 //! # What a per-source key is
 //!
 //! [`ClientAddr::source_key`] is the string a [`CounterKey`](crate::counter::CounterKey) source
@@ -39,11 +48,14 @@ use std::net::{IpAddr, Ipv6Addr};
 use kynos::extract::FromRequestParts;
 use kynos::extract::describe::Describe;
 use kynos::http::Parts;
-use kynos::http::forwarded::{Forwarded, TrustedProxies};
+use kynos::http::forwarded::{Forwarded, Network, ProxyHeader, TrustedProxies};
 use kynos::router::operation::OperationCx;
 
 /// The source key a request with no resolvable address counts against.
 pub const UNKNOWN_SOURCE: &str = "unknown";
+
+/// The one forwarding field a trusted hop is believed through. See the module docs.
+pub const TRUSTED_PROXY_HEADER: ProxyHeader = ProxyHeader::XForwarded;
 
 /// The IPv6 prefix length one source key covers.
 const IPV6_SOURCE_PREFIX: u32 = 64;
@@ -73,8 +85,22 @@ impl ProxyTrust {
     }
 
     /// The policy as the router takes it.
+    ///
+    /// A network Kynos refuses — a `/0`, which [`ProxyTrust::parse_networks`] already refuses —
+    /// is left out and logged rather than widened to trusting everyone.
     pub fn policy(&self) -> TrustedProxies {
-        TrustedProxies::hops(self.hops).and_networks(self.networks.iter().copied())
+        let networks = self
+            .networks
+            .iter()
+            .filter_map(|&(address, prefix)| match Network::new(address, prefix) {
+                Ok(network) => Some(network),
+                Err(error) => {
+                    tracing::warn!(%address, prefix, %error, "a trusted proxy network was ignored");
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        TrustedProxies::hops(TRUSTED_PROXY_HEADER, self.hops).and_networks(networks)
     }
 
     /// Parse `TRUSTED_PROXIES`: a comma-separated list of addresses and CIDR networks.
@@ -128,6 +154,9 @@ fn parse_network(entry: &str) -> Result<(IpAddr, u8), String> {
                 format!("`{entry}` has a prefix length that is not between 0 and {longest}")
             })?,
     };
+    // A `/0` (or its IPv4-mapped spelling) trusts every sender, which lets any client choose
+    // its own key; Kynos refuses it as a network, and so does this.
+    Network::new(address, prefix).map_err(|error| format!("`{entry}` is refused: {error}"))?;
     Ok((address, prefix))
 }
 
@@ -163,14 +192,9 @@ impl ClientAddr {
         }
     }
 
-    /// Read the router's resolution back out of a request head.
-    fn of(parts: &Parts) -> Self {
-        Self(
-            parts
-                .extensions
-                .get::<Forwarded>()
-                .and_then(Forwarded::client),
-        )
+    /// The client the router's resolution names, or none where there was no resolution.
+    fn of(forwarded: Option<&Forwarded>) -> Self {
+        Self(forwarded.and_then(Forwarded::client))
     }
 }
 
@@ -187,8 +211,11 @@ fn canonical(address: IpAddr) -> IpAddr {
 impl<C: Sync> FromRequestParts<C> for ClientAddr {
     type Rejection = Infallible;
 
-    async fn from_request_parts(parts: &mut Parts, _context: &C) -> Result<Self, Self::Rejection> {
-        let client = Self::of(parts);
+    async fn from_request_parts(parts: &mut Parts, context: &C) -> Result<Self, Self::Rejection> {
+        // Kynos's own argument for the one resolution dispatch made before any interceptor ran;
+        // it keeps that resolution in a request extension of its own rather than a `Forwarded`.
+        let Ok(forwarded) = Forwarded::from_request_parts(parts, context).await;
+        let client = Self::of(Some(&forwarded));
         tracing::trace!(client = ?client.0, "resolved the client address");
         Ok(client)
     }

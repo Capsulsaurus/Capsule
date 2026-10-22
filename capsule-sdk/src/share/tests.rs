@@ -133,8 +133,7 @@ fn dead_session_for(base: &str) -> Session {
 /// replays it.
 const REFUSED_CREDENTIAL: &str = "error.auth.invalid_credentials";
 
-/// A refusal as the server renders it: a coded problem, or for the transport backstop's `413`
-/// (`code` is `None`) no body at all.
+/// A refusal as the server renders it: a coded problem, or a bare status where `code` is `None`.
 fn refusal_response(status: u16, reason: &str, code: Option<&str>) -> MockResponse {
     code.map_or_else(
         || MockResponse::new(status, reason),
@@ -308,15 +307,12 @@ async fn every_declared_issue_refusal_maps_to_its_class() {
             Some(error_codes::PROTOCOL_VERSION_UNSUPPORTED),
             |e| matches!(e, ShareError::UpgradeRequired(_)),
         ),
-        (413, "Payload Too Large", None, |e| {
-            matches!(
-                e,
-                ShareError::Unexpected {
-                    status: 413,
-                    code: None
-                }
-            )
-        }),
+        (
+            413,
+            "Payload Too Large",
+            Some(error_codes::REQUEST_TOO_LARGE),
+            |e| matches!(e, ShareError::Unexpected { status: 413, .. }),
+        ),
     ];
     for (status, reason, code, expected) in cases {
         let (link, publication) = published(None);
@@ -327,6 +323,30 @@ async fn every_declared_issue_refusal_maps_to_its_class() {
         assert_eq!(error.error_code(), code, "{status}");
         assert_eq!(seen.lock().unwrap().len(), 1, "{status} is not replayed");
     }
+}
+
+/// A bodyless `413` — a server from before the contract coded it, or a proxy refusing the body —
+/// still lands in the refusal map's `413` class with the transport's code, not as a wire failure.
+#[tokio::test]
+async fn a_bodyless_413_still_maps_to_its_class() {
+    let (link, publication) = published(None);
+    let (_server, client, _) =
+        recording(|_| refusal_response(413, "Payload Too Large", None)).await;
+    let error = client.issue(&link, &publication).await.unwrap_err();
+    assert!(
+        matches!(error, ShareError::Unexpected { status: 413, .. }),
+        "{error:?}"
+    );
+    assert_eq!(error.error_code(), Some(error_codes::REQUEST_TOO_LARGE));
+
+    let (_server, client, _) =
+        recording(|_| refusal_response(413, "Payload Too Large", None)).await;
+    let error = client.revoke(&"a".repeat(32)).await.unwrap_err();
+    assert!(
+        matches!(error, ShareError::Unexpected { status: 413, .. }),
+        "{error:?}"
+    );
+    assert_eq!(error.error_code(), Some(error_codes::REQUEST_TOO_LARGE));
 }
 
 #[tokio::test]
@@ -353,15 +373,12 @@ async fn every_declared_revoke_refusal_maps_to_its_class() {
             Some(error_codes::PROTOCOL_VERSION_UNSUPPORTED),
             |e| matches!(e, ShareError::UpgradeRequired(_)),
         ),
-        (413, "Payload Too Large", None, |e| {
-            matches!(
-                e,
-                ShareError::Unexpected {
-                    status: 413,
-                    code: None
-                }
-            )
-        }),
+        (
+            413,
+            "Payload Too Large",
+            Some(error_codes::REQUEST_TOO_LARGE),
+            |e| matches!(e, ShareError::Unexpected { status: 413, .. }),
+        ),
     ];
     for (status, reason, code, expected) in cases {
         let (_server, client, seen) =

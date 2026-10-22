@@ -165,7 +165,7 @@ impl<C: Sync> Authenticator<AccessToken, C> for AuthContext {
 
             // Valid, live, and the wrong kind: a credential that is insufficient rather than
             // absent. See the module docs.
-            Err(TokenError::WrongKind { .. }) => return Err(AuthRejection::Forbidden),
+            Err(TokenError::WrongKind { .. }) => return Err(AuthRejection::forbidden()),
 
             // Everything else is indistinguishable on purpose. `TokenError` already refuses to
             // carry any part of the credential, and which check failed is exactly what an
@@ -234,7 +234,7 @@ impl<C: Sync> Authenticator<AccessToken, C> for AuthContext {
     async fn authorize(
         &self,
         _credential: &AuthenticatedSession,
-        _scopes: &'static [&'static str],
+        _scopes: &[kynos::security::Unscoped],
         _context: &C,
     ) -> Result<(), AuthRejection> {
         // Bearer access tokens carry no scopes — [`TokenKind`] is the whole of what a Capsule

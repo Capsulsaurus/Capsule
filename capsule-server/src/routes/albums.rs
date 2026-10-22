@@ -124,8 +124,8 @@ pub enum ProvisionRejection {
 /// nothing.
 #[kynos::post("/v1/albums", operation_id = "provision_album", tag = AlbumsTag)]
 pub async fn provision_album(
-    Inject(albums): Inject<AlbumContext>,
     Auth(credential): Auth<AccessToken>,
+    Inject(albums): Inject<AlbumContext>,
     Json(request): Json<ProvisionAlbumRequest>,
 ) -> Result<ProvisionReply, ProvisionRejection> {
     if !is_canonical_album_id(&request.album_id) {

@@ -50,8 +50,8 @@ Every public route applies the same headers:
 | `X-Capsule-Protocol` | request; required on every gated route |
 | `X-Capsule-Crypto-Suite` | request on writes; validated when present |
 | `X-Capsule-Sidecar-Schema` | request; validated when present, absence not refused |
-| `X-Capsule-Protocol-Min` / `-Max` | response, on every operation's responses (including `401`, `413`, `426`) |
-| `X-Capsule-Min-Client-Build` | response, on every operation; advisory (`0.0.0` = no cutoff) |
+| `X-Capsule-Protocol-Min` / `-Max` | response, on every response (including `401`, `413`, `426`, and an unrouted `404`/`405`) |
+| `X-Capsule-Min-Client-Build` | response, on every response; advisory (`0.0.0` = no cutoff) |
 
 Rules (carriage in `capsule-server/src/negotiation.rs`; pinned by `capsule-server/tests/conformance.rs`):
 
@@ -59,7 +59,6 @@ Rules (carriage in `capsule-server/src/negotiation.rs`; pinned by `capsule-serve
 - A **read** is admitted at any grammatical protocol date, past or future.
 - A missing or malformed header on a gated operation is `400 error.request.malformed`.
 - Advertised and enforced windows come from one source and cannot differ.
-- Unrouted `404`/`405` carry no negotiation headers.
 
 **Exempt from the request gate** (still carrying response headers):
 

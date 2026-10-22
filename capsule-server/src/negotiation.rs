@@ -32,8 +32,9 @@
 //! - [`Negotiation`] **advertises**. `Reads = ()`, `Short = Infallible`, `Adds` the three
 //!   response headers. Mounted on the router, outside the body-size limit, so a `413`, a
 //!   `401`, a `426` and a `200` all leave with the window on them. It cannot refuse anything.
-//!   What it cannot reach is a response the router produced *before* choosing an operation —
-//!   an unrouted `404` or `405` — because Kynos runs interceptors per operation, after routing.
+//!   Because it is the *root* router's own interceptor, Kynos also runs it around the router's
+//!   fallbacks, so a request no operation answers — an unrouted `404`, a `405` — carries the
+//!   window too.
 //! - [`ProtocolGate`] **refuses a write**. `Reads` the three request headers, `Adds = ()`,
 //!   `Short` is [`NegotiationRejection`]: `426` outside the window, `400` malformed.
 //! - [`ProtocolReadGate`] **checks a read**. The same `Reads`, `Short` is

@@ -68,8 +68,8 @@ pub enum QuotaRejection {
 /// account's storage use is not another's business.
 #[kynos::get("/v1/quota", operation_id = "get_quota", tag = QuotaTag)]
 pub async fn get_quota(
-    Inject(quota): Inject<QuotaContext>,
     Auth(credential): Auth<AccessToken>,
+    Inject(quota): Inject<QuotaContext>,
 ) -> Result<Json<QuotaResponse>, QuotaRejection> {
     let user = UserId::new(credential.user.as_str());
     let usage = quota.quotas().usage(&user).await.map_err(|error| {

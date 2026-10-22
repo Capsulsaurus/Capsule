@@ -116,7 +116,7 @@ pub use self::app::App;
 /// It takes no context *value* — [`App`] appears only as a type parameter — which is what lets
 /// [`openapi`](fn@openapi) describe the whole server without a database, a cache or a signing key. The
 /// description is a property of the types, not of a running deployment.
-pub fn router() -> ServerRouter {
+pub fn router() -> Router<App, Propagate, ServerInterceptors, impl Sized> {
     Router::<App>::new()
         // **Outermost.** Kynos runs a chain head-first, so this sees every problem the rest of
         // the chain produces — the body-size `413` below it, an extractor's `400`/`415`/`422`,
@@ -257,8 +257,13 @@ pub fn router() -> ServerRouter {
         // **tighter body cap** than the rest of the writes — no body here is anywhere near an
         // upload chunk, and `submit_federated_report` is the server's only unauthenticated write.
         // See [`crate::limits::MAX_FEDERATION_BODY_BYTES`].
+        //
+        // The `FEDERATION_ENABLED` gate is the group's **first** interceptor, so a deployment that
+        // does not federate answers `404` before the body cap, the handshake or the operation's
+        // credential is looked at (#509). See [`routes::federation::FederationGate`].
         .group(
             Group::<App>::new("/")
+                .intercept(routes::federation::FederationGate::new())
                 .intercept(limits::federation_body_size())
                 .intercept(negotiation::ProtocolGate::new())
                 .mount(kynos::routes![
@@ -347,18 +352,17 @@ pub fn router() -> ServerRouter {
         )
 }
 
-/// The router's full type, interceptors included.
+/// The router's own interceptor stack, as [`router`]'s type names it.
 ///
 /// Spelled out because a Kynos interceptor is part of the router's *type* — that is what makes
 /// two interceptors answering with one status a compile error rather than a runtime surprise —
 /// so mounting one changes this signature. That is a feature: the alias is the one place the
-/// server's router-wide middleware stack is written down. The body-size cap is not in it: each
-/// group carries its own (see [`router`] and [`limits`]).
-pub type ServerRouter = Router<
-    App,
-    Propagate,
-    Cons<problem::RetryAfter, Cons<negotiation::Negotiation, Cons<problem::CodedProblems, ()>>>,
->;
+/// server's router-wide middleware stack is written down, and since these are the root router's
+/// own interceptors, the stack Kynos also runs around every fallback (an unrouted `404`, a
+/// `405`). The body-size cap is not in it: each group carries its own (see [`router`] and
+/// [`limits`]), and the groups' stacks are the opaque last parameter of [`router`]'s type.
+pub type ServerInterceptors =
+    Cons<problem::RetryAfter, Cons<negotiation::Negotiation, Cons<problem::CodedProblems, ()>>>;
 
 /// Builds the service the server and the in-process tests both drive.
 ///

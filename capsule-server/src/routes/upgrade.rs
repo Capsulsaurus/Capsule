@@ -63,7 +63,7 @@ pub const MAX_INTENT_BYTES: usize = 64 * 1024;
 #[derive(Clone, Copy, Debug)]
 pub struct IntentCbor;
 
-impl kynos::extract::media::MediaType for IntentCbor {
+impl kynos::http::media::MediaType for IntentCbor {
     const MEDIA_TYPE: &'static str = "application/cbor";
 }
 
@@ -305,10 +305,10 @@ impl From<UpgradeRejection> for AbortRejection {
     tag = AlbumsTag
 )]
 pub async fn begin_album_upgrade(
+    Auth(credential): Auth<AccessToken>,
     Inject(albums): Inject<AlbumContext>,
     Inject(directories): Inject<DeviceDirectoryContext>,
     Inject(uploads): Inject<UploadContext>,
-    Auth(credential): Auth<AccessToken>,
     Path(path): Path<AlbumPath>,
     body: IntentBody,
 ) -> Result<Json<UpgradePhaseResponse>, UpgradeRejection> {
@@ -404,9 +404,9 @@ pub async fn begin_album_upgrade(
     tag = AlbumsTag
 )]
 pub async fn album_upgrade_phase(
+    Auth(credential): Auth<AccessToken>,
     Inject(albums): Inject<AlbumContext>,
     Inject(uploads): Inject<UploadContext>,
-    Auth(credential): Auth<AccessToken>,
     Path(path): Path<AlbumPath>,
 ) -> Result<Json<UpgradePhaseResponse>, PhaseRejection> {
     let owner = OwnerId::new(credential.user.as_str());
@@ -426,9 +426,9 @@ pub async fn album_upgrade_phase(
     tag = AlbumsTag
 )]
 pub async fn abort_album_upgrade(
+    Auth(credential): Auth<AccessToken>,
     Inject(albums): Inject<AlbumContext>,
     Inject(uploads): Inject<UploadContext>,
-    Auth(credential): Auth<AccessToken>,
     Path(path): Path<AlbumPath>,
     Query(query): Query<AbortQuery>,
 ) -> Result<Json<UpgradePhaseResponse>, AbortRejection> {

@@ -89,8 +89,8 @@ pub enum ModerationRecordRejection {
     tag = ModerationTag
 )]
 pub async fn moderation_record(
-    Inject(moderation): Inject<ModerationContext>,
     Auth(credential): Auth<AccessToken>,
+    Inject(moderation): Inject<ModerationContext>,
 ) -> Result<Json<ModerationRecordResponse>, ModerationRecordRejection> {
     let user = UserId::new(credential.user.as_str());
 

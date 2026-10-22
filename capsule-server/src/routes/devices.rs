@@ -181,8 +181,8 @@ pub enum RevokeSessionRejection {
 /// it.
 #[kynos::get("/v1/auth/devices", operation_id = "list_devices", tag = SessionsTag)]
 pub async fn list_devices(
-    Inject(auth): Inject<AuthContext>,
     Auth(credential): Auth<AccessToken>,
+    Inject(auth): Inject<AuthContext>,
 ) -> Result<Json<DevicesResponse>, ListDevicesRejection> {
     let user = UserId::new(credential.user.as_str());
 
@@ -246,8 +246,8 @@ pub async fn list_devices(
     tag = SessionsTag
 )]
 pub async fn revoke_session(
-    Inject(auth): Inject<AuthContext>,
     Auth(credential): Auth<AccessToken>,
+    Inject(auth): Inject<AuthContext>,
     Path(path): Path<SessionPath>,
 ) -> Result<NoContent, RevokeSessionRejection> {
     let user = UserId::new(credential.user.as_str());

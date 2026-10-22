@@ -4005,9 +4005,9 @@ dependencies = [
 
 [[package]]
 name = "kynos"
-version = "0.1.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0e2870b13f4836a8fdf9eef13f4342bddb74e4a78ef7cb350481df6e685a1a29"
+checksum = "5d75530018fdd7c79f6c9ace88d95a47c9a598df22f0fb9a8eaa67941094e59a"
 dependencies = [
  "bytes",
  "futures-core",
@@ -4023,6 +4023,7 @@ dependencies = [
  "percent-encoding",
  "serde",
  "serde_json",
+ "socket2",
  "thiserror 2.0.20",
  "tokio",
  "tracing",
@@ -4030,9 +4031,9 @@ dependencies = [
 
 [[package]]
 name = "kynos-macros"
-version = "0.1.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "17bf779f93eeb6c3942519f261573f47483c79f51d721fff7ec120f6cda949b5"
+checksum = "ca89ea95ab3cae1a5ba78d303f5d0c363b9b40cffcbf7af385e03a2950c55a48"
 dependencies = [
  "kynos-openapi",
  "proc-macro2",
@@ -4042,9 +4043,9 @@ dependencies = [
 
 [[package]]
 name = "kynos-openapi"
-version = "0.1.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5ce3286ca0f45019fd229a2a467a2d0ddeb074843614f09fee9b7370a0cb3eb9"
+checksum = "5b36dffdf28f22cc143a81a5e9d067851653bed0890e0406f026bb156ced4a37"
 dependencies = [
  "http",
  "indexmap 2.14.0",
@@ -7005,9 +7006,9 @@ checksum = "b7c388c1b5e93756d0c740965c41e8822f866621d41acbdf6336a6a168f8840c"
 
 [[package]]
 name = "socket2"
-version = "0.6.4"
+version = "0.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "52d1cfed4120b4d927bf7c0f86d2087a4a7d6027c906d9f9d525a80573b9be51"
+checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",

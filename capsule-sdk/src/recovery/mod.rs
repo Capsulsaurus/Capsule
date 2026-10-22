@@ -164,7 +164,7 @@ pub enum RecoveryError {
     #[error("re-wrapping the master key failed: {0}")]
     Wrap(String),
     /// The server returned a status this client does not model as an escrow outcome — an
-    /// unmodeled status, or the body-size backstop's body-less `413` on a read.
+    /// unmodeled status, or the body-size backstop's `413` on a read.
     #[error("unexpected {status} response from the escrow endpoint")]
     Unexpected {
         /// The HTTP status code the server returned.
@@ -820,9 +820,9 @@ fn fetch_escrow_error(error: rest::Error<rest::FetchEscrowError>) -> RecoveryErr
             rest::FetchEscrowError::Status500(problem) => unavailable(&problem),
             // Declared by the transport backstop and unreachable on a body-less `GET`; kept
             // honest rather than folded into a class it does not belong to.
-            rest::FetchEscrowError::Status413 => RecoveryError::Unexpected {
+            rest::FetchEscrowError::Status413(problem) => RecoveryError::Unexpected {
                 status: 413,
-                code: None,
+                code: Some(problem.code.clone()),
             },
         },
         other => wire_error(&other),
@@ -858,8 +858,8 @@ fn store_escrow_error(error: rest::Error<rest::StoreEscrowError>) -> RecoveryErr
             // something it did not — a client localizing it would be reading the SDK's guess
             // as the server's judgement. The English detail says what happened instead; the
             // variant already says "these bytes will not do, do not resend them".
-            rest::StoreEscrowError::Status413 => RecoveryError::Malformed {
-                code: None,
+            rest::StoreEscrowError::Status413(problem) => RecoveryError::Malformed {
+                code: Some(problem.code.clone()),
                 detail: "the escrow blob exceeds the server's request-body limit".to_owned(),
             },
         },
@@ -885,9 +885,9 @@ fn fetch_sealed_identity_error(
             rest::FetchSealedIdentityError::Status401(problem)
             | rest::FetchSealedIdentityError::Status403(problem) => refused(&problem),
             rest::FetchSealedIdentityError::Status500(problem) => unavailable(&problem),
-            rest::FetchSealedIdentityError::Status413 => RecoveryError::Unexpected {
+            rest::FetchSealedIdentityError::Status413(problem) => RecoveryError::Unexpected {
                 status: 413,
-                code: None,
+                code: Some(problem.code.clone()),
             },
         },
         other => wire_error(&other),
@@ -917,8 +917,8 @@ fn store_sealed_identity_error(
             rest::StoreSealedIdentityError::Status401(problem)
             | rest::StoreSealedIdentityError::Status403(problem) => refused(&problem),
             rest::StoreSealedIdentityError::Status500(problem) => unavailable(&problem),
-            rest::StoreSealedIdentityError::Status413 => RecoveryError::Malformed {
-                code: None,
+            rest::StoreSealedIdentityError::Status413(problem) => RecoveryError::Malformed {
+                code: Some(problem.code.clone()),
                 detail: "the sealed identity exceeds the server's request-body limit".to_owned(),
             },
         },
@@ -975,8 +975,8 @@ fn store_album_keys_error(error: rest::Error<rest::StoreAlbumKeysError>) -> Reco
             rest::StoreAlbumKeysError::Status401(problem)
             | rest::StoreAlbumKeysError::Status403(problem) => refused(&problem),
             rest::StoreAlbumKeysError::Status500(problem) => unavailable(&problem),
-            rest::StoreAlbumKeysError::Status413 => RecoveryError::Malformed {
-                code: None,
+            rest::StoreAlbumKeysError::Status413(problem) => RecoveryError::Malformed {
+                code: Some(problem.code.clone()),
                 detail: "the album key escrow exceeds the server's request-body limit".to_owned(),
             },
         },
@@ -999,9 +999,9 @@ fn list_album_keys_error(error: rest::Error<rest::ListAlbumKeysError>) -> Recove
             rest::ListAlbumKeysError::Status401(problem)
             | rest::ListAlbumKeysError::Status403(problem) => refused(&problem),
             rest::ListAlbumKeysError::Status500(problem) => unavailable(&problem),
-            rest::ListAlbumKeysError::Status413 => RecoveryError::Unexpected {
+            rest::ListAlbumKeysError::Status413(problem) => RecoveryError::Unexpected {
                 status: 413,
-                code: None,
+                code: Some(problem.code.clone()),
             },
         },
         other => wire_error(&other),

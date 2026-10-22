@@ -63,7 +63,7 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use capsule_core::crypto::hash::hash_bytes;
 use capsule_i18n::error_codes;
 use kynos::extract::body::binary::Binary;
-use kynos::extract::media::MediaType;
+use kynos::http::media::MediaType;
 use kynos::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -229,9 +229,9 @@ pub enum FetchRejection {
     tag = DevicesTag
 )]
 pub async fn publish_device_directory(
+    Auth(credential): Auth<AccessToken>,
     Inject(directories): Inject<DeviceDirectoryContext>,
     Inject(attestation): Inject<AttestationContext>,
-    Auth(credential): Auth<AccessToken>,
     Headers(headers): Headers<IdentityHeader>,
     body: DirectoryBody,
 ) -> Result<Json<PublishDirectoryResponse>, PublishRejection> {
@@ -357,8 +357,8 @@ pub async fn publish_device_directory(
     tag = DevicesTag
 )]
 pub async fn fetch_device_directory(
-    Inject(directories): Inject<DeviceDirectoryContext>,
     Auth(credential): Auth<AccessToken>,
+    Inject(directories): Inject<DeviceDirectoryContext>,
     Path(path): Path<DirectoryPath>,
 ) -> Result<Binary<Cbor>, FetchRejection> {
     let target = UserId::new(&path.user_id);

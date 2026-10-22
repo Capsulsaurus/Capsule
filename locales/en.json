@@ -7523,9 +7523,21 @@
     "message": "Capsule couldn't handle that request.",
     "context": "HTTP 405 (slice S-C36): the path exists and the method does not. Not a state a well-formed client reaches; carried so no response on the surface is codeless."
   },
+  "error.request.not_found": {
+    "message": "Capsule couldn't find that.",
+    "context": "HTTP 404 from the router itself: no operation is mounted at the requested path. Not a state a well-formed client reaches (a missing album, link or blob is answered by its own route with its own code); carried so no response on the surface is codeless."
+  },
+  "error.request.not_implemented": {
+    "message": "Capsule couldn't handle that request.",
+    "context": "HTTP 501 from the router itself: no operation anywhere on the server answers the request's method. Not a state a well-formed client reaches; carried so no response on the surface is codeless."
+  },
   "error.request.not_acceptable": {
     "message": "Capsule couldn't produce that response format.",
     "context": "HTTP 406 (slice S-C36): the `Accept` header names no representation the operation can produce."
+  },
+  "error.request.range_not_satisfiable": {
+    "message": "Capsule couldn't send that part of the file.",
+    "context": "HTTP 416 on a blob read: the requested byte range starts past the end of the blob. A client resuming a download with a stale offset reaches it; re-fetching from the start recovers."
   },
   "error.request.too_large": {
     "message": "That request was too large to accept.",

@@ -110,28 +110,43 @@ impl From<ProfileRecord> for ProfileResponse {
 ///
 /// `display_name` is a **doubly** optional field on the wire, and the two levels mean different
 /// things: an absent key leaves the name alone, and an explicit `null` clears it. That is what
-/// `#[serde(default, deserialize_with = …)]` over an `Option<Option<String>>` buys, and it is
-/// the whole reason this body is not `deny_unknown_fields`-plus-a-flat-option: a flat one cannot
-/// tell "I did not mention the name" from "remove the name", so every partial update would wipe
-/// a field the caller never sent.
+/// `#[serde(default)]` over a [`DisplayNameEdit`] buys, and it is the whole reason this body is
+/// not `deny_unknown_fields`-plus-a-flat-option: a flat one cannot tell "I did not mention the
+/// name" from "remove the name", so every partial update would wipe a field the caller never
+/// sent.
 #[derive(Schema, Deserialize, Debug, Default)]
 #[serde(deny_unknown_fields)]
 pub struct UpdateProfileRequest {
     /// The display name to set, clear (`null`), or leave alone (absent).
-    #[serde(default, deserialize_with = "double_option")]
-    pub display_name: Option<Option<String>>,
+    #[serde(default)]
+    pub display_name: DisplayNameEdit,
 }
 
-/// Deserialize a present-`null` into `Some(None)` and an absent key into `None`.
+/// One doubly optional display-name edit: `None` when the key is absent, `Some(None)` for an
+/// explicit `null`, `Some(Some(name))` to set one.
 ///
-/// serde collapses both onto `None` for a plain `Option<Option<T>>` unless the field is read
-/// through a deserializer that is only called when the key is present. `#[serde(default)]`
-/// supplies the absent case; this supplies the other.
-fn double_option<'de, D>(deserializer: D) -> Result<Option<Option<String>>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    Option::<String>::deserialize(deserializer).map(Some)
+/// serde collapses an absent key and a `null` onto `None` for a plain `Option<Option<T>>`, so the
+/// two levels need a reader that is only called when the key is present. A newtype rather than a
+/// field-level `deserialize_with`, because Kynos refuses that attribute on a field its schema
+/// describes: the wire form would no longer follow from the Rust type. Here the type's own
+/// `Deserialize` and `Schema` agree — present, it is a string or `null`; `#[serde(default)]` on
+/// the field supplies the absent case and keeps it out of `required`.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct DisplayNameEdit(pub Option<Option<String>>);
+
+impl<'de> Deserialize<'de> for DisplayNameEdit {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Option::<String>::deserialize(deserializer).map(|present| Self(Some(present)))
+    }
+}
+
+impl Schema for DisplayNameEdit {
+    fn schema(registry: &mut kynos::schema::registry::Registry) -> kynos::openapi::Schema {
+        <Option<String> as Schema>::schema(registry)
+    }
 }
 
 /// The two passwords a rotation needs.
@@ -286,8 +301,8 @@ pub enum ChangePasswordRejection {
 /// nothing else.
 #[kynos::get("/v1/auth/profile", operation_id = "get_profile", tag = ProfileTag)]
 pub async fn get_profile(
-    Inject(auth): Inject<AuthContext>,
     Auth(credential): Auth<AccessToken>,
+    Inject(auth): Inject<AuthContext>,
 ) -> Result<Json<ProfileResponse>, ProfileRejection> {
     let user = UserId::new(credential.user.as_str());
     let record = auth
@@ -319,14 +334,14 @@ pub async fn get_profile(
 /// edited.
 #[kynos::patch("/v1/auth/profile", operation_id = "update_profile", tag = ProfileTag)]
 pub async fn update_profile(
-    Inject(auth): Inject<AuthContext>,
     Auth(credential): Auth<AccessToken>,
+    Inject(auth): Inject<AuthContext>,
     Json(request): Json<UpdateProfileRequest>,
 ) -> Result<Json<ProfileResponse>, UpdateProfileRejection> {
     let user = UserId::new(credential.user.as_str());
 
     // Normalized before a store is reached, so a malformed name costs no round trip.
-    let display_name = match request.display_name {
+    let display_name = match request.display_name.0 {
         None => None,
         Some(None) => Some(None),
         Some(Some(name)) => Some(admissible_display_name(&name).map_err(|error| {
@@ -387,8 +402,8 @@ pub async fn update_profile(
 /// and they would try again with a current password that is no longer current.
 #[kynos::post("/v1/auth/password", operation_id = "change_password", tag = ProfileTag)]
 pub async fn change_password(
-    Inject(auth): Inject<AuthContext>,
     Auth(credential): Auth<AccessToken>,
+    Inject(auth): Inject<AuthContext>,
     Json(request): Json<ChangePasswordRequest>,
 ) -> Result<NoContent, ChangePasswordRejection> {
     let user = UserId::new(credential.user.as_str());

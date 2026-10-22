@@ -1872,6 +1872,9 @@
     <string name="error_request_malformed">Capsule couldn\'t read that request.</string>
     <string name="error_request_method_not_allowed">Capsule couldn\'t handle that request.</string>
     <string name="error_request_not_acceptable">Capsule couldn\'t produce that response format.</string>
+    <string name="error_request_not_found">Capsule couldn\'t find that.</string>
+    <string name="error_request_not_implemented">Capsule couldn\'t handle that request.</string>
+    <string name="error_request_range_not_satisfiable">Capsule couldn\'t send that part of the file.</string>
     <string name="error_request_too_large">That request was too large to accept.</string>
     <string name="error_request_unauthenticated">Please sign in again.</string>
     <string name="error_request_unprocessable">Some of that request didn\'t make sense.</string>

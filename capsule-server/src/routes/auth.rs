@@ -831,8 +831,8 @@ pub async fn refresh_token(
 /// answer, because "there is no longer a session" is what the caller asked for.
 #[kynos::post("/v1/auth/logout", operation_id = "logout", tag = AuthTag)]
 pub async fn logout(
-    Inject(auth): Inject<AuthContext>,
     Auth(credential): Auth<AccessToken>,
+    Inject(auth): Inject<AuthContext>,
 ) -> Result<NoContent, LogoutRejection> {
     let closed = auth
         .sessions()
@@ -908,8 +908,8 @@ pub struct ReauthenticateResponse {
     tag = AuthTag
 )]
 pub async fn reauthenticate(
-    Inject(auth): Inject<AuthContext>,
     Auth(credential): Auth<AccessToken>,
+    Inject(auth): Inject<AuthContext>,
     Json(request): Json<ReauthenticateRequest>,
 ) -> Result<Json<ReauthenticateResponse>, LoginRejection> {
     let user = UserId::new(credential.user.as_str());
@@ -1049,8 +1049,8 @@ pub enum RevokeAllRejection {
     tag = AuthTag
 )]
 pub async fn revoke_all_challenge(
-    Inject(auth): Inject<AuthContext>,
     Auth(credential): Auth<AccessToken>,
+    Inject(auth): Inject<AuthContext>,
 ) -> Result<Json<RevokeChallengeResponse>, RevokeAllRejection> {
     let user = UserId::new(credential.user.as_str());
     // Full-entropy and unguessable: a challenge that could be predicted would let an attacker

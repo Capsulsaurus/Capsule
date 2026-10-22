@@ -139,10 +139,10 @@ impl ReannounceRejection {
     tag = SyncTag
 )]
 pub async fn reannounce_manifests(
+    Auth(credential): Auth<AccessToken>,
     Inject(upload): Inject<UploadContext>,
     Inject(attestation): Inject<AttestationContext>,
     Inject(quota): Inject<QuotaContext>,
-    Auth(credential): Auth<AccessToken>,
     Json(request): Json<ReannounceRequest>,
 ) -> Result<Json<ReannounceResponse>, ReannounceRejection> {
     let manifests = parse(&request)?;

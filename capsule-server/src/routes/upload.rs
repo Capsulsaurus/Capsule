@@ -827,13 +827,13 @@ pub(crate) fn retry_at(clock: &dyn Clock, after: jiff::SignedDuration) -> u64 {
     reason = "one extractor per argument; Kynos resolves each one, and bundling them would hide which the contract declares"
 )]
 pub async fn create_upload(
+    Auth(credential): Auth<AccessToken>,
     Inject(upload): Inject<UploadContext>,
     Inject(attestation): Inject<crate::attestation::AttestationContext>,
     Inject(quota): Inject<crate::quota::QuotaContext>,
     Inject(moderation): Inject<crate::moderation::ModerationContext>,
     Inject(counters): Inject<CounterContext>,
     client: ClientAddr,
-    Auth(credential): Auth<AccessToken>,
     Json(request): Json<CreateUploadRequest>,
 ) -> Result<WithHeaders<CreateReply, CreateHeaders>, CreateRejection> {
     let uploader = credential.user.clone();
@@ -1289,9 +1289,9 @@ pub async fn create_upload(
     reason = "one extractor per argument; Kynos resolves each one, and bundling them would hide which the contract declares"
 )]
 pub async fn append_chunk(
+    Auth(credential): Auth<AccessToken>,
     Inject(upload): Inject<UploadContext>,
     Inject(attestation): Inject<crate::attestation::AttestationContext>,
-    Auth(credential): Auth<AccessToken>,
     Path(path): Path<UploadPath>,
     Headers(headers): Headers<ChunkHeaders>,
     Inject(counters): Inject<CounterContext>,
@@ -1558,9 +1558,9 @@ async fn finish_if_full(
 /// finalization left.
 #[kynos::head("/v1/upload/{id}", operation_id = "head_upload", tag = UploadTag)]
 pub async fn head_upload(
+    Auth(credential): Auth<AccessToken>,
     Inject(upload): Inject<UploadContext>,
     Inject(attestation): Inject<crate::attestation::AttestationContext>,
-    Auth(credential): Auth<AccessToken>,
     Path(path): Path<UploadPath>,
 ) -> Result<WithHeaders<HeadReply, HeadHeaders>, SessionRejection> {
     let mut record = session_for(&upload, &path, &credential.user).await?;
@@ -1601,9 +1601,9 @@ pub async fn head_upload(
 /// client should read instead.
 #[kynos::delete("/v1/upload/{id}", operation_id = "cancel_upload", tag = UploadTag)]
 pub async fn cancel_upload(
+    Auth(credential): Auth<AccessToken>,
     Inject(upload): Inject<UploadContext>,
     Inject(quota): Inject<crate::quota::QuotaContext>,
-    Auth(credential): Auth<AccessToken>,
     Path(path): Path<UploadPath>,
 ) -> Result<NoContent, CancelRejection> {
     let record = session_for(&upload, &path, &credential.user).await?;
