@@ -1,0 +1,17 @@
+---
+source: capsule-sdk/src/events/tests.rs
+expression: render(&first)
+---
+{"blob":"63d8d35920be456776a35578ade76725c687821ad55d4bb950225fed2d33e6cb","event":"range_requested","max_len":512,"offset":0}
+{"blob":"63d8d35920be456776a35578ade76725c687821ad55d4bb950225fed2d33e6cb","event":"range_received","len":512,"offset":0}
+{"blob":"63d8d35920be456776a35578ade76725c687821ad55d4bb950225fed2d33e6cb","event":"range_requested","max_len":512,"offset":512}
+{"blob":"63d8d35920be456776a35578ade76725c687821ad55d4bb950225fed2d33e6cb","event":"fetch_retried","offset":512,"stalled":false,"wait_ms":"[jitter]"}
+{"blob":"63d8d35920be456776a35578ade76725c687821ad55d4bb950225fed2d33e6cb","event":"range_requested","max_len":512,"offset":512}
+{"blob":"63d8d35920be456776a35578ade76725c687821ad55d4bb950225fed2d33e6cb","event":"fetch_retried","offset":512,"stalled":true,"wait_ms":"[jitter]"}
+{"blob":"63d8d35920be456776a35578ade76725c687821ad55d4bb950225fed2d33e6cb","event":"range_requested","max_len":512,"offset":512}
+{"blob":"63d8d35920be456776a35578ade76725c687821ad55d4bb950225fed2d33e6cb","event":"range_received","len":512,"offset":512}
+{"blob":"63d8d35920be456776a35578ade76725c687821ad55d4bb950225fed2d33e6cb","event":"range_requested","max_len":512,"offset":1024}
+{"blob":"63d8d35920be456776a35578ade76725c687821ad55d4bb950225fed2d33e6cb","event":"range_received","len":512,"offset":1024}
+{"blob":"63d8d35920be456776a35578ade76725c687821ad55d4bb950225fed2d33e6cb","event":"range_requested","max_len":464,"offset":1536}
+{"blob":"63d8d35920be456776a35578ade76725c687821ad55d4bb950225fed2d33e6cb","event":"range_received","len":464,"offset":1536}
+{"blob":"63d8d35920be456776a35578ade76725c687821ad55d4bb950225fed2d33e6cb","event":"fetch_verified","size":2000}

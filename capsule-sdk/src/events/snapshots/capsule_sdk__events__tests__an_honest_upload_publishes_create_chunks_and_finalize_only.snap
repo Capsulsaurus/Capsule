@@ -1,0 +1,12 @@
+---
+source: capsule-sdk/src/events/tests.rs
+expression: render(&events)
+---
+{"blob":"b10b","event":"session_created","resume_offset":0,"session_id":"sess-1","size":786432}
+{"blob":"b10b","event":"chunk_sent","len":262144,"offset":0,"session_id":"sess-1"}
+{"acked_offset":262144,"blob":"b10b","event":"chunk_acked","len":262144,"offset":0,"session_id":"sess-1"}
+{"blob":"b10b","event":"chunk_sent","len":262144,"offset":262144,"session_id":"sess-1"}
+{"acked_offset":524288,"blob":"b10b","event":"chunk_acked","len":262144,"offset":262144,"session_id":"sess-1"}
+{"blob":"b10b","event":"chunk_sent","len":262144,"offset":524288,"session_id":"sess-1"}
+{"acked_offset":786432,"blob":"b10b","event":"chunk_acked","len":262144,"offset":524288,"session_id":"sess-1"}
+{"blob":"b10b","event":"finalize","session_id":"sess-1","size":786432}

@@ -70,6 +70,7 @@ use serde::Serialize;
 use tracing::instrument;
 
 use crate::albums::{AlbumClient, AlbumError, ProvisionedAlbum};
+use crate::events::{TransferEvent, TransferEvents};
 use crate::staged::{StagedAsset, StagedScheduler, TierBlob, TierSessionOutcome, remaining_tiers};
 use crate::upload::{
     BlobRole, CreateUploadRequest, ManifestEnvelope, UploadClient, UploadError, UploadOutcome,
@@ -544,6 +545,9 @@ impl AssetPushReport {
 /// [`held_from_feed`](crate::staged::held_from_feed) over a fresh feed pull); those blobs are
 /// skipped without a request. `force` ignores `held` and re-drives every planned blob — the
 /// server still answers `duplicate_blob` for anything it holds, which resolves as a merge.
+///
+/// Every blob's transfer steps are published to `client`'s
+/// [`events`](UploadClient::with_events) handle, tagged with the blob's content address.
 #[instrument(skip_all, fields(asset_id = %bundle.asset_id, album_id = %bundle.album_id, force))]
 pub async fn push_bundle<H: std::hash::BuildHasher + Sync>(
     client: &UploadClient,
@@ -705,13 +709,34 @@ fn check_receipt(
 /// receipting it in this asset's log.
 ///
 /// `now_unix` is the client's clock, injected for the receipt's drift bound.
-#[instrument(skip_all, fields(asset_id = %bundle.asset_id, blobs = report.custody_hashes.len()))]
 pub async fn verify_custody(
     client: &StorageVerifyClient,
     attestation_keys: &[HybridVerifyingKey],
     bundle: &UploadBundle,
     report: &AssetPushReport,
     now_unix: i64,
+) -> Result<VerifiedCustody, PushError> {
+    verify_custody_with_events(
+        client,
+        attestation_keys,
+        bundle,
+        report,
+        now_unix,
+        &TransferEvents::disabled(),
+    )
+    .await
+}
+
+/// [`verify_custody`], publishing the verdict ([`TransferEvent::Verify`]) and each verified
+/// receipt ([`TransferEvent::Receipt`]) to `events`.
+#[instrument(skip_all, fields(asset_id = %bundle.asset_id, blobs = report.custody_hashes.len()))]
+pub async fn verify_custody_with_events(
+    client: &StorageVerifyClient,
+    attestation_keys: &[HybridVerifyingKey],
+    bundle: &UploadBundle,
+    report: &AssetPushReport,
+    now_unix: i64,
+    events: &TransferEvents,
 ) -> Result<VerifiedCustody, PushError> {
     let asset_id = bundle.asset_id.to_string();
     let blobs = bundle_blobs(bundle);
@@ -751,6 +776,12 @@ pub async fn verify_custody(
         })
         .map(|(_, hash, _)| (*hash).clone())
         .collect();
+    events.emit(|| TransferEvent::Verify {
+        asset_id: asset_id.clone(),
+        durable: verdict.durable,
+        blobs: declared.len() as u64,
+        not_durable: not_durable.len() as u64,
+    });
     if !verdict.durable || !not_durable.is_empty() {
         tracing::warn!(
             durable = verdict.durable,
@@ -791,6 +822,11 @@ pub async fn verify_custody(
                     receipt_seq = receipt.core.receipt_seq,
                     "push: custody receipt verified"
                 );
+                events.emit(|| TransferEvent::Receipt {
+                    asset_id: asset_id.clone(),
+                    blob: hash.clone(),
+                    receipt_seq: receipt.core.receipt_seq,
+                });
                 receipts.push(receipt);
             }
             (None, Some(rejection)) => {
