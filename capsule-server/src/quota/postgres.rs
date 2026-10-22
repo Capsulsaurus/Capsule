@@ -329,7 +329,7 @@ impl QuotaStore for PostgresQuota {
             // it — so the row count is the answer, as `charge`'s is.
             let suspended = self
                 .connection
-                .execute(Statement::from_sql_and_values(
+                .execute_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "INSERT INTO quota_usage (user_id, over_since, suspended_since) \
                      VALUES ($1, NULL, $2) \
@@ -350,7 +350,7 @@ impl QuotaStore for PostgresQuota {
         Box::pin(async move {
             let lifted = self
                 .connection
-                .execute(Statement::from_sql_and_values(
+                .execute_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "UPDATE quota_usage SET suspended_since = NULL \
                      WHERE user_id = $1 AND suspended_since IS NOT NULL",
