@@ -3,7 +3,9 @@
 //! Implements RFC 8949 §4.2 *Core Deterministic Encoding*:
 //! - definite-length items only,
 //! - shortest-form (preferred) integer and float encodings,
-//! - map entries sorted by the **bytewise lexicographic order of their encoded keys**.
+//! - map entries sorted by the **bytewise lexicographic order of their encoded keys**,
+//! - bignums (tags 2 and 3 over a byte string) in preferred form (RFC 8949 §3.4.3): a
+//!   magnitude that fits in 64 bits is the plain integer, and leading zero bytes are dropped.
 //!
 //! `ciborium` itself preserves map wire order and does not offer a deterministic mode,
 //! so this encoder owns the framing; `ciborium` is used only to model values.
@@ -17,6 +19,42 @@ const MT_TEXT: u8 = 3;
 const MT_ARRAY: u8 = 4;
 const MT_MAP: u8 = 5;
 const MT_TAG: u8 = 6;
+
+/// Tag 2: an unsigned bignum, `n` for a big-endian magnitude `n` (RFC 8949 §3.4.3).
+pub(crate) const TAG_BIGNUM_POS: u64 = 2;
+/// Tag 3: a negative bignum, `-1 - n` for a big-endian magnitude `n` (RFC 8949 §3.4.3).
+pub(crate) const TAG_BIGNUM_NEG: u64 = 3;
+
+/// The magnitude of a bignum's byte string without its leading zero bytes.
+pub(crate) fn bignum_magnitude(bytes: &[u8]) -> &[u8] {
+    let first = bytes.iter().position(|&b| b != 0).unwrap_or(bytes.len());
+    &bytes[first..]
+}
+
+/// Encode a tag-2/3 bignum in preferred form: the plain integer when the magnitude fits
+/// in 64 bits (major type 0 for tag 2, major type 1 for tag 3, whose argument is the
+/// magnitude itself), otherwise the tag over the magnitude without leading zero bytes.
+///
+/// This is what makes [`super::canonicalize`] a fixed point on bignums: the decoder reads
+/// a bignum that fits as a plain integer and strips leading zeros, so writing the tag
+/// verbatim would give a second, different canonical form on the next pass.
+fn encode_bignum(tag: u64, bytes: &[u8], out: &mut Vec<u8>) {
+    let magnitude = bignum_magnitude(bytes);
+    if magnitude.len() <= 8 {
+        let mut be = [0u8; 8];
+        be[8 - magnitude.len()..].copy_from_slice(magnitude);
+        let major = if tag == TAG_BIGNUM_POS {
+            MT_UINT
+        } else {
+            MT_NINT
+        };
+        encode_head(major, u64::from_be_bytes(be), out);
+    } else {
+        encode_head(MT_TAG, tag, out);
+        encode_head(MT_BYTES, magnitude.len() as u64, out);
+        out.extend_from_slice(magnitude);
+    }
+}
 
 /// Emit a major-type head with its argument in the shortest of the 1/2/3/5/9-byte forms.
 fn encode_head(major: u8, arg: u64, out: &mut Vec<u8>) {
@@ -114,8 +152,12 @@ pub(crate) fn encode_value(value: &Value, out: &mut Vec<u8>) {
         }
         Value::Map(m) => encode_map(m, out),
         Value::Tag(t, inner) => {
-            encode_head(MT_TAG, *t, out);
-            encode_value(inner, out);
+            if let (TAG_BIGNUM_POS | TAG_BIGNUM_NEG, Value::Bytes(b)) = (*t, &**inner) {
+                encode_bignum(*t, b, out);
+            } else {
+                encode_head(MT_TAG, *t, out);
+                encode_value(inner, out);
+            }
         }
         Value::Bool(false) => out.push(0xf4),
         Value::Bool(true) => out.push(0xf5),
