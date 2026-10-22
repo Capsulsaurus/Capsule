@@ -1,4 +1,4 @@
-use std::io::Cursor;
+use std::io::{BufRead, Cursor, Read, Seek, SeekFrom};
 
 use exif::{DateTime as ExifDateTime, In, Reader, Tag, Value};
 use jiff::civil;
@@ -19,13 +19,21 @@ pub struct ExifExtract {
 
 /// Extract the EXIF fields Capsule indexes from a file's bytes.
 ///
-/// Pure over the bytes: reading them is the caller's business (`capsule-library` reads a file
-/// path once and hands the buffer here). Bytes that are not an EXIF container yield an all-`None`
-/// extract rather than an error — a file without EXIF is ordinary, not a failure.
+/// The in-memory form of [`extract_exif_from_reader`]; see it for the contract.
 pub fn extract_exif_from_bytes(bytes: &[u8]) -> ExifExtract {
-    let mut reader = Cursor::new(bytes);
+    extract_exif_from_reader(&mut Cursor::new(bytes))
+}
 
-    let Ok(exif) = Reader::new().read_from_container(&mut reader) else {
+/// Extract the EXIF fields Capsule indexes from a seekable reader over a file's contents.
+///
+/// Generic over the reader so opening the file stays the caller's business (`capsule-library`
+/// hands a buffered file handle here). Contents that are not an EXIF container yield an
+/// all-`None` extract rather than an error — a file without EXIF is ordinary, not a failure — and
+/// are read only as far as the container sniff needs, so a large non-EXIF original is never held
+/// whole. Only an EXIF container is rewound and read to its end, for the Live Photo content
+/// identifier; a read failure there leaves that one field `None`.
+pub fn extract_exif_from_reader<R: BufRead + Seek>(reader: &mut R) -> ExifExtract {
+    let Ok(exif) = Reader::new().read_from_container(reader) else {
         // Not a valid EXIF container — return all-None result
         return ExifExtract {
             date_time_original: None,
@@ -178,7 +186,8 @@ pub fn extract_exif_from_bytes(bytes: &[u8]) -> ExifExtract {
         });
 
     // content_identifier — Apple Live Photo UUID (byte search)
-    let content_identifier = extract_content_identifier(bytes);
+    let content_identifier =
+        read_whole(reader).and_then(|bytes| extract_content_identifier(&bytes));
 
     ExifExtract {
         date_time_original,
@@ -201,6 +210,14 @@ fn strip_quotes(s: &str) -> String {
     } else {
         s.to_string()
     }
+}
+
+/// The reader's whole contents from the start, or `None` if rewinding or reading fails.
+fn read_whole<R: Read + Seek>(reader: &mut R) -> Option<Vec<u8>> {
+    reader.seek(SeekFrom::Start(0)).ok()?;
+    let mut bytes = Vec::new();
+    reader.read_to_end(&mut bytes).ok()?;
+    Some(bytes)
 }
 
 fn extract_content_identifier(bytes: &[u8]) -> Option<String> {
