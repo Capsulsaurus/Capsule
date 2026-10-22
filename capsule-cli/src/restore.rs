@@ -34,7 +34,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use capsule_core::crypto::hash::{self, Hash32};
+use capsule_core::crypto::hash::Hash32;
 use capsule_core::crypto::provenance::ProvenanceRecord;
 use capsule_core::lifecycle::{
     LifecycleError, QuarantineReason, RemoteHead, RemoteOriginal, SyncApplyOutcome, Workspace,
@@ -509,7 +509,11 @@ impl<B: BlobSource + Sync> AssetRestore<'_, B> {
             .map(|blob| blob.size);
         let fetched = match listed {
             Some(size) => self.fetcher.fetch(self.source, &hash, size).await,
-            None => fetch_unsized(self.source, &hash, METADATA_WINDOW).await,
+            None => {
+                self.fetcher
+                    .fetch_unsized(self.source, &hash, MAX_METADATA_BLOB_BYTES)
+                    .await
+            }
         };
         fetched.map_err(|error| AssetRestoreFailure::fetch("metadata blob", &error))
     }
@@ -629,84 +633,10 @@ fn refusal(verdict: &SyncApplyOutcome) -> AssetRestoreFailure {
     }
 }
 
-/// The window a metadata blob of unlisted size is read in. A sealed sidecar is a few KiB, so
-/// one window is the usual whole fetch.
-pub const METADATA_WINDOW: u64 = 64 * 1024;
-
-/// How many responses in a row may bring no bytes before an unsized fetch gives up.
-const UNSIZED_STALLS: u32 = 3;
-
-/// Fetch a whole blob whose size nobody listed, in bounded `window`-sized `Range` requests, and
-/// verify it against its content address.
-///
-/// The end of the blob is the first response shorter than the window, or a `416` for a range
-/// that starts exactly at the end. Nothing is trusted until the reassembled bytes hash to
-/// `hash`.
-pub async fn fetch_unsized<B: BlobSource + Sync>(
-    source: &B,
-    hash: &str,
-    window: u64,
-) -> Result<Vec<u8>, FetchError> {
-    let window = window.max(1);
-    let mut bytes: Vec<u8> = Vec::new();
-    let mut stalls = 0;
-    loop {
-        match source
-            .get_range(hash, bytes.len() as u64, Some(window))
-            .await
-        {
-            RangeOutcome::Complete { bytes: landed } => {
-                let short = (landed.len() as u64) < window;
-                bytes.extend_from_slice(&landed);
-                if short {
-                    break;
-                }
-            }
-            RangeOutcome::Partial { bytes: landed } if !landed.is_empty() => {
-                stalls = 0;
-                bytes.extend_from_slice(&landed);
-            }
-            RangeOutcome::Partial { .. } => {
-                stalls += 1;
-                if stalls >= UNSIZED_STALLS {
-                    return Err(FetchError::Exhausted(format!(
-                        "no progress fetching {hash} after {stalls} attempts"
-                    )));
-                }
-            }
-            RangeOutcome::Status { status: 416, .. } if !bytes.is_empty() => break,
-            RangeOutcome::Status { status, code } => {
-                return Err(match status {
-                    401 => FetchError::Unauthenticated {
-                        code,
-                        message: "the server refused the refreshed credential".to_owned(),
-                    },
-                    403 => FetchError::AuthorizationChanged { code },
-                    404 | 410 => FetchError::Gone,
-                    0 => FetchError::Transient("transport error".to_owned()),
-                    s if (500..600).contains(&s) => {
-                        FetchError::Transient(format!("server status {s}"))
-                    }
-                    s => FetchError::Rejected { status: s, code },
-                });
-            }
-            RangeOutcome::Unauthenticated { code, message } => {
-                return Err(FetchError::Unauthenticated { code, message });
-            }
-        }
-    }
-    if hash::hash_bytes(&bytes).to_hex() != hash {
-        tracing::warn!(
-            hash,
-            "restore: metadata blob content-hash mismatch; discarded"
-        );
-        return Err(FetchError::IntegrityFailed {
-            expected: hash.to_owned(),
-        });
-    }
-    tracing::debug!(hash, bytes = bytes.len(), "restore: unsized blob fetched");
-    Ok(bytes)
-}
+/// The most a restore reads of a metadata blob whose size the feed does not list (16 MiB, the
+/// upload protocol's largest chunk). A sealed sidecar is a few KiB; the cap only stops a
+/// server that keeps answering full windows from growing the buffer without bound.
+pub const MAX_METADATA_BLOB_BYTES: u64 = capsule_sdk::upload::PROTOCOL_MAX_CHUNK;
 
 /// A file extension for a media type, for naming a restored original. Cosmetic: the bytes are
 /// the original's whatever the name says, and an unlisted type is written as `.bin`.
