@@ -82,6 +82,15 @@ pub const BINDINGS: &[Binding] = &[
         action: Action::RefreshSession,
         in_footer: true,
     },
+    Binding {
+        code: KeyCode::Char('t'),
+        modifiers: KeyModifiers::NONE,
+        scope: Scope::On(Screen::Home),
+        label: "t",
+        description: "Watch transfers",
+        action: Action::Open(Screen::Transfers),
+        in_footer: true,
+    },
 ];
 
 /// Whether `binding` applies on `screen`.

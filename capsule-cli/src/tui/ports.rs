@@ -8,6 +8,8 @@
 use std::future::Future;
 use std::path::PathBuf;
 
+use capsule_sdk::events::TransferEvents;
+
 use super::state::{Action, Effect, SessionSummary};
 use crate::session::SessionStore;
 use crate::status::AuthStatus;
@@ -20,6 +22,13 @@ use crate::status::AuthStatus;
 pub trait Ports: Send + Sync + 'static {
     /// The local session summary, as `capsule auth status` reads it: never a network call.
     fn session_summary(&self) -> impl Future<Output = Result<SessionSummary, String>> + Send;
+
+    /// The transfer event handle the transfer screen watches. Every upload, push or fetch the
+    /// TUI starts attaches this handle to its client, so the screen sees it. The default
+    /// publishes nothing.
+    fn transfer_events(&self) -> TransferEvents {
+        TransferEvents::disabled()
+    }
 }
 
 /// Perform `effect` through `ports` and return the action that reports its outcome.
@@ -32,10 +41,12 @@ pub async fn perform<P: Ports>(ports: &P, effect: Effect) -> Action {
     action
 }
 
-/// The ports a real `capsule` run uses: the session file the CLI's own commands read.
+/// The ports a real `capsule` run uses: the session file the CLI's own commands read, and one
+/// transfer event channel for every transfer the TUI starts.
 #[derive(Debug, Clone)]
 pub struct LocalPorts {
     session_path: Option<PathBuf>,
+    transfer_events: TransferEvents,
 }
 
 impl LocalPorts {
@@ -43,11 +54,18 @@ impl LocalPorts {
     /// be resolved, which every read then reports.
     #[must_use]
     pub fn new(session_path: Option<PathBuf>) -> Self {
-        Self { session_path }
+        Self {
+            session_path,
+            transfer_events: TransferEvents::default_channel(),
+        }
     }
 }
 
 impl Ports for LocalPorts {
+    fn transfer_events(&self) -> TransferEvents {
+        self.transfer_events.clone()
+    }
+
     async fn session_summary(&self) -> Result<SessionSummary, String> {
         let path = self
             .session_path

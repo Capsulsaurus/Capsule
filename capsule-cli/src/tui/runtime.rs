@@ -5,6 +5,10 @@
 //! responsiveness bound (Clients — Responsiveness): after every event it applies the action and
 //! draws, and it never awaits a port on the way. Effects run as spawned tasks whose outcomes
 //! arrive later as actions on a channel.
+//!
+//! Transfer events are the exception to drawing after every event: a fast link publishes
+//! thousands a second, so each is folded into the state as it arrives and the transfer screen
+//! draws on a 60 Hz frame tick instead.
 
 use std::sync::Arc;
 
@@ -13,10 +17,12 @@ use futures::{Stream, StreamExt as _};
 use ratatui::Terminal;
 use ratatui::backend::Backend;
 use tokio::sync::mpsc;
+use tokio::time::MissedTickBehavior;
 
 use super::keymap::action_for_event;
 use super::ports::{Ports, perform};
-use super::state::{Action, AppState, Effect};
+use super::state::{Action, AppState, Effect, Screen};
+use super::transfer::{FRAME_INTERVAL, Feed};
 use super::view::render;
 
 /// Run the TUI until it quits or `events` ends, drawing on `terminal`. Returns the final state.
@@ -39,9 +45,12 @@ where
     let (tx, mut rx) = mpsc::unbounded_channel::<Action>();
     spawn_effects(&ports, &tx, effects);
     draw(terminal, &state)?;
+    let mut feed = Feed::new(&ports.transfer_events());
+    let mut frames = tokio::time::interval(FRAME_INTERVAL);
+    frames.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
     while state.is_running() {
-        let action = tokio::select! {
+        let (action, redraw) = tokio::select! {
             // Input first: a key press is never queued behind an effect's outcome.
             biased;
             event = events.next() => {
@@ -50,16 +59,25 @@ where
                     break;
                 };
                 let event = event.wrap_err("reading terminal input")?;
-                action_for_event(&state, &event)
+                (action_for_event(&state, &event), true)
             },
             // `tx` lives as long as the loop, so the channel never closes under it.
-            Some(action) = rx.recv() => Some(action),
+            Some(action) = rx.recv() => (Some(action), true),
+            // The transfer screen redraws at 60 Hz, ahead of the feed so a busy stream never
+            // starves it; other screens never tick.
+            _ = frames.tick(), if state.screen() == Screen::Transfers => {
+                (Some(Action::Tick(feed.now_ms())), true)
+            },
+            // Folded at once, drawn by the next frame tick.
+            action = feed.next() => (Some(action), false),
         };
         if let Some(action) = action {
             let effects = state.update(action);
             spawn_effects(&ports, &tx, effects);
         }
-        draw(terminal, &state)?;
+        if redraw {
+            draw(terminal, &state)?;
+        }
     }
     Ok(state)
 }

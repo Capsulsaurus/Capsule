@@ -15,6 +15,7 @@ use ratatui::widgets::{Block, Borders, Paragraph, Row, Table, Wrap};
 
 use super::keymap::{BINDINGS, Scope, available};
 use super::state::{AppState, Loadable, Screen, SessionSummary};
+use super::transfer;
 
 /// Draw `state` into `frame`.
 pub fn render(frame: &mut Frame, state: &AppState) {
@@ -29,6 +30,9 @@ pub fn render(frame: &mut Frame, state: &AppState) {
     match state.screen() {
         Screen::Home => render_home(frame, body, state),
         Screen::Help => render_help(frame, body),
+        Screen::Transfers => {
+            transfer::view::render(frame, body, state.transfers(), title(Screen::Transfers))
+        }
     }
     render_footer(frame, footer, state);
 }
@@ -38,6 +42,7 @@ fn title(screen: Screen) -> &'static str {
     match screen {
         Screen::Home => "Home",
         Screen::Help => "Key bindings",
+        Screen::Transfers => "Transfers",
     }
 }
 

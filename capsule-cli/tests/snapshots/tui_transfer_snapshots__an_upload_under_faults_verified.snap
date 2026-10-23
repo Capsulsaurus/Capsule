@@ -1,0 +1,16 @@
+---
+source: capsule-cli/tests/tui_transfer_snapshots.rs
+expression: frame
+---
+Capsule · Transfers · Signed out
+┌Transfers─────────────────────────────────────────────────────────────────────┐
+│1 transfer, 0 active · 128 KiB/s · custody: 1 durable, 0 not, 1 receipt       │
+│↑ 5feceb66ffc8  1 MiB / 1 MiB 100%  128 KiB/s  verified (receipt 1)           │
+│██████████████████████████████████████████████████████████████████████████████│
+│██████████████████████████████████████████████████████████████████████████████│
+│chunk 128 KiB → 256 KiB (1 change) · 2 retries · 1 reject · sess-1            │
+│last retry: server asked to wait 3000 ms                                      │
+│· pending  = held before this run  ░ in flight  ▓ acked  █ verified           │
+│R retrying  X rejected  r acked after a retry  x acked after a reject         │
+└──────────────────────────────────────────────────────────────────────────────┘
+q Quit  ? Show the key bindings  Esc Back to the previous screen
