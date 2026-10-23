@@ -8,6 +8,8 @@
 use std::future::Future;
 use std::path::PathBuf;
 
+use capsule_sdk::events::TransferEvents;
+
 use super::auth::{AuthAction, AuthEffect, LoginResult};
 use super::form::Secret;
 use super::restore::{RestoreAction, RestoreEffect, RestoreRequest};
@@ -34,6 +36,13 @@ pub const NOT_OFFERED: &str = "this build of the TUI cannot do that";
 pub trait Ports: Send + Sync + 'static {
     /// The local session summary, as `capsule auth status` reads it: never a network call.
     fn session_summary(&self) -> impl Future<Output = Result<SessionSummary, String>> + Send;
+
+    /// The transfer event handle the transfer screen watches. Every upload, push or fetch the
+    /// TUI starts attaches this handle to its client, so the screen sees it. The default
+    /// publishes nothing.
+    fn transfer_events(&self) -> TransferEvents {
+        TransferEvents::disabled()
+    }
 
     /// Sign in with a password, storing the session on success, as `capsule auth login` does.
     fn login(
@@ -127,11 +136,13 @@ pub async fn perform<P: Ports>(ports: &P, effect: Effect) -> Action {
 }
 
 /// The ports a real `capsule` run uses: the session file, the local store and the server the
-/// CLI's own commands use, through the same functions those commands call.
+/// CLI's own commands use, through the same functions those commands call, and one transfer
+/// event channel for every transfer the TUI starts.
 #[derive(Debug, Clone)]
 pub struct LocalPorts {
     session_path: Option<PathBuf>,
     remote: RemoteConfig,
+    transfer_events: TransferEvents,
 }
 
 impl LocalPorts {
@@ -143,6 +154,7 @@ impl LocalPorts {
         Self {
             session_path,
             remote: RemoteConfig::from_env(),
+            transfer_events: TransferEvents::default_channel(),
         }
     }
 
@@ -183,6 +195,10 @@ where
 }
 
 impl Ports for LocalPorts {
+    fn transfer_events(&self) -> TransferEvents {
+        self.transfer_events.clone()
+    }
+
     async fn session_summary(&self) -> Result<SessionSummary, String> {
         let path = self.session_path()?;
         // A file read: off the async worker so the input loop is never behind it.

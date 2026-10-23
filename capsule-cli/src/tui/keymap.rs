@@ -103,6 +103,12 @@ pub const BINDINGS: &[Binding] = &[
         Screen::Restore,
     ),
     open(KeyCode::Char('l'), "l", "Share links", Screen::Share),
+    open(
+        KeyCode::Char('t'),
+        "t",
+        "Watch transfers",
+        Screen::Transfers,
+    ),
     // ── Account ──────────────────────────────────────────────────────────
     on(
         Screen::Auth,

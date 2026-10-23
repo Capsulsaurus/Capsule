@@ -25,6 +25,7 @@ use super::form::FormKey;
 use super::restore::{RestoreAction, RestoreEffect, RestoreScreen};
 use super::share::{ShareAction, ShareEffect, ShareScreen};
 use super::sync::{SyncAction, SyncEffect, SyncScreen};
+use super::transfer::{Stamped, TransferBoard};
 
 /// One screen on the navigation stack.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,6 +34,8 @@ pub enum Screen {
     Home,
     /// The key bindings, generated from the keymap table.
     Help,
+    /// Every upload and fetch in real time, drawn from the transfer event stream.
+    Transfers,
     /// Sign in and out ([`super::auth`]).
     Auth,
     /// Sync the server's feed into the local store ([`super::sync`]).
@@ -94,6 +97,13 @@ pub enum Action {
     RefreshSession,
     /// [`Effect::LoadSession`] finished.
     SessionLoaded(Result<SessionSummary, String>),
+    /// A transfer event arrived, stamped with when.
+    Transfer(Stamped),
+    /// The transfer stream's subscriber fell behind and this many events never arrived.
+    TransfersLagged(u64),
+    /// The frame clock: milliseconds since the transfer feed started. Moves the transfer
+    /// board's clock without an event, so throughput decays while nothing moves.
+    Tick(u64),
     /// A key typed into the form of the screen on top.
     Form(FormKey),
     /// The answer to the confirmation the screen on top is asking.
@@ -145,6 +155,7 @@ pub struct AppState {
     /// Never empty: the bottom is always [`Screen::Home`].
     stack: Vec<Screen>,
     session: Loadable<SessionSummary>,
+    transfers: TransferBoard,
     running: bool,
     auth: AuthScreen,
     sync: SyncScreen,
@@ -159,6 +170,7 @@ impl AppState {
         let state = Self {
             stack: vec![Screen::Home],
             session: Loadable::Loading,
+            transfers: TransferBoard::default(),
             running: true,
             auth: AuthScreen::default(),
             sync: SyncScreen::default(),
@@ -185,6 +197,12 @@ impl AppState {
     #[must_use]
     pub fn session(&self) -> &Loadable<SessionSummary> {
         &self.session
+    }
+
+    /// Every transfer seen on the event stream.
+    #[must_use]
+    pub fn transfers(&self) -> &TransferBoard {
+        &self.transfers
     }
 
     /// Whether the event loop keeps going. False once [`Action::Quit`] is applied.
@@ -222,7 +240,7 @@ impl AppState {
     #[must_use]
     pub fn is_editing(&self) -> bool {
         match self.screen() {
-            Screen::Home | Screen::Help | Screen::Sync => false,
+            Screen::Home | Screen::Help | Screen::Transfers | Screen::Sync => false,
             Screen::Auth => self.auth.is_editing(),
             Screen::Restore => self.restore.is_editing(),
             Screen::Share => self.share.is_editing(),
@@ -234,7 +252,9 @@ impl AppState {
     #[must_use]
     pub fn is_confirming(&self) -> bool {
         match self.screen() {
-            Screen::Home | Screen::Help | Screen::Sync | Screen::Restore => false,
+            Screen::Home | Screen::Help | Screen::Transfers | Screen::Sync | Screen::Restore => {
+                false
+            }
             Screen::Auth => self.auth.is_confirming(),
             Screen::Share => self.share.is_confirming(),
         }
@@ -278,14 +298,30 @@ impl AppState {
                 };
                 Vec::new()
             }
+            Action::Transfer(stamped) => {
+                self.transfers.apply(stamped);
+                Vec::new()
+            }
+            Action::TransfersLagged(count) => {
+                self.transfers.lagged(count);
+                Vec::new()
+            }
+            Action::Tick(now_ms) => {
+                self.transfers.tick(now_ms);
+                Vec::new()
+            }
             Action::Form(key) => match self.screen() {
-                Screen::Home | Screen::Help | Screen::Sync => Vec::new(),
+                Screen::Home | Screen::Help | Screen::Transfers | Screen::Sync => Vec::new(),
                 Screen::Auth => self.auth.on_form_key(key),
                 Screen::Restore => self.restore.on_form_key(key),
                 Screen::Share => self.share.on_form_key(key),
             },
             Action::Answer(answer) => match self.screen() {
-                Screen::Home | Screen::Help | Screen::Sync | Screen::Restore => Vec::new(),
+                Screen::Home
+                | Screen::Help
+                | Screen::Transfers
+                | Screen::Sync
+                | Screen::Restore => Vec::new(),
                 Screen::Auth => self.auth.on_answer(answer),
                 Screen::Share => self.share.on_answer(answer),
             },

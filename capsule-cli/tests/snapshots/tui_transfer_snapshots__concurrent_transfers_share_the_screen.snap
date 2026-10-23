@@ -1,0 +1,26 @@
+---
+source: capsule-cli/tests/tui_transfer_snapshots.rs
+expression: frame
+---
+Capsule · Transfers · Signed out
+┌Transfers─────────────────────────────────────────────────────────────────────┐
+│3 transfers, 3 active · 672 KiB/s · custody: 0 durable, 0 not, 0 receipts     │
+│↓ d4735e3a265e  64 KiB / ?  32 KiB/s  fetching                                │
+│size not known yet                                                            │
+│                                                                              │
+│chunk 64 KiB · 0 retries · 0 rejects                                          │
+│                                                                              │
+│↑ 6b86b273ff34  512 KiB / 1 MiB  50%  384 KiB/s  sending                      │
+│▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓│
+│░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░│
+│chunk 256 KiB → 512 KiB (1 change) · 1 retry · 0 rejects · sess-8 (2 sessions)│
+│last retry: session lost, opened a new one · resumed at 384 KiB               │
+│↑ 5feceb66ffc8  512 KiB / 1 MiB  50%  256 KiB/s  sending                      │
+│▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr│
+│░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░·······································│
+│chunk 128 KiB → 256 KiB (1 change) · 1 retry · 0 rejects · sess-1             │
+│last retry: connection reset, waited 120 ms                                   │
+│· pending  = held before this run  ░ in flight  ▓ acked  █ verified           │
+│R retrying  X rejected  r acked after a retry  x acked after a reject         │
+└──────────────────────────────────────────────────────────────────────────────┘
+q Quit  ? Show the key bindings  Esc Back to the previous screen

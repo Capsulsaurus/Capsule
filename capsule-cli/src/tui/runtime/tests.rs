@@ -96,6 +96,67 @@ async fn an_input_error_is_returned() {
     assert!(format!("{error:#}").contains("tty gone"), "{error:#}");
 }
 
+/// Ports whose transfer handle the test publishes on, as an upload the TUI started would.
+struct Transferring(capsule_sdk::events::TransferEvents);
+
+impl Ports for Transferring {
+    async fn session_summary(&self) -> Result<SessionSummary, String> {
+        Ok(SessionSummary::SignedOut)
+    }
+
+    fn transfer_events(&self) -> capsule_sdk::events::TransferEvents {
+        self.0.clone()
+    }
+}
+
+/// The loop subscribes to the ports' transfer handle, stamps each event on its own monotonic
+/// clock, and the open transfer screen draws it on the frame tick, which also moves the
+/// board's clock while nothing arrives.
+#[tokio::test(start_paused = true)]
+async fn transfer_events_reach_the_transfer_screen_on_the_frame_tick() {
+    use capsule_sdk::events::{TransferEvent, TransferEvents};
+
+    let handle = TransferEvents::channel(16);
+    let publisher = handle.clone();
+    let emitter = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        publisher.emit(|| TransferEvent::SessionCreated {
+            blob: "feedfacecafe0001".into(),
+            session_id: "sess-1".into(),
+            size: 4096,
+            resume_offset: 0,
+        });
+        publisher.emit(|| TransferEvent::ChunkSent {
+            blob: "feedfacecafe0001".into(),
+            session_id: "sess-1".into(),
+            offset: 0,
+            len: 1024,
+        });
+    });
+    let mut terminal = terminal();
+    let events = Box::pin(stream::iter([press('t')]).chain(stream::once(async {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        press('q')
+    })));
+    let state = event_loop(&mut terminal, events, Arc::new(Transferring(handle)))
+        .await
+        .expect("loop");
+    emitter.await.expect("emitter");
+
+    assert_eq!(state.screen(), Screen::Transfers);
+    let transfer = &state.transfers().transfers()[0];
+    assert_eq!(transfer.started_ms, 100, "stamped on arrival");
+    // The frame tick kept the board's clock moving after the last event.
+    assert!(
+        state.transfers().now_ms() >= 900,
+        "{}",
+        state.transfers().now_ms()
+    );
+    let frame = frame_text(terminal.backend().buffer());
+    assert!(frame.contains("feedfacecafe"), "{frame}");
+    assert!(frame.contains("sending"), "{frame}");
+}
+
 /// With the clock paused, the scripted `q` arrives only once every other task is idle, so the
 /// session read has answered and been drawn by then: effect outcomes reach the frame while input
 /// is quiet.
