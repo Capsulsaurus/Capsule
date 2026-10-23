@@ -179,13 +179,11 @@ impl std::fmt::Debug for EncodedPreview {
 pub fn encode_guarded(
     encode: impl FnOnce() -> Result<Protocol, String>,
 ) -> Result<EncodedPreview, String> {
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(encode)) {
-        Ok(encoded) => encoded.map(|protocol| EncodedPreview(Arc::new(protocol))),
-        Err(_) => {
-            tracing::warn!(target: "capsule_cli::tui", "the terminal image encoder panicked; the preview is text");
-            Err("the terminal image encoder panicked".to_owned())
-        }
+    if let Ok(encoded) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(encode)) {
+        return encoded.map(|protocol| EncodedPreview(Arc::new(protocol)));
     }
+    tracing::warn!(target: "capsule_cli::tui", "the terminal image encoder panicked; the preview is text");
+    Err("the terminal image encoder panicked".to_owned())
 }
 
 /// Encode `request`'s preview with `picker`'s protocol: resize it to the pane and encode it

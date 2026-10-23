@@ -126,13 +126,14 @@ pub struct StackEntry {
 }
 
 impl std::fmt::Debug for Catalogue {
-    // Counts only: every action is traced, and a whole library's rows would swamp the log.
+    // Counts only: every action is traced, and a whole library's rows would swamp the log. The
+    // index is derived from the lists and left out.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Catalogue")
             .field("assets", &self.assets.len())
             .field("albums", &self.albums.len())
             .field("stacks", &self.stacks.len())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

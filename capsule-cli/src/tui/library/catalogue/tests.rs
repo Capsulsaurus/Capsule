@@ -172,7 +172,7 @@ fn an_empty_library_is_an_empty_catalogue_with_its_album() {
 fn debug_prints_counts_not_rows() {
     let fx = Fixture::with_assets(2);
     let printed = format!("{:?}", collect(&fx.ws));
-    assert_eq!(printed, "Catalogue { assets: 2, albums: 1, stacks: 0 }");
+    assert_eq!(printed, "Catalogue { assets: 2, albums: 1, stacks: 0, .. }");
 }
 
 fn bare(asset_id: Uuid, album_id: Uuid, in_trash: bool) -> AssetEntry {
