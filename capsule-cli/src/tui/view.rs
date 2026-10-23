@@ -31,7 +31,7 @@ pub fn render(frame: &mut Frame, state: &AppState) {
         Screen::Home => render_home(frame, body, state),
         Screen::Help => render_help(frame, body),
         Screen::Transfers => {
-            transfer::view::render(frame, body, state.transfers(), title(Screen::Transfers))
+            transfer::view::render(frame, body, state.transfers(), title(Screen::Transfers));
         }
     }
     render_footer(frame, footer, state);
