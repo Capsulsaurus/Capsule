@@ -102,6 +102,11 @@ pub(crate) enum Commands {
         /// the above-index tiers on the connection class, instead of opening all eagerly
         #[arg(long)]
         staged: bool,
+        /// Push only this asset (repeatable); every asset in the library when omitted. Retries
+        /// the assets a run reported failed without re-importing them or re-checking the ones
+        /// that reached custody
+        #[arg(long, value_name = "ASSET_ID")]
+        asset: Vec<Uuid>,
         /// Print the run as one JSON document on stdout: the totals and each asset's outcome
         /// (verified, failed with its error, or planned on a dry run)
         #[arg(long)]

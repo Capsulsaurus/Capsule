@@ -23,6 +23,7 @@ use capsule_sdk::albums::{AlbumClient, AlbumTransport};
 use capsule_sdk::auth::{AuthClient, AuthError, LoginOutcome, Session};
 use capsule_sdk::client::AuthenticatedClient;
 use capsule_sdk::directory::{DirectoryClient, DirectoryError};
+use capsule_sdk::events::TransferEvents;
 use capsule_sdk::fetch::HttpBlobSource;
 use capsule_sdk::net::ConnectionClass;
 use capsule_sdk::push::{self, PushError};
@@ -1456,10 +1457,86 @@ pub async fn push(
     workspace: &mut Workspace,
     options: PushOptions,
 ) -> Result<PushSummary, RemoteError> {
+    push_run(remote, store, workspace, options, PushRun::default()).await
+}
+
+/// [`push`] over the assets `run` names, publishing to `run`'s transfer events and telling its
+/// observer which asset the run is on. `capsule push --asset` and the TUI's push screen run
+/// through here: a retry of failed assets is this over just those assets, so nothing is
+/// re-imported and the assets that already reached custody are not asked about again.
+///
+/// # Errors
+///
+/// As [`push`].
+#[instrument(skip(store, workspace, run), fields(endpoint = %remote.upload_endpoint))]
+pub async fn push_run(
+    remote: &RemoteConfig,
+    store: &SessionStore,
+    workspace: &mut Workspace,
+    options: PushOptions,
+    run: PushRun<'_>,
+) -> Result<PushSummary, RemoteError> {
     let session = resume_session(remote, store).await?;
-    let outcome = push_with(remote, workspace, session.clone(), options).await;
+    let outcome = push_with(remote, workspace, session.clone(), options, run).await;
     checkpoint(store, &session).await;
     outcome
+}
+
+/// Where a push stands for one asset, told to a [`PushRun`]'s observer as the run moves. The
+/// transfer and custody steps themselves (finalize, merge, verify, receipt) are on the run's
+/// [`TransferEvents`]; this only frames them by asset.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AssetProgress {
+    /// The run built the asset's bundle and is about to send it. `blobs` are the content
+    /// addresses of every blob the bundle holds, so an observer can tell which asset a
+    /// blob-keyed transfer event belongs to. A create re-sealed at the album's current epoch is
+    /// started again, with its new blobs.
+    Started {
+        /// The asset.
+        asset_id: Uuid,
+        /// Its blobs' content addresses (lowercase hex), in ladder order.
+        blobs: Vec<String>,
+    },
+    /// The asset's outcome, exactly as the run's summary records it.
+    Finished(AssetPushOutcome),
+}
+
+/// The optional parts of a push: which assets, and who watches it.
+#[derive(Default)]
+pub struct PushRun<'a> {
+    /// The assets to push, in this order; `None` pushes every asset of the library. An id the
+    /// library does not hold fails as that asset's `bundle` error, so a mistyped id is reported
+    /// rather than skipped.
+    pub assets: Option<Vec<Uuid>>,
+    /// Where the run's uploads and custody checks publish their transfer events.
+    pub events: TransferEvents,
+    /// Told when each asset starts and finishes.
+    pub observer: Option<&'a mut dyn FnMut(AssetProgress)>,
+}
+
+impl std::fmt::Debug for PushRun<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PushRun")
+            .field("assets", &self.assets)
+            .field("events", &self.events)
+            .field("observed", &self.observer.is_some())
+            .finish()
+    }
+}
+
+impl PushRun<'_> {
+    /// Tell the observer, building what to tell it only when there is one.
+    fn tell(&mut self, progress: impl FnOnce() -> AssetProgress) {
+        if let Some(observer) = self.observer.as_mut() {
+            observer(progress());
+        }
+    }
+}
+
+/// `assets` with repeats dropped, the first occurrence kept.
+pub(crate) fn distinct(assets: Vec<Uuid>) -> Vec<Uuid> {
+    let mut seen = HashSet::new();
+    assets.into_iter().filter(|id| seen.insert(*id)).collect()
 }
 
 /// The push itself, over a session somebody else is responsible for persisting.
@@ -1468,8 +1545,12 @@ async fn push_with(
     workspace: &mut Workspace,
     session: Session,
     options: PushOptions,
+    mut run: PushRun<'_>,
 ) -> Result<PushSummary, RemoteError> {
-    let asset_ids = workspace.asset_ids();
+    let asset_ids = match run.assets.take() {
+        Some(assets) => distinct(assets),
+        None => workspace.asset_ids(),
+    };
     let mut summary = PushSummary {
         assets: asset_ids.len(),
         dry_run: options.dry_run,
@@ -1508,7 +1589,8 @@ async fn push_with(
         &remote.upload_endpoint,
         &remote.protocol_version,
     ))
-    .with_connection_class(options.connection);
+    .with_connection_class(options.connection)
+    .with_events(run.events.clone());
     let albums = AlbumClient::new(AlbumTransport::with_session(
         session.clone(),
         &remote.albums_endpoint,
@@ -1523,6 +1605,7 @@ async fn push_with(
     if options.dry_run {
         for asset_id in asset_ids {
             let outcome = plan_asset(workspace, &scheduler, &held, options.force, asset_id);
+            run.tell(|| AssetProgress::Finished(outcome.clone()));
             summary.record(outcome);
         }
         summary.log();
@@ -1533,11 +1616,12 @@ async fn push_with(
     // could be confirmed: that is a failure of the run, not of an asset.
     let attestation_keys = pinned_attestation_keys(remote, workspace, &verify).await?;
 
-    let mut run = AssetPusher {
+    let mut pusher = AssetPusher {
         workspace,
         upload,
         albums,
         verify,
+        events: run.events.clone(),
         attestation_keys,
         scheduler,
         held,
@@ -1547,11 +1631,15 @@ async fn push_with(
     };
     for asset_id in asset_ids {
         let mut outcome = AssetPushOutcome::new(asset_id, AssetPushStatus::Verified);
-        if let Err(error) = run.push(asset_id, &mut outcome, &mut summary).await {
+        if let Err(error) = pusher
+            .push(asset_id, &mut outcome, &mut summary, &mut run)
+            .await
+        {
             tracing::warn!(%asset_id, %error, "push: asset failed; continuing with the next");
             outcome.status = AssetPushStatus::Failed;
             outcome.error = Some(error.failure());
         }
+        run.tell(|| AssetProgress::Finished(outcome.clone()));
         summary.record(outcome);
     }
     summary.log();
@@ -1637,6 +1725,8 @@ struct AssetPusher<'a> {
     upload: UploadClient,
     albums: AlbumClient,
     verify: StorageVerifyClient,
+    /// Where the custody check publishes its verdict and receipts.
+    events: TransferEvents,
     attestation_keys: Vec<HybridVerifyingKey>,
     scheduler: StagedScheduler,
     held: HashSet<String>,
@@ -1654,14 +1744,16 @@ impl AssetPusher<'_> {
     /// step completes. A transfer that fails partway leaves `uploaded`, `merged` and `bytes` at
     /// zero for the asset even when some of its blobs landed, because [`push::push_bundle`]
     /// returns only its error; a re-run derives the remaining work from server truth.
-    #[instrument(skip(self, outcome, summary), fields(%asset_id))]
+    #[instrument(skip(self, outcome, summary, run), fields(%asset_id))]
     async fn push(
         &mut self,
         asset_id: Uuid,
         outcome: &mut AssetPushOutcome,
         summary: &mut PushSummary,
+        run: &mut PushRun<'_>,
     ) -> Result<(), AssetError> {
         let bundle = self.workspace.upload_bundle(&asset_id)?;
+        run.tell(|| started(&bundle));
         if self.uncovered.contains(&bundle.album_id) {
             return Err(AssetError::KeysNotEscrowed(bundle.album_id));
         }
@@ -1704,6 +1796,7 @@ impl AssetPusher<'_> {
                     "push: create re-sealed; pushing it again"
                 );
                 let bundle = self.workspace.upload_bundle(&asset_id)?;
+                run.tell(|| started(&bundle));
                 let report = self.push_bundle(&bundle).await?;
                 (bundle, report)
             }
@@ -1719,12 +1812,13 @@ impl AssetPusher<'_> {
             }
         }
 
-        let custody = push::verify_custody(
+        let custody = push::verify_custody_with_events(
             &self.verify,
             &self.attestation_keys,
             &bundle,
             &report,
             jiff::Timestamp::now().as_second(),
+            &self.events,
         )
         .await?;
 
@@ -1758,6 +1852,17 @@ impl AssetPusher<'_> {
             self.force,
         )
         .await
+    }
+}
+
+/// The [`AssetProgress::Started`] for `bundle`.
+fn started(bundle: &capsule_library::lifecycle::UploadBundle) -> AssetProgress {
+    AssetProgress::Started {
+        asset_id: bundle.asset_id,
+        blobs: push::bundle_blobs(bundle)
+            .into_iter()
+            .map(|(_, hash)| hash)
+            .collect(),
     }
 }
 
@@ -2917,6 +3022,146 @@ mod tests {
     /// (`RemoteError::Recovery`), which fails the whole run before any asset is sent.
     #[tokio::test]
     async fn a_full_escrow_holds_back_only_that_albums_assets() {
+        let EscrowRun {
+            _scratch,
+            mut ws,
+            full_album,
+            other_album,
+            held_back,
+            other,
+            mock,
+            remote,
+            session,
+        } = escrow_run().await;
+
+        let summary = push_with(
+            &remote,
+            &mut ws,
+            session,
+            PushOptions::default(),
+            PushRun::default(),
+        )
+        .await
+        .expect("a full escrow holds assets back; it does not fail the run");
+
+        let stores = mock.stores();
+        assert_eq!(stores.len(), 2, "both albums were attempted: {stores:?}");
+        assert!(stores.contains(&full_album.to_string()));
+        assert!(stores.contains(&other_album.to_string()));
+        assert_eq!(
+            summary.album_keys_escrowed, 1,
+            "only the album the server accepted counts as escrowed"
+        );
+
+        let failure_of = |asset_id: Uuid| {
+            summary
+                .outcomes
+                .iter()
+                .find(|outcome| outcome.asset_id == asset_id.to_string())
+                .and_then(|outcome| outcome.error.as_ref())
+                .map(|error| error.kind)
+        };
+        assert_eq!(failure_of(held_back), Some("album_keys_not_escrowed"));
+        assert_ne!(
+            failure_of(other),
+            Some("album_keys_not_escrowed"),
+            "an album whose escrow was stored is not held back by another's"
+        );
+        assert!(
+            !mock
+                .seen
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|line| line.contains(&full_album.to_string()) && !line.contains("/escrow/")),
+            "nothing was sent for the held-back album"
+        );
+    }
+
+    /// A push scoped to named assets (`capsule push --asset`, the TUI's retry) considers those
+    /// assets and no other, in the order given with repeats dropped, and tells its observer when
+    /// each starts — with every blob of its bundle — and how each finished, exactly as the
+    /// summary records it. An id the library does not hold fails as that asset, not silently.
+    #[tokio::test]
+    async fn a_scoped_push_considers_only_the_named_assets_and_reports_each_as_it_goes() {
+        let EscrowRun {
+            _scratch,
+            mut ws,
+            held_back,
+            other,
+            remote,
+            session,
+            ..
+        } = escrow_run().await;
+        let missing = Uuid::now_v7();
+
+        let mut seen = Vec::new();
+        let mut observe = |progress: AssetProgress| seen.push(progress);
+        let summary = push_with(
+            &remote,
+            &mut ws,
+            session,
+            PushOptions::default(),
+            PushRun {
+                assets: Some(vec![held_back, missing, held_back]),
+                observer: Some(&mut observe),
+                ..PushRun::default()
+            },
+        )
+        .await
+        .expect("the run reaches its assets");
+
+        assert_eq!(summary.assets, 2, "the repeat is dropped");
+        let ids: Vec<&str> = summary
+            .outcomes
+            .iter()
+            .map(|o| o.asset_id.as_str())
+            .collect();
+        assert_eq!(ids, vec![held_back.to_string(), missing.to_string()]);
+        assert!(
+            !ids.contains(&other.to_string().as_str()),
+            "an asset not named is not pushed"
+        );
+        let missing_failure = summary.outcomes[1].error.as_ref().map(|e| e.kind);
+        assert_eq!(missing_failure, Some("bundle"));
+
+        let [
+            AssetProgress::Started { asset_id, blobs },
+            AssetProgress::Finished(first),
+            AssetProgress::Finished(second),
+        ] = seen.as_slice()
+        else {
+            panic!("one start and two finishes, in order: {seen:?}");
+        };
+        assert_eq!(*asset_id, held_back);
+        let bundle = ws.upload_bundle(&held_back).unwrap();
+        let expected: Vec<String> = push::bundle_blobs(&bundle)
+            .into_iter()
+            .map(|(_, hash)| hash)
+            .collect();
+        assert_eq!(
+            blobs, &expected,
+            "every blob of the bundle, in ladder order"
+        );
+        assert_eq!(first, &summary.outcomes[0]);
+        assert_eq!(second, &summary.outcomes[1]);
+    }
+
+    /// A library of two albums against the escrow mock, which refuses one album's escrow as
+    /// full: one asset in each album, and a resumed session against the mock.
+    struct EscrowRun {
+        _scratch: Scratch,
+        ws: Workspace,
+        full_album: Uuid,
+        other_album: Uuid,
+        held_back: Uuid,
+        other: Uuid,
+        mock: EscrowMock,
+        remote: RemoteConfig,
+        session: Session,
+    }
+
+    async fn escrow_run() -> EscrowRun {
         let scratch = Scratch::new();
         let lib = scratch.0.join("library");
         std::fs::create_dir_all(&lib).unwrap();
@@ -2970,42 +3215,16 @@ mod tests {
                 access_expires_at_unix: jiff::Timestamp::now().as_second() + 3600,
             })
             .expect("a resumed session");
-
-        let summary = push_with(&remote, &mut ws, session, PushOptions::default())
-            .await
-            .expect("a full escrow holds assets back; it does not fail the run");
-
-        let stores = mock.stores();
-        assert_eq!(stores.len(), 2, "both albums were attempted: {stores:?}");
-        assert!(stores.contains(&full_album.to_string()));
-        assert!(stores.contains(&other_album.to_string()));
-        assert_eq!(
-            summary.album_keys_escrowed, 1,
-            "only the album the server accepted counts as escrowed"
-        );
-
-        let failure_of = |asset_id: Uuid| {
-            summary
-                .outcomes
-                .iter()
-                .find(|outcome| outcome.asset_id == asset_id.to_string())
-                .and_then(|outcome| outcome.error.as_ref())
-                .map(|error| error.kind)
-        };
-        assert_eq!(failure_of(held_back), Some("album_keys_not_escrowed"));
-        assert_ne!(
-            failure_of(other),
-            Some("album_keys_not_escrowed"),
-            "an album whose escrow was stored is not held back by another's"
-        );
-        assert!(
-            !mock
-                .seen
-                .lock()
-                .unwrap()
-                .iter()
-                .any(|line| line.contains(&full_album.to_string()) && !line.contains("/escrow/")),
-            "nothing was sent for the held-back album"
-        );
+        EscrowRun {
+            _scratch: scratch,
+            ws,
+            full_album,
+            other_album,
+            held_back,
+            other,
+            mock,
+            remote,
+            session,
+        }
     }
 }

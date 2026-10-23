@@ -444,8 +444,13 @@ async fn dispatch(command: Commands) -> Result<()> {
                 // `--push` is still honored: an unchanged library is exactly the
                 // re-runnable case push exists to make cheap.
                 if push {
-                    return push_workspace(&mut ws, push_options(false, false, staged), false)
-                        .await;
+                    return push_workspace(
+                        &mut ws,
+                        push_options(false, false, staged),
+                        Vec::new(),
+                        false,
+                    )
+                    .await;
                 }
                 return Ok(());
             }
@@ -500,8 +505,13 @@ async fn dispatch(command: Commands) -> Result<()> {
             // determinism suite depends on that), and the push is a separate pass over
             // the committed library — byte-for-byte the same one `capsule push` runs.
             if push {
-                let pushed =
-                    push_workspace(&mut ws, push_options(false, false, staged), false).await;
+                let pushed = push_workspace(
+                    &mut ws,
+                    push_options(false, false, staged),
+                    Vec::new(),
+                    false,
+                )
+                .await;
                 // Released whether or not every asset pushed: the gate re-asks the server
                 // about each source's own asset, so one failed asset keeps only its source.
                 let released = release_moved(&ws, &moved).await;
@@ -525,10 +535,11 @@ async fn dispatch(command: Commands) -> Result<()> {
             dry_run,
             force,
             staged,
+            asset,
             json,
         } => {
             let mut ws = open_workspace(&library, passphrase_stdin)?;
-            push_workspace(&mut ws, push_options(dry_run, force, staged), json).await?;
+            push_workspace(&mut ws, push_options(dry_run, force, staged), asset, json).await?;
         }
 
         // ── Restore ───────────────────────────────────────────────────────
@@ -1796,14 +1807,25 @@ async fn reannounce_workspace(workspace: &Workspace, dry_run: bool, json: bool) 
 /// JSON document on stdout — the [`remote::PushSummary`], each asset's outcome included — and
 /// nothing else. A run-level failure (no session, no feed, no attestation keys) prints nothing
 /// on stdout; its error goes to stderr and the command exits non-zero.
+///
+/// A non-empty `only` pushes just those assets (`--asset`): the retry of a failed asset, which
+/// re-imports nothing.
 async fn push_workspace(
     workspace: &mut Workspace,
     options: remote::PushOptions,
+    only: Vec<uuid::Uuid>,
     json: bool,
 ) -> Result<()> {
     let remote = remote::RemoteConfig::from_env();
     let store = session_store()?;
-    let assets = workspace.asset_ids().len();
+    let only = (!only.is_empty()).then(|| remote::distinct(only));
+    let assets = only
+        .as_ref()
+        .map_or_else(|| workspace.asset_ids().len(), Vec::len);
+    let run = || remote::PushRun {
+        assets: only.clone(),
+        ..remote::PushRun::default()
+    };
 
     if json {
         let summary = if assets == 0 {
@@ -1812,7 +1834,7 @@ async fn push_workspace(
                 ..Default::default()
             }
         } else {
-            remote::push(&remote, &store, workspace, options)
+            remote::push_run(&remote, &store, workspace, options, run())
                 .await
                 .map_err(|error| push_run_error(&error))?
         };
@@ -1839,7 +1861,7 @@ async fn push_workspace(
         );
     }
 
-    match remote::push(&remote, &store, workspace, options).await {
+    match remote::push_run(&remote, &store, workspace, options, run()).await {
         Ok(summary) => {
             if summary.dry_run {
                 println!(
