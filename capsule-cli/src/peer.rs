@@ -39,7 +39,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::future::Future;
 use std::io::{self, Write as _};
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -535,12 +535,17 @@ pub struct PeerFailure {
     /// ([`delegation_kind`]), or `bundle` (the library could not build the asset's upload
     /// bundle), `read` (the file could not be read), `ack_malformed` (it is not an
     /// acknowledgement), `peer_mismatch` (the device at `--peer` is not the `--to` device) or
-    /// `not_acknowledged` (the peering session ended without the delegate's acknowledgement).
+    /// `not_acknowledged` (the peering session ended without the delegate's acknowledgement),
+    /// or `refusals_elided` (`--listen` refused more distinct sources than it itemizes).
     pub kind: &'static str,
     /// The server's stable `error.*` code, when it supplied one.
     pub code: Option<String>,
     /// The English detail.
     pub message: String,
+    /// How many times this happened, when more than once: `--listen` reports the connections
+    /// it refused once per source address and kind, with their count. Absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub occurrences: Option<u32>,
 }
 
 impl PeerFailure {
@@ -550,6 +555,7 @@ impl PeerFailure {
             kind,
             code: None,
             message: message.into(),
+            occurrences: None,
         }
     }
 
@@ -559,6 +565,7 @@ impl PeerFailure {
             kind: delegation_kind(error),
             code: error.error_code().map(str::to_owned),
             message: error.to_string(),
+            occurrences: None,
         }
     }
 }
@@ -1235,9 +1242,10 @@ async fn accept_with(
 ///
 /// A connection from off the local network is dropped before its handshake; a handshake that
 /// fails (rate-limited, revoked, foreign, timed out, …) is reported and the listener keeps
-/// waiting. Handshakes run concurrently ([`next_session`]), so one that stalls never holds the
-/// listener, and the listen timeout bounds every handshake and session as well as the wait for a
-/// connection. Each verified session pulls every hand-off the peer offers, verifies it was sealed by
+/// waiting. Handshakes run concurrently ([`Admission`]), so one that stalls never holds the
+/// listener, and the listen timeout bounds the wait for a connection and every handshake. A
+/// verified session is not cut by it: it runs to its end, each of its frames bounded by the
+/// channel's I/O timeout, so a slow but live pull is never thrown away. Each verified session pulls every hand-off the peer offers, verifies it was sealed by
 /// that peer for this device, persists it durably and acknowledges it over the same channel. A
 /// session the channel severs keeps its partial pulls, and the listener waits for the origin to
 /// dial again, resuming them; a session that ends cleanly ends the listening.
@@ -1262,21 +1270,15 @@ async fn listen(
         };
         (source, client)
     };
-    let mut handshakes = FuturesUnordered::new();
+    let mut admission = Admission::new();
     let mut partials: BTreeMap<String, Vec<u8>> = BTreeMap::new();
     // A pull the channel lost waits here for a later session to finish it.
     let mut interrupted: BTreeMap<String, PeerFailure> = BTreeMap::new();
     let mut sessions = 0_u32;
     loop {
-        let client = match next_session(
-            &listener.listener,
-            &subject,
-            deadline,
-            &handshake,
-            &mut handshakes,
-            &mut summary.refused,
-        )
-        .await
+        let client = match admission
+            .next_session(&listener.listener, &subject, deadline, &handshake)
+            .await
         {
             Admitted::Session(source, client) => {
                 tracing::info!(%source, peer = %client.peer().device_id, "peer accept: verified session");
@@ -1296,30 +1298,18 @@ async fn listen(
         };
         sessions += 1;
         let peer = client.peer().device_id;
-        let taken = tokio::time::timeout_at(
-            deadline,
-            take_hand_offs(
-                &client,
-                local.trust,
-                local.versions,
-                local.device_id,
-                max_protocol,
-                inbox,
-                &mut partials,
-            ),
+        // Not bounded by the listen deadline: a verified session runs to its end, and each of its
+        // frames is bounded by the channel's I/O timeout.
+        let taken = take_hand_offs(
+            &client,
+            local.trust,
+            local.versions,
+            local.device_id,
+            max_protocol,
+            inbox,
+            &mut partials,
         )
         .await;
-        let Ok(taken) = taken else {
-            // What the session persisted stays in the inbox and is uploaded below; what it had
-            // only partly pulled stays unacknowledged, and the origin re-offers it.
-            tracing::warn!(%peer, "peer accept: the listen timeout cut a session short");
-            summary.refused.push(PeerFailure::new(
-                peer.to_string(),
-                "peering_timeout",
-                "the listen timeout passed before the session finished",
-            ));
-            break;
-        };
         for item in taken.taken {
             match (item.ack, item.error) {
                 (Some(ack), error) => {
@@ -1355,6 +1345,7 @@ async fn listen(
             "peer accept: the session was severed; waiting for the origin to dial again"
         );
     }
+    summary.refused.extend(admission.into_refusals());
     summary.refused.extend(interrupted.into_values());
 }
 
@@ -1362,7 +1353,161 @@ async fn listen(
 /// listener stops accepting, so the kernel's backlog holds further connections until one ends.
 const MAX_PENDING_HANDSHAKES: usize = 16;
 
-/// What [`next_session`] got.
+/// The most handshakes one source address has in flight at once. A further connection from it
+/// is refused before its handshake, so no one host can take more than its share of
+/// [`MAX_PENDING_HANDSHAKES`] and starve another.
+const MAX_HANDSHAKES_PER_SOURCE: usize = 2;
+
+/// The most distinct (source, kind) refusals `--listen` itemizes; the rest are counted in one
+/// `refusals_elided` entry, so a connection flood bounds both memory and the `--json` report.
+const MAX_ITEMIZED_REFUSALS: usize = 64;
+
+/// The connections `--listen` refused, one entry per source address and kind with its count.
+#[derive(Debug, Default)]
+struct Refusals {
+    entries: Vec<PeerFailure>,
+    index: BTreeMap<(String, &'static str), usize>,
+    elided: u32,
+}
+
+impl Refusals {
+    /// Record one refusal of `subject` for `kind`.
+    fn record(&mut self, subject: String, kind: &'static str, message: String) {
+        if let Some(entry) = self
+            .index
+            .get(&(subject.clone(), kind))
+            .and_then(|&at| self.entries.get_mut(at))
+        {
+            entry.occurrences = Some(entry.occurrences.unwrap_or(1).saturating_add(1));
+            return;
+        }
+        if self.entries.len() >= MAX_ITEMIZED_REFUSALS {
+            self.elided = self.elided.saturating_add(1);
+            return;
+        }
+        self.index
+            .insert((subject.clone(), kind), self.entries.len());
+        self.entries.push(PeerFailure::new(subject, kind, message));
+    }
+
+    /// The refusals as `--json` reports them, in the order each was first seen.
+    fn into_failures(self) -> Vec<PeerFailure> {
+        let mut failures = self.entries;
+        if self.elided > 0 {
+            failures.push(PeerFailure {
+                occurrences: Some(self.elided),
+                ..PeerFailure::new(
+                    "other sources",
+                    "refusals_elided",
+                    format!(
+                        "{} more refused connections from other sources were not itemized",
+                        self.elided
+                    ),
+                )
+            });
+        }
+        failures
+    }
+}
+
+/// The handshakes `peer accept --listen` has in flight, how many each source holds, and the
+/// connections it refused.
+struct Admission<Fut> {
+    pending: FuturesUnordered<Fut>,
+    per_source: BTreeMap<IpAddr, usize>,
+    refusals: Refusals,
+}
+
+impl<Fut> Admission<Fut> {
+    fn new() -> Self {
+        Self {
+            pending: FuturesUnordered::new(),
+            per_source: BTreeMap::new(),
+            refusals: Refusals::default(),
+        }
+    }
+
+    /// The refusals recorded, as `--json` reports them.
+    fn into_refusals(self) -> Vec<PeerFailure> {
+        self.refusals.into_failures()
+    }
+
+    fn refuse(&mut self, source: IpAddr, error: &PeeringError) {
+        self.refusals
+            .record(source.to_string(), error.kind(), error.to_string());
+    }
+
+    fn release(&mut self, source: IpAddr) {
+        if let Some(held) = self.per_source.get_mut(&source) {
+            *held = held.saturating_sub(1);
+            if *held == 0 {
+                self.per_source.remove(&source);
+            }
+        }
+    }
+
+    /// Accept connections on `listener` and run their handshakes concurrently, up to
+    /// [`MAX_PENDING_HANDSHAKES`] at once and [`MAX_HANDSHAKES_PER_SOURCE`] per source address,
+    /// until one completes or `deadline` passes. A connection from off the local network, or
+    /// from a source already at its share, is refused before its handshake; a handshake that
+    /// fails is recorded while the others go on. So a peer that stalls its handshakes holds
+    /// only its own slots and never the listener. Handshakes still in flight stay pending for
+    /// the next call; every one of them is bounded by `deadline`, which ends the wait.
+    async fn next_session<T, F>(
+        &mut self,
+        listener: &TcpListener,
+        subject: &str,
+        deadline: tokio::time::Instant,
+        handshake: &F,
+    ) -> Admitted<T>
+    where
+        F: Fn(TcpStream, SocketAddr) -> Fut,
+        Fut: Future<Output = (SocketAddr, Result<T, PeeringError>)>,
+    {
+        loop {
+            tokio::select! {
+                biased;
+                () = tokio::time::sleep_until(deadline) => return Admitted::TimedOut,
+                Some((source, result)) = self.pending.next(), if !self.pending.is_empty() => {
+                    self.release(source.ip());
+                    match result {
+                        Ok(session) => return Admitted::Session(source, session),
+                        Err(error) => {
+                            tracing::warn!(%source, %error, "peer accept: no verified session");
+                            self.refuse(source.ip(), &error);
+                        }
+                    }
+                }
+                accepted = listener.accept(), if self.pending.len() < MAX_PENDING_HANDSHAKES => {
+                    let (tcp, source) = match accepted {
+                        Ok(connection) => connection,
+                        Err(error) => {
+                            self.refusals.record(subject.to_owned(), "peering_io", error.to_string());
+                            return Admitted::Failed;
+                        }
+                    };
+                    let ip = source.ip();
+                    if !is_lan(ip) {
+                        tracing::warn!(%source, "peer accept: refusing a connection from off the local network");
+                        self.refuse(ip, &PeeringError::NotLan(ip));
+                        continue;
+                    }
+                    let held = self.per_source.entry(ip).or_insert(0);
+                    if *held >= MAX_HANDSHAKES_PER_SOURCE {
+                        tracing::warn!(%source, held = *held, "peer accept: refusing a connection from a source at its handshake share");
+                        self.refuse(ip, &PeeringError::RateLimited(ip));
+                        continue;
+                    }
+                    *held += 1;
+                    tracing::debug!(%source, pending = self.pending.len(), "peer accept: handshake started");
+                    self.pending.push(handshake(tcp, source));
+                }
+            }
+        }
+    }
+}
+
+/// What [`Admission::next_session`] got.
 #[derive(Debug)]
 enum Admitted<T> {
     /// A handshake from this source completed.
@@ -1371,64 +1516,6 @@ enum Admitted<T> {
     TimedOut,
     /// The listener itself failed; the failure is recorded.
     Failed,
-}
-
-/// Accept connections on `listener` and run their handshakes concurrently, up to
-/// [`MAX_PENDING_HANDSHAKES`] at once, until one completes or `deadline` passes. A connection
-/// from off the local network is refused before its handshake, and a handshake that fails is
-/// recorded in `refused` while the others go on, so a peer that stalls its handshake holds only
-/// its own slot and never the listener. Handshakes still in flight stay in `pending` for the
-/// next call; every one of them is bounded by `deadline`, which ends the wait.
-async fn next_session<T, F, Fut>(
-    listener: &TcpListener,
-    subject: &str,
-    deadline: tokio::time::Instant,
-    handshake: &F,
-    pending: &mut FuturesUnordered<Fut>,
-    refused: &mut Vec<PeerFailure>,
-) -> Admitted<T>
-where
-    F: Fn(TcpStream, SocketAddr) -> Fut,
-    Fut: Future<Output = (SocketAddr, Result<T, PeeringError>)>,
-{
-    loop {
-        tokio::select! {
-            biased;
-            () = tokio::time::sleep_until(deadline) => return Admitted::TimedOut,
-            Some((source, result)) = pending.next(), if !pending.is_empty() => match result {
-                Ok(session) => return Admitted::Session(source, session),
-                Err(error) => {
-                    tracing::warn!(%source, %error, "peer accept: no verified session");
-                    refused.push(PeerFailure::new(
-                        source.to_string(),
-                        error.kind(),
-                        error.to_string(),
-                    ));
-                }
-            },
-            accepted = listener.accept(), if pending.len() < MAX_PENDING_HANDSHAKES => {
-                match accepted {
-                    Ok((tcp, source)) if is_lan(source.ip()) => {
-                        tracing::debug!(%source, pending = pending.len(), "peer accept: handshake started");
-                        pending.push(handshake(tcp, source));
-                    }
-                    Ok((_, source)) => {
-                        let error = PeeringError::NotLan(source.ip());
-                        tracing::warn!(%source, "peer accept: refusing a connection from off the local network");
-                        refused.push(PeerFailure::new(
-                            source.to_string(),
-                            error.kind(),
-                            error.to_string(),
-                        ));
-                    }
-                    Err(error) => {
-                        refused.push(PeerFailure::new(subject, "peering_io", error.to_string()));
-                        return Admitted::Failed;
-                    }
-                }
-            }
-        }
-    }
 }
 
 /// Upload one hand-off the inbox holds and settle it. Re-verified first: the inbox is local

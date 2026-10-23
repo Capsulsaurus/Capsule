@@ -357,29 +357,31 @@ async fn a_stalled_handshake_does_not_hold_the_listener() {
     let address = listener.local_addr().expect("bound");
     let started = tokio::time::Instant::now();
     let deadline = started + Duration::from_secs(30);
-    let mut pending = FuturesUnordered::new();
-    let mut refused = Vec::new();
+    let mut admission = Admission::new();
 
     let _stalled = TcpStream::connect(address).await.expect("connects");
     let mut prompt = TcpStream::connect(address).await.expect("connects");
     let prompt_source = prompt.local_addr().expect("bound");
     prompt.write_u8(7).await.expect("writes");
 
-    let admitted = next_session(
-        &listener,
-        "the listener",
-        deadline,
-        &byte_handshake,
-        &mut pending,
-        &mut refused,
-    )
-    .await;
+    let admitted = admission
+        .next_session(&listener, "the listener", deadline, &byte_handshake)
+        .await;
     assert!(
         matches!(admitted, Admitted::Session(source, 7) if source == prompt_source),
         "{admitted:?}"
     );
-    assert_eq!(pending.len(), 1, "the stalled handshake is still pending");
-    assert!(refused.is_empty());
+    assert_eq!(
+        admission.pending.len(),
+        1,
+        "the stalled handshake is still pending"
+    );
+    assert_eq!(
+        admission.per_source.get(&prompt_source.ip()),
+        Some(&1),
+        "the completed handshake gave its slot back"
+    );
+    assert!(admission.into_refusals().is_empty());
     assert!(
         started.elapsed() < Duration::from_secs(10),
         "admitted without waiting out the stalled peer"
@@ -393,26 +395,112 @@ async fn the_listen_deadline_bounds_a_stalled_handshake() {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("binds");
     let address = listener.local_addr().expect("bound");
     let deadline = tokio::time::Instant::now() + Duration::from_millis(300);
-    let mut pending = FuturesUnordered::new();
-    let mut refused = Vec::new();
+    let mut admission = Admission::new();
 
     let _stalled = TcpStream::connect(address).await.expect("connects");
     let admitted = tokio::time::timeout(
         Duration::from_secs(10),
-        next_session(
-            &listener,
-            "the listener",
-            deadline,
-            &byte_handshake,
-            &mut pending,
-            &mut refused,
-        ),
+        admission.next_session(&listener, "the listener", deadline, &byte_handshake),
     )
     .await
     .expect("the deadline ends the wait");
     assert!(matches!(admitted, Admitted::TimedOut), "{admitted:?}");
     assert!(tokio::time::Instant::now() >= deadline);
-    assert_eq!(pending.len(), 1, "the handshake was started, then cut off");
+    assert_eq!(
+        admission.pending.len(),
+        1,
+        "the handshake was started, then cut off"
+    );
+}
+
+/// One source holds at most its share of the handshake slots: a third connection from a source
+/// with two stalled handshakes is refused before its handshake, while another source is still
+/// admitted.
+#[tokio::test]
+async fn one_source_cannot_take_more_than_its_share_of_handshakes() {
+    use tokio::io::AsyncWriteExt as _;
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("binds");
+    let address = listener.local_addr().expect("bound");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let mut admission = Admission::new();
+
+    let flooder = IpAddr::from([127, 0, 0, 1]);
+    let mut stalled = Vec::new();
+    for _ in 0..=MAX_HANDSHAKES_PER_SOURCE + 2 {
+        stalled.push(TcpStream::connect(address).await.expect("connects"));
+    }
+    let later = async {
+        // Only once the flood has been accepted.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let socket = tokio::net::TcpSocket::new_v4().expect("a socket");
+        socket
+            .bind("127.0.0.2:0".parse().expect("an address"))
+            .expect("binds a second loopback source");
+        let mut other = socket.connect(address).await.expect("connects");
+        other.write_u8(5).await.expect("writes");
+        other
+    };
+    let (admitted, _other) = tokio::join!(
+        admission.next_session(&listener, "the listener", deadline, &byte_handshake),
+        later
+    );
+    assert!(
+        matches!(admitted, Admitted::Session(source, 5) if source.ip() == IpAddr::from([127, 0, 0, 2])),
+        "{admitted:?}"
+    );
+    assert_eq!(admission.pending.len(), MAX_HANDSHAKES_PER_SOURCE);
+    assert_eq!(
+        admission.per_source.get(&flooder),
+        Some(&MAX_HANDSHAKES_PER_SOURCE)
+    );
+    let refusals = admission.into_refusals();
+    assert_eq!(
+        refusals.len(),
+        1,
+        "one entry per source and kind: {refusals:?}"
+    );
+    assert_eq!(refusals[0].subject, flooder.to_string());
+    assert_eq!(refusals[0].kind, "rate_limited");
+    assert_eq!(refusals[0].occurrences, Some(3));
+}
+
+/// Refusals are reported once per source and kind with their count, and past
+/// `MAX_ITEMIZED_REFUSALS` distinct entries the rest are counted in one entry, so a flood of
+/// connections bounds both memory and the `--json` report.
+#[test]
+fn refusals_are_counted_per_source_and_bounded() {
+    let mut refusals = Refusals::default();
+    for _ in 0..1000 {
+        refusals.record("10.0.0.1".into(), "rate_limited", "over budget".into());
+    }
+    refusals.record("10.0.0.1".into(), "hybrid_check_failed", "bad proof".into());
+    for n in 0..MAX_ITEMIZED_REFUSALS * 4 {
+        refusals.record(format!("fd00::{n:x}"), "unknown_device", "stranger".into());
+    }
+    let failures = refusals.into_failures();
+    assert_eq!(failures.len(), MAX_ITEMIZED_REFUSALS + 1);
+    assert_eq!(failures[0].subject, "10.0.0.1");
+    assert_eq!(failures[0].occurrences, Some(1000));
+    assert_eq!(failures[1].kind, "hybrid_check_failed");
+    assert_eq!(
+        failures[1].occurrences, None,
+        "a single refusal has no count"
+    );
+    let elided = failures.last().expect("the overflow entry");
+    assert_eq!(elided.kind, "refusals_elided");
+    let itemized_strangers = MAX_ITEMIZED_REFUSALS - 2;
+    assert_eq!(
+        elided.occurrences,
+        Some(u32::try_from(MAX_ITEMIZED_REFUSALS * 4 - itemized_strangers).expect("fits"))
+    );
+
+    let single = serde_json::to_value(&failures[1]).expect("serializes");
+    assert!(
+        single.get("occurrences").is_none(),
+        "absent when it happened once"
+    );
+    let counted = serde_json::to_value(&failures[0]).expect("serializes");
+    assert_eq!(counted["occurrences"], 1000);
 }
 
 /// A handshake that fails is recorded under its source and the listener keeps going.
@@ -422,8 +510,7 @@ async fn a_failed_handshake_is_recorded_and_the_next_one_admitted() {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("binds");
     let address = listener.local_addr().expect("bound");
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-    let mut pending = FuturesUnordered::new();
-    let mut refused = Vec::new();
+    let mut admission = Admission::new();
 
     // Closes without a byte: its handshake fails.
     drop(TcpStream::connect(address).await.expect("connects"));
@@ -435,19 +522,18 @@ async fn a_failed_handshake_is_recorded_and_the_next_one_admitted() {
         good
     };
     let (admitted, _good) = tokio::join!(
-        next_session(
-            &listener,
-            "the listener",
-            deadline,
-            &byte_handshake,
-            &mut pending,
-            &mut refused,
-        ),
+        admission.next_session(&listener, "the listener", deadline, &byte_handshake),
         later
     );
     assert!(matches!(admitted, Admitted::Session(_, 9)), "{admitted:?}");
+    assert!(
+        admission.per_source.is_empty(),
+        "both slots were given back"
+    );
+    let refused = admission.into_refusals();
     assert_eq!(refused.len(), 1, "{refused:?}");
     assert_eq!(refused[0].kind, "peering_io");
+    assert_eq!(refused[0].subject, "127.0.0.1");
 }
 
 // ─── The `--json` failure contract ────────────────────────────────────────────
