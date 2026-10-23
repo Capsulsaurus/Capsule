@@ -7743,6 +7743,10 @@
     "message": "Capsule is still receiving this photo's new version. It'll finish on its own.",
     "context": "HTTP 409 on PATCH /v1/upload/{id}: a replace's signed manifest finalized before the original or metadata blob it commits to had landed. A replace mutates an asset that is already visible, so it is applied as one act when its manifest lands — which makes the manifest the member that lands last. Transient: retrying the manifest once the rest of the bundle has committed succeeds."
   },
+  "error.upload.retention_elapsed": {
+    "message": "This item has been in the trash too long to be restored.",
+    "context": "HTTP 409 on POST /v1/albums/{album_id}/ops: a trash-restore reached the server at or after the retention_until its delete signed, judged by the server's clock. The trash recovers an asset only within that window; nothing was written, and the item stays in the trash until it is permanently removed. Permanent: retrying does not help."
+  },
   "error.upload.session_not_active": {
     "message": "This upload has already finished.",
     "context": "HTTP 409: PATCH/DELETE against a session that is finalizing or terminal. The outcome is read via HEAD."

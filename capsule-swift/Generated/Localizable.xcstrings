@@ -42357,6 +42357,16 @@
         }
       }
     },
+    "error.upload.retention_elapsed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This item has been in the trash too long to be restored."
+          }
+        }
+      }
+    },
     "error.upload.session_not_active": {
       "localizations": {
         "ar": {

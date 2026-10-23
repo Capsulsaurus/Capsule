@@ -356,6 +356,45 @@ async fn a_manifest_that_does_not_chain_is_a_stale_revival() {
     );
 }
 
+/// A `trash-restore` the server receives once the delete's signed retention floor has passed,
+/// by the server's clock, is refused with a typed `409`, and writes nothing (#871).
+#[tokio::test]
+async fn a_restore_after_the_retention_window_is_refused() {
+    let fixture = Fixture::working();
+    let bearer = token(&fixture).await;
+    publish(&fixture).await;
+    let floor = fixture.clock.now() + jiff::SignedDuration::from_hours(1);
+    let mut delete = bundle(&fixture, "delete", "d1", Some(&created_head()), None);
+    delete["manifest_envelope"]["retention_until"] = floor.to_string().into();
+    apply(&fixture, &bearer, &delete, StatusCode::OK).await;
+    let before = feed(&fixture, &bearer).await;
+
+    fixture.clock.advance(jiff::SignedDuration::from_hours(2));
+    // The access token from before has expired with the advance; a fresh one is the same user.
+    let bearer = token(&fixture).await;
+    let problem = apply(
+        &fixture,
+        &bearer,
+        &bundle(
+            &fixture,
+            "trash-restore",
+            "r1",
+            Some(&manifest_hash("d1")),
+            None,
+        ),
+        StatusCode::CONFLICT,
+    )
+    .await;
+    assert_eq!(problem["code"], "error.upload.retention_elapsed");
+    assert_eq!(problem["retention_until"], floor.to_string());
+
+    assert_eq!(
+        feed(&fixture, &bearer).await,
+        before,
+        "a refused restore mints no feed position and leaves the tombstone in place"
+    );
+}
+
 /// A lifecycle manifest with no predecessor is malformed, not stale.
 ///
 /// The distinction matters to a client: `409` says "re-read and rebase", and this cannot be
