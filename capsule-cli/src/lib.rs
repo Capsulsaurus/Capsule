@@ -1991,7 +1991,7 @@ async fn peer_delegate(
         for failed in &summary.failed {
             println!(
                 "{}",
-                format!("{}: not handed off: {}", failed.subject, failed.error).red()
+                format!("{}: not handed off: {}", failed.subject, failed.message).red()
             );
         }
     }
@@ -2034,7 +2034,7 @@ async fn peer_accept(
         for refused in &summary.refused {
             println!(
                 "{}",
-                format!("{}: refused: {}", refused.subject, refused.error).red()
+                format!("{}: refused: {}", refused.subject, refused.message).red()
             );
         }
         for upload in &summary.uploads {
@@ -2046,12 +2046,18 @@ async fn peer_accept(
                 "kept" => format!(
                     "{}: uploaded what this connection allows; kept until the server holds it ({})",
                     upload.asset_id,
-                    upload.reason.as_deref().unwrap_or_default()
+                    upload.kind.unwrap_or_default()
+                ),
+                "discarded" => format!(
+                    "{}: permanently refused; this device's copy is discarded and the origin \
+                     keeps the upload: {}",
+                    upload.hand_off,
+                    upload.message.as_deref().unwrap_or_default()
                 ),
                 _ => format!(
-                    "{}: upload failed: {}",
+                    "{}: upload failed; kept for the next run: {}",
                     upload.hand_off,
-                    upload.reason.as_deref().unwrap_or_default()
+                    upload.message.as_deref().unwrap_or_default()
                 ),
             };
             println!("{line}");
@@ -2094,7 +2100,7 @@ async fn peer_status(workspace: &Workspace, acks: &[PathBuf], json: bool) -> Res
                 "{}",
                 format!(
                     "{}: acknowledgement refused: {}",
-                    refused.subject, refused.error
+                    refused.subject, refused.message
                 )
                 .red()
             );

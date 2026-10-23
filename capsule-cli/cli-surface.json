@@ -679,7 +679,7 @@
               "takes_value": false
             },
             {
-              "help": "Print the run as one JSON document on stdout: each hand-off taken with its acknowledgement, each refused with why, and what became of each held hand-off",
+              "help": "Print the run as one JSON document on stdout: each hand-off taken with its acknowledgement, each refused, and what became of each held hand-off (removed, kept, failed and kept, or permanently refused and discarded), each failure with a stable `kind`, the server's `code` when it gave one, and the detail",
               "id": "json",
               "long": "json",
               "positional": false,
@@ -766,7 +766,7 @@
               "takes_value": false
             },
             {
-              "help": "Print the run as one JSON document on stdout: each asset handed off, with its file and content address, and each that was not, with why",
+              "help": "Print the run as one JSON document on stdout: each asset handed off, with its file and content address, and each that was not, with a stable `kind`, the server's `code` when it gave one, and the detail",
               "id": "json",
               "long": "json",
               "positional": false,
@@ -814,7 +814,7 @@
               "takes_value": false
             },
             {
-              "help": "Print the run as one JSON document on stdout: each delegation with its state",
+              "help": "Print the run as one JSON document on stdout: each delegation with its state, and each refused acknowledgement with a stable `kind` and the detail",
               "id": "json",
               "long": "json",
               "positional": false,

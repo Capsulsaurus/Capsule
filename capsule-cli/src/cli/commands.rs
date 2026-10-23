@@ -470,7 +470,8 @@ pub(crate) enum PeerCommands {
         #[arg(long)]
         passphrase_stdin: bool,
         /// Print the run as one JSON document on stdout: each asset handed off, with its file
-        /// and content address, and each that was not, with why
+        /// and content address, and each that was not, with a stable `kind`, the server's
+        /// `code` when it gave one, and the detail
         #[arg(long)]
         json: bool,
     },
@@ -493,7 +494,9 @@ pub(crate) enum PeerCommands {
         #[arg(long)]
         passphrase_stdin: bool,
         /// Print the run as one JSON document on stdout: each hand-off taken with its
-        /// acknowledgement, each refused with why, and what became of each held hand-off
+        /// acknowledgement, each refused, and what became of each held hand-off (removed, kept,
+        /// failed and kept, or permanently refused and discarded), each failure with a stable
+        /// `kind`, the server's `code` when it gave one, and the detail
         #[arg(long)]
         json: bool,
     },
@@ -510,7 +513,8 @@ pub(crate) enum PeerCommands {
         /// works in scripts and CI where there is no terminal.
         #[arg(long)]
         passphrase_stdin: bool,
-        /// Print the run as one JSON document on stdout: each delegation with its state
+        /// Print the run as one JSON document on stdout: each delegation with its state, and
+        /// each refused acknowledgement with a stable `kind` and the detail
         #[arg(long)]
         json: bool,
     },

@@ -40,9 +40,9 @@ use capsule_sdk::directory::DirectoryClient;
 use capsule_sdk::net::ConnectionClass;
 use capsule_sdk::peering::delegation::DEFAULT_HAND_OFF_DEADLINE_MS;
 use capsule_sdk::peering::{
-    DelegateInbox, DelegationError, DelegationState, DirectoryVersions, HandOffAck, OriginLedger,
-    PeeringError, PinnedTrust, ReleaseOutcome, RequeueReason, Settled, accept_hand_off, seal,
-    settle, upload_hand_off, verify_hand_off,
+    DelegateInbox, DelegationError, DelegationState, DirectoryVersions, HandOffAck, HeldFailure,
+    OriginLedger, PeeringError, PinnedTrust, ReleaseOutcome, RequeueReason, Settled,
+    accept_hand_off, dispose_failure, seal, settle, upload_hand_off, verify_hand_off,
 };
 use capsule_sdk::staged::StagedScheduler;
 use capsule_sdk::upload::{UploadClient, UploadTransport};
@@ -390,13 +390,83 @@ pub struct HandedOff {
     pub bytes: u64,
 }
 
-/// One asset that could not be handed off, and why.
-#[derive(Debug, Clone, Serialize)]
+/// One asset, hand-off file or acknowledgement that failed, and why, in the shape `--json`
+/// reports it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PeerFailure {
     /// The asset, or the file, it concerns.
     pub subject: String,
-    /// Why.
-    pub error: String,
+    /// A stable name for why: one per [`DelegationError`] and [`PeeringError`] variant
+    /// ([`delegation_kind`]), or `bundle` (the library could not build the asset's upload
+    /// bundle), `read` (the file could not be read) or `ack_malformed` (it is not an
+    /// acknowledgement).
+    pub kind: &'static str,
+    /// The server's stable `error.*` code, when it supplied one.
+    pub code: Option<String>,
+    /// The English detail.
+    pub message: String,
+}
+
+impl PeerFailure {
+    fn new(subject: impl Into<String>, kind: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            subject: subject.into(),
+            kind,
+            code: None,
+            message: message.into(),
+        }
+    }
+
+    fn delegation(subject: impl Into<String>, error: &DelegationError) -> Self {
+        Self {
+            subject: subject.into(),
+            kind: delegation_kind(error),
+            code: error.error_code().map(str::to_owned),
+            message: error.to_string(),
+        }
+    }
+}
+
+/// The stable name `--json` reports a [`DelegationError`] under. A refused device or directory
+/// is named by its [`PeeringError`] ([`peering_kind`]); every other variant has its own name.
+#[must_use]
+pub fn delegation_kind(error: &DelegationError) -> &'static str {
+    match error {
+        DelegationError::Peering(error) => peering_kind(error),
+        DelegationError::SelfDelegation => "self_delegation",
+        DelegationError::Malformed(_) => "malformed",
+        DelegationError::UnsupportedFormat { .. } => "unsupported_format",
+        DelegationError::WrongDelegate { .. } => "wrong_delegate",
+        DelegationError::ProtocolUnsupported { .. } => "protocol_unsupported",
+        DelegationError::Tampered(_) => "tampered",
+        DelegationError::Inbox(_) => "inbox",
+        DelegationError::Upload(_) => "upload",
+        DelegationError::UnknownDelegation(_) => "unknown_delegation",
+        DelegationError::AckMismatch => "ack_mismatch",
+    }
+}
+
+/// The stable name `--json` reports a [`PeeringError`] under.
+#[must_use]
+pub fn peering_kind(error: &PeeringError) -> &'static str {
+    match error {
+        PeeringError::Tls(_) => "peering_tls",
+        PeeringError::Io(_) => "peering_io",
+        PeeringError::VersionDisjoint { .. } => "version_disjoint",
+        PeeringError::ForeignIdentity => "foreign_identity",
+        PeeringError::DirectoryRollback { .. } => "directory_rollback",
+        PeeringError::PeerDirectoryStale { .. } => "peer_directory_stale",
+        PeeringError::RateLimited(_) => "rate_limited",
+        PeeringError::OutOfScope(_) => "out_of_scope",
+        PeeringError::UnknownDevice(_) => "unknown_device",
+        PeeringError::RevokedDevice(_) => "revoked_device",
+        PeeringError::HybridCheckFailed => "hybrid_check_failed",
+        PeeringError::Discovery(_) => "discovery",
+        PeeringError::Codec(_) => "codec",
+        PeeringError::Crypto(_) => "crypto",
+        PeeringError::Backup(_) => "backup",
+        PeeringError::Transfer(_) => "transfer",
+    }
 }
 
 /// The `capsule peer delegate` run, as `--json` prints it.
@@ -449,18 +519,17 @@ async fn delegate_with(
     for asset_id in &options.assets {
         let sealed = match workspace
             .upload_bundle(asset_id)
-            .map_err(|error| error.to_string())
-            .and_then(|bundle| seal(&bundle, options.to, &trust).map_err(|e| e.to_string()))
-        {
+            .map_err(|error| PeerFailure::new(asset_id.to_string(), "bundle", error.to_string()))
+            .and_then(|bundle| {
+                seal(&bundle, options.to, &trust)
+                    .map_err(|error| PeerFailure::delegation(asset_id.to_string(), &error))
+            }) {
             Ok(sealed) => sealed,
-            Err(error) => {
+            Err(failure) => {
                 // A delegate the directory does not admit fails every asset alike; it is still
                 // reported per asset so the run's report names what was not handed off.
-                tracing::warn!(%asset_id, %error, "peer delegate: not handed off");
-                summary.failed.push(PeerFailure {
-                    subject: asset_id.to_string(),
-                    error,
-                });
+                tracing::warn!(%asset_id, kind = failure.kind, error = %failure.message, "peer delegate: not handed off");
+                summary.failed.push(failure);
                 continue;
             }
         };
@@ -510,16 +579,56 @@ pub struct Accepted {
 }
 
 /// What became of one hand-off in the inbox.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Courier {
-    /// The asset.
+    /// The asset; nil when the held copy could not be read or verified.
     pub asset_id: Uuid,
     /// The hand-off's content address.
     pub hand_off: String,
-    /// `removed` (the server holds it; the copy is gone), `kept` (not yet), or `failed`.
+    /// `removed` (the server holds it; the copy is gone), `kept` (not yet), `failed` (a
+    /// transient failure; the copy is kept for the next run) or `discarded` (a permanent
+    /// refusal; the copy is gone and the origin re-queues the upload at its deadline).
     pub outcome: &'static str,
-    /// Why it was kept or failed.
-    pub reason: Option<String>,
+    /// A stable name for why it was kept (a retain reason: `not_durable`, `receipt_missing`,
+    /// `verify_unavailable`, `receipt_unavailable` or `read_back_mismatch`), failed or was
+    /// discarded (a [`PeerFailure::kind`], or `copy_missing` when the inbox no longer holds it).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<&'static str>,
+    /// The server's stable `error.*` code, when it supplied one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    /// The English detail of a failure.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+impl Courier {
+    fn settled(
+        asset_id: Uuid,
+        address: &str,
+        outcome: &'static str,
+        kind: Option<&'static str>,
+    ) -> Self {
+        Self {
+            asset_id,
+            hand_off: address.to_owned(),
+            outcome,
+            kind,
+            code: None,
+            message: None,
+        }
+    }
+
+    fn failed(asset_id: Uuid, address: &str, kind: &'static str, message: String) -> Self {
+        Self {
+            asset_id,
+            hand_off: address.to_owned(),
+            outcome: "failed",
+            kind: Some(kind),
+            code: None,
+            message: Some(message),
+        }
+    }
 }
 
 /// The `capsule peer accept` run, as `--json` prints it.
@@ -537,7 +646,11 @@ impl AcceptSummary {
     /// Whether anything was refused or failed.
     #[must_use]
     pub fn has_failures(&self) -> bool {
-        !self.refused.is_empty() || self.uploads.iter().any(|u| u.outcome == "failed")
+        !self.refused.is_empty()
+            || self
+                .uploads
+                .iter()
+                .any(|u| matches!(u.outcome, "failed" | "discarded"))
     }
 }
 
@@ -579,8 +692,9 @@ async fn accept_with(
     };
 
     for file in &options.from {
+        let subject = file.display().to_string();
         let taken = fs::read(file)
-            .map_err(|error| DelegationError::Inbox(error.to_string()))
+            .map_err(|error| PeerFailure::new(&subject, "read", error.to_string()))
             .and_then(|bytes| {
                 accept_hand_off(
                     &bytes,
@@ -590,6 +704,7 @@ async fn accept_with(
                     &remote.protocol_version,
                     &inbox,
                 )
+                .map_err(|error| PeerFailure::delegation(&subject, &error))
             });
         match taken {
             Ok((_, ack)) => {
@@ -603,12 +718,9 @@ async fn accept_with(
                     ack_file: ack_file.display().to_string(),
                 });
             }
-            Err(error) => {
-                tracing::warn!(file = %file.display(), %error, "peer accept: refused");
-                summary.refused.push(PeerFailure {
-                    subject: file.display().to_string(),
-                    error: error.to_string(),
-                });
+            Err(failure) => {
+                tracing::warn!(file = %subject, kind = failure.kind, error = %failure.message, "peer accept: refused");
+                summary.refused.push(failure);
             }
         }
     }
@@ -654,7 +766,8 @@ async fn accept_with(
 }
 
 /// Upload one hand-off the inbox holds and settle it. Re-verified first: the inbox is local
-/// state, and what was verified when it was taken is checked again before it is sent.
+/// state, and what was verified when it was taken is checked again before it is sent. A failure
+/// that can never clear discards the copy ([`refused`]).
 #[allow(clippy::too_many_arguments)]
 async fn courier(
     inbox: &dyn DelegateInbox,
@@ -667,41 +780,59 @@ async fn courier(
     scheduler: &StagedScheduler,
     coordinator: &ReleaseCoordinator,
 ) -> Courier {
-    let failed = |asset_id: Uuid, reason: String| Courier {
-        asset_id,
-        hand_off: address.to_owned(),
-        outcome: "failed",
-        reason: Some(reason),
-    };
     let bytes = match inbox.load(address) {
         Ok(Some(bytes)) => bytes,
-        Ok(None) => return failed(Uuid::nil(), "the copy is gone".into()),
-        Err(error) => return failed(Uuid::nil(), error.to_string()),
+        Ok(None) => {
+            return Courier::failed(
+                Uuid::nil(),
+                address,
+                "copy_missing",
+                "the copy is gone".into(),
+            );
+        }
+        Err(error) => return Courier::failed(Uuid::nil(), address, "inbox", error.to_string()),
     };
     let verified = match verify_hand_off(&bytes, trust, versions, device, &remote.protocol_version)
     {
         Ok(verified) => verified,
-        Err(error) => return failed(Uuid::nil(), error.to_string()),
+        Err(error) => return refused(inbox, address, Uuid::nil(), &error),
     };
     let asset_id = verified.asset_id();
     let report = match upload_hand_off(upload, scheduler, &verified).await {
         Ok(report) => report,
-        Err(error) => return failed(asset_id, error.to_string()),
+        Err(error) => return refused(inbox, address, asset_id, &error),
     };
     match settle(coordinator, &verified, &report.deferred, inbox).await {
-        Ok(Settled::Removed) => Courier {
-            asset_id,
-            hand_off: address.to_owned(),
-            outcome: "removed",
-            reason: None,
-        },
-        Ok(Settled::Kept(reason)) => Courier {
-            asset_id,
-            hand_off: address.to_owned(),
-            outcome: "kept",
-            reason: Some(kept_because(&reason).to_owned()),
-        },
-        Err(error) => failed(asset_id, error.to_string()),
+        Ok(Settled::Removed) => Courier::settled(asset_id, address, "removed", None),
+        Ok(Settled::Kept(reason)) => {
+            Courier::settled(asset_id, address, "kept", Some(kept_because(&reason)))
+        }
+        Err(error) => refused(inbox, address, asset_id, &error),
+    }
+}
+
+/// Report a held hand-off that failed with `error`: `discarded`, its copy deleted, when the
+/// failure is permanent ([`dispose_failure`]); `failed`, its copy kept for the next run,
+/// otherwise.
+fn refused(
+    inbox: &dyn DelegateInbox,
+    address: &str,
+    asset_id: Uuid,
+    error: &DelegationError,
+) -> Courier {
+    let (outcome, message) = match dispose_failure(inbox, address, error) {
+        Ok(HeldFailure::Discarded) => ("discarded", error.to_string()),
+        Ok(HeldFailure::Kept) => ("failed", error.to_string()),
+        // A permanent refusal whose copy could not be deleted stays, and is tried again.
+        Err(discard) => ("failed", format!("{error}; {discard}")),
+    };
+    Courier {
+        asset_id,
+        hand_off: address.to_owned(),
+        outcome,
+        kind: Some(delegation_kind(error)),
+        code: error.error_code().map(str::to_owned),
+        message: Some(message),
     }
 }
 
@@ -784,17 +915,21 @@ async fn status_with(
     let mut ledger = state.load_ledger()?;
     let mut refused_acks = Vec::new();
     for file in acks {
+        let subject = file.display().to_string();
         let taken = fs::read(file)
-            .map_err(|error| error.to_string())
+            .map_err(|error| PeerFailure::new(&subject, "read", error.to_string()))
             .and_then(|bytes| {
-                serde_json::from_slice::<HandOffAck>(&bytes).map_err(|error| error.to_string())
+                serde_json::from_slice::<HandOffAck>(&bytes)
+                    .map_err(|error| PeerFailure::new(&subject, "ack_malformed", error.to_string()))
             })
-            .and_then(|ack| ledger.acknowledge(&ack).map_err(|error| error.to_string()));
-        if let Err(error) = taken {
-            refused_acks.push(PeerFailure {
-                subject: file.display().to_string(),
-                error,
+            .and_then(|ack| {
+                ledger
+                    .acknowledge(&ack)
+                    .map_err(|error| PeerFailure::delegation(&subject, &error))
             });
+        if let Err(failure) = taken {
+            tracing::warn!(file = %subject, kind = failure.kind, error = %failure.message, "peer status: acknowledgement refused");
+            refused_acks.push(failure);
         }
     }
     ledger.due(&trust, &clock.epoch(), clock.now_ms());
