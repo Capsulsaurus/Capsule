@@ -151,6 +151,7 @@ fn every_event_round_trips_through_json() {
         TransferEvent::SessionResumed {
             blob: blob(),
             session_id: session_id(),
+            size: 8192,
             offset: 4096,
         },
         TransferEvent::ChunkSent {

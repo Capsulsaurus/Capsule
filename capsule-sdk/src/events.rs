@@ -90,6 +90,9 @@ pub enum TransferEvent {
         blob: String,
         /// The upload session id.
         session_id: String,
+        /// The declared ciphertext size, so an observer that never saw the session's create
+        /// (a resume in a later run) still knows how far the transfer has to go.
+        size: u64,
         /// The authoritative offset the transfer continues from.
         offset: u64,
     },
