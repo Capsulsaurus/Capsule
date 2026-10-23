@@ -355,8 +355,13 @@ impl AppState {
                 Screen::Auth => self.auth.on_form_key(key),
                 Screen::Restore => self.restore.on_form_key(key),
                 Screen::Share => self.share.on_form_key(key),
-                Screen::Import => self.import.on_form_key(key),
-                Screen::Push => self.push.on_form_key(key),
+                // The workspace has no lock, so each writer refuses a library the other has open.
+                Screen::Import => self
+                    .import
+                    .on_form_key_guarded(key, self.push.running_library()),
+                Screen::Push => self
+                    .push
+                    .on_form_key_guarded(key, self.import.running_library()),
             },
             Action::Answer(answer) => match self.screen() {
                 Screen::Home

@@ -7,7 +7,7 @@
 //! the same scan or source adapter, planner and executor ([`crate::import_run`]), and end in the
 //! same report. The import itself never touches the network: pushing is the next screen.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -138,6 +138,8 @@ pub struct ImportScreen {
     /// Why the last submission was refused before anything ran.
     invalid: Option<String>,
     run: Option<Loadable<ImportReport>>,
+    /// The library the latest run imports into.
+    run_library: Option<PathBuf>,
 }
 
 impl Default for ImportScreen {
@@ -154,6 +156,7 @@ impl Default for ImportScreen {
             editing: None,
             invalid: None,
             run: None,
+            run_library: None,
         }
     }
 }
@@ -212,6 +215,14 @@ impl ImportScreen {
         self.run == Some(Loadable::Loading)
     }
 
+    /// The library an import in flight is writing, or `None` when none runs.
+    #[must_use]
+    pub fn running_library(&self) -> Option<&Path> {
+        self.running()
+            .then_some(self.run_library.as_deref())
+            .flatten()
+    }
+
     /// Apply `action`; pure, as [`super::state::AppState::update`] is.
     pub fn update(&mut self, action: ImportAction) -> Vec<Effect> {
         match action {
@@ -259,6 +270,12 @@ impl ImportScreen {
 
     /// Apply a key typed into the form being edited.
     pub fn on_form_key(&mut self, key: FormKey) -> Vec<Effect> {
+        self.on_form_key_guarded(key, None)
+    }
+
+    /// Apply a key typed into the form while a push to `pushing` is in flight: an import into
+    /// that same library is refused with a reason, because the workspace has no lock.
+    pub fn on_form_key_guarded(&mut self, key: FormKey, pushing: Option<&Path>) -> Vec<Effect> {
         match self.editing {
             None => Vec::new(),
             Some(Editing::Source) => {
@@ -276,6 +293,18 @@ impl ImportScreen {
                     Vec::new()
                 }
                 FormOutcome::Submitted => match self.request() {
+                    Ok(request) if pushing.is_some_and(|pushing| pushing == request.library) => {
+                        tracing::warn!(
+                            target: "capsule_cli::tui",
+                            library = %request.library.display(),
+                            "import refused: a push to the same library is in flight"
+                        );
+                        self.invalid = Some(
+                            "A push to this library is still running: wait for it to finish, then import."
+                                .to_owned(),
+                        );
+                        Vec::new()
+                    }
                     Ok(request) => {
                         tracing::info!(
                             target: "capsule_cli::tui",
@@ -287,6 +316,7 @@ impl ImportScreen {
                         self.form.clear_secrets();
                         self.editing = None;
                         self.run = Some(Loadable::Loading);
+                        self.run_library = Some(request.library.clone());
                         vec![Effect::Import(ImportEffect::Run(request))]
                     }
                     Err(reason) => {

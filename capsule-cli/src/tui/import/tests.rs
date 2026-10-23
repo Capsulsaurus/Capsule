@@ -7,6 +7,7 @@ use ratatui::backend::TestBackend;
 use super::*;
 use crate::import_report::FileImportOutcome;
 use crate::tui::driver::frame_text;
+use crate::tui::push::PushAction;
 use crate::tui::state::{Action, AppState, Screen, SessionSummary};
 use crate::tui::view;
 
@@ -344,4 +345,40 @@ fn a_failed_import_offers_nothing() {
     state.update(Action::Form(FormKey::Cancel));
     state.update(Action::Import(ImportAction::Finished(Err("no".to_owned()))));
     assert_eq!(state.push().form().value(0), "");
+}
+
+#[test]
+fn an_import_into_a_library_a_push_is_writing_is_refused_and_says_why() {
+    let mut state = on_import();
+    state.update(Action::Open(Screen::Push));
+    state.update(Action::Push(PushAction::Edit));
+    type_text(&mut state, "/photos/lib");
+    state.update(Action::Form(FormKey::Next));
+    type_text(&mut state, "pw");
+    state.update(Action::Form(FormKey::Submit));
+    assert_eq!(
+        state.push().running_library(),
+        Some(Path::new("/photos/lib"))
+    );
+
+    state.update(Action::Open(Screen::Import));
+    pick(&mut state, "/a");
+    state.update(Action::Import(ImportAction::Edit));
+    type_text(&mut state, "/photos/lib");
+    state.update(Action::Form(FormKey::Next));
+    type_text(&mut state, "pw");
+    let effects = state.update(Action::Form(FormKey::Submit));
+    assert!(effects.is_empty());
+    assert_eq!(state.import().running_library(), None, "no import started");
+    assert!(state.import().is_editing(), "the form stays open to fix");
+    assert!(
+        state.import().invalid().is_some_and(|m| m.contains("push")),
+        "{:?}",
+        state.import().invalid()
+    );
+
+    // The push finishing frees the library.
+    state.update(Action::Push(PushAction::Finished(Err("stop".to_owned()))));
+    let effects = state.update(Action::Form(FormKey::Submit));
+    assert!(!effects.is_empty(), "the library is free again");
 }

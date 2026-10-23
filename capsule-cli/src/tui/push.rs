@@ -18,7 +18,7 @@
 //! authoritative: every asset's row is set from its outcome.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use capsule_sdk::events::TransferEvent;
 use ratatui::Frame;
@@ -201,6 +201,8 @@ pub struct PushScreen {
     /// Why the last request was refused before anything ran, or why there was nothing to do.
     notice: Option<String>,
     run: Option<Loadable<PushSummary>>,
+    /// The library the latest run pushes.
+    run_library: Option<PathBuf>,
     /// The id of the latest run started.
     run_id: u64,
     /// Whether a [`PushEffect::Watch`] is out.
@@ -223,6 +225,7 @@ impl Default for PushScreen {
             retrying: None,
             notice: None,
             run: None,
+            run_library: None,
             run_id: 0,
             watching: false,
             lagged: 0,
@@ -303,6 +306,14 @@ impl PushScreen {
         self.run == Some(Loadable::Loading)
     }
 
+    /// The library a push in flight is writing, or `None` when none runs.
+    #[must_use]
+    pub fn running_library(&self) -> Option<&Path> {
+        self.running()
+            .then_some(self.run_library.as_deref())
+            .flatten()
+    }
+
     /// Apply `action`; pure, as [`super::state::AppState::update`] is.
     pub fn update(&mut self, action: PushAction) -> Vec<Effect> {
         match action {
@@ -374,6 +385,12 @@ impl PushScreen {
 
     /// Apply a key typed into the form.
     pub fn on_form_key(&mut self, key: FormKey) -> Vec<Effect> {
+        self.on_form_key_guarded(key, None)
+    }
+
+    /// Apply a key typed into the form while an import into `importing` is in flight: a push
+    /// to that same library is refused with a notice, because the workspace has no lock.
+    pub fn on_form_key_guarded(&mut self, key: FormKey, importing: Option<&Path>) -> Vec<Effect> {
         if !self.editing {
             return Vec::new();
         }
@@ -384,12 +401,12 @@ impl PushScreen {
                 self.retrying = None;
                 Vec::new()
             }
-            FormOutcome::Submitted => self.submit(),
+            FormOutcome::Submitted => self.submit(importing),
         }
     }
 
     /// Start the run the form describes, or say why not.
-    fn submit(&mut self) -> Vec<Effect> {
+    fn submit(&mut self, importing: Option<&Path>) -> Vec<Effect> {
         let library = self.form.value(LIBRARY);
         let passphrase = self.form.secret(PASSPHRASE);
         if library.is_empty() {
@@ -400,6 +417,19 @@ impl PushScreen {
             self.notice = Some("Enter the library passphrase.".to_owned());
             return Vec::new();
         }
+        if importing.is_some_and(|importing| importing == Path::new(&library)) {
+            tracing::warn!(
+                target: "capsule_cli::tui",
+                library = %library,
+                "push refused: an import into the same library is in flight"
+            );
+            self.notice = Some(
+                "An import into this library is still running: wait for it to finish, then push."
+                    .to_owned(),
+            );
+            return Vec::new();
+        }
+        self.run_library = Some(PathBuf::from(&library));
         self.run_id += 1;
         let assets = self.retrying.take();
         let request = PushRequest {
@@ -501,7 +531,12 @@ impl PushScreen {
             TransferEvent::Finalize { .. } | TransferEvent::Merged { .. } => {
                 row.uploaded = (row.uploaded + 1).min(row.blobs);
             }
-            TransferEvent::Verify { durable, .. } => row.durable = Some(*durable),
+            // The SDK refuses a verdict that counts a blob not durable whatever its flag says.
+            TransferEvent::Verify {
+                durable,
+                not_durable,
+                ..
+            } => row.durable = Some(*durable && *not_durable == 0),
             TransferEvent::Receipt { .. } => row.receipts += 1,
             _ => {}
         }

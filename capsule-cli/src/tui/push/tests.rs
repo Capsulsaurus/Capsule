@@ -7,6 +7,7 @@ use ratatui::backend::TestBackend;
 use super::*;
 use crate::remote::AssetPushFailure;
 use crate::tui::driver::frame_text;
+use crate::tui::import::ImportAction;
 use crate::tui::state::{Action, AppState, Screen, SessionSummary};
 use crate::tui::view;
 
@@ -613,4 +614,75 @@ fn many_assets_show_the_busy_and_failed_ones_first_and_count_the_rest() {
         "{frame}"
     );
     assert!(frame.contains("…and 5 more."), "{frame}");
+}
+
+#[test]
+fn a_verdict_that_counts_a_blob_not_durable_is_not_shown_durable() {
+    let mut screen = running();
+    screen.update(PushAction::Progress(vec![started(A, 3)]));
+    // The SDK rejects this verdict as NotDurable whatever its flag says.
+    screen.update(PushAction::Progress(vec![PushProgress::Transfer(
+        TransferEvent::Verify {
+            asset_id: A.to_owned(),
+            durable: true,
+            blobs: 3,
+            not_durable: 1,
+        },
+    )]));
+    assert_eq!(screen.rows[0].durable, Some(false));
+}
+
+#[test]
+fn a_push_to_a_library_an_import_is_writing_is_refused_and_says_why() {
+    let mut state = on_push();
+    // An import into the same library is in flight.
+    state.update(Action::Open(Screen::Import));
+    state.update(Action::Import(ImportAction::AddSource));
+    for c in "/a".chars() {
+        state.update(Action::Form(FormKey::Char(c)));
+    }
+    state.update(Action::Form(FormKey::Submit));
+    state.update(Action::Import(ImportAction::Edit));
+    for c in "/photos/lib".chars() {
+        state.update(Action::Form(FormKey::Char(c)));
+    }
+    state.update(Action::Form(FormKey::Next));
+    for c in "pw".chars() {
+        state.update(Action::Form(FormKey::Char(c)));
+    }
+    state.update(Action::Form(FormKey::Submit));
+    assert!(state.import().running_library().is_some());
+
+    state.update(Action::Open(Screen::Push));
+    start(&mut state);
+    assert_eq!(state.push().running_library(), None, "no push started");
+    assert!(state.push().is_editing(), "the form stays open to fix");
+    assert!(
+        state.push().notice().is_some_and(|n| n.contains("import")),
+        "{:?}",
+        state.push().notice()
+    );
+}
+
+#[test]
+fn a_retry_to_a_library_an_import_is_writing_is_refused() {
+    let mut retry = PushScreen::default();
+    retry.update(PushAction::Edit);
+    submit(&mut retry, "/photos/lib", "pw");
+    retry.update(PushAction::Finished(Ok(summary(vec![outcome(
+        A,
+        Some(("upload", "boom")),
+    )]))));
+    retry.update(PushAction::Retry);
+    retry.form.set(LIBRARY, "/photos/lib");
+    retry.form.set(PASSPHRASE, "pw");
+    let effects = retry.on_form_key_guarded(FormKey::Submit, Some(Path::new("/photos/lib")));
+    assert!(effects.is_empty());
+    assert_eq!(retry.running_library(), None);
+
+    // Another library is not in the way.
+    retry.form.set(LIBRARY, "/other");
+    let effects = retry.on_form_key_guarded(FormKey::Submit, Some(Path::new("/photos/lib")));
+    assert!(!effects.is_empty());
+    assert_eq!(retry.running_library(), Some(Path::new("/other")));
 }
