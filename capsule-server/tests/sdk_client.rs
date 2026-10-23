@@ -1148,6 +1148,18 @@ async fn a_pushed_asset_reaches_the_feed_and_the_entry_decodes_and_verifies() {
         bundle.created_by_device,
         Timestamp::UNIX_EPOCH,
     );
+    // The key the library signs with, as its directory publishes it: finalization verifies the
+    // provenance blob's device signature under it.
+    fixture.authority.set_device_key(
+        &library_user,
+        bundle.created_by_device,
+        workspace
+            .device_directory()
+            .device(&bundle.created_by_device)
+            .expect("the library lists its own device")
+            .dsk_public
+            .clone(),
+    );
     let base_url = serve(&fixture).await;
     let live = session(&base_url).await;
     // The library's own directory, published as a client does at enrollment: the ledger records

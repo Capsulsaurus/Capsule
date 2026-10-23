@@ -642,7 +642,7 @@ async fn an_upload_through_the_surface_becomes_a_feed_entry() {
     let bearer = bearer(&fixture).await;
 
     // The bundle's index tier, both blobs under the one asset the manifest names.
-    let manifest = upload(&fixture, &bearer, "provenance", 0xA1).await;
+    let (manifest, manifest_bytes) = upload_manifest(&fixture, &bearer).await;
     let metadata = upload(&fixture, &bearer, "metadata", 0xB2).await;
 
     let body = page(&fixture, &bearer, "", StatusCode::OK).await;
@@ -681,8 +681,7 @@ async fn an_upload_through_the_surface_becomes_a_feed_entry() {
         )
         .expect("the feed emits base64");
     assert_eq!(
-        decoded,
-        support::payload(0xA1, 8192),
+        decoded, manifest_bytes,
         "the feed served something other than the provenance bytes the client uploaded"
     );
 
@@ -716,6 +715,23 @@ async fn upload(fixture: &Fixture, bearer: &str, role: &str, marker: u8) -> Cont
             .assert_status(StatusCode::NO_CONTENT);
     }
     ContentAddress::parse(&support::checksum(&bytes)).expect("a content address")
+}
+
+/// Upload the default asset's signed manifest — its provenance blob — through a session to
+/// completion, returning its address and bytes.
+async fn upload_manifest(fixture: &Fixture, bearer: &str) -> (ContentAddress, Vec<u8>) {
+    let (request, bytes) = support::provenance_upload(&fixture.clock, |_| {});
+    let (first, second) = support::two_chunks(&bytes);
+    let id = fixture.open_session_with(&request, bearer).await;
+    for (offset, chunk) in [(0_u64, &first), (4096, &second)] {
+        fixture
+            .chunk(&id, offset, chunk, bearer)
+            .send()
+            .await
+            .assert_status(StatusCode::NO_CONTENT);
+    }
+    let address = ContentAddress::parse(&support::checksum(&bytes)).expect("a content address");
+    (address, bytes)
 }
 
 // ===========================================================================================

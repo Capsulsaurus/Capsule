@@ -11,7 +11,10 @@
 //!    `WaitingForProcessing`, so two racing finalizers cannot both proceed.
 //! 2. **Recompute the hash** over the staged bytes and compare it to the declared one.
 //! 3. **Re-run the envelope battery**, against the clock and the authority *now* — a device
-//!    revoked or an album closed since creation does not slip through.
+//!    revoked or an album closed since creation does not slip through. A provenance blob is
+//!    then admitted only as a manifest its signer signed, under the key the uploader's published
+//!    directory holds for that device ([`super::signer`]): the uploader need not be the signer
+//!    ([delegation]), so the signature, not the uploader, decides.
 //! 4. **Commit** the stage onto its content address, atomically.
 //! 5. **Ledger the custody**: a [`LedgerEvent::Custody`] entry is appended to the owner's
 //!    ledger and fsynced, after the blob commit and before anything is indexed.
@@ -114,6 +117,8 @@
 //! envelope projection into CBOR, does not hash such a re-serialization into an attestation,
 //! and does not synthesize a manifest for a feed. The signed manifest is a `provenance` blob
 //! that travelled this same path and is held verbatim at its content address.
+//!
+//! [delegation]: https://github.com/Capsulsaurus/Capsule/blob/master/capsule-docs/src/content/docs/design/peering.md#delegation
 
 use capsule_core::crypto::hash::{Hash32, Sha256Hasher};
 use capsule_core::crypto::receipts::CustodyReceipt;
@@ -487,7 +492,13 @@ async fn run_claimed(
     let source = locate(context, upload, record, &address).await?;
 
     // 2. Invariant 14.
-    let digest = recompute_hash(context, source, record.total_size).await?;
+    let digest = recompute_hash(
+        context,
+        source,
+        record.total_size,
+        keeps_manifest_bytes(record),
+    )
+    .await?;
     if digest.address != record.expected_hash {
         return Err(FinalizeFailure::ContentHashMismatch {
             expected: record.expected_hash.clone(),
@@ -496,7 +507,12 @@ async fn run_claimed(
     }
 
     // 3. Invariant 15, against the album, the directory and the clock as they are now.
-    revalidate(context, record).await?;
+    let envelope = revalidate(context, record).await?;
+
+    // 3a. A provenance blob is the signed manifest: admitted only under its signer's key.
+    if record.blob_role == crate::store::BlobRole::Provenance {
+        verify_signer(context, record, &envelope, digest.kept.as_deref()).await?;
+    }
 
     // 4. The stage becomes a blob. `AlreadyPresent` is a success that wrote nothing: an
     //    identical ciphertext — or an identical signed manifest — is one object, which is the
@@ -1043,16 +1059,23 @@ struct StagedDigest {
     address: String,
     /// SHA-256 over the same bytes.
     sha256: Hash32,
+    /// The bytes themselves, when the caller asked to keep them: a provenance blob's, for the
+    /// signer check. Kept from the very windows that were hashed, so the manifest verified is
+    /// the manifest committed, with no second read for the store to answer differently.
+    kept: Option<Vec<u8>>,
 }
 
-/// Recompute the ciphertext hash over the bytes `source` names, window by window.
+/// Recompute the ciphertext hash over the bytes `source` names, window by window, keeping them
+/// as well when `keep` is set.
 async fn recompute_hash(
     context: &UploadContext,
     source: Source<'_>,
     expected_len: u64,
+    keep: bool,
 ) -> Result<StagedDigest, FinalizeFailure> {
     let mut hasher = Sha256Hasher::new();
     let mut offset = 0_u64;
+    let mut kept = keep.then(Vec::new);
 
     loop {
         let window = match source {
@@ -1076,6 +1099,9 @@ async fn recompute_hash(
         }
         offset += window.len() as u64;
         hasher.update(&window);
+        if let Some(kept) = kept.as_mut() {
+            kept.extend_from_slice(&window);
+        }
     }
 
     if offset != expected_len {
@@ -1090,14 +1116,76 @@ async fn recompute_hash(
     Ok(StagedDigest {
         address: sha256.to_hex(),
         sha256,
+        kept,
     })
 }
 
-/// Step 3: the battery, re-run against durable state as it is at this instant.
+/// Whether finalizing `record` keeps its bytes for the signer check: a provenance blob no
+/// larger than the manifest ceiling. A larger one is refused by the check unread.
+fn keeps_manifest_bytes(record: &UploadSessionRecord) -> bool {
+    record.blob_role == crate::store::BlobRole::Provenance
+        && record.total_size <= crate::ledger::manifest::MAX_MANIFEST_BYTES
+}
+
+/// Step 3a, for a provenance blob: admit the manifest only as one its signer signed
+/// ([`super::signer`]), under the uploader's published directory as it is now.
+///
+/// Every provenance blob, delegated or not: the server cannot tell an upload by the signing
+/// device from one by another device of the account, so it never takes the uploader's word for
+/// who signed.
+async fn verify_signer(
+    context: &UploadContext,
+    record: &UploadSessionRecord,
+    envelope: &ManifestEnvelope,
+    bytes: Option<&[u8]>,
+) -> Result<(), FinalizeFailure> {
+    let directory = context
+        .authority()
+        .device_directory(&record.upload_user_id)
+        .await
+        .map_err(|error| FinalizeFailure::Unavailable(error.to_string()))?;
+    let checked = match bytes {
+        Some(bytes) => super::signer::check_signed_manifest(
+            bytes,
+            envelope,
+            &record.upload_user_id,
+            directory.as_ref(),
+        ),
+        None => Err(super::signer::SignerReject::NotAManifest(
+            crate::ledger::manifest::ManifestFault::TooLarge {
+                size: record.total_size,
+            },
+        )),
+    };
+    match checked {
+        Ok(manifest) => {
+            tracing::debug!(
+                upload = %record.upload_id,
+                uploader = %record.upload_user_id,
+                signer = %manifest.core.created_by_device,
+                "the provenance blob verifies under its signing device's published key"
+            );
+            Ok(())
+        }
+        Err(reject) => {
+            tracing::warn!(
+                upload = %record.upload_id,
+                uploader = %record.upload_user_id,
+                reason = reject.as_str(),
+                %reject,
+                "a provenance blob was refused: its signer did not verify"
+            );
+            Err(FinalizeFailure::EnvelopeRejected(reject.gate()))
+        }
+    }
+}
+
+/// Step 3: the battery, re-run against durable state as it is at this instant. Returns the
+/// stored envelope it re-ran.
 async fn revalidate(
     context: &UploadContext,
     record: &UploadSessionRecord,
-) -> Result<(), FinalizeFailure> {
+) -> Result<ManifestEnvelope, FinalizeFailure> {
     let envelope: ManifestEnvelope = serde_json::from_str(&record.manifest_envelope)
         .map_err(|error| FinalizeFailure::Unavailable(format!("stored envelope: {error}")))?;
 
@@ -1160,7 +1248,8 @@ async fn revalidate(
             server_clock: context.clock().now(),
         },
     )
-    .map_err(FinalizeFailure::EnvelopeRejected)
+    .map_err(FinalizeFailure::EnvelopeRejected)?;
+    Ok(envelope)
 }
 
 /// Step 8, the winning half.

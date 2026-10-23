@@ -1892,6 +1892,12 @@ impl CreateRejection {
                 ),
                 code: error_codes::UPLOAD_UNKNOWN_DERIVATIVE_FORMAT,
             },
+            // Decided only at finalization, which holds the manifest's bytes; a create never
+            // sees them. Mapped rather than unwrapped so the match stays total.
+            GateReject::SignatureUnverified => invalid(
+                error_codes::UPLOAD_ENVELOPE_REJECTED,
+                "the manifest does not verify under its signing device's published key",
+            ),
         }
     }
 

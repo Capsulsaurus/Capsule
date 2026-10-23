@@ -19,7 +19,10 @@ use capsule_core::crypto::hash::hash_bytes;
 use capsule_server::index::{AssetIndex, AssetState};
 use capsule_server::store::{AssetId, BlobRole};
 use kynos::http::StatusCode;
-use support::{Fixture, PROTOCOL_VERSION, checksum, create_request, payload, replace_request};
+use support::{
+    Fixture, PROTOCOL_VERSION, checksum, create_request, payload, replace_request,
+    sign_provenance_body,
+};
 
 /// The asset every case in this file works on — the id `create_request` fixes.
 fn asset() -> AssetId {
@@ -36,20 +39,42 @@ async fn upload(fixture: &Fixture, body: &serde_json::Value, bytes: &[u8], beare
         .assert_status(StatusCode::NO_CONTENT);
 }
 
+/// The manifest member of a bundle: `body`, a provenance body, declared at the manifest its
+/// envelope describes, signed by the device it names.
+fn signed(mut body: serde_json::Value) -> (serde_json::Value, Vec<u8>) {
+    let bytes = sign_provenance_body(&mut body);
+    (body, bytes)
+}
+
+/// The replace manifest for the bundle `(original, metadata)`, chained on `prior`.
+fn replace_manifest(
+    fixture: &Fixture,
+    prior: &str,
+    original: &[u8],
+    metadata: &[u8],
+) -> (serde_json::Value, Vec<u8>) {
+    signed(replace_request(
+        &fixture.clock,
+        b"a replace manifest",
+        "provenance",
+        prior,
+        Some((&checksum(original), &checksum(metadata))),
+    ))
+}
+
 /// Publish the asset the ordinary way, and return `(original bytes, chain head hex)`.
 async fn publish(fixture: &Fixture, bearer: &str) -> (Vec<u8>, String) {
     let original = payload(b'o', 8192);
     let metadata = payload(b'm', 4096);
-    let manifest = payload(b'p', 2048);
 
-    for (bytes, role) in [
-        (&original, "original"),
-        (&metadata, "metadata"),
-        (&manifest, "provenance"),
-    ] {
+    for (bytes, role) in [(&original, "original"), (&metadata, "metadata")] {
         let body = create_request(&fixture.clock, bytes, role);
         upload(fixture, &body, bytes, bearer).await;
     }
+    let mut body = create_request(&fixture.clock, b"a create manifest", "provenance");
+    body["manifest_envelope"]["metadata_blob_hash"] = checksum(&metadata).into();
+    let (body, manifest) = signed(body);
+    upload(fixture, &body, &manifest, bearer).await;
 
     let row = fixture
         .index
@@ -96,7 +121,6 @@ async fn a_replace_bundle_supersedes_the_original_and_reaches_the_feed() {
 
     let original = payload(b'O', 8192);
     let metadata = payload(b'M', 4096);
-    let manifest = payload(b'P', 2048);
     assert_ne!(original, first_original);
 
     // Bytes first. Each of these commits its blob and applies nothing — the index still points
@@ -112,13 +136,7 @@ async fn a_replace_bundle_supersedes_the_original_and_reaches_the_feed() {
     );
 
     // The manifest, which is the act.
-    let body = replace_request(
-        &fixture.clock,
-        &manifest,
-        "provenance",
-        &head,
-        Some((&checksum(&original), &checksum(&metadata))),
-    );
+    let (body, manifest) = replace_manifest(&fixture, &head, &original, &metadata);
     upload(&fixture, &body, &manifest, &bearer).await;
 
     assert_eq!(
@@ -211,17 +229,9 @@ async fn a_manifest_that_arrives_before_its_bundle_is_refused_and_retryable() {
 
     let original = payload(b'O', 8192);
     let metadata = payload(b'M', 4096);
-    let manifest = payload(b'P', 2048);
-    let bundle = Some((checksum(&original), checksum(&metadata)));
-    let (original_hex, metadata_hex) = bundle.clone().expect("a bundle");
+    let original_hex = checksum(&original);
 
-    let body = replace_request(
-        &fixture.clock,
-        &manifest,
-        "provenance",
-        &head,
-        Some((&original_hex, &metadata_hex)),
-    );
+    let (body, manifest) = replace_manifest(&fixture, &head, &original, &metadata);
     let early = fixture.open_session_with(&body, &bearer).await;
     let refused = fixture.chunk(&early, 0, &manifest, &bearer).send().await;
     refused.assert_status(StatusCode::CONFLICT);
@@ -229,7 +239,7 @@ async fn a_manifest_that_arrives_before_its_bundle_is_refused_and_retryable() {
     assert_eq!(problem["code"], "error.upload.replace_incomplete");
     assert_eq!(
         held(&fixture, BlobRole::Provenance).await,
-        checksum(&payload(b'p', 2048)),
+        head,
         "a refused replace changes nothing at all"
     );
     // The custody entry the refused manifest wrote is resolved, so a rebuild does not replay it.
@@ -258,13 +268,6 @@ async fn a_manifest_that_arrives_before_its_bundle_is_refused_and_retryable() {
         let body = replace_request(&fixture.clock, bytes, role, &head, None);
         upload(&fixture, &body, bytes, &bearer).await;
     }
-    let body = replace_request(
-        &fixture.clock,
-        &manifest,
-        "provenance",
-        &head,
-        Some((&original_hex, &metadata_hex)),
-    );
     upload(&fixture, &body, &manifest, &bearer).await;
     assert_eq!(held(&fixture, BlobRole::Original).await, original_hex);
 }
@@ -280,20 +283,13 @@ async fn a_replace_that_does_not_chain_onto_the_head_is_refused() {
 
     let original = payload(b'O', 8192);
     let metadata = payload(b'M', 4096);
-    let manifest = payload(b'P', 2048);
     for (bytes, role) in [(&original, "original"), (&metadata, "metadata")] {
         let body = replace_request(&fixture.clock, bytes, role, &head, None);
         upload(&fixture, &body, bytes, &bearer).await;
     }
 
     let stale = checksum(b"a manifest this asset never had");
-    let body = replace_request(
-        &fixture.clock,
-        &manifest,
-        "provenance",
-        &stale,
-        Some((&checksum(&original), &checksum(&metadata))),
-    );
+    let (body, manifest) = replace_manifest(&fixture, &stale, &original, &metadata);
     let id = fixture.open_session_with(&body, &bearer).await;
     let refused = fixture.chunk(&id, 0, &manifest, &bearer).send().await;
     refused.assert_status(StatusCode::CONFLICT);

@@ -780,6 +780,12 @@ impl OpRejection {
                 error_codes::UPLOAD_MALFORMED_REQUEST,
                 "the manifest is not a well-formed lifecycle bundle",
             ),
+            // Reachable only from upload finalization's signer check, which this surface does
+            // not run. Mapped rather than unwrapped so the match stays total.
+            GateReject::SignatureUnverified => invalid(
+                error_codes::UPLOAD_ENVELOPE_MISMATCH,
+                "the manifest does not verify under its signing device's published key",
+            ),
         }
     }
 }

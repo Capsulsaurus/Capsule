@@ -37,6 +37,7 @@
 
 use std::sync::Arc;
 
+use capsule_core::crypto::keys::DeviceDirectory;
 use jiff::Timestamp;
 use uuid::Uuid;
 
@@ -162,22 +163,7 @@ impl WriteAuthority for ProvisionedAuthority {
         device: Uuid,
     ) -> AuthorityFuture<'a, Option<Timestamp>> {
         Box::pin(async move {
-            let Some(published) = self.directories.fetch(user).await.map_err(|error| {
-                tracing::error!(%error, %user, "the device directory store could not answer");
-                unavailable(&error)
-            })?
-            else {
-                tracing::info!(%user, "no published device directory, so no invariant-7 floor");
-                return Ok(None);
-            };
-
-            // The bytes are the account's own signed document. Failing to decode one the server
-            // itself accepted is a server-side inconsistency, so it is logged loudly and
-            // answered as "not in the directory" — the refusing direction.
-            let Ok(directory) = capsule_core::cbor::from_slice::<
-                capsule_core::crypto::keys::DeviceDirectory,
-            >(&published.document) else {
-                tracing::error!(%user, "a stored device directory does not decode");
+            let Some(directory) = self.published_directory(user).await? else {
                 return Ok(None);
             };
 
@@ -203,5 +189,39 @@ impl WriteAuthority for ProvisionedAuthority {
                 }
             }
         })
+    }
+
+    fn device_directory<'a>(
+        &'a self,
+        user: &'a UserId,
+    ) -> AuthorityFuture<'a, Option<DeviceDirectory>> {
+        Box::pin(async move { self.published_directory(user).await })
+    }
+}
+
+impl ProvisionedAuthority {
+    /// `user`'s published device directory, decoded, or `None` when there is none.
+    async fn published_directory(
+        &self,
+        user: &UserId,
+    ) -> Result<Option<DeviceDirectory>, AuthorityError> {
+        let Some(published) = self.directories.fetch(user).await.map_err(|error| {
+            tracing::error!(%error, %user, "the device directory store could not answer");
+            unavailable(&error)
+        })?
+        else {
+            tracing::info!(%user, "no published device directory, so no invariant-7 floor");
+            return Ok(None);
+        };
+
+        // The bytes are the account's own signed document. Failing to decode one the server
+        // itself accepted is a server-side inconsistency, so it is logged loudly and answered as
+        // "no directory" — the refusing direction.
+        let Ok(directory) = capsule_core::cbor::from_slice::<DeviceDirectory>(&published.document)
+        else {
+            tracing::error!(%user, "a stored device directory does not decode");
+            return Ok(None);
+        };
+        Ok(Some(directory))
     }
 }

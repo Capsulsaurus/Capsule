@@ -17,11 +17,12 @@ use std::time::{Duration, Instant};
 
 use kynos::http::StatusCode;
 use support::{
-    Fixture, PROTOCOL_VERSION, album, checksum, create_request, device, owner, payload,
-    second_album,
+    Fixture, PROTOCOL_VERSION, album, checksum, create_request, declare_bytes, device, owner,
+    payload, provenance_upload, second_album, signed_provenance_by, two_chunks, user,
 };
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::TcpStream;
+use uuid::Uuid;
 
 /// The blob every happy-path case transfers: two 4 KiB chunks.
 const CHUNK: usize = 4096;
@@ -472,8 +473,9 @@ async fn a_provenance_blob_is_stored_exactly_as_it_arrived() {
     // is the case that says so.
     let fixture = Fixture::working();
     let bearer = fixture.bearer().await;
-    let (first, second, whole) = blob();
-    let id = fixture.open_session(&whole, "provenance", &bearer).await;
+    let (request, whole) = provenance_upload(&fixture.clock, |_| {});
+    let (first, second) = two_chunks(&whole);
+    let id = fixture.open_session_with(&request, &bearer).await;
 
     fixture
         .chunk(&id, 0, &first, &bearer)
@@ -493,6 +495,124 @@ async fn a_provenance_blob_is_stored_exactly_as_it_arrived() {
 }
 
 #[tokio::test]
+async fn a_manifest_signed_by_another_device_of_the_account_is_admitted_on_its_signature() {
+    // Delegation (peering.md): the uploading device need not be the signer. The session here is
+    // the account's, and nothing about it names the origin device; the manifest is admitted
+    // because the device it names signed it under the key the directory publishes for it.
+    let fixture = Fixture::working();
+    let origin = Uuid::parse_str("018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5e7a").expect("a uuid");
+    fixture
+        .authority
+        .add_device(&user(), origin, jiff::Timestamp::UNIX_EPOCH);
+    let bearer = fixture.bearer().await;
+    let (request, whole) = provenance_upload(&fixture.clock, |request| {
+        request["manifest_envelope"]["created_by_device"] = origin.to_string().into();
+    });
+    let (first, second) = two_chunks(&whole);
+    let id = fixture.open_session_with(&request, &bearer).await;
+    fixture
+        .chunk(&id, 0, &first, &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    fixture
+        .chunk(&id, 4096, &second, &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(
+        fixture.blobs.blob_for_test(&checksum(&whole)).await,
+        Some(whole)
+    );
+}
+
+#[tokio::test]
+async fn a_manifest_whose_signature_does_not_verify_under_its_signer_is_refused() {
+    // The uploader is a device of the account and the envelope names a device of the account:
+    // neither admits the manifest. Signed by any key but the named device's, it is refused at
+    // finalization, and nothing is stored or published.
+    use capsule_server::index::AssetIndex as _;
+    use capsule_server::store::AssetId;
+
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (mut request, _) = provenance_upload(&fixture.clock, |_| {});
+    let forged = signed_provenance_by(&request, |_| {
+        capsule_core::crypto::keys::HybridSigningKey::from_seed_bytes(&[0xEE; 32], &[0xEE; 32])
+    });
+    declare_bytes(&mut request, &forged);
+    let (first, second) = two_chunks(&forged);
+    let id = fixture.open_session_with(&request, &bearer).await;
+    fixture
+        .chunk(&id, 0, &first, &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let refused = fixture.chunk(&id, 4096, &second, &bearer).send().await;
+    refused.assert_status(StatusCode::BAD_REQUEST);
+    assert_eq!(
+        code(&refused.json::<serde_json::Value>()),
+        "error.upload.envelope_rejected"
+    );
+    assert_eq!(fixture.blobs.blob_for_test(&checksum(&forged)).await, None);
+    let row = fixture
+        .index
+        .read(&AssetId::new("018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5e61"))
+        .await
+        .expect("the index answers")
+        .expect("the session reserved a row when it opened");
+    assert_eq!(
+        row.chain_head, None,
+        "the forged manifest was not published"
+    );
+}
+
+#[tokio::test]
+async fn bytes_that_are_not_a_signed_manifest_are_refused_as_a_provenance_blob() {
+    // A provenance blob is the signed manifest; arbitrary bytes under that role are admitted on
+    // nothing at all.
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (mut request, _) = provenance_upload(&fixture.clock, |_| {});
+    let (first, second, whole) = blob();
+    declare_bytes(&mut request, &whole);
+    let id = fixture.open_session_with(&request, &bearer).await;
+    fixture
+        .chunk(&id, 0, &first, &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let refused = fixture.chunk(&id, 4096, &second, &bearer).send().await;
+    refused.assert_status(StatusCode::BAD_REQUEST);
+    assert_eq!(
+        code(&refused.json::<serde_json::Value>()),
+        "error.upload.envelope_rejected"
+    );
+}
+
+#[tokio::test]
+async fn a_manifest_naming_a_revoked_device_is_refused() {
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (request, whole) = provenance_upload(&fixture.clock, |_| {});
+    let (first, second) = two_chunks(&whole);
+    let id = fixture.open_session_with(&request, &bearer).await;
+    fixture
+        .chunk(&id, 0, &first, &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    fixture.authority.revoke_device(&user(), device());
+    let refused = fixture.chunk(&id, 4096, &second, &bearer).send().await;
+    refused.assert_status(StatusCode::BAD_REQUEST);
+    assert_eq!(
+        code(&refused.json::<serde_json::Value>()),
+        "error.upload.envelope_rejected"
+    );
+    assert_eq!(fixture.blobs.blob_for_test(&checksum(&whole)).await, None);
+}
+
+#[tokio::test]
 async fn a_created_manifest_lands_its_album_key_epoch_on_the_row() {
     // #790: the row mirrors the epoch its manifest was sealed under, as a rebuild from the same
     // manifest would, so the integrity scrub finds nothing to disagree about and the album's
@@ -502,9 +622,10 @@ async fn a_created_manifest_lands_its_album_key_epoch_on_the_row() {
 
     let fixture = Fixture::working();
     let bearer = fixture.bearer().await;
-    let (first, second, whole) = blob();
-    let mut request = create_request(&fixture.clock, &whole, "provenance");
-    request["manifest_envelope"]["amk_version"] = serde_json::json!(4);
+    let (request, whole) = provenance_upload(&fixture.clock, |request| {
+        request["manifest_envelope"]["amk_version"] = serde_json::json!(4);
+    });
+    let (first, second) = two_chunks(&whole);
     let id = fixture.open_session_with(&request, &bearer).await;
 
     let asset = AssetId::new("018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5e61");
@@ -592,9 +713,10 @@ async fn a_create_below_the_albums_epoch_is_refused_at_finalization() {
             .expect("the index records");
     }
 
-    let (first, second, whole) = blob();
-    let mut request = create_request(&fixture.clock, &whole, "provenance");
-    request["manifest_envelope"]["amk_version"] = serde_json::json!(4);
+    let (request, whole) = provenance_upload(&fixture.clock, |request| {
+        request["manifest_envelope"]["amk_version"] = serde_json::json!(4);
+    });
+    let (first, second) = two_chunks(&whole);
     let id = fixture.open_session_with(&request, &bearer).await;
     fixture
         .chunk(&id, 0, &first, &bearer)
@@ -925,8 +1047,9 @@ async fn a_manifest_is_never_adopted_across_assets() {
 
     let fixture = Fixture::working();
     let bearer = fixture.bearer().await;
-    let (first, second, whole) = blob();
-    let id = fixture.open_session(&whole, "provenance", &bearer).await;
+    let (request, whole) = provenance_upload(&fixture.clock, |_| {});
+    let (first, second) = two_chunks(&whole);
+    let id = fixture.open_session_with(&request, &bearer).await;
     for (offset, chunk) in [(0_u64, &first), (4096, &second)] {
         fixture
             .chunk(&id, offset, chunk, &bearer)
