@@ -25,6 +25,7 @@ use std::path::{Path, PathBuf};
 use super::auth::{AuthAction, AuthEffect, AuthScreen};
 use super::form::FormKey;
 use super::import::{ImportAction, ImportEffect, ImportScreen};
+use super::library::{LibraryAction, LibraryEffect, LibraryScreen};
 use super::push::{PushAction, PushEffect, PushScreen};
 use super::restore::{RestoreAction, RestoreEffect, RestoreScreen};
 use super::share::{ShareAction, ShareEffect, ShareScreen};
@@ -91,6 +92,8 @@ pub enum Screen {
     Import,
     /// Push a library and watch each asset reach custody ([`super::push`]).
     Push,
+    /// Browse a library's timeline, albums and stacks ([`super::library`]).
+    Library,
 }
 
 /// The answer to a confirmation a screen asked for before an act it cannot take back.
@@ -167,6 +170,8 @@ pub enum Action {
     Import(ImportAction),
     /// The push screen.
     Push(PushAction),
+    /// The library browser.
+    Library(LibraryAction),
 }
 
 /// Work the reducer asks the runtime to perform through the ports.
@@ -186,6 +191,8 @@ pub enum Effect {
     Import(ImportEffect),
     /// The push screen's work.
     Push(PushEffect),
+    /// The library browser's work.
+    Library(LibraryEffect),
 }
 
 impl Effect {
@@ -202,6 +209,7 @@ impl Effect {
             Self::Share(effect) => Action::Share(effect.failed(reason)),
             Self::Import(effect) => Action::Import(effect.failed(reason)),
             Self::Push(effect) => Action::Push(effect.failed(reason)),
+            Self::Library(effect) => Action::Library(effect.failed(reason)),
         }
     }
 }
@@ -220,6 +228,7 @@ pub struct AppState {
     share: ShareScreen,
     import: ImportScreen,
     push: PushScreen,
+    library: LibraryScreen,
 }
 
 impl AppState {
@@ -237,6 +246,7 @@ impl AppState {
             share: ShareScreen::default(),
             import: ImportScreen::default(),
             push: PushScreen::default(),
+            library: LibraryScreen::default(),
         };
         tracing::debug!(target: "capsule_cli::tui", "TUI state initialised");
         (state, vec![Effect::LoadSession])
@@ -322,6 +332,12 @@ impl AppState {
         &self.push
     }
 
+    /// The library browser's state.
+    #[must_use]
+    pub fn library(&self) -> &LibraryScreen {
+        &self.library
+    }
+
     /// Whether the screen on top is taking text: keys then go into its form as
     /// [`Action::Form`], and only the editing bindings and the Ctrl bindings apply.
     #[must_use]
@@ -333,6 +349,7 @@ impl AppState {
             Screen::Share => self.share.is_editing(),
             Screen::Import => self.import.is_editing(),
             Screen::Push => self.push.is_editing(),
+            Screen::Library => self.library.is_editing(),
         }
     }
 
@@ -342,14 +359,15 @@ impl AppState {
     pub fn is_confirming(&self) -> bool {
         match self.screen() {
             // Import and Push never ask first: an import copies its sources and a push only adds
-            // to the server, so neither can take anything away.
+            // to the server, so neither can take anything away. The library browser only reads.
             Screen::Home
             | Screen::Help
             | Screen::Transfers
             | Screen::Sync
             | Screen::Restore
             | Screen::Import
-            | Screen::Push => false,
+            | Screen::Push
+            | Screen::Library => false,
             Screen::Auth => self.auth.is_confirming(),
             Screen::Share => self.share.is_confirming(),
         }
@@ -417,6 +435,7 @@ impl AppState {
                 Screen::Push => self
                     .push
                     .on_form_key_guarded(key, self.import.running_library()),
+                Screen::Library => self.library.on_form_key(key),
             },
             Action::Answer(answer) => match self.screen() {
                 Screen::Home
@@ -425,7 +444,8 @@ impl AppState {
                 | Screen::Sync
                 | Screen::Restore
                 | Screen::Import
-                | Screen::Push => Vec::new(),
+                | Screen::Push
+                | Screen::Library => Vec::new(),
                 Screen::Auth => self.auth.on_answer(answer),
                 Screen::Share => self.share.on_answer(answer),
             },
@@ -445,6 +465,7 @@ impl AppState {
                 effects
             }
             Action::Push(action) => self.push.update(action),
+            Action::Library(action) => self.library.update(action),
         };
         if !effects.is_empty() {
             tracing::debug!(target: "capsule_cli::tui", ?effects, "action requested effects");

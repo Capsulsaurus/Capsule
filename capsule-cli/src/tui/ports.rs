@@ -10,11 +10,16 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use capsule_sdk::events::{TransferEvent, TransferEvents};
+use ratatui_image::picker::Picker;
 use tokio::sync::{Mutex, broadcast, mpsc, oneshot};
 
 use super::auth::{AuthAction, AuthEffect, LoginResult};
 use super::form::Secret;
 use super::import::{ImportAction, ImportEffect, ImportRequest};
+use super::library::{
+    Catalogue, LibraryAction, LibraryEffect, NO_IMAGE_PROTOCOL, OpenRequest, PREVIEW_EDGE,
+    PreviewImage, PreviewRequest,
+};
 use super::push::{PushAction, PushEffect, PushProgress, PushRequest, is_custody_step};
 use super::restore::{RestoreAction, RestoreEffect, RestoreRequest};
 use super::share::{CreateLinkRequest, IssuedLink, ShareAction, ShareEffect};
@@ -135,6 +140,33 @@ pub trait Ports: Send + Sync + 'static {
     fn push_progress(&self) -> impl Future<Output = Vec<PushProgress>> + Send {
         async { vec![PushProgress::Closed { run: None }] }
     }
+
+    /// Unlock a library, snapshot it for the browser and close it again. Writes nothing but
+    /// the default-album resolution every library verb shares on open.
+    fn open_library(
+        &self,
+        request: OpenRequest,
+    ) -> impl Future<Output = Result<Catalogue, String>> + Send {
+        let _ = request;
+        async { Err(NOT_OFFERED.to_owned()) }
+    }
+
+    /// Decode an asset's original into a preview no larger than [`PREVIEW_EDGE`] on its long
+    /// edge, through `capsule-core::media`. `Err` says why there is none, including a terminal
+    /// that draws no images.
+    fn preview(
+        &self,
+        request: PreviewRequest,
+    ) -> impl Future<Output = Result<PreviewImage, String>> + Send {
+        let _ = request;
+        async { Err(NOT_OFFERED.to_owned()) }
+    }
+
+    /// The terminal's image protocol picker, queried once at start-up; `None` (the default)
+    /// draws previews as text.
+    fn image_picker(&self) -> Option<Picker> {
+        None
+    }
 }
 
 /// Perform `effect` through `ports` and return the action that reports its outcome.
@@ -172,6 +204,16 @@ pub async fn perform<P: Ports>(ports: &P, effect: Effect) -> Action {
         Effect::Push(PushEffect::Watch) => {
             Action::Push(PushAction::Progress(ports.push_progress().await))
         }
+        Effect::Library(LibraryEffect::Open(request)) => {
+            Action::Library(LibraryAction::Opened(ports.open_library(request).await))
+        }
+        Effect::Library(LibraryEffect::Preview(request)) => {
+            let asset_id = request.asset_id;
+            Action::Library(LibraryAction::PreviewLoaded {
+                asset_id,
+                result: ports.preview(request).await,
+            })
+        }
     };
     tracing::debug!(target: "capsule_cli::tui", ?effect, ?action, "effect finished");
     action
@@ -186,6 +228,7 @@ pub struct LocalPorts {
     session_path: Option<PathBuf>,
     remote: RemoteConfig,
     transfer_events: TransferEvents,
+    picker: Option<Picker>,
 }
 
 impl LocalPorts {
@@ -199,7 +242,16 @@ impl LocalPorts {
             session_path,
             remote: RemoteConfig::from_env(),
             transfer_events: TransferEvents::default_channel(),
+            picker: None,
         }
+    }
+
+    /// These ports with the image protocol picker the terminal answered with
+    /// ([`super::library::query_picker`]); `None` keeps previews as text.
+    #[must_use]
+    pub fn with_picker(mut self, picker: Option<Picker>) -> Self {
+        self.picker = picker;
+        self
     }
 
     fn session_path(&self) -> Result<PathBuf, String> {
@@ -555,6 +607,42 @@ impl Ports for LocalPorts {
 
     async fn push_progress(&self) -> Vec<PushProgress> {
         self.push_progress.next_batch().await
+    }
+
+    async fn open_library(&self, request: OpenRequest) -> Result<Catalogue, String> {
+        // Unlocking runs Argon2: off the async workers. The workspace is dropped, and the
+        // library's lock with it, as soon as the snapshot is taken.
+        off_loop(move || async move {
+            let workspace =
+                crate::open_workspace_with(&request.library, request.passphrase.expose())
+                    .map_err(|e| e.to_string())?;
+            Ok(super::library::catalogue::collect(&workspace))
+        })
+        .await
+    }
+
+    async fn preview(&self, request: PreviewRequest) -> Result<PreviewImage, String> {
+        // Decoding an original the terminal cannot show would be wasted work.
+        if self.picker.is_none() {
+            return Err(NO_IMAGE_PROTOCOL.to_owned());
+        }
+        super::library::previewable(&request.ext)?;
+        tokio::task::spawn_blocking(move || {
+            let bytes = std::fs::read(&request.original)
+                .map_err(|e| format!("could not read the original: {e}"))?;
+            super::library::decode_preview(
+                &capsule_core::media::RawshiftDecoder,
+                &bytes,
+                &request.ext,
+                PREVIEW_EDGE,
+            )
+        })
+        .await
+        .map_err(|e| format!("the preview decode did not finish: {e}"))?
+    }
+
+    fn image_picker(&self) -> Option<Picker> {
+        self.picker.clone()
     }
 }
 

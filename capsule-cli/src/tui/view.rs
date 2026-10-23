@@ -14,11 +14,19 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Row, Table, Wrap};
 
 use super::keymap::{BINDINGS, Scope, available};
+use super::library::{self, PreviewCanvas};
 use super::state::{Action, AppState, Loadable, Screen, SessionSummary};
 use super::{auth, restore, share, sync, transfer};
 
-/// Draw `state` into `frame`.
+/// Draw `state` into `frame`, with previews in text.
 pub fn render(frame: &mut Frame, state: &AppState) {
+    render_with(frame, state, &mut PreviewCanvas::text_only());
+}
+
+/// Draw `state` into `frame`, drawing the library browser's preview on `canvas`. The frame
+/// is still a function of the state: the canvas decides only whether a decoded preview shows
+/// as an image or as the text that says why it does not.
+pub fn render_with(frame: &mut Frame, state: &AppState, canvas: &mut PreviewCanvas) {
     let [header, body, footer] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(0),
@@ -40,6 +48,7 @@ pub fn render(frame: &mut Frame, state: &AppState) {
         Screen::Share => share::render(frame, body, state.share(), title(screen)),
         Screen::Import => super::import::render(frame, body, state.import(), title(screen)),
         Screen::Push => super::push::render(frame, body, state.push(), title(screen)),
+        Screen::Library => library::render(frame, body, state.library(), title(screen), canvas),
     }
     render_footer(frame, footer, state);
 }
@@ -56,6 +65,7 @@ fn title(screen: Screen) -> &'static str {
         Screen::Share => "Share links",
         Screen::Import => "Import",
         Screen::Push => "Push",
+        Screen::Library => "Library",
     }
 }
 

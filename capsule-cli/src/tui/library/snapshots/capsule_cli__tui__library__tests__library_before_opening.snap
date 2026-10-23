@@ -1,0 +1,30 @@
+---
+source: capsule-cli/src/tui/library/tests.rs
+expression: draw(&on_library())
+---
+Capsule · Library · Signed in
+┌Library───────────────────────────────────────────────────────────────────────────────────────────┐
+│Browse a local library: its timeline, albums and stacks, each asset's metadata, labels and        │
+│provenance history, and a preview where the terminal draws images.                                │
+│                                                                                                  │
+│  Library                                                                                         │
+│  Library passphrase                                                                              │
+│                                                                                                  │
+│Scriptable: `capsule show ASSET --library PATH` prints one asset's record.                        │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+o Open a library  v Next view  Enter List the album or stack  Left Leave the album or stack  q Quit
