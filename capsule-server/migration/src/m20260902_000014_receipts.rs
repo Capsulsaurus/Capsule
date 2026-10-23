@@ -1,4 +1,4 @@
-//! The custody receipt log: the server's signed, append-only chain of what it accepted.
+//! The custody receipt log (`S-C15`): the server's signed, append-only chain of what it accepted.
 
 use sea_orm_migration::prelude::*;
 

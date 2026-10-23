@@ -1,4 +1,4 @@
-//! Guest drops: the upload links, the declarations held while bytes land, and the
+//! Guest drops (`S-C5`): the upload links, the declarations held while bytes land, and the
 //! owner's inbox.
 
 use sea_orm_migration::prelude::*;

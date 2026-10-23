@@ -1,4 +1,4 @@
-//! The account cluster: one table behind four ports.
+//! The account cluster (`S-C53`, `S-C54`): one table behind four ports.
 //!
 //! `AccountRegistry`, `AccountDirectory`, `AccountProfiles` and `PasswordChange` are four ports
 //! because they answer four questions with four disclosure contracts — not because they are
@@ -35,7 +35,7 @@ impl MigrationTrait for Migration {
                     // and never read above the adapter.
                     .col(ColumnDef::new(Accounts::Credential).text().not_null())
                     // The lockout the directory port makes the adapter's own state: a column on
-                    // the account row, not a windowed counter. Rate limiting is a separate concern and has
+                    // the account row, not a windowed counter. Rate limiting is `S-C32` and has
                     // no port in this crate.
                     .col(
                         ColumnDef::new(Accounts::Failures)

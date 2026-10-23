@@ -1,4 +1,5 @@
-//! Published device directories and the identity anchor each account is held to.
+//! Published device directories (`S-C9`) and the identity anchor each account is held to
+//! (`S-C42`).
 
 use sea_orm_migration::prelude::*;
 

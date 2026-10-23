@@ -1,4 +1,4 @@
-//! The collector's marks: which unreferenced blobs are waiting out their grace window.
+//! The collector's marks (`S-C11`): which unreferenced blobs are waiting out their grace window.
 
 use sea_orm_migration::prelude::*;
 

@@ -7,8 +7,8 @@
 //!
 //! - `000001`–`000004` (#402): the asset index, the account cluster, the device-cohort map and
 //!   the quota ledger;
-//! - `000005`: album membership (#405);
-//! - `000006`: federation's capabilities, revocation list and peers (#406);
+//! - `000005`: album membership (`S-C51`, #405);
+//! - `000006`: federation's capabilities, revocation list and peers (`S-E2`, #406);
 //! - `000007`–`000015` (#446): albums, device directories, moderation, share links, drops,
 //!   escrow, the collector's marks, custody receipts and TOTP enrolments;
 //! - `000016` (#460): federated accounts on the account table — a nullable credential and

@@ -1,4 +1,4 @@
-//! The quota ledger: attribution by content address, and the over-limit clock.
+//! The quota ledger (`S-C6`): attribution by content address, and the over-limit clock.
 
 use sea_orm_migration::prelude::*;
 
