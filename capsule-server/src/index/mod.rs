@@ -1,5 +1,4 @@
-//! The asset index — the durable half of the upload path, and the sync feed's only source
-//!.
+//! The asset index — the durable half of the upload path, and the sync feed's only source.
 //!
 //! # Why this is not in [`crate::store`]
 //!
@@ -880,8 +879,7 @@ pub trait AssetIndex: std::fmt::Debug + Send + Sync {
     /// that would come back empty.
     fn head_seq<'a>(&'a self, owner: &'a OwnerId) -> IndexFuture<'a, u64>;
 
-    /// Up to `limit` feed entries in `album` after sequence number `after`, in sequence order
-    ///.
+    /// Up to `limit` feed entries in `album` after sequence number `after`, in sequence order.
     ///
     /// The **owner's** sequence, filtered to one album: positions are the same numbers the
     /// owner's own feed carries, so they are per-album monotonic exactly as the client's

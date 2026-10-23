@@ -261,8 +261,8 @@ impl DevicesView {
 /// One session's row in a [`SupportBundle`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SupportBundleEntry {
-    /// The hardware `device_id` the session was created with, when the client asserted one
-    ///. `None` for a session opened by a client that sent no device id.
+    /// The hardware `device_id` the session was created with, when the client asserted one. `None`
+    /// for a session opened by a client that sent no device id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub device_id: Option<String>,
     /// The session id.

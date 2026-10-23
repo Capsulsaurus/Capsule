@@ -72,8 +72,7 @@ impl Workspace {
     }
 
     /// Local, network-free check that `recovery_secret` still opens `blob` **to this device's
-    /// master key** — the derived-tag compare that backs the recovery verification cadence
-    ///.
+    /// master key** — the derived-tag compare that backs the recovery verification cadence.
     ///
     /// Delegates wholesale to [`backup::verify_recovery_secret`]; nothing is compared here, and
     /// no key bytes are surfaced either way. The stale-cache rule (refresh the blob once before

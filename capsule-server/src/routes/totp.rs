@@ -550,8 +550,8 @@ pub async fn totp_verify_login(
         })?;
     let user = verified.user;
 
-    // Charged **before** the code is checked, and on every attempt whatever the outcome
-    //. Keyed on the challenge rather than the account: keying on the account would let
+    // Charged **before** the code is checked, and on every attempt whatever the outcome. Keyed on
+    // the challenge rather than the account: keying on the account would let
     // a stream of first-factor sign-ins from an attacker exhaust the budget of the person whose
     // password they do not have.
     let key = CounterKey::SecondFactor(verified.challenge.as_str().to_owned());

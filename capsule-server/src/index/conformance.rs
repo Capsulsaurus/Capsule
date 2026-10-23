@@ -1595,8 +1595,7 @@ pub async fn a_lifecycle_write_retains_the_manifest_it_supersedes(index: &dyn As
     );
 }
 
-/// A `replace` re-points the **original**, which is the role `record_blob` refuses to move
-///.
+/// A `replace` re-points the **original**, which is the role `record_blob` refuses to move.
 ///
 /// The refusal is not softened by this: an *upload* that swapped the original would swap bytes
 /// under a signature that still verifies against the old ones, and `BlobOutcome::Conflict` is

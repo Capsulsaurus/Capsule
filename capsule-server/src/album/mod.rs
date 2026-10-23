@@ -20,8 +20,8 @@
 //! [`AlbumRecord::protocol_version`] is set from the protocol the *server* speaks when the album
 //! is created, never from anything the request carries. Invariant 6
 //! compares a write against the album's own pin, and an album whose pin came from a request
-//! would be comparing a request against itself. Moving a pin forward is an album upgrade
-//!, which is a ceremony rather than a field.
+//! would be comparing a request against itself. Moving a pin forward is an album upgrade, which is
+//! a ceremony rather than a field.
 //!
 //! # No name, and the refusal is deliberate rather than an omission
 //!
@@ -157,8 +157,7 @@ pub trait AlbumStore: std::fmt::Debug + Send + Sync {
     /// The album, if it has been provisioned.
     fn read<'a>(&'a self, album: &'a AlbumId) -> StoreFuture<'a, Option<AlbumRecord>>;
 
-    /// Put `album` into upgrade quiescence under `quiescence`, if nothing else holds it
-    ///.
+    /// Put `album` into upgrade quiescence under `quiescence`, if nothing else holds it.
     ///
     /// One operation for the same reason [`Self::provision`] is one: a caller that read the
     /// album, saw no ceremony, and then wrote one has a window in which a second proposer does

@@ -225,8 +225,7 @@ pub enum ServeResolution {
     /// account the server holds a revoked membership row for. Decided **before** every policy
     /// refusal below, so a former member learns nothing about holds or deletions either.
     Forbidden,
-    /// The reader is entitled to the album but its grant does not cover this blob's role
-    ///.
+    /// The reader is entitled to the album but its grant does not cover this blob's role.
     ///
     /// Only a peer under a capability reaches it. Decided in the same place as
     /// [`Self::Forbidden`] and for the same reason: it is an authorization answer, and it is

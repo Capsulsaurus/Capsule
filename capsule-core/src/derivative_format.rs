@@ -162,7 +162,6 @@ pub fn verify_still_role_format(
 }
 
 /// Whether an imported asset got thumbnail/preview derivatives — and if not, **why**
-///.
 ///
 /// Capsule is a backup tool, so this never gates admission: the original is imported as a
 /// signed, encrypted, verifiable asset in every case below. What varies is only whether a

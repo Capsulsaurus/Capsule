@@ -1,8 +1,8 @@
 //! UniFFI bindings exposing the `capsule-core` SQLite catalog to Swift (and, in
 //! future, other UniFFI targets such as Android/Kotlin).
 //!
-//! One of the two uniffi namespaces in the workspace, on a single pinned uniffi version
-//!: `capsule_core_ffi` here, and `capsule_sdk` in `capsule-sdk`, which carries
+//! One of the two uniffi namespaces in the workspace, on a single pinned uniffi version:
+//! `capsule_core_ffi` here, and `capsule_sdk` in `capsule-sdk`, which carries
 //! the crypto `FfiWorkspace` and the `FfiHardwareSigner` / `FfiHardwareKeyAgreement` foreign
 //! traits. `capsule-core` itself exports no namespace, so no dependency this crate links
 //! contributes generated scaffolding of its own (ADR-0005).

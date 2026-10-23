@@ -965,8 +965,7 @@ async fn sync_with<C: ConnectionTrait + TransactionTrait>(
     from_start: bool,
 ) -> Result<SyncSummary, RemoteError> {
     // One endpoint now: the feed is `GET /v1/sync` on the same REST base URL every other call
-    // uses, so there is no second connection to dial and no second transport to configure
-    //.
+    // uses, so there is no second connection to dial and no second transport to configure.
     let consumer = SyncConsumer::with_session(&remote.sync_endpoint, session)?;
 
     let mut state = syncstore::load_sync_state(db, &remote.protocol_version).await?;

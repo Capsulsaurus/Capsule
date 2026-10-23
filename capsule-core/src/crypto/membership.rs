@@ -1,5 +1,4 @@
-//! The album roster attestation — the one membership fact a **key-free server** can verify
-//!.
+//! The album roster attestation — the one membership fact a **key-free server** can verify.
 //!
 //! # What the server cannot see, and what this gives it instead
 //!

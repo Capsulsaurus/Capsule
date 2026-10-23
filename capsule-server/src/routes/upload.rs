@@ -1376,8 +1376,8 @@ pub async fn append_chunk(
         return Err(ChunkRejection::checksum_mismatch());
     }
 
-    // The rules themselves live in `upload::chunk`, shared verbatim with the guest-drop path
-    //: invariants 9–12 mean the same thing on both surfaces, and two copies would
+    // The rules themselves live in `upload::chunk`, shared verbatim with the guest-drop path:
+    // invariants 9–12 mean the same thing on both surfaces, and two copies would
     // drift on exactly the case a client hits after losing a connection. What stays here is
     // what genuinely differs — who is allowed to append, and how a refusal is spelled on the
     // wire.

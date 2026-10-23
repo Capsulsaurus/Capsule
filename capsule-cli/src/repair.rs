@@ -1,5 +1,4 @@
-//! `capsule repair capture-time` — recover capture timestamps stamped with import time
-//!.
+//! `capsule repair capture-time` — recover capture timestamps stamped with import time.
 //!
 //! Before the parser fix, `extract_exif` could never parse a well-formed `DateTimeOriginal`, so
 //! every import wrote its own clock as the asset's capture time — **inside the signed sidecar**,

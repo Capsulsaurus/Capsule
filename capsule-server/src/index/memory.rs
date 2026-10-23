@@ -128,8 +128,8 @@ impl Inner {
         // by the route because this is where the manifest becomes durable, and a head recorded
         // before the bytes landed would point at a manifest nobody holds.
         //
-        // The value is the record's own `manifest_sha256` and never the content address
-        //: the two are equal today and are not the same identifier, so deriving one
+        // The value is the record's own `manifest_sha256` and never the content address: the two
+        // are equal today and are not the same identifier, so deriving one
         // from the other would be correct by coincidence and would break silently the day a
         // suite picks a different content-address digest.
         //

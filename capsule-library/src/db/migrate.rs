@@ -246,8 +246,7 @@ const STEP_2_TO_3: Step = Step {
     ],
 };
 
-/// v3 → v4. Adds `assets.is_hidden`, the index projection of the sidecar `hidden` LWW register
-///.
+/// v3 → v4. Adds `assets.is_hidden`, the index projection of the sidecar `hidden` LWW register.
 ///
 /// Existing rows default to `0` — not hidden — which is the correct reading of a catalog whose
 /// sidecars predate the register. The gated Hidden view is empty until the sidecars are

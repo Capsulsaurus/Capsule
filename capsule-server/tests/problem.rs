@@ -1,5 +1,5 @@
-//! Every rejection carries an `error.*` code, including the ones Capsule does not write
-//!, and the document says so.
+//! Every rejection carries an `error.*` code, including the ones Capsule does not write, and the
+//! document says so.
 //!
 //! Two halves make one contract. The interceptor fills in the member on a framework-rendered
 //! problem; the OpenAPI document describes it. Either alone leaves the

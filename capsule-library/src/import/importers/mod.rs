@@ -20,8 +20,8 @@
 //! (description, favorites, album membership) unconditionally — so a migrated library keeps what
 //! the exporting service carried instead of discarding it once the plan is built.
 //!
-//! The committed adapter is [`takeout::TakeoutAdapter`] (Google Takeout); the iCloud
-//!, Immich, and tethered-camera adapters are post-v1 and land on this
+//! The committed adapter is [`takeout::TakeoutAdapter`] (Google Takeout); the iCloud, Immich, and
+//! tethered-camera adapters are post-v1 and land on this
 //! same seam.
 //!
 //! [Scan & Extract]: https://docs/design/import/pipeline/#scan--extract

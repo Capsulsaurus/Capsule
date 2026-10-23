@@ -4645,8 +4645,7 @@ pub(crate) fn signed_directory_with_device(
     capsule_core::cbor::to_canonical_vec(&directory).expect("a directory serializes")
 }
 
-/// A signed album roster, base64-encoded as `PUT /v1/albums/{album_id}/roster` carries it
-///.
+/// A signed album roster, base64-encoded as `PUT /v1/albums/{album_id}/roster` carries it.
 ///
 /// Attested by the seeded account through `capsule_core::crypto::membership` — the same types
 /// the server verifies with — so a fixture cannot pass while the two ends disagree about what

@@ -163,8 +163,8 @@ pub async fn get_asset_receipts(
     let asset = AssetId::new(path.asset_id);
     let caller = UserId::new(credential.user.as_str());
 
-    // The ownership read comes first and decides everything, exactly as `serve::resolve` does
-    //: a caller who is not the owner must not be able to tell a tombstoned asset from
+    // The ownership read comes first and decides everything, exactly as `serve::resolve` does: a
+    // caller who is not the owner must not be able to tell a tombstoned asset from
     // one that never existed by reading the status line.
     let row = verify
         .index()

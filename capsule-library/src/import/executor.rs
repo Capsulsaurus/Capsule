@@ -168,8 +168,8 @@ pub fn execute_with_source_metadata(
         // the second a genuine decode failure of a format we do support.
         derivatives_deferred = summary.deferred_derivative_count(),
         derivatives_decode_failed = summary.decode_failed_count(),
-        // How much of this run carried third-party exporter metadata into the signed sidecars
-        //; zero for a plain filesystem import.
+        // How much of this run carried third-party exporter metadata into the signed sidecars; zero
+        // for a plain filesystem import.
         enriched_candidates,
         "import: execution complete"
     );

@@ -370,8 +370,8 @@ pub async fn sync_feed(
 
     // Who is asking, and which page they may have. An account reads its own feed, or — with
     // `album_id` — one album's page as its owner or a member of its current roster.
-    // A peer reads exactly the album its capability names, as the member it was minted for
-    //. Each relationship is decided first, and one refusal covers every way it fails.
+    // A peer reads exactly the album its capability names, as the member it was minted for. Each
+    // relationship is decided first, and one refusal covers every way it fails.
     let (reader, album) = match principal {
         Principal::Session(credential) => {
             let album = match requested {

@@ -191,8 +191,7 @@ pub struct LoginRequest {
     /// Verified by the account directory and never retained, logged, or echoed.
     pub password: String,
 
-    /// An advisory device-cohort hash grouping one physical device's re-enrollments
-    ///.
+    /// An advisory device-cohort hash grouping one physical device's re-enrollments.
     ///
     /// Legibility metadata only: no authorization path reads it, and an unusable value is
     /// dropped rather than refused — a sign-in must not fail over a field that gates nothing.

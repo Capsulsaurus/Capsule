@@ -1,5 +1,5 @@
-//! uniffi bindings: an async-capable wrapper over the SDK's user-flow primitives
-//!, so iOS/macOS (Swift), Android (Kotlin), and Linux consumers call
+//! uniffi bindings: an async-capable wrapper over the SDK's user-flow primitives, so iOS/macOS
+//! (Swift), Android (Kotlin), and Linux consumers call
 //! one SDK instead of reimplementing login/upload/sync flows.
 //!
 //! # Surface

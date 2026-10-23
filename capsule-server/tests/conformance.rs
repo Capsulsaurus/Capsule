@@ -5658,8 +5658,8 @@ async fn upgrade_block(
         .assert_status(StatusCode::BAD_REQUEST);
 }
 
-/// Every declared response of `POST /v1/auth/oidc/authorize` and `POST /v1/auth/oidc/callback`
-///, driven through the fixture's provider double.
+/// Every declared response of `POST /v1/auth/oidc/authorize` and `POST /v1/auth/oidc/callback`,
+/// driven through the fixture's provider double.
 ///
 /// The 400 and 426 are the gate's and are produced by the document walk above; the 413 by the
 /// body-size loop. Everything else is this block's: the extractor's 415/422, the ceremony's own

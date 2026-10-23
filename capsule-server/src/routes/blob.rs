@@ -161,8 +161,7 @@ pub enum BlobRejection {
         code: &'static str,
     },
 
-    /// The peer is entitled to the album but its grant does not cover this blob's role
-    ///.
+    /// The peer is entitled to the album but its grant does not cover this blob's role.
     ///
     /// A `read-derivative-only` capability asking for an `original`, or any capability asking
     /// for a `backup`. `403` rather than `404` because the peer already knows the asset is

@@ -395,8 +395,8 @@ pub struct SignedImport {
 /// A streamed import: everything the [streaming window](crate::import::execute_streaming) needs
 /// about one just-imported asset to drive its upload → verify → release step, without exposing
 /// workspace internals. Produced by [`Workspace::import_asset_streaming`], which commits on the
-/// signed path with source release **deferred** to the server-side verify-before-destroy gate
-///, since in streaming mode the local bytes are the only copy until the *server* durably
+/// signed path with source release **deferred** to the server-side verify-before-destroy gate,
+/// since in streaming mode the local bytes are the only copy until the *server* durably
 /// holds them.
 #[derive(Debug, Clone)]
 pub struct StreamedImport {

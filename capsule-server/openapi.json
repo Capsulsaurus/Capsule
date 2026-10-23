@@ -26206,7 +26206,7 @@
               "string",
               "null"
             ],
-            "description": "An advisory device-cohort hash grouping one physical device's re-enrollments\n.\n\nLegibility metadata only: no authorization path reads it, and an unusable value is\ndropped rather than refused — a sign-in must not fail over a field that gates nothing."
+            "description": "An advisory device-cohort hash grouping one physical device's re-enrollments.\n\nLegibility metadata only: no authorization path reads it, and an unusable value is\ndropped rather than refused — a sign-in must not fail over a field that gates nothing."
           },
           "device_id": {
             "type": [
@@ -27276,7 +27276,7 @@
               "string",
               "null"
             ],
-            "description": "The content hash of the bundle's **original** blob, when the manifest commits to one\n.\n\nThe manifest's own `ciphertext_hash`, under a name that cannot be confused with\n[`Self::ciphertext_hash`]'s per-session meaning. Optional on the wire and **required on a\n`replace`**: a replace re-points roles that already have bytes, so it has to be applied\nas one act, and the only member of the bundle that can carry the whole change is the\nmanifest — which therefore has to be able to name the original it commits to.\n\nA `create` may omit it. Its bundle is assembled incrementally in a row nobody can see,\nso no member needs to name another and requiring it would be a wire change for no gain."
+            "description": "The content hash of the bundle's **original** blob, when the manifest commits to one.\n\nThe manifest's own `ciphertext_hash`, under a name that cannot be confused with\n[`Self::ciphertext_hash`]'s per-session meaning. Optional on the wire and **required on a\n`replace`**: a replace re-points roles that already have bytes, so it has to be applied\nas one act, and the only member of the bundle that can carry the whole change is the\nmanifest — which therefore has to be able to name the original it commits to.\n\nA `create` may omit it. Its bundle is assembled incrementally in a row nobody can see,\nso no member needs to name another and requiring it would be a wire change for no gain."
           },
           "derivative_role": {
             "type": [

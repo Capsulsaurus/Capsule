@@ -797,8 +797,8 @@ mod tests {
         assert_eq!(ws.verify(&a).unwrap(), VerifyOutcome::Accept);
     }
 
-    /// The manual stacking path writes through to the index the same way the importer does
-    ///: the `assets` stack columns are a projection of the signed register, so
+    /// The manual stacking path writes through to the index the same way the importer does: the
+    /// `assets` stack columns are a projection of the signed register, so
     /// `set_stack_membership` immediately suppresses a non-primary member from the timeline,
     /// and leaving the stack (a stamped `None`) puts it back.
     #[test]

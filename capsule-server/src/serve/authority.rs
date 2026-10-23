@@ -139,8 +139,7 @@ pub enum BlobReadAccess {
     ///
     /// Rendered as `404`, byte-identical to an address nothing references — which is the point.
     Unrelated,
-    /// The caller is entitled to the album, but its grant does not cover this blob's role
-    ///.
+    /// The caller is entitled to the album, but its grant does not cover this blob's role.
     ///
     /// Only a peer under a capability ever sees this: an account's membership carries no scope.
     /// Rendered as `403 error.federation.scope_insufficient` rather than `404`, because the peer

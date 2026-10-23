@@ -843,8 +843,8 @@ fn retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
 #[derive(Clone)]
 pub struct UploadClient {
     transport: UploadTransport,
-    /// The detected connection class, coupling the chunk strategy to the network
-    ///: under [`ConnectionClass::Adverse`] the transfer pins to the tier
+    /// The detected connection class, coupling the chunk strategy to the network: under
+    /// [`ConnectionClass::Adverse`] the transfer pins to the tier
     /// chunk floor. Defaults to [`ConnectionClass::Unmetered`].
     connection: ConnectionClass,
     /// The backoff sleeper for the shared retry engine's transient-reset retries.

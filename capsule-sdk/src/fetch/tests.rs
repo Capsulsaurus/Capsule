@@ -1,5 +1,5 @@
-//! Mocked tests for the transfer download doc's client fetch Validation bullets
-//!: tiered fetch correctness, cross-asset dedup, resume-after-
+//! Mocked tests for the transfer download doc's client fetch Validation bullets: tiered fetch
+//! correctness, cross-asset dedup, resume-after-
 //! interrupt (zero duplicate bytes), above-tier permanent unavailability with the
 //! degrade ladder and automatic re-fetch, the `403` authorization-change path, the
 //! `awaiting-original` pending state, and content-hash self-verification. All

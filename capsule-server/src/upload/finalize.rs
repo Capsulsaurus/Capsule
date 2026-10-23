@@ -17,8 +17,8 @@
 //!    ledger and fsynced, after the blob commit and before anything is indexed.
 //! 6. **Record and receipt**, in one transaction: the blob is recorded against its asset — where
 //!    the asset's next sequence number is minted when the change is one a client can observe
-//! — and the custody receipt, the server's signed admission of what it accepted
-//!, is signed and logged with it.
+//!    — and the custody receipt, the server's signed admission of what it accepted, is signed
+//!    and logged with it.
 //! 7. **Ledger the index write**: a [`LedgerEvent::Indexed`] entry carries the sequence number
 //!    and the receipt step 6 minted — or, when the index refused the write, a
 //!    [`LedgerEvent::Refused`] entry resolves the custody entry so a rebuild does not replay it.

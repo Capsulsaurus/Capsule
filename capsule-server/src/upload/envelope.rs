@@ -84,8 +84,7 @@ pub struct ManifestEnvelope {
     pub key_mode: String,
     /// The content hash of the bundle's metadata blob, when the manifest commits to one.
     pub metadata_blob_hash: Option<String>,
-    /// The content hash of the bundle's **original** blob, when the manifest commits to one
-    ///.
+    /// The content hash of the bundle's **original** blob, when the manifest commits to one.
     ///
     /// The manifest's own `ciphertext_hash`, under a name that cannot be confused with
     /// [`Self::ciphertext_hash`]'s per-session meaning. Optional on the wire and **required on a

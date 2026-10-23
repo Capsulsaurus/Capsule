@@ -429,8 +429,7 @@ async fn rows_resolve_to_blobs(
     }
 }
 
-/// Check 5: the facts the index mirrors out of the signed manifest still agree with it
-///.
+/// Check 5: the facts the index mirrors out of the signed manifest still agree with it.
 ///
 /// # The decision this slice needed, and the answer
 ///

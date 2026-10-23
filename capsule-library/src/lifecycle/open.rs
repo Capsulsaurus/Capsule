@@ -33,8 +33,8 @@ const DEVICE_ADDED_AT: &str = "2020-01-01T00:00:00Z";
 /// The signed device directory's file under `{root}/.library/` (#562).
 const DIRECTORY_FILE: &str = "directory.cbor";
 
-/// A request to bind this workspace's **device encryption key** to a per-platform secure element
-///: the P-256 key-agreement element itself plus the alias its key is held under.
+/// A request to bind this workspace's **device encryption key** to a per-platform secure element:
+/// the P-256 key-agreement element itself plus the alias its key is held under.
 ///
 /// Supplying one makes the DEK's classical half hardware-held for the life of the account — see
 /// [`DeviceDek`](capsule_core::crypto::keys::DeviceDek). Omitting it keeps the software X-Wing DEK,

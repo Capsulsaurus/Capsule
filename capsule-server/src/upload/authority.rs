@@ -137,8 +137,8 @@ pub trait WriteAuthority: fmt::Debug + Send + Sync {
     ///
     /// `None` is a refusal, not an absence to work around: an upload whose manifest names a
     /// device the directory does not carry is invariant 7's rejecting case. An adapter for an
-    /// account with no directory yet may answer with the documented account-creation floor
-    ///, which is a decision about *that adapter*, not about this contract.
+    /// account with no directory yet may answer with the documented account-creation floor, which
+    /// is a decision about *that adapter*, not about this contract.
     fn device_added_at<'a>(
         &'a self,
         user: &'a UserId,

@@ -74,8 +74,7 @@ pub enum TokenKind {
     Access,
     /// Presented in the body of a refresh, and nowhere else.
     Refresh,
-    /// Carries a **half-finished** sign-in: the password verified and a second factor has not
-    ///.
+    /// Carries a **half-finished** sign-in: the password verified and a second factor has not.
     ///
     /// It authenticates nothing. Its `sid` names a [`ChallengeId`] rather than a session,
     /// because no session exists until the second factor lands — which is exactly why it is a

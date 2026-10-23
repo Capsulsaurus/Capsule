@@ -663,8 +663,8 @@ pub struct AuthClient {
     rest: Arc<rest::Client>,
     clock: Arc<dyn Clock>,
     refresh_skew_secs: i64,
-    /// The advisory device-cohort hash to ride every session-creation request
-    ///. `None` ⇒ nothing is sent — the server behaves identically
+    /// The advisory device-cohort hash to ride every session-creation request. `None` ⇒ nothing is
+    /// sent — the server behaves identically
     /// (the cohort hash is advisory only). Computed by the platform app from its
     /// primary identifier via [`crate::cohort`] and set with
     /// [`with_cohort_hash`](AuthClient::with_cohort_hash).
