@@ -1044,8 +1044,15 @@ impl AssetIndex for RacesTheListing {
 async fn a_restore_between_listing_and_purge_keeps_its_bytes() {
     let h = Harness::new();
     let held = h.publish("raced", b"restored while the purge ran").await;
-    h.delete("raced", Some(Timestamp::UNIX_EPOCH), 1).await;
-    h.clock.advance(days(1));
+    // The window closes an hour from now. The restore below is accepted (its `at` stamped)
+    // inside it, and reaches the index only after a purge a day later has listed the row: the
+    // one restore that can race a purge, since one accepted after the floor is refused.
+    h.delete(
+        "raced",
+        Some(h.clock.now() + SignedDuration::from_hours(1)),
+        1,
+    )
+    .await;
 
     let id = AssetId::new("raced");
     let before = h.index.read(&id).await.expect("read").expect("row");
@@ -1063,6 +1070,7 @@ async fn a_restore_between_listing_and_purge_keeps_its_bytes() {
         retention_until: None,
         at: h.clock.now(),
     };
+    h.clock.advance(days(1));
     let racing = Arc::new(RacesTheListing::new(h.index.clone()));
     *racing
         .restore
@@ -1100,6 +1108,61 @@ async fn a_restore_between_listing_and_purge_keeps_its_bytes() {
         h.blobs.stat(&held).await.expect("stat").is_some(),
         "the restored asset's bytes are still on disk"
     );
+}
+
+#[tokio::test]
+async fn a_restore_after_the_window_is_refused_and_the_purge_proceeds() {
+    let h = Harness::new();
+    let held = h.publish("late", b"restored too late").await;
+    h.delete(
+        "late",
+        Some(h.clock.now() + SignedDuration::from_hours(1)),
+        1,
+    )
+    .await;
+    h.clock.advance(days(1));
+
+    let id = AssetId::new("late");
+    let before = h.index.read(&id).await.expect("read").expect("row");
+    let outcome = h
+        .index
+        .apply_op(LifecycleOp {
+            asset_id: id.clone(),
+            owner_id: OwnerId::new("gc-owner"),
+            album_id: AlbumId::new("gc-album"),
+            action: OpAction::TrashRestore,
+            manifest_hash: Hash32([2; 32]),
+            prior_provenance_hash: before.chain_head,
+            amk_version: 1,
+            provenance: h.store(b"late-restore-manifest").await,
+            original: None,
+            metadata: None,
+            retention_until: None,
+            at: h.clock.now(),
+        })
+        .await
+        .expect("the index answers");
+    assert!(
+        matches!(outcome, OpOutcome::RetentionElapsed { .. }),
+        "a restore the server accepts after the floor is refused: {outcome:?}"
+    );
+    assert_eq!(
+        h.index.read(&id).await.expect("read").expect("row"),
+        before,
+        "the refusal wrote nothing"
+    );
+
+    let report = purge_expired(&h.context, Mode::Apply, 10)
+        .await
+        .expect("a pass");
+    assert_eq!(
+        report.purged,
+        vec![id.clone()],
+        "the refused restore left the tombstone to its purge"
+    );
+    let row = h.index.read(&id).await.expect("read").expect("row");
+    assert_eq!(row.state, crate::index::AssetState::Tombstoned);
+    assert!(!row.blobs.iter().any(|blob| blob.address == held));
 }
 
 #[tokio::test]

@@ -1840,12 +1840,16 @@ pub async fn purging_drops_the_references_and_keeps_the_tombstone(index: &dyn As
 /// The worker lists tombstones from a snapshot and purges them one at a time. A restore that
 /// commits in between must keep its bytes, so the index — not the listing — decides; and a
 /// tombstone whose signed floor is absent or not yet reached is never purged at all.
+///
+/// The restore that races is one the server accepted *before* the window closed (its `at` is
+/// inside the floor), applied after the listing of a purge whose `now` is past it: the only
+/// restore that can race a purge, since one accepted later is refused outright.
 pub async fn a_purge_rechecks_state_and_retention_under_the_lock(index: &dyn AssetIndex) {
     let (asset, _) = publish(index, "purge-race", 1).await;
     let head = head_of(index, &asset).await;
     let mut delete = op("purge-race", 1, OpAction::Delete, head, manifest(91));
     delete.provenance = address("purge-race-delete");
-    delete.retention_until = Some(Timestamp::UNIX_EPOCH);
+    delete.retention_until = Some(Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_hours(1));
     let deleted = ok(index.apply_op(delete).await, "delete");
     assert!(matches!(deleted, OpOutcome::Applied { .. }), "{deleted:?}");
 
@@ -1942,7 +1946,8 @@ pub async fn a_restore_clears_the_retention_floor(index: &dyn AssetIndex) {
         .expect("the row exists")
         .chain_head;
     let mut delete = op("restore-floor", 1, OpAction::Delete, head, manifest(22));
-    delete.retention_until = Some(Timestamp::UNIX_EPOCH);
+    // Inside the window: the restore below is accepted at the epoch, an hour before it closes.
+    delete.retention_until = Some(Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_hours(1));
     ok(index.apply_op(delete).await, "delete");
 
     let head = ok(index.read(&asset).await, "read")
@@ -1966,6 +1971,176 @@ pub async fn a_restore_clears_the_retention_floor(index: &dyn AssetIndex) {
         row.retention_until, None,
         "an asset back in the live set has no window left to run out"
     );
+}
+
+/// A `trash-restore` the server accepts at or after the tombstone's signed retention floor is
+/// refused, before and after a purge, writing nothing and minting no number.
+///
+/// The window is the one [`super::purge_refusal`] closes: at the floor exactly, a purge is
+/// admissible and a restore is not, so no instant admits both. A restore applied inside the
+/// window and retried after it is still a replay, a tombstone with no floor stays restorable,
+/// and an op that is not a restore is not refused for the window.
+pub async fn a_restore_after_the_retention_window_is_refused(index: &dyn AssetIndex) {
+    let floor = Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_hours(1);
+    let after_floor = floor + jiff::SignedDuration::from_hours(1);
+
+    let (asset, _) = publish(index, "restore-late", 1).await;
+    let mut delete = op(
+        "restore-late",
+        1,
+        OpAction::Delete,
+        head_of(index, &asset).await,
+        manifest(101),
+    );
+    delete.provenance = address("restore-late-delete");
+    delete.retention_until = Some(floor);
+    let deleted = ok(index.apply_op(delete).await, "delete");
+    assert!(matches!(deleted, OpOutcome::Applied { .. }), "{deleted:?}");
+    let before = ok(index.read(&asset).await, "read").expect("the row exists");
+
+    // At the floor exactly: the window has closed.
+    let mut late = op(
+        "restore-late",
+        1,
+        OpAction::TrashRestore,
+        before.chain_head,
+        manifest(102),
+    );
+    late.provenance = address("restore-late-restore");
+    late.at = floor;
+    assert_eq!(
+        ok(index.apply_op(late.clone()).await, "restore at the floor"),
+        OpOutcome::RetentionElapsed {
+            retention_until: floor
+        },
+    );
+    assert_eq!(
+        ok(index.read(&asset).await, "read").expect("the row exists"),
+        before,
+        "a refused restore writes nothing: the row stays a tombstone with its floor, its head \
+         and its number",
+    );
+    // Recorded nowhere, so resending it is refused again rather than answered as a replay.
+    assert_eq!(
+        ok(index.apply_op(late).await, "resend the late restore"),
+        OpOutcome::RetentionElapsed {
+            retention_until: floor
+        },
+    );
+
+    // An op that is not a restore is not the window's to refuse, and the number it takes is
+    // the one after the delete's: the refusals minted none.
+    let mut touch = op(
+        "restore-late",
+        1,
+        OpAction::MetadataUpdate,
+        before.chain_head,
+        manifest(103),
+    );
+    touch.provenance = address("restore-late-touch");
+    touch.at = after_floor;
+    let OpOutcome::Applied { row, sync_seq } = ok(
+        index.apply_op(touch).await,
+        "metadata update past the floor",
+    ) else {
+        panic!("a metadata update to a tombstone is not refused for the window");
+    };
+    assert_eq!(row.state, AssetState::Tombstoned);
+    assert_eq!(row.retention_until, Some(floor));
+    assert_eq!(
+        Some(sync_seq),
+        before.sync_seq.map(|seq| seq + 1),
+        "no refused restore consumed a sequence number",
+    );
+
+    // After the purge commits, a restore is refused the same way and cannot revive a row whose
+    // references are gone.
+    assert!(matches!(
+        ok(index.purge(&asset, floor).await, "purge at the floor"),
+        PurgeOutcome::Purged(_)
+    ));
+    let purged = ok(index.read(&asset).await, "read").expect("the tombstone stays");
+    let mut revive = op(
+        "restore-late",
+        1,
+        OpAction::TrashRestore,
+        purged.chain_head,
+        manifest(104),
+    );
+    revive.provenance = address("restore-late-revive");
+    revive.at = after_floor;
+    assert_eq!(
+        ok(index.apply_op(revive).await, "restore a purged row"),
+        OpOutcome::RetentionElapsed {
+            retention_until: floor
+        },
+    );
+    let still = ok(index.read(&asset).await, "read").expect("the tombstone stays");
+    assert_eq!(still, purged, "a purged asset stays purged");
+    assert_eq!(still.state, AssetState::Tombstoned);
+    assert!(still.blobs.is_empty());
+
+    // A restore applied inside the window, retried after it closed, is the same op arriving
+    // twice: a replay, not a refusal.
+    let (inside, _) = publish(index, "restore-inside", 1).await;
+    let mut delete = op(
+        "restore-inside",
+        1,
+        OpAction::Delete,
+        head_of(index, &inside).await,
+        manifest(105),
+    );
+    delete.provenance = address("restore-inside-delete");
+    delete.retention_until = Some(floor);
+    let deleted = ok(index.apply_op(delete).await, "delete");
+    assert!(matches!(deleted, OpOutcome::Applied { .. }), "{deleted:?}");
+    let mut restore = op(
+        "restore-inside",
+        1,
+        OpAction::TrashRestore,
+        head_of(index, &inside).await,
+        manifest(106),
+    );
+    restore.provenance = address("restore-inside-restore");
+    let OpOutcome::Applied { sync_seq, .. } =
+        ok(index.apply_op(restore.clone()).await, "restore inside")
+    else {
+        panic!("a restore inside the window is applied");
+    };
+    restore.at = after_floor;
+    assert_eq!(
+        ok(index.apply_op(restore).await, "retry after the floor"),
+        OpOutcome::Replayed { sync_seq },
+    );
+
+    // A tombstone with no floor has no window to close.
+    let (floorless, _) = publish(index, "restore-floorless", 1).await;
+    let mut delete = op(
+        "restore-floorless",
+        1,
+        OpAction::Delete,
+        head_of(index, &floorless).await,
+        manifest(107),
+    );
+    delete.provenance = address("restore-floorless-delete");
+    let deleted = ok(index.apply_op(delete).await, "delete without a floor");
+    assert!(matches!(deleted, OpOutcome::Applied { .. }), "{deleted:?}");
+    let mut restore = op(
+        "restore-floorless",
+        1,
+        OpAction::TrashRestore,
+        head_of(index, &floorless).await,
+        manifest(108),
+    );
+    restore.provenance = address("restore-floorless-restore");
+    restore.at = after_floor;
+    assert!(matches!(
+        ok(
+            index.apply_op(restore).await,
+            "restore a floorless tombstone"
+        ),
+        OpOutcome::Applied { .. }
+    ));
 }
 
 /// Run every case against `index`, in order.
@@ -2814,6 +2989,7 @@ pub async fn run_all(index: &dyn AssetIndex) {
     purging_drops_the_references_and_keeps_the_tombstone(index).await;
     a_purge_rechecks_state_and_retention_under_the_lock(index).await;
     a_restore_clears_the_retention_floor(index).await;
+    a_restore_after_the_retention_window_is_refused(index).await;
     a_serving_hold_is_placed_reported_and_lifted(index).await;
     holding_an_unknown_asset_is_not_found(index).await;
     the_row_walk_covers_every_state_and_resumes(index).await;
