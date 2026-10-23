@@ -1,0 +1,22 @@
+---
+source: capsule-cli/src/tui/share/tests.rs
+expression: draw(&state)
+---
+Capsule · Share links · Signed in
+┌Share links───────────────────────────────────────────────────────────────────────────────────────┐
+│Revoke a link by its opaque id, the 32 hex characters after /s/.                                  │
+│                                                                                                  │
+│› Opaque id  ▏                                                                                    │
+│                                                                                                  │
+│Scriptable: `capsule share create … --json`, `capsule share revoke ID --json`.                    │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+Enter Submit  Tab Next field  Esc Stop editing

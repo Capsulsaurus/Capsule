@@ -1,0 +1,18 @@
+---
+source: capsule-cli/src/tui/sync/tests.rs
+expression: draw(&state)
+---
+Capsule · Sync · Signed in
+┌Sync──────────────────────────────────────────────────────────────────────────┐
+│Bring the albums and assets the server lists into this device's local store.  │
+│                                                                              │
+│Syncing…                                                                      │
+│                                                                              │
+│Scriptable: `capsule sync --json` (add `--force` to start over).              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+s Sync now  f Sync from the start  q Quit  ? Show the key bindings  Esc Back to

@@ -1,0 +1,22 @@
+---
+source: capsule-cli/src/tui/share/tests.rs
+expression: frame
+---
+Capsule · Share links · Signed in
+┌Share links───────────────────────────────────────────────────────────────────────────────────────┐
+│Issue a view-only link over an album or one asset. Every covered original must already be on the  │
+│server (`capsule push`).                                                                          │
+│                                                                                                  │
+│Share link issued for 3 assets.                                                                   │
+│Anyone with this URL can view what it covers:                                                     │
+│http://127.0.0.1:3000/s/0123456789abcdef0123456789abcdef#fragment-secret                          │
+│The link is passphrase-protected: send the passphrase separately from the URL.                    │
+│The link stops opening at 2026-12-31T23:59:59Z.                                                   │
+│To revoke it: x, then Enter (or `capsule share revoke 0123456789abcdef0123456789abcdef`).         │
+│Scriptable: `capsule share create … --json`, `capsule share revoke ID --json`.                    │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+c Issue a link  x Revoke a link  q Quit  ? Show the key bindings  Esc Back to the previous screen

@@ -4,13 +4,30 @@ expression: frame
 ---
 Capsule · Key bindings · Signed out
 ┌Key bindings──────────────────────────────────────────────────────────────────┐
-│Key      Action                                                   Where       │
-│q        Quit                                                     everywhere  │
-│Ctrl-C   Quit                                                     everywhere  │
-│?        Show the key bindings                                    everywhere  │
-│Esc      Back to the previous screen                              everywhere  │
-│r        Reload the session status                                Home        │
-│                                                                              │
+│Key        Action                                                Where        │
+│q          Quit                                                  everywhere   │
+│Ctrl-C     Quit                                                  everywhere   │
+│?          Show the key bindings                                 everywhere   │
+│Esc        Back to the previous screen                           everywhere   │
+│r          Reload the session status                             Home         │
+│a          Account                                               Home         │
+│s          Sync                                                  Home         │
+│d          Restore originals                                     Home         │
+│l          Share links                                           Home         │
+│l          Sign in                                               Account      │
+│o          Sign out                                              Account      │
+│s          Sync now                                              Sync         │
+│f          Sync from the start                                   Sync         │
+│e          Fill in and run a restore                             Restore      │
+│c          Issue a link                                          Share links  │
+│x          Revoke a link                                         Share links  │
+│Enter      Submit                                                while typing │
+│Tab        Next field                                            while typing │
+│Down       Next field                                            while typing │
+│Shift-Tab  Previous field                                        while typing │
+│Up         Previous field                                        while typing │
+│Backspace  Delete a character                                    while typing │
+│Esc        Stop editing                                          while typing │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
 q Quit  Esc Back to the previous screen

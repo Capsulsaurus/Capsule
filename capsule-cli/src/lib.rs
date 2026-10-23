@@ -545,15 +545,7 @@ async fn dispatch(command: Commands) -> Result<()> {
                 (None, Some(asset)) => restore::RestoreScope::Asset(asset),
                 (None, None) => restore::RestoreScope::Library,
             };
-            let options = restore::RestoreOptions {
-                scope,
-                out,
-                // Sampled through the same port as a push. A restore is a foreground request
-                // for the originals, so the class sizes its range windows but never defers it.
-                connection: cache::transfer_plan(&DesktopConnectionClass::new()).class,
-                range_window: restore::RESTORE_RANGE_WINDOW,
-            };
-            restore_workspace(&ws, &options, json).await?;
+            restore_workspace(&ws, &restore_options(scope, out), json).await?;
         }
 
         // ── Verify ────────────────────────────────────────────────────────
@@ -1533,6 +1525,12 @@ fn open_workspace_quiet(library: &Path, passphrase_stdin: bool) -> Result<Worksp
         passphrase_stdin.then_some("--passphrase-stdin"),
         "Library passphrase".to_string(),
     )?;
+    open_workspace_with(library, &passphrase)
+}
+
+/// [`open_workspace_quiet`] with the passphrase already in hand: the TUI's forms collect it
+/// themselves.
+fn open_workspace_with(library: &Path, passphrase: &str) -> Result<Workspace> {
     let mut ws = as_capsule_cli(
         Workspace::open(library, passphrase.as_bytes(), DeviceTier::Normal.params())
             .map_err(|e| eyre!("Failed to open signed workspace: {e}"))?,
@@ -1541,6 +1539,18 @@ fn open_workspace_quiet(library: &Path, passphrase_stdin: bool) -> Result<Worksp
     ws.ensure_album(default_album, "Imports")
         .map_err(|e| eyre!("Failed to resolve the default album: {e}"))?;
     Ok(ws)
+}
+
+/// How a restore of `scope` into `out` runs, on the connection class the desktop source reports
+/// now. A restore is a foreground request for the originals, so the class sizes its range
+/// windows but never defers it.
+fn restore_options(scope: restore::RestoreScope, out: PathBuf) -> restore::RestoreOptions {
+    restore::RestoreOptions {
+        scope,
+        out,
+        connection: cache::transfer_plan(&DesktopConnectionClass::new()).class,
+        range_window: restore::RESTORE_RANGE_WINDOW,
+    }
 }
 
 /// The push configuration behind the CLI's three push flags, on the connection class the

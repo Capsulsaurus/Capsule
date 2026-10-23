@@ -1,0 +1,18 @@
+---
+source: capsule-cli/src/tui/auth/tests.rs
+expression: draw(&on_auth())
+---
+Capsule · Account · Signed out
+┌Account───────────────────────────────────────────────────────────────────────┐
+│Not signed in.                                                                │
+│                                                                              │
+│Identity provider: `capsule auth login --oidc` (add `--device` to approve on  │
+│another device). New account: `capsule auth register`. Scriptable: `capsule   │
+│auth status --json`.                                                          │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+l Sign in  o Sign out  q Quit  ? Show the key bindings  Esc Back to the previous

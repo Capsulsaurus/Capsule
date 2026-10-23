@@ -1,0 +1,22 @@
+---
+source: capsule-cli/src/tui/restore/tests.rs
+expression: draw(&state)
+---
+Capsule · Restore · Signed in
+┌Restore───────────────────────────────────────────────────────────────────────┐
+│Download originals from the server, verified byte for byte, into a directory. │
+│An interrupted restore resumes where it stopped.                              │
+│                                                                              │
+│› Library              /photos/lib▏                                           │
+│  Output directory                                                            │
+│  Library passphrase                                                          │
+│  Album id (optional)                                                         │
+│  Asset id (optional)                                                         │
+│Enter the library and the output directory.                                   │
+│                                                                              │
+│Scriptable: `capsule restore --library PATH --out DIR --json`.                │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+Enter Submit  Tab Next field  Esc Stop editing

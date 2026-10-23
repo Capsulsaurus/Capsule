@@ -127,6 +127,106 @@ async fn an_effect_outcome_dispatched_while_on_help_lands_under_it() {
     assert!(d.frame().contains("Signed in"), "{}", d.frame());
 }
 
+/// Signs in only with an authenticator code, and counts the sign-ins asked for.
+struct TwoFactor {
+    logins: AtomicUsize,
+}
+
+impl Ports for TwoFactor {
+    async fn session_summary(&self) -> Result<SessionSummary, String> {
+        Ok(if self.logins.load(Ordering::SeqCst) == 0 {
+            SessionSummary::SignedOut
+        } else {
+            SessionSummary::SignedIn {
+                access_token_fresh: true,
+            }
+        })
+    }
+
+    async fn login(
+        &self,
+        email: String,
+        password: crate::tui::form::Secret,
+    ) -> Result<crate::tui::auth::LoginResult, String> {
+        assert_eq!(
+            (email.as_str(), password.expose()),
+            ("me@example.com", "pw")
+        );
+        Ok(crate::tui::auth::LoginResult::SecondFactor {
+            mfa_token: crate::tui::form::Secret::new("challenge"),
+        })
+    }
+
+    async fn verify_second_factor(
+        &self,
+        mfa_token: crate::tui::form::Secret,
+        code: String,
+    ) -> Result<(), String> {
+        assert_eq!((mfa_token.expose(), code.as_str()), ("challenge", "123456"));
+        self.logins.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+/// The whole sign-in, key by key: open the account screen, type the credentials (a `q` in the
+/// password is text, not quit), answer the second factor, and land signed in.
+#[tokio::test]
+async fn signing_in_with_a_second_factor_key_by_key() {
+    let mut d = Driver::new(
+        TwoFactor {
+            logins: AtomicUsize::new(0),
+        },
+        80,
+        16,
+    );
+    d.settle().await;
+    d.type_keys("al");
+    assert_eq!(d.state().screen(), Screen::Auth);
+    assert!(d.state().is_editing());
+    d.type_keys("me@example.com");
+    d.press(key(KeyCode::Tab));
+    d.type_keys("pq");
+    d.press(key(KeyCode::Backspace));
+    d.type_keys("w");
+    assert!(d.state().is_running(), "q in a field is text");
+    assert!(!d.frame().contains("pw"), "{}", d.frame());
+    d.press(key(KeyCode::Enter));
+    assert!(d.frame().contains("Signing in…"), "{}", d.frame());
+    d.settle().await;
+    assert!(d.frame().contains("Authenticator code"), "{}", d.frame());
+    d.type_keys("123456");
+    d.press(key(KeyCode::Enter));
+    d.settle().await;
+    assert_eq!(
+        d.state().session(),
+        &Loadable::Ready(SessionSummary::SignedIn {
+            access_token_fresh: true
+        })
+    );
+    assert!(d.frame().contains("Signed in."), "{}", d.frame());
+    // Not typing any more: Esc goes back, q quits.
+    d.press(key(KeyCode::Esc));
+    assert_eq!(d.state().screen(), Screen::Home);
+    d.type_keys("q");
+    assert!(!d.state().is_running());
+}
+
+/// A sync run from the sync screen, with the default port answering that it is not offered:
+/// the failure is shown, not waited on.
+#[tokio::test]
+async fn a_port_a_double_left_out_shows_as_a_failure() {
+    let mut d = driver(Ok(SessionSummary::SignedOut));
+    d.settle().await;
+    d.type_keys("ss");
+    assert!(d.frame().contains("Syncing…"), "{}", d.frame());
+    d.settle().await;
+    assert!(
+        d.frame().contains(crate::tui::ports::NOT_OFFERED),
+        "{}",
+        d.frame()
+    );
+}
+
 #[test]
 fn frame_text_trims_each_row() {
     let buffer = Buffer::with_lines(["ab  ", "    "]);
