@@ -16,7 +16,7 @@ use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
 use super::form::{Field, Form, FormKey, FormOutcome, Secret};
-use super::state::{Effect, Loadable};
+use super::state::{Effect, Loadable, ResolvedLibrary};
 use crate::cli::ImportProviderArg;
 use crate::import_report::{FileImportStatus, ImportReport, summary_line};
 
@@ -140,6 +140,7 @@ pub struct ImportScreen {
     run: Option<Loadable<ImportReport>>,
     /// The library the latest run imports into.
     run_library: Option<PathBuf>,
+    resolved: Option<ResolvedLibrary>,
 }
 
 impl Default for ImportScreen {
@@ -157,6 +158,7 @@ impl Default for ImportScreen {
             invalid: None,
             run: None,
             run_library: None,
+            resolved: None,
         }
     }
 }
@@ -209,6 +211,19 @@ impl ImportScreen {
     #[must_use]
     pub fn library(&self) -> &str {
         self.form.value(LIBRARY)
+    }
+
+    /// Record the canonical form of the library typed now, made by the caller outside the
+    /// reducer; the next submit compares it, not the typed text.
+    pub(super) fn resolve_library(&mut self, canonicalize: impl Fn(&Path) -> PathBuf) {
+        let typed = self.form.value(LIBRARY);
+        if !typed.is_empty() {
+            self.resolved = Some(ResolvedLibrary::new(typed, canonicalize(Path::new(typed))));
+        }
+    }
+
+    fn library_identity(&self) -> PathBuf {
+        ResolvedLibrary::identity(self.resolved.as_ref(), self.form.value(LIBRARY))
     }
 
     fn running(&self) -> bool {
@@ -293,7 +308,9 @@ impl ImportScreen {
                     Vec::new()
                 }
                 FormOutcome::Submitted => match self.request() {
-                    Ok(request) if pushing.is_some_and(|pushing| pushing == request.library) => {
+                    Ok(request)
+                        if pushing.is_some_and(|pushing| pushing == self.library_identity()) =>
+                    {
                         tracing::warn!(
                             target: "capsule_cli::tui",
                             library = %request.library.display(),
@@ -316,7 +333,7 @@ impl ImportScreen {
                         self.form.clear_secrets();
                         self.editing = None;
                         self.run = Some(Loadable::Loading);
-                        self.run_library = Some(request.library.clone());
+                        self.run_library = Some(self.library_identity());
                         vec![Effect::Import(ImportEffect::Run(request))]
                     }
                     Err(reason) => {

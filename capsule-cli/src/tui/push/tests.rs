@@ -686,3 +686,85 @@ fn a_retry_to_a_library_an_import_is_writing_is_refused() {
     assert!(!effects.is_empty());
     assert_eq!(retry.running_library(), Some(Path::new("/other")));
 }
+
+/// A stand-in for the filesystem: `./lib`, `lib` and the absolute spelling all name one library.
+fn alias_canonical(path: &Path) -> PathBuf {
+    match path.to_str() {
+        Some("./photos/lib" | "photos/lib" | "/photos/lib") => PathBuf::from("/photos/lib"),
+        _ => path.to_path_buf(),
+    }
+}
+
+/// Apply `action` the way the event loop does: resolve the libraries, then reduce.
+fn step(state: &mut AppState, action: Action) {
+    state.resolve_libraries(&action, alias_canonical);
+    state.update(action);
+}
+
+fn type_text(state: &mut AppState, text: &str) {
+    for c in text.chars() {
+        step(state, Action::Form(FormKey::Char(c)));
+    }
+}
+
+#[test]
+fn two_spellings_of_one_library_refuse_each_other_across_screens() {
+    let mut state = on_push();
+    state.update(Action::Open(Screen::Import));
+    step(&mut state, Action::Import(ImportAction::AddSource));
+    type_text(&mut state, "/a");
+    step(&mut state, Action::Form(FormKey::Submit));
+    step(&mut state, Action::Import(ImportAction::Edit));
+    type_text(&mut state, "./photos/lib");
+    step(&mut state, Action::Form(FormKey::Next));
+    type_text(&mut state, "pw");
+    step(&mut state, Action::Form(FormKey::Submit));
+    assert!(state.import().running_library().is_some());
+
+    // A push typed with another spelling of that library is refused.
+    state.update(Action::Open(Screen::Push));
+    step(&mut state, Action::Push(PushAction::Edit));
+    type_text(&mut state, "/photos/lib");
+    step(&mut state, Action::Form(FormKey::Next));
+    type_text(&mut state, "pw");
+    step(&mut state, Action::Form(FormKey::Submit));
+    assert_eq!(state.push().running_library(), None, "no push started");
+    assert!(state.push().notice().is_some_and(|n| n.contains("import")));
+
+    // Fixing the spelling to a different library lets it run.
+    step(&mut state, Action::Form(FormKey::Previous));
+    for _ in 0.."/photos/lib".len() {
+        step(&mut state, Action::Form(FormKey::Backspace));
+    }
+    type_text(&mut state, "/elsewhere");
+    step(&mut state, Action::Form(FormKey::Submit));
+    assert_eq!(
+        state.push().running_library(),
+        Some(Path::new("/elsewhere"))
+    );
+}
+
+#[test]
+fn an_import_with_another_spelling_of_the_library_a_push_writes_is_refused() {
+    let mut state = on_push();
+    step(&mut state, Action::Push(PushAction::Edit));
+    type_text(&mut state, "photos/lib");
+    step(&mut state, Action::Form(FormKey::Next));
+    type_text(&mut state, "pw");
+    step(&mut state, Action::Form(FormKey::Submit));
+    assert_eq!(
+        state.push().running_library(),
+        Some(Path::new("/photos/lib"))
+    );
+
+    state.update(Action::Open(Screen::Import));
+    step(&mut state, Action::Import(ImportAction::AddSource));
+    type_text(&mut state, "/a");
+    step(&mut state, Action::Form(FormKey::Submit));
+    step(&mut state, Action::Import(ImportAction::Edit));
+    type_text(&mut state, "./photos/lib");
+    step(&mut state, Action::Form(FormKey::Next));
+    type_text(&mut state, "pw");
+    step(&mut state, Action::Form(FormKey::Submit));
+    assert_eq!(state.import().running_library(), None, "no import started");
+}

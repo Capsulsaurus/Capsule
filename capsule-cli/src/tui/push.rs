@@ -29,7 +29,7 @@ use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use uuid::Uuid;
 
 use super::form::{Field, Form, FormKey, FormOutcome, Secret};
-use super::state::{Effect, Loadable};
+use super::state::{Effect, Loadable, ResolvedLibrary};
 use crate::remote::{AssetProgress, AssetPushOutcome, AssetPushStatus, PushSummary, custody_line};
 
 /// The most asset rows the screen draws; the rest are counted.
@@ -203,6 +203,7 @@ pub struct PushScreen {
     run: Option<Loadable<PushSummary>>,
     /// The library the latest run pushes.
     run_library: Option<PathBuf>,
+    resolved: Option<ResolvedLibrary>,
     /// The id of the latest run started.
     run_id: u64,
     /// Whether a [`PushEffect::Watch`] is out.
@@ -226,6 +227,7 @@ impl Default for PushScreen {
             notice: None,
             run: None,
             run_library: None,
+            resolved: None,
             run_id: 0,
             watching: false,
             lagged: 0,
@@ -299,6 +301,15 @@ impl PushScreen {
     pub fn offer_library(&mut self, library: &str) {
         if !self.editing && self.form.value(LIBRARY).is_empty() {
             self.form.set(LIBRARY, library);
+        }
+    }
+
+    /// Record the canonical form of the library typed now, made by the caller outside the
+    /// reducer; the next submit compares it, not the typed text.
+    pub(super) fn resolve_library(&mut self, canonicalize: impl Fn(&Path) -> PathBuf) {
+        let typed = self.form.value(LIBRARY);
+        if !typed.is_empty() {
+            self.resolved = Some(ResolvedLibrary::new(typed, canonicalize(Path::new(typed))));
         }
     }
 
@@ -417,7 +428,8 @@ impl PushScreen {
             self.notice = Some("Enter the library passphrase.".to_owned());
             return Vec::new();
         }
-        if importing.is_some_and(|importing| importing == Path::new(&library)) {
+        let identity = ResolvedLibrary::identity(self.resolved.as_ref(), library);
+        if importing.is_some_and(|importing| importing == identity) {
             tracing::warn!(
                 target: "capsule_cli::tui",
                 library = %library,
@@ -429,7 +441,7 @@ impl PushScreen {
             );
             return Vec::new();
         }
-        self.run_library = Some(PathBuf::from(&library));
+        self.run_library = Some(identity);
         self.run_id += 1;
         let assets = self.retrying.take();
         let request = PushRequest {

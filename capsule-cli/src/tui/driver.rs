@@ -15,7 +15,7 @@ use ratatui::buffer::Buffer;
 
 use super::keymap::action_for_key;
 use super::ports::{Ports, perform};
-use super::state::{Action, AppState, Effect};
+use super::state::{Action, AppState, Effect, canonical_library};
 use super::view::render;
 
 /// The TUI driven by a script instead of a terminal.
@@ -98,6 +98,7 @@ impl<P: Ports> Driver<P> {
     }
 
     fn apply(&mut self, action: Action) {
+        self.state.resolve_libraries(&action, canonical_library);
         let effects = self.state.update(action);
         self.pending.extend(effects);
     }

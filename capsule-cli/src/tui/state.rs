@@ -20,6 +20,8 @@
 //! - A screen that takes text exposes it as a [`Form`](super::form::Form); while one is being
 //!   edited, [`AppState::is_editing`] is true and keys arrive as [`Action::Form`].
 
+use std::path::{Path, PathBuf};
+
 use super::auth::{AuthAction, AuthEffect, AuthScreen};
 use super::form::FormKey;
 use super::import::{ImportAction, ImportEffect, ImportScreen};
@@ -28,6 +30,45 @@ use super::restore::{RestoreAction, RestoreEffect, RestoreScreen};
 use super::share::{ShareAction, ShareEffect, ShareScreen};
 use super::sync::{SyncAction, SyncEffect, SyncScreen};
 use super::transfer::{Stamped, TransferBoard};
+
+/// A library path as typed, with the canonical path it was resolved to outside the reducer.
+///
+/// The import and push screens refuse each other on the same library, and two spellings
+/// (`./lib`, `lib`, an absolute path, a symlink) name one library. The reducer cannot touch the
+/// filesystem, so the resolution is made by [`AppState::resolve_libraries`] before the submit
+/// reaches it and handed in as this value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ResolvedLibrary {
+    typed: String,
+    canonical: PathBuf,
+}
+
+impl ResolvedLibrary {
+    pub(super) fn new(typed: &str, canonical: PathBuf) -> Self {
+        Self {
+            typed: typed.to_owned(),
+            canonical,
+        }
+    }
+
+    /// The path `typed` names for comparison: the canonical form when it was resolved for exactly
+    /// this text, else the text itself.
+    pub(super) fn identity(resolved: Option<&Self>, typed: &str) -> PathBuf {
+        match resolved {
+            Some(resolved) if resolved.typed == typed => resolved.canonical.clone(),
+            _ => PathBuf::from(typed),
+        }
+    }
+}
+
+/// The canonical form of `path`: symlinks and `.`/`..` resolved when it exists, else made
+/// absolute, else the path as given.
+#[must_use]
+pub fn canonical_library(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path)
+        .or_else(|_| std::path::absolute(path))
+        .unwrap_or_else(|_| path.to_path_buf())
+}
 
 /// One screen on the navigation stack.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -199,6 +240,20 @@ impl AppState {
         };
         tracing::debug!(target: "capsule_cli::tui", "TUI state initialised");
         (state, vec![Effect::LoadSession])
+    }
+
+    /// Resolve, outside the reducer, the library a submit is about to use, so the cross-screen
+    /// guard compares canonical paths. Call it with each action before [`update`](Self::update);
+    /// it only acts on a form submit on the import or push screen.
+    pub fn resolve_libraries(&mut self, action: &Action, canonicalize: impl Fn(&Path) -> PathBuf) {
+        if !matches!(action, Action::Form(FormKey::Submit)) {
+            return;
+        }
+        match self.screen() {
+            Screen::Import => self.import.resolve_library(canonicalize),
+            Screen::Push => self.push.resolve_library(canonicalize),
+            _ => {}
+        }
     }
 
     /// The screen on top of the stack: the one drawn.
