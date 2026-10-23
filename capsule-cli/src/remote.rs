@@ -1460,14 +1460,14 @@ pub async fn push(
     push_run(remote, store, workspace, options, PushRun::default()).await
 }
 
-/// [`push`] over the assets `run` names, publishing to `run`'s transfer events and telling its
+/// [`push()`] over the assets `run` names, publishing to `run`'s transfer events and telling its
 /// observer which asset the run is on. `capsule push --asset` and the TUI's push screen run
 /// through here: a retry of failed assets is this over just those assets, so nothing is
 /// re-imported and the assets that already reached custody are not asked about again.
 ///
 /// # Errors
 ///
-/// As [`push`].
+/// As [`push()`].
 #[instrument(skip(store, workspace, run), fields(endpoint = %remote.upload_endpoint))]
 pub async fn push_run(
     remote: &RemoteConfig,

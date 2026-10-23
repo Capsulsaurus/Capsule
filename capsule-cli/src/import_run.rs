@@ -1,8 +1,7 @@
 //! One `capsule import` run with nothing printed: the import the TUI's import screen runs.
 //!
-//! It is the same pipeline the subcommand drives — the source read
-//! ([`read_import_source`](crate::read_import_source): the filesystem scanner, or a provider's
-//! source adapter), the pure planner, and the one executor — over a workspace the caller opened,
+//! It is the same pipeline the subcommand drives — the source read (the crate's
+//! `read_import_source`: the filesystem scanner, or a provider's source adapter), the pure planner, and the one executor — over a workspace the caller opened,
 //! and it ends in the same [`ImportReport`] `capsule import --json` prints. It imports in copy
 //! mode only: a move deletes sources once the server holds them, which belongs to
 //! `capsule import --move --push`.
