@@ -301,6 +301,10 @@ jobs:
         run: rustup toolchain install
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
+      # nasm and libdav1d: capsule-e2e links capsule-cli's codecs through capsule-library, as
+      # in the `rust` job.
+      - name: Install nasm and libdav1d
+        run: sudo apt-get update && sudo apt-get install -y nasm libdav1d-dev
       - name: Install nextest
         uses: taiki-e/install-action@v2
         with:
@@ -508,7 +512,7 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: "1.4.3" # pinned: a newer bun rewrites bun.lock and fails --frozen-lockfile
       - name: Cache bun install
         uses: actions/cache@v4
         with:
@@ -553,7 +557,7 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: "1.4.3" # pinned: a newer bun rewrites bun.lock and fails --frozen-lockfile
       - name: Cache bun install
         uses: actions/cache@v4
         with:
@@ -582,7 +586,7 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: "1.4.3" # pinned: a newer bun rewrites bun.lock and fails --frozen-lockfile
       - name: Set up mise (task runner)
         uses: jdx/mise-action@v2
         with:
@@ -600,7 +604,7 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: "1.4.3" # pinned: a newer bun rewrites bun.lock and fails --frozen-lockfile
       - name: Set up mise (task runner)
         uses: jdx/mise-action@v2
         with:
