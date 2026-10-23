@@ -24,12 +24,15 @@
 //!   the blob's content address, so a subscriber watching several concurrent transfers through
 //!   one handle can tell them apart.
 //!
+//! - **Replayable.** An event serializes to one JSON object and parses back to the same value,
+//!   so a recorded stream replays into a progress UI exactly as it was published.
+//!
 //! Events describe the transfer, never its contents: offsets, sizes, content addresses and
 //! session ids, no plaintext and no key material.
 
 use std::time::Duration;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 
 /// The capacity [`TransferEvents::default_channel`] uses: room for a few seconds of chunk
@@ -37,7 +40,7 @@ use tokio::sync::broadcast;
 pub const DEFAULT_CAPACITY: usize = 1024;
 
 /// Why a chunk is being sent again, or from a different offset than the last acknowledgement.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "reason", rename_all = "snake_case")]
 pub enum RetryReason {
     /// The connection reset or the request was lost; the same chunk is re-sent after `wait`.
@@ -65,7 +68,7 @@ pub enum RetryReason {
 ///
 /// `blob` is always the blob's content address (lowercase hex). Offsets and lengths are bytes of
 /// ciphertext.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum TransferEvent {
     // ── Upload ──────────────────────────────────────────────────────────────
