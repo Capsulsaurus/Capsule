@@ -33,7 +33,7 @@ ffi-bindgen = ["ffi", "uniffi/cli"]
 # capsule-i18n gives the SDK the canonical `error.*` code constants it switches
 # on (clients localize codes, never bare HTTP statuses — see CLAUDE.md).
 capsule-i18n = { path = "../capsule-i18n" }
-# The verify-before-destroy gate (S-D4) reuses the offline data plane's pure predicate
+# The verify-before-destroy gate reuses the offline data plane's pure predicate
 # (`library::release_is_safe`), the `StorageVerdict` type, and custody-receipt verification
 # (`library::verify_receipt` under the pinned hybrid attestation key) — `capsule-library` surface
 # over `capsule-core` crypto, so the SDK does not re-implement signature verification.
@@ -56,7 +56,7 @@ hex = { workspace = true }
 # Single-flight refresh coordination (Mutex / RwLock / Notify) plus `time` for the
 # shared retry engine's backoff sleeper (`net::TokioSleeper`). The async runtime
 # itself is supplied by the caller; the SDK only needs these primitives here. `net` +
-# `io-util` are the LAN-peering (S-E3) channel's TCP socket and framed async read/write.
+# `io-util` are the LAN-peering channel's TCP socket and framed async read/write.
 tokio = { version = "1", features = ["sync", "time", "net", "io-util"] }
 
 uuid = { version = "1.23.3", features = ["v7", "serde"] }
@@ -70,7 +70,7 @@ reqwest = { version = "0.12.28", default-features = false, features = [
 # out of; `reqwest::Response` is constructible only from an `http::Response`.
 http = { workspace = true }
 
-# ── LAN peering (S-E3) ───────────────────────────────────────────────────────
+# ── LAN peering ───────────────────────────────────────────────────────
 # The peering channel is mutually-authenticated TLS 1.3 with no CA (the device keys
 # are the trust anchor, checked at the application layer). rustls is the sanctioned
 # TLS stack (Dependencies doc — "LAN-peering mutual TLS"); tokio-rustls is its async
@@ -83,19 +83,19 @@ rcgen = { version = "0.13", default-features = false, features = ["ring", "crypt
 
 # Ranged blob fetch and the generated client's byte bodies. There is no gRPC here any
 # more: the sync feed is `GET /v1/sync` and rides the generated REST client like every
-# other operation (`S-D28`), so `tonic`, `tonic-prost` and `prost` are gone with it.
+# other operation, so `tonic`, `tonic-prost` and `prost` are gone with it.
 bytes = { workspace = true }
 
 # ── FFI (optional; `ffi` feature) ──────────────────────────────────────────
 # uniffi proc-macro bindings for Swift/Kotlin/Linux over the SDK's user-flow
-# primitives. Single pinned uniffi (0.31.1 — the S-F1 consolidation; do not add a
+# primitives. Single pinned uniffi (0.31.1, shared with capsule-core-ffi; do not add a
 # second). The `tokio` feature lets `#[uniffi::export(async_runtime = "tokio")]`
 # drive the async login/upload/sync flows on the tokio runtime reqwest needs.
 uniffi = { version = "0.31", features = ["tokio"], optional = true }
 
 [build-dependencies]
 # spargen (in-house) generates the typed REST client from the committed OpenAPI 3.2 schema
-# at build time (slice `S-D8`); see `build.rs`. `default-features = false` drops its `cli`
+# at build time; see `build.rs`. `default-features = false` drops its `cli`
 # (clap) and the `uuid`/`time` `format`-mapping features — the current schema emits neither,
 # and disabling them keeps the SDK's build graph minimal. spargen is a *build*-dependency
 # only: its embedded runtime is emitted into the generated module, so spargen never appears
@@ -115,13 +115,13 @@ proptest = { workspace = true }
 insta = { workspace = true }
 uuid = { version = "1.23.3", features = ["v7"] }
 serde_json = { workspace = true }
-# The S-D18 envelope mapping is asserted against a manifest a real `capsule_core::Workspace`
+# The envelope mapping is asserted against a manifest a real `capsule_core::Workspace`
 # produced, so the push tests build a throwaway library on disk.
 tempfile = "3"
-# A software stand-in for a P-256 secure element, so the S-P1 `FfiHardwareSigner` foreign-trait
+# A software stand-in for a P-256 secure element, so the `FfiHardwareSigner` foreign-trait
 # seam is proven end to end (SEC1 public key in, DER ECDSA signature out — the exact shapes
 # Secure Enclave and StrongBox emit) without an Xcode/Android toolchain. `ecdh` lets the same
-# stand-in play the `FfiHardwareKeyAgreement` element behind the hardware DEK round-trip (S-F5).
+# stand-in play the `FfiHardwareKeyAgreement` element behind the hardware DEK round-trip.
 # Test-only, and the same pin `capsule-core` already carries for the real composition; nothing
 # here enters the runtime dependency tree.
 p256 = { version = "0.13", default-features = false, features = [

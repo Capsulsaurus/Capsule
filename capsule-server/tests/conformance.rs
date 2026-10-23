@@ -3,9 +3,9 @@
 //!
 //! These two assertions are opposites and both are needed. Together they are the executable
 //! form of the failure this rebuild exists to remove: the Salvo surface had **thirteen response
-//! variants that rendered a status the published schema never declared** (slice `S-C28`) —
-//! login could answer `423` and `429`, and the Salvo document (then committed as
-//! `capsule-sdk/openapi.json`, deleted in `S-C59`) mentioned neither, so the
+//! variants that rendered a status the published schema never declared** —
+//! login could answer `423` and `429`, and the Salvo document (once committed as
+//! `capsule-sdk/openapi.json`, since deleted) mentioned neither, so the
 //! generated client had no case to map them to. That gap was invisible because it lived between
 //! two hand-written impls, one rendering and one registering, with nothing comparing them.
 //!
@@ -109,11 +109,11 @@ async fn version_reports_the_server_identity() {
 
 /// Everything the description promises has actually been produced by a test.
 ///
-/// This is the assertion that would have caught `S-C28` at the moment it was introduced, and it
-/// is the reason the auth port deleted a status rather than documenting it: the Salvo login can
-/// answer `429`, the counter port that backs rate limiting does not exist (`S-C29` excluded
-/// counters; `S-C32` owns them), and a `429` declared here would fail this test on the first
-/// run. A gap the suite reports beats a promise the server cannot keep.
+/// This is the assertion that catches a status rendered but never declared the moment it is
+/// introduced, and it is the reason the auth port deleted a status rather than documenting it:
+/// the Salvo login can answer `429`, the counter port that backs rate limiting does not exist
+/// (the session store carries no counters), and a `429` declared here would fail this test on
+/// the first run. A gap the suite reports beats a promise the server cannot keep.
 ///
 /// It walks **every** operation in one client, because the recorder is per-client and a status
 /// produced against a second server would not count. So the whole surface — eighteen responses
@@ -143,7 +143,7 @@ async fn every_declared_response_is_exercised() {
 
     // 413 is declared on *every* operation, because every group carries a body-size cap — the
     // exempt twelve in a group holding nothing else — and a Kynos interceptor's declaration is its
-    // type (`S-C33`, #478). So every operation produces one here, sent the cheapest way the
+    // type (#478). So every operation produces one here, sent the cheapest way the
     // limit can be reached: a `Content-Length` over every group's cap, refused before a byte of
     // the body is read.
     for (method, path) in [
@@ -365,8 +365,8 @@ async fn every_declared_response_is_exercised() {
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
 
-    // 423: the account is locked. Reachable, therefore documented — the half of `S-C28` that
-    // was closed by declaring rather than deleting.
+    // 423: the account is locked. Reachable, therefore documented — the case that
+    // is closed by declaring rather than deleting.
     fixture.accounts.lock(EMAIL);
     client
         .post("/v1/auth/login")
@@ -481,10 +481,9 @@ async fn every_declared_response_is_exercised() {
     // order is load-bearing: a `409` on `DELETE` needs a session mid-finalization, and a `200`
     // on `POST` needs one already open for the same bytes.
     //
-    // A fresh sign-in, because the walk just logged the previous one out. Before `S-C48` the
-    // rest of this walk rode `rotated.access_token` straight past its own logout — the token
-    // outlived the session it named, which is exactly the defect that slice closed. That it now
-    // has to sign in again is the fix showing up in the test that would have hidden it.
+    // A fresh sign-in, because the walk just logged the previous one out. A token
+    // does not outlive the session it names, so the rest of this walk cannot ride
+    // `rotated.access_token` past its own logout and has to sign in again.
     let signed_in: TokenResponse = client
         .post("/v1/auth/login")
         .header("accept", "application/json")
@@ -819,7 +818,7 @@ async fn every_declared_response_is_exercised() {
         .await
         .assert_status(StatusCode::NO_CONTENT);
 
-    // POST 409: the owner already holds these bytes (`S-C22`). Needs a blob that actually
+    // POST 409: the owner already holds these bytes. Needs a blob that actually
     // finalized, so one small session is opened and completed in a single chunk first — which
     // is also the only place in this test where the index's durable half runs end to end.
     let held = payload(b'c', 4096);
@@ -1026,7 +1025,7 @@ async fn every_declared_response_is_exercised() {
         .await
         .assert_status(StatusCode::FORBIDDEN);
 
-    // 403: an album page the caller may not read (`S-C51`) — here an album nobody provisioned,
+    // 403: an album page the caller may not read — here an album nobody provisioned,
     // which is one answer with not-a-member and removed.
     client
         .get("/v1/sync?album_id=018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5eff")
@@ -1053,7 +1052,7 @@ async fn every_declared_response_is_exercised() {
         .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
     fixture.index.set_unavailable(false);
 
-    // 429: a federated peer over its events budget (`S-E5`, invariant 21). The budget is spent
+    // 429: a federated peer over its events budget (invariant 21). The budget is spent
     // through the counter port and the last hit is the route's; the capability is minted and
     // recorded exactly as the mint route records one.
     let peer_bearer = federated_peer(&fixture).await;
@@ -1130,7 +1129,7 @@ async fn every_declared_response_is_exercised() {
     // 400 is the `Path` extractor's, and it took a probe to establish that anything reaches it:
     // a `String` path parameter accepts every segment that *is* a string, so the only way in is
     // a segment that is not one. `%FF` is not valid UTF-8, so the request is refused before the
-    // route runs. Reachable, therefore declared — the `S-C28` question asked of the framework's
+    // route runs. Reachable, therefore declared — the same question asked of the framework's
     // own rejection rather than only of the handler's.
     client
         .get("/v1/blob/%FF")
@@ -1188,7 +1187,7 @@ async fn every_declared_response_is_exercised() {
             .expect("the index records");
     }
 
-    // 403: a former member of the album (`S-C51`). The stranger account above was on the
+    // 403: a former member of the album. The stranger account above was on the
     // roster at version 1 and is not at version 2, so the server holds a revoked row for it —
     // the one fact the `403` may be rendered from. Applied through the store: the roster route
     // and its verification are `tests/roster.rs`'s, and this walk is about which statuses exist.
@@ -1230,7 +1229,7 @@ async fn every_declared_response_is_exercised() {
         .assert_status(StatusCode::NOT_FOUND);
 
     // 409: nothing references the address *yet*, because the caller's own upload of exactly
-    // those bytes is still in flight (`S-C40`). Transient, and the only account-scoped answer
+    // those bytes is still in flight. Transient, and the only account-scoped answer
     // this route gives.
     let coming = payload(b'y', 4096);
     let promised = checksum(&coming);
@@ -1302,7 +1301,7 @@ async fn every_declared_response_is_exercised() {
         .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
     fixture.index.set_unavailable(false);
 
-    // 429: a federated peer over its events budget (`S-E5`, invariant 21), the same admission
+    // 429: a federated peer over its events budget (invariant 21), the same admission
     // the feed charges — refused before the index is touched, which is why the address it names
     // does not have to exist.
     for _ in 0..capsule_server::counter::budgets::PEER_REQUESTS.limit {
@@ -1381,7 +1380,7 @@ async fn every_declared_response_is_exercised() {
     }
     fixture.federation.set_enabled(true);
 
-    // ── The federation capability lifecycle (`S-E2`) ───────────────────────────────────────
+    // ── The federation capability lifecycle ───────────────────────────────────────
     // A member on the album's roster to mint for, applied through the store: the roster route
     // and its verification are `tests/roster.rs`'s, and this walk is about which statuses exist.
     {
@@ -1646,7 +1645,7 @@ async fn every_declared_response_is_exercised() {
         .await
         .assert_status(StatusCode::NO_CONTENT);
 
-    // ── POST /v1/federation/reports (`S-C49`) ──────────────────────────────────────────────
+    // ── POST /v1/federation/reports ──────────────────────────────────────────────
     // The report carries its own signature and no bearer, so the peer must be *pinned* before
     // anything it says can be verified: a peer nobody pinned is `403`, which is also what a
     // pinned peer with no key gets.
@@ -1923,7 +1922,7 @@ async fn every_declared_response_is_exercised() {
 
     // ── /v1/auth/devices/directory ─────────────────────────────────────────────────────────
     // One identity key for the whole block: the account is anchored to the first key it
-    // publishes under (`S-C42`), so a fresh key per request would make every publish after the
+    // publishes under, so a fresh key per request would make every publish after the
     // first a 403 for the wrong reason.
     let account_ik = support::identity_key();
     let anchor = support::identity_header(&account_ik);
@@ -2047,7 +2046,7 @@ async fn every_declared_response_is_exercised() {
         .assert_status(StatusCode::CONFLICT);
 
     // 403 on publish, the *other* way: the document is well-formed and correctly signed, but by
-    // a key that is not this anchored account's (`S-C42`). Distinct from the credential 403
+    // a key that is not this anchored account's. Distinct from the credential 403
     // above, which is the framework's.
     let impostor = support::identity_key();
     client
@@ -2105,7 +2104,7 @@ async fn every_declared_response_is_exercised() {
             .record_blob(
                 &asset,
                 capsule_server::index::BlobRecord {
-                    // The chain head, which the first lifecycle op has to name (`S-C31`).
+                    // The chain head, which the first lifecycle op has to name.
                     manifest_sha256: (role == capsule_server::store::BlobRole::Provenance).then(
                         || {
                             capsule_core::crypto::hash::Hash32::from_hex(at.as_str())
@@ -2304,7 +2303,7 @@ async fn every_declared_response_is_exercised() {
         .await
         .assert_status(StatusCode::OK);
 
-    // ── The album-upgrade ceremony (`S-C24`) ───────────────────────────────────────────────
+    // ── The album-upgrade ceremony ───────────────────────────────────────────────
     // Boxed like the drops block, and for the same reason: this walk drives every operation on
     // one client, and the generator holding all of it overflowed the test thread's stack once
     // the surface passed forty operations.
@@ -2318,7 +2317,7 @@ async fn every_declared_response_is_exercised() {
     ))
     .await;
 
-    // ── PUT /v1/albums/{album_id}/roster (`S-C51`) ─────────────────────────────────────────
+    // ── PUT /v1/albums/{album_id}/roster ─────────────────────────────────────────
     Box::pin(roster_block(
         client,
         &fixture,
@@ -2452,7 +2451,7 @@ async fn every_declared_response_is_exercised() {
         .await
         .assert_status(StatusCode::OK);
 
-    // ── The rest of the `.well-known/capsule` registry (`S-C18`) ───────────────────────────
+    // ── The rest of the `.well-known/capsule` registry ───────────────────────────
     // Public for the same reason, so again there is no 401 in any of these declared sets and
     // again the absence is the assertion.
     for path in [
@@ -2480,13 +2479,13 @@ async fn every_declared_response_is_exercised() {
         .assert_status(StatusCode::SERVICE_UNAVAILABLE);
     fixture.revocations.set_unavailable(false);
 
-    // ── Re-authentication and the cross-device add (`S-C7`) ────────────────────────────────
+    // ── Re-authentication and the cross-device add ────────────────────────────────
     // Before the ledger block, because a re-authentication is what reopens the freshness window
     // the enrollment gate reads.
     //
     // A fresh sign-in first: `bearer`'s own session was closed by the logout block above, and
     // re-authentication is the one operation here that needs a *live session record* rather
-    // than a merely valid token — it moves a field on one. That the two differ is `S-C48`.
+    // than a merely valid token — it moves a field on one. The bearer scheme distinguishes the two.
     let enrolling: capsule_server::routes::auth::TokenResponse = client
         .post("/v1/auth/login")
         .header("accept", "application/json")
@@ -2582,7 +2581,7 @@ async fn every_declared_response_is_exercised() {
         .send()
         .await
         .assert_status(StatusCode::FORBIDDEN);
-    // The 500 comes from the *enrollment* store, not the session store. Since `S-C48` the
+    // The 500 comes from the *enrollment* store, not the session store. The
     // freshness gate reads `authenticated_at` off the credential the bearer scheme already
     // verified, so this operation no longer touches the session store at all — and a walk that
     // kept reaching for it would be exercising a path the handler does not have.
@@ -2763,7 +2762,7 @@ async fn every_declared_response_is_exercised() {
     fixture.channels.set_unavailable(false);
 
     // 429 on redeem: the fallback spelling's deployment-wide budget, spent by distinct wrong
-    // guesses (`S-C32`, issue #528). Eight digits, because only a guess shaped like the fallback
+    // guesses (issue #528). Eight digits, because only a guess shaped like the fallback
     // is charged to that bucket — anything else is charged to the one malformed bucket.
     for index in 0..30 {
         client
@@ -2789,7 +2788,7 @@ async fn every_declared_response_is_exercised() {
         .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
     fixture.enrollments.set_unavailable(false);
 
-    // ── The session ledger (`S-C13`, `S-N3`) ───────────────────────────────────────────────
+    // ── The session ledger ───────────────────────────────────────────────
     // Before the escrow block, and before the global sign-out at the end, because a revoke
     // closes sessions the rest of the walk is using.
     client
@@ -2837,7 +2836,7 @@ async fn every_declared_response_is_exercised() {
         .assert_status(StatusCode::BAD_REQUEST);
 
     // A second sign-in, so there is a session this walk is not riding. It is opened *before*
-    // the failure cases because since `S-C48` the `DELETE`'s own 500 needs a target that really
+    // the failure cases because the `DELETE`'s own 500 needs a target that really
     // exists: the handler reads the session, finds it, and then fails on the close. A target
     // that does not exist answers 404 and never reaches the store operation the 500 is about.
     let extra: capsule_server::routes::auth::TokenResponse = client
@@ -2899,7 +2898,7 @@ async fn every_declared_response_is_exercised() {
         .await
         .assert_status(StatusCode::NO_CONTENT);
 
-    // ── Guest drops (`S-C5`) ───────────────────────────────────────────────────────────────
+    // ── Guest drops ───────────────────────────────────────────────────────────────
     // In its own future, boxed: this walk drives every operation on one client — the recorder
     // is per-client — and inlining every block into one `async fn` overflowed the test thread's
     // stack once the surface passed forty operations. `Box::pin` moves each block's state to
@@ -2912,7 +2911,7 @@ async fn every_declared_response_is_exercised() {
     ))
     .await;
 
-    // ── Share links (`S-C4`) ───────────────────────────────────────────────────────────────
+    // ── Share links ───────────────────────────────────────────────────────────────
     // The public path is walked last among the reads, because a revoked link is one of the
     // answers and revoking it ends the only live link this block makes.
     client
@@ -3057,7 +3056,7 @@ async fn every_declared_response_is_exercised() {
         .await
         .assert_status(StatusCode::BAD_REQUEST);
 
-    // 429 on all three public operations: the per-link budget (`S-C32`), spent against an id
+    // 429 on all three public operations: the per-link budget, spent against an id
     // that does not exist so the live link this block made is untouched.
     let probed = "abcdef0123456789abcdef01234567dd";
     for _ in 0..60 {
@@ -3126,7 +3125,7 @@ async fn every_declared_response_is_exercised() {
             .assert_status(StatusCode::NOT_FOUND);
     }
 
-    // ── The moderation record (`S-C8`) ─────────────────────────────────────────────────────
+    // ── The moderation record ─────────────────────────────────────────────────────
     client
         .get("/v1/moderation/record")
         .send()
@@ -3157,7 +3156,7 @@ async fn every_declared_response_is_exercised() {
         .await
         .assert_status(StatusCode::OK);
 
-    // ── The master-key escrow (`S-C12`) ────────────────────────────────────────────────────
+    // ── The master-key escrow ────────────────────────────────────────────────────
     client
         .put("/v1/auth/escrow")
         .body("application/octet-stream", vec![7_u8; 64])
@@ -3252,19 +3251,19 @@ async fn every_declared_response_is_exercised() {
     // ── The album key escrows beside it (#741) ─────────────────────────────────────────────
     album_keys_block(client, &fixture, &bearer, &rotated.refresh_token).await;
 
-    // ── The profile surface (`S-C54`) ──────────────────────────────────────────────────────
+    // ── The profile surface ──────────────────────────────────────────────────────
     profile_block(client, &fixture).await;
 
-    // ── The second factor (`S-C55`) ────────────────────────────────────────────────────────
+    // ── The second factor ────────────────────────────────────────────────────────
     totp_block(client, &fixture).await;
 
-    // ── Signing in through an identity provider (`S-N1`) ───────────────────────────────────
+    // ── Signing in through an identity provider ───────────────────────────────────
     oidc_block(client, &fixture).await;
 
     // ── Signing in without a browser: the device grant (issue #635) ────────────────────────
     oidc_device_block(client, &fixture).await;
 
-    // ── The resumption listing (`S-C57`) and the durable custody chain (`S-C58`) ───────────
+    // ── The resumption listing and the durable custody chain ───────────
     // Both are plain authenticated reads over stores this walk has already filled, so they sit
     // here rather than in a block of their own.
     for (method, path) in [
@@ -3350,7 +3349,7 @@ async fn every_declared_response_is_exercised() {
         .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
     fixture.index.set_unavailable(false);
 
-    // ── The global sign-out ceremony (`S-C23`) ─────────────────────────────────────────────
+    // ── The global sign-out ceremony ─────────────────────────────────────────────
     // Last, because a successful revoke closes every session this walk has been using. The
     // directory block above anchored the account to `account_ik`, which is the key the proof
     // has to be made under — that dependency is the ceremony, not test order.
@@ -3904,7 +3903,7 @@ async fn a_representative_route_per_module_holds_the_handshake_before_anything_e
     }
 }
 
-/// One `bearer` component, and every secured operation names it (`S-E5`).
+/// One `bearer` component, and every secured operation names it.
 ///
 /// The two read primitives accept a session token *or* a federation capability through a second
 /// scheme type registered under the same component name. What that must not do is split the
@@ -3965,7 +3964,7 @@ fn the_router_emits_a_document() {
     );
 }
 
-/// No album-shaped schema carries a plaintext title (`S-C26`).
+/// No album-shaped schema carries a plaintext title.
 ///
 /// The Salvo schema had `albums.name` and `albums.description` as plaintext Postgres columns —
 /// a residue of the pre-key-free design, and on a key-free server a privacy defect rather than
@@ -4001,7 +4000,7 @@ fn no_album_schema_carries_a_plaintext_title() {
             assert!(
                 !properties.contains_key(forbidden),
                 "{name} declares `{forbidden}`: album titles are user content and belong in the \
-                 encrypted sidecar, not on a key-free server (S-C26)"
+                 encrypted sidecar, not on a key-free server"
             );
         }
     }
@@ -4035,7 +4034,7 @@ fn the_document_declares_openapi_32() {
     );
 }
 
-/// The second factor's whole walk (`S-C55`).
+/// The second factor's whole walk.
 ///
 /// On an account of its own, for the reason [`profile_block`] uses one: switching a second
 /// factor on for the fixture's shared account would make every later `POST /v1/auth/login` in the
@@ -4526,7 +4525,7 @@ async fn totp_block(client: &support::Client, fixture: &Fixture) {
         .assert_status(StatusCode::NO_CONTENT);
 }
 
-/// The profile surface's whole walk (`S-C54`).
+/// The profile surface's whole walk.
 ///
 /// On an account of its **own**, registered here rather than the fixture's seeded one. The
 /// password change on this surface closes every other session of the account it acts on, so
@@ -4772,7 +4771,7 @@ async fn profile_block(client: &support::Client, fixture: &Fixture) {
         .assert_status(StatusCode::NO_CONTENT);
 }
 
-/// The guest-drop surface's whole walk (`S-C5`).
+/// The guest-drop surface's whole walk.
 ///
 /// Extracted so [`every_declared_response_is_exercised`] does not build one generator larger
 /// than a thread stack. Same client, so the recorder still sees these.
@@ -5214,7 +5213,7 @@ async fn drops_block(
         .await
         .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
 
-    // 429 on creation: the per-link budget (invariant 31, `S-C32`). Against a link that does
+    // 429 on creation: the per-link budget (invariant 31). Against a link that does
     // not exist, so it spends no cap and disturbs nothing else in this walk.
     let hammered = "abcdef0123456789abcdef01234567cc";
     for _ in 0..30 {
@@ -5304,7 +5303,7 @@ async fn drops_block(
         .assert_status(StatusCode::NO_CONTENT);
 }
 
-/// Every answer the roster publish can give (`S-C51`).
+/// Every answer the roster publish can give.
 ///
 /// Its own function for the reason the upgrade block is one: the walk's generator has to fit in
 /// the test thread's stack.
@@ -5450,7 +5449,7 @@ async fn roster_block(
         .assert_status(StatusCode::CONFLICT);
 }
 
-/// Every answer the three upgrade-ceremony operations can give (`S-C24`).
+/// Every answer the three upgrade-ceremony operations can give.
 ///
 /// Its own function so the walk's generator stays inside the test thread's stack; see the drops
 /// block for the same note.
@@ -5463,9 +5462,9 @@ async fn upgrade_block(
     account_ik: &capsule_core::crypto::keys::HybridSigningKey,
 ) {
     let path = format!("/v1/albums/{album}/upgrade");
-    // The account's *own* anchor, not a fresh key: `S-C42` pins a directory to the first identity
-    // key that published one, so a second key here would be refused as an impostor — which is
-    // the check working, in the middle of a walk about something else.
+    // The account's *own* anchor, not a fresh key: the server pins a directory to the
+    // first identity key that published one, so a second key here would be refused as an
+    // impostor — which is the check working, in the middle of a walk about something else.
     let dsk = support::identity_key();
     let intent = uuid::Uuid::parse_str("019a0000-0000-7000-8000-0000000000c0").expect("a uuid");
     let signed =
@@ -5659,8 +5658,8 @@ async fn upgrade_block(
         .assert_status(StatusCode::BAD_REQUEST);
 }
 
-/// Every declared response of `POST /v1/auth/oidc/authorize` and `POST /v1/auth/oidc/callback`
-/// (`S-N1`), driven through the fixture's provider double.
+/// Every declared response of `POST /v1/auth/oidc/authorize` and `POST /v1/auth/oidc/callback`,
+/// driven through the fixture's provider double.
 ///
 /// The 400 and 426 are the gate's and are produced by the document walk above; the 413 by the
 /// body-size loop. Everything else is this block's: the extractor's 415/422, the ceremony's own

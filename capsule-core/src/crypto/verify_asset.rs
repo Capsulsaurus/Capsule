@@ -697,7 +697,7 @@ mod tests {
         );
     }
 
-    // ── Directory dispatch on the declared classical algorithm (S-A4) ────────────
+    // ── Directory dispatch on the declared classical algorithm ────────────
 
     /// The chokepoint accepts a manifest whose signing device is a **hardware P-256** hybrid
     /// key: the directory entry declares `EcdsaP256`, and `verify_asset` dispatches to the
@@ -982,7 +982,7 @@ mod tests {
         );
     }
 
-    // ── Metadata↔manifest binding (S-A3, invariant 25 client half) ───────────────
+    // ── Metadata↔manifest binding (invariant 25 client half) ───────────────
 
     use crate::crypto::encryption::seal_metadata_blob;
 

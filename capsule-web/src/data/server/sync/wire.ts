@@ -4,7 +4,7 @@
  * This module used to be a hand-rolled Protobuf + gRPC-web codec: 410 lines of varint and
  * length-delimited framing, written because browsers cannot speak native gRPC and pulling a
  * `protobuf-es`/`connect-web` toolchain into the bun build to read a handful of fields was not
- * worth it. The feed is REST/JSON now (`S-C2`, `S-D28`) and the whole codec is gone — the
+ * worth it. The feed is REST/JSON now and the whole codec is gone — the
  * server's own OpenAPI document is the contract, `JSON.parse` is the parser, and the framing
  * problem does not exist.
  *

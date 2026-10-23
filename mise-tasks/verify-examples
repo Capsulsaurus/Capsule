@@ -17,19 +17,18 @@ done
 # The software-signer smoke: the simplest backend (no uniffi foreign trait, no hardware).
 cargo nextest run -p capsule-core --lib crypto::keys::software
 
-# S-D9 + S-P1: the SDK's FFI surface must exist and its host-verifiable smoke must pass.
+# The SDK's FFI surface must exist and its host-verifiable smoke must pass.
 #
-#   S-D9  — the networked user flow (login → upload → status), driven from Rust against
+#   Client flow — the networked user flow (login → upload → status), driven from Rust against
 #           the established mock-HTTP-server pattern.
-#   S-P1  — the workspace verbs the iOS lane is blocked on, driven as one flow
+#   Workspace verbs — the verbs the iOS lane depends on, driven as one flow
 #           (enroll → album → seal+import → upload → sync-apply) through the FFI types,
 #           plus escrow put/get, device-directory publish, and hardware-signer
 #           constructor parity over the `FfiHardwareSigner` foreign-trait seam.
 #
 # The native (Swift + Kotlin) harnesses implement `FfiHardwareSigner` /
 # `FfiHardwareKeyAgreement` and drive these verbs through the generated `capsule_sdk`
-# bindings (platform CI's half; the Kotlin toolchain is unavailable on this host — see
-# SLICES.md S-D9).
+# bindings (platform CI's half; the Kotlin toolchain is unavailable on this host).
 for f in \
     capsule-sdk/src/ffi.rs \
     capsule-sdk/src/ffi/workspace.rs; do
@@ -38,8 +37,8 @@ done
 cargo nextest run -p capsule-sdk --features ffi --lib ffi::tests
 
 # The `capsule_sdk` workspace verbs delegate to the capsule-library Workspace (and through it to
-# capsule-core for every cryptographic step); these are the receiving/import halves S-P1 added,
+# capsule-core for every cryptographic step); these are the receiving/import halves of those verbs,
 # run here so the two sides of each verb are smoked together rather than only in the full suite.
 cargo nextest run -p capsule-library --lib lifecycle::sync_apply lifecycle::import
 
-echo "HardwareSigner examples present; software-signer + SDK FFI-flow (S-D9) + workspace-verb (S-P1) smokes passed"
+echo "HardwareSigner examples present; software-signer + SDK FFI-flow and workspace-verb smokes passed"

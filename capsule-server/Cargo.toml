@@ -32,7 +32,7 @@ doctest = false
 # The framework. Pinned to a rev in the root manifest; see design/dependencies.md for why a rev
 # and not a version, and for the repin-on-publish exit.
 kynos = { workspace = true }
-# The shared, key-free validation invariants (slice `S-C1`). The envelope gate does not
+# The shared, key-free validation invariants. The envelope gate does not
 # reimplement invariants 1-8 and 15: `capsule_core::validation` owns them, the client's own
 # `verify_asset` mirrors them, and a second implementation here would be a second answer to a
 # question the threat model allows one answer to. `capsule_core::crypto::hash` comes with it,
@@ -45,7 +45,7 @@ kynos = { workspace = true }
 # SQLite, sqlite-vec, OpenMLS and libcrux, none of which a key-free server touches.
 capsule-core = { path = "../capsule-core", default-features = false }
 serde = { workspace = true }
-# The state ports (slice `S-C29`). `thiserror` because these are a library surface;
+# The state ports. `thiserror` because these are a library surface;
 # `jiff` because every record and every TTL is a time and chrono is banned; `tracing` because
 # the ports are on the critical path of every authenticated request and every upload chunk;
 # `uuid` so a session's asserted `device_id` is parsed once at the port boundary instead of
@@ -58,14 +58,14 @@ tracing = { workspace = true }
 # Identifiers row in design/dependencies.md makes UUIDv7 the default for one. `v4` rides along
 # from the workspace default.
 uuid = { workspace = true, features = ["v7"] }
-# The message catalog's stable `error.*` codes (slice `S-C27`, the i18n design doc). Every
+# The message catalog's stable `error.*` codes (the i18n design doc). Every
 # rejection this server renders names one from `capsule_i18n::error_codes` rather than a string
 # literal, so a typo is a compile error and the code cannot drift from `locales/`.
 capsule-i18n = { path = "../capsule-i18n" }
 # EdDSA access and refresh tokens. Already the workspace's JWT crate, pinned with `aws_lc_rs`;
 # see the Tokens row in design/dependencies.md. Nothing else in this crate parses a JWT.
 jsonwebtoken = { workspace = true }
-# The blob store's filesystem adapter (slice `S-C33`). `tokio::fs` because every blob write is
+# The blob store's filesystem adapter. `tokio::fs` because every blob write is
 # an await on a server runtime and `std::fs` on that runtime blocks it; `fs`/`io-util`/`rt` are
 # the three features a ranged read and a durable append need, and nothing more. Already the
 # workspace's async runtime (design/dependencies.md, "Async runtime") and already in this
@@ -88,7 +88,7 @@ tokio = { workspace = true, features = [
 # Already a workspace dependency with a row in design/dependencies.md, and already here as a
 # dev-dependency.
 serde_json = { workspace = true }
-# The sync cursor's HMAC-SHA256 (slice `S-C2`, validation invariant 22). `ring` is already the
+# The sync cursor's HMAC-SHA256 (validation invariant 22). `ring` is already the
 # workspace's key-generation crate and was already here as a dev-dependency; this promotes it.
 # The alternative was the RustCrypto `hmac` + `sha2` pair, which would have put a second HMAC
 # implementation in one binary for one 41-byte token.
@@ -100,12 +100,12 @@ base64 = { workspace = true }
 # back a span without a copy. Already in the lock file through `capsule-sdk` and `capsule-api`;
 # no new external dependency and no new domain, so no design/dependencies.md row.
 bytes = { workspace = true }
-# The coded-problem interceptor (`S-C36`) reads a rendered problem body back before putting it
+# The coded-problem interceptor reads a rendered problem body back before putting it
 # down again, and `Body` is an `http_body::Body` with no inherent collector. Already in the lock
 # file through Kynos and hyper; see design/dependencies.md.
 http-body-util = { workspace = true }
 
-# RFC 6238 second-factor codes (slice `S-C55`). `otpauth` for the provisioning URI an
+# RFC 6238 second-factor codes. `otpauth` for the provisioning URI an
 # authenticator app scans, `gen_secret` for the shared secret this server generates. See the
 # Second factor row in design/dependencies.md; already in the lock file through the retired
 # `capsule-api/auth`, which is where the four TOTP operations are being ported *from*.
@@ -122,7 +122,7 @@ subtle = { workspace = true }
 # are unrelated numbers. The Postgres adapter (#402) uses the same helper.
 argon2 = { workspace = true }
 # The Valkey adapters behind the state ports and the counter port (`store::valkey`,
-# `counter::valkey`; slice `S-C29`'s owed half, #403). `redis-rs` is the crate the Rust
+# `counter::valkey`; #403). `redis-rs` is the crate the Rust
 # Architecture Decisions name for exactly this; the workspace pin carries `tokio-comp` and
 # `connection-manager`, and two features are added here: `tokio-rustls-comp`, so a `rediss://`
 # URL terminates TLS in rustls and never in native-tls, and `script`, because every multi-key
@@ -131,7 +131,7 @@ argon2 = { workspace = true }
 # connection, which is the whole of what a server talking to one Valkey needs. See the Volatile
 # state row in design/dependencies.md.
 redis = { workspace = true, features = ["tokio-rustls-comp", "script"] }
-# The OIDC relying party's egress (slice `S-N1`): the discovery document, the JWK Set and the
+# The OIDC relying party's egress: the discovery document, the JWK Set and the
 # form-encoded token exchange, against the configured identity provider and nothing else. The
 # one outbound HTTP client in this crate. Already in the lock file through `capsule-sdk`, so this
 # promotes an edge rather than adding a crate; the HTTP-client row in design/dependencies.md
@@ -222,7 +222,7 @@ capsule-wasm = { path = "../capsule-wasm" }
 kynos = { workspace = true, features = ["test-util", "server"] }
 # The SDK, as a *consumer* of this server. It depends on nothing here — its client is
 # generated from `openapi.json`, a file — so this is acyclic, and it is what makes the
-# generated client's round trip against the real router a test rather than a hope (`S-D28`).
+# generated client's round trip against the real router a test rather than a hope.
 capsule-sdk = { path = "../capsule-sdk" }
 # The client's local library, for the tests that push a **real** `Workspace`'s upload ladder at
 # the router (`tests/sdk_client.rs`). Already in the graph through `capsule-sdk`; dev-only, so the
@@ -246,7 +246,7 @@ rcgen = { version = "0.13", default-features = false, features = ["ring", "crypt
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
 # The feed's manifest bytes arrive base64-encoded, and a test that asserts byte equality has to
-# decode them. A normal dependency of the crate since `S-C2`; listed here because the suite
+# decode them. A normal dependency of the crate; listed here because the suite
 # uses it directly.
 base64 = { workspace = true }
 # The suite builds its own authenticator from `capsule_server::auth::totp`'s exported constants
@@ -257,6 +257,6 @@ base64 = { workspace = true }
 totp-rs = { workspace = true }
 # Ed25519 key generation for the token tests: the suite mints a fresh key pair per signer
 # rather than reading a checked-in PEM, because a private key in the repository is a private
-# key somebody eventually reuses. `ring` is a normal dependency since `S-C2` (the cursor MAC);
+# key somebody eventually reuses. `ring` is a normal dependency (the cursor MAC);
 # it stays listed here only so the intent of the test usage is recorded.
 

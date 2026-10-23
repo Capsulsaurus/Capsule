@@ -12,7 +12,7 @@ import Foundation
 ///
 /// Concurrent edits are **not** last-writer-wins-and-forget. A losing write is
 /// preserved in the sidecar's superseded log, which is what makes an offline
-/// edit safe to make; surfacing that log is `S-U8`'s restore affordance and is
+/// edit safe to make; a restore affordance that surfaces that log is
 /// not built here.
 public protocol CaptionStore: Sendable {
     /// The current caption, or `nil` when the asset has none — or when this

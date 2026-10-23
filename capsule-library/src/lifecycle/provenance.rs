@@ -64,7 +64,7 @@ impl Workspace {
             // the same reason: it is the device whose DSK signs the bytes below.
             created_by_user: self.account.user_id,
             created_by_device: self.account.device.device_id,
-            // Each write records the exact client build that produced *this* record (S-D15), not
+            // Each write records the exact client build that produced *this* record, not
             // the creator's — so an edit by a different client identifies itself in the chain.
             client_version: self.client_version.clone(),
             ..base.clone()
@@ -254,7 +254,7 @@ mod tests {
     use super::super::fast_workspace;
     use super::*;
 
-    /// S-A3: the `Workspace` populates `metadata_blob_hash` per the sealing order, the sidecar
+    /// The `Workspace` populates `metadata_blob_hash` per the sealing order, the sidecar
     /// binds to the manifest through the prior head, and a one-byte sidecar mutation quarantines.
     #[test]
     fn metadata_binding_populated_and_enforced() {

@@ -125,7 +125,7 @@ impl DerivativeTier {
     }
 
     /// Long-edge cap in pixels, or `None` to keep the source resolution. The 1080p cap in the
-    /// tier table governs the *video* preview transcode (slice `S-B5`), not the still preview.
+    /// tier table governs the *video* preview transcode, not the still preview.
     pub const fn max_long_edge(self) -> Option<u32> {
         match self {
             Self::Thumbnail => Some(256),
@@ -254,7 +254,7 @@ pub struct GeneratedDerivative {
 
 /// The outcome of one asset's still-derivative generation.
 ///
-/// `deferred` is the per-`(tier, format)` gap S-B13 asks for: a pair with no encoder in this
+/// `deferred` is the per-`(tier, format)` gap the design requires: a pair with no encoder in this
 /// build is *recorded*, not collapsed into the asset-level status. The asset is still
 /// `DerivativeStatus::Decoded` — the decode succeeded and a renderable derivative exists —
 /// which is why the two live in different places.
@@ -363,7 +363,7 @@ pub fn generate_still_derivatives(
                     %tier,
                     %format,
                     "media: no encoder for this (tier, format) in this build; the tier still \
-                     ships its encodable variants and this pair is backfillable (S-B1 remainder)"
+                     ships its encodable variants and this pair is backfillable"
                 );
                 out.deferred.push((tier, format));
                 continue;

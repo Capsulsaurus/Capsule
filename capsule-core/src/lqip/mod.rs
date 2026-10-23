@@ -1,6 +1,6 @@
 //! LQIP — the low-quality image placeholder carried in every asset's signed sidecar.
 //!
-//! SSoT: [Thumbnails — LQIP](https://docs/design/thumbnails/#lqip); slice `S-B14`.
+//! SSoT: [Thumbnails — LQIP](https://docs/design/thumbnails/#lqip).
 //!
 //! # Why this module exists at the crate root
 //!

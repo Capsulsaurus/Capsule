@@ -1,8 +1,8 @@
-//! The second factor's surface (slice `S-C55`) — enrolling an authenticator, confirming it,
+//! The second factor's surface — enrolling an authenticator, confirming it,
 //! removing it, and completing a sign-in with it.
 //!
 //! [`crate::auth::totp`] owns the algorithm, the replay ledger and the reasons each is where it
-//! is — including the defect this slice fixes: the retired surface had all four operations and
+//! is — including the defect this change fixes: the retired surface had all four operations and
 //! its login **never issued a challenge**, so a confirmed second factor gated nothing.
 //!
 //! # The shape of a sign-in with a second factor
@@ -16,7 +16,7 @@
 //! *that* is where the session is opened. A client which cannot tell `200` from `202` gets a
 //! body with no `access_token` in it and fails loudly, which is the failure mode to want.
 //!
-//! # `S-C28` audit
+//! # The status audit
 //!
 //! | Status | Verdict |
 //! | --- | --- |
@@ -30,7 +30,7 @@
 //! | verify-login `200` | the pair, at last |
 //! | verify-login `401 error.auth.totp_challenge_invalid` | the half-finished sign-in did not verify, expired, or was another kind of token |
 //! | verify-login `401 error.auth.totp_invalid_code` | the code did not verify or had been used |
-//! | verify-login `429 error.auth.rate_limited` | five attempts per challenge (`S-C32`) |
+//! | verify-login `429 error.auth.rate_limited` | five attempts per challenge |
 //! | `500 error.auth.unavailable` | a collaborator could not answer |
 //!
 //! **There is no `enabled` field on any response and no "is TOTP on" endpoint.** A client learns
@@ -41,7 +41,7 @@
 //!
 //! # What this surface deliberately does not gate
 //!
-//! `POST /v1/auth/reauthenticate` (`S-C7`) still takes a password alone. The second factor
+//! `POST /v1/auth/reauthenticate` still takes a password alone. The second factor
 //! guards *becoming* a session; re-authentication is performed **by** a session that already
 //! exists, and demanding a code there would protect nothing an attacker holding that session has
 //! not already got past. Recorded here rather than left to be noticed.
@@ -131,7 +131,7 @@ impl fmt::Debug for SecondFactorChallenge {
 ///
 /// It carries the same two advisory identifiers `LoginRequest` does, because *this* is the
 /// request that opens the session: without them a TOTP sign-in would land in the devices view as
-/// an unknown, ungrouped device (`S-N3`).
+/// an unknown, ungrouped device.
 #[derive(Schema, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct VerifyLoginRequest {
@@ -141,10 +141,10 @@ pub struct VerifyLoginRequest {
     /// The code the authenticator app is showing.
     pub totp_code: String,
 
-    /// An advisory device-cohort hash grouping one physical device's re-enrollments (`S-C13`).
+    /// An advisory device-cohort hash grouping one physical device's re-enrollments.
     pub cohort_hash: Option<String>,
 
-    /// The directory device the client claims to be (`S-N3`), as a UUID.
+    /// The directory device the client claims to be, as a UUID.
     pub device_id: Option<String>,
 }
 
@@ -550,8 +550,8 @@ pub async fn totp_verify_login(
         })?;
     let user = verified.user;
 
-    // Charged **before** the code is checked, and on every attempt whatever the outcome
-    // (`S-C32`). Keyed on the challenge rather than the account: keying on the account would let
+    // Charged **before** the code is checked, and on every attempt whatever the outcome. Keyed on
+    // the challenge rather than the account: keying on the account would let
     // a stream of first-factor sign-ins from an attacker exhaust the budget of the person whose
     // password they do not have.
     let key = CounterKey::SecondFactor(verified.challenge.as_str().to_owned());

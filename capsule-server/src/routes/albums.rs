@@ -1,4 +1,4 @@
-//! `POST /v1/albums` — album provisioning (slice `S-C25`).
+//! `POST /v1/albums` — album provisioning.
 //!
 //! The one endpoint that lets a client tell the server an album exists. A container album's id
 //! is derived from the account master key, so the client already knows it; this binds that id
@@ -140,7 +140,7 @@ pub async fn provision_album(
         .provision(AlbumRecord {
             album_id: AlbumId::new(&request.album_id),
             owner_id: owner.clone(),
-            // The server's own protocol, never the request's (`S-C19`). An album whose pin came
+            // The server's own protocol, never the request's. An album whose pin came
             // from a request would have invariant 6 comparing a write against itself.
             protocol_version: capsule_core::crypto::primitives::PROTOCOL_VERSION.to_owned(),
             upgrade: None,

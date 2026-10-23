@@ -6,9 +6,9 @@
 //! `stack_membership`, rating, tags), and it is the write path's own output, so a rebuild
 //! reconstructs exactly what the write path indexed.
 //!
-//! The unsigned pre-signed-path shape is **not** read any more (slice `S-D24`). Its write path
-//! was retired by `S-B2`/`S-G4`, and its read path — the compatibility branch `S-D21` kept so a
-//! pre-signed-path library still rebuilt — was retired once
+//! The unsigned pre-signed-path shape is **not** read any more. Its write path
+//! is gone, and its read path — the compatibility branch that let a pre-signed-path library
+//! still rebuild — was retired once
 //! [`Workspace::migrate_unsigned_sidecars`](crate::lifecycle::Workspace::migrate_unsigned_sidecars)
 //! existed to bring such a library forward. A rebuild holds no key material and cannot sign a
 //! sidecar, a manifest, or seal a blob, so it could never have *upgraded* one; what it does now
@@ -25,14 +25,14 @@
 //! | stacks | the `stack_membership` LWW register |
 //! | `cull` | *not an index projection* — see below |
 //!
-//! An **importer-formed** stack used to be the one thing the sidecar did not carry: pre-`S-B15`,
-//! `import_asset_with` recorded it as `assets.stack_id` / `is_stack_hidden` and wrote no
+//! An **importer-formed** stack used to be the one thing the sidecar did not carry: an
+//! older `import_asset_with` recorded it as `assets.stack_id` / `is_stack_hidden` and wrote no
 //! `stack_membership` register, so it lived only in the index and a lost index lost it.
-//! `S-B15` closed that: the importer now writes the register, so an importer-formed stack is
-//! reconstructed from disk like any other. The preservation branch in [`signed_asset_row`] is
-//! therefore no longer load-bearing for anything this build writes — it stays as the
-//! **compatibility path** for libraries imported before `S-B15`, whose sidecars carry no
-//! register and whose placement is still index-only.
+//! The importer now writes the register, so an importer-formed stack is reconstructed from
+//! disk like any other. The preservation branch in [`signed_asset_row`] is therefore no longer
+//! load-bearing for anything this build writes — it stays as the **compatibility path** for
+//! libraries imported by that older importer, whose sidecars carry no register and whose
+//! placement is still index-only.
 //!
 //! `cull` needs nothing here: it has no column in `assets` and no query projects it. The
 //! culling views ([`Workspace::assets_by_cull`](crate::lifecycle::Workspace::assets_by_cull))
@@ -85,7 +85,7 @@ struct ChainFacts {
 /// Every `{uuid}.cbor` under `media/` is decoded as the signed [`SidecarV1`] shape and upserted
 /// as an `assets` row; stacks are then reconstructed from the `stack_membership` registers.
 ///
-/// An unsigned pre-signed-path sidecar is **not** indexed (slice `S-D24`): a rebuild holds no
+/// An unsigned pre-signed-path sidecar is **not** indexed: a rebuild holds no
 /// keys and cannot admit it, so it is counted and reported with a `warn` naming
 /// [`Workspace::migrate_unsigned_sidecars`](crate::lifecycle::Workspace::migrate_unsigned_sidecars).
 /// A sidecar that is neither shape is warned about and skipped: one unreadable file must not
@@ -143,7 +143,7 @@ pub fn rebuild_index(library: &Library) -> Result<(), LibraryError> {
                 signed.push(SignedOnDisk { dir, sidecar });
             }
             Err(signed_err) => match shape::probe(&bytes) {
-                // A pre-signed-path library (`S-D24`). Nothing here holds the keys to admit it,
+                // A pre-signed-path library. Nothing here holds the keys to admit it,
                 // and indexing it would show an asset the workspace cannot verify, export, or
                 // upload — so it is counted and named, not indexed.
                 SidecarShape::LegacyUnsigned => {
@@ -304,10 +304,10 @@ fn signed_asset_row(s: &SidecarV1, facts: &ChainFacts, prior: Option<&AssetRow>)
             // so, so the columns are cleared rather than reconstructed from a stale index row.
             (Some(m.stack_id.to_string()), m.role != StackRole::Primary)
         }),
-        // No register on disk at all. Compatibility path only, since `S-B15`: every
+        // No register on disk at all. Compatibility path only: every
         // importer-formed stack this build writes carries the register, so reaching here means a
-        // **pre-`S-B15` library**, whose placement was written only to the index and lives nowhere
-        // else. Whatever the row already carries is then the only copy in existence, and a rebuild
+        // **library imported by the older importer**, whose placement was written only to the
+        // index and lives nowhere else. Whatever the row already carries is then the only copy in existence, and a rebuild
         // must not erase it.
         None => prior.map_or((None, false), |p| (p.stack_id.clone(), p.is_stack_hidden)),
     };
@@ -315,7 +315,7 @@ fn signed_asset_row(s: &SidecarV1, facts: &ChainFacts, prior: Option<&AssetRow>)
         tracing::debug!(
             asset_id = %s.uuid,
             stack_id = ?stack_id,
-            "rebuild_index: no stack_membership register on disk (pre-S-B15 asset); keeping \
+            "rebuild_index: no stack_membership register on disk (asset written before the register existed); keeping \
              the index-only stack placement the existing row carries"
         );
     }
@@ -342,7 +342,7 @@ fn signed_asset_row(s: &SidecarV1, facts: &ChainFacts, prior: Option<&AssetRow>)
         rating: i64::from(s.rating.get().copied().unwrap_or(0)),
         is_deleted: facts.is_deleted,
         deleted_at: facts.deleted_at,
-        // The register this whole slice exists for (`S-D19`/`S-D21`): a never-written
+        // The register this rebuild exists for: a never-written
         // register means visible, the wire-absent default.
         is_hidden: s.hidden.get().copied().unwrap_or(false),
     }
@@ -466,7 +466,7 @@ fn now_secs() -> i64 {
         .as_secs() as i64
 }
 
-// The contract these tests hold `rebuild_index` to (slice `S-D21`):
+// The contract these tests hold `rebuild_index` to:
 //
 // signed shape (`SidecarV1` — what every current write path emits)
 //   1. a hidden asset comes back hidden, and stays out of the default projections
@@ -480,7 +480,7 @@ fn now_secs() -> i64 {
 //      siblings are not sidecars, and a real attestation log survives the rebuild untouched
 //   8. `cull` needs no rebuild support — it is not an index projection (audit finding)
 //
-// the retired unsigned shape (`S-D24`)
+// the retired unsigned shape
 //   9. the two shapes are disjoint on the wire, so the probe cannot mis-route a file
 //   10. an unsigned sidecar is reported and not indexed; the signed asset beside it is
 #[cfg(test)]
@@ -581,9 +581,9 @@ mod tests {
 
     /// The two shapes are disjoint on the wire, so the probe cannot mis-route a file: a
     /// signed sidecar has integer field 0 and no `version` key, an unsigned one has `version`
-    /// and no field 0. This is also *why* the pre-`S-D21` rebuild lost the register state
-    /// silently — it did not mis-read signed sidecars, it skipped every one of them, so a
-    /// signed library rebuilt to nothing at all.
+    /// and no field 0. This is also *why* a rebuild that only knew the unsigned shape
+    /// would lose the register state silently — it would not mis-read signed sidecars, it
+    /// would skip every one of them, so a signed library rebuilt to nothing at all.
     #[test]
     fn the_two_sidecar_shapes_probe_disjointly() {
         let signed = signed_sidecar(Uuid::from_u128(0xD15), 0x66).to_canonical_vec();
@@ -598,11 +598,11 @@ mod tests {
         );
     }
 
-    /// **`S-D24`.** An unsigned pre-signed-path sidecar is reported and *not* indexed: a
-    /// rebuild holds no keys and cannot admit it, and indexing it would show an asset the
-    /// workspace cannot verify, export, or upload. The signed asset beside it rebuilds as
-    /// before, and the run still succeeds — one legacy file must not cost the library its
-    /// index.
+    /// **Unsigned sidecars are reported, not indexed.** An unsigned pre-signed-path sidecar is
+    /// reported and *not* indexed: a rebuild holds no keys and cannot admit it, and indexing
+    /// it would show an asset the workspace cannot verify, export, or upload. The signed asset
+    /// beside it rebuilds as before, and the run still succeeds — one legacy file must not
+    /// cost the library its index.
     #[test]
     fn an_unsigned_sidecar_is_reported_not_indexed() {
         let tmp = TempDir::new().unwrap();
@@ -639,7 +639,7 @@ mod tests {
         assert_eq!(lib.db.query_hidden(0, 100).unwrap().len(), 1);
     }
 
-    /// **The `S-D21` acceptance case.** A hidden asset survives a rebuild still hidden — and
+    /// **The acceptance case.** A hidden asset survives a rebuild still hidden — and
     /// therefore still absent from the default projections, which is what the hidden state is
     /// *for*. Before the fix the rebuilt row came back `is_hidden = false` and the asset
     /// reappeared in the timeline: a gate bypass on the one path a user reaches for after
@@ -671,7 +671,7 @@ mod tests {
             .expect("the hidden asset is back in the index");
         assert!(row.is_hidden, "the sidecar `hidden` register must survive");
 
-        // ...and the projections behave as `S-D19` requires.
+        // ...and the projections hide the asset from every default view.
         let timeline = lib.db.query_timeline(0, 100).unwrap();
         assert_eq!(
             timeline.len(),
@@ -787,7 +787,8 @@ mod tests {
         assert_eq!(members.len(), 2, "both members are in `stack_members`");
     }
 
-    /// The pre-`S-B15` compatibility case. A stack formed by an importer *of that vintage* was
+    /// The compatibility case for the older importer. A stack formed by an importer *of that
+    /// vintage* was
     /// recorded only as `assets.stack_id` / `is_stack_hidden` — its signed sidecar got no
     /// `stack_membership` register, so that placement exists nowhere on disk. Rebuilding a
     /// *live* index (`capsule rebuild`) must leave it alone rather than overwrite the only copy
@@ -965,7 +966,7 @@ mod tests {
     /// Overwrite an asset's signed sidecar with `mutate` applied.
     ///
     /// This is how a test produces a hidden asset today: `hidden` has an index projection and
-    /// a gated view (`S-D19`) but no `Workspace` setter yet, so the register can only be
+    /// a gated view but no `Workspace` setter yet, so the register can only be
     /// written straight onto the on-disk record — which is exactly the shape a peer device's
     /// write would arrive in. The signature goes stale, and that costs nothing here:
     /// `rebuild_index` holds no keys and verifies none (see the module docs).
@@ -987,7 +988,7 @@ mod tests {
         fs::write(&path, sidecar.to_canonical_vec()).unwrap();
     }
 
-    /// **The `S-D21` acceptance case on a real signed library**, rather than on a hand-built
+    /// **The acceptance case on a real signed library**, rather than on a hand-built
     /// sidecar: import two assets through the signed write path, hide one, delete the whole
     /// index file (the actual recovery scenario), and rebuild. The hidden asset must come
     /// back hidden and stay out of the timeline.
@@ -1037,7 +1038,7 @@ mod tests {
         assert_eq!(hidden_view[0].uuid, hidden.to_string());
     }
 
-    /// **The trash half of the `S-D21` audit, end to end on a real signed library.** The
+    /// **The trash half of the rebuild, end to end on a real signed library.** The
     /// signed sidecar carries no deletion state at all — it lives in the provenance chain —
     /// so a rebuild that reads only sidecars resurrects every trashed asset into the default
     /// timeline. Here the whole index file is deleted (the actual recovery scenario) and

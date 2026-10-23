@@ -11,7 +11,7 @@ pub enum ImportOutcome {
     ///
     /// `derivatives` says whether a thumbnail/preview could be generated alongside it. It is
     /// **not** a success/failure flag: an asset whose format has no codec in this build is a
-    /// fully successful import that happens to be missing its derivative (slice `S-B13`).
+    /// fully successful import that happens to be missing its derivative.
     Imported {
         /// The asset the file became — what a Move-mode caller releases the source against.
         asset_id: Uuid,
@@ -71,7 +71,7 @@ impl ImportExecutionSummary {
     }
 
     /// How many of the imported assets landed **without** thumbnail/preview derivatives because
-    /// this build has no codec for their format (slice `S-B13`).
+    /// this build has no codec for their format.
     ///
     /// These are counted by [`imported_count`](Self::imported_count) too — they are successful
     /// imports; the original is signed, encrypted and verifiable. This is the number a caller
@@ -94,7 +94,7 @@ impl ImportExecutionSummary {
     }
 
     /// The total number of `(tier, format)` pairs across the run that the tier table commits to
-    /// and this build cannot encode (slice `S-B13`).
+    /// and this build cannot encode.
     ///
     /// **Not a failure count, and not comparable to
     /// [`deferred_derivative_count`](Self::deferred_derivative_count).** That one counts *assets*

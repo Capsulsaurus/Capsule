@@ -13,7 +13,7 @@ use super::{AssetState, Workspace, asset_is_deleted, now_rfc3339};
 
 impl Workspace {
     /// The issuer-held record for a share link, if this workspace issued it. Exposes the
-    /// authoritative scope / expiry / revocation state the serving endpoint (S-C4) consults.
+    /// authoritative scope / expiry / revocation state the serving endpoint consults.
     pub fn share_link(&self, link: &ShareLinkId) -> Option<&ShareLinkRecord> {
         self.share_links.get(link)
     }

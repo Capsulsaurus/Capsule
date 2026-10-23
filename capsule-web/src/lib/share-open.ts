@@ -1,4 +1,4 @@
-// Client-side share-link open surface (slice S-E1).
+// Client-side share-link open surface.
 //
 // Thin wrapper over the `capsule-wasm` module (built by `mise run build-wasm`). All the
 // share-link crypto — Argon2id passphrase unwrap, link-secret decapsulation, and STREAM blob

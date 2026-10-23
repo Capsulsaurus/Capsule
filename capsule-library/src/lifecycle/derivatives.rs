@@ -1,5 +1,5 @@
 //! The one `lifecycle` file that reaches [`capsule_core::media`]: decode a still once at import and
-//! derive everything that needs pixels (slices `S-B1`, `S-B13`).
+//! derive everything that needs pixels.
 //!
 //! # Why this is not feature-gated
 //!
@@ -111,7 +111,7 @@ impl PreparedStill {
 }
 
 /// Map a decode failure onto the status the run summary counts, logging the distinction that
-/// makes the two reasons useful (slice `S-B13`).
+/// makes the two reasons useful.
 fn classify(error: &MediaError, src: &Path, format: Option<StillFormat>) -> DerivativeStatus {
     match error {
         MediaError::UnsupportedFormat { format, op } => {
@@ -122,7 +122,7 @@ fn classify(error: &MediaError, src: &Path, format: Option<StillFormat>) -> Deri
                 supported = ?capsule_core::media::SUPPORTED_STILL_FORMATS,
                 "derivatives: no codec for this format in this build; the original is imported \
                  signed and encrypted, but without a thumbnail or LQIP until the codec lands. \
-                 Derivatives are backfillable from the stored original (S-B13)"
+                 Derivatives are backfillable from the stored original"
             );
             DerivativeStatus::DeferredNoCodec
         }
@@ -551,8 +551,8 @@ impl Workspace {
             // does not cost the thumbnail JXL — this arm is the asset with no derivative at all.
             // The signed original, its dimensions and its
             // placeholder are all still right, and failing the import would trade a missing
-            // thumbnail for a missing backup — which is the whole of `S-B13`'s reasoning and
-            // this module's stated contract. Reported as `DecodeFailed`, the "a supported path
+            // thumbnail for a missing backup — which is the whole of the no-codec reasoning
+            // and this module's stated contract. Reported as `DecodeFailed`, the "a supported path
             // produced no derivative and somebody should look at it" bucket, so the run summary
             // counts it instead of staying silent.
             Err(error) => {
@@ -846,7 +846,7 @@ mod tests {
         panic!("no bucket for {asset_id}");
     }
 
-    /// **The `S-B14` acceptance case, and the first production caller of `capsule_core::lqip`.**
+    /// **The acceptance case, and the first production caller of `capsule_core::lqip`.**
     ///
     /// A decodable still imports with real pixel dimensions and a 32-byte chromahash placeholder
     /// inside the *signed* sidecar, and the sidecar still verifies — the placeholder is
@@ -1185,7 +1185,7 @@ mod tests {
 
     /// A format with no codec here, and bytes that are no still at all: both import as signed,
     /// verifiable originals, with EXIF-or-nothing dimensions, no placeholder, no derivative
-    /// files, and the reason recorded (slice `S-B13`).
+    /// files, and the reason recorded.
     #[test]
     fn an_undecodable_original_still_imports_with_the_reason_recorded() {
         let lib = TempDir::new().unwrap();

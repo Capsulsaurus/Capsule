@@ -1,5 +1,5 @@
 //! The album-upgrade ceremony's **wire vocabulary** — the parts both ends need and neither end
-//! needs MLS for (slices `S-X3`, `S-C24`).
+//! needs MLS for.
 //!
 //! SSoT: [Versioning — Album Upgrade Ceremony](https://docs/design/versioning/#album-upgrade-ceremony).
 //!
@@ -13,7 +13,7 @@
 //! none of them needs a group.
 //!
 //! So the types that are *pure data plus a signature check* live here, ungated, and
-//! `openmls_authority` re-exports them. It is the same move `S-C46` made for the custody receipt,
+//! `openmls_authority` re-exports them. The custody receipt is shared the same way,
 //! for the same reason: a structure defined at both ends is one added field away from a signature
 //! that stops verifying, so there is one definition and both ends read it.
 //!
@@ -24,8 +24,8 @@
 //! # What the server can decide from here, and what it cannot
 //!
 //! It can verify [`SignedUpgradeIntent`] against the account's published
-//! [`DeviceDirectory`] — the same trust anchor `S-C42`
-//! established — so a quiescence it records is one an admin device really asked for. It can
+//! [`DeviceDirectory`] — the same trust anchor
+//! the roster uses — so a quiescence it records is one an admin device really asked for. It can
 //! evaluate [`UpgradeIntent::is_expired`] against its own clock, which is the whole point of the
 //! deadline being a *duration*: a skewed member clock can neither extend nor shorten the window.
 //!

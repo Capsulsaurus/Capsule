@@ -1,4 +1,4 @@
-//! The album-upgrade ceremony's server halves (slice `S-C24`), end to end.
+//! The album-upgrade ceremony's server halves, end to end.
 //!
 //! The ceremony itself is a client ceremony carried on MLS application messages the server
 //! cannot read. Four of its steps are the server's, and each one is the server's *because the

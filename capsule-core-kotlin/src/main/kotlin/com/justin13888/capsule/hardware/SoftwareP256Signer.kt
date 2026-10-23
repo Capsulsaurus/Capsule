@@ -18,7 +18,7 @@ import java.security.MessageDigest
  * replaces, and the always-runnable path for the P-256 hybrid composition (a JVM/CI host has no
  * StrongBox). It mirrors [StrongBoxSigner]'s wire contract exactly — a 65-byte **uncompressed
  * SEC1** (`0x04‖x‖y`) public key and a **DER-encoded ECDSA** signature over `SHA-256(msg)` — so it
- * plugs into `FfiWorkspace.createWithP256HardwareSigner` end to end (slice S-F2), and mirrors the
+ * plugs into `FfiWorkspace.createWithP256HardwareSigner` end to end, and mirrors the
  * Swift `SoftwareP256Signer`.
  *
  * The P-256 scalar is derived deterministically (HKDF-SHA256, per `keyAlias`, reduced mod n) from a

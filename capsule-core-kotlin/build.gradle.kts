@@ -53,7 +53,7 @@ tasks.withType<Test>().configureEach {
     systemProperty("jna.library.path", "${projectDir.parentFile}/target/debug")
 }
 
-// ── FFI wiring (S-F3) ────────────────────────────────────────────────────────
+// ── FFI wiring ────────────────────────────────────────────────────────
 // The uniffi Kotlin bindings (build/generated-bindings) and the per-ABI JNI libs
 // (src/main/jniLibs) are generated build inputs — both .gitignored, never committed.
 // These tasks reproduce what stage-bindings.sh does by hand so a clean-checkout Gradle

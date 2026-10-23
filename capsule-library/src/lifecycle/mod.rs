@@ -120,10 +120,10 @@ pub enum LifecycleError {
     Db(String),
     /// The on-disk library could not be opened. Typed rather than stringified so a caller
     /// can act on the one open failure with its own recovery — a catalog stamped by a newer
-    /// build ([`LibraryError::CatalogTooNew`], slice `S-D23`) — instead of matching on text.
+    /// build ([`LibraryError::CatalogTooNew`]) — instead of matching on text.
     #[error("open library: {0}")]
     Library(#[from] LibraryError),
-    /// The durable album-key store could not be read or written (slice `S-A10`). Never
+    /// The durable album-key store could not be read or written. Never
     /// swallowed: losing album keys silently is exactly the failure this store exists to fix.
     #[error(transparent)]
     AlbumStore(#[from] AlbumStoreError),
@@ -282,11 +282,11 @@ pub struct AssetState {
 /// The **index projection** of an asset's stack membership: the two `assets` columns
 /// (`stack_id`, `is_stack_hidden`) that keep a non-primary member out of the timeline.
 ///
-/// Since `S-B15` this is a *derived* value, not a source of truth: the durable record is the
+/// This is a *derived* value, not a source of truth: the durable record is the
 /// sidecar's signed `stack_membership` register, which both the importer and
 /// [`Workspace::set_stack_membership`] write. It survives here for the one case the register
-/// cannot serve — an asset imported **before** `S-B15`, whose placement was written only to the
-/// index and therefore exists nowhere else (see [`Workspace::open`] step (6) and
+/// cannot serve — an asset imported **before** the importer wrote that register, whose
+/// placement was written only to the index and therefore exists nowhere else (see [`Workspace::open`] step (6) and
 /// [`library::rebuild_index`](crate::library::rebuild_index)).
 #[derive(Debug, Clone)]
 pub struct StackPlacement {
@@ -309,7 +309,7 @@ impl StackPlacement {
 }
 
 /// Out-of-band metadata a third-party [source adapter](crate::import::SourceAdapter) folded for
-/// one media file, in the shape the signed sidecar stores it (slice `S-B10`).
+/// one media file, in the shape the signed sidecar stores it.
 ///
 /// The [precedence rule] is resolved in two places, and this type is what keeps the two halves
 /// apart:
@@ -353,22 +353,22 @@ pub struct SignedImportOptions {
     /// Delete the source file after a durable commit (Move mode).
     pub move_source: bool,
     /// Defer Move-mode source deletion to the caller's verify-before-destroy gate
-    /// (`S-D4` [`release_move_source`](crate::library::release_move_source)) instead of
+    /// ([`release_move_source`](crate::library::release_move_source)) instead of
     /// releasing on the local durable commit. Set by every import of a user's file — the
-    /// executor and streaming import (`S-B3`) — because the source is the only other copy until
+    /// executor and streaming import — because the source is the only other copy until
     /// the *server* durably holds it (invariant 7); the caller releases it through
     /// [`Workspace::release_move_source`]. Left `false` only where the source is scratch the
     /// library made itself ([`Workspace::import_bytes`]).
     pub defer_source_release: bool,
-    /// Signed stack membership for a multi-file candidate member (`S-B15`). Written into the
+    /// Signed stack membership for a multi-file candidate member. Written into the
     /// sidecar's `stack_membership` LWW register — the same durable write
     /// [`Workspace::set_stack_membership`] performs — and projected from there onto the index
     /// row. `None` imports a standalone asset and leaves the register wire-absent.
     pub stack: Option<StackMembership>,
-    /// Folded third-party exporter metadata for this file (`S-B10`), attached by the
+    /// Folded third-party exporter metadata for this file, attached by the
     /// [executor](crate::import::execute_with_source_metadata) when the import came
     /// from a [source adapter](crate::import::SourceAdapter). `None` — a plain filesystem
-    /// import — leaves every enriched field exactly as it was before the slice.
+    /// import — leaves every enriched field exactly as it was before this change.
     pub enrichment: Option<SidecarEnrichment>,
 }
 
@@ -386,7 +386,7 @@ pub struct SignedImport {
     /// Whether thumbnail/preview derivatives were generated, and if not, why.
     pub derivatives: DerivativeStatus,
     /// How many `(tier, format)` pairs the tier table commits to and this build cannot encode
-    /// — the per-format half of the `S-B13` gap, which is orthogonal to
+    /// — the per-format half of the no-codec gap, which is orthogonal to
     /// [`derivatives`](Self::derivatives): a `Decoded` asset can still carry deferred formats.
     /// Zero when the still did not decode at all, because nothing was attempted.
     pub deferred_formats: u32,
@@ -395,8 +395,8 @@ pub struct SignedImport {
 /// A streamed import: everything the [streaming window](crate::import::execute_streaming) needs
 /// about one just-imported asset to drive its upload → verify → release step, without exposing
 /// workspace internals. Produced by [`Workspace::import_asset_streaming`], which commits on the
-/// signed path with source release **deferred** to the server-side verify-before-destroy gate
-/// (`S-D4`), since in streaming mode the local bytes are the only copy until the *server* durably
+/// signed path with source release **deferred** to the server-side verify-before-destroy gate,
+/// since in streaming mode the local bytes are the only copy until the *server* durably
 /// holds them.
 #[derive(Debug, Clone)]
 pub struct StreamedImport {
@@ -423,7 +423,7 @@ pub struct Workspace {
     device_signer: Box<dyn Signer>,
     directory: DeviceDirectory,
     /// The `client_version` / `generated_by_client` this workspace stamps on every manifest and
-    /// derivative it authors (S-D15). Defaults to the bare-core
+    /// derivative it authors. Defaults to the bare-core
     /// [`capsule-core/{semver}+{commit}`](capsule_core::client_build::core_client_version) identity; an
     /// app injects its own product id via [`with_client_id`](Self::with_client_id) (CLI) or the
     /// FFI constructor (native apps) so each client reports itself rather than `capsule-core`.
@@ -436,18 +436,18 @@ pub struct Workspace {
     /// default; the enum lets the live
     /// [`OpenMlsAuthority`](capsule_core::crypto::authority::OpenMlsAuthority) drop in without the
     /// lifecycle naming a concrete backend. **Persisted** alongside the album keys in
-    /// [`AlbumStore`](capsule_core::crypto::keys::AlbumStore) and restored on open (`S-A10`) — without
+    /// [`AlbumStore`](capsule_core::crypto::keys::AlbumStore) and restored on open — without
     /// it a reopened library could hold an AMK and still not verify a single manifest.
     authorities: HashMap<Uuid, Authority>,
     assets: HashMap<Uuid, AssetState>,
     /// The reconciled [aggregated-album](capsule_core::federation) group assertion for each album the
-    /// workspace can see, keyed by album id (`S-E4`). An own album's entry is self-authored via
+    /// workspace can see, keyed by album id. An own album's entry is self-authored via
     /// [`create_album_group`](Self::create_album_group) / [`join_album_group`](Self::join_album_group);
     /// a peer constituent's entry is folded in from the feed via
     /// [`merge_album_group_assertion`](Self::merge_album_group_assertion). Removing an entry is a
     /// group *leave* — it drops the constituent from every viewer's aggregate on their next sync.
     ///
-    /// **Deliberately session-scoped** (`S-A10`): every entry is a self-verifying signed
+    /// **Deliberately session-scoped**: every entry is a self-verifying signed
     /// assertion that the federation feed re-delivers, so it is a cache of reconcilable state,
     /// not key material. Losing it on close costs one reconcile, not access.
     group_assertions: HashMap<Uuid, AlbumGroupAssertion>,
@@ -458,9 +458,9 @@ pub struct Workspace {
     /// on share links so a share's cost matches the device tier.
     argon2_params: Argon2Params,
     /// Issued share links keyed by their revocation handle — the authoritative link records
-    /// the serving endpoint (S-C4) consults for scope, expiry, and revocation state.
+    /// the serving endpoint consults for scope, expiry, and revocation state.
     ///
-    /// **Deliberately session-scoped** (`S-A10`): the durable registry these mirror lives on the
+    /// **Deliberately session-scoped**: the durable registry these mirror lives on the
     /// serving side, and a link's *secret* travels in the URL rather than here, so persisting the
     /// local copy is a link-management concern (revoke-after-restart) rather than a data-plane
     /// key-loss one. Tracked with the share-link slices, not with album keys.
@@ -469,7 +469,7 @@ pub struct Workspace {
     /// escrow-wrapped Drop Key private half so any of this owner's adopting devices can
     /// later decapsulate a drop sealed to it (SSoT: [Web Upload]).
     ///
-    /// **Session-scoped, and the one deferral here that is real key material** (`S-A10`): closing
+    /// **Session-scoped, and the one deferral here that is real key material**: closing
     /// a workspace with an outstanding upload link drops the escrowed Drop Key private half, so a
     /// drop sealed to that link can no longer be adopted. It is deferred rather than folded into
     /// [`AlbumStore`](capsule_core::crypto::keys::AlbumStore) because the link registry is
@@ -480,16 +480,16 @@ pub struct Workspace {
     /// [Web Upload]: https://docs/design/web-upload/
     upload_links: HashMap<UploadLinkId, IssuedLink>,
     /// Pending guest drops in this user's inbox, keyed by drop id. Models the server's
-    /// staging store (the server's drop module, `S-C5`) so the offline core can drive the
+    /// staging store (the server's drop module) so the offline core can drive the
     /// full seal → stage → adopt path; a real client fills it from server responses.
     ///
-    /// **Deliberately session-scoped** (`S-A10`): the server's staging store is the authority and
+    /// **Deliberately session-scoped**: the server's staging store is the authority and
     /// a client refills this from it, so there is nothing here to lose.
     inbox: HashMap<DropId, InboxEntry>,
     /// The `{uuid}.cbor` files under `media/` that no provenance chain anchors, found at
     /// [`open`](Self::open): unsigned pre-signed-path sidecars awaiting
     /// [`migrate_unsigned_sidecars`](Self::migrate_unsigned_sidecars), or the debris of an
-    /// interrupted run (`S-D24`). Recomputed by the verb; empty for a signed-only library.
+    /// interrupted run. Recomputed by the verb; empty for a signed-only library.
     unmigrated: Vec<UnmigratedSidecar>,
 }
 
@@ -551,7 +551,7 @@ impl Workspace {
     /// This workspace's **signed device directory** — the user-IK-signed list of enrolled
     /// device signing keys `verify_asset` resolves a manifest's `created_by_device` against.
     ///
-    /// Exposed so a client can publish it (the `S-C9` device-directory surface, driven from
+    /// Exposed so a client can publish it (the device-directory surface, driven from
     /// the SDK by `capsule_sdk::directory`). The directory is a signed, self-verifying
     /// document: it carries no private key material, and a reader checks it under
     /// [`user_ik_public`](Self::user_ik_public) before trusting a single entry.
@@ -585,7 +585,7 @@ impl Workspace {
     /// bytes the asset's metadata-bearing manifest commits to via `metadata_blob_hash`
     /// ([`AssetState::metadata_blob`]).
     ///
-    /// Persisted since `S-A10`. The blob is AMK ciphertext, so it is safe at rest beside the
+    /// Persisted to disk. The blob is AMK ciphertext, so it is safe at rest beside the
     /// plaintext original, and it cannot be regenerated: [`seal_metadata_blob`] draws a fresh
     /// nonce per call which is folded into the blob key, so re-sealing the same sidecar produces
     /// different bytes and a different content address. Without these bytes on disk a reopened
@@ -648,7 +648,7 @@ impl Workspace {
     /// This device's published **DEK** public encapsulation key — the bytes a peer (or this
     /// account's own escrow path) wraps a key to so only this device can open it.
     ///
-    /// Length-tagged by composition (`S-F8`): 1216 bytes for the software X-Wing DEK, 1249 for
+    /// Length-tagged by composition: 1216 bytes for the software X-Wing DEK, 1249 for
     /// the hardware-bound P-256 hybrid, so a recipient never has to be told which it is holding
     /// and the two can never be confused for one another.
     pub fn device_dek_public(&self) -> Vec<u8> {
@@ -665,7 +665,7 @@ impl Workspace {
         Ok(self.account.device.dek.decapsulate(ciphertext)?)
     }
 
-    /// Whether this workspace's DEK has its classical half in a secure element (`S-F8`) rather
+    /// Whether this workspace's DEK has its classical half in a secure element rather
     /// than in software — the honest answer to "is this device actually hardware-bound", read
     /// from the account's own recorded binding rather than from whether an element was offered.
     pub fn device_dek_is_hardware_bound(&self) -> bool {

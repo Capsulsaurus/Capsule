@@ -1,4 +1,4 @@
-//! [`FederationPull`] — a peer server pulling one shared album from its home server (`S-E2`).
+//! [`FederationPull`] — a peer server pulling one shared album from its home server.
 //!
 //! # There is no federation protocol to speak
 //!
@@ -403,7 +403,7 @@ fn write<T>(lock: &RwLock<T>) -> std::sync::RwLockWriteGuard<'_, T> {
 /// A [`BlobSource`] over the **generated** `get_blob`, presenting a capability.
 ///
 /// Not [`HttpBlobSource`](crate::fetch::HttpBlobSource): that one is raw `reqwest` over an
-/// `S-D7` session, and a peer has no session. Everything that parses or serializes here is
+/// SDK session, and a peer has no session. Everything that parses or serializes here is
 /// generated — the `Range` parameter, the byte body and every declared refusal — and what is
 /// hand-written is the mapping from a status to the fetcher's own outcome.
 #[derive(Clone)]

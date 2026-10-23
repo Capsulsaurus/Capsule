@@ -3,7 +3,7 @@ import Foundation
 
 /// A Secure Enclave–backed ``FfiHardwareKeyAgreement`` (Apple, iOS / macOS) — the ECDH analogue of
 /// ``SecureEnclaveSigner`` that backs the hardware-bound classical half of the device **encryption**
-/// key (slice S-F5). The private key is generated inside the Secure Enclave and never leaves it;
+/// key. The private key is generated inside the Secure Enclave and never leaves it;
 /// there is no API to read the private bytes, so non-exportability is enforced by the platform.
 ///
 /// ## Algorithm

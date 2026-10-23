@@ -5,15 +5,14 @@
 //! written elsewhere. Everything is generic over `&dyn AssetIndex`, so a Postgres-backed smoke
 //! test is one [`run_all`] call and costs nothing in a binary that never makes one.
 //!
-//! # What this suite can prove about `S-C21`, and what it cannot
+//! # What this suite can prove about single-sequence allocation, and what it cannot
 //!
 //! The port's central claim is that a sequence number is allocated inside the same critical
 //! section that makes its row readable, so a reader can never page past a number that is still
 //! uncommitted. **A single-process suite cannot exhibit that race**, because the window it
 //! would have to observe exists only between two concurrent transactions. Saying otherwise
-//! would repeat the `S-C35` mistake in a new place: a conformance suite proves the operations
-//! that exist behave consistently, never that a property holds under conditions it cannot
-//! create.
+//! would claim more than a conformance suite can: it proves the operations that exist behave
+//! consistently, never that a property holds under conditions it cannot create.
 //!
 //! So the suite asserts the property's **observable consequences** — every minted number is
 //! reachable through the feed, numbers are strictly increasing per owner, and paging over any
@@ -81,7 +80,7 @@ pub(crate) fn pending(case: &str, n: u32) -> PendingAsset {
 /// A finalized blob of `role`, addressed from `seed`.
 ///
 /// A provenance blob carries a `manifest_sha256`, because that is what a real finalization
-/// computes over the bytes it committed and it is what the chain head is set from (`S-C31`).
+/// computes over the bytes it committed and it is what the chain head is set from.
 /// Taken from the address here only because the double's addresses *are* SHA-256 digests; the
 /// port is what refuses to make that assumption.
 ///
@@ -486,7 +485,8 @@ pub async fn paging_is_ordered_bounded_and_resumable(index: &dyn AssetIndex) {
 
 /// Every number the index mints is reachable through the feed.
 ///
-/// The observable half of `S-C21` — see the module docs on what this can and cannot prove.
+/// The observable half of the single-sequence claim — see the module docs on what this can and
+/// cannot prove.
 pub async fn every_minted_number_is_reachable(index: &dyn AssetIndex) {
     let owner = OwnerId::new("reach-owner");
     let mut minted = Vec::new();
@@ -1510,7 +1510,7 @@ pub async fn an_op_on_an_asset_that_is_not_the_callers_is_not_found(index: &dyn 
     let _ = asset;
 }
 
-/// A lifecycle write **retains** the manifest it supersedes (`S-C52`).
+/// A lifecycle write **retains** the manifest it supersedes.
 ///
 /// The provenance role moves; the manifest it moved off does not become an orphan. Two
 /// documented capabilities rest on that — the scrub's chain walk, and the takedown rebuttal,
@@ -1595,8 +1595,7 @@ pub async fn a_lifecycle_write_retains_the_manifest_it_supersedes(index: &dyn As
     );
 }
 
-/// A `replace` re-points the **original**, which is the role `record_blob` refuses to move
-/// (`S-C43`).
+/// A `replace` re-points the **original**, which is the role `record_blob` refuses to move.
 ///
 /// The refusal is not softened by this: an *upload* that swapped the original would swap bytes
 /// under a signature that still verifies against the old ones, and `BlobOutcome::Conflict` is
@@ -1972,7 +1971,7 @@ pub async fn a_restore_clears_the_retention_floor(index: &dyn AssetIndex) {
 /// Run every case against `index`, in order.
 /// A serving hold is placed, reported on every reference, and lifted.
 ///
-/// `S-C17`. Three separate claims, and the third is the one a takedown's reversibility rests
+/// Three separate claims, and the third is the one a takedown's reversibility rests
 /// on: a lifted hold leaves the row exactly as it was, because the hold never touched the
 /// state, the blobs or the feed position in the first place.
 pub async fn a_serving_hold_is_placed_reported_and_lifted(index: &dyn AssetIndex) {
@@ -2172,7 +2171,7 @@ pub async fn the_row_walk_orders_by_the_identifiers_own_bytes(index: &dyn AssetI
     );
 }
 
-/// An album page is the owner's sequence filtered to one album, with its own head (`S-C51`).
+/// An album page is the owner's sequence filtered to one album, with its own head.
 ///
 /// Positions are the owner's numbers, so a member's per-album anti-rewind mark is the same value
 /// the owner's feed carries; gaps are the other albums' entries. The head is the album's last

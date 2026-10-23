@@ -1,7 +1,6 @@
-//! [`ReadAuthority`] — who may fetch a blob, and the `403` the contract asks for (`S-C39`,
-//! `S-C51`).
+//! [`ReadAuthority`] — who may fetch a blob, and the `403` the contract asks for.
 //!
-//! # The hole `S-C39` closed
+//! # The hole this closes
 //!
 //! Before it, `GET /v1/blob/{hash}` authorized on "a valid access token" and nothing else, on
 //! both the Salvo surface and its Kynos port. **Any authenticated account could fetch any live
@@ -21,7 +20,7 @@
 //! | [`BlobReadAccess::Granted`] | `200`/`206` | the bytes |
 //! | [`BlobReadAccess::Revoked`] | `403` | *"you had this and you do not now"* — re-sync membership, then degrade |
 //! | [`BlobReadAccess::Unrelated`] | `404` | nothing. Byte-identical to an address the server never heard of |
-//! | [`BlobReadAccess::ScopeInsufficient`] | `403` | *"this grant does not cover originals"* — a peer only (`S-E5`) |
+//! | [`BlobReadAccess::ScopeInsufficient`] | `403` | *"this grant does not cover originals"* — a peer only |
 //!
 //! **A `403` is a disclosure and a `404` is not**, which is why the boundary is drawn where it
 //! is. Answering `403` to a caller with no relationship to an asset would confirm that the
@@ -30,7 +29,7 @@
 //! authorization *change*, and a change presupposes a prior state: the caller has to be someone
 //! the server can see once had access. Everyone else is told what an unknown address is told.
 //!
-//! # Where the middle row's fact comes from (`S-C51`)
+//! # Where the middle row's fact comes from
 //!
 //! [`MembershipAuthority`] grants a fetch to the account the referencing asset is filed under
 //! and to any account on the current roster of the album it belongs to, in either role — a
@@ -42,7 +41,7 @@
 //! never named is [`BlobReadAccess::Unrelated`], indistinguishable from a stranger, because it
 //! is one.
 //!
-//! # And where a peer's fact comes from (`S-E5`)
+//! # And where a peer's fact comes from
 //!
 //! A federated peer is not an account, so it is not asked the account's question. Its
 //! relationship to an asset is the **capability** this server minted: one album, one roster
@@ -79,12 +78,12 @@
 //! so it costs none either. A peer's backup holder still costs its lookup, because the peer path
 //! asks the roster before it checks the role.
 //!
-//! **The takedown `410` was deliberately left alone** by `S-C39`, and the reasoning still holds
-//! with members in the picture: design/moderation.md states the per-surface rule as *"takedown
-//! of known content → `410`"*, and changing a landed, tested contract on an inference is not
-//! this module's to do. What `S-C51` adds is that a *former* member is answered `403` before any
-//! `410` is reached, so the authority-first ordering `S-C39` established keeps every policy
-//! refusal illegible to anyone who is not currently entitled to the bytes.
+//! **The takedown `410` was deliberately left alone** by this authority check, and the
+//! reasoning still holds with members in the picture: design/moderation.md states the
+//! per-surface rule as *"takedown of known content → `410`"*, and changing a landed, tested
+//! contract on an inference is not this module's to do. A *former* member is answered `403`
+//! before any `410` is reached, so the authority-first ordering keeps every policy refusal
+//! illegible to anyone who is not currently entitled to the bytes.
 //!
 //! [Download & Sync]: ../../../capsule-docs/src/content/docs/design/transfer/download.md
 
@@ -131,7 +130,7 @@ impl ReadAuthorityError {
 pub enum BlobReadAccess {
     /// Serve them.
     Granted,
-    /// The caller was on the album's roster and has been removed (`S-C51`).
+    /// The caller was on the album's roster and has been removed.
     ///
     /// Rendered as `403`: the one answer that discloses the address is live, given only to an
     /// account the server holds a revoked membership row for.
@@ -140,8 +139,7 @@ pub enum BlobReadAccess {
     ///
     /// Rendered as `404`, byte-identical to an address nothing references — which is the point.
     Unrelated,
-    /// The caller is entitled to the album, but its grant does not cover this blob's role
-    /// (`S-E5`).
+    /// The caller is entitled to the album, but its grant does not cover this blob's role.
     ///
     /// Only a peer under a capability ever sees this: an account's membership carries no scope.
     /// Rendered as `403 error.federation.scope_insufficient` rather than `404`, because the peer
@@ -150,7 +148,7 @@ pub enum BlobReadAccess {
     ScopeInsufficient,
 }
 
-/// Who a blob is being served to (`S-C39`, `S-E5`).
+/// Who a blob is being served to.
 ///
 /// An account and a peer are decided from the same stores, but they are not the same reader:
 /// an account's relationship to an asset is its own membership, while a peer's is the
@@ -161,12 +159,12 @@ pub enum BlobReadAccess {
 pub enum ReadPrincipal<'a> {
     /// An account, through a session access token.
     Account(&'a OwnerId),
-    /// A peer server, through a federation capability (`S-E5`).
+    /// A peer server, through a federation capability.
     Peer(&'a VerifiedCapability),
 }
 
 impl<'a> ReadPrincipal<'a> {
-    /// The account whose own in-flight uploads may answer a fetch (`S-C40`), or `None`.
+    /// The account whose own in-flight uploads may answer a fetch, or `None`.
     ///
     /// A peer has none. The transient `409` reports the caller's *own device* still sending
     /// exactly these bytes; a peer has no device here, so it is told what an unreferenced
@@ -285,7 +283,7 @@ impl MembershipAuthority {
     }
 
     /// What a peer may read: the album its capability names, as the member it was minted for,
-    /// within the scope it was granted (`S-E5`).
+    /// within the scope it was granted.
     async fn peer_access(
         &self,
         capability: &VerifiedCapability,

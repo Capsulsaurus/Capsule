@@ -18,9 +18,9 @@ pub trait AlbumStoreFile: Sized {
 
     /// Load and unseal the store at `{root}/.library/albums.cbor`.
     ///
-    /// `Ok(None)` means the file does not exist — a **pre-`S-A10` library**, whose album keys
-    /// were session-scoped and were therefore never persisted at all. Such a library opens with
-    /// zero albums; its assets are recoverable only through a backup artifact (see
+    /// `Ok(None)` means the file does not exist — a **library written before album keys were
+    /// durable**, whose album keys were session-scoped and were therefore never persisted. Such
+    /// a library opens with zero albums; its assets are recoverable only through a backup artifact (see
     /// [`Workspace::import_backup`](crate::lifecycle::Workspace::import_backup)). This is not a
     /// regression — those assets were already undecryptable across a restart before the store
     /// existed — but it is a real, permanent limitation of libraries created before it.

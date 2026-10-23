@@ -1,4 +1,4 @@
-//! [`PostgresReceipts`] — the durable custody receipt log (`S-C15`, #446).
+//! [`PostgresReceipts`] — the durable custody receipt log (#446).
 //!
 //! # One row per receipt, holding the signed bytes
 //!

@@ -56,7 +56,7 @@ pub struct SessionRecord {
     /// When the user last presented a credential on this session's lineage.
     ///
     /// Set at sign-in and **carried forward unchanged by a refresh**. This is what a
-    /// re-authentication gate reads (`S-C7`): starting a cross-device add requires a fresh local
+    /// re-authentication gate reads: starting a cross-device add requires a fresh local
     /// device authorization, and while the server cannot verify a biometric, it can refuse to
     /// act on a session whose owner has not proved anything in hours.
     pub authenticated_at: Timestamp,
@@ -66,13 +66,13 @@ pub struct SessionRecord {
     pub user_agent: Option<String>,
     /// The address the opening ceremony came from, for the devices listing.
     pub ip_address: Option<String>,
-    /// The advisory device-cohort hash asserted at session creation (slice `S-C13`).
+    /// The advisory device-cohort hash asserted at session creation.
     ///
     /// **Legibility metadata only.** No authorization path reads it — the JWT claims carry no
     /// cohort field — so it groups a physical device's re-enrollments in the devices view and
     /// nothing more.
     pub cohort_hash: Option<String>,
-    /// The directory device the client claimed to be (slice `S-N3`).
+    /// The directory device the client claimed to be.
     ///
     /// A *different* identifier space from [`Self::cohort_hash`]: the cohort groups
     /// re-enrollments of one physical device, this names one directory device. Typed as a
@@ -154,7 +154,7 @@ pub trait AuthStateStore: std::fmt::Debug + Send + Sync {
     ///
     /// This is the revoke-all ceremony, and the returned length is the number a client is told.
     /// Global by construction: the caller's own session is among `user`'s sessions, so a
-    /// revoke-all signs the caller out too (slice `S-C23`) — the point of the ceremony, not an
+    /// revoke-all signs the caller out too — the point of the ceremony, not an
     /// oversight. Running it twice returns an empty second time; there is no residue to count.
     fn close_all_for_user<'a>(&'a self, user: &'a UserId) -> StoreFuture<'a, Vec<SessionRecord>>;
 }
@@ -163,7 +163,7 @@ pub trait AuthStateStore: std::fmt::Debug + Send + Sync {
 // Device cohorts
 // -------------------------------------------------------------------------------------------
 
-/// One physical device's history with an account (slice `S-C13`).
+/// One physical device's history with an account.
 ///
 /// The durable half of the cohort story. A session store forgets a cohort exactly when the
 /// "have I seen this device before?" question becomes worth asking — a user reinstalls, gets a

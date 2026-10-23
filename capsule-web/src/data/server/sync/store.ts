@@ -7,10 +7,9 @@
  * holds no album keys, so the store retains only what the feed's envelope legitimately
  * exposes — ids, per-album `sync_seq`, the album protocol pin, blob content addresses by
  * role, and the derived `original_held` state. Capture dates, dimensions, titles, LQIP
- * and locations live in the encrypted metadata and are NOT available here (see the S-D6
- * report); the gateway maps these records to key-free display shells.
+ * and locations live in the encrypted metadata and are NOT available here; the gateway maps these records to key-free display shells.
  *
- * Validation mirrors the S-D2 client rules (sync design doc, Cursor Authenticity and Anti-Rewind):
+ * Validation mirrors the native client rules (sync design doc, Cursor Authenticity and Anti-Rewind):
  *   - Forward-version rejection: an entry whose `protocol_version` is above the client's
  *     max known is refused WITHOUT partial application.
  *   - Anti-rewind: a page whose `sync_seq` regresses against the per-album high-water mark

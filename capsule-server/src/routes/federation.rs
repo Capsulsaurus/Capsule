@@ -1,4 +1,4 @@
-//! The federation capability's lifecycle: minting, revoking and refreshing (`S-E2`, `S-C49`).
+//! The federation capability's lifecycle: minting, revoking and refreshing.
 //!
 //! Not the pull path. design/federation.md is explicit that federation adds **no new data
 //! protocol** — a peer pulls through `GET /v1/sync?album_id=` and `GET /v1/blob/{hash}`, which
@@ -943,7 +943,7 @@ pub async fn refresh_capability(
 }
 
 // ===========================================================================================
-// Federated moderation report intake (S-C49)
+// Federated moderation report intake
 // ===========================================================================================
 
 /// The most bytes any one field of a federated report may carry.

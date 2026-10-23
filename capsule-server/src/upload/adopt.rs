@@ -39,7 +39,7 @@
 //!   computes over bytes it has just read. The plain `409` stands.
 //!
 //! Quota is not charged: no byte is stored, and the duplicate check is ahead of the charge so
-//! that a refused duplicate costs nothing (`S-C6`).
+//! that a refused duplicate costs nothing.
 
 use uuid::Uuid;
 

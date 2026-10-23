@@ -9,14 +9,14 @@
 //! reason the server has none — "rollback then continue" is what corrupts data, on a laptop
 //! as much as on a server.
 //!
-//! SSoT: design/versioning § Client Catalog Migration (slice `S-D23`).
+//! SSoT: design/versioning § Client Catalog Migration.
 //!
 //! # Why not drop and rebuild
 //!
 //! `rebuild_index` is the **repair** path ([Maintenance § Repair]), reached when the index is
 //! already known-inconsistent. It is not a release ritual: spending it on every shipped column
 //! would re-derive the whole library on each upgrade and re-lose whatever the sidecars do not
-//! yet carry (importer-formed stack placement, slice `S-B15`). The migrator is the durability
+//! yet carry (importer-formed stack placement). The migrator is the durability
 //! mechanism; rebuild stays the recovery path it was.
 //!
 //! # A shipped step is immutable
@@ -46,7 +46,7 @@
 //! | v3    | + `embeddings` + its two indexes (`09ae1d1`) |
 //! | v4    | + `assets.is_hidden`, `idx_assets_hidden`, widened `idx_assets_timeline` (`5d3ef26`) |
 //!
-//! Two consequences the slice text did not anticipate, both handled below:
+//! Two consequences the original plan did not anticipate, both handled below:
 //!
 //! 1. **v1 is ambiguous**: a v1-stamped catalog may carry either `hash_blake3` or `hash_sha256`,
 //!    so the 1 → 2 step renames *conditionally* rather than unconditionally.
@@ -189,7 +189,7 @@ const STEP_1_TO_2: Step = Step {
     ],
 };
 
-/// v2 → v3. Adds the `embeddings` provenance companion table (slice `S-H1`).
+/// v2 → v3. Adds the `embeddings` provenance companion table.
 ///
 /// The `vec0` partition tables are *not* created here: their vector dimension is declared by
 /// the model registry, so they are created at runtime by their writer (see
@@ -246,8 +246,7 @@ const STEP_2_TO_3: Step = Step {
     ],
 };
 
-/// v3 → v4. Adds `assets.is_hidden`, the index projection of the sidecar `hidden` LWW register
-/// (slice `S-D19`).
+/// v3 → v4. Adds `assets.is_hidden`, the index projection of the sidecar `hidden` LWW register.
 ///
 /// Existing rows default to `0` — not hidden — which is the correct reading of a catalog whose
 /// sidecars predate the register. The gated Hidden view is empty until the sidecars are
@@ -633,7 +632,7 @@ mod tests {
     //!   - `v3_rows_default_to_not_hidden`
     //!   - `an_unstamped_catalog_is_adopted_at_the_baseline_version`
     //!
-    //! Acceptance (slice `S-D23` "done when")
+    //! Acceptance (the "done when")
     //!   - `each_historical_library_opens_with_correct_default_and_gated_projections`
     //!
     //! Refusal and atomicity
@@ -1227,9 +1226,9 @@ CREATE INDEX IF NOT EXISTS idx_embeddings_task  ON embeddings(task, platform, mo
             > 0
     }
 
-    // ── Acceptance (slice S-D23) ────────────────────────────────────────────
+    // ── Acceptance ────────────────────────────────────────────
 
-    /// Slice `S-D23` "done when": a library created at each historical `user_version` opens at
+    /// The "done when": a library created at each historical `user_version` opens at
     /// the current version with every column present, and both the default projections
     /// (timeline, filtered timeline, album) and the gated Hidden projection are correct.
     ///

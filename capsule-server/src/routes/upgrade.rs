@@ -1,4 +1,4 @@
-//! The album-upgrade ceremony's **server halves** (slice `S-C24`).
+//! The album-upgrade ceremony's **server halves**.
 //!
 //! [Versioning — Album Upgrade Ceremony](../../../capsule-docs/src/content/docs/design/versioning.md#album-upgrade-ceremony)
 //! is a client ceremony carried on MLS application messages the server cannot read. Four of its
@@ -15,7 +15,7 @@
 //! # What the server verifies, and what it must not
 //!
 //! It verifies the proposer's DSK signature over the intent against the account's **published
-//! device directory** — the trust anchor `S-C42` established — so a quiescence it records is one
+//! device directory** — the trust anchor for device signatures — so a quiescence it records is one
 //! an admin device really asked for, and a member's client cannot freeze somebody's album by
 //! POSTing an unsigned struct.
 //!
@@ -32,7 +32,7 @@
 //! aborts cleanly"* implemented as an absence of state rather than as a worker, and it is what
 //! stops a proposer who vanished from freezing an album forever.
 //!
-//! # `S-C28` audit
+//! # The status audit
 //!
 //! Every status here is reachable and every reachable one is declared. The `409` is the one worth
 //! naming: only *one* upgrade may be in flight per album, so a second proposal under a different
@@ -56,7 +56,7 @@ use crate::upload::UploadContext;
 ///
 /// An `UpgradeIntent` is a handful of strings and two hybrid signatures; 64 KiB is three orders
 /// of magnitude more than one needs and still small enough that a refusal costs nothing. The
-/// transport backstop (`S-C33`) is 32 MiB, which is not a bound on a ceremony message.
+/// transport backstop is 32 MiB, which is not a bound on a ceremony message.
 pub const MAX_INTENT_BYTES: usize = 64 * 1024;
 
 /// `application/cbor` — the encoding the intent is *signed* in.
@@ -111,7 +111,7 @@ pub struct UpgradePhaseResponse {
 ///
 /// One enum per operation rather than one shared across three, because a shared enum
 /// over-declares: the phase read cannot be malformed and cannot conflict, and a status an
-/// operation cannot produce is the `S-C28` defect however plausible it looks in a list.
+/// operation cannot produce is an over-declaration however plausible it looks in a list.
 #[derive(Debug, thiserror::Error, ApiError)]
 pub enum UpgradeRejection {
     /// The body is not a signed intent this server can read, or the album id is not one.
@@ -330,7 +330,7 @@ pub async fn begin_album_upgrade(
         ));
     };
 
-    // The proposer, against the account's published directory (`S-C42`'s anchor). Without this
+    // The proposer, against the account's published directory, the trust anchor. Without this
     // any member's client — or anyone holding a token — could freeze an album by POSTing a
     // struct, which is the opposite of a ceremony keyed to an admin device.
     let published = directories

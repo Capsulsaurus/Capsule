@@ -1,4 +1,4 @@
-//! Server-to-server federation (`S-E2`, `S-E5`, `S-C49`): the capability that gates which peer
+//! Server-to-server federation: the capability that gates which peer
 //! may pull which album, the store it is issued from and revoked into, and the peers this
 //! server knows.
 //!
@@ -308,7 +308,7 @@ pub async fn admit(
 
 /// Revoke every live capability over `album` whose member is not on the roster `listed` names.
 ///
-/// The one automatic revocation write (`S-E5`). A roster is the album owner's statement of who
+/// The one automatic revocation write. A roster is the album owner's statement of who
 /// may read it; a capability minted for a member the owner has just removed is a grant the
 /// owner has withdrawn, and the peer holding it learns so from
 /// `/.well-known/capsule/revoked-jti` rather than from a refusal it cannot explain.

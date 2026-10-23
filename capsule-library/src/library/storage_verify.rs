@@ -1,5 +1,4 @@
-//! The verify-before-destroy gate — client half of storage verification (slices `S-C3`
-//! server endpoint / `S-D4` client wiring in the repo-root `SLICES.md`; SSoT:
+//! The verify-before-destroy gate — client half of storage verification (SSoT:
 //! [Transfer — Durability](https://docs/design/transfer/durability/)).
 //!
 //! Before any post-write local cleanup of irreplaceable bytes (releasing a device-owned
@@ -7,7 +6,8 @@
 //! **both** halves to pass: `verify_asset` accepts the asset (crypto validity — the
 //! offline core already implements it) and the server's `POST /storage/verify` verdict is
 //! `durable` (stored ∧ indexed ∧ retrievable for every required blob). The predicate here
-//! is the pure conjunction those call sites consume; fetching the verdict is `S-D4`.
+//! is the pure conjunction those call sites consume; fetching the verdict goes through the
+//! `StorageVerifier` seam.
 
 use std::fs;
 use std::path::Path;
@@ -17,7 +17,7 @@ use capsule_core::crypto::hash::Hash32;
 ///
 /// Defined in [`capsule_core::crypto::receipts`] and re-exported here, because a custody receipt's
 /// `blob_role` is written from the same enum and the issuer and the verifier must not each
-/// have their own (`S-C46`). This path is the one the transfer durability doc names, so it
+/// have their own. This path is the one the transfer durability doc names, so it
 /// stays.
 pub use capsule_core::crypto::receipts::BlobRole;
 use uuid::Uuid;
@@ -147,7 +147,7 @@ impl ReleaseDecision {
 /// The verify-before-destroy gate over a [`StorageVerifier`]. It never destroys anything itself:
 /// [`may_release`](Self::may_release) is the pure decision the three destructive paths
 /// (device-owned-original release, Move-import source deletion, streaming-mode release) consult
-/// before any local cleanup, and streaming import (`S-B3`) drives its per-asset release window
+/// before any local cleanup, and streaming import drives its per-asset release window
 /// through the same call.
 pub struct ReleaseGate<'a, V: StorageVerifier + ?Sized> {
     verifier: &'a V,
@@ -271,7 +271,7 @@ mod tests {
         assert!(!release_is_safe(&verdict(true, vec![]), true));
     }
 
-    // ─── S-D4 wiring: the gate over the `StorageVerifier` seam ──────────────────
+    // ─── Wiring: the gate over the `StorageVerifier` seam ──────────────────
 
     use std::cell::Cell;
 
@@ -326,7 +326,7 @@ mod tests {
         }
     }
 
-    /// `S-D4` acceptance: the device-owned-original release, Move-import source deletion, and
+    /// The acceptance: the device-owned-original release, Move-import source deletion, and
     /// streaming-mode release all gate on [`ReleaseGate::may_release`] fed by a
     /// `POST /storage/verify` verdict + custody receipt; a non-`durable` verdict, a missing
     /// receipt, or a transport failure each retains the local copy and surfaces the reason.

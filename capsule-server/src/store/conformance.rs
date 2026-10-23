@@ -15,7 +15,7 @@
 //!
 //! # What is asserted, and what cannot be
 //!
-//! Two of the slice's three properties are *type-level* and have no runtime case here, by
+//! Two of the three properties are *type-level* and have no runtime case here, by
 //! design — a test for them would be a test that the code compiles:
 //!
 //! - **No operation takes an arbitrary serializable payload.** There is no `T: Serialize` in
@@ -95,7 +95,7 @@ pub trait Harness: CohortHarness {
     fn enrollments(&self) -> &dyn EnrollmentStore;
     /// The enrollment relay-channel store under test.
     fn channels(&self) -> &dyn ChannelStore;
-    /// The pending OIDC authorization store under test (slice `S-N1`).
+    /// The pending OIDC authorization store under test.
     fn oidc_authorizations(&self) -> &dyn OidcAuthorizationStore;
     /// The pending OIDC device authorization store under test (issue #635).
     fn oidc_devices(&self) -> &dyn OidcDeviceStore;
@@ -536,7 +536,7 @@ pub async fn uploader_listing_is_ordered_and_scoped(h: &dyn Harness) {
     );
 }
 
-/// An active session is the promise that bytes are coming; a terminal one is not (`S-C40`).
+/// An active session is the promise that bytes are coming; a terminal one is not.
 ///
 /// The promise belongs to the **uploader** (#462). The helper files every session under a
 /// `{case}-owner` distinct from its `{case}-{uploader}`, which is the shape of a writer member's
@@ -616,7 +616,7 @@ pub async fn a_pending_address_is_uploader_scoped_and_ends_with_the_session(h: &
     );
 }
 
-/// A discarded session takes its promise with it (`S-C40`).
+/// A discarded session takes its promise with it.
 pub async fn discarding_a_session_withdraws_its_pending_address(h: &dyn Harness) {
     let store = h.uploads();
     let record = upload("pending-discard", "a", "uploader", 0);

@@ -1,4 +1,4 @@
-//! Phase 4 — execute an import plan onto the **signed lifecycle path** (slice `S-B2`).
+//! Phase 4 — execute an import plan onto the **signed lifecycle path**.
 //!
 //! Each `ImportDecision::Import` candidate is imported through
 //! [`Workspace::import_asset_with`](crate::lifecycle::Workspace::import_asset_with): every member
@@ -6,12 +6,12 @@
 //! append-only provenance, self-verified through
 //! [`verify_asset`](capsule_core::crypto::verify_asset::verify_asset), and — when the still decodes —
 //! with a chromahash `lqip` in the sidecar and signed thumbnail derivatives on disk
-//! ([`capsule_core::media`], slices `S-B1`/`S-B13`/`S-B14`). A format with no
+//! ([`capsule_core::media`]). A format with no
 //! codec in this build still imports, as a signed original with the gap recorded rather than
 //! hidden.
 //!
 //! This retired the legacy unsigned `AssetSidecar` write path from the executor; the production
-//! write path itself is now gone (`S-G4`) — no code writes unsigned sidecars anymore. Only the
+//! write path itself is now gone — no code writes unsigned sidecars anymore. Only the
 //! *read* path survives, for the recovery-first index rebuild
 //! ([`rebuild_index`](crate::library::rebuild_index)) that still ingests unsigned `.cbor`
 //! sidecars left by pre-signed-path libraries. The pure planner (`import::planner`) is unchanged:
@@ -62,7 +62,7 @@ pub fn execute(
 }
 
 /// [`execute`], with the folded metadata a third-party [source adapter] extracted attached to
-/// each file it covers (slice `S-B10`).
+/// each file it covers.
 ///
 /// The adapter resolved the [precedence rule] at extraction; the executor is what makes the
 /// result *durable* — each member's record is mapped onto sidecar fields by
@@ -164,12 +164,12 @@ pub fn execute_with_source_metadata(
         imported = summary.imported_count(),
         duplicates = summary.duplicate_count(),
         errors = summary.error_count(),
-        // Imported, but with no thumbnail/preview: the first is the expected S-B13 codec gap,
+        // Imported, but with no thumbnail/preview: the first is the expected no-codec gap,
         // the second a genuine decode failure of a format we do support.
         derivatives_deferred = summary.deferred_derivative_count(),
         derivatives_decode_failed = summary.decode_failed_count(),
-        // How much of this run carried third-party exporter metadata into the signed sidecars
-        // (`S-B10`); zero for a plain filesystem import.
+        // How much of this run carried third-party exporter metadata into the signed sidecars; zero
+        // for a plain filesystem import.
         enriched_candidates,
         "import: execution complete"
     );
@@ -182,8 +182,8 @@ pub fn execute_with_source_metadata(
 ///
 /// The single place a [`SourceMetadataIndex`] is turned into a [`SidecarEnrichment`], shared by
 /// this executor and the [streaming window](crate::import::streaming) so a *streamed*
-/// third-party import writes exactly what a bulk one does (`S-B11` closed the gap `S-B10` left open). A path the index does not
-/// cover, or a record that folds to nothing, yields [`None`] — the untouched write path.
+/// third-party import writes exactly what a bulk one does. A path the index does not cover, or a record that folds to nothing, yields
+/// [`None`] — the untouched write path.
 pub(crate) fn member_enrichment(
     source: &SourceMetadataIndex,
     path: &Path,
@@ -323,7 +323,7 @@ fn import_error_outcome(e: &LifecycleError) -> ImportOutcome {
     }
 }
 
-/// The signed [`StackMembership`] one member of a multi-file candidate carries (`S-B15`), or
+/// The signed [`StackMembership`] one member of a multi-file candidate carries, or
 /// `None` for a standalone candidate.
 ///
 /// `is_primary` is the executor's own rule (the declared primary, or the first member when none
@@ -419,17 +419,16 @@ mod tests {
         ws
     }
 
-    /// **The S-B13 contract (slice `S-B13`).** An original whose format has no codec in this
+    /// **The no-codec contract.** An original whose format has no codec in this
     /// build is imported as a signed, encrypted, verifiable asset — it simply arrives without a
     /// thumbnail, and the run summary says so.
     ///
-    /// **The distinction is observable again.** `S-C59` retired the decoder and collapsed both
-    /// files below into deferrals, which made the logs' most useful property untestable. With
-    /// `capsule_core::media` on `rawshift-image` the two are apart once more, and they are apart
-    /// for the reason that matters rather than by extension: `iphone.heic` is a format Capsule
-    /// *recognises and cannot decode* (an expected, backfillable gap), while `snap.jpg` is a
-    /// format it can decode whose bytes are not a JPEG (a real problem). Both still land as
-    /// signed, encrypted, self-verifying backups, which is the half that would be worst to lose.
+    /// **The distinction is observable.** With `capsule_core::media` on `rawshift-image` the two
+    /// files below are told apart, and for the reason that matters rather than by extension:
+    /// `iphone.heic` is a format Capsule *recognises and cannot decode* (an expected,
+    /// backfillable gap), while `snap.jpg` is a format it can decode whose bytes are not a JPEG
+    /// (a real problem). Both still land as signed, encrypted, self-verifying backups, which is
+    /// the half that would be worst to lose.
     #[test]
     fn originals_with_no_codec_are_still_imported_and_signed() {
         use crate::lifecycle::DerivativeStatus;
@@ -499,7 +498,7 @@ mod tests {
 
     /// A RAW-only candidate — no same-stem JPEG to fall back on — still lands as a signed,
     /// self-verifying original even when no derivative can be made from it, which is why this
-    /// needs pinning: the archive is the whole point, the derivative is a bonus (slice `S-B13`).
+    /// needs pinning: the archive is the whole point, the derivative is a bonus.
     ///
     /// ARW decodes in this build (issue #589), so the deferral here is not "RAW has no decoder".
     /// A Sony ARW is a TIFF container, so its *header* says TIFF and only the extension names
@@ -770,9 +769,9 @@ mod tests {
             "only the primary member is visible"
         );
 
-        // S-B15: the grouping is *durable* — every member carries the signed
-        // `stack_membership` register, sharing one stack id, with exactly one primary. Before
-        // that slice the executor's placement was index columns and nothing else.
+        // The grouping is *durable* — every member carries the signed `stack_membership`
+        // register, sharing one stack id, with exactly one primary, rather than only index
+        // columns.
         let mut stack_ids = Vec::new();
         let mut primaries = 0;
         for id in ws.asset_ids() {

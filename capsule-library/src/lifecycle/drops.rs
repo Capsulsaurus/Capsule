@@ -39,7 +39,7 @@ use crate::exif::ExifExtract;
 pub(super) struct IssuedLink {
     /// The random 128-bit opaque URL-path id.
     opaque_id: [u8; 16],
-    /// The per-link caps the serve path (S-C5) enforces at drop-session creation.
+    /// The per-link caps the serve path enforces at drop-session creation.
     caps: LinkCaps,
     /// The Drop Key public half (KEM encapsulation key; travels in the URL fragment only).
     drop_pubkey: Vec<u8>,
@@ -100,7 +100,7 @@ impl Workspace {
     }
 
     /// The optional Argon2id write-abuse verifier of an issued link — the record the serve
-    /// path (S-C5) consults to gate a drop-session on passphrase possession.
+    /// path consults to gate a drop-session on passphrase possession.
     pub fn upload_link_passphrase(&self, link: &UploadLinkId) -> Option<&PassphraseVerifier> {
         self.upload_links
             .get(link)
@@ -124,7 +124,7 @@ impl Workspace {
     }
 
     /// Stage a guest's [`SealedDrop`] into this owner's inbox, modeling the server's stage
-    /// step (S-C5) so the offline core can drive the full seal → stage → adopt path. Refuses
+    /// step so the offline core can drive the full seal → stage → adopt path. Refuses
     /// a drop through an unknown or revoked link (a fail-closed stand-in for the serve
     /// path's cap/quota checks). Returns the new inbox drop id.
     pub fn receive_drop(
@@ -537,7 +537,7 @@ mod tests {
     use super::super::fast_workspace;
     use super::*;
 
-    /// S-A6: the full guest-drop path through the `Workspace` — issue an upload link, seal a
+    /// The full guest-drop path through the `Workspace` — issue an upload link, seal a
     /// drop to its Drop Key (the WASM/browser half), stage it, and adopt it into an album.
     /// The adopting `create` manifest is `key_mode = wrapped`, self-verifies, and a second
     /// member (holding the same AMK) unwraps `wrapped_file_key` and decrypts the unchanged
@@ -849,7 +849,7 @@ mod tests {
         assert!(ws.asset_ids().is_empty(), "nothing was registered");
     }
 
-    /// S-A6: a rejected drop is discarded — removed from the inbox with no library trace.
+    /// A rejected drop is discarded — removed from the inbox with no library trace.
     #[test]
     fn discarded_drop_leaves_no_trace() {
         use capsule_core::drop::{DropAdopter, UploadLinkIssuer, seal_drop};

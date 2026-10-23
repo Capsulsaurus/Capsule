@@ -447,7 +447,7 @@ mod tests {
 
 /// What appending one chunk did.
 ///
-/// Neutral: the album path and the guest-drop path (`S-C5`) obey invariants 9–12 identically,
+/// Neutral: the album path and the guest-drop path obey invariants 9–12 identically,
 /// so the *rules* live here once and each surface maps this outcome onto its own wire shape.
 /// Two copies of this logic would be two answers to what an offset means, and the two would
 /// drift on exactly the case a client hits after losing a connection.

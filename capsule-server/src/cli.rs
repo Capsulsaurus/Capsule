@@ -992,7 +992,7 @@ impl std::fmt::Display for Rendered<'_, ScrubReport> {
     }
 }
 
-/// Write, or verify, the committed OpenAPI 3.2 document (slice `S-C34`).
+/// Write, or verify, the committed OpenAPI 3.2 document.
 ///
 /// The drift guard for the rebuild's central claim: that the description is derived from the
 /// types and cannot disagree with them. That claim is already enforced *inside* the crate —

@@ -5,7 +5,7 @@ import Foundation
 ///
 /// The *canonical* sidecar is the signed CBOR `SidecarV1`, authored only by
 /// the Rust core; a build that links the core has no sidecar codec of its own
-/// (the unsigned CBOR codec was retired with `S-D24`). `JSONSidecarCoder` is
+/// (the unsigned CBOR codec is gone). `JSONSidecarCoder` is
 /// the codec of the mock lane. This is a protocol rather than an `enum` of
 /// statics so the coder is injectable:
 /// the mock lane builds and tests without linking the Rust core, and a failure

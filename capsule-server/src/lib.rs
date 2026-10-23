@@ -3,8 +3,8 @@
 //! # Why this crate exists
 //!
 //! The previous server was Salvo, and its wire-contract types were themselves salvo-typed, so
-//! replacing it was never a transport swap (`SLICES.md`, the salvo→kynos row). `S-C27` moved the
-//! response taxonomy into a framework-free crate so the contract could outlive the transport;
+//! replacing it was never a transport swap (`SLICES.md`, the salvo→kynos row). The
+//! response taxonomy moved into a framework-free crate so the contract could outlive the transport;
 //! that crate retired with the Salvo tree it adapted (ADR-0004), and this crate is where the
 //! surfaces the taxonomy described get rebuilt. `problem`, `limits` and `body` own it now.
 //!
@@ -13,7 +13,7 @@
 //! Kynos derives the description from the types the server runs on. There is no second
 //! declaration of a status, a path parameter or a body shape, so there is nothing for the
 //! description to drift from. That matters here specifically: the Salvo surface had **thirteen
-//! response variants that rendered a status the published schema never declared** (`S-C28`) —
+//! response variants that rendered a status the published schema never declared** —
 //! a `Writer` said `423`, its `EndpointOutRegister` never registered one, and the generated
 //! client could not map it. That failure is not expressible in this crate, because the status
 //! is part of the return type.
@@ -121,7 +121,7 @@ pub fn router() -> Router<App, Propagate, ServerInterceptors, impl Sized> {
         // **Outermost.** Kynos runs a chain head-first, so this sees every problem the rest of
         // the chain produces — the body-size `413` below it, an extractor's `400`/`415`/`422`,
         // and the bearer scheme's `401`/`403` — and fills in the `error.*` code none of those
-        // framework-owned types has a seam to carry. See [`problem`], and `S-C36`.
+        // framework-owned types has a seam to carry. See [`problem`].
         .intercept(problem::CodedProblems::new())
         // Inside the coder and outside everything that can refuse: the protocol window rides
         // **every** response — the body-size `413` below, an extractor's `400`, the bearer
@@ -182,7 +182,7 @@ pub fn router() -> Router<App, Propagate, ServerInterceptors, impl Sized> {
                     routes::escrow::store_album_keys,
                 ])
                 // What an account changes about itself, its second factor, and the other way
-                // a session is opened: through an external identity provider (`S-N1`).
+                // a session is opened: through an external identity provider.
                 .mount(kynos::routes![
                     routes::profile::update_profile,
                     routes::profile::change_password,
@@ -422,12 +422,12 @@ const SPEC_VERSION: kynos::openapi::SpecVersion = kynos::openapi::SpecVersion::V
 /// `SPEC_VERSION` cannot express.
 pub fn openapi() -> kynos::Result<kynos::openapi::Document> {
     let mut document = router().openapi_as(SPEC_VERSION)?;
-    // `S-C38`: Kynos attaches `#[problem(extension)]` members at run time and describes none of
+    // Kynos attaches `#[problem(extension)]` members at run time and describes none of
     // them, so every problem response would otherwise point at one generic `Problem` with
     // `additionalProperties: true` — and a generated client would lose the `code` the i18n
     // contract tells it to localize. See [`openapi`](crate::openapi) the module.
     openapi::describe_problem_extensions(&mut document);
-    // `S-Z7`: Kynos describes a raw-byte body as the empty schema, which is true and useless to
+    // Kynos describes a raw-byte body as the empty schema, which is true and useless to
     // a generator. Filled in with the binary marker so the SDK's client can be generated from
     // the whole document instead of most of it.
     openapi::describe_raw_byte_payloads(&mut document);

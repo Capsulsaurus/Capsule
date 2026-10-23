@@ -1,4 +1,4 @@
-//! `PUT /v1/albums/{album_id}/roster` — publishing an album's membership roster (slice `S-C51`).
+//! `PUT /v1/albums/{album_id}/roster` — publishing an album's membership roster.
 //!
 //! The one way the key-free server learns who may read and write a shared album. What these
 //! cases pin is the trust anchor and the disclosure boundary: only the album owner's account

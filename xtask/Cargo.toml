@@ -11,8 +11,7 @@ publish.workspace = true
 capsule-core = { path = "../capsule-core" }
 # capsule-i18n owns the CLDR cardinal plural rules. The generator needs the same table the
 # runtime selects with — which categories a language can select decides which
-# `<item quantity=…>` arms Android may carry — and two copies of it in two crates is what
-# `S-I7` found. The generator writes this crate's bundles; the committed output means there
+# `<item quantity=…>` arms Android may carry — and two copies of it in two crates would drift. The generator writes this crate's bundles; the committed output means there
 # is no bootstrap problem, and the dependency is on hand-written code, not generated code.
 capsule-i18n = { path = "../capsule-i18n" }
 base64 = { workspace = true }

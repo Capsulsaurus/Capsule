@@ -1,5 +1,5 @@
 /**
- * The real `CapsuleGateway`: the web client's key-free read path (slice S-D6).
+ * The real `CapsuleGateway`: the web client's key-free read path.
  *
  * It consumes the `capsule.sync.v1` feed over gRPC-web, validates-then-applies each page
  * into the client-side `SyncStore` (the browser's `library.sqlite` analogue), persists the
@@ -13,9 +13,9 @@
  * is therefore ABSENT: display titles, cover art, capture dates, pixel dimensions, LQIP
  * placeholders, locations, durations, and any renderable imagery (blobs are ciphertext with
  * no in-browser decrypt path yet — gateway.ts defers that wasm boundary). Those display
- * fields are filled with safe placeholders and documented in the S-D6 report; they light up
- * once a wasm decode/verify boundary lands beneath this gateway. S-G1 (retirement of the
- * legacy server-side query surface) required query PARITY on this real path — which the key-free
+ * fields are filled with safe placeholders and documented here; they light up
+ * once a wasm decode/verify boundary lands beneath this gateway. Retiring the
+ * legacy server-side query surface required query PARITY on this real path — which the key-free
  * shells provide for the aggregate UI — not decrypted content; that surface is now removed.
  */
 
@@ -41,7 +41,7 @@ import {
  * It used to be the server *root* rather than a versioned prefix, because gRPC addresses a
  * method by its fully-qualified path and native tonic clients discard any path on the endpoint
  * URI — so a prefixed mount was unreachable from them, and versioning rode the proto package
- * (`capsule.sync.v1`) instead of the URL. With the feed on REST (`S-C2`) the version is back in
+ * (`capsule.sync.v1`) instead of the URL. With the feed on REST the version is back in
  * the path, where a person reading a request log can see it.
  */
 const API_BASE = import.meta.env.PUBLIC_API_URL ?? 'http://localhost:3000';

@@ -1,4 +1,4 @@
-//! An asset landed by the sync feed into the CLI's local store (slice `S-D5`).
+//! An asset landed by the sync feed into the CLI's local store.
 //!
 //! This is the client-side, sync-fed library `capsule list` queries — the CLI's
 //! analogue of a `library.sqlite`. Ids arrive from the feed as opaque bytes

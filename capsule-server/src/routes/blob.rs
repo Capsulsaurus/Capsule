@@ -1,4 +1,4 @@
-//! `GET /v1/blob/{hash}` — key-free ranged blob serving (slice `S-C10`).
+//! `GET /v1/blob/{hash}` — key-free ranged blob serving.
 //!
 //! The read side of the store. A client learns an address from a sync entry and fetches the
 //! ciphertext here, resumably: [Encryption — ranged reads] fixes the client's stride at the
@@ -20,18 +20,18 @@
 //! name itself. That is what makes `If-Range` honest: a resumed fetch cannot splice bytes from
 //! a different representation, because a different representation has a different address.
 //!
-//! # `S-C28` audit
+//! # The status audit
 //!
 //! | Salvo status | Verdict |
 //! | --- | --- |
 //! | `200`/`206`/`416` | kept, and now derived — `Delivery` declares all three from its own type |
 //! | `404` | kept. Bodyless there, an RFC 9457 problem here: every `404` this route renders is byte-identical, so it discriminates nothing and gains the `error.*` code the i18n contract requires |
 //! | `410` | kept |
-//! | `409 error.blob.pending_upload` | **restored by `S-C40`**, and rendered from the caller's own in-flight upload rather than from a reference the index does not have — see [`crate::serve`] |
+//! | `409 error.blob.pending_upload` | **rendered from the caller's own in-flight upload**, not from a reference the index does not have — see [`crate::serve`] |
 //! | `401` | kept, and now the framework's, with the `WWW-Authenticate` challenge |
 //! | `500` | kept, with `error.blob.unavailable` |
 //!
-//! # A peer fetches here too (`S-E5`)
+//! # A peer fetches here too
 //!
 //! `Authorization: Bearer` carries a session token **or** a federation capability, on the same
 //! component and through the same scheme the feed uses. A peer is admitted first
@@ -69,7 +69,7 @@ pub struct MediaTag;
 enum Reader {
     /// An account, through a session access token.
     Account(crate::store::OwnerId),
-    /// A peer server, through an admitted federation capability (`S-E5`).
+    /// A peer server, through an admitted federation capability.
     Peer(Box<VerifiedCapability>),
 }
 
@@ -102,7 +102,7 @@ pub enum BlobRejection {
     },
 
     /// Not referenced *yet*: the caller's own account has an upload of exactly these bytes in
-    /// flight (`S-C40`). Transient.
+    /// flight. Transient.
     ///
     /// Carries no session identifier and no progress. The fetcher is a different device from
     /// the uploader, and telling it *which* upload or how far along would be reporting on
@@ -117,7 +117,7 @@ pub enum BlobRejection {
     },
 
     /// The caller was a member of the album that holds these bytes and has been removed from
-    /// its roster (`S-C51`). An authorization change, not a durability loss: the client re-syncs
+    /// its roster. An authorization change, not a durability loss: the client re-syncs
     /// its album membership before retrying, and only then degrades.
     ///
     /// Only a former member ever sees this. Everyone else gets [`Self::NotFound`], byte-identical
@@ -139,7 +139,7 @@ pub enum BlobRejection {
         code: &'static str,
     },
 
-    /// A peer's capability has been revoked (`S-E5`).
+    /// A peer's capability has been revoked.
     ///
     /// The federated counterpart of [`Self::Forbidden`], and a different code because the
     /// action is different: an account re-syncs its album membership, while a peer asks the
@@ -152,7 +152,7 @@ pub enum BlobRejection {
         code: &'static str,
     },
 
-    /// The peer is on this server's blocklist (`S-C49`).
+    /// The peer is on this server's blocklist.
     #[error("this server is blocked")]
     #[problem(status = 403, title = "Server blocked")]
     PeerBlocked {
@@ -161,8 +161,7 @@ pub enum BlobRejection {
         code: &'static str,
     },
 
-    /// The peer is entitled to the album but its grant does not cover this blob's role
-    /// (`S-E5`).
+    /// The peer is entitled to the album but its grant does not cover this blob's role.
     ///
     /// A `read-derivative-only` capability asking for an `original`, or any capability asking
     /// for a `backup`. `403` rather than `404` because the peer already knows the asset is
@@ -214,7 +213,7 @@ impl From<Refusal> for BlobRejection {
 }
 
 impl BlobRejection {
-    /// A former member of the album that holds the bytes (`S-C51`).
+    /// A former member of the album that holds the bytes.
     fn forbidden() -> Self {
         Self::Forbidden {
             code: error_codes::BLOB_ACCESS_REVOKED,
@@ -249,7 +248,7 @@ impl BlobRejection {
         }
     }
 
-    /// A peer's grant does not cover this blob's role (`S-E5`).
+    /// A peer's grant does not cover this blob's role.
     fn scope_insufficient() -> Self {
         Self::ScopeInsufficient {
             code: error_codes::FEDERATION_SCOPE_INSUFFICIENT,
@@ -265,9 +264,9 @@ impl BlobRejection {
 /// see [`crate::serve`] for the boundary and its reasons.
 ///
 /// The one answer that *is* account-scoped is the transient `409`: it reports the caller's own
-/// in-flight upload and nobody else's (`S-C40`).
+/// in-flight upload and nobody else's.
 ///
-/// A federated peer fetches here with a capability instead of a session token (`S-E5`), through
+/// A federated peer fetches here with a capability instead of a session token, through
 /// the same resolution and the same authority.
 #[kynos::get("/v1/blob/{hash}", operation_id = "get_blob", tag = MediaTag)]
 pub async fn get_blob(

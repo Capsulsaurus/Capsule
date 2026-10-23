@@ -39,7 +39,7 @@ use crate::crypto::keys::HybridVerifyingKey;
 /// How much history a new joiner may decrypt, fixed **per album** at creation and read from the
 /// album's MLS metadata on every add — never chosen per-add, so a member's history visibility
 /// never depends on which device added them or in what order (SSoT: MLS § History Delivery).
-/// Changing it is an album upgrade ceremony (S-X3), never an ad-hoc per-add decision.
+/// Changing it is an album upgrade ceremony, never an ad-hoc per-add decision.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum HistoryPolicy {
     /// Full history (the default for shared albums): the joiner receives every prior AMK
@@ -146,7 +146,7 @@ pub(crate) enum MlsAppPayload {
     WriteTier(WriteTierDistribution),
     /// A join-time history batch (read-only prior epochs).
     History(AlbumHistoryBundle),
-    /// A hybrid-signed album [upgrade](super::upgrade) intent (S-X3). Processed via
+    /// A hybrid-signed album [upgrade](super::upgrade) intent. Processed via
     /// [`receive_upgrade_intent`](super::OpenMlsAuthority::receive_upgrade_intent), **not** the
     /// key-delivery path — [`process_key_delivery`](super::OpenMlsAuthority::process_key_delivery)
     /// rejects it.

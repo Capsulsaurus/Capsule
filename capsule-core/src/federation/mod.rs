@@ -1,5 +1,5 @@
-//! Aggregated federated albums — the album-group **view** (slice `S-E4` in the repo-root
-//! `SLICES.md`; SSoT: [Federation — Federated Shared Albums] and [Organization — views]).
+//! Aggregated federated albums — the album-group **view** (SSoT: [Federation — Federated Shared
+//! Albums] and [Organization — views]).
 //!
 //! An *aggregated album* is N ordinary container albums — one per contributor, each homed on
 //! its contributor's own server and single-writer-domain as always — that clients present as
@@ -173,9 +173,9 @@ pub fn mint_group_id() -> Uuid {
 
 /// Group-aware invite **data** riding the existing album invite: the `group_id` plus the sibling
 /// hints a joiner seeds its own assertion from. This carries the group facts as data; the
-/// interactive membership ceremony (delivering the AMK, the MLS `Welcome`) is `S-X2`'s and is
-/// blocked — same caveat as the organization doc's invitation surface. A joiner turns this into
-/// its own constituent's [`AlbumGroupAssertion`] with [`to_assertion`](Self::to_assertion).
+/// interactive membership ceremony (delivering the AMK, the MLS `Welcome`) belongs to the
+/// MLS authority's membership layer and is blocked — same caveat as the organization doc's
+/// invitation surface. A joiner turns this into its own constituent's [`AlbumGroupAssertion`] with [`to_assertion`](Self::to_assertion).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AlbumGroupInvite {
     /// The group being joined.

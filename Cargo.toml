@@ -15,7 +15,7 @@ members = [
     "xtask",
 ]
 # capsule-sdk's REST client is generated at build time by spargen from the committed
-# capsule-server/openapi.json (slice S-D28); regenerate it with `mise run openapi-kynos`.
+# capsule-server/openapi.json; regenerate it with `mise run openapi-kynos`.
 default-members = [
     "capsule-cli",
     "capsule-cli/entity",
@@ -48,7 +48,7 @@ repository = "https://github.com/Capsulsaurus/Capsule"
 [workspace.dependencies]
 argon2 = "0.5.3"
 # RFC 6238 time-based one-time passwords — the second factor of the local auth path
-# (design/authentication.md, slice `S-C55`). `otpauth` emits the `otpauth://` provisioning URI
+# (design/authentication.md). `otpauth` emits the `otpauth://` provisioning URI
 # every authenticator app scans; `gen_secret` generates the shared secret. Promoted to a
 # workspace dependency here so the rebuilt server and the retiring `capsule-api/auth` cannot
 # drift to two versions of the same algorithm during the changeover.
@@ -67,7 +67,7 @@ base64 = "0.22.1"
 bb8 = "0.9.1"
 bb8-redis = "0.26.0"
 bytes = "1.12.1"
-# Reading a response body back to bytes, for the coded-problem interceptor (slice `S-C36`).
+# Reading a response body back to bytes, for the coded-problem interceptor.
 # `http-body-util` is already in the lock file — Kynos and hyper both depend on it — and it is
 # the canonical adapter crate for the `http-body` trait rather than a new domain. See the
 # HTTP body row in design/dependencies.md.
@@ -86,7 +86,7 @@ jsonwebtoken = { version = "10.4.0", features = ["aws_lc_rs"] }
 nanoid = "0.4.0"
 redis = { version = "1.2.2", features = ["tokio-comp", "connection-manager"] }
 # The HTTP client. `capsule-sdk` is the sanctioned client network path and `capsule-server`'s
-# OIDC relying party (slice `S-N1`) is the one server egress: discovery, JWKS and the token
+# OIDC relying party is the one server egress: discovery, JWKS and the token
 # exchange against an identity provider. rustls only, per the TLS row in design/dependencies.md;
 # `json` for the provider's documents. The SDK enables `stream` and `multipart` on top.
 reqwest = { version = "0.12.28", default-features = false, features = [

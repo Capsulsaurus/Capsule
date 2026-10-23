@@ -186,7 +186,7 @@ async fn the_invariant_seven_floor_is_the_devices_own_added_at() {
             directory_version: 1,
             document: directory(&user, device, "2026-03-04T05:06:07Z", None),
             // The authority reads a *stored* directory, which the publish path has already
-            // anchored and verified (`S-C42`); these cases seed the store directly, so the
+            // anchored and verified; these cases seed the store directly, so the
             // anchor is only along for the ride.
             identity_key: Vec::new(),
             published_at: Timestamp::UNIX_EPOCH,
@@ -272,9 +272,8 @@ async fn an_account_with_no_published_directory_has_no_floor() {
 
 /// A writer on the roster writes under the owner's namespace; everyone else is one `Denied`.
 ///
-/// The widening `S-C25` deferred, answered from the membership port (`S-C51`). A reader, a former
-/// member and a stranger get the same answer an unprovisioned album gets, so the refusal says
-/// nothing about the roster.
+/// Answered from the membership port. A reader, a former member and a stranger get the same
+/// answer an unprovisioned album gets, so the refusal says nothing about the roster.
 #[tokio::test]
 async fn a_writer_member_writes_under_the_owner_and_nobody_else_writes_at_all() {
     use crate::membership::{InMemoryMembership, MemberRole, MembershipStore as _, RosterRecord};

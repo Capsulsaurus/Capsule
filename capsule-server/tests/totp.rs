@@ -1,6 +1,6 @@
-//! The second factor (slice `S-C55`), end to end.
+//! The second factor, end to end.
 //!
-//! Two cases carry the slice, and both are about the defect it fixes. `a_confirmed_factor_makes_
+//! Two cases carry the acceptance, and both are about the defect it fixes. `a_confirmed_factor_makes_
 //! a_password_alone_insufficient` is the whole point: the retired surface had all four TOTP
 //! operations and its login never issued a challenge, so a confirmed factor gated nothing. And
 //! `a_code_is_good_once_even_inside_its_own_window` is RFC 6238 §5.2 — a code stays valid for
@@ -225,7 +225,7 @@ async fn a_pending_enrollment_is_replaced_without_ceremony() {
 
 #[tokio::test]
 async fn a_confirmed_factor_makes_a_password_alone_insufficient() {
-    // The case this slice exists for. The retired surface answered a token pair here.
+    // The case this test exists for. The retired surface answered a token pair here.
     let fixture = Fixture::working();
     let bearer = fixture.bearer().await;
     enroll_and_confirm(&fixture, &bearer).await;

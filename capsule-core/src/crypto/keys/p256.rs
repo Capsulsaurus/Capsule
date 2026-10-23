@@ -1,5 +1,5 @@
-//! P-256 hybrid-DSK variant — the hardware-backed device signing key (slice `S-A4` in the
-//! repo-root `SLICES.md`; design: <https://docs/design/cryptography/keys/#device-keys>).
+//! P-256 hybrid-DSK variant — the hardware-backed device signing key (design:
+//! <https://docs/design/cryptography/keys/#device-keys>).
 //!
 //! Shipping secure elements (Secure Enclave, StrongBox, TPM 2.0) expose **ECDSA-P256**,
 //! not Ed25519, so the hardware-backed device-key composition pairs a *hardware P-256
@@ -162,7 +162,7 @@ mod tests {
     use crate::crypto::keys::directory::{DeviceEntry, DirectoryCore};
     use crate::crypto::keys::{ClassicalAlgorithm, HybridSigningKey};
 
-    /// The slice-`S-A4` acceptance criterion: enroll a mock P-256 element, sign a fixed payload,
+    /// The acceptance criterion: enroll a mock P-256 element, sign a fixed payload,
     /// verify both halves through the algorithm-tagged hybrid verifying key, assert an
     /// Ed25519-only verifier rejects it, assert non-exportability, and prove directory dispatch
     /// on the entry's declared classical algorithm.

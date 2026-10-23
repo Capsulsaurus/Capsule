@@ -1,4 +1,4 @@
-//! Guest drops (`S-C5`) — upload links, the inbox, and the promotion that ends one.
+//! Guest drops — upload links, the inbox, and the promotion that ends one.
 //!
 //! # A drop is not a small upload
 //!
@@ -19,7 +19,7 @@
 //! that reads a counter, decides, and then writes: two guests uploading at once through a
 //! read-decide-write would both see room under a cap and both be admitted, which is how a
 //! "maximum 10 files" link ends up holding twenty. The check and the reservation are the same
-//! operation, and every adapter owes that atomically — the `S-C37` lesson in the place where
+//! operation, and every adapter owes that atomically, in the place where
 //! getting it wrong is the abuse surface the caps exist to close.
 //!
 //! # Adoption is claimed, not taken
@@ -45,8 +45,8 @@
 //! # Rate limiting is absent, and named
 //!
 //! Invariant 31 wants the same two limiters the share-link serve path wants, and they need the
-//! same counter port `S-C32` owns. The `429` is **not declared** (`S-C28`). The caps are not a
-//! substitute — they bound total damage, not request rate — and saying so is the point.
+//! same counter port, which is not wired to this route. The `429` is **not declared**. The caps
+//! are not a substitute — they bound total damage, not request rate — and saying so is the point.
 //!
 //! # Adapters
 //!

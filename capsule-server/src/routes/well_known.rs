@@ -1,4 +1,4 @@
-//! The `.well-known/capsule/*` registry — the attestation-key record (slice `S-C15`).
+//! The `.well-known/capsule/*` registry — the attestation-key record.
 //!
 //! # Public, and that is the point
 //!
@@ -20,7 +20,7 @@
 //! [`crate::attestation`] owns the history and derives the active key's entry from the signer,
 //! so a server cannot publish a set that omits the key it is currently signing with.
 //!
-//! # The other registry records (`S-C18`)
+//! # The other registry records
 //!
 //! `server-info`, `revoked-jti` and `deprecation` are served here too, from
 //! [`crate::discovery`], and every one of them is public for the same reason: a client deciding
@@ -146,7 +146,7 @@ pub struct AuthEndpointsResponse {
     pub oidc: Option<OidcEndpointsResponse>,
 }
 
-/// The OIDC ceremony's endpoints (slice `S-N1`).
+/// The OIDC ceremony's endpoints.
 #[derive(Schema, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct OidcEndpointsResponse {
     /// Where a client asks for an authorization URL.

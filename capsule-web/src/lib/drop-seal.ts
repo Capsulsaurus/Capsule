@@ -1,4 +1,4 @@
-// Client-side guest-drop sealing surface (slice S-D3).
+// Client-side guest-drop sealing surface.
 //
 // Thin wrapper over the `capsule-wasm` module (built by `mise run build-wasm`). All the drop
 // crypto — fresh per-asset key `K`, STREAM encryption, and KEM-encapsulation of `K` to the link's

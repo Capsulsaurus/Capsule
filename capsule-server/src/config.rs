@@ -309,7 +309,7 @@ pub struct Overrides {
     pub grace_window_hours: Option<u64>,
 }
 
-/// The OpenID Connect relying party, when a deployment has one (slice `S-N1`).
+/// The OpenID Connect relying party, when a deployment has one.
 ///
 /// Present only when `OIDC_ISSUER` is set. A half-configured relying party — an issuer with no
 /// client id, or the reverse — is a configuration fault rather than a feature that is quietly
@@ -1552,7 +1552,7 @@ mod tests {
 
     #[test]
     fn serving_without_valkey_and_without_the_memory_profile_is_refused_by_name() {
-        // `store/mod.rs` has documented this refusal since `S-C29` and nothing enforced it.
+        // `store/mod.rs` documents this refusal, and boot enforces it.
         let error = Config::load(&serveable(), &Overrides::default(), Demands::Serve)
             .expect_err("it refuses");
         assert!(error.names("VALKEY_URL"), "{error}");

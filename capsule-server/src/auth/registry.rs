@@ -1,9 +1,9 @@
-//! [`AccountRegistry`] — bringing an account into existence (slice `S-C53`).
+//! [`AccountRegistry`] — bringing an account into existence.
 //!
 //! # Why this is not a method on [`AccountDirectory`](super::AccountDirectory)
 //!
 //! That port's own docs said so before this existed: *"a directory that also listed accounts,
-//! created them or changed passwords would be the grab-bag `S-C29` deleted, rebuilt one method
+//! created them or changed passwords would be the grab-bag state trait rebuilt one method
 //! at a time; registration and password change are their own surfaces and will bring their own
 //! contracts."* This is that contract, and keeping it separate is what stops the one operation
 //! login asks from growing into six.

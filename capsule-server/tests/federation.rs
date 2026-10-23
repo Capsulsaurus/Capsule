@@ -1,4 +1,4 @@
-//! Federation (`S-E2`, `S-E5`, `S-C49`), end to end: a peer server pulls a shared album through
+//! Federation, end to end: a peer server pulls a shared album through
 //! the **existing** read primitives with a capability, and the lifecycle around that grant.
 //!
 //! The peer is stood up as what a peer is here — a holder of a capability this server minted,
@@ -239,7 +239,7 @@ fn album_query() -> String {
 }
 
 // ===========================================================================================
-// The pull path: the sync feed under a capability (S-E5)
+// The pull path: the sync feed under a capability
 // ===========================================================================================
 
 /// E2E case 4 (server half): a peer holding a capability pulls the album's page.
@@ -594,7 +594,7 @@ async fn a_store_that_cannot_answer_a_peer_is_an_outage_never_an_admission() {
 }
 
 // ===========================================================================================
-// The pull path: blob bytes under a capability (S-E5)
+// The pull path: blob bytes under a capability
 // ===========================================================================================
 
 /// Fetch `address` as `bearer` and return the raw response.
@@ -815,7 +815,7 @@ async fn a_blocked_peer_and_a_spent_budget_refuse_the_blob_route_too() {
 }
 
 // ===========================================================================================
-// The lifecycle: minting, revoking and refreshing the grant (S-E2)
+// The lifecycle: minting, revoking and refreshing the grant
 // ===========================================================================================
 
 /// A fixture whose seeded account is anchored on `dsk` and whose album is provisioned, so the
@@ -1339,7 +1339,7 @@ async fn a_deployment_that_does_not_federate_answers_404_before_any_work() {
 }
 
 // ===========================================================================================
-// Moderation's federated halves (S-C49)
+// Moderation's federated halves
 // ===========================================================================================
 
 /// Pin `key` as `PEER`'s operational key, as an operator does.

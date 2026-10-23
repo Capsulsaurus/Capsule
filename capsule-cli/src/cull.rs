@@ -1,7 +1,7 @@
-//! `capsule cull` — the standalone culling command (slice `S-D16`).
+//! `capsule cull` — the standalone culling command.
 //!
-//! The photographer's review pass, exposed over the landed culling engine (`S-D13`, in
-//! `capsule_library::lifecycle`) and `S-A10`'s durable open plumbing. One invocation runs the
+//! The photographer's review pass, exposed over the landed culling engine (in
+//! `capsule_library::lifecycle`) and the durable library-open plumbing. One invocation runs the
 //! design's loop in order:
 //!
 //! 1. **Flag** — write the trinary `cull` LWW register for the named assets
@@ -15,9 +15,9 @@
 //! The view is captured **before** the sweep on purpose: it is the set the sweep acts on, and
 //! reporting the post-sweep view would show an empty reject list next to a non-zero sweep count.
 //!
-//! Because each invocation opens the library afresh, the loop spans processes: flags written by
-//! one `capsule cull` run are read back and swept by the next. That durability is `S-A10`'s, and
-//! `tests/cull_round_trip.rs` proves it across a real process boundary.
+//! Because each invocation opens the library afresh, the loop spans processes: flags written by one
+//! `capsule cull` run are read back and swept by the next. That durability comes from the library's
+//! on-disk state, and `tests/cull_round_trip.rs` proves it across a real process boundary.
 //!
 //! SSoT: [Organization — Culling](https://docs/design/organization/#culling).
 

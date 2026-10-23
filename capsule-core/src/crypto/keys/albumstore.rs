@@ -1,5 +1,5 @@
 //! The durable album-key store: every album's AMK ledger, write-tier + admin signing seeds,
-//! and attested authority state, sealed at rest under the account master key (slice `S-A10`).
+//! and attested authority state, sealed at rest under the account master key.
 //!
 //! Album keys used to be **session-scoped** — minted per `Workspace` and dropped on close — so a
 //! reopened library could neither decrypt nor write its own prior assets. This module is the

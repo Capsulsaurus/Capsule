@@ -1,4 +1,4 @@
-//! `GET /v1/blob/{hash}` — key-free ranged blob serving (slice `S-C10`), end to end.
+//! `GET /v1/blob/{hash}` — key-free ranged blob serving, end to end.
 //!
 //! The status taxonomy is the contract here, so most of these cases are about *which* refusal
 //! rather than about bytes: `404` and `410` make a client degrade permanently, `409` makes it
@@ -383,7 +383,7 @@ async fn a_shared_blob_survives_one_holders_deletion() {
     );
 }
 
-/// An original still uploading is a transient `409`, not a permanent `404` (`S-C40`).
+/// An original still uploading is a transient `409`, not a permanent `404`.
 ///
 /// The whole point of the status split: a client told `404` degrades to the representation it
 /// already holds and stops asking, which for an original that is thirty seconds from arriving
@@ -448,7 +448,7 @@ async fn an_original_still_uploading_is_transient_rather_than_unknown() {
         .assert_status(StatusCode::NOT_FOUND);
 }
 
-/// The transient answer reports the caller's own upload and nobody else's (`S-C40`).
+/// The transient answer reports the caller's own upload and nobody else's.
 #[tokio::test]
 async fn another_accounts_upload_is_not_this_accounts_pending_answer() {
     let fixture = Fixture::working();
@@ -473,13 +473,13 @@ async fn another_accounts_upload_is_not_this_accounts_pending_answer() {
 }
 
 /// Finalizing discharges the promise: the transient answer stops, because the thing that made
-/// it stopped (`S-C40`).
+/// it stopped.
 ///
-/// It does not become a `200` here, and that is not a gap in this slice. A blob is servable once
+/// It does not become a `200` here, and that is not a gap. A blob is servable once
 /// a *visible* asset references it, and an upload alone leaves the asset row pending — the
-/// lifecycle op that publishes it is `S-C16`'s, and `a_live_blob_is_served_whole` covers the
-/// served end. What this case pins is the boundary the transient status owns: it is true exactly
-/// while an upload is in flight, and not one request longer.
+/// lifecycle op that publishes it is a separate step, and `a_live_blob_is_served_whole` covers
+/// the served end. What this case pins is the boundary the transient status owns: it is true
+/// exactly while an upload is in flight, and not one request longer.
 #[tokio::test]
 async fn finalizing_discharges_the_promise() {
     let fixture = Fixture::working();
@@ -521,7 +521,7 @@ async fn finalizing_discharges_the_promise() {
 
 /// A reference with no bytes is `410` whatever its role — a reference is written *after* the
 /// bytes commit, so its bytes being absent means they were removed, never that they have not
-/// arrived. This is why `S-C40`'s transient answer lives in the no-reference arm.
+/// arrived. This is why the transient in-flight answer lives in the no-reference arm.
 #[tokio::test]
 async fn a_reference_without_bytes_is_gone_even_for_an_original() {
     let fixture = Fixture::working();
@@ -642,7 +642,7 @@ async fn a_blob_awaiting_collection_is_gone_while_its_bytes_are_still_there() {
 
 /// A taken-down asset stops serving, keeps its bytes, and serves again when the hold is lifted.
 ///
-/// `S-C17`. The three assertions are the whole of design/moderation.md's takedown contract:
+/// The three assertions are the whole of design/moderation.md's takedown contract:
 /// `410` rather than `404` (a takedown signals removal of content the fetcher already knows
 /// about, unlike capability-URL serving, which must not confirm a URL ever existed); the blob
 /// is preserved, because the user owns the data and a takedown is a serving constraint rather
@@ -786,16 +786,16 @@ async fn an_unreachable_index_is_a_coded_failure_not_a_missing_blob() {
 }
 
 // ===========================================================================================
-// Who may fetch (`S-C39`)
+// Who may fetch
 // ===========================================================================================
 
 /// A live blob of somebody else's is unknown, not served.
 ///
-/// This is the hole `S-C39` closed. Before it, `GET /v1/blob/{hash}` authorized on "a valid
-/// access token" and nothing else, so **any** authenticated account could fetch **any** live
-/// ciphertext whose address it could name. The defence was that a content address is the hash of
-/// ciphertext and so a capability rather than a guessable name — true, and not the contract, and
-/// a capability that never expires because the address never changes.
+/// Authorizing `GET /v1/blob/{hash}` on "a valid access token" and nothing else would let
+/// **any** authenticated account fetch **any** live ciphertext whose address it could name. The
+/// defence that a content address is the hash of ciphertext and so a capability rather than a
+/// guessable name is true, and not the contract, and a capability that never expires because the
+/// address never changes.
 #[tokio::test]
 async fn another_accounts_live_blob_is_unknown_rather_than_served() {
     let fixture = Fixture::working();
@@ -831,7 +831,7 @@ async fn another_accounts_live_blob_is_unknown_rather_than_served() {
 /// differed from the unknown-address answer — would confirm that the address is referenced by
 /// *somebody*, which is an existence oracle over content addresses handed to anyone who can name
 /// one. The `403` the contract describes is reserved for a caller the server can see once *had*
-/// access — a former member, whose row the membership store keeps (`S-C51`).
+/// access — a former member, whose row the membership store keeps.
 #[tokio::test]
 async fn a_strangers_refusal_is_indistinguishable_from_an_unknown_address() {
     let fixture = Fixture::working();
@@ -915,7 +915,7 @@ async fn a_stranger_cannot_tell_a_takedown_from_an_unknown_address() {
 }
 
 // ===========================================================================================
-// Membership (`S-C51`)
+// Membership
 // ===========================================================================================
 
 /// A second account, on the seeded album's roster in whatever state a case puts it.
@@ -1023,7 +1023,7 @@ async fn a_former_member_is_told_access_was_revoked() {
 
 #[tokio::test]
 async fn a_former_member_gets_the_403_before_any_policy_refusal() {
-    // Authority first, as `S-C39` fixed it: a former member learns nothing about takedowns or
+    // Authority first: a former member learns nothing about takedowns or
     // deletions either. The `403` is theirs whatever the asset's state.
     let fixture = Fixture::working();
     let address = published_original(&fixture, "held-from-former", &ciphertext()).await;

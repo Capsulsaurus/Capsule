@@ -1,4 +1,4 @@
-//! The **tombstone-plus-fork album upgrade ceremony** (slice S-X3).
+//! The **tombstone-plus-fork album upgrade ceremony**.
 //!
 //! SSoT: [Versioning — Album Upgrade Ceremony](https://docs/design/versioning/#album-upgrade-ceremony).
 //!
@@ -17,7 +17,7 @@
 //!
 //! **The wire vocabulary moved out.** [`UpgradeIntent`], [`SignedUpgradeIntent`] and
 //! [`UpgradeLineage`] now live in [`crate::crypto::upgrade`], **ungated**, because the key-free
-//! server owns four of the ceremony's steps and does not enable the `mls` feature (`S-C24`). They
+//! server owns four of the ceremony's steps and does not enable the `mls` feature. They
 //! are re-exported here so this module reads as it did. What stays is everything that touches a
 //! group.
 

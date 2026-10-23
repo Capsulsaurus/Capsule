@@ -206,7 +206,7 @@ pub async fn another_accounts_reservation_is_not_releasable(h: &dyn Harness) {
     assert_eq!(ok(h.quotas().usage(&owner).await, "read usage").used, 64);
 }
 
-/// The collector releases by address, and the ledger names the account (`S-C44`).
+/// The collector releases by address, and the ledger names the account.
 ///
 /// A sweep knows an address and nothing else — attribution is global by content address, so the
 /// blob it is deleting may be charged to an account with no remaining connection to the asset

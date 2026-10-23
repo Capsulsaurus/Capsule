@@ -1,5 +1,5 @@
 //! [`CodedProblems`] — the `error.*` code every rejection owes, including the ones Capsule does
-//! not write (slice `S-C36`).
+//! not write.
 //!
 //! # The contract, and where it was broken
 //!
@@ -15,7 +15,7 @@
 //! | Response | Whose |
 //! | --- | --- |
 //! | `401`, `403` | `Auth<AccessToken>` — Kynos's `AuthRejection` |
-//! | `413` | the body-size interceptor (`S-C33`) |
+//! | `413` | the body-size interceptor |
 //! | `400` | a `Path` or `Headers` extractor that could not decode |
 //! | `415`, `422` | the `Json` extractor |
 //! | `416` | a blob read's `Delivery`, for a range past the end |
@@ -71,7 +71,7 @@
 //! # The other half
 //!
 //! Attaching the member is only half the i18n contract; a generated client also has to know the
-//! member is there. That is `S-C38`, and it is why [`crate::openapi`](fn@crate::openapi) describes `code` on every
+//! member is there. That is why [`crate::openapi`](fn@crate::openapi) describes `code` on every
 //! problem response — the two are one change, and this module is the half that makes the
 //! document's claim true for the framework's own responses.
 

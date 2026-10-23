@@ -1,6 +1,6 @@
-//! The single opaque sync cursor persisted for the sync-fed local store (slice
-//! `S-D5`). The cursor is server-MAC'd and never interpreted by the client; it is
-//! round-tripped verbatim, so it is stored as raw bytes in a one-row table.
+//! The single opaque sync cursor persisted for the sync-fed local store. The
+//! cursor is server-MAC'd and never interpreted by the client; it is round-tripped verbatim, so
+//! it is stored as raw bytes in a one-row table.
 
 use sea_orm::entity::prelude::*;
 

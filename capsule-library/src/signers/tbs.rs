@@ -1,5 +1,4 @@
-//! Windows TPM 2.0 [`HardwareSigner`](capsule_core::crypto::keys::HardwareSigner) over **TBS** (TPM Base Services) —
-//! slice `S-F4`.
+//! Windows TPM 2.0 [`HardwareSigner`](capsule_core::crypto::keys::HardwareSigner) over **TBS** (TPM Base Services).
 //!
 //! The `tpm` reference adapter (`tpm`-feature-gated, so undocumented in a default build) drives a
 //! TPM through `tss-esapi`'s high-level ESAPI and links the system `libtss2` — the Linux path.
@@ -12,7 +11,7 @@
 //! # P-256, composed
 //!
 //! Shipping TPMs expose **ECDSA over NIST P-256**, so — exactly like Secure Enclave and StrongBox
-//! (slice `S-F2`) and the `tpm` reference — the classical half is P-256, and this signer plugs
+//! and the `tpm` reference — the classical half is P-256, and this signer plugs
 //! into [`P256HybridSigningKey`](capsule_core::crypto::keys::P256HybridSigningKey) unchanged:
 //! [`enroll`](capsule_core::crypto::keys::HardwareSigner::enroll) returns the bare `x‖y` public point (64 bytes — the
 //! form `p256::parse_p256_public` normalizes), and [`sign_classical`] returns a **DER-encoded**
@@ -943,7 +942,7 @@ mod backend {
         use super::*;
 
         /// Real-TPM smoke, mirroring the tss-esapi reference round trip (`README-tpm.md`) and the
-        /// Secure Enclave / StrongBox composition smoke (slice `S-F2`): enroll a TPM-held P-256
+        /// Secure Enclave / StrongBox composition smoke: enroll a TPM-held P-256
         /// key, compose it through `P256HybridSigningKey`, sign, verify, and assert
         /// non-exportability. Gated on a present TPM, so it no-ops on machines without one.
         #[test]

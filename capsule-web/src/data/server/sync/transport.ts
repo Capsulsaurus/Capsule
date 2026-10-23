@@ -1,11 +1,10 @@
 /**
  * The transport seam for the sync feed. `SyncStore` and `ServerGateway` depend only on this
- * interface, so the store logic is unit-tested against a mock transport with no live server
- * (`S-D6` gate).
+ * interface, so the store logic is unit-tested against a mock transport with no live server.
  *
  * The real implementation was `GrpcWebSyncTransport`, which framed a hand-rolled Protobuf
  * message into gRPC-web and reconciled a status that could arrive in headers *or* in a trailer
- * block. `S-C2` moved the feed onto REST and `S-C59` retired the gRPC surface entirely, so what
+ * block. The feed now rides REST and the gRPC surface is gone entirely, so what
  * is left is [`RestSyncTransport`]: one `GET`, one JSON body, one status line.
  */
 

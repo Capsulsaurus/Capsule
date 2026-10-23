@@ -35,7 +35,7 @@
 //! `CounterKey::LoginAttempts`: the per-account ceiling is this lockout, reserved atomically
 //! with the account row, and a second counter keyed on the account would need the route to
 //! learn *which* account a refused password belonged to — the one thing this port withholds. Rate limiting *is* a counter, it has no port anywhere
-//! in this crate, and slice `S-C32` owns it; see `routes::auth` for what that costs the ported
+//! in this crate yet; see `routes::auth` for what that costs the ported
 //! surface today.
 
 use std::fmt;
@@ -77,7 +77,7 @@ pub enum Authentication {
 /// a status and an `error.*` code belongs to the route that could not finish, which knows what
 /// the caller was trying to do.
 ///
-/// `#[non_exhaustive]` because the Postgres adapter this slice does not write may need a
+/// `#[non_exhaustive]` because the Postgres adapter this change does not write may need a
 /// variant, and a route matching on it must keep compiling when one lands.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
@@ -95,7 +95,7 @@ pub enum DirectoryError {
 /// Who exists, and whether a presented password is theirs.
 ///
 /// One operation. A directory that also listed accounts, created them or changed passwords
-/// would be the grab-bag `S-C29` deleted, rebuilt one method at a time; registration and
+/// would be the grab-bag state trait rebuilt one method at a time; registration and
 /// password change are their own surfaces and will bring their own contracts.
 pub trait AccountDirectory: fmt::Debug + Send + Sync {
     /// Decide whether `password` authenticates the account named by `email`.
@@ -117,7 +117,7 @@ pub trait AccountDirectory: fmt::Debug + Send + Sync {
         password: &'a str,
     ) -> DirectoryFuture<'a, Authentication>;
 
-    /// The same decision, for an account already identified (`S-C7`).
+    /// The same decision, for an account already identified.
     ///
     /// Re-authentication happens on a session that already names its account, so the account
     /// comes from the credential and never from the request. That distinction is the whole

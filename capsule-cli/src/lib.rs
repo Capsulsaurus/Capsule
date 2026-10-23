@@ -1,7 +1,7 @@
 //! The Capsule CLI as a library: the command implementations and the dispatch the
 //! thin `capsule` binary calls.
 //!
-//! The networked commands (`auth login/logout`, `sync`, `list` — slice `S-D5`)
+//! The networked commands (`auth login/logout`, `sync`, `list`)
 //! live in [`remote`] and are driven entirely over `capsule-sdk`; [`session`] and
 //! [`syncstore`] are their durable state. Splitting the logic into a library lets
 //! the real-server round-trip drive these command functions directly rather than
@@ -56,13 +56,13 @@ pub mod tui;
 pub mod utils;
 pub mod verify;
 
-/// The stable product id this CLI reports on every manifest it authors (S-D15). Combined with
+/// The stable product id this CLI reports on every manifest it authors. Combined with
 /// this crate's own semver and capsule-core's build-embedded commit, it composes the
 /// `client_version` grammar `capsule-cli/{semver}+{commit}[.dirty]`.
 pub const CLIENT_ID: &str = "capsule-cli";
 
 /// Tag a freshly built workspace with this CLI's build identity so every manifest and derivative
-/// it produces carries `capsule-cli/{semver}+{commit}` (S-D15) rather than the bare
+/// it produces carries `capsule-cli/{semver}+{commit}` rather than the bare
 /// `capsule-core` default. Applied at every workspace construction site in the CLI.
 #[must_use]
 fn as_capsule_cli(ws: Workspace) -> Workspace {
@@ -375,7 +375,7 @@ async fn dispatch(command: Commands) -> Result<()> {
 
             let mut ws = open_workspace(&library, passphrase_stdin)?;
 
-            // Phase 1: Scan (plain tree) or extract (third-party export, S-B11).
+            // Phase 1: Scan (plain tree) or extract (third-party export).
             if human {
                 println!("{}", "Scanning source files…".cyan());
             }
@@ -397,7 +397,7 @@ async fn dispatch(command: Commands) -> Result<()> {
                 },
                 force_reimport_duplicates: force,
                 // No explicit pick and no owner pointer on the CLI yet: bind the library's
-                // derived de facto album so the plan records the rule that fired (S-B12).
+                // derived de facto album so the plan records the rule that fired.
                 album: DefaultAlbumContext::derived(ws.default_album_id()),
                 ..Default::default()
             };
@@ -450,7 +450,7 @@ async fn dispatch(command: Commands) -> Result<()> {
 
             // The one execute path: a plain filesystem import reaches it with an empty index
             // and behaves exactly as it always has; a `--provider` import reaches it with the
-            // adapter's folded metadata, which lands inside each signed sidecar (`S-B10`).
+            // adapter's folded metadata, which lands inside each signed sidecar.
             let summary = execute_with_source_metadata(
                 &plan_result,
                 &mut ws,
@@ -824,7 +824,7 @@ async fn dispatch(command: Commands) -> Result<()> {
     Ok(())
 }
 
-// ─── Networked commands (S-D5) ───────────────────────────────────────────────
+// ─── Networked commands ───────────────────────────────────────────────
 
 /// Read a value from a flag, else prompt for it. Prompting needs a terminal, so the flag is
 /// what makes these commands usable from a script, a CI job, or a heredoc.
@@ -873,7 +873,7 @@ async fn auth_register(email: Option<String>, password_stdin: bool) -> Result<()
     let remote = remote::RemoteConfig::from_env();
     let store = session_store()?;
 
-    // An address and a password, and nothing else. The server takes nothing else (`S-C53`): a
+    // An address and a password, and nothing else. The server takes nothing else: a
     // display name is a fact about a person, and the profile surface that would hold one is
     // owed rather than assumed. Prompting for a value the server discards would be worse than
     // not asking.
@@ -931,7 +931,7 @@ async fn auth_login(email: Option<String>, password_stdin: bool) -> Result<()> {
 
 /// Finish a sign-in that answered a second-factor challenge, by asking for the code.
 ///
-/// The first factor verified and the sign-in may not be finished (`S-C55`). The CLI is
+/// The first factor verified and the sign-in may not be finished. The CLI is
 /// interactive, so it asks — a client that could not would have to report a second factor as
 /// a failure, which is what the SDK's `LoginOutcome::into_session` is for and what this is
 /// deliberately not. Shared by the password and the identity-provider sign-ins, which honour the
@@ -1371,13 +1371,13 @@ async fn sync(
 /// Open a Capsule library as a signed workspace.
 ///
 /// Imports land on the signed lifecycle path (signed sidecar + manifest + provenance +
-/// derivatives), never the legacy unsigned sidecar (S-B2); a first open initializes the account
-/// under the given passphrase. The default album is resolved-or-created (`S-A10`): album keys
+/// derivatives), never the legacy unsigned sidecar; a first open initializes the account
+/// under the given passphrase. The default album is resolved-or-created: album keys
 /// are durable now, so a second run MUST resolve the album the first run minted rather than
 /// replacing it — minting a fresh one per run is exactly what left a reopened library unable to
 /// decrypt or extend its own prior imports (and would make a push unrepeatable).
 ///
-/// When the open found unsigned pre-signed-path sidecars (`S-D24`), a notice naming their count
+/// When the open found unsigned pre-signed-path sidecars, a notice naming their count
 /// and `capsule library migrate` goes to stderr, so every verb over such a library says why
 /// some assets are missing before the user runs the migration.
 fn open_workspace(library: &Path, passphrase_stdin: bool) -> Result<Workspace> {
@@ -2268,13 +2268,13 @@ mod client_build_wiring_tests {
 
     use super::as_capsule_cli;
 
-    /// S-D15: a workspace built the way the CLI builds one (`as_capsule_cli`, the same wrapper the
+    /// A workspace built the way the CLI builds one (`as_capsule_cli`, the same wrapper the
     /// `import`/`demo` paths use) stamps every manifest it authors with
     /// `capsule-cli/{semver}+{commit}` — proving the CLI reports itself, not the bare
     /// `capsule-core` default. Uses a fast Argon2 cost so the test never pays the production KDF.
     #[test]
     fn cli_workspace_stamps_capsule_cli_client_version() {
-        let dir = std::env::temp_dir().join(format!("capsule-cli-s-d15-{}", nanoid::nanoid!()));
+        let dir = std::env::temp_dir().join(format!("capsule-cli-scratch-{}", nanoid::nanoid!()));
         let lib = dir.join("lib");
         std::fs::create_dir_all(&lib).unwrap();
         let src = dir.join("photo.jpg");

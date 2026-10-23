@@ -1,11 +1,11 @@
-//! The key-free **sync consumer** (slice `S-D2`; SSoT: [Download & Sync]).
+//! The key-free **sync consumer** (SSoT: [Download & Sync]).
 //!
 //! [`SyncConsumer`] drives `GET /v1/sync` through the **generated REST client** — the same
-//! paged `(cursor, page_size)` feed the server serves (slice `S-C2`) — authorizing through the
-//! `S-D7` session and retrying once on a `401`. The opaque, server-MAC'd cursor is round-tripped
+//! paged `(cursor, page_size)` feed the server serves — authorizing through the
+//! SDK session and retrying once on a `401`. The opaque, server-MAC'd cursor is round-tripped
 //! verbatim: the client stores `next_cursor` and hands it back untouched.
 //!
-//! **There was a second transport here and there is not any more** (`S-D28`). The feed rode
+//! **There was a second transport here and there is not any more**. The feed rode
 //! `capsule.sync.v1.SyncService` over tonic, which meant the SDK described one wire contract in
 //! a `.proto` and every other in an OpenAPI document. Nothing below the transport moved:
 //! [`SyncState`] and its two rules were never about gRPC.
@@ -169,7 +169,7 @@ pub struct FeedEntry {
 }
 
 /// The derived per-asset **original availability** — the badge a client's timeline
-/// reads (staged uploads, slice `S-B4`; transfer download doc, "The `awaiting-original`
+/// reads (staged uploads; transfer download doc, "The `awaiting-original`
 /// state"). It is **always derived** from the feed's `original_held` fact, never
 /// stored as a second source of truth: an asset whose original has not yet landed
 /// on the server shows in the timeline immediately (LQIP, then T1 tiers as they
@@ -332,7 +332,7 @@ impl SyncState {
     /// [`SyncState::high_water_marks`]: a client persists those two after every
     /// [`apply_page`](SyncState::apply_page) and restores here on the next run so
     /// the anti-rewind high-water mark survives process restarts (the CLI's
-    /// `capsule sync`, slice `S-D5`). `max_known_protocol` is intentionally *not*
+    /// `capsule sync`). `max_known_protocol` is intentionally *not*
     /// persisted — it is the running build's own ceiling, so a client that
     /// upgraded raises it here rather than restoring a stale one.
     #[must_use]
@@ -448,7 +448,7 @@ impl SyncState {
 // ─── REST consumer ───────────────────────────────────────────────────────────
 
 /// How the feed's `Authorization` header is populated. Closed on purpose, mirroring the upload
-/// client: either the `S-D7` session (pre-flight refresh, single-flight coalescing, and one
+/// client: either the SDK session (pre-flight refresh, single-flight coalescing, and one
 /// refresh-and-retry on a `401`) or a fixed bearer for tests and callers that already hold a
 /// live token.
 #[derive(Clone)]
@@ -461,7 +461,7 @@ enum SyncAuth {
     Static,
 }
 
-/// The sync consumer, over the **generated REST client** (`S-D28`).
+/// The sync consumer, over the **generated REST client**.
 ///
 /// It used to drive `capsule.sync.v1.SyncService` over tonic. The feed is `GET /v1/sync` now and
 /// is a generated operation like every other, which removes the SDK's second transport and, with
@@ -476,7 +476,7 @@ pub struct SyncConsumer {
 }
 
 impl SyncConsumer {
-    /// A consumer for the API at `base_url`, authorizing through an `S-D7` [`Session`] — the
+    /// A consumer for the API at `base_url`, authorizing through an SDK [`Session`] — the
     /// sanctioned production path.
     ///
     /// # Errors
@@ -505,10 +505,9 @@ impl SyncConsumer {
     /// Pull one page after `cursor`.
     ///
     /// On a `401` under a session, refreshes once and retries — the reactive half of the session
-    /// contract, which the pre-flight refresh cannot cover when a token is revoked mid-flight
-    /// (`S-C48` made that a real answer rather than a theoretical one). A `503` or a transport
-    /// failure rides the shared retry engine's `interactive` class: short timeout, at most two
-    /// retries, then a visible failure — no configuration hot-loops.
+    /// contract, which the pre-flight refresh cannot cover when a token is revoked mid-flight.
+    /// A `503` or a transport failure rides the shared retry engine's `interactive` class: short
+    /// timeout, at most two retries, then a visible failure — no configuration hot-loops.
     #[instrument(skip(self, cursor), fields(page_size, entries))]
     pub async fn pull(&self, cursor: &SyncCursor, page_size: u32) -> Result<SyncPage, SyncError> {
         self.pull_scoped(cursor, page_size, None).await
@@ -556,7 +555,7 @@ impl SyncConsumer {
 
     /// Pull one page of **one album** after `cursor`.
     ///
-    /// The album arm of the same operation (`S-C51`, `S-E5`): an account reads it as the album's
+    /// The album arm of the same operation: an account reads it as the album's
     /// owner or a member of its current roster, and a federated peer reads it under a capability
     /// whose audience is that album. Same retry and same refresh-once behaviour as
     /// [`Self::pull`]; the only difference is the parameter, because the *server* is where the
@@ -672,7 +671,7 @@ fn is_transient(error: &rest::Error<rest::SyncFeedError>) -> bool {
 // ─── Wire decoding ───────────────────────────────────────────────────────────
 
 /// Map a generated client error to a typed [`SyncError`], keeping the stable `error.*` code the
-/// problem body carries (`S-C36`/`S-C38` are why it is always there and always described).
+/// problem body carries (the server always sends it and always describes it).
 fn map_error(error: rest::Error<rest::SyncFeedError>) -> SyncError {
     match error {
         rest::Error::Api(response) => {
@@ -680,7 +679,7 @@ fn map_error(error: rest::Error<rest::SyncFeedError>) -> SyncError {
                 // The 400 includes the protocol gate's malformed-handshake answer (issue #404).
                 // There is no 426 to map: the feed is a read, and a read is admitted at any
                 // grammatical protocol date — the window rides the response headers instead.
-                // The 429 is a federated peer's events budget (`S-E5`): a capability puller
+                // The 429 is a federated peer's events budget: a capability puller
                 // over its hour. Rejected rather than retried, because the window is an hour
                 // and the interactive retry class would give up long before it turned.
                 // The 409 is a cursor from before the library's sync epoch moved (#697); the
@@ -727,7 +726,7 @@ fn decode_entry(entry: rest::types::SyncEntry) -> Result<FeedEntry, SyncError> {
     };
     // Base64, because the manifest is CBOR and the feed is JSON. Decoded here so a caller holds
     // the *exact* signed bytes `verify_asset` needs — re-encoding them anywhere would be the
-    // thing `S-C30` exists to prevent.
+    // corruption that carrying the signed bytes verbatim exists to prevent.
     let manifest_cbor = match entry.manifest_cbor.as_deref() {
         Some(encoded) => BASE64
             .decode(encoded)

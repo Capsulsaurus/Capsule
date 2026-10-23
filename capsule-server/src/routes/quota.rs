@@ -1,4 +1,4 @@
-//! `GET /v1/quota` — the storage-quota snapshot (slice `S-C6`).
+//! `GET /v1/quota` — the storage-quota snapshot.
 //!
 //! Read-only, and deliberately not an enforcement point. The hard check runs at
 //! `POST /v1/upload` session creation; this exists so a client can show a user what is full and
@@ -11,7 +11,7 @@
 //! knows nothing about sentinels, and a number that is not a limit is a number some client will
 //! eventually put in a progress bar.
 //!
-//! # `S-C28` audit
+//! # The status audit
 //!
 //! | Salvo status | Verdict |
 //! | --- | --- |

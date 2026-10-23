@@ -6829,7 +6829,7 @@
   },
   "common.display_name": {
     "message": "Display name",
-    "context": "Form label for the optional display name in profile settings (slice S-C54). It replaced 'Username': the server no longer stores a username, and a display name is the one name a person chooses for themselves."
+    "context": "Form label for the optional display name in profile settings. It replaced 'Username': the server no longer stores a username, and a display name is the one name a person chooses for themselves."
   },
   "common.email": {
     "message": "Email",
@@ -7069,51 +7069,51 @@
   },
   "error.album.invalid_id": {
     "message": "This album could not be registered because its identifier is malformed.",
-    "context": "HTTP 400 on POST /v1/albums (album provisioning, S-C25): album_id is not a canonical lowercase hyphenated UUID. Always a client bug — the id is derived deterministically from the account master key."
+    "context": "HTTP 400 on POST /v1/albums (album provisioning): album_id is not a canonical lowercase hyphenated UUID. Always a client bug — the id is derived deterministically from the account master key."
   },
   "error.album.not_available": {
     "message": "This album isn't available on your account.",
-    "context": "HTTP 403 on POST /v1/albums (album provisioning, S-C25): the submitted album id cannot be bound to the caller. Deliberately identical whatever the reason, so the endpoint never reveals whether another account already holds that id."
+    "context": "HTTP 403 on POST /v1/albums (album provisioning): the submitted album id cannot be bound to the caller. Deliberately identical whatever the reason, so the endpoint never reveals whether another account already holds that id."
   },
   "error.album.roster_attester": {
     "message": "Only a device on the album owner's account can publish its roster.",
-    "context": "HTTP 403 on PUT /v1/albums/{album_id}/roster (slice S-C51): the roster's attester signature does not verify against the owner's published device directory, the attesting device is revoked, no directory is published, or attested_by_user is not the caller."
+    "context": "HTTP 403 on PUT /v1/albums/{album_id}/roster: the roster's attester signature does not verify against the owner's published device directory, the attesting device is revoked, no directory is published, or attested_by_user is not the caller."
   },
   "error.album.roster_malformed": {
     "message": "Capsule couldn't read that album roster.",
-    "context": "HTTP 400 on PUT /v1/albums/{album_id}/roster (slice S-C51): the body's roster_cbor is not base64 of a signed album roster, is past the 512 KiB ceiling, names a different album than the path, lists the owner or lists an account twice."
+    "context": "HTTP 400 on PUT /v1/albums/{album_id}/roster: the body's roster_cbor is not base64 of a signed album roster, is past the 512 KiB ceiling, names a different album than the path, lists the owner or lists an account twice."
   },
   "error.album.roster_not_found": {
     "message": "That album isn't yours, or doesn't exist.",
-    "context": "HTTP 404 on PUT /v1/albums/{album_id}/roster (slice S-C51): no such album, or one owned by a different account. One answer for both — a member, even an MLS admin, cannot publish the owner's roster and learns nothing by trying."
+    "context": "HTTP 404 on PUT /v1/albums/{album_id}/roster: no such album, or one owned by a different account. One answer for both — a member, even an MLS admin, cannot publish the owner's roster and learns nothing by trying."
   },
   "error.album.roster_stale": {
     "message": "The roster you sent is out of step with the one the server holds.",
-    "context": "HTTP 409 on PUT /v1/albums/{album_id}/roster (slice S-C51): the roster_version is at or below the one the server holds with different bytes, or a newer version carried a lower AMK epoch. Carries current_version so the client can re-sync and republish."
+    "context": "HTTP 409 on PUT /v1/albums/{album_id}/roster: the roster_version is at or below the one the server holds with different bytes, or a newer version carried a lower AMK epoch. Carries current_version so the client can re-sync and republish."
   },
   "error.album.roster_version_leap": {
     "message": "That roster's version is too far ahead of the one the server holds.",
-    "context": "HTTP 400 on PUT /v1/albums/{album_id}/roster (slice S-C51): the roster_version is more than the accepted step above the held one, which is refused because a version nothing can supersede would freeze the album's membership for good. Carries declared, current_version and max_version; the client re-signs the same roster at current_version + 1."
+    "context": "HTTP 400 on PUT /v1/albums/{album_id}/roster: the roster_version is more than the accepted step above the held one, which is refused because a version nothing can supersede would freeze the album's membership for good. Carries declared, current_version and max_version; the client re-signs the same roster at current_version + 1."
   },
   "error.album.unavailable": {
     "message": "Capsule couldn't set up that album. Please try again.",
-    "context": "HTTP 500 on POST /v1/albums (slice S-C25): the album store could not answer, so nothing was provisioned. Retryable, and it says nothing about whether the id is available."
+    "context": "HTTP 500 on POST /v1/albums: the album store could not answer, so nothing was provisioned. Retryable, and it says nothing about whether the id is available."
   },
   "error.album.upgrade_in_flight": {
     "message": "This album is already being upgraded.",
-    "context": "HTTP 409 on POST/DELETE /v1/albums/{id}/upgrade (slice S-C24): only one upgrade may be in flight per album. Carries the live intent_id so a proposer can tell which ceremony it is losing to."
+    "context": "HTTP 409 on POST/DELETE /v1/albums/{id}/upgrade: only one upgrade may be in flight per album. Carries the live intent_id so a proposer can tell which ceremony it is losing to."
   },
   "error.album.upgrade_malformed": {
     "message": "Capsule couldn't read that album upgrade request.",
-    "context": "HTTP 400 on POST/DELETE /v1/albums/{id}/upgrade (slice S-C24): the body is not a signed UpgradeIntent, is past the size ceiling, or the intent_id is not a UUID."
+    "context": "HTTP 400 on POST/DELETE /v1/albums/{id}/upgrade: the body is not a signed UpgradeIntent, is past the size ceiling, or the intent_id is not a UUID."
   },
   "error.album.upgrade_not_found": {
     "message": "That album isn't yours, or doesn't exist.",
-    "context": "HTTP 404 on the album-upgrade surface (slice S-C24): no such album, or one filed under a different account. One answer for both — an album id is client-derived, so a guess must buy nothing."
+    "context": "HTTP 404 on the album-upgrade surface: no such album, or one filed under a different account. One answer for both — an album id is client-derived, so a guess must buy nothing."
   },
   "error.album.upgrade_proposer": {
     "message": "Only an admin device on this account can upgrade an album.",
-    "context": "HTTP 403 on POST /v1/albums/{id}/upgrade (slice S-C24): the intent's proposer signature does not verify against the account's published device directory, or no directory is published. Without this check anyone holding a token could freeze an album by posting a struct."
+    "context": "HTTP 403 on POST /v1/albums/{id}/upgrade: the intent's proposer signature does not verify against the account's published device directory, or no directory is published. Without this check anyone holding a token could freeze an album by posting a struct."
   },
   "error.auth.account_locked": {
     "message": "This account is locked after too many failed sign-in attempts.",
@@ -7121,7 +7121,7 @@
   },
   "error.auth.current_password_invalid": {
     "message": "That is not your current password.",
-    "context": "HTTP 403 on POST /v1/auth/password (slice S-C54): the current password presented to authorize the change did not match. 403 and not 401 — the caller is authenticated, and a 401 would send a client to a sign-in its live session does not need."
+    "context": "HTTP 403 on POST /v1/auth/password: the current password presented to authorize the change did not match. 403 and not 401 — the caller is authenticated, and a 401 would send a client to a sign-in its live session does not need."
   },
   "error.auth.invalid_credentials": {
     "message": "Invalid email or password.",
@@ -7129,11 +7129,11 @@
   },
   "error.auth.oidc_address_taken": {
     "message": "An account with that email address already exists here. Sign in with its password instead.",
-    "context": "HTTP 409 on POST /v1/auth/oidc/callback (slice S-N1): the identity provider asserted an email address that already belongs to a local account, and this identity is not linked to it. Capsule never links accounts by an address the provider controls; the person signs in with the existing account's password."
+    "context": "HTTP 409 on POST /v1/auth/oidc/callback: the identity provider asserted an email address that already belongs to a local account, and this identity is not linked to it. Capsule never links accounts by an address the provider controls; the person signs in with the existing account's password."
   },
   "error.auth.oidc_at_capacity": {
     "message": "Too many sign-ins are already in progress. Please try again in a moment.",
-    "context": "HTTP 503 on POST /v1/auth/oidc/authorize (slice S-N1): the server is already holding as many unfinished single sign-on ceremonies as it will hold, so this one was not begun. Retryable within minutes - pending ceremonies expire ten minutes after they start. Distinct from error.auth.unavailable, which is a 500 meaning a store could not answer at all: this one means the server answered and said 'not now', and a client may retry it on a short timer rather than surfacing an outage."
+    "context": "HTTP 503 on POST /v1/auth/oidc/authorize: the server is already holding as many unfinished single sign-on ceremonies as it will hold, so this one was not begun. Retryable within minutes - pending ceremonies expire ten minutes after they start. Distinct from error.auth.unavailable, which is a 500 meaning a store could not answer at all: this one means the server answered and said 'not now', and a client may retry it on a short timer rather than surfacing an outage."
   },
   "error.auth.oidc_device_denied": {
     "message": "The sign-in was declined at your identity provider.",
@@ -7157,39 +7157,39 @@
   },
   "error.auth.oidc_exchange_failed": {
     "message": "Your identity provider didn't accept that sign-in. Try again.",
-    "context": "HTTP 401 on POST /v1/auth/oidc/callback (slice S-N1): the identity provider refused to exchange the authorization code (an invalid, spent or mismatched code). The person starts the sign-in again."
+    "context": "HTTP 401 on POST /v1/auth/oidc/callback: the identity provider refused to exchange the authorization code (an invalid, spent or mismatched code). The person starts the sign-in again."
   },
   "error.auth.oidc_not_configured": {
     "message": "Single sign-on isn't set up on this server.",
-    "context": "HTTP 404 on POST /v1/auth/oidc/authorize (slice S-N1): this deployment has no OIDC identity provider configured, so there is nowhere to send the person. The server-info record publishes auth.oidc as null in this case; a client that shows the option anyway sees this."
+    "context": "HTTP 404 on POST /v1/auth/oidc/authorize: this deployment has no OIDC identity provider configured, so there is nowhere to send the person. The server-info record publishes auth.oidc as null in this case; a client that shows the option anyway sees this."
   },
   "error.auth.oidc_redirect_invalid": {
     "message": "That sign-in can't return to this app.",
-    "context": "HTTP 400 on POST /v1/auth/oidc/authorize (slice S-N1): the redirect URI the client asked for is neither the deployment's configured one nor a loopback address it admits, so the server will not send the person back there. A client bug or a misconfigured deployment, not something the person can fix."
+    "context": "HTTP 400 on POST /v1/auth/oidc/authorize: the redirect URI the client asked for is neither the deployment's configured one nor a loopback address it admits, so the server will not send the person back there. A client bug or a misconfigured deployment, not something the person can fix."
   },
   "error.auth.oidc_state_invalid": {
     "message": "That sign-in has expired. Start again.",
-    "context": "HTTP 401 on POST /v1/auth/oidc/callback (slice S-N1): the state is unknown, already redeemed, or past its ten-minute window. One answer for all three, so the callback is not an oracle; the person starts the sign-in again."
+    "context": "HTTP 401 on POST /v1/auth/oidc/callback: the state is unknown, already redeemed, or past its ten-minute window. One answer for all three, so the callback is not an oracle; the person starts the sign-in again."
   },
   "error.auth.oidc_token_invalid": {
     "message": "Your identity provider's answer couldn't be verified.",
-    "context": "HTTP 401 on POST /v1/auth/oidc/callback (slice S-N1): the identity provider's ID token failed a check (signature, issuer, audience, expiry or nonce). One answer for every check, deliberately; the specific reason reaches the server log, not the client."
+    "context": "HTTP 401 on POST /v1/auth/oidc/callback: the identity provider's ID token failed a check (signature, issuer, audience, expiry or nonce). One answer for every check, deliberately; the specific reason reaches the server log, not the client."
   },
   "error.auth.oidc_unavailable": {
     "message": "Capsule couldn't reach your identity provider just now. Please try again.",
-    "context": "HTTP 500 on the /v1/auth/oidc routes (slice S-N1): the identity provider could not be reached, or its published metadata or keys could not be used. Retryable, and distinct from error.auth.unavailable because 'the identity provider is down' and 'the session store is down' are different operator actions."
+    "context": "HTTP 500 on the /v1/auth/oidc routes: the identity provider could not be reached, or its published metadata or keys could not be used. Retryable, and distinct from error.auth.unavailable because 'the identity provider is down' and 'the session store is down' are different operator actions."
   },
   "error.auth.password_invalid": {
     "message": "That password cannot be used.",
-    "context": "HTTP 400 on POST /v1/auth/password (slice S-C54): the proposed new password is under the 12-character floor, or is the password already in use. The second case matters because a change that changes nothing leaves the caller believing a leaked credential has been rotated."
+    "context": "HTTP 400 on POST /v1/auth/password: the proposed new password is under the 12-character floor, or is the password already in use. The second case matters because a change that changes nothing leaves the caller believing a leaked credential has been rotated."
   },
   "error.auth.profile_invalid": {
     "message": "That display name cannot be used.",
-    "context": "HTTP 400 on PATCH /v1/auth/profile (slice S-C54): the submitted display name is past the 128-character ceiling or carries control characters. Refused rather than silently rewritten — a name that renders as something other than what was typed is worse than one the server declines."
+    "context": "HTTP 400 on PATCH /v1/auth/profile: the submitted display name is past the 128-character ceiling or carries control characters. Refused rather than silently rewritten — a name that renders as something other than what was typed is worse than one the server declines."
   },
   "error.auth.profile_not_found": {
     "message": "That account no longer exists.",
-    "context": "HTTP 404 on GET/PATCH /v1/auth/profile and POST /v1/auth/password (slice S-C54): the presented credential is valid and names an account the directory no longer holds — a session outlives the account row it names when the account is deleted mid-session. The server is working correctly; the account is gone."
+    "context": "HTTP 404 on GET/PATCH /v1/auth/profile and POST /v1/auth/password: the presented credential is valid and names an account the directory no longer holds — a session outlives the account row it names when the account is deleted mid-session. The server is working correctly; the account is gone."
   },
   "error.auth.rate_limited": {
     "message": "Too many attempts. Please wait and try again.",
@@ -7197,15 +7197,15 @@
   },
   "error.auth.registration_invalid": {
     "message": "That email or password can't be used. Passwords need at least 12 characters.",
-    "context": "HTTP 400 on POST /v1/auth/register (slice S-C53): the address is not usable or the password is under the length floor. A length floor and no composition rule — the password authenticates a session, not the master key, and composition rules push people towards shorter, more guessable passwords."
+    "context": "HTTP 400 on POST /v1/auth/register: the address is not usable or the password is under the length floor. A length floor and no composition rule — the password authenticates a session, not the master key, and composition rules push people towards shorter, more guessable passwords."
   },
   "error.auth.revoke_proof_invalid": {
     "message": "That didn't confirm as you. Nothing was logged out.",
-    "context": "HTTP 401 on POST /v1/auth/logout/all (slice S-C23): a proof was presented but did not verify — an unknown, spent, or expired challenge; an account with no published device directory, and so no identity anchor (S-C42) to check against; or a signature that does not verify under that anchor. Every reason is surfaced identically so the endpoint is not an oracle over which accounts have published a directory, and no session is revoked."
+    "context": "HTTP 401 on POST /v1/auth/logout/all: a proof was presented but did not verify — an unknown, spent, or expired challenge; an account with no published device directory, and so no identity anchor to check against; or a signature that does not verify under that anchor. Every reason is surfaced identically so the endpoint is not an oracle over which accounts have published a directory, and no session is revoked."
   },
   "error.auth.revoke_proof_required": {
     "message": "Confirm with your account key to log out of all devices.",
-    "context": "HTTP 401 on POST /v1/auth/logout/all (slice S-C23): no readable master-key proof was presented — the field was absent, not base64, or not a decodable hybrid signature. The global revoke is authenticated by an identity-key signature over a server-issued challenge, never by a session token, so a request without one revokes nothing at all — there is no partial success and nothing for the client to clear locally."
+    "context": "HTTP 401 on POST /v1/auth/logout/all: no readable master-key proof was presented — the field was absent, not base64, or not a decodable hybrid signature. The global revoke is authenticated by an identity-key signature over a server-issued challenge, never by a session token, so a request without one revokes nothing at all — there is no partial success and nothing for the client to clear locally."
   },
   "error.auth.session_expired": {
     "message": "Your session has ended. Please sign in again.",
@@ -7213,27 +7213,27 @@
   },
   "error.auth.session_not_found": {
     "message": "That device is already signed out.",
-    "context": "HTTP 404 on DELETE /v1/auth/devices/{session_id} (slice S-C13): no live session of this account has that id. One answer for never-existed, already-closed, expired, and belonging to another account — distinguishing the last would make the endpoint an oracle over whether a guessed session id belongs to somebody else."
+    "context": "HTTP 404 on DELETE /v1/auth/devices/{session_id}: no live session of this account has that id. One answer for never-existed, already-closed, expired, and belonging to another account — distinguishing the last would make the endpoint an oracle over whether a guessed session id belongs to somebody else."
   },
   "error.auth.totp_already_active": {
     "message": "Two-factor authentication is already switched on.",
-    "context": "HTTP 409 on POST /v1/auth/totp/enroll (slice S-C55): the account already has a confirmed second factor. Refused rather than silently replaced — an enroll that overwrote an active secret would let a stolen session swap the factor for one the attacker holds, without ever presenting a code."
+    "context": "HTTP 409 on POST /v1/auth/totp/enroll: the account already has a confirmed second factor. Refused rather than silently replaced — an enroll that overwrote an active secret would let a stolen session swap the factor for one the attacker holds, without ever presenting a code."
   },
   "error.auth.totp_challenge_invalid": {
     "message": "That sign-in has expired. Enter your password again.",
-    "context": "HTTP 401 on POST /v1/auth/login/verify-totp (slice S-C55): the half-finished sign-in token did not verify, had expired, or was another kind of token. One answer for all three — a client can act on none of the distinctions and every one of them means starting the sign-in again."
+    "context": "HTTP 401 on POST /v1/auth/login/verify-totp: the half-finished sign-in token did not verify, had expired, or was another kind of token. One answer for all three — a client can act on none of the distinctions and every one of them means starting the sign-in again."
   },
   "error.auth.totp_invalid_code": {
     "message": "That code is not right. Check your authenticator app and try again.",
-    "context": "HTTP 403 on the authenticated TOTP operations and 401 on POST /v1/auth/login/verify-totp (slice S-C55): the six-digit code did not verify, or it verified and had already been used. One answer for both — telling a caller that a code was correct but replayed would confirm they had the right code."
+    "context": "HTTP 403 on the authenticated TOTP operations and 401 on POST /v1/auth/login/verify-totp: the six-digit code did not verify, or it verified and had already been used. One answer for both — telling a caller that a code was correct but replayed would confirm they had the right code."
   },
   "error.auth.totp_not_enrolled": {
     "message": "Two-factor authentication is not switched on for this account.",
-    "context": "HTTP 409 on POST /v1/auth/totp/disable (slice S-C55): there is no confirmed second factor to remove."
+    "context": "HTTP 409 on POST /v1/auth/totp/disable: there is no confirmed second factor to remove."
   },
   "error.auth.totp_not_pending": {
     "message": "There is no two-factor setup waiting to be confirmed.",
-    "context": "HTTP 409 on POST /v1/auth/totp/verify-enrollment (slice S-C55): nothing is pending for this account — either enrolment was never started, or it was already confirmed."
+    "context": "HTTP 409 on POST /v1/auth/totp/verify-enrollment: nothing is pending for this account — either enrolment was never started, or it was already confirmed."
   },
   "error.auth.unavailable": {
     "message": "Capsule couldn't reach your account just now. Please try again.",
@@ -7245,15 +7245,15 @@
   },
   "error.blob.access_revoked": {
     "message": "You no longer have access to this album.",
-    "context": "HTTP 403 on GET /v1/blob/{hash} (slice S-C51): the caller was once a member of the album that holds these bytes and has since been removed from its roster. Only a former member ever sees this; everyone else gets the same 404 as an unknown address. The client re-syncs the album list and degrades."
+    "context": "HTTP 403 on GET /v1/blob/{hash}: the caller was once a member of the album that holds these bytes and has since been removed from its roster. Only a former member ever sees this; everyone else gets the same 404 as an unknown address. The client re-syncs the album list and degrades."
   },
   "error.blob.gone": {
     "message": "That photo file is no longer available.",
-    "context": "HTTP 410 on GET /v1/blob/{hash} (slice S-C10): the address is referenced but not retrievable per policy — the asset was deleted, or the reference is dangling. Permanent: the client degrades to a representation it already holds rather than retrying. Distinct from the transient error.blob.pending_upload."
+    "context": "HTTP 410 on GET /v1/blob/{hash}: the address is referenced but not retrievable per policy — the asset was deleted, or the reference is dangling. Permanent: the client degrades to a representation it already holds rather than retrying. Distinct from the transient error.blob.pending_upload."
   },
   "error.blob.not_found": {
     "message": "That photo file isn't on the server.",
-    "context": "HTTP 404 on GET /v1/blob/{hash} (slice S-C10): no live asset references the content address, or the path is not a content address at all. Both answer identically on purpose — a distinguishable malformed-address response would turn the route into an oracle over guesses."
+    "context": "HTTP 404 on GET /v1/blob/{hash}: no live asset references the content address, or the path is not a content address at all. Both answer identically on purpose — a distinguishable malformed-address response would turn the route into an oracle over guesses."
   },
   "error.blob.pending_upload": {
     "message": "The original photo hasn't been uploaded from its device yet.",
@@ -7261,7 +7261,7 @@
   },
   "error.blob.unavailable": {
     "message": "Capsule couldn't reach that photo file. Please try again.",
-    "context": "HTTP 500 on GET /v1/blob/{hash} (slice S-C10): the asset index or the blob store could not answer, so the server decided nothing. Retryable; it says nothing about whether the blob exists."
+    "context": "HTTP 500 on GET /v1/blob/{hash}: the asset index or the blob store could not answer, so the server decided nothing. Retryable; it says nothing about whether the blob exists."
   },
   "error.client.unclassified": {
     "message": "Something went wrong.",
@@ -7273,7 +7273,7 @@
   },
   "error.directory.identity_mismatch": {
     "message": "This device list is signed by a different account key.",
-    "context": "HTTP 403 on POST /v1/auth/devices/directory (slice S-C42, threat-model invariant 23): the document is well-formed and correctly signed, but under a key that is not this account's identity anchor. The anchor is established by the account's first published directory and is immutable after it. The refusal deliberately says nothing about the stored anchor."
+    "context": "HTTP 403 on POST /v1/auth/devices/directory (threat-model invariant 23): the document is well-formed and correctly signed, but under a key that is not this account's identity anchor. The anchor is established by the account's first published directory and is immutable after it. The refusal deliberately says nothing about the stored anchor."
   },
   "error.directory.malformed": {
     "message": "The device list could not be read.",
@@ -7281,15 +7281,15 @@
   },
   "error.directory.not_published": {
     "message": "This account hasn't published a device list yet.",
-    "context": "HTTP 404 on GET /v1/auth/devices/directory/{user_id} (slice S-C9): the account has never published a signed DeviceDirectory. Not an error state for the caller so much as a fact about the target — a client that cannot resolve a device key cannot verify that account's manifests, and this says why."
+    "context": "HTTP 404 on GET /v1/auth/devices/directory/{user_id}: the account has never published a signed DeviceDirectory. Not an error state for the caller so much as a fact about the target — a client that cannot resolve a device key cannot verify that account's manifests, and this says why."
   },
   "error.directory.unavailable": {
     "message": "Capsule couldn't reach the device list. Please try again.",
-    "context": "HTTP 500 on the device-directory surface (slice S-C9): the store could not answer, so nothing was published or read. Retryable, and it says nothing about whether a directory exists."
+    "context": "HTTP 500 on the device-directory surface: the store could not answer, so nothing was published or read. Retryable, and it says nothing about whether a directory exists."
   },
   "error.directory.unsupported_media_type": {
     "message": "That device list couldn't be read.",
-    "context": "HTTP 415 on POST /v1/auth/devices/directory (slice S-C9): the body was not sent as application/cbor. The signed device directory travels as canonical CBOR — the encoding it was signed in — so any other media type is a client that has misunderstood what it is sending."
+    "context": "HTTP 415 on POST /v1/auth/devices/directory: the body was not sent as application/cbor. The signed device directory travels as canonical CBOR — the encoding it was signed in — so any other media type is a client that has misunderstood what it is sending."
   },
   "error.directory.untrusted_signature": {
     "message": "This account's device list isn't signed by the account key this device trusts.",
@@ -7301,7 +7301,7 @@
   },
   "error.drop.adoption_refused": {
     "message": "That upload could not be added to the album.",
-    "context": "HTTP 400 on POST /v1/drops/{drop-id}/adopt (slice S-C5, threat-model invariant 32): the signed create manifest was refused — a key_mode outside its closed enum, a manifest naming a different blob or size than the drop, no write capability for the album, an unknown device, or a failure of invariants 1-8. Nothing is written and the drop returns to the inbox."
+    "context": "HTTP 400 on POST /v1/drops/{drop-id}/adopt (threat-model invariant 32): the signed create manifest was refused — a key_mode outside its closed enum, a manifest naming a different blob or size than the drop, no write capability for the album, an unknown device, or a failure of invariants 1-8. Nothing is written and the drop returns to the inbox."
   },
   "error.drop.cap_exceeded": {
     "message": "This upload link is full.",
@@ -7309,11 +7309,11 @@
   },
   "error.drop.cap_exhausted": {
     "message": "This upload link is full. Ask for a new one.",
-    "context": "HTTP 409 on POST /d/{opaque-id} (slice S-C5, threat-model invariant 26): a cumulative cap — total bytes or file count — on an otherwise-live link. Deliberately NOT the indistinguishable 404 the link's own liveness gets: the guest was handed a real link by somebody who wants their photos and needs to be told to ask for a new one rather than conclude the link never existed."
+    "context": "HTTP 409 on POST /d/{opaque-id} (threat-model invariant 26): a cumulative cap — total bytes or file count — on an otherwise-live link. Deliberately NOT the indistinguishable 404 the link's own liveness gets: the guest was handed a real link by somebody who wants their photos and needs to be told to ask for a new one rather than conclude the link never existed."
   },
   "error.drop.chunk_refused": {
     "message": "That part of the upload could not be accepted. It will be retried.",
-    "context": "HTTP 409 on PATCH /d/{opaque-id}/{upload-id} (slice S-C5, threat-model invariants 9-12): the chunk is at the wrong offset, carries different bytes for an offset already accepted, is unaligned, or would exceed the declared size. The same rules the album chunk path runs, through the same function."
+    "context": "HTTP 409 on PATCH /d/{opaque-id}/{upload-id} (threat-model invariants 9-12): the chunk is at the wrong offset, carries different bytes for an offset already accepted, is unaligned, or would exceed the declared size. The same rules the album chunk path runs, through the same function."
   },
   "error.drop.chunk_unavailable": {
     "message": "Capsule couldn't reach the upload service. The upload will resume shortly.",
@@ -7321,11 +7321,11 @@
   },
   "error.drop.file_too_large": {
     "message": "That file is larger than this link accepts.",
-    "context": "HTTP 413 on POST /d/{opaque-id} (slice S-C5, threat-model invariant 28): the single file exceeds the link's max_file_size. Answered before the cumulative caps, so a guest is told to shrink the file rather than to ask for a new link."
+    "context": "HTTP 413 on POST /d/{opaque-id} (threat-model invariant 28): the single file exceeds the link's max_file_size. Answered before the cumulative caps, so a guest is told to shrink the file rather than to ask for a new link."
   },
   "error.drop.malformed": {
     "message": "That upload could not be accepted.",
-    "context": "HTTP 400 on POST /d/{opaque-id} and its chunk path (slice S-C5, threat-model invariants 27 and 30): the declaration is not a usable drop — a zero size, a malformed ciphertext hash, an empty kem_ct, a missing content type, or a body carrying a field a drop may not have (an album id, a manifest, provenance). `deny_unknown_fields` is what makes the absence clause a rejection rather than a silently ignored field, because ignoring it would let a guest believe they had written into an album."
+    "context": "HTTP 400 on POST /d/{opaque-id} and its chunk path (threat-model invariants 27 and 30): the declaration is not a usable drop — a zero size, a malformed ciphertext hash, an empty kem_ct, a missing content type, or a body carrying a field a drop may not have (an album id, a manifest, provenance). `deny_unknown_fields` is what makes the absence clause a rejection rather than a silently ignored field, because ignoring it would let a guest believe they had written into an album."
   },
   "error.drop.malformed_descriptor": {
     "message": "This upload couldn't be accepted.",
@@ -7333,7 +7333,7 @@
   },
   "error.drop.not_found": {
     "message": "That upload is no longer in your inbox.",
-    "context": "HTTP 404 on the inbox operations (slice S-C5): no pending drop of this account has that id. One answer for unknown, for another account's, and for one already held by a concurrent adoption, so the endpoint is not an oracle over guessed drop ids."
+    "context": "HTTP 404 on the inbox operations: no pending drop of this account has that id. One answer for unknown, for another account's, and for one already held by a concurrent adoption, so the endpoint is not an oracle over guessed drop ids."
   },
   "error.drop.not_in_inbox": {
     "message": "This drop is no longer available to adopt.",
@@ -7345,7 +7345,7 @@
   },
   "error.drop.at_capacity": {
     "message": "This server is handling too many upload links right now. Please try again shortly.",
-    "context": "HTTP 429 on POST /d/{opaque_id} (slice S-C5): the per-link rate-limit store is holding as many distinct upload links as it will hold, so this link could not be given a window of its own. Saturated by design rather than broken - distinct from error.drop.unavailable, which is a 500 meaning a store could not answer at all. The `retry_after` member is an upper bound: it is the limiter window, after which a lapsed window frees room."
+    "context": "HTTP 429 on POST /d/{opaque_id}: the per-link rate-limit store is holding as many distinct upload links as it will hold, so this link could not be given a window of its own. Saturated by design rather than broken - distinct from error.drop.unavailable, which is a 500 meaning a store could not answer at all. The `retry_after` member is an upper bound: it is the limiter window, after which a lapsed window frees room."
   },
   "error.drop.rate_limited": {
     "message": "Too many attempts. Please wait and try again.",
@@ -7357,31 +7357,31 @@
   },
   "error.drop.unavailable": {
     "message": "Capsule couldn't reach the upload service. Please try again.",
-    "context": "HTTP 500 on the drop surface (slice S-C5): a store could not answer. Retryable; a drop session that failed to open has its link reservation refunded so an outage does not burn a guest's link down. On PATCH /d/{opaque-id}/{upload-id} it is only the failures a resent chunk cannot repair (a stage shorter than the session, or filing the finished drop failing); an outage there is error.drop.chunk_unavailable and a full disk error.drop.storage_full."
+    "context": "HTTP 500 on the drop surface: a store could not answer. Retryable; a drop session that failed to open has its link reservation refunded so an outage does not burn a guest's link down. On PATCH /d/{opaque-id}/{upload-id} it is only the failures a resent chunk cannot repair (a stage shorter than the session, or filing the finished drop failing); an outage there is error.drop.chunk_unavailable and a full disk error.drop.storage_full."
   },
   "error.enrollment.channel_not_found": {
     "message": "This device-add session has ended. Start again.",
-    "context": "HTTP 404 on the enrollment relay channel (slice S-C7): the channel handle is unknown or expired, so the server has nothing to relay between the two devices."
+    "context": "HTTP 404 on the enrollment relay channel: the channel handle is unknown or expired, so the server has nothing to relay between the two devices."
   },
   "error.enrollment.code_refused": {
     "message": "That device code didn't work. Generate a new one and try again.",
-    "context": "HTTP 404 on POST /devices/enroll/redeem (slice S-C7): the submitted enrollment code is unknown, already redeemed, expired, or rate-limited. Every reason is surfaced identically (indistinguishable by design) so redemption is not an oracle."
+    "context": "HTTP 404 on POST /devices/enroll/redeem: the submitted enrollment code is unknown, already redeemed, expired, or rate-limited. Every reason is surfaced identically (indistinguishable by design) so redemption is not an oracle."
   },
   "error.enrollment.local_auth_required": {
     "message": "Confirm it's you on this device to add another device.",
-    "context": "HTTP 403 on POST /devices/enroll (slice S-C7): the access token is not fresh enough to stand in for the doc's fresh local device authorization. A valid session token alone cannot start a cross-device add — the caller must re-authenticate locally so a stolen, stale token cannot enroll a rogue device."
+    "context": "HTTP 403 on POST /devices/enroll: the access token is not fresh enough to stand in for the doc's fresh local device authorization. A valid session token alone cannot start a cross-device add — the caller must re-authenticate locally so a stolen, stale token cannot enroll a rogue device."
   },
   "error.enrollment.at_capacity": {
     "message": "This server is handling too many enrollment attempts right now. Please try again shortly.",
-    "context": "HTTP 429 on POST /v1/auth/devices/enroll/redeem (slice S-C7): the redemption rate-limit store is holding as many distinct codes as it will hold, so this code could not be given a window of its own. Saturated by design rather than broken - distinct from error.auth.unavailable, which is a 500 meaning a store could not answer at all. The `retry_after` member is an upper bound: it is the limiter window, after which a lapsed window frees room."
+    "context": "HTTP 429 on POST /v1/auth/devices/enroll/redeem: the redemption rate-limit store is holding as many distinct codes as it will hold, so this code could not be given a window of its own. Saturated by design rather than broken - distinct from error.auth.unavailable, which is a 500 meaning a store could not answer at all. The `retry_after` member is an upper bound: it is the limiter window, after which a lapsed window frees room."
   },
   "error.enrollment.rate_limited": {
     "message": "Too many device-add attempts. Please wait and try again.",
-    "context": "HTTP 429 on POST /devices/enroll (slice S-C7): the caller exceeded the per-user enrollment-code issuance budget for the current window."
+    "context": "HTTP 429 on POST /devices/enroll: the caller exceeded the per-user enrollment-code issuance budget for the current window."
   },
   "error.enrollment.relay_malformed": {
     "message": "The device-add request could not be read.",
-    "context": "HTTP 400 on the enrollment relay channel (slice S-C7): the request named an unknown direction or carried a missing/oversized opaque payload. The server never inspects the payload contents; this is a structural rejection only."
+    "context": "HTTP 400 on the enrollment relay channel: the request named an unknown direction or carried a missing/oversized opaque payload. The server never inspects the payload contents; this is a structural rejection only."
   },
   "error.escrow.album_keys_full": {
     "message": "This account's recovery backup has no room for another album's keys.",
@@ -7393,95 +7393,95 @@
   },
   "error.escrow.malformed": {
     "message": "The recovery backup could not be saved.",
-    "context": "HTTP 400 on master-key escrow store (slice S-C12): the request body failed the coarse size sanity bound (empty, or larger than any legitimate wrapped master key). The server keeps the blob opaque and never inspects the wrap format; the recovery-secret entropy floor is enforced client-side in core, not here."
+    "context": "HTTP 400 on master-key escrow store: the request body failed the coarse size sanity bound (empty, or larger than any legitimate wrapped master key). The server keeps the blob opaque and never inspects the wrap format; the recovery-secret entropy floor is enforced client-side in core, not here."
   },
   "error.escrow.not_stored": {
     "message": "No recovery backup is saved for this account.",
-    "context": "HTTP 404 on GET /v1/auth/escrow (slice S-C12): this account has never stored a wrapped master key. Distinct from a store failure so a client can tell \"you have no recovery backup\" from \"we could not read it\" — the first is a setup prompt and the second is a retry."
+    "context": "HTTP 404 on GET /v1/auth/escrow: this account has never stored a wrapped master key. Distinct from a store failure so a client can tell \"you have no recovery backup\" from \"we could not read it\" — the first is a setup prompt and the second is a retry."
   },
   "error.escrow.unavailable": {
     "message": "Capsule couldn't reach the recovery backup. Please try again.",
-    "context": "HTTP 500 on the master-key escrow surface (slice S-C12): the store could not answer, so nothing was written or read. Retryable, and it says nothing about whether an escrow exists."
+    "context": "HTTP 500 on the master-key escrow surface: the store could not answer, so nothing was written or read. Retryable, and it says nothing about whether an escrow exists."
   },
   "error.federation.album_not_found": {
     "message": "That album couldn't be found.",
-    "context": "HTTP 404 on POST/DELETE /v1/albums/{album_id}/capabilities (slice S-E2): no such album, or one owned by a different account. One answer for both, as on the roster and upgrade ceremonies — an album id somebody else holds must not be confirmed to exist."
+    "context": "HTTP 404 on POST/DELETE /v1/albums/{album_id}/capabilities: no such album, or one owned by a different account. One answer for both, as on the roster and upgrade ceremonies — an album id somebody else holds must not be confirmed to exist."
   },
   "error.federation.audience_mismatch": {
     "message": "This access grant is for a different album.",
-    "context": "HTTP 403 on a federation pull (slice S-E2, threat-model invariant 19): the capability's aud (an urn:capsule:album:UUID) does not match the album the peer is pulling. The aud is matched against the album, never against the verifying server (a deliberate RFC 7519 deviation)."
+    "context": "HTTP 403 on a federation pull (threat-model invariant 19): the capability's aud (an urn:capsule:album:UUID) does not match the album the peer is pulling. The aud is matched against the album, never against the verifying server (a deliberate RFC 7519 deviation)."
   },
   "error.federation.capability_expired": {
     "message": "This shared album's access has expired.",
-    "context": "HTTP 401 on a federation pull, and HTTP 403 on POST /v1/federation/capabilities/refresh (slice S-E2, threat-model invariant 19). On a pull: the capability token is past its exp. On a refresh: the whole grant is past the absolute deadline its owner fixed at the original mint — which is also what a grant nobody made renewable hits on its first refresh — so no successor will ever be issued from it and the peer's next move is to ask the album's owner, not this server. Tokens live at most 24h regardless."
+    "context": "HTTP 401 on a federation pull, and HTTP 403 on POST /v1/federation/capabilities/refresh (threat-model invariant 19). On a pull: the capability token is past its exp. On a refresh: the whole grant is past the absolute deadline its owner fixed at the original mint — which is also what a grant nobody made renewable hits on its first refresh — so no successor will ever be issued from it and the peer's next move is to ask the album's owner, not this server. Tokens live at most 24h regardless."
   },
   "error.federation.capability_invalid": {
     "message": "This shared album's access could not be verified.",
-    "context": "HTTP 401 on a federation pull, and HTTP 403 on POST /v1/federation/capabilities/refresh (slice S-E2, threat-model invariant 19): the presented capability token failed structural verification — a missing claim, a bad Ed25519 signature, an unparseable RFC 3339 claim, a wrong issuer, a not-yet-valid (nbf) token, or an expiry window wider than the 24h ceiling — or, on refresh, the credential was a session access token, which grants an account nothing to continue. The token never establishes access; the peer must obtain a fresh, well-formed one."
+    "context": "HTTP 401 on a federation pull, and HTTP 403 on POST /v1/federation/capabilities/refresh (threat-model invariant 19): the presented capability token failed structural verification — a missing claim, a bad Ed25519 signature, an unparseable RFC 3339 claim, a wrong issuer, a not-yet-valid (nbf) token, or an expiry window wider than the 24h ceiling — or, on refresh, the credential was a session access token, which grants an account nothing to continue. The token never establishes access; the peer must obtain a fresh, well-formed one."
   },
   "error.federation.capability_malformed": {
     "message": "That sharing request isn't valid.",
-    "context": "HTTP 400 on POST /v1/albums/{album_id}/capabilities (slice S-E2): the peer origin or the member id in the body is empty. Always a client bug — the values come from the album's roster and the peer's own server-info."
+    "context": "HTTP 400 on POST /v1/albums/{album_id}/capabilities: the peer origin or the member id in the body is empty. Always a client bug — the values come from the album's roster and the peer's own server-info."
   },
   "error.federation.capability_revoked": {
     "message": "Access to this shared album has been revoked.",
-    "context": "HTTP 403 on a federation pull (slice S-E2, threat-model invariant 19): the capability's jti is on the issuer's revocation list, OR the verifier is relying on a cached revocation list it can no longer refresh past the 15-minute staleness bound and therefore cannot confirm the jti — the fail-closed rule. Revocation is never outlived by making the list unreachable."
+    "context": "HTTP 403 on a federation pull (threat-model invariant 19): the capability's jti is on the issuer's revocation list, OR the verifier is relying on a cached revocation list it can no longer refresh past the 15-minute staleness bound and therefore cannot confirm the jti — the fail-closed rule. Revocation is never outlived by making the list unreachable."
   },
   "error.federation.circuit_open": {
     "message": "This source is temporarily backed off after repeated errors.",
-    "context": "HTTP 429 on a federation pull (slice S-E2): the peer spent its per-peer error budget on malformed input, tripping a circuit breaker that backs it off exponentially (5 / 30 / 60 minutes). Requests are short-circuited until the back-off elapses, so a buggy peer cannot DoS the server."
+    "context": "HTTP 429 on a federation pull: the peer spent its per-peer error budget on malformed input, tripping a circuit breaker that backs it off exponentially (5 / 30 / 60 minutes). Requests are short-circuited until the back-off elapses, so a buggy peer cannot DoS the server."
   },
   "error.federation.member_not_on_roster": {
     "message": "That person isn't on this album's member list.",
-    "context": "HTTP 409 on POST /v1/albums/{album_id}/capabilities (slice S-E2): the account the capability would carry is not on the album's current roster, so there is no membership to grant a peer access for. A stale-state class: the owner publishes the roster that lists them first, then mints."
+    "context": "HTTP 409 on POST /v1/albums/{album_id}/capabilities: the account the capability would carry is not on the album's current roster, so there is no membership to grant a peer access for. A stale-state class: the owner publishes the roster that lists them first, then mints."
   },
   "error.federation.not_configured": {
     "message": "This server doesn't share albums with other servers.",
-    "context": "HTTP 404 on all four federation operations — minting, revoking or refreshing a capability, and federated report intake (slice S-E2): this deployment has FEDERATION_ENABLED off, which is the default, so it does not federate. While it is off no capability is honoured, including one minted while it was on."
+    "context": "HTTP 404 on all four federation operations — minting, revoking or refreshing a capability, and federated report intake: this deployment has FEDERATION_ENABLED off, which is the default, so it does not federate. While it is off no capability is honoured, including one minted while it was on."
   },
   "error.federation.peer_unknown": {
     "message": "That server isn't one this server knows.",
-    "context": "HTTP 403 on POST /v1/federation/reports (slice S-C49): the reporting server has no pinned signing key here, so its report cannot be verified and is dropped before the admin queue. Peer keys are operator-pinned in v1; there is no network fetch."
+    "context": "HTTP 403 on POST /v1/federation/reports: the reporting server has no pinned signing key here, so its report cannot be verified and is dropped before the admin queue. Peer keys are operator-pinned in v1; there is no network fetch."
   },
   "error.federation.rate_budget_exceeded": {
     "message": "This source has reached its request limit. Please wait and try again.",
-    "context": "HTTP 429 on a federation pull (slice S-E2, threat-model invariant 21): the peer exceeded one of its per-peer transfer budgets — events/hour, bytes/hour, or CPU/hour. Each peer is its own blast-radius boundary; a busy or hostile peer cannot starve good ones."
+    "context": "HTTP 429 on a federation pull (threat-model invariant 21): the peer exceeded one of its per-peer transfer budgets — events/hour, bytes/hour, or CPU/hour. Each peer is its own blast-radius boundary; a busy or hostile peer cannot starve good ones."
   },
   "error.federation.revocations_unavailable": {
     "message": "Capsule couldn't read the revocation list. Please try again.",
-    "context": "HTTP 503 on GET /.well-known/capsule/revoked-jti (slice S-C18): this server's own revocation list could not be read, so it makes no claim about what is revoked. Deliberately not an empty list — an empty list is the strongest claim the record can make, and serving it on a storage failure would silently un-revoke every token a peer holds."
+    "context": "HTTP 503 on GET /.well-known/capsule/revoked-jti: this server's own revocation list could not be read, so it makes no claim about what is revoked. Deliberately not an empty list — an empty list is the strongest claim the record can make, and serving it on a storage failure would silently un-revoke every token a peer holds."
   },
   "error.federation.scope_insufficient": {
     "message": "This access grant does not cover the requested content.",
-    "context": "HTTP 403 on a federation blob fetch (slice S-E2, threat-model invariant 19): a read-derivative-only capability tried to fetch a blob whose server-visible role is 'original'. Scope is enforced structurally against each blob's role."
+    "context": "HTTP 403 on a federation blob fetch (threat-model invariant 19): a read-derivative-only capability tried to fetch a blob whose server-visible role is 'original'. Scope is enforced structurally against each blob's role."
   },
   "error.federation.unavailable": {
     "message": "Capsule couldn't reach the federation records. Please try again.",
-    "context": "HTTP 500 on the federation surface (slice S-E2): the capability store, the peer store or the per-peer counter could not answer, so nothing was decided — never a refusal and never an admission. A limiter that cannot be reached is an outage, not a limit."
+    "context": "HTTP 500 on the federation surface: the capability store, the peer store or the per-peer counter could not answer, so nothing was decided — never a refusal and never an admission. A limiter that cannot be reached is an outage, not a limit."
   },
   "error.moderation.account_suspended": {
     "message": "Your account is suspended. You can't upload or share until it's reinstated.",
-    "context": "HTTP 403 at POST /upload session creation (slice S-C8): the account carries an admin/billing suspension flag. Distinct from quota and permission rejections so the client surfaces the right remediation. Suspension is an access-level action — the user's data is untouched and the block is reversible."
+    "context": "HTTP 403 at POST /upload session creation: the account carries an admin/billing suspension flag. Distinct from quota and permission rejections so the client surfaces the right remediation. Suspension is an access-level action — the user's data is untouched and the block is reversible."
   },
   "error.moderation.report_malformed": {
     "message": "That report isn't valid.",
-    "context": "HTTP 400 on POST /v1/federation/reports (slice S-C49): a field of the signed report is empty, its reported_at is not an RFC 3339 timestamp, or its signature is not base64. Structural, and decided before any store is touched — a report that cannot be read cannot be attributed either."
+    "context": "HTTP 400 on POST /v1/federation/reports: a field of the signed report is empty, its reported_at is not an RFC 3339 timestamp, or its signature is not base64. Structural, and decided before any store is touched — a report that cannot be read cannot be attributed either."
   },
   "error.moderation.report_rate_limited": {
     "message": "Too many reports from this source. Please wait and try again.",
-    "context": "HTTP 429 on federated report intake (slice S-C8, threat-model invariant 24): the per-(reporting_server, reported_user) report budget for the current window is exhausted. Backpressure defeats the false-flag / mass-report abuse vector rather than amplifying it."
+    "context": "HTTP 429 on federated report intake (threat-model invariant 24): the per-(reporting_server, reported_user) report budget for the current window is exhausted. Backpressure defeats the false-flag / mass-report abuse vector rather than amplifying it."
   },
   "error.moderation.report_unsigned": {
     "message": "The moderation report could not be verified.",
-    "context": "Federated report intake (slice S-C8, threat-model invariant 24): the report's Ed25519 signature did not verify against a known peer key — unsigned, tampered, or from an unregistered peer — or the report was structurally malformed. It is dropped before the admin queue, never surfaced."
+    "context": "Federated report intake (threat-model invariant 24): the report's Ed25519 signature did not verify against a known peer key — unsigned, tampered, or from an unregistered peer — or the report was structurally malformed. It is dropped before the admin queue, never surfaced."
   },
   "error.moderation.server_blocked": {
     "message": "This server is blocked from federating with us.",
-    "context": "HTTP 403 (federation pull / report intake, slice S-C8): the requesting peer server is on this server's blocklist, so its federated request — a pull or a moderation report — is refused at the federation-capability layer."
+    "context": "HTTP 403 (federation pull / report intake): the requesting peer server is on this server's blocklist, so its federated request — a pull or a moderation report — is refused at the federation-capability layer."
   },
   "error.moderation.unavailable": {
     "message": "Capsule couldn't reach your account record. Please try again.",
-    "context": "HTTP 500 on GET /v1/moderation/record (slice S-C8): the moderation store could not answer, so neither the account's standing nor its history could be read. Retryable, and it says nothing about whether anything is on record."
+    "context": "HTTP 500 on GET /v1/moderation/record: the moderation store could not answer, so neither the account's standing nor its history could be read. Retryable, and it says nothing about whether anything is on record."
   },
   "error.protocol.version_unsupported": {
     "message": "This version of Capsule is no longer supported. Please update the app.",
@@ -7505,23 +7505,23 @@
   },
   "error.quota.unavailable": {
     "message": "Capsule couldn't check your storage use. Please try again.",
-    "context": "HTTP 500 on GET /v1/quota (slice S-C6): the quota ledger could not answer, so no snapshot was produced. Read-only and retryable; it says nothing about how full the account is."
+    "context": "HTTP 500 on GET /v1/quota: the quota ledger could not answer, so no snapshot was produced. Read-only and retryable; it says nothing about how full the account is."
   },
   "error.request.failed": {
     "message": "Something went wrong with that request.",
-    "context": "The fallback the coded-problem interceptor (slice S-C36) attaches when a framework rejection renders a status the mapping does not name. Reaching it means the surface grew a status nobody localized, so it is deliberately vague and deliberately rare."
+    "context": "The fallback the coded-problem interceptor attaches when a framework rejection renders a status the mapping does not name. Reaching it means the surface grew a status nobody localized, so it is deliberately vague and deliberately rare."
   },
   "error.request.forbidden": {
     "message": "That credential isn't enough for this action.",
-    "context": "HTTP 403 (slice S-C36): a valid credential that is insufficient — presenting a refresh token where an access token is required. Distinct from 401: re-presenting the same credential will not help."
+    "context": "HTTP 403: a valid credential that is insufficient — presenting a refresh token where an access token is required. Distinct from 401: re-presenting the same credential will not help."
   },
   "error.request.malformed": {
     "message": "Capsule couldn't read that request.",
-    "context": "HTTP 400 (slice S-C36): a framework-level rejection — a path segment, query value or header the request line could not be decoded into the shape the operation declares. Attached by the server's coded-problem interceptor, because the framework's own rejection types carry no extension member."
+    "context": "HTTP 400: a framework-level rejection — a path segment, query value or header the request line could not be decoded into the shape the operation declares. Attached by the server's coded-problem interceptor, because the framework's own rejection types carry no extension member."
   },
   "error.request.method_not_allowed": {
     "message": "Capsule couldn't handle that request.",
-    "context": "HTTP 405 (slice S-C36): the path exists and the method does not. Not a state a well-formed client reaches; carried so no response on the surface is codeless."
+    "context": "HTTP 405: the path exists and the method does not. Not a state a well-formed client reaches; carried so no response on the surface is codeless."
   },
   "error.request.not_found": {
     "message": "Capsule couldn't find that.",
@@ -7533,7 +7533,7 @@
   },
   "error.request.not_acceptable": {
     "message": "Capsule couldn't produce that response format.",
-    "context": "HTTP 406 (slice S-C36): the `Accept` header names no representation the operation can produce."
+    "context": "HTTP 406: the `Accept` header names no representation the operation can produce."
   },
   "error.request.range_not_satisfiable": {
     "message": "Capsule couldn't send that part of the file.",
@@ -7541,55 +7541,55 @@
   },
   "error.request.too_large": {
     "message": "That request was too large to accept.",
-    "context": "HTTP 413 (slice S-C36): the request body passed the server's transport backstop and was abandoned before a handler saw it. Distinct from error.upload.chunk_too_large, which is the upload protocol's own bound and tells a client its chunking is wrong."
+    "context": "HTTP 413: the request body passed the server's transport backstop and was abandoned before a handler saw it. Distinct from error.upload.chunk_too_large, which is the upload protocol's own bound and tells a client its chunking is wrong."
   },
   "error.request.unauthenticated": {
     "message": "Please sign in again.",
-    "context": "HTTP 401 (slice S-C36): no credential was presented, the credential did not verify, or the session it named is no longer open. One code for all three on purpose — which check failed is exactly what an attacker probing a token would like to be told."
+    "context": "HTTP 401: no credential was presented, the credential did not verify, or the session it named is no longer open. One code for all three on purpose — which check failed is exactly what an attacker probing a token would like to be told."
   },
   "error.request.unprocessable": {
     "message": "Some of that request didn't make sense.",
-    "context": "HTTP 422 (slice S-C36): the body parsed as its media type but did not match the shape the operation declares — a field of the wrong type, or a required one missing."
+    "context": "HTTP 422: the body parsed as its media type but did not match the shape the operation declares — a field of the wrong type, or a required one missing."
   },
   "error.request.unsupported_media_type": {
     "message": "Capsule couldn't read that content type.",
-    "context": "HTTP 415 (slice S-C36): the body's `Content-Type` is not one the operation accepts."
+    "context": "HTTP 415: the body's `Content-Type` is not one the operation accepts."
   },
   "error.share.malformed": {
     "message": "That share link could not be created.",
-    "context": "HTTP 400 on POST /v1/shares (slice S-C4): the record is not a usable share link — an opaque id that is not 32 lowercase hex characters, a malformed content address, a `serves` set that omits the metadata blob, an unparseable expiry, or a non-base64 wrapped secret. The owner's own operation, so the detail is specific; the public serve path never distinguishes anything."
+    "context": "HTTP 400 on POST /v1/shares: the record is not a usable share link — an opaque id that is not 32 lowercase hex characters, a malformed content address, a `serves` set that omits the metadata blob, an unparseable expiry, or a non-base64 wrapped secret. The owner's own operation, so the detail is specific; the public serve path never distinguishes anything."
   },
   "error.share.at_capacity": {
     "message": "This server is handling too many shared links right now. Please try again shortly.",
-    "context": "HTTP 429 on the public /s/{opaque_id} routes (slice S-C4): the per-link rate-limit store is holding as many distinct share links as it will hold, so this link could not be given a window of its own. Saturated by design rather than broken - distinct from the 500 this surface renders when a store could not answer at all. The `retry_after` member is an upper bound: it is the limiter window, after which a lapsed window frees room."
+    "context": "HTTP 429 on the public /s/{opaque_id} routes: the per-link rate-limit store is holding as many distinct share links as it will hold, so this link could not be given a window of its own. Saturated by design rather than broken - distinct from the 500 this surface renders when a store could not answer at all. The `retry_after` member is an upper bound: it is the limiter window, after which a lapsed window frees room."
   },
   "error.share.rate_limited": {
     "message": "Too many attempts. Please wait and try again.",
-    "context": "HTTP 429 on the public share serve path (slice S-C4): the per-source-IP or per-{opaque-id} serve rate limit engaged. Both limiters are charged on every /s/{opaque-id} request (metadata, blob, wrapped-secret) to throttle link enumeration; a not-found/revoked/expired link is an indistinguishable bodyless 404, never a distinct code."
+    "context": "HTTP 429 on the public share serve path: the per-source-IP or per-{opaque-id} serve rate limit engaged. Both limiters are charged on every /s/{opaque-id} request (metadata, blob, wrapped-secret) to throttle link enumeration; a not-found/revoked/expired link is an indistinguishable bodyless 404, never a distinct code."
   },
   "error.share.unavailable": {
     "message": "Capsule couldn't reach that share. Please try again.",
-    "context": "HTTP 500 on the share surface (slice S-C4): a store could not answer. Deliberately distinct from the public path's 404 — fail-closed means a serving process that cannot confirm a link is live refuses, and answering 404 would tell a client the link was revoked when it is perfectly good."
+    "context": "HTTP 500 on the share surface: a store could not answer. Deliberately distinct from the public path's 404 — fail-closed means a serving process that cannot confirm a link is live refuses, and answering 404 would tell a client the link was revoked when it is perfectly good."
   },
   "error.storage.asset_not_found": {
     "message": "That item was not found.",
-    "context": "HTTP 404 on GET /v1/assets/{asset_id}/receipts (slice S-C58): no such asset, or one belonging to another account. One answer for both — an asset id is not a capability, and a guess must not reveal whether it named something."
+    "context": "HTTP 404 on GET /v1/assets/{asset_id}/receipts: no such asset, or one belonging to another account. One answer for both — an asset id is not a capability, and a guess must not reveal whether it named something."
   },
   "error.storage.deep_rate_limited": {
     "message": "Too many deep storage checks. Please wait and try again.",
-    "context": "HTTP 429 from POST /storage/verify with deep=true (slice S-C3): the caller exceeded its per-user deep re-hash budget for the current window. Deep scans are server-priced (rate-limited and coalesced) so they cannot be turned into an I/O-amplification attack."
+    "context": "HTTP 429 from POST /storage/verify with deep=true: the caller exceeded its per-user deep re-hash budget for the current window. Deep scans are server-priced (rate-limited and coalesced) so they cannot be turned into an I/O-amplification attack."
   },
   "error.storage.invalid_request": {
     "message": "The storage-verification request was malformed.",
-    "context": "HTTP 400 from POST /storage/verify (slice S-C3): a declared blob hash is not 64-char lowercase hex, or an asset_id is empty. Structural rejection before any verdict is computed."
+    "context": "HTTP 400 from POST /storage/verify: a declared blob hash is not 64-char lowercase hex, or an asset_id is empty. Structural rejection before any verdict is computed."
   },
   "error.storage.unavailable": {
     "message": "Capsule couldn't check whether your photos are safely stored. Please try again.",
-    "context": "HTTP 500 on POST /v1/storage/verify (slice S-C3): the asset index or the blob store could not answer, so no durability verdict was reached. Deliberately not a durable=false verdict — a client told \"not durable\" keeps its local copy and is safe, so conflating an outage with a real finding would train users to ignore the state that matters. Retryable."
+    "context": "HTTP 500 on POST /v1/storage/verify: the asset index or the blob store could not answer, so no durability verdict was reached. Deliberately not a durable=false verdict — a client told \"not durable\" keeps its local copy and is safe, so conflating an outage with a real finding would train users to ignore the state that matters. Retryable."
   },
   "error.sync.album_access_denied": {
     "message": "You don't have access to that album.",
-    "context": "HTTP 403 on GET /v1/sync?album_id= (slice S-C51): the album is not the caller's and the caller is not on its roster — never a member, removed, or no such album. One answer for all three, matching the write routes' uniform 403."
+    "context": "HTTP 403 on GET /v1/sync?album_id=: the album is not the caller's and the caller is not on its roster — never a member, removed, or no such album. One answer for all three, matching the write routes' uniform 403."
   },
   "error.sync.cursor_invalid": {
     "message": "The sync session is out of date. Capsule will resync from the start.",
@@ -7617,11 +7617,11 @@
   },
   "error.sync.unauthenticated": {
     "message": "Please sign in again to continue syncing.",
-    "context": "HTTP 401 on the sync feed: the request carried no valid access token. Currently unused — the framework renders the 401 and carries no error code on it (slice S-C36)."
+    "context": "HTTP 401 on the sync feed: the request carried no valid access token. Currently unused — the framework renders the 401 and carries no error code on it."
   },
   "error.sync.unavailable": {
     "message": "Capsule could not reach the server to sync. It will try again.",
-    "context": "HTTP 500 on GET /v1/sync (slice S-C2): the asset index or the blob store could not answer, so the page was neither served nor refused on its merits. Transient by nature — the client retries with backoff and keeps its cursor, which is still valid."
+    "context": "HTTP 500 on GET /v1/sync: the asset index or the blob store could not answer, so the page was neither served nor refused on its merits. Transient by nature — the client retries with backoff and keeps its cursor, which is still valid."
   },
   "error.unexpected": {
     "message": "Something went wrong during this transfer.",
@@ -7633,7 +7633,7 @@
   },
   "error.upload.album_quiescing": {
     "message": "This album is being upgraded. Your photos will upload once it's done.",
-    "context": "HTTP 409 on POST /v1/upload (slice S-C24): the album is in upgrade quiescence and this session did not name the ceremony's intent_id — a stale client that never saw the UpgradeIntent trying to write past the freeze. Transient: the ceremony completes and the client writes into the fork, or its deadline passes on the server's clock and the album returns to normal operation."
+    "context": "HTTP 409 on POST /v1/upload: the album is in upgrade quiescence and this session did not name the ceremony's intent_id — a stale client that never saw the UpgradeIntent trying to write past the freeze. Transient: the ceremony completes and the client writes into the fork, or its deadline passes on the server's clock and the album returns to normal operation."
   },
   "error.upload.amk_regressed": {
     "message": "This change references an older album key than the server has recorded.",
@@ -7709,7 +7709,7 @@
   },
   "error.upload.invalid_status_filter": {
     "message": "That is not an upload status.",
-    "context": "HTTP 400 on GET /v1/upload/sessions (slice S-C57): the ?status= filter named something that is not one of pending, uploading, waiting_for_processing, completed, failed_processing. Refused rather than ignored — the retired surface dropped an unparseable filter silently, so one letter off returned every session instead of none, and the caller acted on a list they believed was filtered."
+    "context": "HTTP 400 on GET /v1/upload/sessions: the ?status= filter named something that is not one of pending, uploading, waiting_for_processing, completed, failed_processing. Refused rather than ignored — the retired surface dropped an unparseable filter silently, so one letter off returned every session instead of none, and the caller acted on a list they believed was filtered."
   },
   "error.upload.malformed_request": {
     "message": "The upload request was malformed.",
@@ -7741,7 +7741,7 @@
   },
   "error.upload.replace_incomplete": {
     "message": "Capsule is still receiving this photo's new version. It'll finish on its own.",
-    "context": "HTTP 409 on PATCH /v1/upload/{id} (slice S-C43): a replace's signed manifest finalized before the original or metadata blob it commits to had landed. A replace mutates an asset that is already visible, so it is applied as one act when its manifest lands — which makes the manifest the member that lands last. Transient: retrying the manifest once the rest of the bundle has committed succeeds."
+    "context": "HTTP 409 on PATCH /v1/upload/{id}: a replace's signed manifest finalized before the original or metadata blob it commits to had landed. A replace mutates an asset that is already visible, so it is applied as one act when its manifest lands — which makes the manifest the member that lands last. Transient: retrying the manifest once the rest of the bundle has committed succeeds."
   },
   "error.upload.session_not_active": {
     "message": "This upload has already finished.",

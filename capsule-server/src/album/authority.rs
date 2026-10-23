@@ -5,17 +5,17 @@
 //! proven against facts a fixture asserted rather than facts the server holds. This is the
 //! production one.
 //!
-//! # Invariant 6, from the album store (`S-C25`)
+//! # Invariant 6, from the album store
 //!
 //! An album is writable by the account it was provisioned to, pinned to the protocol the server
-//! spoke when it was created — and, since `S-C51`, by a **writer** on its current roster
+//! spoke when it was created — and by a **writer** on its current roster
 //! ([`crate::membership`]). Either way the write is filed under the *owner's* namespace, which is
 //! the one every member's devices read. A reader, a former member, a stranger and an
 //! unprovisioned id are all [`AlbumWriteAccess::Denied`], one answer, which is the safe direction:
 //! a write that should have been allowed is refused, never the reverse, and the refusal says
 //! nothing about which of the four it was.
 //!
-//! # Invariant 7, from the published device directory (`S-C20`)
+//! # Invariant 7, from the published device directory
 //!
 //! The floor was account-creation time, with a comment saying "until the directory table lands"
 //! that had outlived the table landing. It is now the device's own `added_at` from the account's
@@ -59,7 +59,7 @@ impl ProvisionedAuthority {
     /// Assembles the authority over the stores that hold its facts.
     ///
     /// The clock is here because an upgrade ceremony's window is evaluated on the **server's**
-    /// clock and nowhere else (`S-C24`) — the deadline is a duration precisely so that a member's
+    /// clock and nowhere else — the deadline is a duration precisely so that a member's
     /// clock cannot move it.
     pub fn new(
         albums: Arc<dyn AlbumStore>,
@@ -132,7 +132,7 @@ impl WriteAuthority for ProvisionedAuthority {
             let role = if record.owner_id.as_str() == caller.as_str() {
                 WriteRole::Owner
             } else {
-                // Somebody else's album: the roster decides (`S-C51`).
+                // Somebody else's album: the roster decides.
                 match self.member_role(album, caller).await? {
                     Some(role) => role,
                     None => return Ok(AlbumWriteAccess::Denied),
@@ -143,7 +143,7 @@ impl WriteAuthority for ProvisionedAuthority {
             Ok(AlbumWriteAccess::Writable {
                 owner_id: record.owner_id,
                 role,
-                // `S-C24`: an expired ceremony is reported as none, because the deadline
+                // An expired ceremony is reported as none, because the deadline
                 // passing *is* the abort. Nothing has to run to clear it, which is what stops
                 // a proposer who vanished from freezing an album forever.
                 quiescing_under: record

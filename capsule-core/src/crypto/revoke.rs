@@ -1,4 +1,4 @@
-//! The master-key proof that authorizes a global sign-out (`S-C23`; SSoT:
+//! The master-key proof that authorizes a global sign-out (SSoT:
 //! [Authentication — Explicit Revocation](https://docs/design/authentication/#explicit-revocation)).
 //!
 //! # The asymmetry this exists to create
@@ -49,7 +49,7 @@ pub fn revoke_all_signing_bytes(challenge: &str) -> Vec<u8> {
 /// Whether `signature` is a valid revoke-all proof for `challenge` under `identity_key`.
 ///
 /// `identity_key` is the account's **anchor** — the identity public key its published device
-/// directory verifies under (`S-C42`) — not a key the request supplied. A proof checked against
+/// directory verifies under — not a key the request supplied. A proof checked against
 /// a caller-supplied key proves only that the caller can sign, which is not a fact about the
 /// account.
 #[must_use]

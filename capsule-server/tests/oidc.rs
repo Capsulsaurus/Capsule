@@ -1,4 +1,4 @@
-//! The OIDC relying party (slice `S-N1`), over the real wire.
+//! The OIDC relying party, over the real wire.
 //!
 //! `HttpIdentityProvider` is driven against the in-process mock provider in
 //! `support::idp`, which serves discovery JSON, a JWK Set and a form-decoding token endpoint

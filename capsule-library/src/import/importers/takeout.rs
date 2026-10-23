@@ -1,4 +1,4 @@
-//! Google Takeout source adapter (slice `S-B6`).
+//! Google Takeout source adapter.
 //!
 //! Walks a Google Photos [Takeout] export — one directory tree, or the several extracted parts of
 //! a split archive — pairs each media file with its JSON sidecar (photo-taken time, GPS,

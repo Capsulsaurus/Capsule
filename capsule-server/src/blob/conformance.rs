@@ -588,8 +588,8 @@ pub async fn a_ranged_read_returns_exactly_its_window_and_clamps_at_the_end(h: &
 
 /// A staged upload reads back in windows, so finalization can verify it without the filesystem.
 ///
-/// This is the case `S-C1` depends on: [`BlobStore::commit`] requires its caller to have
-/// verified that the staged bytes hash to the address they are about to occupy, and a
+/// This is the case upload finalization depends on: [`BlobStore::commit`] requires its caller
+/// to have verified that the staged bytes hash to the address they are about to occupy, and a
 /// committed blob is immutable and shared by every asset that names it. An adapter that could
 /// not hand the staged bytes back would leave that verification impossible through the port.
 pub async fn a_staged_upload_reads_back_in_windows(h: &dyn Harness) {

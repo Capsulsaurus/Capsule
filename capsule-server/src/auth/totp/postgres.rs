@@ -1,4 +1,4 @@
-//! [`PostgresTotp`] — the durable second-factor store (`S-C55`, #446).
+//! [`PostgresTotp`] — the durable second-factor store (#446).
 //!
 //! # One row per account, and every operation is one statement
 //!

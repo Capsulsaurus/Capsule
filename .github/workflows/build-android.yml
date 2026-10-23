@@ -97,7 +97,7 @@ jobs:
         with:
           install: false
 
-      # `-Pcapsule.wireFfi` turns on the S-F3 FFI-staging tasks in :core: generate the
+      # `-Pcapsule.wireFfi` turns on the FFI-staging tasks in :core: generate the
       # `capsule_sdk` uniffi Kotlin bindings (host libcapsule_sdk) + build the per-ABI
       # libcapsule_sdk.so JNI libs via cargo-ndk, both as Gradle build inputs.
       # assembleDebug proves the app consumes them; :core:test runs the software-signer
@@ -106,8 +106,8 @@ jobs:
         run: ./gradlew :android:assembleDebug :core:test -Pcapsule.wireFfi
 
   # On-device StrongBox / hardware-keystore lane. StrongBox is a physical secure element
-  # — stock emulators expose only a software/TEE keystore, so the S-F2 StrongBoxSigner
-  # (and the S-F5 hardware-DEK ECDH adapter) can only truly run on hardware. This lane is
+  # — stock emulators expose only a software/TEE keystore, so the StrongBoxSigner
+  # (and the hardware-DEK ECDH adapter) can only truly run on hardware. This lane is
   # therefore manual + self-hosted; add a runner with the `strongbox` label (a device or
   # a host with an attached device) to activate it. Until then it is inert, matching the
   # repo convention of gating hardware runs behind a label rather than faking them on a

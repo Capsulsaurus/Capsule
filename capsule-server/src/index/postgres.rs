@@ -1,4 +1,4 @@
-//! [`PostgresAssetIndex`] — the durable asset index (`S-C37`, #402).
+//! [`PostgresAssetIndex`] — the durable asset index (#402).
 //!
 //! # The one thing this adapter exists to get right
 //!
@@ -15,8 +15,8 @@
 //! `owner_sequences` is a **counter row**, never a Postgres `SEQUENCE` or a `bigserial`.
 //! `nextval` is deliberately non-transactional: it hands 5 and 6 to two concurrent
 //! finalizations and does not roll back, so a reader who sees 6 commit first can page past 5
-//! forever. `index/mod.rs` names that as the whole of `S-C21`, and a counter row updated by the
-//! allocating transaction makes allocation order equal commit order.
+//! forever. `index/mod.rs` names that as the whole of the single-sequence design, and a counter
+//! row updated by the allocating transaction makes allocation order equal commit order.
 //!
 //! # Why the mutations are written in Rust rather than in SQL
 //!
@@ -33,7 +33,7 @@
 //! [`AssetIndex::reference_count`] is a `COUNT(*)`. design/filesystem/server.md fixes that: a
 //! blob's reference count is derived from the rows that name it, because a counter is a second
 //! copy of a derivable fact and a counter that drifts low deletes a live blob. Superseded
-//! manifests count (`S-C52`), or the collector reclaims the server's own rebuttal evidence.
+//! manifests count, or the collector reclaims the server's own rebuttal evidence.
 
 use capsule_core::crypto::hash::Hash32;
 use jiff::Timestamp;
@@ -575,7 +575,7 @@ async fn record_in(
 
     // The create's provenance blob is the asset's first accepted manifest, so it is the chain
     // the first lifecycle op must name (invariant 17). Set from the record's own
-    // `manifest_sha256` and never from the content address (`S-C31`). The manifest's album-key
+    // `manifest_sha256` and never from the content address. The manifest's album-key
     // epoch lands with it: invariant 18 reads the album's high-water mark off the rows.
     if blob.role == BlobRole::Provenance
         && row.chain_head.is_none()
@@ -769,7 +769,7 @@ async fn apply_in(
     if let Some(metadata) = &op.metadata {
         set_singular(&mut row, BlobRole::Metadata, metadata);
     }
-    // A replace's whole point (`S-C43`): the authorized form of the change `record_blob`
+    // A replace's whole point: the authorized form of the change `record_blob`
     // refuses, arriving with a manifest that chains onto the one it supersedes.
     if let Some(original) = &op.original {
         set_singular(&mut row, BlobRole::Original, original);
@@ -1221,7 +1221,7 @@ impl AssetIndex for PostgresAssetIndex {
     fn reference_count<'a>(&'a self, address: &'a ContentAddress) -> IndexFuture<'a, u64> {
         Box::pin(async move {
             // A **query**, never a stored counter. A manifest the chain has moved past is still
-            // referenced (`S-C52`); without that the collector reclaims the server's own
+            // referenced; without that the collector reclaims the server's own
             // rebuttal evidence.
             let counted = self
                 .connection
@@ -1348,7 +1348,7 @@ impl AssetIndex for PostgresAssetIndex {
             // The row **stays**. A client that has not synced since the delete still has to
             // learn about it, so removing the row would make the deletion invisible rather than
             // final. The chain goes with the bytes it describes: a purge is the end of the
-            // retention window the user's own signed delete fixed (`S-C52`).
+            // retention window the user's own signed delete fixed.
             row.blobs.clear();
             row.superseded.clear();
             persist(&transaction, &row).await?;

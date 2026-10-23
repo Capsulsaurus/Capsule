@@ -1,7 +1,7 @@
-//! `capsule show` — what an imported asset's signed sidecar actually records (slice `S-B18`).
+//! `capsule show` — what an imported asset's signed sidecar actually records.
 //!
 //! The importer folds a third-party export's caption, favourite, album membership, capture
-//! time and GPS into each asset's **signed** sidecar (`S-B10`), and every one of those mappings
+//! time and GPS into each asset's **signed** sidecar, and every one of those mappings
 //! is lossy by design: a favourite becomes five stars, an album becomes a tag. Nothing in the
 //! CLI printed the result back, so a user could not check a mapping they might disagree with
 //! until correcting it cost a signed `metadata-update` per asset — and the migration guide had

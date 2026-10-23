@@ -1,5 +1,4 @@
-//! The Valkey adapters — the required backend behind every state port (slice `S-C29`'s owed
-//! half, #403).
+//! The Valkey adapters — the required backend behind every state port (#403).
 //!
 //! # Shape
 //!

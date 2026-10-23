@@ -1,6 +1,6 @@
-//! The session ledger (slices `S-C13`, `S-N3`), end to end.
+//! The session ledger, end to end.
 //!
-//! Two cases carry the slices. `a_reinstall_groups_with_the_device_it_replaced` is the whole
+//! Two cases carry the acceptances. `a_reinstall_groups_with_the_device_it_replaced` is the whole
 //! point of cohorts: reinstalling re-enrolls with a **new** `device_id` by design, so one
 //! physical phone accumulates ledger entries the user cannot tell apart, and the cohort is what
 //! groups them. `the_cohort_map_outlives_the_sessions_that_carried_it` is why the map is durable
@@ -228,7 +228,7 @@ async fn revoking_a_session_ends_it_and_leaves_the_others() {
     assert_eq!(body["sessions"].as_array().expect("sessions").len(), 1);
 
     // The revoked session's refresh token is dead — that is the half a revoke is immediate
-    // about, and the half `S-C48` does not cover.
+    // about, and the half the access-token ledger check does not cover.
     fixture
         .client
         .post("/v1/auth/refresh")

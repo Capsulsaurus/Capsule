@@ -8,6 +8,6 @@
 #
 # There is exactly one legitimate reason to be here: the doc names a surface in
 # order to say it does not exist. A surface that is merely unbuilt does not
-# belong — that is what the slice tracker is for, and an entry added to quiet a
+# belong — that is what the issue tracker is for, and an entry added to quiet a
 # real drift turns this file into a place where drift hides.
 

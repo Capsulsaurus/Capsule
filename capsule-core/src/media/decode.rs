@@ -123,8 +123,8 @@ pub struct MediaMetadata {
     /// sRGB without converting — so `rawshift-image` 0.1.1 reports no source gamut for a
     /// standard format at all, whatever the file's ICC profile says. The consequence is a
     /// fidelity limitation, not a correctness bug: a Display P3 source gets a placeholder
-    /// interpreted as sRGB, i.e. slightly under-saturated, which is the direction slice `S-B14`
-    /// chose when it had to pick one. This module's private `gamut_of` is kept as the single
+    /// interpreted as sRGB, i.e. slightly under-saturated, which is the safer direction
+    /// when one has to be picked. This module's private `gamut_of` is kept as the single
     /// mapping point for when
     /// the crate does start reporting it. A RAW frame is sRGB for a better reason: its colour
     /// matrix converts camera RGB to sRGB primaries, so sRGB is what the samples really are.
@@ -957,7 +957,7 @@ fn orientation_of(bytes: &[u8], format: StillFormat) -> Option<u16> {
 ///
 /// `LinearSrgb` and `Unknown` both become [`Gamut::Srgb`]: `Linear` names a transfer function
 /// rather than a gamut, and sRGB primaries are the only safe assumption for an untagged source
-/// (over-saturating is worse than under-saturating — the resolution slice `S-B14` recorded).
+/// (over-saturating is worse than under-saturating).
 ///
 /// **The wide-gamut arms are unreachable today**, because `probe_standard_image` hard-codes
 /// `ColorSpace::Srgb` for every format (see [`MediaMetadata::gamut`]). They are here as the one

@@ -22,7 +22,7 @@ public actor ImportService {
 
     /// - Parameter sidecarCoder: the mock lane's sidecar format, `JSONSidecarCoder`.
     ///   A build that links the Rust core has no CBOR sidecar codec: the signed
-    ///   `SidecarV1` is authored by the core alone (`S-D24`).
+    ///   `SidecarV1` is authored by the core alone.
     public init(
         library: ManagedLibrary,
         fileStore: any FileStore,

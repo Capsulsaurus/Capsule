@@ -1,4 +1,4 @@
-//! The sync-fed local store (slice `S-D5`): the opaque cursor and the assets the
+//! The sync-fed local store: the opaque cursor and the assets the
 //! sync feed has landed, which `capsule list` queries client-side.
 
 use sea_orm_migration::prelude::*;

@@ -1,4 +1,4 @@
-//! The master-key escrow surface (slice `S-C12`), and the sealed identity beside it (#544).
+//! The master-key escrow surface, and the sealed identity beside it (#544).
 //!
 //! Two operations on one blob per account: store it, and fetch it back. There is no delete —
 //! see below. The same two operations exist a second time at `/v1/auth/escrow/identity`, for
@@ -33,7 +33,7 @@
 //! recovery path in one authenticated request, which is exactly the capability a stolen session
 //! token should not have; rotation replaces, and account deletion takes the escrow with it.
 //!
-//! # `S-C28` audit
+//! # The status audit
 //!
 //! | Status | Verdict |
 //! | --- | --- |

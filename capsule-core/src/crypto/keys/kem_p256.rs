@@ -1,5 +1,5 @@
-//! The **hardware-bound P-256 variant** of the Device Encryption Key (DEK) — slice `S-F5` in the
-//! repo-root `SLICES.md`; design: <https://docs/design/cryptography/keys/#device-keys>.
+//! The **hardware-bound P-256 variant** of the Device Encryption Key (DEK); design:
+//! <https://docs/design/cryptography/keys/#device-keys>.
 //!
 //! The software DEK is **X-Wing** (X25519 + ML-KEM-768; see [`super::kem`]). Shipping secure
 //! elements expose **ECDH-P256**, not X25519, so — mirroring the P-256 hybrid **signing** key
@@ -115,7 +115,7 @@ pub struct P256HybridDek {
     agreement: Arc<dyn HardwareKeyAgreement>,
     key_alias: String,
     /// The 32-byte software seed the ML-KEM-768 half was expanded from. Retained so the keystore
-    /// can seal it under the master key and re-derive this half on unlock (`S-F8`); the classical
+    /// can seal it under the master key and re-derive this half on unlock; the classical
     /// half needs no seed because it never leaves the element.
     ml_seed: [u8; 32],
     /// ML-KEM-768 decapsulation key (software half).
@@ -148,13 +148,13 @@ impl P256HybridDek {
 
     /// The element alias this DEK's classical half is enrolled under. Persisted (in the clear —
     /// it is a lookup handle, not a secret) in the [`AccountFile`](super::keystore::AccountFile)
-    /// so a reopened workspace can re-bind to the same hardware key (`S-F8`).
+    /// so a reopened workspace can re-bind to the same hardware key.
     pub fn key_alias(&self) -> &str {
         &self.key_alias
     }
 
     /// The 32-byte software seed of the ML-KEM-768 half — the value the keystore seals under the
-    /// master key (`S-F8`), mirroring [`DekKeypair::to_seed_bytes`](super::kem::DekKeypair::to_seed_bytes).
+    /// master key, mirroring [`DekKeypair::to_seed_bytes`](super::kem::DekKeypair::to_seed_bytes).
     /// The classical half is *not* covered: it is hardware-held and non-exportable by contract,
     /// which is exactly why a hardware-bound device cannot be restored from a backup.
     pub fn to_ml_seed_bytes(&self) -> [u8; 32] {
@@ -327,7 +327,7 @@ mod tests {
     use super::*;
     use crate::crypto::keys::kem::{DEK_CIPHERTEXT_LEN, DEK_PUBLIC_LEN, DekKeypair};
 
-    /// The slice-`S-F5` acceptance: encapsulate to the hybrid public key, decapsulate through the
+    /// The acceptance: encapsulate to the hybrid public key, decapsulate through the
     /// hardware-held P-256 half (via the mock element), and recover the identical shared secret.
     #[test]
     fn p256_hybrid_dek_round_trips_through_hardware_ecdh() {

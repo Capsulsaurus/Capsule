@@ -1,4 +1,4 @@
-//! [`PostgresCollection`] — the durable mark store the collector writes (`S-C11`, #446).
+//! [`PostgresCollection`] — the durable mark store the collector writes (#446).
 //!
 //! # Why the marks have to survive a restart at all
 //!

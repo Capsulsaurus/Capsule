@@ -1,6 +1,6 @@
-//! Storage quota, end to end (slice `S-C6`).
+//! Storage quota, end to end.
 //!
-//! The cases that carry the slice are the two refusals and the one that must *never* be a
+//! The cases that carry the acceptance are the two refusals and the one that must *never* be a
 //! refusal: uploads stop at the hard limit, metadata growth stops when the grace expires, and a
 //! delete is admitted whatever the state — because a user who cannot delete cannot get back
 //! under the limit, and a quota that could lock someone out of freeing space would be a trap

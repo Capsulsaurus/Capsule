@@ -1,5 +1,5 @@
 //! Alert classes and their trigger predicates — the **one shared decision function** every
-//! platform evaluates instead of reimplementing the taxonomy (slice `S-D29`, core half; SSoT:
+//! platform evaluates instead of reimplementing the taxonomy (core half; SSoT:
 //! [Notifications]).
 //!
 //! # The surface

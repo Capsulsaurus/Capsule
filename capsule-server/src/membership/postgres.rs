@@ -1,4 +1,4 @@
-//! [`PostgresMembership`] — the durable membership store (`S-C51`).
+//! [`PostgresMembership`] — the durable membership store.
 //!
 //! # Two tables, one lock
 //!

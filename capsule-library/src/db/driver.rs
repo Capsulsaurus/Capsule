@@ -32,7 +32,7 @@ impl DatabaseDriver {
     /// [`MigrationError::CatalogTooNew`] is the one variant a caller acts on differently: the
     /// catalog was left untouched and the recovery is to update the app, so `library::open`
     /// maps it to [`LibraryError::CatalogTooNew`](crate::library::LibraryError::CatalogTooNew)
-    /// instead of folding it into a generic database error (slice `S-D23`).
+    /// instead of folding it into a generic database error.
     pub(crate) fn open_typed(path: &Path) -> Result<Self, MigrationError> {
         crate::db::vector::ensure_vec_extension();
         let conn = Connection::open(path)?;
@@ -720,7 +720,7 @@ mod tests {
         assert_eq!(timeline[0].uuid, "uuid-1");
     }
 
-    /// S-D19: a user-hidden asset is excluded from **every** default projection — timeline,
+    /// A user-hidden asset is excluded from **every** default projection — timeline,
     /// filtered timeline, and album — and surfaces only in `query_hidden`. Hiding is
     /// view-layer only, so it keeps its album membership and stays directly reachable by
     /// uuid and by hash (SSoT: design/organization § Hidden Assets).

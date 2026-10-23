@@ -1,6 +1,6 @@
-//! The device-directory surface (slice `S-C9`), end to end.
+//! The device-directory surface, end to end.
 //!
-//! Two properties carry the whole slice: the bytes come back exactly as they went in, and a
+//! Two properties carry the whole suite: the bytes come back exactly as they went in, and a
 //! version that does not strictly advance changes nothing. The first is what makes a signature
 //! still verify after a round trip; the second is what stops a server rolling a directory back
 //! to un-revoke a device somebody deliberately removed.
@@ -18,7 +18,7 @@ use uuid::Uuid;
 /// An account's identity key.
 ///
 /// Held by the caller rather than generated inside `signed`, because the server anchors an
-/// account to the first key it sees (`S-C42`) and a fresh key per publish would make every
+/// account to the first key it sees and a fresh key per publish would make every
 /// second one a `403`.
 fn ik() -> HybridSigningKey {
     HybridSigningKey::generate()
@@ -309,10 +309,10 @@ async fn the_directory_surface_requires_a_credential() {
         .assert_status(StatusCode::UNAUTHORIZED);
 }
 
-/// The account is anchored to the first identity key it publishes under (`S-C42`).
+/// The account is anchored to the first identity key it publishes under.
 ///
 /// This is invariant 23's second clause reaching the wire. Before it, an authenticated caller
-/// could publish a document that verifies under no key, and `S-C23`'s revoke-all — which
+/// could publish a document that verifies under no key, and the revoke-all — which
 /// accepts a candidate IK only if it verifies the account's stored directory — would have been
 /// permanently disabled for that account by a stolen session token. A stolen token cannot
 /// revoke everything; it must not be able to make sure nobody can.

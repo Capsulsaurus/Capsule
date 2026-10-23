@@ -1,4 +1,4 @@
-//! Cross-device add (`S-C7`) — the code, the channel, and the freshness gate.
+//! Cross-device add — the code, the channel, and the freshness gate.
 //!
 //! # Three surfaces, three different callers
 //!
@@ -44,8 +44,8 @@
 //! # Rate limiting is absent, and absent on purpose
 //!
 //! The contract rate-limits redemption, and the catalog carries `error.enrollment.rate_limited`
-//! for it. The per-user counter that would enforce it has no port (`S-C32`), so the status is
-//! **not declared** rather than declared and unreachable — the `S-C28` rule. What stands in
+//! for it. The per-user counter that would enforce it has no port, so the status is
+//! **not declared** rather than declared and unreachable. What stands in
 //! meanwhile is not nothing: a code is single-use, lives ten minutes, and carries ≥64 bits of
 //! entropy, so the brute-force window is bounded by the TTL rather than by a counter.
 

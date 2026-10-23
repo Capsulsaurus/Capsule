@@ -1,4 +1,4 @@
-//! Custody receipts (`S-C15`) — the server's signed admission of what it accepted — and the
+//! Custody receipts — the server's signed admission of what it accepted — and the
 //! signed storage attestation ([`sign_storage_attestation`]) the same key puts on a durability
 //! verdict when a client asks for one.
 //!
@@ -11,7 +11,7 @@
 //! later loses the bytes has already signed a statement it cannot take back.
 //!
 //! The type is [`capsule_core::crypto::receipts::CustodyReceipt`], shared with the client rather
-//! than mirrored (`S-C46`). A signed structure defined at both ends is one added field away from
+//! than mirrored. A signed structure defined at both ends is one added field away from
 //! a signature that stops verifying.
 //!
 //! # The chain is the log, and it is minted where it is written
@@ -22,8 +22,9 @@
 //! [`ReceiptLog::issue`] takes a [`ReceiptSigner`] and does the whole thing in one operation
 //! rather than handing a caller a sequence number to sign against. A caller that read the head,
 //! signed, and then appended would let two concurrent finalizations sign the same position, and
-//! the chain would fork with both halves validly signed. That is the `S-C37` lesson in a place
-//! where getting it wrong produces *forged-looking* evidence rather than a missing entry.
+//! the chain would fork with both halves validly signed. It is the hazard of a sequence mint
+//! that reads before it writes, in a place where getting it wrong produces *forged-looking*
+//! evidence rather than a missing entry.
 //!
 //! The signer is passed in rather than held by the store: a log is a table, and key material has
 //! no business in one.

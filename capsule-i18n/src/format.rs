@@ -31,7 +31,7 @@
 //! and any other `{name, kind, …}` block are **refused**: a `debug_assert!` fires where a
 //! developer will see it, and the release build copies the construct through verbatim
 //! rather than gaining a new crash on a catalog it could previously render badly. Emitting
-//! ICU source to a user is the exact failure Android shipped before slice `S-I6`; the
+//! ICU source to a user is the exact failure Android once shipped; the
 //! refusal exists so the next construct this runtime cannot express is a test failure
 //! instead.
 //!
@@ -381,7 +381,7 @@ impl<'a> Arms<'a> {
 ///
 /// Brace *matching*, not the first `}`: every ICU plural nests braces, and a scan that
 /// stops at the first one cannot see past the opening arm — the same defect that let
-/// Android's renderer ship raw ICU (slice `S-I6`).
+/// Android's renderer ship raw ICU.
 ///
 /// Used by [`Arms::parse`], where the arms are disjoint so the scans add up to one pass
 /// over the body. [`render`] uses [`brace_pairs`] instead, because there the same brace
@@ -629,7 +629,7 @@ mod tests {
     /// onto `select` rather than deleted, because the property it pins is not about
     /// plurals. Emitting a construct verbatim means the **user reads the message source**,
     /// which is precisely what Android shipped for as long as its renderer lacked plural
-    /// support (slice `S-I6`). A limitation that renders as output is not a limitation, it
+    /// support. A limitation that renders as output is not a limitation, it
     /// is a defect.
     ///
     /// `cfg(debug_assertions)`, which it was missing: the assertion is compiled out of a

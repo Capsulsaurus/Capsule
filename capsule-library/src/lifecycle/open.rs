@@ -33,8 +33,8 @@ const DEVICE_ADDED_AT: &str = "2020-01-01T00:00:00Z";
 /// The signed device directory's file under `{root}/.library/` (#562).
 const DIRECTORY_FILE: &str = "directory.cbor";
 
-/// A request to bind this workspace's **device encryption key** to a per-platform secure element
-/// (`S-F8`): the P-256 key-agreement element itself plus the alias its key is held under.
+/// A request to bind this workspace's **device encryption key** to a per-platform secure element:
+/// the P-256 key-agreement element itself plus the alias its key is held under.
 ///
 /// Supplying one makes the DEK's classical half hardware-held for the life of the account — see
 /// [`DeviceDek`](capsule_core::crypto::keys::DeviceDek). Omitting it keeps the software X-Wing DEK,
@@ -61,7 +61,7 @@ impl std::fmt::Debug for HardwareDekBinding {
 
 /// Recover `device`'s `add_id` high-water mark by sweeping the signed sidecars under
 /// `root/media` — the maximum `add_id.counter` this device has ever written, across every
-/// `AddId`-bearing OR-set of every sidecar (slice `S-A9`).
+/// `AddId`-bearing OR-set of every sidecar.
 ///
 /// `None` means the device provably issued nothing: no sidecar on disk bears its `device_id` in
 /// any OR-set, so [`Counter::reseed_from_max`] may safely reset to zero. Anything else is one
@@ -205,7 +205,7 @@ impl Workspace {
     }
 
     /// As [`create_with_params`](Self::create_with_params) but with the device **encryption** key's
-    /// classical half generated inside `binding`'s secure element and never leaving it (`S-F8`).
+    /// classical half generated inside `binding`'s secure element and never leaving it.
     /// The ML-KEM-768 half is software-sealed under the master key as usual, so the account file
     /// round-trips; reopening the library needs the same element back, via
     /// [`open_with_hardware_dek`](Self::open_with_hardware_dek).
@@ -491,8 +491,9 @@ impl Workspace {
             .map_err(|e| LifecycleError::Io(e.to_string()))?;
 
         // The album keystore exists from day one, even empty: a library whose `albums.cbor` is
-        // simply absent is indistinguishable from a pre-`S-A10` one, and `open` treats that as
-        // "keys were never persisted" rather than "there are no albums yet".
+        // simply absent is indistinguishable from one written before keys were durable, and
+        // `open` treats that as "keys were never persisted" rather than "there are no albums
+        // yet".
         AlbumStore::new().save(root, &account.master)?;
 
         // Default to the account's own software DSK; a hardware signer overrides it.
@@ -502,7 +503,7 @@ impl Workspace {
         Self::persist_directory(root, &directory)?;
         // A freshly minted `device_id` over a freshly initialised (provably empty) library has
         // provably issued no `add_id`, so it starts at zero with no sweep — the one case the
-        // add-id durability rule licenses a reset (`S-A9`). Every *re*-open goes through
+        // add-id durability rule licenses a reset. Every *re*-open goes through
         // [`open`](Self::open), which reseeds from the sidecars on disk.
         let counter = Counter::new(account.device.device_id);
         Ok(Self {
@@ -526,7 +527,7 @@ impl Workspace {
     }
 
     /// Set the reporting client identity every manifest and derivative this workspace authors
-    /// carries (S-D15): `client_id` names the product (`capsule-cli`, `capsule-ios`, …) and
+    /// carries: `client_id` names the product (`capsule-cli`, `capsule-ios`, …) and
     /// `semver` is that client's own version. The build-embedded commit + dirty flag are appended
     /// per the [`client_version` grammar](capsule_core::client_build), so an in-repo app supplies only
     /// its id and version. Without this, a workspace reports the bare-core
@@ -541,14 +542,13 @@ impl Workspace {
     /// creating + persisting) the account under `passphrase`. `params` sets the Argon2id cost for
     /// a first-time account and the share-link wrap tier.
     ///
-    /// Since `S-A10` this restores the workspace's durable state rather than starting empty:
+    /// This restores the workspace's durable state rather than starting empty:
     ///
     /// - **album keys + authorities** from the sealed [`AlbumStore`], so a reopened library can
     ///   decrypt and keep writing into the albums it already has;
     /// - **every managed asset** from its signed artifacts on disk (chain, sidecar, sealed
     ///   metadata blob), a `warn`-and-skip per asset rather than a failed open;
-    /// - **the `add_id` counter**, reseeded past everything this device has ever written
-    ///   (`S-A9`);
+    /// - **the `add_id` counter**, reseeded past everything this device has ever written;
     /// - **the signed device directory** from `{root}/.library/directory.cbor` (#562), once it
     ///   verifies under the user IK and lists this device live (re-signed under this account's
     ///   id at the next version when it still names the id from before a rebind); otherwise a
@@ -557,7 +557,7 @@ impl Workspace {
     /// A library with no `albums.cbor` predates this and opens with zero albums plus a `warn`
     /// naming backup restore — see [`AlbumStore::load`].
     ///
-    /// A library holding **unsigned pre-signed-path sidecars** still opens (`S-D24`): those
+    /// A library holding **unsigned pre-signed-path sidecars** still opens: those
     /// assets have no provenance chain, so they are not restored, but each is reported through
     /// [`unmigrated_sidecars`](Self::unmigrated_sidecars) with a `warn` naming
     /// [`migrate_unsigned_sidecars`](Self::migrate_unsigned_sidecars) as the way in.
@@ -574,7 +574,7 @@ impl Workspace {
     }
 
     /// As [`open`](Self::open), re-attaching the secure element that holds this device's
-    /// hardware-bound DEK (`S-F8`). Required for a library created by
+    /// hardware-bound DEK. Required for a library created by
     /// [`create_with_hardware_dek`](Self::create_with_hardware_dek): its DEK's classical half is
     /// non-exportable, so plain [`open`](Self::open) refuses it rather than degrading to software.
     ///
@@ -621,7 +621,8 @@ impl Workspace {
                 cbor::to_canonical_vec(&file).map_err(|e| LifecycleError::Cbor(e.to_string()))?;
             fs::write(&account_path, &acct_bytes).map_err(|e| LifecycleError::Io(e.to_string()))?;
             // First use of this library: seed an empty album keystore alongside the account, so
-            // the next open sees "no albums yet" rather than the pre-`S-A10` migration case.
+            // the next open sees "no albums yet" rather than the keys-never-persisted migration
+            // case.
             AlbumStore::new().save(root, &account.master)?;
             account
         };
@@ -633,7 +634,7 @@ impl Workspace {
         // extension of the account's published one — survives the close.
         let directory = Self::restore_directory(root, &account, &dsk_public, built);
         let user_id = account.user_id;
-        // `S-A9`: reseed the `add_id` counter to one past the maximum this device has ever
+        // Reseed the `add_id` counter to one past the maximum this device has ever
         // written, recovered from its own signed sidecars. Without this a reopened library
         // reissues counters from zero and aliases two distinct OR-set adds.
         let device_id = account.device.device_id;
@@ -662,7 +663,7 @@ impl Workspace {
             inbox: HashMap::new(),
             unmigrated: Vec::new(),
         };
-        // `S-A10`: album keys, authorities, and every managed asset come back from disk here.
+        // Album keys, authorities, and every managed asset come back from disk here.
         // Without this the reopened workspace would hold an unlocked account and nothing else.
         ws.restore_durable_state()?;
         tracing::info!(
@@ -674,11 +675,11 @@ impl Workspace {
         Ok(ws)
     }
 
-    /// Restore the durable half of the workspace after unlocking the account (`S-A10`):
+    /// Restore the durable half of the workspace after unlocking the account:
     /// album key material + authorities from `{root}/.library/albums.cbor`, then every managed
     /// asset's in-memory state from the artifacts on disk.
     ///
-    /// **Migration.** A library with no `albums.cbor` is a pre-`S-A10` library whose album keys
+    /// **Migration.** A library with no `albums.cbor` predates durable album keys: its keys
     /// were session-scoped and therefore never written anywhere. It opens with zero albums and a
     /// `warn` naming backup restore as the recovery path. That is not a regression introduced
     /// here: those assets were already undecryptable across a restart, because the only copy of
@@ -693,7 +694,7 @@ impl Workspace {
         } else {
             tracing::warn!(
                 path = %AlbumStore::path(&self.root).display(),
-                "no album keystore: this library predates durable album keys (S-A10), so it opens \
+                "no album keystore: this library predates durable album keys, so it opens \
                  with zero albums. Its existing assets can only be recovered through a backup \
                  artifact (`import_backup`), which escrows their AMKs."
             );
@@ -755,7 +756,7 @@ impl Workspace {
             "workspace open: assets restored from disk"
         );
 
-        // Second pass (`S-D24`): the sidecars no chain anchors. An unsigned pre-signed-path
+        // Second pass: the sidecars no chain anchors. An unsigned pre-signed-path
         // record has never had one; a signed sidecar without one is an interrupted migration.
         // Neither is restorable here — open holds no album write capability and must not author
         // signed records unasked — so each is recorded and named, never silently dropped.
@@ -836,17 +837,17 @@ impl Workspace {
             LifecycleError::NotFound(format!("original media file for asset {asset_id}"))
         })?;
 
-        // (5) The sealed metadata blob. Absence is tolerated: libraries written before `S-A10`
-        // never persisted it. Such an asset reads and verifies fine; only `export_backup` and
-        // upload need the blob, and both fail loudly on the empty value rather than shipping a
-        // wrong one.
+        // (5) The sealed metadata blob. Absence is tolerated: libraries written before album
+        // keys were durable never persisted it. Such an asset reads and verifies fine; only
+        // `export_backup` and upload need the blob, and both fail loudly on the empty value
+        // rather than shipping a wrong one.
         let blob_path = dir.join(format!("{}.metadata.bin", asset_id.simple()));
         let metadata_blob = match fs::read(&blob_path) {
             Ok(b) => b,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 tracing::warn!(
                     asset_id = %asset_id,
-                    "no sealed metadata blob on disk (pre-S-A10 asset); it cannot be exported or \
+                    "no sealed metadata blob on disk (asset written before sealed metadata existed); it cannot be exported or \
                      uploaded until its metadata is rewritten"
                 );
                 Vec::new()
@@ -854,11 +855,12 @@ impl Workspace {
             Err(e) => return Err(LifecycleError::Io(format!("metadata blob: {e}"))),
         };
 
-        // (6) Stack placement. Since `S-B15` the durable record is the sidecar's signed
+        // (6) Stack placement. The durable record is the sidecar's signed
         // `stack_membership` register, so a written register is authoritative — `Some` is a
         // placement, a stamped `None` an explicit departure from a stack. Reading the index is
-        // the compatibility path for an asset imported *before* that slice, whose placement was
-        // written only as `assets.stack_id` / `is_stack_hidden` and exists nowhere else.
+        // the compatibility path for an asset imported before that register existed, whose
+        // placement was written only as `assets.stack_id` / `is_stack_hidden` and exists
+        // nowhere else.
         let stack = match sidecar.stack_membership.get() {
             Some(membership) => membership.as_ref().map(StackPlacement::from_membership),
             None => self
@@ -897,7 +899,7 @@ impl Workspace {
                 dsk_public,
                 // The published half of this device's encryption key, so a peer can encapsulate
                 // to it using the directory alone. `public_bytes()` is the single seam for both
-                // compositions and the recipient tells them apart by length (S-F8), which is why
+                // compositions and the recipient tells them apart by length, which is why
                 // nothing here says which one it is holding.
                 dek_public: Some(DekPublic(account.device.dek.public_bytes())),
                 added_at: DEVICE_ADDED_AT.into(),
@@ -1059,7 +1061,7 @@ mod tests {
     use super::super::{FAST_PARAMS, fast_workspace};
     use super::*;
 
-    /// **S-A10, the core claim.** An asset imported in one session is fully usable in the next:
+    /// **The core claim.** An asset imported in one session is fully usable in the next:
     /// its album key comes back from the sealed keystore, so the workspace can re-derive the file
     /// key (proved by `verify_asset` accepting, which regenerates the ciphertext and re-checks its
     /// content address) and can open the sealed metadata blob it persisted to disk.
@@ -1113,7 +1115,7 @@ mod tests {
         );
     }
 
-    /// **S-A10.** A reopened library keeps *writing* into the album it already has — the write-tier
+    /// A reopened library keeps *writing* into the album it already has — the write-tier
     /// and admin keys and the attested authority all survive, so a second-session import self-
     /// verifies under the same epoch instead of needing a brand-new album.
     #[test]
@@ -1157,7 +1159,7 @@ mod tests {
         assert_eq!(ws2.rotate_epoch(album).unwrap(), 2);
     }
 
-    /// **S-A10.** The authority — not just the content key — is durable: the admin-signed epoch
+    /// The authority — not just the content key — is durable: the admin-signed epoch
     /// ledger comes back verifying, with the epoch ceiling and per-epoch write-tier keys intact,
     /// and its local-only `amk_present` flags restored from the epochs actually held.
     #[test]
@@ -1203,7 +1205,7 @@ mod tests {
         assert!(authority.has_amk(AmkVersion(2)));
     }
 
-    /// **S-A10, migration.** A library written before durable album keys has no `albums.cbor`. It
+    /// **Migration.** A library written before durable album keys has no `albums.cbor`. It
     /// must still open — with zero albums and a warning — rather than failing. This is not a
     /// regression: those assets' AMKs never existed anywhere but in the process that minted them.
     #[test]
@@ -1219,7 +1221,8 @@ mod tests {
             ws.import_asset(album, &img).unwrap()
         };
 
-        // Simulate the pre-S-A10 on-disk shape: signed artifacts present, keystore absent.
+        // Simulate the on-disk shape before album keys were durable: signed artifacts present,
+        // keystore absent.
         let store = capsule_core::crypto::keys::AlbumStore::path(lib.path());
         assert!(store.exists());
         fs::remove_file(&store).unwrap();
@@ -1240,7 +1243,7 @@ mod tests {
         ));
     }
 
-    /// **S-A10.** `export_backup` reads each asset's album AMK *and* its sealed metadata blob, so
+    /// `export_backup` reads each asset's album AMK *and* its sealed metadata blob, so
     /// it is the sharpest test that both survived the close — and the restored artifact must be
     /// byte-identical to one exported before it.
     #[test]
@@ -1295,7 +1298,7 @@ mod tests {
         assert_eq!(ws4.read_plaintext(&id).unwrap(), bytes);
     }
 
-    /// **S-A10.** An album recovered purely from a backup artifact holds content keys and no
+    /// An album recovered purely from a backup artifact holds content keys and no
     /// signing capability — the artifact escrows AMKs, never the write-tier/admin keys or the
     /// admin-signed ledger. Authoring a new write into it must be a typed refusal, not a fresh
     /// admin key minted behind the user's back.
@@ -1344,7 +1347,7 @@ mod tests {
         assert_eq!(ws2.album(&album).unwrap().amks.len(), epochs_before);
     }
 
-    /// **S-A10.** `create_album_with_id` refuses to mint over an album that already holds key
+    /// `create_album_with_id` refuses to mint over an album that already holds key
     /// material: doing so would discard the AMKs every existing asset in it was encrypted under.
     #[test]
     fn creating_an_album_that_already_exists_is_refused() {
@@ -1891,7 +1894,7 @@ mod tests {
         assert_eq!(reopened.user_id(), original);
     }
 
-    /// **S-A9.** A reopened library must never reissue an `add_id` counter it has already
+    /// A reopened library must never reissue an `add_id` counter it has already
     /// written: `Workspace::open` reseeds from the maximum counter this device's own signed
     /// sidecars record, so the next issued counter is strictly greater than every prior one.
     #[test]
@@ -1936,7 +1939,7 @@ mod tests {
         assert_eq!(next, 2);
     }
 
-    /// **S-A9.** The reset-to-zero case is the *only* one the durability rule licenses: a device
+    /// The reset-to-zero case is the *only* one the durability rule licenses: a device
     /// whose sidecars bear none of its `add_id`s has provably issued nothing.
     #[test]
     fn add_id_counter_resets_to_zero_for_a_device_that_issued_nothing() {
@@ -1960,7 +1963,7 @@ mod tests {
         );
     }
 
-    /// **S-A9.** The high-water mark is per-device: another device's much larger counters in the
+    /// The high-water mark is per-device: another device's much larger counters in the
     /// same sidecar must not inflate this device's next `add_id` (they are a different key in the
     /// `(device, counter)` space, and consuming them would burn 500 of our own counters for
     /// nothing).
@@ -2003,7 +2006,7 @@ mod tests {
         );
     }
 
-    /// S-D15: an injected `client_id` flows onto every write the workspace authors — the create
+    /// An injected `client_id` flows onto every write the workspace authors — the create
     /// manifest and a later metadata-update record both report the app's identity (not the bare
     /// `capsule-core` default), and each value parses as the normative grammar.
     #[test]
@@ -2124,11 +2127,11 @@ mod tests {
         );
     }
 
-    // ── S-F8: the device encryption key bound to a secure element, in a real workspace ──
+    // ── the device encryption key bound to a secure element, in a real workspace ──
 
-    /// The mock element + alias every S-F8 workspace test binds to. A real Secure Enclave /
-    /// StrongBox / TPM adapter substitutes for the mock without a change above this line — that
-    /// is the point of the [`HardwareKeyAgreement`] seam.
+    /// The mock element + alias every hardware-bound workspace test binds to. A real Secure
+    /// Enclave / StrongBox / TPM adapter substitutes for the mock without a change above this
+    /// line — that is the point of the [`HardwareKeyAgreement`] seam.
     fn mock_dek_binding(scalar: u8) -> HardwareDekBinding {
         use capsule_core::crypto::keys::MockP256KeyAgreement;
 
@@ -2138,13 +2141,13 @@ mod tests {
         }
     }
 
-    /// **S-F8 acceptance.** A workspace created with a `HardwareKeyAgreement` round-trips
+    /// **The acceptance case.** A workspace created with a `HardwareKeyAgreement` round-trips
     /// lock/unlock: close it, reopen it with the same element, and the DEK is still the same
     /// hardware-bound key — a secret encapsulated to it *before* the close is recovered *after*
     /// the reopen, with the classical ECDH done inside the element both times.
     ///
     /// The asset import either side of the close is what makes this a workspace test rather than
-    /// a keystore one: the hardware DEK must coexist with the whole `S-A10` durable-state
+    /// a keystore one: the hardware DEK must coexist with the whole durable-state
     /// restore, not merely survive in isolation.
     #[test]
     fn hardware_dek_workspace_round_trips_lock_and_unlock() {
@@ -2193,7 +2196,7 @@ mod tests {
             sent_secret,
             "a secret sealed before the close must open after the reopen"
         );
-        // `S-A10`'s durable state is unaffected by the hardware binding.
+        // The durable state is unaffected by the hardware binding.
         assert_eq!(reopened.verify(&asset).unwrap(), VerifyOutcome::Accept);
     }
 
@@ -2256,7 +2259,7 @@ mod tests {
         assert!(reopened.device_dek_decapsulate(&hw_ct).is_err());
     }
 
-    /// **S-D23, the owed half at the workspace boundary.** `Workspace::open` no longer
+    /// **Newer-catalog refusal at the workspace boundary.** `Workspace::open` no longer
     /// stringifies a library-open failure into `Io`: a catalog newer than this build surfaces
     /// as `LifecycleError::Library(LibraryError::CatalogTooNew { .. })`, so a client can name
     /// both versions and tell the user to update rather than to check their disk.

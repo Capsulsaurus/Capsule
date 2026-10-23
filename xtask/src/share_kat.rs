@@ -1,4 +1,4 @@
-//! Cross-language share-link Known-Answer-Test (KAT) fixture generator (slice `S-E1`).
+//! Cross-language share-link Known-Answer-Test (KAT) fixture generator.
 //!
 //! Emits a **deterministic** JSON fixture that the browser share-open path
 //! (`capsule-web`'s `share-open` bun test, loading the `capsule-wasm` module) reopens, so the

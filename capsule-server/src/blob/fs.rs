@@ -797,7 +797,7 @@ mod tests {
     /// A store on a directory that disappears with the test.
     ///
     /// No temporary-directory crate: one `remove_dir_all` in `Drop` is the whole requirement, and
-    /// a dependency for it would need a row in a design doc this slice does not own.
+    /// a dependency for it would need a row in a design doc this change does not own.
     #[derive(Debug)]
     struct TempStore {
         store: FilesystemBlobStore,

@@ -1,4 +1,4 @@
-// Guest-drop uploader (slices S-D3, S-C61): chunking, checksums, progress, and failure
+// Guest-drop uploader: chunking, checksums, progress, and failure
 // classification, driven against a mocked fetch. No crypto here — the seal is exercised by the
 // cross-language KAT; this pins the HTTP protocol `capsule-server`'s drop routes require, and it
 // is what caught the paths and the body going stale when the Salvo tree retired.

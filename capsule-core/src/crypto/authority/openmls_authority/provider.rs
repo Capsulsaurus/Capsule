@@ -1,11 +1,11 @@
 //! The OpenMLS provider Capsule drives every album group through — the libcrux-backed
 //! crypto/rand halves paired with an **owned, serializable** storage half.
 //!
-//! S-X1 used `openmls_libcrux_crypto::Provider`, whose bundled `MemoryStorage` is a private
-//! field: durable group state could not be exported, so S-X1 left MLS state in RAM. S-X2 swaps
-//! in this thin composition — the same formally-verified libcrux [`CryptoProvider`] (crypto +
-//! rand) as before, but over a [`MemoryStorage`] this crate *holds*, so the whole storage keyspace
-//! (ratchet tree, epoch secrets, queued proposals, the leaf signer, key-package bundles) round-trips
+//! `openmls_libcrux_crypto::Provider`'s bundled `MemoryStorage` is a private field, so durable
+//! group state could not be exported from it. This thin composition replaces it — the same
+//! formally-verified libcrux [`CryptoProvider`] (crypto + rand), but over a [`MemoryStorage`]
+//! this crate *holds*, so the whole storage keyspace (ratchet tree, epoch secrets, queued
+//! proposals, the leaf signer, key-package bundles) round-trips
 //! through [`export_bytes`](CapsuleMlsProvider::export_bytes) /
 //! [`import_bytes`](CapsuleMlsProvider::import_bytes). That is the durable-persistence surface the
 //! [`OpenMlsAuthority`](super::OpenMlsAuthority) exposes; *where* those bytes live (a `library.sqlite`

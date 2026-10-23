@@ -1,5 +1,5 @@
-//! uniffi bindings: an async-capable wrapper over the SDK's user-flow primitives
-//! (slice `S-D9`), so iOS/macOS (Swift), Android (Kotlin), and Linux consumers call
+//! uniffi bindings: an async-capable wrapper over the SDK's user-flow primitives, so iOS/macOS
+//! (Swift), Android (Kotlin), and Linux consumers call
 //! one SDK instead of reimplementing login/upload/sync flows.
 //!
 //! # Surface
@@ -13,7 +13,7 @@
 //! [`fetch_blob_to_path`](crate::ffi::FfiSession::fetch_blob_to_path),
 //! [`sync_pull`](crate::ffi::FfiSession::sync_pull),
 //! [`logout`](crate::ffi::FfiSession::logout)) rides that handle. **Tokens never cross the FFI
-//! boundary raw**: the S-D7 session store injects and auto-refreshes the bearer
+//! boundary raw**: the SDK session store injects and auto-refreshes the bearer
 //! behind the handle, so foreign code never sees access/refresh token material.
 //!
 //! [`FfiCapsuleClient`]: crate::ffi::FfiCapsuleClient
@@ -60,7 +60,7 @@ use crate::upload::{
     UploadOutcome, UploadTransport,
 };
 
-/// The `capsule-core`-facing workspace verbs (`S-P1`): enroll/open, albums, seal + import,
+/// The `capsule-core`-facing workspace verbs: enroll/open, albums, seal + import,
 /// verify, sync-apply, escrow minting, and the signed device directory. Separated from the
 /// networked client/session surface below because it is the half that touches no transport.
 mod workspace;
@@ -72,7 +72,7 @@ pub use workspace::{
     p256_hardware_dek_round_trip,
 };
 
-/// The local-alert surface (`S-D29`): the shared `capsule_core::notify` predicate, flattened.
+/// The local-alert surface: the shared `capsule_core::notify` predicate, flattened.
 /// Separated from both blocks above because it touches neither a transport nor a workspace —
 /// it is a pure function of caller-supplied device state, and the two free exports say so.
 mod notify;
@@ -759,7 +759,7 @@ impl FfiCapsuleClient {
     /// - `upload_base_url` is the upload endpoint root (`POST` target; chunk/HEAD hang
     ///   under `{upload_base_url}/{id}`).
     /// - `protocol_version` is the pinned protocol date (`YYYY-MM-DD`).
-    /// - `cohort_hash` is the optional advisory device-cohort digest (S-D11); `None`
+    /// - `cohort_hash` is the optional advisory device-cohort digest; `None`
     ///   sends nothing (the server behaves identically).
     #[uniffi::constructor]
     pub fn new(
@@ -780,7 +780,7 @@ impl FfiCapsuleClient {
     }
 }
 
-/// What a password login answered with, across the FFI (`S-C63`).
+/// What a password login answered with, across the FFI.
 ///
 /// An enum rather than an optional session handle: "signed in" and "needs a code" are different
 /// states an app renders differently, and a `null` handle beside a `mfaToken` string would let a
@@ -813,7 +813,7 @@ impl FfiCapsuleClient {
             LoginOutcome::Session(session) => Ok(FfiLoginOutcome::Session {
                 session: self.session_handle(session),
             }),
-            // The password verified and the sign-in is not finished (`S-C55`). No session
+            // The password verified and the sign-in is not finished. No session
             // handle is produced, because there is no session — an app that got one here would
             // hold a handle to a half-authentication.
             LoginOutcome::SecondFactorRequired {
@@ -826,7 +826,7 @@ impl FfiCapsuleClient {
         }
     }
 
-    /// Complete a sign-in with the code an authenticator app is showing (`S-C55`).
+    /// Complete a sign-in with the code an authenticator app is showing.
     ///
     /// `mfa_token` is what [`FfiLoginOutcome::SecondFactorRequired`] carried. It is good once
     /// and for five minutes.
@@ -844,7 +844,7 @@ impl FfiCapsuleClient {
 
     /// Create an account and return an authenticated session handle (the server
     /// issues tokens on registration).
-    /// An address and a password, and nothing else: the server takes nothing else (`S-C53`).
+    /// An address and a password, and nothing else: the server takes nothing else.
     /// A display name is a fact about a person, and the profile surface that would hold one is
     /// owed rather than assumed.
     pub async fn register(
@@ -869,7 +869,7 @@ impl FfiCapsuleClient {
 
 // ─── Session (authenticated handle) ──────────────────────────────────────────
 
-/// An authenticated session handle. Owns the S-D7 token store internally (auto
+/// An authenticated session handle. Owns the SDK token store internally (auto
 /// pre-flight refresh, single-flight, `401`-retry-once); **no token ever crosses
 /// the FFI boundary**. Every flow rides this handle.
 #[derive(uniffi::Object)]
@@ -996,7 +996,7 @@ impl FfiSession {
     /// (auto-refreshed); it never crosses the FFI boundary.
     ///
     /// The parameter is the **API base URL** now, not a gRPC endpoint: the feed is
-    /// `GET /v1/sync` on the same origin as every other call (`S-D28`).
+    /// `GET /v1/sync` on the same origin as every other call.
     pub async fn sync_pull(
         &self,
         api_base_url: String,

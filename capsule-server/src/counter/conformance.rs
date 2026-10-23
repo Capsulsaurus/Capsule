@@ -1,7 +1,7 @@
 //! The one suite every counter adapter must pass.
 //!
 //! The property that matters is that charging and deciding are one operation. A single-threaded
-//! sequence cannot exhibit the race that makes read-then-write wrong — the same limit `S-C21`'s
+//! sequence cannot exhibit the race that makes read-then-write wrong — the same limit the index
 //! conformance note records — so most of what is asserted here is the *observable consequence*:
 //! the n-th hit inside a window is refused, and no sequence of calls admits more than the budget.
 //! [`concurrent_hits_admit_exactly_the_budget`] is the one case that does race, on a

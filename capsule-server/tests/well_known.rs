@@ -1,4 +1,4 @@
-//! The `.well-known/capsule/*` registry, end to end (slices `S-C15`, `S-C18`).
+//! The `.well-known/capsule/*` registry, end to end.
 //!
 //! Every record here is fetched **with no credential**, and that omission is the assertion: a
 //! client deciding whether it can talk to this server at all has no token yet, and a peer
@@ -6,10 +6,11 @@
 //! authenticated here. If any of these grew an `Auth` extractor, these cases would stop
 //! compiling their way to a `200` and start returning `401`.
 //!
-//! The case that carries `S-C18` is `a_peer_refuses_a_token_the_published_list_revokes`: it
-//! drives the *verifying* half of design/federation.md's revocation rule over the list this
-//! server actually published, rather than over a hand-built record. The two halves only work
-//! together, and a published list nobody consumes proves nothing about revocation.
+//! The case that consumes the revocation list is
+//! `a_peer_refuses_a_token_the_published_list_revokes`: it drives the *verifying*
+//! half of design/federation.md's revocation rule over the list this server actually published,
+//! rather than over a hand-built record. The two halves only work together,
+//! and a published list nobody consumes proves nothing about revocation.
 
 mod support;
 
@@ -183,7 +184,7 @@ async fn an_expired_entry_leaves_the_published_list() {
 
 #[tokio::test]
 async fn a_peer_refuses_a_token_the_published_list_revokes() {
-    // The slice's own criterion: a second server's revocation check consuming *this* server's
+    // The acceptance criterion: a second server's revocation check consuming *this* server's
     // published list. The peer is stood up as what a peer actually is here — a verifier holding
     // a token and a fetched copy of the issuer's list — rather than as a whole second
     // deployment, because the rule under test is entirely a property of those two things.

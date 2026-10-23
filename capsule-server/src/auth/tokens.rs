@@ -74,8 +74,7 @@ pub enum TokenKind {
     Access,
     /// Presented in the body of a refresh, and nowhere else.
     Refresh,
-    /// Carries a **half-finished** sign-in: the password verified and a second factor has not
-    /// (`S-C55`).
+    /// Carries a **half-finished** sign-in: the password verified and a second factor has not.
     ///
     /// It authenticates nothing. Its `sid` names a [`ChallengeId`] rather than a session,
     /// because no session exists until the second factor lands — which is exactly why it is a
@@ -188,7 +187,7 @@ pub enum TokenError {
     },
 }
 
-/// The identifier a second-factor challenge travels under (`S-C55`).
+/// The identifier a second-factor challenge travels under.
 ///
 /// A fresh UUIDv7 per sign-in that reaches the second factor, carried in the `sid` slot of a
 /// [`TokenKind::SecondFactor`] token. It is what the attempt limiter keys on, which is why it is
@@ -408,7 +407,7 @@ impl SessionTokens {
         })
     }
 
-    /// Mint a token carrying a half-finished sign-in (`S-C55`).
+    /// Mint a token carrying a half-finished sign-in.
     ///
     /// It is deliberately *not* a token pair. There is nothing to refresh — the ceremony either
     /// completes inside [`crate::auth::totp::CHALLENGE_TTL`] or is started again from the

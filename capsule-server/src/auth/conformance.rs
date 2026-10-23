@@ -22,7 +22,7 @@
 //!
 //! **The timing-equalized miss.** [`AccountDirectory`]'s contract is that no caller can tell an
 //! unknown account from a wrong password, and half of that is a *response time*. A timing
-//! assertion is flaky by nature and would be the `S-C35` mistake in a new place — a suite
+//! assertion is flaky by nature and would be a suite
 //! claiming to prove a property under conditions it cannot create. What is asserted instead is
 //! the consequence a suite *can* see: both answers are the same value, and neither path is
 //! distinguishable through the port. The work itself is asserted where it is decidable, in
@@ -65,15 +65,15 @@ use crate::store::{StoreFuture, UserId};
 /// tighter one must still pass — and a suite that hardcoded ten would silently stop testing the
 /// ceiling the moment a deployment moved it.
 pub trait Harness: Send + Sync {
-    /// Where accounts are created (`S-C53`).
+    /// Where accounts are created.
     fn registry(&self) -> &dyn AccountRegistry;
     /// Who exists, and whether a presented password is theirs.
     fn directory(&self) -> &dyn AccountDirectory;
-    /// The facts an account keeps about itself (`S-C54`).
+    /// The facts an account keeps about itself.
     fn profiles(&self) -> &dyn AccountProfiles;
-    /// Where a password is replaced (`S-C54`).
+    /// Where a password is replaced.
     fn passwords(&self) -> &dyn PasswordChange;
-    /// Which account a verified OpenID Connect identity is (`S-N1`, #460) — over the same rows
+    /// Which account a verified OpenID Connect identity is (#460) — over the same rows
     /// as the other four, which is what the federated cases below assert.
     fn federated(&self) -> &dyn FederatedAccounts;
 

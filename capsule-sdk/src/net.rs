@@ -1,8 +1,8 @@
 //! Connection-class and retry-policy contract types (SSoT: the Network
 //! Resilience design doc). Detection (OS signals + behavioral promotion to
-//! [`ConnectionClass::Adverse`]) and the per-class retry engines land with
-//! slices `S-D2` (class detection feeding sync/cache budgets) and `S-D10`
-//! (adverse-network hardening) in the repo-root `SLICES.md`.
+//! [`ConnectionClass::Adverse`]) and the per-class retry engines
+//! live here: class detection feeds the sync and cache budgets, and the adverse class hardens
+//! the network behaviour.
 //!
 //! This module fills the `capsule-sdk::net` seam named by the networking doc:
 //! it maps **mocked OS path signals** ([`PathSignals`]) to a base
@@ -718,7 +718,7 @@ pub const DIAL_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// only"). The parallel IPv6/IPv4 TCP race (RFC 8305) is provided for free by the
 /// underlying `hyper-util` `HttpConnector` (a 300 ms fallback delay between the
 /// preferred and fallback address families), which both `reqwest` (this client)
-/// and `tonic` (the sync channel) sit on — so S-D10 does not re-implement address
+/// and `tonic` (the sync channel) sit on — so this module does not re-implement address
 /// racing. What this constructor *does* add is the bounded connect timeout and the
 /// standing guarantee that Capsule never races whole *requests* across paths
 /// (which would double server load): there is no per-request fan-out anywhere in

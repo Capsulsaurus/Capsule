@@ -11,7 +11,7 @@
 //! immutability, atomic finalization, and enumeration cost — is the thing that would be
 //! abstracted away.
 //!
-//! It follows the shape `S-C29` fixed for the two state ports (see [`crate::store`]): typed
+//! It follows the shape of the two state ports (see [`crate::store`]): typed
 //! operations with no arbitrary serializable payload, properties that belong to the store rather
 //! than to each call, boxed futures so every port stays dyn-compatible, and **one shared
 //! conformance suite in `src/`** that every adapter must pass.
@@ -21,9 +21,10 @@
 //! `blobs/{hash[0:2]}/{hash[2:4]}/{hash}.bin` was settled (design/filesystem/server.md) on a
 //! sizing case that is *not* lookup: a lookup is a `stat` at a known address and costs the same
 //! flat or sharded. The cost lands on the three full-store walks — the integrity scrub's
-//! blob→row pass (`S-C14`), the refcount GC's orphan sweep (`S-C11`), and the index rebuild
-//! (`S-C1`'s recovery counterpart) — each a complete `readdir` + `stat`, each an integrity or
-//! recovery path that must stay affordable exactly when a deployment is already in trouble.
+//! blob→row pass, the refcount GC's orphan sweep, and the index rebuild
+//! (the recovery counterpart of upload finalization) — each a complete `readdir` + `stat`, each
+//! an integrity or recovery path that must stay affordable exactly when a deployment is
+//! already in trouble.
 //!
 //! So [`BlobStore::enumerate`] is on the port. A caller that walked the tree itself would fork
 //! the layout, and the first fork is the one that stops finding blobs after the shard changes.
@@ -99,7 +100,7 @@
 //!   invariant is *immutability* — a committed address is never overwritten — which is what
 //!   makes a wrong address a caller bug rather than silent corruption of a good blob.
 //! - **It does not own `.server/`.** The schema version and the operator's configuration are
-//!   plaintext server metadata, not blobs; nothing in this slice reads them.
+//!   plaintext server metadata, not blobs; nothing in this change reads them.
 //! - **It does not count references.** Reference counting is a query over committed Postgres
 //!   rows (design/filesystem/server.md, "Deletion and Garbage Collection"), and a store that
 //!   kept its own counter is the drift that design forbids.
@@ -133,7 +134,7 @@ pub type BlobFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, BlobError>> +
 /// `error.*` code belongs to the route that could not complete, which knows what the caller was
 /// trying to do.
 ///
-/// `#[non_exhaustive]` because an adapter this slice has not written yet may need a variant.
+/// `#[non_exhaustive]` because an adapter this change has not written yet may need a variant.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum BlobError {
@@ -329,7 +330,7 @@ pub trait BlobStore: fmt::Debug + Send + Sync {
     /// that address. Without a staged read the caller would have to reach past the port to the
     /// filesystem to perform that verification, which is exactly what a port exists to
     /// prevent; with it, finalization streams the stage in bounded windows and hashes them
-    /// (`S-C1`, invariant 14).
+    /// (invariant 14).
     fn read_staged_at<'a>(
         &'a self,
         upload: &'a UploadId,

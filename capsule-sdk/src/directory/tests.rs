@@ -1,4 +1,4 @@
-//! Tests for the device-directory client (`S-P1` over the `S-C9` surface).
+//! Tests for the device-directory client.
 //!
 //! Driven against the shared in-process mock server ([`crate::testmock`]), which replays the
 //! real wire. What is pinned here:
@@ -191,7 +191,7 @@ async fn a_malformed_document_carries_its_catalog_code() {
     assert_eq!(err.error_code(), Some(error_codes::DIRECTORY_MALFORMED));
 }
 
-/// `S-C42`: a key other than the account's anchor is its own typed refusal, so a client can
+/// A key other than the account's anchor is its own typed refusal, so a client can
 /// tell "signed by somebody else" from "not a directory at all".
 #[tokio::test]
 async fn a_foreign_identity_key_carries_its_catalog_code() {

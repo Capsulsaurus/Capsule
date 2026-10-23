@@ -1,5 +1,4 @@
-//! The asset index — the durable half of the upload path, and the sync feed's only source
-//! (slice `S-C37`).
+//! The asset index — the durable half of the upload path, and the sync feed's only source.
 //!
 //! # Why this is not in [`crate::store`]
 //!
@@ -12,7 +11,7 @@
 //! behind a port whose whole contract is "this disappears on schedule", which is how the Salvo
 //! grab-bag started.
 //!
-//! # One sequence, not two — which is `S-C21`'s fix rather than its patch
+//! # One sequence, not two — a fix rather than a patch
 //!
 //! The retired feed had **two** ordering keys: a per-album `sync_seq` the client checked for
 //! rewinds, and a global `bigserial feed_seq` the cursor paged over. The race lived in the
@@ -41,7 +40,7 @@
 //!
 //! [`crate::upload::visibility`] owns the definition and this port consumes it. Note what the
 //! definition became: the upload protocol says an asset becomes visible "once its **manifest
-//! and metadata blob** are finalized", and since `S-C30` the manifest is a blob of its own — so
+//! and metadata blob** are finalized", and the manifest is a blob of its own — so
 //! the gate is two finalized sessions, and a per-role `did this one flip visibility` function
 //! cannot express it. See [`crate::upload::visibility::bundle_is_publishable`].
 //!
@@ -49,7 +48,7 @@
 //!
 //! - **It never touches bytes.** It holds content *addresses*; the provenance blob's bytes are
 //!   read through [`crate::blob::BlobStore`] by whoever serves them. That is what keeps
-//!   `S-C30`'s verbatim rule enforceable: there is no path from the index to a byte, so the
+//!   the verbatim-manifest rule enforceable: there is no path from the index to a byte, so the
 //!   index cannot re-serialize a manifest even by accident.
 //! - **It never decides what a change means to a reader.** [`ChangeKind`] is computed per page
 //!   against the reader's own cursor, because "created" and "updated" are facts about the
@@ -92,7 +91,7 @@ pub enum AssetState {
     Tombstoned,
 }
 
-/// Why the server refuses to serve an asset whose bytes it still holds (`S-C17`).
+/// Why the server refuses to serve an asset whose bytes it still holds.
 ///
 /// Orthogonal to [`AssetState`] rather than a fourth variant of it, and deliberately: a hold is
 /// **reversible**, and lifting one has to restore whatever state the asset was already in. A
@@ -203,7 +202,7 @@ pub struct AssetRow {
     /// content address, even though the two are equal today: a content address is whatever
     /// digest the crypto suite selects, while `prior_provenance_hash` is fixed at SHA-256. The
     /// value arrives on [`BlobRecord::manifest_sha256`], computed by finalization over the bytes
-    /// it committed, so the equality is never relied on (`S-C31`).
+    /// it committed, so the equality is never relied on.
     pub chain_head: Option<Hash32>,
     /// The album-key epoch the last accepted manifest was written under — invariant 18's
     /// subject.
@@ -212,7 +211,7 @@ pub struct AssetRow {
     /// separate album table would be a second home for the same fact, and the two would
     /// eventually disagree about an album whose newest asset was rolled back.
     pub amk_version: u64,
-    /// Every manifest this asset's chain has moved past, oldest first (`S-C52`).
+    /// Every manifest this asset's chain has moved past, oldest first.
     ///
     /// The current manifest is **not** here — it is the [`BlobRole::Provenance`] entry in
     /// [`Self::blobs`], and one fact has one home. Together they are the asset's provenance
@@ -224,7 +223,7 @@ pub struct AssetRow {
     /// write simply dropped the manifest it superseded:
     ///
     /// - the integrity scrub's *envelope chain ⇄ index agreement* check has something to walk
-    ///   (`S-C45` found it had nothing);
+    ///   (without the superseded manifests it has nothing);
     /// - and the takedown rebuttal is **evidentiary**. A server accused of losing an asset
     ///   answers with the user's own signed `delete` manifest and its elapsed `retention_until`.
     ///   A superseded manifest that has been collected is a rebuttal that is gone precisely when
@@ -234,7 +233,7 @@ pub struct AssetRow {
     /// **not** an orphan. That is the whole retention: content addressing does the rest, and two
     /// assets whose chains pass through the same manifest share one object.
     pub superseded: Vec<ContentAddress>,
-    /// The serving hold moderation has placed on the asset, if any (`S-C17`).
+    /// The serving hold moderation has placed on the asset, if any.
     ///
     /// `None` is the ordinary case. A held row keeps every one of its blobs and its place in
     /// the feed; what changes is that the serving path and storage verification both refuse to
@@ -299,8 +298,9 @@ pub enum Reservation {
     ///
     /// Deliberately carries **nothing**. A caller that hits this is by definition not the party
     /// the existing row belongs to, so handing back the row would answer a guessed asset id
-    /// with another account's album — the same disclosure argument that blocks `S-C22`'s
-    /// `409 duplicate_blob`, in the one place where the guess costs the attacker nothing.
+    /// with another account's album — the same disclosure argument that governs the
+    /// `409 duplicate_blob`'s `existing_asset`, in the one place where the guess costs the
+    /// attacker nothing.
     Conflict,
 }
 
@@ -313,7 +313,7 @@ pub struct BlobRecord {
     pub address: ContentAddress,
     /// Its size in bytes.
     pub size: u64,
-    /// SHA-256 over the blob's bytes, for a `provenance` blob (`S-C31`).
+    /// SHA-256 over the blob's bytes, for a `provenance` blob.
     ///
     /// `None` for every other role, and the asymmetry is the point: this is the asset's
     /// **chain position** — `prior_provenance_hash` is defined as a SHA-256 over the signed
@@ -456,12 +456,12 @@ impl ChangeKind {
 pub struct BlobReference {
     /// The asset the reference belongs to.
     pub asset_id: AssetId,
-    /// The album that asset belongs to (`S-C51`).
+    /// The album that asset belongs to.
     ///
     /// What the read authority asks the membership store about, from the same read that found
     /// the reference, for the reason [`Self::owner_id`] rides here.
     pub album_id: AlbumId,
-    /// The account that asset is filed under (`S-C39`).
+    /// The account that asset is filed under.
     ///
     /// The fact the read authority decides on. Carried on the reference for the same reason
     /// [`Self::hold`] is: the serving path must decide from the *same read* that found the
@@ -474,7 +474,7 @@ pub struct BlobReference {
     /// Whether that asset's original has landed, which is what tells a missing original apart
     /// from a dangling reference.
     pub original_held: bool,
-    /// The serving hold on the asset the reference belongs to (`S-C17`), if any.
+    /// The serving hold on the asset the reference belongs to, if any.
     ///
     /// Carried on the reference rather than looked up separately, so the serving path decides
     /// a takedown from the *same read* that found the reference — one round trip, and no window
@@ -482,11 +482,11 @@ pub struct BlobReference {
     pub hold: Option<ServingHold>,
 }
 
-/// A lifecycle write that does not move blob bytes (`S-C16`).
+/// A lifecycle write that does not move blob bytes.
 ///
 /// The closed set is the authorization doc's: everything a `POST /albums/{id}/ops` may carry.
 /// `create` and `replace` are absent because they move bytes and are therefore uploads —
-/// `create` is `S-C1`'s and `replace` is `S-C43`'s.
+/// `create` and `replace` ride the upload surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum OpAction {
     /// Soft-delete: the asset is tombstoned and recoverable until its retention window closes.
@@ -498,7 +498,7 @@ pub enum OpAction {
     /// A derivative whose bytes the server already holds is attached, or re-pointed.
     Derivative,
     /// The asset's bytes are replaced: a new original, a new metadata blob and a new manifest,
-    /// applied as one act (`S-C43`).
+    /// applied as one act.
     ///
     /// **Not reachable from `POST /albums/{id}/ops`.** A write that moves blob bytes is an
     /// upload by definition, so this arrives from `crate::upload::finalize` and the lifecycle
@@ -545,11 +545,11 @@ pub struct LifecycleOp {
     /// The album epoch it was written under — invariant 18's subject.
     pub amk_version: u64,
     /// The stored provenance blob holding the signed manifest, so the feed serves those exact
-    /// bytes (`S-C30`) for a lifecycle write as it does for an upload.
+    /// bytes for a lifecycle write as it does for an upload.
     pub provenance: ContentAddress,
     /// The stored metadata blob, when the action carries one.
     pub metadata: Option<ContentAddress>,
-    /// The stored **original** blob, when the action carries one (`S-C43`).
+    /// The stored **original** blob, when the action carries one.
     ///
     /// Only a [`OpAction::Replace`] does. The other four leave the asset's bytes alone by
     /// definition, which is what makes them expressible on a route that never sees a byte.
@@ -636,7 +636,7 @@ pub enum OpOutcome {
 /// One entry of the sync feed.
 ///
 /// Carries addresses, never bytes. The route that serves a page reads the provenance blob
-/// through [`crate::blob::BlobStore`] and emits those bytes verbatim (`S-C30`).
+/// through [`crate::blob::BlobStore`] and emits those bytes verbatim.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FeedEntry {
     /// The asset that changed.
@@ -726,7 +726,7 @@ pub trait AssetIndex: std::fmt::Debug + Send + Sync {
     /// Both scopes are load-bearing and for different reasons:
     ///
     /// - **Owner** is the disclosure boundary. The blob store could say whether *anyone* holds
-    ///   a ciphertext, and answering `S-C22`'s `existing_asset` from that would tell one account
+    ///   a ciphertext, and answering the `existing_asset` member from that would tell one account
     ///   what another holds — which content addressing makes a real cross-tenant leak.
     /// - **Album** is the merge contract. A `409 duplicate_blob` is the *client's merge
     ///   trigger*: it means "you already have these bytes here, reconcile the two assets
@@ -788,7 +788,7 @@ pub trait AssetIndex: std::fmt::Debug + Send + Sync {
     /// [`apply_op`](Self::apply_op), with the custody receipt appended in the same critical
     /// section (#693).
     ///
-    /// The finalization of a `replace` bundle's manifest (`S-C43`), which applies the bundle as
+    /// The finalization of a `replace` bundle's manifest, which applies the bundle as
     /// one op. A receipt is written for [`OpOutcome::Applied`] and [`OpOutcome::Replayed`] and
     /// for nothing else, on the terms of
     /// [`record_blob_with_receipt`](Self::record_blob_with_receipt).
@@ -798,7 +798,7 @@ pub trait AssetIndex: std::fmt::Debug + Send + Sync {
         custody: Custody<'a>,
     ) -> IndexFuture<'a, Receipted<OpOutcome>>;
 
-    /// Place, replace or lift `asset`'s serving hold (`S-C17`).
+    /// Place, replace or lift `asset`'s serving hold.
     ///
     /// `None` lifts. A hold is a property of the asset rather than of its blobs, because
     /// content addressing means two assets can share a thumbnail and taking one down must not
@@ -879,8 +879,7 @@ pub trait AssetIndex: std::fmt::Debug + Send + Sync {
     /// that would come back empty.
     fn head_seq<'a>(&'a self, owner: &'a OwnerId) -> IndexFuture<'a, u64>;
 
-    /// Up to `limit` feed entries in `album` after sequence number `after`, in sequence order
-    /// (`S-C51`).
+    /// Up to `limit` feed entries in `album` after sequence number `after`, in sequence order.
     ///
     /// The **owner's** sequence, filtered to one album: positions are the same numbers the
     /// owner's own feed carries, so they are per-album monotonic exactly as the client's
@@ -897,7 +896,7 @@ pub trait AssetIndex: std::fmt::Debug + Send + Sync {
         limit: usize,
     ) -> IndexFuture<'a, Vec<FeedEntry>>;
 
-    /// The highest sequence number any entry in `album` carries, or `0` for none (`S-C51`).
+    /// The highest sequence number any entry in `album` carries, or `0` for none.
     ///
     /// The album page's caught-up mark. Not the owner's allocator: a member who has seen the
     /// album's last entry is caught up whatever the owner has minted in other albums since.
@@ -1027,12 +1026,12 @@ pub(crate) fn create_epoch(row: &AssetRow, blob: &BlobRecord) -> Option<u64> {
 /// verifies against the old ones; a lifecycle op is the *authorized* form of the same change,
 /// and it arrives with a manifest chaining onto the one it supersedes.
 ///
-/// Shared by every adapter for the reason [`entry_for`] is: the `S-C52` retention rule below —
+/// Shared by every adapter for the reason [`entry_for`] is: the retention rule below —
 /// a superseded *manifest* is kept referenced rather than dropped — is exactly the kind of thing
 /// two implementations drift on, and the drift reclaims the server's own rebuttal evidence.
 pub(crate) fn set_singular(row: &mut AssetRow, role: BlobRole, address: &ContentAddress) {
-    // `S-C52`: only the provenance role. The other singular roles are ciphertext, and the old
-    // bytes of a replaced original are exactly what the collector is for.
+    // Retention rule: only the provenance role. The other singular roles are ciphertext, and
+    // the old bytes of a replaced original are exactly what the collector is for.
     if role == BlobRole::Provenance
         && let Some(previous) = row.address_for(BlobRole::Provenance).cloned()
         && &previous != address

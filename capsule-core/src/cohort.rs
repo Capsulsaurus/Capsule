@@ -1,6 +1,5 @@
 //! Device-cohort hash — the advisory session-grouping aid (SSoT:
-//! [Authentication — Device Cohorts]; server storage + client emission are
-//! slices `S-C13`/`S-D11` in the repo-root `SLICES.md`).
+//! [Authentication — Device Cohorts]).
 //!
 //! One deterministic hash groups a physical device's sessions across app
 //! reinstalls (reset-stability is platform-limited and documented honestly in

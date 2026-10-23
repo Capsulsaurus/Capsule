@@ -1,4 +1,4 @@
-//! `POST /v1/albums/{album_id}/ops` — the lifecycle-write surface (slice `S-C16`), end to end.
+//! `POST /v1/albums/{album_id}/ops` — the lifecycle-write surface, end to end.
 //!
 //! This is the only producer of a tombstone the sync feed has, so half of what these cases
 //! assert is not about the response at all: it is about what a *second device* sees on the feed
@@ -68,7 +68,7 @@ async fn publish(fixture: &Fixture) -> AssetId {
                 &id,
                 BlobRecord {
                     // A provenance blob carries the chain position finalization computed over
-                    // its bytes (`S-C31`); the addresses here are SHA-256 digests, so it is the
+                    // its bytes; the addresses here are SHA-256 digests, so it is the
                     // same value, arriving the way the port requires rather than by inference.
                     manifest_sha256: (role == BlobRole::Provenance)
                         .then(|| Hash32::from_hex(address.as_str()).expect("a digest")),
@@ -607,7 +607,7 @@ async fn a_lifecycle_write_requires_a_credential() {
 }
 
 // ===========================================================================================
-// Member writes (`S-C51`)
+// Member writes
 // ===========================================================================================
 
 /// A second account, on the seeded album's roster in whatever role a case puts it.
@@ -738,8 +738,8 @@ async fn a_members_op_is_checked_against_the_members_own_directory() {
 }
 
 /// **A suspended account may not write, and a lifecycle op is a write.** `POST /v1/upload`
-/// refused a suspended uploader from the start; this surface did not, which stopped being merely
-/// inconsistent once `S-C51` widened it from the owner to every writer member. Both principals
+/// refuses a suspended uploader, and this surface must too: it is open to every writer member,
+/// not only the owner, so an unchecked suspension is not merely inconsistent. Both principals
 /// are asserted, because the refusal has to be about *standing* and not about ownership.
 #[tokio::test]
 async fn a_suspended_account_may_not_apply_a_lifecycle_op() {
@@ -885,8 +885,8 @@ async fn a_member_continues_the_owners_chain_under_their_own_authorship() {
 }
 
 /// **A write may not be attributed to another account.** Invariant 7's account half, and the
-/// refusal the write widening made necessary: before `S-C51` only the album owner could reach
-/// this surface and the field could only plausibly be their own.
+/// refusal that opening the surface to every writer member makes necessary: were only the album
+/// owner able to reach it, the field could only plausibly be their own.
 #[tokio::test]
 async fn an_op_attributed_to_another_account_is_refused() {
     use capsule_server::membership::MemberRole;

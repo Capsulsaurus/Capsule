@@ -303,7 +303,7 @@ mod tests {
 
     #[test]
     fn face_recognition_is_an_embedding_task_the_fixture_serves() {
-        // Face features ride the same embedding seam as semantic search (the S-H3 face slot).
+        // Face features ride the same embedding seam as semantic search (the face slot).
         let r = FixtureRunner::new("cpu-reference");
         let v = r
             .embed_image(TaskKind::FaceRecognition, &[Frame::new(b"a face crop")])

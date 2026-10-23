@@ -20,13 +20,13 @@ publish.workspace = true
 #   cargo build -p capsule-core --target wasm32-unknown-unknown --no-default-features
 default = ["native"]
 native = ["mls", "media"]
-# `media` links the still-image decode/encode stack (`capsule_core::media`, slices `S-B1`/`S-B13`)
+# `media` links the still-image decode/encode stack (`capsule_core::media`)
 # over `rawshift-image`. Implied by `native`, so the CLI, the tests and the mobile FFI all carry
 # decoders; **excluded** from the `wasm32-unknown-unknown` sealing build (`--no-default-features`),
 # to which the whole stack is irrelevant. Every enabled codec is pure Rust and links no C, which
 # is what keeps the mobile cross-builds working — see the dependency's own comment for why WebP
 # is not among them. `capsule_core::lqip` stays unconditional and is NOT behind this feature — a
-# placeholder must not depend on which client imported the photo (slice `S-B14`).
+# placeholder must not depend on which client imported the photo.
 media = ["dep:rawshift-image"]
 # `media-linked-codecs` adds the two still **encoders** that link native code, and is therefore
 # **opt-in and never in `default`** (issue #437). `default` (via `native`) is what the mobile FFI
@@ -71,8 +71,8 @@ media-linked-codecs = [
 # `image` already links, named directly so `media::decode` can bound every AV1 frame with
 # dav1d's own `frame_size_limit` before `image` (which sets none) decodes it.
 media-avif-decode = ["media", "rawshift-image/avif-decode-image", "dep:dav1d", "dep:mp4parse"]
-# `mls` links the live OpenMLS group backend (`crypto::authority::OpenMlsAuthority`, slice
-# S-X1) pinned to the X-Wing PQ ciphersuite `MLS_256_XWING_CHACHA20POLY1305_SHA256_Ed25519`
+# `mls` links the live OpenMLS group backend (`crypto::authority::OpenMlsAuthority`)
+# pinned to the X-Wing PQ ciphersuite `MLS_256_XWING_CHACHA20POLY1305_SHA256_Ed25519`
 # (`0x004D`) via its formally-verified libcrux provider. Implied by `native` so the default
 # library build (CLI, FFI, tests) exercises it; **excluded** from the `wasm32-unknown-unknown`
 # sealing build (`--no-default-features`) because the libcrux provider does not target wasm32.
@@ -110,7 +110,7 @@ inference = []
 ciborium = "0.2"
 half = "2"               # IEEE-754 f16 for RFC 8949 §4.2 shortest-float canonical CBOR
 globset = "0.4.18"
-# The LQIP placeholder codec (SSoT: Thumbnails — LQIP; slice S-B14). **Not optional and not
+# The LQIP placeholder codec (SSoT: Thumbnails — LQIP). **Not optional and not
 # feature-gated**: `capsule_core::lqip` is linked identically by the CLI, the app FFI and
 # `capsule-wasm`, so a photo's placeholder never depends on which client imported it. Safe to
 # keep unconditional because chromahash has zero runtime dependencies and builds for
@@ -199,7 +199,7 @@ ed25519-dalek = "2"
 # RustCrypto NIST P-256 ECDSA + ECDH — the classical half of the hardware-backed hybrid device
 # keys (Secure Enclave / StrongBox / TPM expose P-256, not Ed25519/X25519). `ecdsa` backs the
 # hybrid DSK (`crypto::keys::p256`); `ecdh` backs the hybrid DEK's hardware-bound classical half
-# (`crypto::keys::kem_p256`, slice S-F5). Already in the workspace tree via `jsonwebtoken`; the
+# (`crypto::keys::kem_p256`). Already in the workspace tree via `jsonwebtoken`; the
 # software `p256` element is the reference/mock a real secure element replaces. DER ECDSA over
 # SHA-256 — `default-features = false` drops the unused `pem`/`pkcs8`/`std` surface.
 p256 = { version = "0.13", default-features = false, features = ["ecdsa", "ecdh", "arithmetic"] }
@@ -238,7 +238,7 @@ openmls_traits = { version = "0.6", features = ["draft-ietf-mls-pq-ciphersuites"
 openmls_libcrux_crypto = { version = "0.4.0", features = ["draft-ietf-mls-pq-ciphersuites"], optional = true }
 openmls_basic_credential = { version = "0.6", features = ["draft-ietf-mls-pq-ciphersuites"], optional = true }
 # The OpenMLS storage provider Capsule owns (rather than the libcrux provider's private one), so
-# durable group state serializes for `OpenMlsAuthority::export_state`/`import_state` (slice S-X2).
+# durable group state serializes for `OpenMlsAuthority::export_state`/`import_state`.
 # Same version the libcrux provider already pulls transitively; host-only alongside the rest of `mls`.
 openmls_memory_storage = { version = "0.6.0", features = ["draft-ietf-mls-pq-ciphersuites"], optional = true }
 
