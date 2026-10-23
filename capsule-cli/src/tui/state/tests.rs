@@ -97,3 +97,22 @@ fn a_session_answer_does_not_move_the_navigation_stack() {
     state.update(Action::SessionLoaded(Ok(SessionSummary::SignedOut)));
     assert_eq!(state.screen(), Screen::Help);
 }
+
+#[test]
+fn an_answer_reaches_the_screen_on_top_only_while_it_asks() {
+    let mut state = ready();
+    state.update(Action::Open(Screen::Auth));
+    assert!(
+        state.update(Action::Answer(Answer::Yes)).is_empty(),
+        "nothing asked"
+    );
+    state.update(Action::Auth(AuthAction::SignOut));
+    assert!(state.is_confirming());
+    assert!(state.update(Action::Answer(Answer::No)).is_empty());
+    assert!(!state.is_confirming());
+    state.update(Action::Auth(AuthAction::SignOut));
+    assert_eq!(
+        state.update(Action::Answer(Answer::Yes)),
+        vec![Effect::Auth(AuthEffect::Logout)]
+    );
+}

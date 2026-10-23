@@ -55,7 +55,7 @@ impl<P: Ports> Driver<P> {
     /// The effects requested and not yet performed, oldest first.
     #[must_use]
     pub fn pending(&self) -> Vec<Effect> {
-        self.pending.iter().copied().collect()
+        self.pending.iter().cloned().collect()
     }
 
     /// Press `key` and draw. Returns the action it sent, or `None` where no binding matched.

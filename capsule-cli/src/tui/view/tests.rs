@@ -11,7 +11,11 @@ const WIDTH: u16 = 80;
 const HEIGHT: u16 = 12;
 
 fn draw(state: &AppState) -> String {
-    let mut terminal = Terminal::new(TestBackend::new(WIDTH, HEIGHT)).expect("test terminal");
+    draw_sized(state, HEIGHT)
+}
+
+fn draw_sized(state: &AppState, height: u16) -> String {
+    let mut terminal = Terminal::new(TestBackend::new(WIDTH, height)).expect("test terminal");
     terminal
         .draw(|frame| render(frame, state))
         .expect("draw on a test backend");
@@ -60,7 +64,9 @@ fn home_when_the_session_cannot_be_read() {
 fn help_lists_every_binding() {
     let mut state = loaded(Ok(SessionSummary::SignedOut));
     state.update(Action::Open(Screen::Help));
-    let frame = draw(&state);
+    // Tall enough for every binding: a person scrolls nothing, and the test sees every row.
+    let rows = u16::try_from(BINDINGS.len()).expect("a handful of bindings");
+    let frame = draw_sized(&state, rows + 6);
     for binding in BINDINGS {
         assert!(frame.contains(binding.description), "{}", binding.label);
     }

@@ -1,0 +1,11 @@
+---
+source: capsule-cli/tests/json_contract.rs
+expression: "run(&scratch, &[\"sync\", \"--json\"])"
+---
+status: 1
+--- stdout ---
+
+--- stderr ---
+Syncing from http://127.0.0.1:9…
+Error: 
+   0: Not authenticated. Run 'capsule auth login' first.

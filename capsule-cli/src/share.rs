@@ -70,7 +70,7 @@ impl std::fmt::Debug for CreateRequest {
 }
 
 /// What a successful `capsule share create` registered.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct IssuedShare {
     /// The link's opaque id, lowercase hex — what `capsule share revoke` takes.
     pub opaque_id: String,

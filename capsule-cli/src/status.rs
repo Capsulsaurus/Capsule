@@ -18,6 +18,8 @@ pub(crate) struct StatusInfo {
     pub sync_status: SyncStatus,
 }
 
+/// The local session's state: what `capsule auth status` prints, and its `--json` document.
+#[derive(Debug, serde::Serialize)]
 pub(crate) struct AuthStatus {
     /// Whether a session is persisted at all. This — not the access token's freshness — is
     /// what "logged in" means: an expired access token still refreshes silently on the next

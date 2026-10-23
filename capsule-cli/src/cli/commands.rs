@@ -248,6 +248,11 @@ pub(crate) enum Commands {
         /// Read the library passphrase from stdin instead of prompting (with `--library`)
         #[arg(long, requires = "library")]
         passphrase_stdin: bool,
+        /// Print the run as one JSON document on stdout: how many changes were applied across
+        /// how many albums and pages, whether the server had rebuilt the index, and the
+        /// re-announce report when `--library` ran one
+        #[arg(long)]
+        json: bool,
     },
     /// Show current status
     Status,
@@ -425,12 +430,19 @@ pub(crate) enum ShareCommands {
         /// after the library passphrase when --passphrase-stdin is also given)
         #[arg(long, requires = "protect")]
         link_passphrase_stdin: bool,
+        /// Print the issued link as one JSON document on stdout: its opaque id, URL, how many
+        /// assets it covers, whether it is passphrase-protected, and its expiry
+        #[arg(long)]
+        json: bool,
     },
     /// Revoke a share link, so its URL stops opening
     Revoke {
         /// The link's opaque id: the 32 hex characters after /s/ in its URL
         #[arg(value_name = "OPAQUE_ID")]
         opaque_id: String,
+        /// Print the outcome as one JSON document on stdout: the revoked link's opaque id
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -470,6 +482,10 @@ pub(crate) enum AuthCommands {
             conflicts_with_all = ["no_browser", "email", "password_stdin"]
         )]
         device: bool,
+        /// Print the outcome of a password sign-in as one JSON document on stdout; prompts and
+        /// progress go to stderr. Not combined with --oidc, whose address is printed for a person
+        #[arg(long, conflicts_with = "oidc")]
+        json: bool,
     },
     /// Set up recovery for a library: bind it to the signed-in account and store its recovery
     /// backup under a new recovery secret
@@ -498,7 +514,16 @@ pub(crate) enum AuthCommands {
         passphrase_stdin: bool,
     },
     /// Logout from Capsule
-    Logout,
+    Logout {
+        /// Print the outcome as one JSON document on stdout: whether a session was signed out
+        #[arg(long)]
+        json: bool,
+    },
     /// Show authentication status
-    Status,
+    Status {
+        /// Print the status as one JSON document on stdout: whether a session is stored, whether
+        /// its access token is still fresh, and when that token expires
+        #[arg(long)]
+        json: bool,
+    },
 }

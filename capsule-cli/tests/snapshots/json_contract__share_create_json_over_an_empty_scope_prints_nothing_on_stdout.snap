@@ -1,0 +1,11 @@
+---
+source: capsule-cli/tests/json_contract.rs
+expression: "run(&scratch,\n&[\"share\", \"create\", \"--library\", path(&scratch.library()), \"--album\",\n\"0192f1a0-0000-7000-8000-000000000000\", \"--passphrase-stdin\", \"--json\",],)"
+---
+status: 1
+--- stdout ---
+
+--- stderr ---
+Issuing a share link on http://127.0.0.1:9…
+Error: 
+   0: Share link not issued: This library does not hold that album or asset, or the asset is in trash.

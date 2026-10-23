@@ -94,12 +94,32 @@
               "repeatable": false,
               "required": false,
               "takes_value": false
+            },
+            {
+              "help": "Print the outcome of a password sign-in as one JSON document on stdout; prompts and progress go to stderr. Not combined with --oidc, whose address is printed for a person",
+              "id": "json",
+              "long": "json",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
             }
           ],
           "name": "login"
         },
         {
           "about": "Logout from Capsule",
+          "args": [
+            {
+              "help": "Print the outcome as one JSON document on stdout: whether a session was signed out",
+              "id": "json",
+              "long": "json",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            }
+          ],
           "name": "logout"
         },
         {
@@ -167,6 +187,17 @@
         },
         {
           "about": "Show authentication status",
+          "args": [
+            {
+              "help": "Print the status as one JSON document on stdout: whether a session is stored, whether its access token is still fresh, and when that token expires",
+              "id": "json",
+              "long": "json",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            }
+          ],
           "name": "status"
         }
       ]
@@ -941,6 +972,15 @@
               "repeatable": false,
               "required": false,
               "takes_value": false
+            },
+            {
+              "help": "Print the issued link as one JSON document on stdout: its opaque id, URL, how many assets it covers, whether it is passphrase-protected, and its expiry",
+              "id": "json",
+              "long": "json",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
             }
           ],
           "name": "create"
@@ -958,6 +998,15 @@
               "value_names": [
                 "OPAQUE_ID"
               ]
+            },
+            {
+              "help": "Print the outcome as one JSON document on stdout: the revoked link's opaque id",
+              "id": "json",
+              "long": "json",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
             }
           ],
           "name": "revoke"
@@ -1043,6 +1092,15 @@
           "help": "Read the library passphrase from stdin instead of prompting (with `--library`)",
           "id": "passphrase_stdin",
           "long": "passphrase-stdin",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "takes_value": false
+        },
+        {
+          "help": "Print the run as one JSON document on stdout: how many changes were applied across how many albums and pages, whether the server had rebuilt the index, and the re-announce report when `--library` ran one",
+          "id": "json",
+          "long": "json",
           "positional": false,
           "repeatable": false,
           "required": false,

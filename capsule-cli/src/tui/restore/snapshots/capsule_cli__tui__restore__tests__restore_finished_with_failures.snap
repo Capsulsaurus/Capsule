@@ -1,0 +1,22 @@
+---
+source: capsule-cli/src/tui/restore/tests.rs
+expression: draw(&state)
+---
+Capsule · Restore · Signed in
+┌Restore───────────────────────────────────────────────────────────────────────┐
+│Download originals from the server, verified byte for byte, into a directory. │
+│An interrupted restore resumes where it stopped.                              │
+│                                                                              │
+│  Library                                                                     │
+│  Output directory                                                            │
+│  Library passphrase                                                          │
+│  Album id (optional)                                                         │
+│  Asset id (optional)                                                         │
+│                                                                              │
+│Restored 2 of 3 assets to /tmp/out (0 already present, 1 failed, 0 deleted    │
+│skipped).                                                                     │
+│asset asset-100 failed: the original does not match its manifest              │
+│                                                                              │
+│Scriptable: `capsule restore --library PATH --out DIR --json`.                │
+└──────────────────────────────────────────────────────────────────────────────┘
+e Fill in and run a restore  q Quit  ? Show the key bindings  Esc Back to the pr

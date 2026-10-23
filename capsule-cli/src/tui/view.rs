@@ -14,7 +14,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Row, Table, Wrap};
 
 use super::keymap::{BINDINGS, Scope, available};
-use super::state::{AppState, Loadable, Screen, SessionSummary};
+use super::state::{Action, AppState, Loadable, Screen, SessionSummary};
+use super::{auth, restore, share, sync};
 
 /// Draw `state` into `frame`.
 pub fn render(frame: &mut Frame, state: &AppState) {
@@ -26,9 +27,14 @@ pub fn render(frame: &mut Frame, state: &AppState) {
     .areas(frame.area());
 
     render_header(frame, header, state);
-    match state.screen() {
+    let screen = state.screen();
+    match screen {
         Screen::Home => render_home(frame, body, state),
         Screen::Help => render_help(frame, body),
+        Screen::Auth => auth::render(frame, body, state.auth(), state.session(), title(screen)),
+        Screen::Sync => sync::render(frame, body, state.sync(), title(screen)),
+        Screen::Restore => restore::render(frame, body, state.restore(), title(screen)),
+        Screen::Share => share::render(frame, body, state.share(), title(screen)),
     }
     render_footer(frame, footer, state);
 }
@@ -38,6 +44,10 @@ fn title(screen: Screen) -> &'static str {
     match screen {
         Screen::Home => "Home",
         Screen::Help => "Key bindings",
+        Screen::Auth => "Account",
+        Screen::Sync => "Sync",
+        Screen::Restore => "Restore",
+        Screen::Share => "Share links",
     }
 }
 
@@ -84,6 +94,21 @@ fn render_home(frame: &mut Frame, area: Rect, state: &AppState) {
     };
     let mut lines = session;
     lines.push(Line::default());
+    // The screens Home leads to, from the binding table, so the list and the keys agree.
+    let mut screens = Vec::new();
+    for binding in BINDINGS
+        .iter()
+        .filter(|b| matches!(b.action, Action::Open(_)) && b.scope == Scope::On(Screen::Home))
+    {
+        if !screens.is_empty() {
+            screens.push("   ".into());
+        }
+        screens.push(binding.label.bold());
+        screens.push(" ".into());
+        screens.push(binding.description.into());
+    }
+    lines.push(Line::from(screens));
+    lines.push(Line::default());
     lines.push(Line::from(
         "Every flow is also a `capsule <command>` subcommand; `capsule --help` lists them.",
     ));
@@ -103,15 +128,17 @@ fn render_help(frame: &mut Frame, area: Rect) {
         let scope = match b.scope {
             Scope::Global => "everywhere",
             Scope::On(screen) => title(screen),
+            Scope::Editing => "while typing",
+            Scope::Confirming => "on a question",
         };
         Row::new(vec![b.label, b.description, scope])
     });
     let table = Table::new(
         rows,
         [
-            Constraint::Length(8),
+            Constraint::Length(10),
             Constraint::Min(20),
-            Constraint::Length(12),
+            Constraint::Length(13),
         ],
     )
     .header(
@@ -127,10 +154,13 @@ fn render_help(frame: &mut Frame, area: Rect) {
 
 fn render_footer(frame: &mut Frame, area: Rect, state: &AppState) {
     let mut spans = Vec::new();
-    for binding in BINDINGS
+    // This screen's own keys first: on a narrow terminal the footer is cut at the right, and
+    // the keys every screen shares are the ones a person already knows (and `?` lists).
+    let shown = BINDINGS
         .iter()
-        .filter(|b| b.in_footer && available(b, state))
-    {
+        .filter(|b| b.in_footer && available(b, state));
+    let (shared, own): (Vec<_>, Vec<_>) = shown.partition(|b| b.scope == Scope::Global);
+    for binding in own.into_iter().chain(shared) {
         if !spans.is_empty() {
             spans.push("  ".into());
         }

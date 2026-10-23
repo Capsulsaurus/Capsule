@@ -15,18 +15,28 @@
 //!   lets them answer.
 //! - [`hook`] — the panic hook: restores the terminal only for a panic on the loop's thread.
 //! - [`log`] — routes log events to a file while the TUI owns the terminal.
+//! - [`form`] — the text forms the feature screens collect input with, with secrets kept out
+//!   of the log.
+//!
+//! The feature screens, one module each: [`auth`] (sign in and out), [`sync`], [`restore`] and
+//! [`share`] (issue and revoke share links).
 //!
 //! The CLI and TUI are English-only (ADR-0011): strings are inline English, not catalog keys.
 //! Every flow the TUI offers stays reachable as a non-interactive `capsule` subcommand with
 //! `--json`.
 
+pub mod auth;
 pub mod driver;
+pub mod form;
 pub mod hook;
 pub mod keymap;
 pub mod log;
 pub mod ports;
+pub mod restore;
 pub mod runtime;
+pub mod share;
 pub mod state;
+pub mod sync;
 pub mod view;
 
 use std::io::IsTerminal as _;

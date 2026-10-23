@@ -88,13 +88,14 @@ fn spawn_effects<P: Ports>(
         // The effect runs on its own task so a panic in a port is caught by the runtime and
         // arrives here as a `JoinError`. It becomes the effect's failure action, so the screen
         // leaves its loading marker and shows the error instead of waiting forever.
-        let work = tokio::spawn(async move { perform(ports.as_ref(), effect).await });
+        let performed = effect.clone();
+        let work = tokio::spawn(async move { perform(ports.as_ref(), performed).await });
         tokio::spawn(async move {
             let action = match work.await {
                 Ok(action) => action,
                 Err(e) => {
                     tracing::error!(target: "capsule_cli::tui", ?effect, error = %e, panicked = e.is_panic(), "effect task did not finish");
-                    effect.failed(if e.is_panic() {
+                    effect.clone().failed(if e.is_panic() {
                         "the task panicked; see the TUI log".to_owned()
                     } else {
                         format!("the task did not finish: {e}")
