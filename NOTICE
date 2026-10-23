@@ -129,13 +129,20 @@ License elections
 --------------------------------------------------------------------------------
 
 Where a dependency is offered under a choice of licenses, Capsule elects a
-permissive term. One election is worth recording explicitly:
+permissive term. Two elections, each declining a copyleft arm, are worth
+recording explicitly:
 
   r-efi   Offered as `MIT OR Apache-2.0 OR LGPL-2.1-or-later`. Capsule elects
           MIT. Capsule does not accept the LGPL-2.1-or-later arm, and no
           copyleft obligation arises from this dependency. `r-efi` is reached
           only through `getrandom`/`wasi` and is compiled only for UEFI and
           wasm32 targets.
+
+  self_cell
+          Offered as `Apache-2.0 OR GPL-2.0-only`. Capsule elects Apache-2.0.
+          Capsule does not accept the GPL-2.0-only arm, and no copyleft
+          obligation arises from this dependency. `self_cell` is reached only
+          through `ratatui-image` in the CLI.
 
 For every other multi-licensed dependency Capsule elects MIT where offered, and
 otherwise the first permissive term listed in its SPDX expression.

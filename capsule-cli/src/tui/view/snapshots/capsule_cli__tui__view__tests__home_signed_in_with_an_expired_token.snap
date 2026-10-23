@@ -8,7 +8,7 @@ Capsule · Home · Signed in
 │Access token: expired; it refreshes on the next network operation.            │
 │                                                                              │
 │a Account   s Sync   d Restore originals   l Share links   t Watch transfers  │
-│i Import   p Push                                                             │
+│i Import   p Push   b Browse a library                                        │
 │                                                                              │
 │Every flow is also a `capsule <command>` subcommand; `capsule --help` lists   │
 │them.                                                                         │

@@ -17,6 +17,7 @@ Capsule · Key bindings · Signed out
 │t          Watch transfers                                       Home         │
 │i          Import                                                Home         │
 │p          Push                                                  Home         │
+│b          Browse a library                                      Home         │
 │l          Sign in                                               Account      │
 │o          Sign out                                              Account      │
 │s          Sync now                                              Sync         │
@@ -33,6 +34,12 @@ Capsule · Key bindings · Signed out
 │Up         Select the previous source                            Import       │
 │e          Fill in and run a push                                Push         │
 │r          Retry the assets not in custody                       Push         │
+│o          Open a library                                        Library      │
+│v          Next view                                             Library      │
+│Enter      List the album or stack                               Library      │
+│Left       Leave the album or stack                              Library      │
+│Down       Select the next row                                   Library      │
+│Up         Select the previous row                               Library      │
 │Enter      Submit                                                while typing │
 │Tab        Next field                                            while typing │
 │Down       Next field                                            while typing │

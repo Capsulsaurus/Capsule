@@ -51,6 +51,9 @@ A password, passphrase or authenticator code typed into the TUI is masked on scr
 neither it nor an issued share URL is written to that log. Signing out and revoking a share
 link ask `y` or `n` first in the TUI; the subcommands do not ask, so scripts keep working.
 Every flow the TUI offers stays reachable as a subcommand, with `--json` where it reports.
+The library browser asks the terminal once, at start-up, whether it draws Kitty, Sixel or
+iTerm2 graphics; where it draws none, the preview pane says so in text and no original is
+decoded for it.
 
 ## Where the contract lives
 

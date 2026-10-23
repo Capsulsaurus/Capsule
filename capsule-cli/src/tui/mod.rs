@@ -27,6 +27,9 @@
 //! custody (uploaded, durable, receipted) as the run's event stream tells it, with the assets
 //! that did not make it retryable.
 //!
+//! [`library`] browses a local library: its timeline, albums and stacks, each asset's metadata,
+//! labels and provenance history, and an inline preview where the terminal draws images.
+//!
 //! The CLI and TUI are English-only (ADR-0011): strings are inline English, not catalog keys.
 //! Every flow the TUI offers stays reachable as a non-interactive `capsule` subcommand with
 //! `--json`.
@@ -37,6 +40,7 @@ pub mod form;
 pub mod hook;
 pub mod import;
 pub mod keymap;
+pub mod library;
 pub mod log;
 pub mod ports;
 pub mod push;
@@ -87,7 +91,6 @@ pub async fn run() -> Result<()> {
         .wrap_err_with(|| format!("opening the TUI log at {}", log_path.display()))?;
     tracing::info!(target: "capsule_cli::tui", log = %log_path.display(), "opening the TUI");
 
-    let ports = Arc::new(LocalPorts::new(get_session_file_path()));
     let mut terminal = match hook::init_terminal() {
         Ok(terminal) => terminal,
         Err(e) => {
@@ -96,6 +99,10 @@ pub async fn run() -> Result<()> {
             return Err(e).wrap_err("setting up the terminal");
         }
     };
+    // The image protocol query writes to the terminal and reads its answer from stdin, so it
+    // runs once the terminal is set up and before the input stream exists.
+    let ports =
+        Arc::new(LocalPorts::new(get_session_file_path()).with_picker(library::query_picker()));
     let outcome =
         runtime::event_loop(&mut terminal, crossterm::event::EventStream::new(), ports).await;
     let restored = ratatui::try_restore().wrap_err("restoring the terminal");

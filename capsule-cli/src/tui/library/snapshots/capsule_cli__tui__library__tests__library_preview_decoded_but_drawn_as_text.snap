@@ -1,0 +1,30 @@
+---
+source: capsule-cli/src/tui/library/tests.rs
+expression: draw(&state)
+---
+Capsule · Library · Signed in
+┌Library · /photos/lib─────────────────────────────────────────────────────────────────────────────┐
+│Timeline  Albums  Stacks                                                                          │
+│› 2024-06-01 10:00  jpg  stack of 2    ┌Preview──────────────────────────────────────────────────┐│
+│  2023-12-24 18:30  jpg                │No preview: this terminal draws no inline images (Kitty, ││
+│                                       │Sixel or iTerm2 graphics). 640×480 decoded.              ││
+│                                       └─────────────────────────────────────────────────────────┘│
+│                                       Asset 0192f1a0-0000-7000-8000-000000000101                 │
+│                                       Album:           0192f1a0-0000-7000-8000-0000000000a1      │
+│                                       Captured:        2024-06-01T10:00:00Z                      │
+│                                       User tags:       beach, sunset                             │
+│                                       Album name:      Imports                                   │
+│                                       Album labels:    family                                    │
+│                                       Stack labels:    best                                      │
+│                                                                                                  │
+│                                       History                                                    │
+│                                       2024-05-02T08:00:00Z  create             device 000000d1   │
+│                                       capsule-cli/0.1.0                                          │
+│                                       2024-05-03T09:30:00Z  metadata-update    device 000000d1   │
+│                                       capsule-cli/0.1.0                                          │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+o Open a library  v Next view  Enter List the album or stack  Left Leave the album or stack  q Quit
