@@ -1,0 +1,22 @@
+---
+source: capsule-cli/src/tui/share/tests.rs
+expression: draw(&state)
+---
+Capsule · Share links · Signed in
+┌Share links───────────────────────────────────────────────────────────────────────────────────────┐
+│Revoke a link by its opaque id, the 32 hex characters after /s/.                                  │
+│                                                                                                  │
+│  Opaque id  0123456789abcdef0123456789abcdef                                                     │
+│                                                                                                  │
+│Revoke link 0123456789abcdef0123456789abcdef? Nobody holding it can open it again. y to revoke, n │
+│to cancel.                                                                                        │
+│Anyone with this URL can view what it covers:                                                     │
+│http://127.0.0.1:3000/s/0123456789abcdef0123456789abcdef#fragment-secret                          │
+│The link stops opening at 2026-12-31T23:59:59Z.                                                   │
+│To revoke it: x, Enter, then y (or `capsule share revoke 0123456789abcdef0123456789abcdef`).      │
+│Scriptable: `capsule share create … --json`, `capsule share revoke ID --json`.                    │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+y Yes, go ahead  n No, cancel

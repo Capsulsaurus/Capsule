@@ -9,7 +9,7 @@ use super::auth::AuthAction;
 use super::form::FormKey;
 use super::restore::RestoreAction;
 use super::share::ShareAction;
-use super::state::{Action, AppState, Screen};
+use super::state::{Action, Answer, AppState, Screen};
 use super::sync::SyncAction;
 
 /// Where a binding applies.
@@ -22,6 +22,9 @@ pub enum Scope {
     On(Screen),
     /// Only while a form is being edited, on any screen.
     Editing,
+    /// Only while a screen waits for a yes or no, on any screen. Every other key is ignored,
+    /// so an answer is never a slip of the finger on a neighbouring binding.
+    Confirming,
 }
 
 /// One key binding.
@@ -179,6 +182,10 @@ pub const BINDINGS: &[Binding] = &[
         false,
     ),
     editing(KeyCode::Esc, "Esc", "Stop editing", FormKey::Cancel, true),
+    // ── While a screen asks for a yes or no ──────────────────────────────
+    confirming(KeyCode::Char('y'), "y", "Yes, go ahead", Answer::Yes, true),
+    confirming(KeyCode::Char('n'), "n", "No, cancel", Answer::No, true),
+    confirming(KeyCode::Esc, "Esc", "No, cancel", Answer::No, false),
 ];
 
 /// A Home binding opening `screen`, listed in Home's body rather than the footer.
@@ -237,15 +244,38 @@ const fn editing(
     }
 }
 
+/// A key that answers the question a screen is asking.
+const fn confirming(
+    code: KeyCode,
+    label: &'static str,
+    description: &'static str,
+    answer: Answer,
+    in_footer: bool,
+) -> Binding {
+    Binding {
+        code,
+        modifiers: KeyModifiers::NONE,
+        scope: Scope::Confirming,
+        label,
+        description,
+        action: Action::Answer(answer),
+        in_footer,
+    }
+}
+
 /// Whether `binding` applies in `state`, before asking whether it would do anything.
 #[must_use]
 pub fn applies(binding: &Binding, state: &AppState) -> bool {
     let editing = state.is_editing();
+    let confirming = state.is_confirming();
+    // Typing must reach the field and an answer must reach the question: only a Ctrl chord
+    // outranks either.
+    let captured = editing || confirming;
     match binding.scope {
-        // Typing must reach the field: only a Ctrl chord outranks it.
-        Scope::Global => !editing || binding.modifiers.contains(KeyModifiers::CONTROL),
-        Scope::On(on) => !editing && on == state.screen(),
+        Scope::Global => !captured || binding.modifiers.contains(KeyModifiers::CONTROL),
+        Scope::On(on) => !captured && on == state.screen(),
         Scope::Editing => editing,
+        Scope::Confirming => confirming,
     }
 }
 

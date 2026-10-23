@@ -13,7 +13,7 @@ use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
 use super::form::{Field, Form, FormKey, FormOutcome, Secret, Status};
-use super::state::{Effect, Loadable, SessionSummary};
+use super::state::{Answer, Effect, Loadable, SessionSummary};
 
 /// How far a password sign-in got.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,7 +32,7 @@ pub enum LoginResult {
 pub enum AuthAction {
     /// Show the sign-in form and start typing into it.
     BeginSignIn,
-    /// Sign out.
+    /// Ask whether to sign out; [`AuthScreen::on_answer`] takes the answer.
     SignOut,
     /// [`AuthEffect::Login`] finished.
     LoginFinished(Result<LoginResult, String>),
@@ -56,8 +56,9 @@ pub enum AuthEffect {
     VerifySecondFactor {
         /// The challenge from [`LoginResult::SecondFactor`].
         mfa_token: Secret,
-        /// The code the authenticator app shows.
-        code: String,
+        /// The code the authenticator app shows. A [`Secret`]: it is a live credential for
+        /// its validity window, so it never reaches a `Debug` print or `tui.log`.
+        code: Secret,
     },
     /// Sign out; answered by [`AuthAction::SignOutFinished`].
     Logout,
@@ -96,7 +97,7 @@ fn credentials_form() -> Form {
 }
 
 fn code_form() -> Form {
-    Form::new(vec![Field::text("Authenticator code")])
+    Form::new(vec![Field::secret("Authenticator code")])
 }
 
 /// The account screen's state.
@@ -105,6 +106,8 @@ pub struct AuthScreen {
     stage: Stage,
     form: Form,
     editing: bool,
+    /// Whether the sign-out question is on screen, waiting for a yes or no.
+    confirming: bool,
     status: Status,
 }
 
@@ -114,6 +117,7 @@ impl Default for AuthScreen {
             stage: Stage::Credentials,
             form: credentials_form(),
             editing: false,
+            confirming: false,
             status: Status::Idle,
         }
     }
@@ -124,6 +128,12 @@ impl AuthScreen {
     #[must_use]
     pub fn is_editing(&self) -> bool {
         self.editing
+    }
+
+    /// Whether the sign-out question waits for a yes or no.
+    #[must_use]
+    pub fn is_confirming(&self) -> bool {
+        self.confirming
     }
 
     /// The form on screen.
@@ -148,7 +158,7 @@ impl AuthScreen {
     pub fn update(&mut self, action: AuthAction) -> Vec<Effect> {
         match action {
             AuthAction::BeginSignIn => {
-                if !self.status.is_working() {
+                if !self.status.is_working() && !self.confirming {
                     // The email typed last time stays; it is not a secret. A pending challenge
                     // is dropped: this starts the sign-in over.
                     let email = match self.stage {
@@ -164,12 +174,16 @@ impl AuthScreen {
                 Vec::new()
             }
             AuthAction::SignOut => {
-                if self.status.is_working() {
+                if self.status.is_working() || self.confirming {
                     return Vec::new();
                 }
                 self.editing = false;
-                self.status = Status::Working("Signing out…");
-                vec![Effect::Auth(AuthEffect::Logout)]
+                self.confirming = true;
+                self.status = Status::Asking(
+                    "Sign out and forget this device's session? y to sign out, n to cancel."
+                        .to_owned(),
+                );
+                Vec::new()
             }
             AuthAction::LoginFinished(Ok(LoginResult::SignedIn))
             | AuthAction::SecondFactorFinished(Ok(())) => {
@@ -210,6 +224,24 @@ impl AuthScreen {
         }
     }
 
+    /// Apply the answer to the sign-out question. No question waiting: nothing happens.
+    pub fn on_answer(&mut self, answer: Answer) -> Vec<Effect> {
+        if !self.confirming {
+            return Vec::new();
+        }
+        self.confirming = false;
+        match answer {
+            Answer::Yes => {
+                self.status = Status::Working("Signing out…");
+                vec![Effect::Auth(AuthEffect::Logout)]
+            }
+            Answer::No => {
+                self.status = Status::Idle;
+                Vec::new()
+            }
+        }
+    }
+
     /// Apply a key typed into the form.
     pub fn on_form_key(&mut self, key: FormKey) -> Vec<Effect> {
         if !self.editing {
@@ -246,7 +278,8 @@ impl AuthScreen {
                 AuthEffect::Login { email, password }
             }
             Stage::SecondFactor { mfa_token } => {
-                let code = self.form.value(CODE).to_owned();
+                // Whitespace around a pasted code is not part of it.
+                let code = Secret::new(self.form.secret(CODE).expose().trim());
                 if code.is_empty() {
                     self.status = Status::Failed("Enter the authenticator code.".to_owned());
                     return Vec::new();

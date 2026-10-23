@@ -129,6 +129,7 @@ fn render_help(frame: &mut Frame, area: Rect) {
             Scope::Global => "everywhere",
             Scope::On(screen) => title(screen),
             Scope::Editing => "while typing",
+            Scope::Confirming => "on a question",
         };
         Row::new(vec![b.label, b.description, scope])
     });

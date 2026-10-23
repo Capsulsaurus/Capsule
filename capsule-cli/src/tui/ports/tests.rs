@@ -78,8 +78,8 @@ impl Ports for Echo {
         }
     }
 
-    async fn verify_second_factor(&self, mfa_token: Secret, code: String) -> Result<(), String> {
-        Err(format!("{} {code}", mfa_token.expose()))
+    async fn verify_second_factor(&self, mfa_token: Secret, code: Secret) -> Result<(), String> {
+        Err(format!("{} {}", mfa_token.expose(), code.expose()))
     }
 
     async fn logout(&self) -> Result<bool, String> {
@@ -150,7 +150,7 @@ async fn each_feature_effect_comes_back_as_its_screens_action() {
         (
             Effect::Auth(AuthEffect::VerifySecondFactor {
                 mfa_token: Secret::new("t"),
-                code: "123".to_owned(),
+                code: Secret::new("123"),
             }),
             Action::Auth(AuthAction::SecondFactorFinished(Err("t 123".to_owned()))),
         ),
@@ -202,7 +202,7 @@ async fn a_port_left_out_answers_that_it_is_not_offered() {
     );
     assert_eq!(
         ports
-            .verify_second_factor(Secret::default(), String::new())
+            .verify_second_factor(Secret::default(), Secret::default())
             .await,
         not_offered()
     );
@@ -244,7 +244,7 @@ async fn local_ports_without_a_config_directory_refuse_before_any_request() {
     );
     assert_eq!(
         ports
-            .verify_second_factor(Secret::default(), String::new())
+            .verify_second_factor(Secret::default(), Secret::default())
             .await,
         reason
     );

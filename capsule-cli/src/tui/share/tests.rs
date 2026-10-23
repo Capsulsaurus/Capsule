@@ -120,14 +120,45 @@ fn an_issued_link_is_shown_and_its_id_waits_in_the_revoke_form() {
     );
     screen.update(ShareAction::BeginRevoke);
     assert_eq!(screen.mode(), ShareMode::Revoke);
+    assert!(screen.on_form_key(FormKey::Submit).is_empty(), "asks first");
     assert_eq!(
-        screen.on_form_key(FormKey::Submit),
+        screen.on_answer(Answer::Yes),
         vec![Effect::Share(ShareEffect::Revoke {
             opaque_id: OPAQUE.to_owned()
         })]
     );
     screen.update(ShareAction::Revoked(Ok(OPAQUE.to_owned())));
     assert_eq!(screen.issued(), None, "a revoked link is not offered again");
+}
+
+#[test]
+fn revoking_asks_first_and_no_leaves_the_link_alone() {
+    let mut screen = ShareScreen::default();
+    screen.update(ShareAction::BeginRevoke);
+    for c in OPAQUE.chars() {
+        screen.on_form_key(FormKey::Char(c));
+    }
+    assert!(screen.on_form_key(FormKey::Submit).is_empty());
+    assert!(screen.is_confirming());
+    assert!(!screen.is_editing());
+    assert!(
+        matches!(screen.status(), Status::Asking(q) if q.contains(OPAQUE)),
+        "{:?}",
+        screen.status()
+    );
+    // Neither issuing nor revoking again replaces the question.
+    screen.update(ShareAction::BeginCreate);
+    screen.update(ShareAction::BeginRevoke);
+    assert!(screen.is_confirming());
+    assert_eq!(screen.mode(), ShareMode::Revoke);
+    assert!(screen.on_answer(Answer::No).is_empty());
+    assert!(!screen.is_confirming());
+    assert_eq!(screen.status(), &Status::Idle);
+    assert_eq!(screen.form().value(OPAQUE_ID), OPAQUE, "the id stays typed");
+    assert!(
+        screen.on_answer(Answer::Yes).is_empty(),
+        "no question, no revoke"
+    );
 }
 
 #[test]
@@ -244,6 +275,16 @@ fn share_links_after_issuing_a_protected_link() {
     let frame = draw(&state);
     assert!(frame.contains(URL), "the person copies the URL from here");
     insta::assert_snapshot!(frame);
+}
+
+#[test]
+fn share_links_asking_whether_to_revoke() {
+    let mut state = on_share();
+    state.update(Action::Share(ShareAction::Created(Ok(link(false)))));
+    state.update(Action::Share(ShareAction::BeginRevoke));
+    state.update(Action::Form(FormKey::Submit));
+    assert!(state.is_confirming());
+    insta::assert_snapshot!(draw(&state));
 }
 
 #[test]

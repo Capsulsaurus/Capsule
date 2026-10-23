@@ -98,7 +98,7 @@ fn a_second_factor_asks_for_the_code_and_sends_it_with_the_challenge() {
         screen.on_form_key(FormKey::Submit),
         vec![Effect::Auth(AuthEffect::VerifySecondFactor {
             mfa_token: token(),
-            code: "123456".to_owned(),
+            code: Secret::new("123456"),
         })]
     );
     assert_eq!(
@@ -163,20 +163,42 @@ fn sign_out_reloads_the_session_whatever_the_server_said() {
         ),
     ] {
         let mut screen = AuthScreen::default();
+        assert!(screen.update(AuthAction::SignOut).is_empty(), "asks first");
         assert_eq!(
-            screen.update(AuthAction::SignOut),
+            screen.on_answer(Answer::Yes),
             vec![Effect::Auth(AuthEffect::Logout)]
         );
         assert!(
             screen.update(AuthAction::SignOut).is_empty(),
             "one at a time"
         );
+        assert!(!screen.is_confirming(), "no second question while it runs");
         assert_eq!(
             screen.update(AuthAction::SignOutFinished(result)),
             vec![Effect::LoadSession]
         );
         assert_eq!(screen.status(), &status);
     }
+}
+
+#[test]
+fn sign_out_asks_before_it_acts() {
+    let mut screen = AuthScreen::default();
+    assert!(screen.update(AuthAction::SignOut).is_empty());
+    assert!(screen.is_confirming());
+    assert!(matches!(screen.status(), Status::Asking(_)));
+    // Asking again, or starting a sign-in, leaves the question as it was.
+    assert!(screen.update(AuthAction::SignOut).is_empty());
+    screen.update(AuthAction::BeginSignIn);
+    assert!(screen.is_confirming());
+    assert!(!screen.is_editing());
+    // No: nothing is asked of the ports, and the question is gone.
+    assert!(screen.on_answer(Answer::No).is_empty());
+    assert!(!screen.is_confirming());
+    assert_eq!(screen.status(), &Status::Idle);
+    // An answer with no question pending does nothing, in particular never signs out.
+    assert!(screen.on_answer(Answer::Yes).is_empty());
+    assert_eq!(screen.status(), &Status::Idle);
 }
 
 #[test]
@@ -193,7 +215,7 @@ fn each_failed_effect_reports_its_own_outcome() {
     assert_eq!(
         AuthEffect::VerifySecondFactor {
             mfa_token: token(),
-            code: String::new()
+            code: Secret::default()
         }
         .failed(reason()),
         AuthAction::SecondFactorFinished(Err(reason()))
@@ -216,6 +238,46 @@ fn nothing_secret_reaches_debug() {
     let printed = format!("{:?} {effects:?} {second:?} {:?}", filled(), second);
     assert!(!printed.contains("hunter2"), "{printed}");
     assert!(!printed.contains("mfa-token"), "{printed}");
+}
+
+#[test]
+fn no_debug_print_of_an_effect_holds_the_code_the_password_or_the_challenge() {
+    // `state.rs`, `ports.rs` and `runtime.rs` log effects with `?effect`; whatever `Debug`
+    // prints reaches `tui.log`.
+    let verify = Effect::Auth(AuthEffect::VerifySecondFactor {
+        mfa_token: Secret::new("challenge-4417"),
+        code: Secret::new("918273"),
+    });
+    let login = Effect::Auth(AuthEffect::Login {
+        email: "me@example.com".to_owned(),
+        password: Secret::new("hunter2-4417"),
+    });
+    let finished = Action::Auth(AuthAction::LoginFinished(Ok(LoginResult::SecondFactor {
+        mfa_token: Secret::new("challenge-4417"),
+    })));
+    for printed in [
+        format!("{verify:?}"),
+        format!("{verify:#?}"),
+        format!("{login:?}"),
+        format!("{finished:?}"),
+    ] {
+        for secret in ["918273", "hunter2", "challenge-4417"] {
+            assert!(!printed.contains(secret), "{secret} leaked into {printed}");
+        }
+    }
+}
+
+#[test]
+fn the_code_is_masked_on_screen_and_cleared_on_submit() {
+    let mut screen = filled();
+    screen.on_form_key(FormKey::Submit);
+    screen.update(AuthAction::LoginFinished(Ok(LoginResult::SecondFactor {
+        mfa_token: token(),
+    })));
+    type_text(&mut screen, "918273");
+    assert!(screen.form().fields()[CODE].is_secret());
+    screen.on_form_key(FormKey::Submit);
+    assert!(screen.form().secret(CODE).is_empty());
 }
 
 fn draw(state: &AppState) -> String {
@@ -262,6 +324,13 @@ fn account_asking_for_the_code() {
     state.update(Action::Auth(AuthAction::LoginFinished(Ok(
         LoginResult::SecondFactor { mfa_token: token() },
     ))));
+    insta::assert_snapshot!(draw(&state));
+}
+
+#[test]
+fn account_asking_whether_to_sign_out() {
+    let mut state = on_auth();
+    state.update(Action::Auth(AuthAction::SignOut));
     insta::assert_snapshot!(draw(&state));
 }
 

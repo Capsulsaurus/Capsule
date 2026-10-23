@@ -43,6 +43,15 @@ pub enum Screen {
     Share,
 }
 
+/// The answer to a confirmation a screen asked for before an act it cannot take back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Answer {
+    /// Go ahead.
+    Yes,
+    /// Leave things as they are.
+    No,
+}
+
 /// A value an [`Effect`] is fetching.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Loadable<T> {
@@ -87,6 +96,8 @@ pub enum Action {
     SessionLoaded(Result<SessionSummary, String>),
     /// A key typed into the form of the screen on top.
     Form(FormKey),
+    /// The answer to the confirmation the screen on top is asking.
+    Answer(Answer),
     /// The account screen.
     Auth(AuthAction),
     /// The sync screen.
@@ -218,6 +229,17 @@ impl AppState {
         }
     }
 
+    /// Whether the screen on top is waiting for a yes or no before it acts: only the confirming
+    /// bindings and the Ctrl bindings apply then.
+    #[must_use]
+    pub fn is_confirming(&self) -> bool {
+        match self.screen() {
+            Screen::Home | Screen::Help | Screen::Sync | Screen::Restore => false,
+            Screen::Auth => self.auth.is_confirming(),
+            Screen::Share => self.share.is_confirming(),
+        }
+    }
+
     /// Apply `action` and return the effects it asks for.
     ///
     /// Pure: no I/O, no awaiting, no clock. The returned effects are performed by the caller.
@@ -261,6 +283,11 @@ impl AppState {
                 Screen::Auth => self.auth.on_form_key(key),
                 Screen::Restore => self.restore.on_form_key(key),
                 Screen::Share => self.share.on_form_key(key),
+            },
+            Action::Answer(answer) => match self.screen() {
+                Screen::Home | Screen::Help | Screen::Sync | Screen::Restore => Vec::new(),
+                Screen::Auth => self.auth.on_answer(answer),
+                Screen::Share => self.share.on_answer(answer),
             },
             // A screen's outcome lands on its state whichever screen is on top, so leaving a
             // screen while its request runs loses nothing.

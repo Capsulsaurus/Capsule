@@ -160,9 +160,9 @@ impl Ports for TwoFactor {
     async fn verify_second_factor(
         &self,
         mfa_token: crate::tui::form::Secret,
-        code: String,
+        code: crate::tui::form::Secret,
     ) -> Result<(), String> {
-        assert_eq!((mfa_token.expose(), code.as_str()), ("challenge", "123456"));
+        assert_eq!((mfa_token.expose(), code.expose()), ("challenge", "123456"));
         self.logins.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }

@@ -12,7 +12,7 @@ Capsule · Share links · Signed in
 │http://127.0.0.1:3000/s/0123456789abcdef0123456789abcdef#fragment-secret                          │
 │The link is passphrase-protected: send the passphrase separately from the URL.                    │
 │The link stops opening at 2026-12-31T23:59:59Z.                                                   │
-│To revoke it: x, then Enter (or `capsule share revoke 0123456789abcdef0123456789abcdef`).         │
+│To revoke it: x, Enter, then y (or `capsule share revoke 0123456789abcdef0123456789abcdef`).      │
 │Scriptable: `capsule share create … --json`, `capsule share revoke ID --json`.                    │
 │                                                                                                  │
 │                                                                                                  │

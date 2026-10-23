@@ -274,6 +274,8 @@ pub enum Status {
     Idle,
     /// A request is in flight; the phrase says which.
     Working(&'static str),
+    /// The screen is waiting for a yes or no; the question.
+    Asking(String),
     /// The last request finished; what it did.
     Done(String),
     /// The last request, or the form's own check, failed; why.
@@ -293,6 +295,7 @@ impl Status {
         match self {
             Self::Idle => None,
             Self::Working(what) => Some(Line::from(what.fg(Color::DarkGray))),
+            Self::Asking(question) => Some(Line::from(question.clone().fg(Color::Yellow))),
             Self::Done(what) => Some(Line::from(what.clone().fg(Color::Green))),
             Self::Failed(why) => Some(Line::from(why.clone().fg(Color::Red))),
         }

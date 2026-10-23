@@ -16,7 +16,7 @@ use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use uuid::Uuid;
 
 use super::form::{Field, Form, FormKey, FormOutcome, Secret, Status};
-use super::state::Effect;
+use super::state::{Answer, Effect};
 use crate::share::{describe_error, validate_opaque_id};
 
 /// One link to issue, as the form collected it.
@@ -124,6 +124,8 @@ pub struct ShareScreen {
     create: Form,
     revoke: Form,
     editing: bool,
+    /// The opaque id whose revocation waits for a yes or no.
+    revoking: Option<String>,
     status: Status,
     issued: Option<IssuedLink>,
 }
@@ -142,6 +144,7 @@ impl Default for ShareScreen {
             ]),
             revoke: Form::new(vec![Field::text("Opaque id")]),
             editing: false,
+            revoking: None,
             status: Status::Idle,
             issued: None,
         }
@@ -153,6 +156,12 @@ impl ShareScreen {
     #[must_use]
     pub fn is_editing(&self) -> bool {
         self.editing
+    }
+
+    /// Whether a revocation waits for a yes or no.
+    #[must_use]
+    pub fn is_confirming(&self) -> bool {
+        self.revoking.is_some()
     }
 
     /// Which form is shown.
@@ -193,7 +202,7 @@ impl ShareScreen {
     pub fn update(&mut self, action: ShareAction) -> Vec<Effect> {
         match action {
             ShareAction::BeginCreate | ShareAction::BeginRevoke => {
-                if !self.status.is_working() {
+                if !self.status.is_working() && self.revoking.is_none() {
                     self.mode = if action == ShareAction::BeginCreate {
                         ShareMode::Create
                     } else {
@@ -228,6 +237,23 @@ impl ShareScreen {
         Vec::new()
     }
 
+    /// Apply the answer to the revoke question. No question waiting: nothing happens.
+    pub fn on_answer(&mut self, answer: Answer) -> Vec<Effect> {
+        let Some(opaque_id) = self.revoking.take() else {
+            return Vec::new();
+        };
+        match answer {
+            Answer::Yes => {
+                self.status = Status::Working("Revoking the link…");
+                vec![Effect::Share(ShareEffect::Revoke { opaque_id })]
+            }
+            Answer::No => {
+                self.status = Status::Idle;
+                Vec::new()
+            }
+        }
+    }
+
     /// Apply a key typed into the form.
     pub fn on_form_key(&mut self, key: FormKey) -> Vec<Effect> {
         if !self.editing {
@@ -250,6 +276,16 @@ impl ShareScreen {
                         .map_err(|error| describe_error(&error)),
                 };
                 match effect {
+                    // Revoking cannot be taken back: ask first. The id stays in the form.
+                    Ok(ShareEffect::Revoke { opaque_id }) => {
+                        self.editing = false;
+                        self.status = Status::Asking(format!(
+                            "Revoke link {opaque_id}? Nobody holding it can open it again. \
+                             y to revoke, n to cancel."
+                        ));
+                        self.revoking = Some(opaque_id);
+                        Vec::new()
+                    }
                     Ok(effect) => {
                         self.form_mut().clear_secrets();
                         self.editing = false;
@@ -327,7 +363,7 @@ pub fn issued_lines(issued: &IssuedLink) -> Vec<Line<'static>> {
         )));
     }
     lines.push(Line::from(format!(
-        "To revoke it: x, then Enter (or `capsule share revoke {}`).",
+        "To revoke it: x, Enter, then y (or `capsule share revoke {}`).",
         issued.opaque_id
     )));
     lines

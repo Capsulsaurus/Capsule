@@ -28,6 +28,9 @@ Capsule · Key bindings · Signed out
 │Up         Previous field                                        while typing │
 │Backspace  Delete a character                                    while typing │
 │Esc        Stop editing                                          while typing │
+│y          Yes, go ahead                                         on a question│
+│n          No, cancel                                            on a question│
+│Esc        No, cancel                                            on a question│
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
 q Quit  Esc Back to the previous screen

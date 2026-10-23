@@ -149,6 +149,7 @@ fn no_two_bindings_claim_the_same_key_on_the_same_screen() {
         at(Screen::Restore),
         at(Screen::Share),
         typing(),
+        asking(),
     ];
     for state in states {
         let keys: Vec<_> = BINDINGS
@@ -272,4 +273,45 @@ fn the_editing_keys_do_nothing_when_no_form_takes_text() {
         action_for_key(&state, key(KeyCode::Esc)),
         Some(Action::Back)
     );
+}
+
+/// The account screen asking whether to sign out.
+fn asking() -> AppState {
+    let mut state = at(Screen::Auth);
+    state.update(Action::Auth(AuthAction::SignOut));
+    assert!(state.is_confirming());
+    state
+}
+
+#[test]
+fn while_asking_only_the_answers_and_ctrl_c_act() {
+    let state = asking();
+    for (code, action) in [
+        (KeyCode::Char('y'), Some(Action::Answer(Answer::Yes))),
+        (KeyCode::Char('n'), Some(Action::Answer(Answer::No))),
+        (KeyCode::Esc, Some(Action::Answer(Answer::No))),
+        // Neither a stray `o` nor `q` or `?` is an answer, and none leaves the question.
+        (KeyCode::Char('o'), None),
+        (KeyCode::Char('l'), None),
+        (KeyCode::Char('q'), None),
+        (KeyCode::Char('?'), None),
+    ] {
+        assert_eq!(action_for_key(&state, key(code)), action, "{code:?}");
+    }
+    assert_eq!(
+        action_for_key(
+            &state,
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)
+        ),
+        Some(Action::Quit)
+    );
+}
+
+#[test]
+fn y_and_n_mean_nothing_when_nothing_is_asked() {
+    for state in [home(), at(Screen::Auth), at(Screen::Share)] {
+        for c in ['y', 'n'] {
+            assert_eq!(action_for_key(&state, key(KeyCode::Char(c))), None);
+        }
+    }
 }

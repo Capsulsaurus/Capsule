@@ -47,9 +47,10 @@ TUI; `q` or Ctrl-C leaves it and `?` lists its keys. Anywhere else (a pipe, a re
 runner) bare `capsule` prints the help on stderr and exits 2, as a missing command always has,
 so a script never blocks on a screen. While the TUI holds the terminal, log output goes to
 `tui.log` in the CLI's cache directory instead of stderr, replaced each time the TUI opens.
-A password or passphrase typed into the TUI is masked on screen, and neither it nor an issued
-share URL is written to that log. Every flow the TUI offers stays reachable as a subcommand, with `--json` where it
-reports.
+A password, passphrase or authenticator code typed into the TUI is masked on screen, and
+neither it nor an issued share URL is written to that log. Signing out and revoking a share
+link ask `y` or `n` first in the TUI; the subcommands do not ask, so scripts keep working.
+Every flow the TUI offers stays reachable as a subcommand, with `--json` where it reports.
 
 ## Where the contract lives
 

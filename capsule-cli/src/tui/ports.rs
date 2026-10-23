@@ -49,7 +49,7 @@ pub trait Ports: Send + Sync + 'static {
     fn verify_second_factor(
         &self,
         mfa_token: Secret,
-        code: String,
+        code: Secret,
     ) -> impl Future<Output = Result<(), String>> + Send {
         let _ = (mfa_token, code);
         async { Err(NOT_OFFERED.to_owned()) }
@@ -217,11 +217,11 @@ impl Ports for LocalPorts {
         .await
     }
 
-    async fn verify_second_factor(&self, mfa_token: Secret, code: String) -> Result<(), String> {
+    async fn verify_second_factor(&self, mfa_token: Secret, code: Secret) -> Result<(), String> {
         let (remote, store) = (self.remote.clone(), self.store()?);
         off_loop(move || async move {
             let mfa_token = secrecy::SecretString::from(mfa_token.expose().to_owned());
-            remote::auth_verify_totp(&remote, &store, &mfa_token, code.trim())
+            remote::auth_verify_totp(&remote, &store, &mfa_token, code.expose().trim())
                 .await
                 .map_err(|error| remote_reason(&error))
         })
