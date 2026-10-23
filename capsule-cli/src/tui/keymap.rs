@@ -8,6 +8,7 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use super::auth::AuthAction;
 use super::form::FormKey;
 use super::import::ImportAction;
+use super::library::LibraryAction;
 use super::push::PushAction;
 use super::restore::RestoreAction;
 use super::share::ShareAction;
@@ -113,6 +114,7 @@ pub const BINDINGS: &[Binding] = &[
     ),
     open(KeyCode::Char('i'), "i", "Import", Screen::Import),
     open(KeyCode::Char('p'), "p", "Push", Screen::Push),
+    open(KeyCode::Char('b'), "b", "Browse a library", Screen::Library),
     // ── Account ──────────────────────────────────────────────────────────
     on(
         Screen::Auth,
@@ -230,6 +232,49 @@ pub const BINDINGS: &[Binding] = &[
         "r",
         "Retry the assets not in custody",
         Action::Push(PushAction::Retry),
+    ),
+    // ── Library browser ──────────────────────────────────────────────────
+    on(
+        Screen::Library,
+        KeyCode::Char('o'),
+        "o",
+        "Open a library",
+        Action::Library(LibraryAction::Edit),
+    ),
+    on(
+        Screen::Library,
+        KeyCode::Char('v'),
+        "v",
+        "Next view",
+        Action::Library(LibraryAction::NextView),
+    ),
+    on(
+        Screen::Library,
+        KeyCode::Enter,
+        "Enter",
+        "List the album or stack",
+        Action::Library(LibraryAction::Enter),
+    ),
+    on(
+        Screen::Library,
+        KeyCode::Left,
+        "Left",
+        "Leave the album or stack",
+        Action::Library(LibraryAction::Leave),
+    ),
+    unlisted(
+        Screen::Library,
+        KeyCode::Down,
+        "Down",
+        "Select the next row",
+        Action::Library(LibraryAction::SelectNext),
+    ),
+    unlisted(
+        Screen::Library,
+        KeyCode::Up,
+        "Up",
+        "Select the previous row",
+        Action::Library(LibraryAction::SelectPrevious),
     ),
     // ── While a form is being edited ─────────────────────────────────────
     editing(KeyCode::Enter, "Enter", "Submit", FormKey::Submit, true),

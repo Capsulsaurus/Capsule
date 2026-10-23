@@ -450,6 +450,132 @@ async fn local_push_reports_a_library_that_does_not_open_and_closes_its_run() {
 }
 
 #[tokio::test]
+async fn local_open_library_reports_a_library_that_does_not_open() {
+    let scratch = Scratch::new();
+    let ports = LocalPorts::new(Some(scratch.session_path()));
+    let reason = ports
+        .open_library(OpenRequest {
+            library: scratch.0.join("no-library-here"),
+            passphrase: Secret::new("pw"),
+        })
+        .await
+        .expect_err("no library");
+    assert!(
+        reason.starts_with("Failed to open signed workspace"),
+        "{reason}"
+    );
+}
+
+fn preview_request(original: PathBuf, ext: &str) -> PreviewRequest {
+    PreviewRequest {
+        asset_id: uuid::Uuid::now_v7(),
+        original,
+        ext: ext.to_owned(),
+    }
+}
+
+#[tokio::test]
+async fn local_preview_decodes_nothing_for_a_terminal_without_images() {
+    let scratch = Scratch::new();
+    let ports = LocalPorts::new(Some(scratch.session_path()));
+    assert!(ports.image_picker().is_none());
+    // The original does not even exist: nothing is read.
+    let reason = ports
+        .preview(preview_request(scratch.0.join("missing.jpg"), "jpg"))
+        .await
+        .expect_err("no protocol");
+    assert_eq!(reason, NO_IMAGE_PROTOCOL);
+}
+
+#[tokio::test]
+async fn local_preview_decodes_an_original_through_the_media_module() {
+    let scratch = Scratch::new();
+    let ports =
+        LocalPorts::new(Some(scratch.session_path())).with_picker(Some(Picker::halfblocks()));
+    assert!(ports.image_picker().is_some());
+
+    let original = scratch.0.join("photo.png");
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::RgbaImage::from_pixel(2048, 1024, image::Rgba([1, 2, 3, 255]))
+        .write_to(&mut png, image::ImageFormat::Png)
+        .expect("encode a PNG");
+    std::fs::write(&original, png.into_inner()).expect("write the original");
+    let preview = ports
+        .preview(preview_request(original, "png"))
+        .await
+        .expect("a PNG previews");
+    assert_eq!(
+        (preview.width, preview.height),
+        (PREVIEW_EDGE, PREVIEW_EDGE / 2)
+    );
+
+    // A format with no still decoder is refused before its original is read.
+    let reason = ports
+        .preview(preview_request(scratch.0.join("missing.mp4"), "mp4"))
+        .await
+        .expect_err("not a still");
+    assert_eq!(reason, "a .mp4 original is not a still this build decodes");
+    // A missing original says so.
+    let reason = ports
+        .preview(preview_request(scratch.0.join("missing.jpg"), "jpg"))
+        .await
+        .expect_err("no file");
+    assert!(
+        reason.starts_with("could not read the original"),
+        "{reason}"
+    );
+}
+
+fn encode_request(rgba_len: usize) -> EncodeRequest {
+    EncodeRequest {
+        generation: 7,
+        image: PreviewImage {
+            width: 8,
+            height: 8,
+            rgba: vec![9; rgba_len].into(),
+        },
+        size: ratatui::layout::Size::new(10, 5),
+    }
+}
+
+#[tokio::test]
+async fn local_encode_runs_off_the_loop_and_reports_its_failures() {
+    let scratch = Scratch::new();
+    let text = LocalPorts::new(Some(scratch.session_path()));
+    assert_eq!(
+        text.encode_preview(encode_request(8 * 8 * 4))
+            .await
+            .map(|_| ()),
+        Err(NO_IMAGE_PROTOCOL.to_owned())
+    );
+    let ports = text.with_picker(Some(Picker::halfblocks()));
+    assert!(
+        ports
+            .encode_preview(encode_request(8 * 8 * 4))
+            .await
+            .is_ok()
+    );
+    assert_eq!(
+        ports.encode_preview(encode_request(3)).await.map(|_| ()),
+        Err("the decoded preview has the wrong length".to_owned())
+    );
+    // Through `perform`, the answer names the preview and pane it was for.
+    let action = perform(
+        &ports,
+        Effect::Library(LibraryEffect::Encode(encode_request(3))),
+    )
+    .await;
+    assert!(
+        matches!(
+            action,
+            Action::Library(LibraryAction::PreviewEncoded { generation: 7, size, result: Err(_) })
+                if size == ratatui::layout::Size::new(10, 5)
+        ),
+        "{action:?}"
+    );
+}
+
+#[tokio::test]
 async fn local_import_reports_a_library_that_does_not_open() {
     let scratch = Scratch::new();
     let ports = LocalPorts::new(Some(scratch.session_path()));

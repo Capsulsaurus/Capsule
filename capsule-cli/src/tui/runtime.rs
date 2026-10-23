@@ -20,10 +20,11 @@ use tokio::sync::mpsc;
 use tokio::time::MissedTickBehavior;
 
 use super::keymap::action_for_event;
+use super::library::{LibraryAction, LibraryEffect, PreviewCanvas};
 use super::ports::{Ports, perform};
 use super::state::{Action, AppState, Effect, Screen, canonical_library};
 use super::transfer::{FRAME_INTERVAL, Feed};
-use super::view::render;
+use super::view::render_with;
 
 /// Run the TUI until it quits or `events` ends, drawing on `terminal`. Returns the final state.
 ///
@@ -44,7 +45,9 @@ where
     let (mut state, effects) = AppState::init();
     let (tx, mut rx) = mpsc::unbounded_channel::<Action>();
     spawn_effects(&ports, &tx, effects);
-    draw(terminal, &state)?;
+    let mut canvas = PreviewCanvas::new(ports.image_picker());
+    draw(terminal, &state, &mut canvas)?;
+    request_encodes(&ports, &tx, &mut state, &mut canvas);
     let mut feed = Feed::new(&ports.transfer_events());
     let mut frames = tokio::time::interval(FRAME_INTERVAL);
     frames.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -77,22 +80,44 @@ where
             spawn_effects(&ports, &tx, effects);
         }
         if redraw {
-            draw(terminal, &state)?;
+            draw(terminal, &state, &mut canvas)?;
+            // A preview the frame could not draw yet is encoded off the loop, like any effect.
+            request_encodes(&ports, &tx, &mut state, &mut canvas);
         }
     }
     Ok(state)
 }
 
-/// Draw one frame of `state`.
-fn draw<B>(terminal: &mut Terminal<B>, state: &AppState) -> Result<()>
+/// Draw one frame of `state`, the library preview on `canvas`.
+fn draw<B>(terminal: &mut Terminal<B>, state: &AppState, canvas: &mut PreviewCanvas) -> Result<()>
 where
     B: Backend,
     B::Error: std::error::Error + Send + Sync + 'static,
 {
     terminal
-        .draw(|frame| render(frame, state))
+        .draw(|frame| render_with(frame, state, canvas))
         .wrap_err("drawing a frame")?;
     Ok(())
+}
+
+/// Run the encodes the last frame asked for, noting each in `state` first so only the latest
+/// ask's answer is kept.
+fn request_encodes<P: Ports>(
+    ports: &Arc<P>,
+    tx: &mpsc::UnboundedSender<Action>,
+    state: &mut AppState,
+    canvas: &mut PreviewCanvas,
+) {
+    let effects = canvas.take_requests();
+    for effect in &effects {
+        if let Effect::Library(LibraryEffect::Encode(request)) = effect {
+            state.update(Action::Library(LibraryAction::EncodeRequested {
+                generation: request.generation,
+                size: request.size,
+            }));
+        }
+    }
+    spawn_effects(ports, tx, effects);
 }
 
 /// Start each effect on its own task; its outcome comes back on `tx` as an action.

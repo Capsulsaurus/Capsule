@@ -60,6 +60,13 @@ humansize = "2.1"
 indexmap = { workspace = true }
 nanoid = "0.4.0"
 ratatui = { workspace = true }
+# The library browser's inline preview (Terminal image preview row of design/dependencies.md):
+# Kitty, Sixel or iTerm2 graphics where the terminal answers the query, a text fallback
+# elsewhere. No default features: `chafa-dyn` would load the LGPL libchafa, and the crossterm
+# feature is only its examples'. Decoding stays with Rawshift; `image` is named only for the
+# `DynamicImage` buffer the widget takes, with no codec features of its own.
+ratatui-image = { version = "11.1.0", default-features = false }
+image = { version = "0.25", default-features = false }
 sea-orm = { workspace = true, features = [
     "sqlx-sqlite",
     "runtime-tokio-rustls",
