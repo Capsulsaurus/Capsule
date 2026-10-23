@@ -60,7 +60,7 @@ fn asset(n: u128, captured: &str, album_id: Uuid) -> AssetEntry {
 
 /// Five assets: two stacked (1 primary, 2 member), one hidden, one in trash, one in a second
 /// album. Newest first, as `collect` orders them.
-fn catalogue() -> Catalogue {
+fn assets() -> Vec<AssetEntry> {
     let mut primary = asset(1, "2024-06-01T10:00:00Z", ALBUM);
     primary.stack = Some((STACK, StackRole::Primary));
     let mut member = asset(2, "2024-05-31T10:00:00Z", ALBUM);
@@ -70,29 +70,39 @@ fn catalogue() -> Catalogue {
     let mut trashed = asset(4, "2024-05-29T10:00:00Z", ALBUM);
     trashed.in_trash = true;
     let trip = asset(5, "2023-12-24T18:30:00Z", TRIPS);
-    Catalogue {
-        assets: vec![primary, member, hidden, trashed, trip],
-        albums: vec![
-            AlbumEntry {
-                album_id: ALBUM,
-                name: "Imports".to_owned(),
-                labels: Ok(vec!["family".to_owned()]),
-            },
-            AlbumEntry {
-                album_id: TRIPS,
-                name: "Trips".to_owned(),
-                labels: Err("the label record does not verify".to_owned()),
-            },
+    vec![primary, member, hidden, trashed, trip]
+}
+
+/// The two albums `assets()` are in.
+fn albums() -> Vec<AlbumEntry> {
+    vec![
+        AlbumEntry {
+            album_id: ALBUM,
+            name: "Imports".to_owned(),
+            labels: Ok(vec!["family".to_owned()]),
+        },
+        AlbumEntry {
+            album_id: TRIPS,
+            name: "Trips".to_owned(),
+            labels: Err("the label record does not verify".to_owned()),
+        },
+    ]
+}
+
+/// The one stack of `assets()`.
+fn stacks() -> Vec<StackEntry> {
+    vec![StackEntry {
+        stack_id: STACK,
+        members: vec![
+            (asset_id(1), StackRole::Primary),
+            (asset_id(2), StackRole::Member),
         ],
-        stacks: vec![StackEntry {
-            stack_id: STACK,
-            members: vec![
-                (asset_id(1), StackRole::Primary),
-                (asset_id(2), StackRole::Member),
-            ],
-            labels: Ok(vec!["best".to_owned()]),
-        }],
-    }
+        labels: Ok(vec!["best".to_owned()]),
+    }]
+}
+
+fn catalogue() -> Catalogue {
+    Catalogue::new(assets(), albums(), stacks())
 }
 
 fn preview_of(n: u128) -> Effect {
@@ -293,8 +303,9 @@ fn a_shown_preview_is_not_asked_for_again() {
 
 #[test]
 fn an_asset_with_no_original_on_this_device_says_so_without_asking() {
-    let mut catalogue = catalogue();
-    catalogue.assets[0].original = None;
+    let mut assets = assets();
+    assets[0].original = None;
+    let catalogue = Catalogue::new(assets, albums(), stacks());
     let mut screen = LibraryScreen::default();
     assert!(
         screen
@@ -395,6 +406,91 @@ fn reopening_resets_the_views_and_ignores_a_stale_preview() {
     assert_eq!(screen.preview(), None);
     // The stale answer lands on nothing and asks for the current selection.
     assert_eq!(answer(&mut screen, 1, Ok(image(4, 4))), vec![preview_of(1)]);
+}
+
+// ── A large library ───────────────────────────────────────────────────────
+
+const LARGE: u128 = 50_000;
+
+/// `LARGE` assets in one album, every tenth stacked with the next as its member.
+fn large_catalogue() -> Catalogue {
+    let mut assets = Vec::new();
+    let mut stacks = Vec::new();
+    for n in 0..LARGE {
+        let mut entry = asset(n, "2024-06-01T10:00:00Z", ALBUM);
+        entry.rows.clear();
+        entry.history.clear();
+        if n % 10 == 0 {
+            let stack_id = Uuid::from_u128(0x0192_f1a0_0000_7000_9000_0000_0000_0000 + n);
+            entry.stack = Some((stack_id, StackRole::Primary));
+            stacks.push(StackEntry {
+                stack_id,
+                members: vec![
+                    (asset_id(n), StackRole::Primary),
+                    (asset_id(n + 1), StackRole::Member),
+                ],
+                labels: Ok(Vec::new()),
+            });
+        } else if n % 10 == 1 {
+            let stack_id = Uuid::from_u128(0x0192_f1a0_0000_7000_9000_0000_0000_0000 + n - 1);
+            entry.stack = Some((stack_id, StackRole::Member));
+        }
+        assets.push(entry);
+    }
+    Catalogue::new(assets, albums(), stacks)
+}
+
+#[test]
+fn visible_window_keeps_the_selection_in_a_viewport_sized_range() {
+    assert_eq!(visible_window(0, 0, 10), 0..0);
+    assert_eq!(visible_window(3, 5, 0), 0..0);
+    assert_eq!(visible_window(0, 5, 10), 0..5);
+    assert_eq!(visible_window(4, 100, 10), 0..10);
+    assert_eq!(visible_window(9, 100, 10), 0..10);
+    assert_eq!(visible_window(10, 100, 10), 1..11);
+    assert_eq!(visible_window(99, 100, 10), 90..100);
+    // A cursor past the end is clamped to the last row.
+    assert_eq!(visible_window(500, 100, 10), 90..100);
+}
+
+#[test]
+fn a_frame_builds_list_items_for_the_viewport_only() {
+    let catalogue = large_catalogue();
+    let mut screen = LibraryScreen::default();
+    screen.update(LibraryAction::Opened(Ok(catalogue.clone())));
+    let timeline = catalogue.timeline().len();
+    assert!(timeline > 40_000, "{timeline}");
+    for step in 0..3 * 20 {
+        screen.update(LibraryAction::SelectNext);
+        let (items, selected) = list_window(&screen, &catalogue, 20);
+        assert_eq!(items.len(), 20, "step {step}");
+        assert_eq!(selected, Some((step + 1).min(19)), "step {step}");
+    }
+    // At the far end of a long list, still one viewport's worth.
+    for _ in 0..timeline {
+        screen.update(LibraryAction::SelectNext);
+    }
+    assert_eq!(screen.cursor(), timeline - 1);
+    let (items, selected) = list_window(&screen, &catalogue, 20);
+    assert_eq!((items.len(), selected), (20, Some(19)));
+    // A viewport taller than the list builds the list.
+    screen.update(LibraryAction::NextView);
+    screen.update(LibraryAction::Enter);
+    let (items, _) = list_window(&screen, &catalogue, 20);
+    assert!(items.len() <= 20);
+}
+
+#[test]
+fn a_large_library_draws_and_moves_with_the_selection_in_view() {
+    let mut state = on_library();
+    library_action(&mut state, LibraryAction::Opened(Ok(large_catalogue())));
+    for _ in 0..30 {
+        library_action(&mut state, LibraryAction::SelectNext);
+    }
+    let selected = state.library().selected_asset().expect("an asset");
+    let frame = draw(&state);
+    assert!(frame.contains(&selected.to_string()), "{frame}");
+    assert!(frame.contains("› "), "{frame}");
 }
 
 // ── The preview decode ────────────────────────────────────────────────────
@@ -578,10 +674,7 @@ fn library_with_no_assets() {
     let mut state = on_library();
     library_action(
         &mut state,
-        LibraryAction::Opened(Ok(Catalogue {
-            albums: catalogue().albums,
-            ..Catalogue::default()
-        })),
+        LibraryAction::Opened(Ok(Catalogue::new(Vec::new(), albums(), Vec::new()))),
     );
     insta::assert_snapshot!(draw(&state));
 }

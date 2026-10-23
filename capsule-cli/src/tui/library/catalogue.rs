@@ -8,6 +8,7 @@
 //! The per-asset rows come from [`crate::show::rows`], so the detail pane and `capsule show`
 //! word every field the same way.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use capsule_core::crypto::provenance::Action as ProvenanceAction;
@@ -17,15 +18,37 @@ use jiff::Timestamp;
 use uuid::Uuid;
 
 /// One library as the browser shows it.
+///
+/// Built once per snapshot by [`Catalogue::new`], which also indexes it by id: every lookup a
+/// frame or a key press makes ([`asset`](Self::asset), [`album`](Self::album),
+/// [`stack`](Self::stack), [`album_assets`](Self::album_assets), [`timeline`](Self::timeline))
+/// is a hash lookup or a borrowed slice, never a scan of the whole library.
 #[derive(Clone, Default, PartialEq, Eq)]
 pub struct Catalogue {
     /// Every asset the workspace manages, newest capture first (ties by id), trashed and
     /// hidden ones included: each view decides what it leaves out.
-    pub assets: Vec<AssetEntry>,
+    assets: Vec<AssetEntry>,
     /// Every album the workspace holds keys for, by name then id.
-    pub albums: Vec<AlbumEntry>,
+    albums: Vec<AlbumEntry>,
     /// Every stack an asset is a member of, newest first by its primary's capture.
-    pub stacks: Vec<StackEntry>,
+    stacks: Vec<StackEntry>,
+    /// The lookups by id, boxed so a catalogue in flight as an action stays small.
+    index: Box<Index>,
+}
+
+/// What [`Catalogue::new`] derives from the lists, once per snapshot.
+#[derive(Clone, Default, PartialEq, Eq)]
+struct Index {
+    /// Position in `assets` by asset id.
+    asset_at: HashMap<Uuid, usize>,
+    /// Position in `albums` by album id.
+    album_at: HashMap<Uuid, usize>,
+    /// Position in `stacks` by stack id.
+    stack_at: HashMap<Uuid, usize>,
+    /// The timeline's asset ids, in `assets` order.
+    timeline: Vec<Uuid>,
+    /// Each album's assets not in trash, in `assets` order.
+    album_assets: HashMap<Uuid, Vec<Uuid>>,
 }
 
 /// One asset: what the lists need, the detail rows, and its provenance history.
@@ -114,42 +137,105 @@ impl std::fmt::Debug for Catalogue {
 }
 
 impl Catalogue {
+    /// A catalogue of `assets` (newest first), `albums` and `stacks`, in the order each view
+    /// lists them, indexed by id. The first entry wins where an id repeats.
+    #[must_use]
+    pub fn new(assets: Vec<AssetEntry>, albums: Vec<AlbumEntry>, stacks: Vec<StackEntry>) -> Self {
+        let mut asset_at = HashMap::with_capacity(assets.len());
+        let mut timeline = Vec::new();
+        let mut album_assets: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
+        for (at, asset) in assets.iter().enumerate() {
+            asset_at.entry(asset.asset_id).or_insert(at);
+            if asset.in_timeline() {
+                timeline.push(asset.asset_id);
+            }
+            if !asset.in_trash {
+                album_assets
+                    .entry(asset.album_id)
+                    .or_default()
+                    .push(asset.asset_id);
+            }
+        }
+        let mut album_at = HashMap::with_capacity(albums.len());
+        for (at, album) in albums.iter().enumerate() {
+            album_at.entry(album.album_id).or_insert(at);
+        }
+        let mut stack_at = HashMap::with_capacity(stacks.len());
+        for (at, stack) in stacks.iter().enumerate() {
+            stack_at.entry(stack.stack_id).or_insert(at);
+        }
+        Self {
+            assets,
+            albums,
+            stacks,
+            index: Box::new(Index {
+                asset_at,
+                album_at,
+                stack_at,
+                timeline,
+                album_assets,
+            }),
+        }
+    }
+
+    /// Every asset, newest capture first, trashed and hidden ones included.
+    #[must_use]
+    pub fn assets(&self) -> &[AssetEntry] {
+        &self.assets
+    }
+
+    /// Every album, by name then id.
+    #[must_use]
+    pub fn albums(&self) -> &[AlbumEntry] {
+        &self.albums
+    }
+
+    /// Every stack, newest first by its primary's capture.
+    #[must_use]
+    pub fn stacks(&self) -> &[StackEntry] {
+        &self.stacks
+    }
+
     /// The asset with `asset_id`, if the library has it.
     #[must_use]
     pub fn asset(&self, asset_id: Uuid) -> Option<&AssetEntry> {
-        self.assets.iter().find(|a| a.asset_id == asset_id)
+        self.index
+            .asset_at
+            .get(&asset_id)
+            .map(|&at| &self.assets[at])
     }
 
     /// The album with `album_id`, if the workspace holds its keys.
     #[must_use]
     pub fn album(&self, album_id: Uuid) -> Option<&AlbumEntry> {
-        self.albums.iter().find(|a| a.album_id == album_id)
+        self.index
+            .album_at
+            .get(&album_id)
+            .map(|&at| &self.albums[at])
     }
 
     /// The stack with `stack_id`, if any asset is placed in it.
     #[must_use]
     pub fn stack(&self, stack_id: Uuid) -> Option<&StackEntry> {
-        self.stacks.iter().find(|s| s.stack_id == stack_id)
+        self.index
+            .stack_at
+            .get(&stack_id)
+            .map(|&at| &self.stacks[at])
     }
 
     /// The timeline: every asset [`AssetEntry::in_timeline`] admits, newest first.
     #[must_use]
-    pub fn timeline(&self) -> Vec<Uuid> {
-        self.assets
-            .iter()
-            .filter(|a| a.in_timeline())
-            .map(|a| a.asset_id)
-            .collect()
+    pub fn timeline(&self) -> &[Uuid] {
+        &self.index.timeline
     }
 
     /// An album's assets that are not in trash, newest first.
     #[must_use]
-    pub fn album_assets(&self, album_id: Uuid) -> Vec<Uuid> {
-        self.assets
-            .iter()
-            .filter(|a| a.album_id == album_id && !a.in_trash)
-            .map(|a| a.asset_id)
-            .collect()
+    pub fn album_assets(&self, album_id: Uuid) -> &[Uuid] {
+        self.index
+            .album_assets
+            .get(&album_id)
+            .map_or(&[], Vec::as_slice)
     }
 }
 
@@ -204,22 +290,26 @@ pub fn collect(ws: &Workspace) -> Catalogue {
     // Stacks in the order their first member appears in the (newest-first) asset list, with
     // the primary moved to the front.
     let mut stacks: Vec<StackEntry> = Vec::new();
+    let mut stack_at: HashMap<Uuid, usize> = HashMap::new();
     for asset in &assets {
         let Some((stack_id, role)) = asset.stack else {
             continue;
         };
         let member = (asset.asset_id, role);
-        match stacks.iter_mut().find(|s| s.stack_id == stack_id) {
+        match stack_at.get(&stack_id).map(|&at| &mut stacks[at]) {
             Some(stack) if role == StackRole::Primary => stack.members.insert(0, member),
             Some(stack) => stack.members.push(member),
-            None => stacks.push(StackEntry {
-                stack_id,
-                members: vec![member],
-                labels: ws
-                    .stack_labels(stack_id)
-                    .map(|labels| labels.into_iter().collect())
-                    .map_err(|e| e.to_string()),
-            }),
+            None => {
+                stack_at.insert(stack_id, stacks.len());
+                stacks.push(StackEntry {
+                    stack_id,
+                    members: vec![member],
+                    labels: ws
+                        .stack_labels(stack_id)
+                        .map(|labels| labels.into_iter().collect())
+                        .map_err(|e| e.to_string()),
+                });
+            }
         }
     }
 
@@ -230,11 +320,7 @@ pub fn collect(ws: &Workspace) -> Catalogue {
         stacks = stacks.len(),
         "library catalogue collected"
     );
-    Catalogue {
-        assets,
-        albums,
-        stacks,
-    }
+    Catalogue::new(assets, albums, stacks)
 }
 
 /// One asset's entry, or `None` for an id the workspace does not manage.

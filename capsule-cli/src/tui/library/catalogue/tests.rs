@@ -72,7 +72,7 @@ impl Drop for Fixture {
 fn every_asset_is_listed_with_its_rows_history_and_original() {
     let fx = Fixture::with_assets(3);
     let catalogue = collect(&fx.ws);
-    assert_eq!(catalogue.assets.len(), 3);
+    assert_eq!(catalogue.assets().len(), 3);
     for id in &fx.ids {
         let asset = catalogue.asset(*id).expect("listed");
         assert_eq!(asset.album_id, fx.album);
@@ -91,7 +91,7 @@ fn every_asset_is_listed_with_its_rows_history_and_original() {
 fn the_list_is_newest_capture_first_then_by_id() {
     let fx = Fixture::with_assets(4);
     let catalogue = collect(&fx.ws);
-    for pair in catalogue.assets.windows(2) {
+    for pair in catalogue.assets().windows(2) {
         assert!(
             pair[0].captured > pair[1].captured
                 || (pair[0].captured == pair[1].captured && pair[0].asset_id < pair[1].asset_id),
@@ -128,7 +128,7 @@ fn the_timeline_leaves_out_trash_hidden_and_non_primary_stack_members() {
         stack.members,
         vec![(primary, StackRole::Primary), (member, StackRole::Member)]
     );
-    assert_eq!(catalogue.stacks.len(), 1);
+    assert_eq!(catalogue.stacks().len(), 1);
 
     // The trashed asset's history carries the delete and its deadline.
     let trashed = catalogue.asset(trashed).expect("still managed");
@@ -162,9 +162,9 @@ fn album_and_stack_labels_are_read() {
 fn an_empty_library_is_an_empty_catalogue_with_its_album() {
     let fx = Fixture::with_assets(0);
     let catalogue = collect(&fx.ws);
-    assert!(catalogue.assets.is_empty());
-    assert!(catalogue.stacks.is_empty());
-    assert_eq!(catalogue.albums.len(), 1);
+    assert!(catalogue.assets().is_empty());
+    assert!(catalogue.stacks().is_empty());
+    assert_eq!(catalogue.albums().len(), 1);
     assert!(catalogue.timeline().is_empty());
 }
 
@@ -173,6 +173,51 @@ fn debug_prints_counts_not_rows() {
     let fx = Fixture::with_assets(2);
     let printed = format!("{:?}", collect(&fx.ws));
     assert_eq!(printed, "Catalogue { assets: 2, albums: 1, stacks: 0 }");
+}
+
+fn bare(asset_id: Uuid, album_id: Uuid, in_trash: bool) -> AssetEntry {
+    AssetEntry {
+        asset_id,
+        album_id,
+        captured: None,
+        ext: "jpg".to_owned(),
+        original: None,
+        hidden: false,
+        in_trash,
+        stack: None,
+        rows: Vec::new(),
+        history: Vec::new(),
+    }
+}
+
+#[test]
+fn the_index_answers_by_id_in_list_order() {
+    let (one, two) = (Uuid::from_u128(1), Uuid::from_u128(2));
+    let (album, other) = (Uuid::from_u128(10), Uuid::from_u128(11));
+    let mut dup = bare(one, other, false);
+    dup.ext = "png".to_owned();
+    let catalogue = Catalogue::new(
+        vec![bare(one, album, false), bare(two, album, true), dup],
+        vec![AlbumEntry {
+            album_id: album,
+            name: "A".to_owned(),
+            labels: Ok(Vec::new()),
+        }],
+        Vec::new(),
+    );
+    // The first entry for an id is the one looked up.
+    assert_eq!(catalogue.asset(one).map(|a| a.ext.as_str()), Some("jpg"));
+    assert_eq!(catalogue.asset(two).map(|a| a.in_trash), Some(true));
+    assert!(catalogue.asset(Uuid::from_u128(3)).is_none());
+    assert_eq!(catalogue.album(album).map(|a| a.name.as_str()), Some("A"));
+    assert!(catalogue.album(other).is_none());
+    assert!(catalogue.stack(one).is_none());
+    // Album lists leave out trash and keep list order; an unknown album lists nothing.
+    assert_eq!(catalogue.album_assets(album), [one]);
+    assert_eq!(catalogue.album_assets(other), [one]);
+    assert!(catalogue.album_assets(Uuid::from_u128(12)).is_empty());
+    assert_eq!(catalogue.timeline(), [one, one]);
+    assert_eq!(catalogue, catalogue.clone());
 }
 
 #[test]

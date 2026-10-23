@@ -245,6 +245,52 @@ pub enum Row {
     Stack(Uuid),
 }
 
+/// The list a view or group shows, borrowed from the catalogue.
+#[derive(Debug, Clone, Copy)]
+enum RowSource<'a> {
+    /// Assets by id: the timeline or an album.
+    Assets(&'a [Uuid]),
+    /// A stack's members.
+    Members(&'a [(Uuid, StackRole)]),
+    /// The albums.
+    Albums(&'a [AlbumEntry]),
+    /// The stacks.
+    Stacks(&'a [StackEntry]),
+}
+
+impl RowSource<'_> {
+    const fn len(self) -> usize {
+        match self {
+            Self::Assets(ids) => ids.len(),
+            Self::Members(members) => members.len(),
+            Self::Albums(albums) => albums.len(),
+            Self::Stacks(stacks) => stacks.len(),
+        }
+    }
+
+    fn get(self, at: usize) -> Option<Row> {
+        match self {
+            Self::Assets(ids) => ids.get(at).copied().map(Row::Asset),
+            Self::Members(members) => members.get(at).map(|(id, _)| Row::Asset(*id)),
+            Self::Albums(albums) => albums.get(at).map(|a| Row::Album(a.album_id)),
+            Self::Stacks(stacks) => stacks.get(at).map(|s| Row::Stack(s.stack_id)),
+        }
+    }
+}
+
+/// The rows of a `len`-row list that fit a `height`-row viewport with row `cursor` selected:
+/// the same window the list widget scrolls to on its own (the selection kept in view, at the
+/// bottom once it passes the first screen), so only those rows are built each frame.
+#[must_use]
+pub fn visible_window(cursor: usize, len: usize, height: usize) -> std::ops::Range<usize> {
+    if len == 0 || height == 0 {
+        return 0..0;
+    }
+    let cursor = cursor.min(len - 1);
+    let start = cursor.saturating_sub(height - 1);
+    start..(start + height).min(len)
+}
+
 const LIBRARY: usize = 0;
 const PASSPHRASE: usize = 1;
 
@@ -340,42 +386,41 @@ impl LibraryScreen {
         }
     }
 
-    /// The rows the list shows now.
-    #[must_use]
-    pub fn rows(&self) -> Vec<Row> {
+    /// The list shown now, borrowed from the catalogue: its length and any one row cost a
+    /// lookup, not a pass over the library.
+    fn row_source(&self) -> RowSource<'_> {
         let Some(catalogue) = self.ready() else {
-            return Vec::new();
+            return RowSource::Assets(&[]);
         };
         match self.group {
-            Some((Group::Album(album_id), _)) => catalogue
-                .album_assets(album_id)
-                .into_iter()
-                .map(Row::Asset)
-                .collect(),
-            Some((Group::Stack(stack_id), _)) => catalogue
-                .stack(stack_id)
-                .map(|stack| {
-                    stack
-                        .members
-                        .iter()
-                        .map(|(id, _)| Row::Asset(*id))
-                        .collect()
-                })
-                .unwrap_or_default(),
+            Some((Group::Album(album_id), _)) => {
+                RowSource::Assets(catalogue.album_assets(album_id))
+            }
+            Some((Group::Stack(stack_id), _)) => RowSource::Members(
+                catalogue
+                    .stack(stack_id)
+                    .map_or(&[], |stack| stack.members.as_slice()),
+            ),
             None => match self.view {
-                View::Timeline => catalogue.timeline().into_iter().map(Row::Asset).collect(),
-                View::Albums => catalogue
-                    .albums
-                    .iter()
-                    .map(|a| Row::Album(a.album_id))
-                    .collect(),
-                View::Stacks => catalogue
-                    .stacks
-                    .iter()
-                    .map(|s| Row::Stack(s.stack_id))
-                    .collect(),
+                View::Timeline => RowSource::Assets(catalogue.timeline()),
+                View::Albums => RowSource::Albums(catalogue.albums()),
+                View::Stacks => RowSource::Stacks(catalogue.stacks()),
             },
         }
+    }
+
+    /// The rows the list shows now. Builds the whole list: drawing and moving use
+    /// [`row_count`](Self::row_count) and [`selected`](Self::selected), which do not.
+    #[must_use]
+    pub fn rows(&self) -> Vec<Row> {
+        let source = self.row_source();
+        (0..source.len()).filter_map(|at| source.get(at)).collect()
+    }
+
+    /// How many rows the list shows now.
+    #[must_use]
+    pub fn row_count(&self) -> usize {
+        self.row_source().len()
     }
 
     fn cursor_mut(&mut self) -> &mut usize {
@@ -397,9 +442,9 @@ impl LibraryScreen {
     /// The selected row, if the list has any.
     #[must_use]
     pub fn selected(&self) -> Option<Row> {
-        let rows = self.rows();
-        let last = rows.len().checked_sub(1)?;
-        rows.get(self.cursor().min(last)).copied()
+        let source = self.row_source();
+        let last = source.len().checked_sub(1)?;
+        source.get(self.cursor().min(last))
     }
 
     /// The asset the preview pane is about: the selected asset, or a selected stack's primary.
@@ -457,7 +502,7 @@ impl LibraryScreen {
                 self.want_preview()
             }
             LibraryAction::SelectNext => {
-                let last = self.rows().len().saturating_sub(1);
+                let last = self.row_count().saturating_sub(1);
                 let cursor = self.cursor_mut();
                 *cursor = (*cursor + 1).min(last);
                 self.want_preview()
@@ -721,7 +766,25 @@ fn row_item(catalogue: &Catalogue, row: Row) -> ListItem<'static> {
     ListItem::new(text)
 }
 
-/// The detail pane's lines for an asset: the `capsule show` rows, its album's and stack's
+/// The list items for the rows a `height`-row viewport shows ([`visible_window`]), and the
+/// selection's index among them. Only those rows are built, so a frame costs the viewport, not
+/// the library.
+fn list_window(
+    screen: &LibraryScreen,
+    catalogue: &Catalogue,
+    height: usize,
+) -> (Vec<ListItem<'static>>, Option<usize>) {
+    let source = screen.row_source();
+    let window = visible_window(screen.cursor(), source.len(), height);
+    let selected = (!window.is_empty()).then(|| screen.cursor().min(window.end - 1) - window.start);
+    let items = window
+        .filter_map(|at| source.get(at))
+        .map(|row| row_item(catalogue, row))
+        .collect();
+    (items, selected)
+}
+
+/// The detail pane's lines for an asset:the `capsule show` rows, its album's and stack's
 /// labels, and its provenance history.
 fn asset_lines(catalogue: &Catalogue, asset: &AssetEntry) -> Vec<Line<'static>> {
     let mut lines = vec![Line::from(format!("Asset {}", asset.asset_id).bold())];
@@ -894,8 +957,8 @@ fn render_browser(
 
     let [list_area, side] =
         Layout::horizontal([Constraint::Percentage(40), Constraint::Percentage(60)]).areas(body);
-    let rows = screen.rows();
-    if rows.is_empty() {
+    let (items, selected) = list_window(screen, catalogue, usize::from(list_area.height));
+    if screen.row_count() == 0 {
         let empty = match (screen.group, screen.view) {
             (Some(_), _) => "Nothing here.",
             (None, View::Timeline) => {
@@ -909,12 +972,10 @@ fn render_browser(
             list_area,
         );
     } else {
-        let items: Vec<ListItem> = rows.iter().map(|row| row_item(catalogue, *row)).collect();
         let list = List::new(items)
             .highlight_style(Style::new().add_modifier(Modifier::REVERSED))
             .highlight_symbol("› ");
-        let mut state =
-            ListState::default().with_selected(Some(screen.cursor().min(rows.len() - 1)));
+        let mut state = ListState::default().with_selected(selected);
         frame.render_stateful_widget(list, list_area, &mut state);
     }
 
