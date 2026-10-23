@@ -123,7 +123,8 @@ origin: seal + sign bundle ──hand-off──▶ delegate: persist, upload ─
    blob, signed manifest) exactly as it would upload it, and records its own content hashes.
 2. **Hand-off.** The delegate pulls the bundle over the channel, verifies every hash against the
    manifest, fsyncs it, and only then acknowledges. The acknowledgement is not custody: the origin
-   keeps the original pinned.
+   keeps the original pinned. The bundle is self-verifying, so the same hand-off may also travel
+   by any other courier (the CLI writes it to a file); its integrity never rests on the channel.
 3. **Upload.** The delegate uploads the bundle through the normal
    [transfer protocol](/design/transfer/upload/) under its own session. The server accepts a
    manifest signed by one device of the account and uploaded by another; quota is charged to
