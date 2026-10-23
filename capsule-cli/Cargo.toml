@@ -50,6 +50,9 @@ jiff = { workspace = true }
 clap = { version = "4.6.1", features = ["derive"] }
 color-eyre = "0.6.5"
 colored = "3.1.1"
+# Bare `capsule` on a terminal opens the full-screen TUI (`src/tui/`); see the Terminal UI row
+# of design/dependencies.md.
+crossterm = { workspace = true }
 dialoguer = "0.11.0"
 directories = "6.0"
 eyre = { workspace = true }
@@ -57,6 +60,7 @@ futures = "0.3.32"
 humansize = "2.1"
 indexmap = { workspace = true }
 nanoid = "0.4.0"
+ratatui = { workspace = true }
 sea-orm = { workspace = true, features = [
     "sqlx-sqlite",
     "runtime-tokio-rustls",
