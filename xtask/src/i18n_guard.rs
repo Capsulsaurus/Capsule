@@ -7,7 +7,7 @@
 //! literals and fails if it finds one that is not a known catalog key (and is not
 //! on the documented allowlist).
 //!
-//! Design (pragmatism over perfection, per the slice contract): this is an
+//! Design (pragmatism over perfection, per the contract): this is an
 //! exact-pattern scanner with a documented allowlist file, NOT a full AST parser.
 //! Each surface has a small set of high-signal patterns:
 //!

@@ -2274,7 +2274,7 @@ mod client_build_wiring_tests {
     /// `capsule-core` default. Uses a fast Argon2 cost so the test never pays the production KDF.
     #[test]
     fn cli_workspace_stamps_capsule_cli_client_version() {
-        let dir = std::env::temp_dir().join(format!("capsule-cli-s-d15-{}", nanoid::nanoid!()));
+        let dir = std::env::temp_dir().join(format!("capsule-cli-scratch-{}", nanoid::nanoid!()));
         let lib = dir.join("lib");
         std::fs::create_dir_all(&lib).unwrap();
         let src = dir.join("photo.jpg");

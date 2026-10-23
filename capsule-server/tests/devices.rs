@@ -1,6 +1,6 @@
 //! The session ledger, end to end.
 //!
-//! Two cases carry the slices. `a_reinstall_groups_with_the_device_it_replaced` is the whole
+//! Two cases carry the acceptances. `a_reinstall_groups_with_the_device_it_replaced` is the whole
 //! point of cohorts: reinstalling re-enrolls with a **new** `device_id` by design, so one
 //! physical phone accumulates ledger entries the user cannot tell apart, and the cohort is what
 //! groups them. `the_cohort_map_outlives_the_sessions_that_carried_it` is why the map is durable

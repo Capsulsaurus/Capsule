@@ -1,6 +1,6 @@
 //! Guest drops, end to end.
 //!
-//! Three cases carry the slice. `a_guest_drop_lands_in_the_owners_inbox_and_never_in_an_album`
+//! Three cases carry the acceptance. `a_guest_drop_lands_in_the_owners_inbox_and_never_in_an_album`
 //! is invariant 30's absence clause: nothing a guest sends can put bytes into an album.
 //! `a_links_caps_are_spent_once_per_drop_and_refunded_when_one_is_refused` is invariant 26 —
 //! the caps are the whole authorization model on a path with no credential.
@@ -1443,7 +1443,7 @@ async fn probing_a_link_that_does_not_exist_still_costs_the_prober() {
 
 #[tokio::test]
 async fn a_gated_link_refuses_a_drop_with_no_proof() {
-    // The case the slice exists for. The gate was provisioned and never checked, so a
+    // The case this test exists for. The gate was provisioned and never checked, so a
     // passphrase-gated link spent the owner's quota for anyone holding the opaque id.
     let fixture = Fixture::working();
     let bearer = fixture.bearer().await;

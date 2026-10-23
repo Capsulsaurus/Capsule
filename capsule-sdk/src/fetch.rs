@@ -1300,7 +1300,7 @@ async fn fetch_representation<S: BlobSource>(
 /// The mid-stream-drop resume path ([`RangeOutcome::Partial`]) is exercised by the
 /// module's mocks; this impl reads each `Range` window whole (a clean drop surfaces
 /// as a transport error and the loop resumes from the persisted offset), and the
-/// streaming-partial wiring lands with the media-serving slice.
+/// streaming-partial wiring lands with media serving.
 #[derive(Clone)]
 pub struct HttpBlobSource {
     session: crate::auth::Session,

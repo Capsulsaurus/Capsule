@@ -33,8 +33,8 @@ describe('slugify', () => {
     it('keeps underscores, which headings use as identifiers not emphasis', () => {
         // `SLICES.md:1909` and six siblings. Stripping `_` as an emphasis
         // marker silently renames every one of their anchors.
-        expect(slugify('S-C21 — `feed_seq` visibility-order fix')).toBe(
-            's-c21--feed_seq-visibility-order-fix',
+        expect(slugify('C21 — `feed_seq` visibility-order fix')).toBe(
+            'c21--feed_seq-visibility-order-fix',
         );
         expect(slugify('`device_id` on session listing')).toBe(
             'device_id-on-session-listing',

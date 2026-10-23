@@ -15,7 +15,7 @@
 //!
 //! # What is asserted, and what cannot be
 //!
-//! Two of the slice's three properties are *type-level* and have no runtime case here, by
+//! Two of the three properties are *type-level* and have no runtime case here, by
 //! design — a test for them would be a test that the code compiles:
 //!
 //! - **No operation takes an arbitrary serializable payload.** There is no `T: Serialize` in

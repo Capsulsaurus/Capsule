@@ -31,7 +31,7 @@
 //!
 //! # The ledger is on the request path
 //!
-//! The third row is the one this slice added, and it is a deliberate purchase rather than a
+//! The third row is the one this change added, and it is a deliberate purchase rather than a
 //! refinement. Before it, `authenticate` checked the JWT's signature, issuer, kind and deadline
 //! and never touched [`AuthStateStore`](crate::store::AuthStateStore) — so closing a session,
 //! one or all of them, killed *refresh* immediately and left every already-issued access token
@@ -70,7 +70,7 @@
 //! ## The touch is coalesced, and the coalescing window is a staleness window
 //!
 //! [`AuthStateStore::touch_session`](crate::store::AuthStateStore::touch_session) had no
-//! production caller at all before this slice — the port declared it, the conformance suite
+//! production caller at all before this change — the port declared it, the conformance suite
 //! exercised it, and no request path used it, so `last_active_at` never moved and the devices
 //! listing's "last used" was the sign-in time forever. It is called here, which is where the
 //! design always meant it to be called.

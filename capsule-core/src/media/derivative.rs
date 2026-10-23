@@ -363,7 +363,7 @@ pub fn generate_still_derivatives(
                     %tier,
                     %format,
                     "media: no encoder for this (tier, format) in this build; the tier still \
-                     ships its encodable variants and this pair is backfillable (S-B1 remainder)"
+                     ships its encodable variants and this pair is backfillable"
                 );
                 out.deferred.push((tier, format));
                 continue;

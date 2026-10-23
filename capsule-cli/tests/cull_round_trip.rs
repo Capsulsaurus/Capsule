@@ -37,7 +37,7 @@ struct ScratchDir(PathBuf);
 
 impl ScratchDir {
     fn new() -> Self {
-        let path = std::env::temp_dir().join(format!("capsule-cli-s-d16-{}", nanoid::nanoid!()));
+        let path = std::env::temp_dir().join(format!("capsule-cli-scratch-{}", nanoid::nanoid!()));
         std::fs::create_dir_all(&path).expect("create scratch dir");
         Self(path)
     }
@@ -110,7 +110,7 @@ fn fixture_library(root: &Path) -> Vec<Uuid> {
     ids
 }
 
-/// The "Done when".** Flag in one process, read the filtered view back in a second, sweep in a
+/// Flag in one process, read the filtered view back in a second, sweep in a
 /// third, and confirm the sweep in a fourth — the whole culling loop over a library that is
 /// reopened from disk every single time.
 #[test]

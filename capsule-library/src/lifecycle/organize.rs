@@ -663,7 +663,7 @@ mod tests {
     /// is written into the signed sidecar, not just the index — it is *still* hidden after the
     /// index is deleted and rebuilt from disk.
     ///
-    /// Before this slice there was no `set_hidden` at all: the column, the gate and the
+    /// Before this change there was no `set_hidden` at all: the column, the gate and the
     /// projections all read a register nothing wrote.
     #[test]
     fn hidden_written_through_the_api_leaves_default_views_and_survives_rebuild() {

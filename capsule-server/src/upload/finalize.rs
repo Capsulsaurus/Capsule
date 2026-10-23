@@ -878,7 +878,7 @@ async fn record_against_asset(
 ///
 /// # And why the manifest can name what it commits to
 ///
-/// It could not, until this slice. `manifest_envelope.ciphertext_hash` names *the blob this
+/// It could not, until this change. `manifest_envelope.ciphertext_hash` names *the blob this
 /// session is uploading*, not the manifest's own — a conflation that is invisible for a create
 /// and blocking here, because the provenance session's value is the manifest's own address.
 /// `original_blob_hash` is the manifest's commitment under a name that cannot be confused with

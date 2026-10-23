@@ -2,7 +2,7 @@
 //! removing it, and completing a sign-in with it.
 //!
 //! [`crate::auth::totp`] owns the algorithm, the replay ledger and the reasons each is where it
-//! is — including the defect this slice fixes: the retired surface had all four operations and
+//! is — including the defect this change fixes: the retired surface had all four operations and
 //! its login **never issued a challenge**, so a confirmed second factor gated nothing.
 //!
 //! # The shape of a sign-in with a second factor

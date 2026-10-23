@@ -1,6 +1,6 @@
 //! Cross-device add, end to end.
 //!
-//! The case that carries the slice is `a_stolen_session_token_cannot_start_a_device_add`: step 1
+//! The case that carries the acceptance is `a_stolen_session_token_cannot_start_a_device_add`: step 1
 //! of design/device-enrollment.md exists so that a remotely-exfiltrated token cannot enroll a
 //! rogue device, and a gate that a refresh could satisfy would be no gate at all.
 

@@ -7,7 +7,7 @@
 //!
 //! The multi-party topology is entirely in-process: two-plus [`OpenMlsAuthority`] instances
 //! exchange real MLS messages by value (the server-side delivery-service transport is out of
-//! scope for this slice).
+//! scope for this change).
 
 use openmls::prelude::KeyPackage;
 use openmls::prelude::tls_codec::Deserialize as _;
@@ -881,7 +881,7 @@ fn export_import_state_round_trips_and_can_continue() {
 // mls-resilience.md § Validation gets a test here, driven through real OpenMLS state with the
 // two-plus in-process participants the module already uses. Server-side concerns (the server-clock
 // deadline, `409` on stale sessions, the drain of in-flight uploads) are modelled outside the
-// authority per the slice's scope guards.
+// authority per its scope guards.
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// An album-state summary carrying a single synthetic manifest hash, so two members can be made to
@@ -1549,7 +1549,7 @@ fn rekey_atomicity_resumes_after_a_mid_ceremony_crash() {
 /// the upgrade → quiesce → drain (modelled: no in-flight sessions) → tombstone → fork → queued
 /// writes replay, **including one resume-from-crash mid-ceremony**. This is the Module-Map E2E case
 /// 8 in the established in-process multi-participant shape (the server/client-UI halves are out of
-/// this slice's scope); it exercises `capsule-core::crypto::mls` end-to-end for the ceremony.
+/// this change's scope); it exercises `capsule-core::crypto::mls` end-to-end for the ceremony.
 #[test]
 fn e2e_case_8_album_upgrade_ceremony() {
     let album = Uuid::from_u128(0x0E8E);

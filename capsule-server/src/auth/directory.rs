@@ -77,7 +77,7 @@ pub enum Authentication {
 /// a status and an `error.*` code belongs to the route that could not finish, which knows what
 /// the caller was trying to do.
 ///
-/// `#[non_exhaustive]` because the Postgres adapter this slice does not write may need a
+/// `#[non_exhaustive]` because the Postgres adapter this change does not write may need a
 /// variant, and a route matching on it must keep compiling when one lands.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]

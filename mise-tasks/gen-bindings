@@ -41,7 +41,7 @@ done
 #   Workspace verbs — the capsule_sdk verbs the iOS lane depends on:
 #          enroll (incl. hardware-signer parity), album, seal+import, the
 #          seal→upload bridge, verify, sync-apply, escrow, device directory.
-#   Alert surface — the local alert surface: the shared predicate plus the per-class
+#   Alert surface — the shared predicate plus the per-class
 #          pre-arm deadlines a client actually schedules its alarms from. The
 #          arm call is the one that must not go missing: without it a client
 #          can only ask "what is true now?", which is the question pre-arming
@@ -78,4 +78,4 @@ for f in "$sdk_kt" "$sdk_swift"; do
 done
 
 echo "uniffi bindings written to $out (capsule_sdk, kotlin + swift)"
-echo "surface check passed: S-D9 client/session + S-P1 workspace verbs + S-D29 alert surface present in both languages"
+echo "surface check passed: client/session, workspace verbs and alert surface present in both languages"

@@ -454,7 +454,7 @@ mod tests {
         assert!(status.token_expires_at.is_none());
     }
 
-    /// The regression this slice exists for: `auth status` used to read an environment
+    /// The regression this change exists for: `auth status` used to read an environment
     /// variable rather than the session store, so it reported "Not logged in" immediately
     /// after `auth login` had succeeded.
     #[test]

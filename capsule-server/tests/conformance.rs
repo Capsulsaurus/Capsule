@@ -4000,7 +4000,7 @@ fn no_album_schema_carries_a_plaintext_title() {
             assert!(
                 !properties.contains_key(forbidden),
                 "{name} declares `{forbidden}`: album titles are user content and belong in the \
-                 encrypted sidecar, not on a key-free server (S-C26)"
+                 encrypted sidecar, not on a key-free server"
             );
         }
     }

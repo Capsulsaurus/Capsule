@@ -9,7 +9,7 @@
 //!
 //! ## What a synthesized archive can and cannot prove
 //!
-//! The slice's criterion is the guide's checklist on a **real** export. This file covers the half
+//! The acceptance criterion is the guide's checklist on a **real** export. This file covers the half
 //! that is a property of the *format*, which a hand-built tree reproduces exactly:
 //!
 //! - **Step 2 (every part extracted).** The archive is built as **two parts**, with `split.jpg`
@@ -78,7 +78,7 @@ struct ScratchDir(PathBuf);
 
 impl ScratchDir {
     fn new() -> Self {
-        let path = std::env::temp_dir().join(format!("capsule-cli-s-b11-{}", nanoid::nanoid!()));
+        let path = std::env::temp_dir().join(format!("capsule-cli-scratch-{}", nanoid::nanoid!()));
         std::fs::create_dir_all(&path).expect("create scratch dir");
         Self(path)
     }
@@ -537,7 +537,7 @@ fn a_takeout_export_imports_through_the_cli_with_its_exporter_metadata() {
 }
 
 /// **The guide's "Counts" checklist step.** Re-running the identical command imports nothing and
-/// adds no assets — the determinism/resume half of the slice's criterion, which a synthesized
+/// adds no assets — the determinism/resume half of the acceptance criterion, which a synthesized
 /// archive proves as well as a real one does.
 #[test]
 fn re_running_the_same_takeout_import_skips_completed_work() {
@@ -567,7 +567,7 @@ fn re_running_the_same_takeout_import_skips_completed_work() {
 /// **What `--provider` is for.** The same tree imported as a plain directory brings the bytes
 /// across and nothing else: no album tag, no favorite, no caption, and a capture time that is
 /// the import clock rather than the exporter's `photoTakenTime`. This is the state the migration
-/// guide described before this slice.
+/// guide described before this change.
 #[test]
 fn without_the_provider_flag_the_exporter_metadata_is_not_applied() {
     let fx = fixture();

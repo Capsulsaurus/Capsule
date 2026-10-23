@@ -100,7 +100,7 @@
 //!   invariant is *immutability* — a committed address is never overwritten — which is what
 //!   makes a wrong address a caller bug rather than silent corruption of a good blob.
 //! - **It does not own `.server/`.** The schema version and the operator's configuration are
-//!   plaintext server metadata, not blobs; nothing in this slice reads them.
+//!   plaintext server metadata, not blobs; nothing in this change reads them.
 //! - **It does not count references.** Reference counting is a query over committed Postgres
 //!   rows (design/filesystem/server.md, "Deletion and Garbage Collection"), and a store that
 //!   kept its own counter is the drift that design forbids.
@@ -134,7 +134,7 @@ pub type BlobFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, BlobError>> +
 /// `error.*` code belongs to the route that could not complete, which knows what the caller was
 /// trying to do.
 ///
-/// `#[non_exhaustive]` because an adapter this slice has not written yet may need a variant.
+/// `#[non_exhaustive]` because an adapter this change has not written yet may need a variant.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum BlobError {

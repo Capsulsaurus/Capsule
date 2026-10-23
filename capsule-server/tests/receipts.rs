@@ -1,6 +1,6 @@
 //! `GET /v1/upload/{id}/receipt` — custody receipts, end to end.
 //!
-//! The case that carries the slice is `a_finalized_upload_yields_a_verifiable_receipt`: it
+//! The case that carries the acceptance is `a_finalized_upload_yields_a_verifiable_receipt`: it
 //! verifies the fetched bytes the way a **client** does — through `capsule_core`'s own
 //! `verify_receipt`, under the key the fixture holds — because a receipt the client cannot
 //! verify is worse than no receipt at all. It is the server claiming accountability it does not

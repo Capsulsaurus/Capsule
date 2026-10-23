@@ -520,7 +520,7 @@ impl Workspace {
     /// crash before it leaves a chainless signed sidecar the migration resumes from rather than
     /// a torn chain that counts as anchored and hides the asset. A stale `.tmp` is the startup
     /// scrub's to remove. The per-asset *bundle* (sidecar, chain, blob renamed as one unit)
-    /// remains its own slice.
+    /// remains separate work.
     pub(super) fn write_signed_artifacts(&self, asset: &AssetState) -> Result<()> {
         let dir = media_dir(&self.root, asset.capture_utc);
         create_dir_durable(&dir)?;
@@ -1697,7 +1697,7 @@ mod tests {
     /// hand — is written into the signed sidecar, so it survives losing `index/library.sqlite`
     /// entirely and rebuilding from the artifacts on disk.
     ///
-    /// Before this slice the placement existed only as index columns, so this test's `rebuild`
+    /// Before this change the placement existed only as index columns, so this test's `rebuild`
     /// came back with both members loose in the timeline and no `asset_stacks` row at all.
     #[test]
     fn importer_formed_stack_survives_index_loss_and_rebuild() {

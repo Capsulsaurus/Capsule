@@ -431,7 +431,7 @@ async fn rows_resolve_to_blobs(
 
 /// Check 5: the facts the index mirrors out of the signed manifest still agree with it.
 ///
-/// # The decision this slice needed, and the answer
+/// # The decision this change needed, and the answer
 ///
 /// *May the scrub decode signed CBOR?* Yes, and the question turns out to be easier than it
 /// looked: the provenance blob is **deliberately server-visible** signed CBOR that carries no

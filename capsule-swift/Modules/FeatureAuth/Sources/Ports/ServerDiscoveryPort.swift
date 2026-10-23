@@ -100,7 +100,7 @@ public struct ServerInfo: Sendable, Equatable, Hashable, Identifiable {
 /// Resolving a typed domain to a server, and pinning what it claims to be.
 ///
 /// **Not yet in `CapsulePorts`.** `.well-known/capsule/server-info` is specified in
-/// *Authentication — The `.well-known/capsule/*` Registry*), so
+/// *Authentication — The `.well-known/capsule/*` Registry*, so
 /// this protocol is declared here, next to its only consumer, and moves to
 /// `CapsulePorts/IdentityPorts.swift` unchanged when the SDK surface exists.
 public protocol ServerDiscoveryPort: Sendable {

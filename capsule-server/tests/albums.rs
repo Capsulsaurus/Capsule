@@ -1,6 +1,6 @@
 //! `POST /v1/albums` — album provisioning, end to end.
 //!
-//! The slice exists because `capsule push` had nowhere to land: a container album's id is
+//! This suite exists because `capsule push` had nowhere to land: a container album's id is
 //! derived from the account master key, the client already knows it, and the server had never
 //! heard of it. So the case that matters most here is not any single response — it is
 //! `provisioning_makes_an_album_writable`, which asserts that an upload the server refused
@@ -75,7 +75,7 @@ async fn provisioning_is_idempotent() {
     }
 }
 
-/// The point of the slice: an album invariant 6 will actually admit a write to.
+/// The point of this test: an album invariant 6 will actually admit a write to.
 ///
 /// Asserted through [`ProvisionedAuthority`] rather than against the store, because the store
 /// holding a row proves nothing on its own — what a write path asks is

@@ -41,4 +41,4 @@ cargo nextest run -p capsule-sdk --features ffi --lib ffi::tests
 # run here so the two sides of each verb are smoked together rather than only in the full suite.
 cargo nextest run -p capsule-library --lib lifecycle::sync_apply lifecycle::import
 
-echo "HardwareSigner examples present; software-signer + SDK FFI-flow (S-D9) + workspace-verb (S-P1) smokes passed"
+echo "HardwareSigner examples present; software-signer + SDK FFI-flow and workspace-verb smokes passed"

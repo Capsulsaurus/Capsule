@@ -7,7 +7,7 @@
 //! `user@server.tld` or a device name. Whether two advertisements belong to the same user is
 //! established *inside* the encrypted [`channel`](super::channel), never from the broadcast.
 //!
-//! The live mDNS responder is intentionally **not** built into this slice: it is inherently
+//! The live mDNS responder is intentionally **not** built into this change: it is inherently
 //! non-deterministic (real multicast, real timing) and belongs behind the [`Discovery`] seam,
 //! exactly as the connection-class detector kept live NIC probing behind a signal seam. Tests
 //! drive a [`MockDiscovery`]; a production responder — pure-Rust `mdns-sd` is the sanctioned

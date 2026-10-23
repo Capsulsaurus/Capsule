@@ -42,7 +42,7 @@
 //! verbatim). The first publish records it; every later publish must present the same key, and
 //! the document must verify under it.
 //!
-//! The alternative the slice weighed was recording an IK at **registration**, which is
+//! The alternative this design weighed was recording an IK at **registration**, which is
 //! stronger: it removes the first-publish window in which a stolen session token could pin an
 //! attacker's key. It is not available — registration is not ported, so there is
 //! no account record to put an IK in and no registration contract to change. Trust-on-first-use
@@ -58,7 +58,7 @@
 //! global sign-out — the recovery path a user reaches for after a device is stolen, and the
 //! ceremony designed so that a stolen session token could not deny it to them.
 //!
-//! **The migration the slice warned about does not exist, because of when this landed.** No
+//! **The migration the design warned about does not exist, because of when this landed.** No
 //! deployment has stored a directory under this port — every adapter here is in-memory and the
 //! server has no binary — so turning verification on costs nothing. Doing it after the first
 //! deployment would have meant an account whose stored document does not verify, and refusing

@@ -489,7 +489,7 @@ async fn the_sdk_completes_a_real_second_factor_over_a_socket() {
 
 /// The escrow round trip, over a socket, against the router that actually serves it.
 ///
-/// This is the case the slice was missing. `capsule_sdk::recovery` used to build
+/// This is the case that was missing. `capsule_sdk::recovery` used to build
 /// `{api_root}/backup/escrow` by hand — the Salvo document's path — and its own in-module mock
 /// answered whatever path it was handed, so every escrow test passed while no real server had
 /// that route. Only a client pointed at the router can tell the difference, and the bytes are

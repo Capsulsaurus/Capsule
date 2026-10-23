@@ -1,6 +1,6 @@
 //! Moderation, end to end.
 //!
-//! The case that carries the slice is
+//! The case that carries the acceptance is
 //! `a_suspended_account_is_told_why_and_keeps_every_recovery_path`: design/moderation.md's
 //! structural rule is that there are **no silent operations**, and its structural *limit* is
 //! that moderation is access-level and never data-level. Both are asserted in one place because

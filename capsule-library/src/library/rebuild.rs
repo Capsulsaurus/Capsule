@@ -315,7 +315,7 @@ fn signed_asset_row(s: &SidecarV1, facts: &ChainFacts, prior: Option<&AssetRow>)
         tracing::debug!(
             asset_id = %s.uuid,
             stack_id = ?stack_id,
-            "rebuild_index: no stack_membership register on disk (pre-S-B15 asset); keeping \
+            "rebuild_index: no stack_membership register on disk (asset written before the register existed); keeping \
              the index-only stack placement the existing row carries"
         );
     }
@@ -342,7 +342,7 @@ fn signed_asset_row(s: &SidecarV1, facts: &ChainFacts, prior: Option<&AssetRow>)
         rating: i64::from(s.rating.get().copied().unwrap_or(0)),
         is_deleted: facts.is_deleted,
         deleted_at: facts.deleted_at,
-        // The register this whole slice exists for: a never-written
+        // The register this rebuild exists for: a never-written
         // register means visible, the wire-absent default.
         is_hidden: s.hidden.get().copied().unwrap_or(false),
     }

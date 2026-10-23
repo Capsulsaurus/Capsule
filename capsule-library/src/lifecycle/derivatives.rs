@@ -122,7 +122,7 @@ fn classify(error: &MediaError, src: &Path, format: Option<StillFormat>) -> Deri
                 supported = ?capsule_core::media::SUPPORTED_STILL_FORMATS,
                 "derivatives: no codec for this format in this build; the original is imported \
                  signed and encrypted, but without a thumbnail or LQIP until the codec lands. \
-                 Derivatives are backfillable from the stored original (S-B13)"
+                 Derivatives are backfillable from the stored original"
             );
             DerivativeStatus::DeferredNoCodec
         }

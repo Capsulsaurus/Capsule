@@ -1,7 +1,7 @@
 //! The second factor — enrolling a TOTP authenticator, and demanding one at
 //! sign-in.
 //!
-//! # The defect this slice fixes, stated plainly
+//! # The defect this change fixes, stated plainly
 //!
 //! The retired Salvo tree had all four TOTP operations and **never asked for a code**. Its login
 //! handler called `authenticate_user`, which returns a token pair unconditionally; the

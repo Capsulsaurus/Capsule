@@ -43,7 +43,7 @@
 //! `VALKEY_URL` (design/filesystem/server.md, "Required Services"), and [`crate::boot`] connects
 //! to it and proves it answers `PING` before anything else is assembled. The rejected
 //! alternative was a Postgres fallback removing Valkey, which would mean emulating TTL and
-//! expiry in SQL — the generic TTL abstraction this slice exists to delete. The in-memory
+//! expiry in SQL — the generic TTL abstraction this change exists to delete. The in-memory
 //! adapter is a **test double**, never a deployment profile.
 //!
 //! [`CohortStore`] is the exception and gets **Postgres** and the double, because it is the one
@@ -118,7 +118,7 @@ pub type StoreFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, StoreError>>
 /// and a localized message belongs to the route that could not complete, which knows what the
 /// caller was trying to do; a store does not.
 ///
-/// `#[non_exhaustive]` because an adapter this slice has not written yet may need a variant,
+/// `#[non_exhaustive]` because an adapter this change has not written yet may need a variant,
 /// and a route matching on it must keep compiling when one lands.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]

@@ -889,7 +889,7 @@ mod tests {
 
     // ── the reactive half ────────────────────────────────────────────────────────
 
-    /// **The slice's Done-when.** A token that is valid as far as the *client* can tell and
+    /// **The acceptance case.** A token that is valid as far as the *client* can tell and
     /// refused by the server — the race the pre-flight check cannot close — is refreshed once
     /// and the call replayed once, and the replay carries the rotated token.
     #[tokio::test]

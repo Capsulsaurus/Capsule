@@ -46,7 +46,7 @@
 //! | v3    | + `embeddings` + its two indexes (`09ae1d1`) |
 //! | v4    | + `assets.is_hidden`, `idx_assets_hidden`, widened `idx_assets_timeline` (`5d3ef26`) |
 //!
-//! Two consequences the slice text did not anticipate, both handled below:
+//! Two consequences the original plan did not anticipate, both handled below:
 //!
 //! 1. **v1 is ambiguous**: a v1-stamped catalog may carry either `hash_blake3` or `hash_sha256`,
 //!    so the 1 → 2 step renames *conditionally* rather than unconditionally.

@@ -1,6 +1,6 @@
 //! Share links, end to end.
 //!
-//! The case that carries the slice is `a_link_cannot_be_walked_into_a_blob_it_does_not_name`.
+//! The case that carries the acceptance is `a_link_cannot_be_walked_into_a_blob_it_does_not_name`.
 //! design/share-links.md asks the serve path to apply the boundary-crossing privacy strip, and
 //! a key-free server cannot — the metadata is ciphertext sealed under material the server does
 //! not hold. What it *can* enforce is the property that makes the client's strip stick: a link

@@ -694,7 +694,7 @@ impl Workspace {
         } else {
             tracing::warn!(
                 path = %AlbumStore::path(&self.root).display(),
-                "no album keystore: this library predates durable album keys (S-A10), so it opens \
+                "no album keystore: this library predates durable album keys, so it opens \
                  with zero albums. Its existing assets can only be recovered through a backup \
                  artifact (`import_backup`), which escrows their AMKs."
             );
@@ -847,7 +847,7 @@ impl Workspace {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 tracing::warn!(
                     asset_id = %asset_id,
-                    "no sealed metadata blob on disk (pre-S-A10 asset); it cannot be exported or \
+                    "no sealed metadata blob on disk (asset written before sealed metadata existed); it cannot be exported or \
                      uploaded until its metadata is rewritten"
                 );
                 Vec::new()

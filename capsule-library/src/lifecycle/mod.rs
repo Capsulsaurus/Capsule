@@ -368,7 +368,7 @@ pub struct SignedImportOptions {
     /// Folded third-party exporter metadata for this file, attached by the
     /// [executor](crate::import::execute_with_source_metadata) when the import came
     /// from a [source adapter](crate::import::SourceAdapter). `None` — a plain filesystem
-    /// import — leaves every enriched field exactly as it was before the slice.
+    /// import — leaves every enriched field exactly as it was before this change.
     pub enrichment: Option<SidecarEnrichment>,
 }
 

@@ -62,7 +62,7 @@ struct ScratchDir(PathBuf);
 
 impl ScratchDir {
     fn new() -> Self {
-        let path = std::env::temp_dir().join(format!("capsule-cli-s-b17-{}", nanoid::nanoid!()));
+        let path = std::env::temp_dir().join(format!("capsule-cli-scratch-{}", nanoid::nanoid!()));
         std::fs::create_dir_all(&path).expect("create scratch dir");
         Self(path)
     }
@@ -440,7 +440,7 @@ fn repair_reports_by_default_and_corrects_under_apply() {
         let mut ws = fx.reopen();
         let broken = fx.asset_for(&ws, broken_image);
         ws.correct_imported_capture_timestamp(&broken, jiff::Timestamp::now())
-            .expect("reproduce the pre-S-B16 stamp");
+            .expect("reproduce the stamp from before the repair existed");
         let month = fx.month_dir(&ws, broken);
         (broken, month)
     };

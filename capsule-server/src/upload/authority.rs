@@ -25,7 +25,7 @@
 //! table, its pin column and the device directory — and
 //! the test one is a double, which belongs in a test binary rather than inside a server
 //! binary. This slice declares what the gate needs and refuses by default without it; wiring
-//! the adapters is the work of the slices that own those tables.
+//! the adapters is the work of the changes that own those tables.
 //!
 //! # Two methods, one question
 //!

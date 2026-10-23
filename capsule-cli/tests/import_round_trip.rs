@@ -5,7 +5,7 @@
 //! hands integration tests of the crate that declares the bin). `capsule library init`,
 //! `capsule import`, `capsule cull` and `capsule library rebuild` each get their own process,
 //! and the only thing they share is the library directory on disk. That is the whole point:
-//! the criterion is that state survives a *new process*, and an in-process second
+//! what is being proved is that state survives a *new process*, and an in-process second
 //! `Workspace::open` cannot tell durable state apart from state that merely survived in a
 //! `HashMap`. A process boundary can — which is why this is a subprocess test, and why (like
 //! `cull_round_trip.rs`, whose pattern it follows) it needs no test dependency to be one.
@@ -72,7 +72,7 @@ struct ScratchDir(PathBuf);
 
 impl ScratchDir {
     fn new() -> Self {
-        let path = std::env::temp_dir().join(format!("capsule-cli-s-a10-{}", nanoid::nanoid!()));
+        let path = std::env::temp_dir().join(format!("capsule-cli-scratch-{}", nanoid::nanoid!()));
         std::fs::create_dir_all(&path).expect("create scratch dir");
         Self(path)
     }
@@ -380,7 +380,7 @@ fn an_import_is_reconstructed_by_a_later_process_from_disk_alone() {
     );
     assert!(
         sidecar.signature.is_some(),
-        "imports land on the signed path (S-B2), never the legacy unsigned sidecar"
+        "imports land on the signed path, never the legacy unsigned sidecar"
     );
 
     // The EXIF the importer genuinely parsed: neither value exists anywhere but inside the
@@ -433,7 +433,7 @@ fn an_import_is_reconstructed_by_a_later_process_from_disk_alone() {
     assert_eq!(records.len(), 1, "a fresh import is a chain of one");
     let core = &records[0].manifest.core;
     assert_eq!(core.file_id, asset_id);
-    assert_eq!(core.album_id, fx.album, "S-B12: the derived de facto album");
+    assert_eq!(core.album_id, fx.album, "the derived de facto album");
     assert_eq!(core.action, Action::Create);
     assert_eq!(core.plaintext_size as usize, fx.image.len());
     assert!(
@@ -468,7 +468,7 @@ fn library_rebuild_reconstructs_the_index_in_a_new_process() {
     assert!(out.contains("Index rebuilt successfully"), "stdout:\n{out}");
 
     let row = index_row(&fx.library, &asset_id)
-        .expect("S-D21: a signed library must rebuild its rows, not zero of them");
+        .expect("a signed library must rebuild its rows, not zero of them");
     assert_eq!(row.uuid, asset_id.to_string());
     assert_eq!(row.asset_type, "photo");
     assert_eq!(
@@ -485,7 +485,7 @@ fn library_rebuild_reconstructs_the_index_in_a_new_process() {
     assert!(!row.is_deleted, "a live asset must not rebuild as trashed");
     assert!(
         !row.is_hidden,
-        "a never-written `hidden` register rebuilds as visible (S-D19/S-D21)"
+        "a never-written `hidden` register rebuilds as visible"
     );
 
     // And the workspace's own restore never depended on the index: a further process still sees

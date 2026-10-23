@@ -2,7 +2,7 @@
 //!
 //! # Why this is a library module and not `main`
 //!
-//! Until this slice the only composition root in the tree was `tests/support/mod.rs`, which
+//! Until this change the only composition root in the tree was `tests/support/mod.rs`, which
 //! assembles seventeen module contexts out of test doubles. Nothing assembled the server. A
 //! composition root that lives in `main` is a composition root nothing tests: "the router
 //! builds", "every port has an adapter" and "the published signing key is the one the tokens
@@ -1038,7 +1038,7 @@ fn compose(
         albums: AlbumContext::new(albums.clone(), clock.clone()),
         membership: MembershipContext::new(members, clock.clone()),
         // Unlimited, which is what a self-hosted deployment runs. A configurable ceiling is a
-        // quota policy this slice does not own; `QuotaLimits` already takes one.
+        // quota policy this change does not own; `QuotaLimits` already takes one.
         quota: QuotaContext::new(quotas.clone(), clock.clone(), QuotaLimits::unlimited()),
         attestation: attestation.clone(),
         discovery: DiscoveryContext::new(server_info, revocations),

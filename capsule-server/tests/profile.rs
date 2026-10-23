@@ -1,6 +1,6 @@
 //! The profile surface, end to end.
 //!
-//! Two cases carry the slice. `a_password_change_ends_every_other_session_and_keeps_this_one` is
+//! Two cases carry the acceptance. `a_password_change_ends_every_other_session_and_keeps_this_one` is
 //! the whole reason a password change is its own operation: a rotation that left the leaked
 //! credential's sessions live would be worthless, and one that signed the caller out of the
 //! device they rotated on would be unusable. And
@@ -307,7 +307,7 @@ const NEW_PASSWORD: &str = "a different correct horse";
 
 #[tokio::test]
 async fn a_password_change_ends_every_other_session_and_keeps_this_one() {
-    // The case the slice exists for. A rotation that left the leaked credential's sessions live
+    // The case this test exists for. A rotation that left the leaked credential's sessions live
     // would be worthless; one that signed the caller out of the device they rotated on would be
     // unusable.
     let fixture = Fixture::working();

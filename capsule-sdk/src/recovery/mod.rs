@@ -1836,7 +1836,7 @@ mod tests {
     /// The mock's route guard is live: a client pointed one segment off the documented path
     /// gets a loud `Unexpected`, not a plausible-looking `NotEnrolled`.
     ///
-    /// This is the regression this slice exists for, asserted as a property of the *test
+    /// This is the regression this change exists for, asserted as a property of the *test
     /// harness*: without it the mock would answer any path at all, and a wrong route would
     /// once again read as "this account has escrowed nothing" — which is what let
     /// `backup/escrow` survive a contract re-source.

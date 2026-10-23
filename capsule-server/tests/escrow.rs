@@ -1,6 +1,6 @@
 //! The master-key escrow surface, end to end.
 //!
-//! The case that carries the slice is `a_rotation_replaces_the_escrow_and_the_old_one_is_gone`:
+//! The case that carries the acceptance is `a_rotation_replaces_the_escrow_and_the_old_one_is_gone`:
 //! after a guided re-wrap the lost recovery secret must unwrap nothing, and a server that kept
 //! the previous blob would preserve exactly the artifact the rotation exists to destroy.
 

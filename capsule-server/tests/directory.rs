@@ -1,6 +1,6 @@
 //! The device-directory surface, end to end.
 //!
-//! Two properties carry the whole slice: the bytes come back exactly as they went in, and a
+//! Two properties carry the whole suite: the bytes come back exactly as they went in, and a
 //! version that does not strictly advance changes nothing. The first is what makes a signature
 //! still verify after a round trip; the second is what stops a server rolling a directory back
 //! to un-revoke a device somebody deliberately removed.

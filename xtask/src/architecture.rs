@@ -1076,7 +1076,7 @@ mod tests {
     fn retired_dependency_list_holds_the_retired_but_not_the_approved() {
         assert!(
             !RETIRED_DEPENDENCIES.contains(&"chromahash"),
-            "chromahash is approved as of 0.7.1 — see design/thumbnails.md and slice S-B14"
+            "chromahash is approved as of 0.7.1 — see design/thumbnails.md"
         );
 
         // Still genuinely retired. `thumbhash` is what chromahash replaces and stays listed until

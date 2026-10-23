@@ -1,6 +1,6 @@
 //! The global sign-out ceremony, end to end.
 //!
-//! The property the whole slice exists for is
+//! The property the whole suite exists for is
 //! `a_stolen_session_token_cannot_log_the_owner_out_of_everything`: an attacker holding a live
 //! token can revoke *that* token and nothing else. Every other case here is a way that property
 //! could be lost — a challenge that survives a failed attempt, a proof checked against a

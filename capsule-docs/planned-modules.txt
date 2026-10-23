@@ -1,7 +1,7 @@
 # Modules the design specifies and the tree does not have yet.
 #
 # Format, tab-separated:
-#   <module path>	<why it does not exist yet, and the slice that lands it>
+#   <module path>	<why it does not exist yet, and the issue that lands it>
 #
 # Keyed on the path alone: a module that does not exist does not exist in every
 # doc that names it. `mise run check-docs-truth` fails on an entry whose module

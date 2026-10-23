@@ -184,7 +184,7 @@ async fn an_expired_entry_leaves_the_published_list() {
 
 #[tokio::test]
 async fn a_peer_refuses_a_token_the_published_list_revokes() {
-    // The slice's own criterion: a second server's revocation check consuming *this* server's
+    // The acceptance criterion: a second server's revocation check consuming *this* server's
     // published list. The peer is stood up as what a peer actually is here — a verifier holding
     // a token and a fetched copy of the issuer's list — rather than as a whole second
     // deployment, because the rule under test is entirely a property of those two things.
