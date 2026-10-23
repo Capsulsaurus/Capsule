@@ -55,6 +55,13 @@ fn asset(n: u128, captured: &str, album_id: Uuid) -> AssetEntry {
                 retention_until: None,
             },
         ],
+        labels: vec!["beach".to_owned(), "sunset".to_owned()],
+        regions: Vec::new(),
+        capture_text: captured.to_owned(),
+        capture_imported: None,
+        location: None,
+        location_imported: None,
+        location_edited: false,
     }
 }
 

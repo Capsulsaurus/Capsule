@@ -8,7 +8,9 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use super::auth::AuthAction;
 use super::form::FormKey;
 use super::import::ImportAction;
+use super::label_editor::{LabelAction, Nudge};
 use super::library::LibraryAction;
+use super::metadata_repair::RepairAction;
 use super::push::PushAction;
 use super::restore::RestoreAction;
 use super::share::ShareAction;
@@ -275,6 +277,197 @@ pub const BINDINGS: &[Binding] = &[
         "Up",
         "Select the previous row",
         Action::Library(LibraryAction::SelectPrevious),
+    ),
+    on(
+        Screen::Library,
+        KeyCode::Char('e'),
+        "e",
+        "Edit labels",
+        Action::EditLabels,
+    ),
+    on(
+        Screen::Library,
+        KeyCode::Char('m'),
+        "m",
+        "Fix time and place",
+        Action::RepairMetadata,
+    ),
+    // ── Label editor ─────────────────────────────────────────────────────
+    on(
+        Screen::Labels,
+        KeyCode::Char('a'),
+        "a",
+        "Add a label",
+        Action::Labels(LabelAction::Add),
+    ),
+    on(
+        Screen::Labels,
+        KeyCode::Char('x'),
+        "x",
+        "Remove the label or region",
+        Action::Labels(LabelAction::Remove),
+    ),
+    on(
+        Screen::Labels,
+        KeyCode::Char('c'),
+        "c",
+        "Draw a circle",
+        Action::Labels(LabelAction::DrawCircle),
+    ),
+    on(
+        Screen::Labels,
+        KeyCode::Char('r'),
+        "r",
+        "Draw a rectangle",
+        Action::Labels(LabelAction::DrawRect),
+    ),
+    on(
+        Screen::Labels,
+        KeyCode::Enter,
+        "Enter",
+        "Label and keep the region",
+        Action::Labels(LabelAction::Finish),
+    ),
+    unlisted(
+        Screen::Labels,
+        KeyCode::Up,
+        "Up",
+        "Select the previous row, or move the region up",
+        Action::Labels(LabelAction::Nudge(Nudge::Up)),
+    ),
+    unlisted(
+        Screen::Labels,
+        KeyCode::Down,
+        "Down",
+        "Select the next row, or move the region down",
+        Action::Labels(LabelAction::Nudge(Nudge::Down)),
+    ),
+    unlisted(
+        Screen::Labels,
+        KeyCode::Left,
+        "Left",
+        "Move the region left",
+        Action::Labels(LabelAction::Nudge(Nudge::Left)),
+    ),
+    unlisted(
+        Screen::Labels,
+        KeyCode::Right,
+        "Right",
+        "Move the region right",
+        Action::Labels(LabelAction::Nudge(Nudge::Right)),
+    ),
+    unlisted(
+        Screen::Labels,
+        KeyCode::Char('+'),
+        "+",
+        "Grow the region",
+        Action::Labels(LabelAction::Resize {
+            width: 1,
+            height: 1,
+        }),
+    ),
+    unlisted(
+        Screen::Labels,
+        KeyCode::Char('='),
+        "=",
+        "Grow the region",
+        Action::Labels(LabelAction::Resize {
+            width: 1,
+            height: 1,
+        }),
+    ),
+    unlisted(
+        Screen::Labels,
+        KeyCode::Char('-'),
+        "-",
+        "Shrink the region",
+        Action::Labels(LabelAction::Resize {
+            width: -1,
+            height: -1,
+        }),
+    ),
+    unlisted(
+        Screen::Labels,
+        KeyCode::Char(']'),
+        "]",
+        "Widen the rectangle",
+        Action::Labels(LabelAction::Resize {
+            width: 1,
+            height: 0,
+        }),
+    ),
+    unlisted(
+        Screen::Labels,
+        KeyCode::Char('['),
+        "[",
+        "Narrow the rectangle",
+        Action::Labels(LabelAction::Resize {
+            width: -1,
+            height: 0,
+        }),
+    ),
+    unlisted(
+        Screen::Labels,
+        KeyCode::Char('}'),
+        "}",
+        "Heighten the rectangle",
+        Action::Labels(LabelAction::Resize {
+            width: 0,
+            height: 1,
+        }),
+    ),
+    unlisted(
+        Screen::Labels,
+        KeyCode::Char('{'),
+        "{",
+        "Lower the rectangle",
+        Action::Labels(LabelAction::Resize {
+            width: 0,
+            height: -1,
+        }),
+    ),
+    // ── Metadata repair ──────────────────────────────────────────────────
+    on(
+        Screen::Repair,
+        KeyCode::Char('t'),
+        "t",
+        "Correct the capture time",
+        Action::Repair(RepairAction::EditTime),
+    ),
+    on(
+        Screen::Repair,
+        KeyCode::Char('g'),
+        "g",
+        "Correct the location",
+        Action::Repair(RepairAction::EditLocation),
+    ),
+    on(
+        Screen::Repair,
+        KeyCode::Char('c'),
+        "c",
+        "Copy the neighbour's location",
+        Action::Repair(RepairAction::CopyLocation),
+    ),
+    on(
+        Screen::Repair,
+        KeyCode::Char('x'),
+        "x",
+        "Record no location",
+        Action::Repair(RepairAction::ClearLocation),
+    ),
+    unlisted(
+        Screen::Repair,
+        KeyCode::Down,
+        "Down",
+        "Select the next neighbour",
+        Action::Repair(RepairAction::SelectNext),
+    ),
+    unlisted(
+        Screen::Repair,
+        KeyCode::Up,
+        "Up",
+        "Select the previous neighbour",
+        Action::Repair(RepairAction::SelectPrevious),
     ),
     // ── While a form is being edited ─────────────────────────────────────
     editing(KeyCode::Enter, "Enter", "Submit", FormKey::Submit, true),

@@ -40,6 +40,30 @@ Capsule · Key bindings · Signed out
 │Left       Leave the album or stack                              Library      │
 │Down       Select the next row                                   Library      │
 │Up         Select the previous row                               Library      │
+│e          Edit labels                                           Library      │
+│m          Fix time and place                                    Library      │
+│a          Add a label                                           Labels       │
+│x          Remove the label or region                            Labels       │
+│c          Draw a circle                                         Labels       │
+│r          Draw a rectangle                                      Labels       │
+│Enter      Label and keep the region                             Labels       │
+│Up         Select the previous row, or move the region up        Labels       │
+│Down       Select the next row, or move the region down          Labels       │
+│Left       Move the region left                                  Labels       │
+│Right      Move the region right                                 Labels       │
+│+          Grow the region                                       Labels       │
+│=          Grow the region                                       Labels       │
+│-          Shrink the region                                     Labels       │
+│]          Widen the rectangle                                   Labels       │
+│[          Narrow the rectangle                                  Labels       │
+│}          Heighten the rectangle                                Labels       │
+│{          Lower the rectangle                                   Labels       │
+│t          Correct the capture time                              Time and plac│
+│g          Correct the location                                  Time and plac│
+│c          Copy the neighbour's location                         Time and plac│
+│x          Record no location                                    Time and plac│
+│Down       Select the next neighbour                             Time and plac│
+│Up         Select the previous neighbour                         Time and plac│
 │Enter      Submit                                                while typing │
 │Tab        Next field                                            while typing │
 │Down       Next field                                            while typing │

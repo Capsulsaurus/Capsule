@@ -16,10 +16,12 @@ use tokio::sync::{Mutex, broadcast, mpsc, oneshot};
 use super::auth::{AuthAction, AuthEffect, LoginResult};
 use super::form::Secret;
 use super::import::{ImportAction, ImportEffect, ImportRequest};
+use super::label_editor::{EditRequest, Edited, LabelAction, LabelEffect, REGION_PREVIEW_EDGE};
 use super::library::{
     Catalogue, EncodeRequest, EncodedPreview, LibraryAction, LibraryEffect, NO_IMAGE_PROTOCOL,
     OpenRequest, PREVIEW_EDGE, PreviewImage, PreviewRequest,
 };
+use super::metadata_repair::{RepairAction, RepairEffect};
 use super::push::{PushAction, PushEffect, PushProgress, PushRequest, is_custody_step};
 use super::restore::{RestoreAction, RestoreEffect, RestoreRequest};
 use super::share::{CreateLinkRequest, IssuedLink, ShareAction, ShareEffect};
@@ -178,6 +180,27 @@ pub trait Ports: Send + Sync + 'static {
     fn image_picker(&self) -> Option<Picker> {
         None
     }
+
+    /// Unlock the library, write one edit through [`crate::edit::apply`] (what `capsule label`,
+    /// `capsule region` and `capsule edit` run), snapshot it and close it again.
+    fn apply_edit(
+        &self,
+        request: EditRequest,
+    ) -> impl Future<Output = Result<Edited, String>> + Send {
+        let _ = request;
+        async { Err(NOT_OFFERED.to_owned()) }
+    }
+
+    /// Decode an asset's original into a preview no larger than [`REGION_PREVIEW_EDGE`] for
+    /// the label editor to draw regions on as half blocks: unlike
+    /// [`preview`](Self::preview), whatever image protocol the terminal speaks.
+    fn region_preview(
+        &self,
+        request: PreviewRequest,
+    ) -> impl Future<Output = Result<PreviewImage, String>> + Send {
+        let _ = request;
+        async { Err(NOT_OFFERED.to_owned()) }
+    }
 }
 
 /// Perform `effect` through `ports` and return the action that reports its outcome.
@@ -232,6 +255,19 @@ pub async fn perform<P: Ports>(ports: &P, effect: Effect) -> Action {
                 size,
                 result: ports.encode_preview(request).await,
             })
+        }
+        Effect::Labels(LabelEffect::Apply(request)) => {
+            Action::Labels(LabelAction::Applied(ports.apply_edit(request).await))
+        }
+        Effect::Labels(LabelEffect::Preview(request)) => {
+            let asset_id = request.asset_id;
+            Action::Labels(LabelAction::PreviewLoaded {
+                asset_id,
+                result: ports.region_preview(request).await,
+            })
+        }
+        Effect::Repair(RepairEffect::Apply(request)) => {
+            Action::Repair(RepairAction::Applied(ports.apply_edit(request).await))
         }
     };
     tracing::debug!(target: "capsule_cli::tui", ?effect, ?action, "effect finished");
@@ -673,6 +709,44 @@ impl Ports for LocalPorts {
 
     fn image_picker(&self) -> Option<Picker> {
         self.picker.clone()
+    }
+
+    async fn apply_edit(&self, request: EditRequest) -> Result<Edited, String> {
+        // Unlocking runs Argon2 and the edit signs and seals: off the async workers. The
+        // workspace, and the library's lock with it, is dropped once the snapshot is taken.
+        off_loop(move || async move {
+            let EditRequest {
+                library,
+                passphrase,
+                edit,
+            } = request;
+            let mut workspace = crate::open_workspace_with(&library, passphrase.expose())
+                .map_err(|e| e.to_string())?;
+            let report = crate::edit::apply(&mut workspace, &edit)
+                .map_err(|error| crate::edit::describe_error(&error))?;
+            Ok(Edited {
+                summary: crate::edit::summary(&report),
+                catalogue: super::library::catalogue::collect(&workspace),
+                library,
+            })
+        })
+        .await
+    }
+
+    async fn region_preview(&self, request: PreviewRequest) -> Result<PreviewImage, String> {
+        super::library::previewable(&request.ext)?;
+        tokio::task::spawn_blocking(move || {
+            let bytes = std::fs::read(&request.original)
+                .map_err(|e| format!("could not read the original: {e}"))?;
+            super::library::decode_preview(
+                &capsule_core::media::RawshiftDecoder,
+                &bytes,
+                &request.ext,
+                REGION_PREVIEW_EDGE,
+            )
+        })
+        .await
+        .map_err(|e| format!("the preview decode did not finish: {e}"))?
     }
 }
 
