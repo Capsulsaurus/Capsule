@@ -18,6 +18,7 @@
 
 pub mod catalogue;
 
+use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -690,7 +691,7 @@ fn row_item(catalogue: &Catalogue, row: Row) -> ListItem<'static> {
             let mut text = format!("{}  {}", when(asset), asset.ext);
             if let Some((stack_id, StackRole::Primary)) = asset.stack {
                 let count = catalogue.stack(stack_id).map_or(1, |s| s.members.len());
-                text.push_str(&format!("  stack of {count}"));
+                let _ = write!(text, "  stack of {count}");
             }
             if asset.hidden {
                 text.push_str("  hidden");
@@ -756,7 +757,7 @@ fn asset_lines(catalogue: &Catalogue, asset: &AssetEntry) -> Vec<Line<'static>> 
             record.client_version
         );
         if let Some(until) = &record.retention_until {
-            text.push_str(&format!("  until {until}"));
+            let _ = write!(text, "  until {until}");
         }
         lines.push(Line::from(text));
     }
