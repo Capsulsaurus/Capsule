@@ -349,6 +349,28 @@ async fn a_body_past_the_chunk_bound_still_reaches_the_chunk_routes() {
 /// The header-read bound every socket case below serves with.
 const HEADER_READ_TIMEOUT: Duration = Duration::from_millis(300);
 
+/// A client that connects and never sends a byte is disconnected at the header bound (#795).
+///
+/// The read that tells HTTP/1 from the HTTP/2 preface precedes hyper's own header timer, so
+/// this is the case that timer alone never reached: Kynos holds a connection's first head to
+/// the header-read timeout from accept, sniff included.
+#[tokio::test]
+async fn a_client_that_never_sends_a_byte_is_disconnected() {
+    let address = support::serve_on_socket(Fixture::working_app(), HEADER_READ_TIMEOUT).await;
+    let mut stream = TcpStream::connect(address).await.expect("it connects");
+    let started = Instant::now();
+
+    let trailing = support::read_until_closed(&mut stream).await;
+    assert!(
+        trailing.is_empty(),
+        "nothing was asked for, so nothing is answered: {trailing}"
+    );
+    assert!(
+        started.elapsed() >= HEADER_READ_TIMEOUT,
+        "closed before the header bound passed"
+    );
+}
+
 /// A client that sends part of a request head and then stalls is disconnected.
 #[tokio::test]
 async fn a_client_that_stalls_inside_its_request_head_is_disconnected() {

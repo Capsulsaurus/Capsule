@@ -163,11 +163,12 @@ pub fn federation_body_size() -> BodySize {
 /// Keep-alive itself stays on: a client uploading many chunks reuses one connection, and the
 /// idle bound is what keeps that from being a way to hold one open.
 ///
-/// # What this cannot bound
+/// # A connection that never sends a byte
 ///
-/// A connection that sends **no byte at all** is held by Kynos's protocol sniff (it reads the
-/// first bytes to tell HTTP/1 from HTTP/2) before hyper's driver, and so before this timer,
-/// exists. Kynos 0.1.0 exposes no deadline for that read; only `MAX_CONNECTIONS` bounds it.
+/// Kynos reads a connection's first bytes to tell HTTP/1 from HTTP/2 before hyper's driver,
+/// and so before hyper's header timer, exists. Kynos holds that first head — sniff included —
+/// to this same `header_read_timeout`, counted from accept, so a client that connects and stays
+/// silent is closed at the same bound (#795; pinned on a socket in `tests/limits.rs`).
 pub fn http1(header_read_timeout: Duration) -> Http1Config {
     Http1Config::default()
         .keep_alive(true)
