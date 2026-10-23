@@ -3,10 +3,11 @@
 //! # Why one module
 //!
 //! [Server Filesystem § Rebuild] confines manifest decoding to a single module, shared by the
-//! index rebuild and the [integrity scrub](crate::scrub), and fuzzed. The
-//! write path never decodes a manifest: it validates the envelope projection a client declared
-//! and stores the manifest's bytes verbatim. Decoding is a recovery and audit act, off the hot
-//! path, so a parser bug can cost a rebuild a row or a scrub a finding, and never an upload.
+//! index rebuild, the [integrity scrub](crate::scrub) and the upload path's
+//! [signer check](crate::upload::signer), and fuzzed. The write path decodes exactly one blob:
+//! a provenance blob at finalization, so that its signature is verified against the device that
+//! signed it rather than taken on the uploader's word. Everything else it stores verbatim and
+//! never opens.
 //!
 //! Every byte this module reads came from a client, so it is bounded before it is decoded
 //! ([`MAX_MANIFEST_BYTES`]), and it decodes through `capsule_core`'s own types rather than a
@@ -32,8 +33,9 @@
 //! predecessor as a broken chain, which needs the decoded manifest, while a rebuild refuses to
 //! replay it and quarantines the bytes. [`parse_valid`] is the two together.
 //!
-//! Signatures are not checked here. That needs the uploading device's published key, which is
-//! the client's `verify_asset` and, for a rebuild, the device directory the ledger recorded.
+//! Signatures are not checked here. That needs the signing device's published key: the client's
+//! `verify_asset`, the upload path's signer check against the directory in force, and, for a
+//! rebuild, the device directory the ledger recorded.
 //!
 //! [Server Filesystem § Rebuild]: https://github.com/Capsulsaurus/Capsule/blob/master/capsule-docs/src/content/docs/design/filesystem/server.md#rebuild
 

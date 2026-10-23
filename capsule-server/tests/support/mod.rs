@@ -2676,6 +2676,8 @@ pub(crate) struct TestAuthority {
     shares: Mutex<BTreeMap<(String, String), MemberRole>>,
     upgrades: Mutex<BTreeMap<(String, String), Uuid>>,
     devices: Mutex<BTreeMap<(String, Uuid), Timestamp>>,
+    /// A device's published signing key where a case set one; [`device_key`] otherwise.
+    keys: Mutex<BTreeMap<(String, Uuid), capsule_core::crypto::keys::HybridVerifyingKey>>,
     unavailable: AtomicBool,
 }
 
@@ -2754,6 +2756,19 @@ impl TestAuthority {
             .insert((user.as_str().to_owned(), device), added_at);
     }
 
+    /// Publish `key` as `device`'s signing key, for a case whose manifests a real library signs.
+    pub(crate) fn set_device_key(
+        &self,
+        user: &UserId,
+        device: Uuid,
+        key: capsule_core::crypto::keys::HybridVerifyingKey,
+    ) {
+        self.keys
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert((user.as_str().to_owned(), device), key);
+    }
+
     /// Remove a device from the directory, as a revocation would.
     pub(crate) fn revoke_device(&self, user: &UserId, device: Uuid) {
         self.devices().remove(&(user.as_str().to_owned(), device));
@@ -2830,6 +2845,179 @@ impl WriteAuthority for TestAuthority {
                 .copied())
         })
     }
+
+    fn device_directory<'a>(
+        &'a self,
+        user: &'a UserId,
+    ) -> AuthorityFuture<'a, Option<capsule_core::crypto::keys::DeviceDirectory>> {
+        Box::pin(async move {
+            use capsule_core::crypto::keys::{DeviceEntry, DirectoryCore};
+
+            if self.is_down() {
+                return Err(AuthorityError::unavailable(REFUSAL));
+            }
+            let Ok(user_id) = Uuid::parse_str(user.as_str()) else {
+                return Ok(None);
+            };
+            let keys = self
+                .keys
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone();
+            let devices: Vec<DeviceEntry> = self
+                .devices()
+                .iter()
+                .filter(|((holder, _), _)| holder == user.as_str())
+                .map(|((holder, device), added_at)| DeviceEntry {
+                    device_id: *device,
+                    dsk_public: keys
+                        .get(&(holder.clone(), *device))
+                        .cloned()
+                        .unwrap_or_else(|| device_key(*device).verifying_key()),
+                    dek_public: None,
+                    added_at: added_at.to_string(),
+                    revoked_at: None,
+                    unknown: Default::default(),
+                })
+                .collect();
+            if devices.is_empty() {
+                return Ok(None);
+            }
+            // Signed under a fixed identity key: the signer check reads entries, and the
+            // directory's own signature was the publish route's to verify, not this double's.
+            Ok(Some(
+                DirectoryCore {
+                    user_id,
+                    directory_version: 1,
+                    updated_at: "2026-01-01T00:00:00Z".to_owned(),
+                    devices,
+                    unknown: Default::default(),
+                }
+                .sign(&HybridSigningKey::from_seed_bytes(&[0x1D; 32], &[0x1D; 32])),
+            ))
+        })
+    }
+}
+
+/// The signing key [`TestAuthority`] publishes for `device`: derived from its id, so a case signs
+/// a manifest as a device just by naming it ([`signed_provenance`]).
+pub(crate) fn device_key(device: Uuid) -> HybridSigningKey {
+    let mut seed = [0u8; 32];
+    seed[..16].copy_from_slice(device.as_bytes());
+    seed[16..].copy_from_slice(device.as_bytes());
+    HybridSigningKey::from_seed_bytes(&seed, &seed)
+}
+
+/// A provenance blob for the envelope `request` declares: the canonical CBOR of a provenance
+/// record whose manifest says exactly what the envelope says, signed by the device it names under
+/// [`device_key`] — what a real client uploads as the `provenance` member of a bundle.
+///
+/// `request` is a `POST /v1/upload` body ([`create_request`] and friends); only its
+/// `manifest_envelope` is read. The manifest's own `ciphertext_hash` is the envelope's
+/// `original_blob_hash` when it carries one, and otherwise a fixed value no blob in a case has.
+pub(crate) fn signed_provenance(request: &serde_json::Value) -> Vec<u8> {
+    signed_provenance_by(request, device_key)
+}
+
+/// A provenance member's `POST /v1/upload` body and the signed bytes it declares: a
+/// [`create_request`] for the `provenance` role that commits to a metadata blob, as every create
+/// manifest does, adjusted by `adjust`, then signed ([`signed_provenance`]) and declared at the
+/// signed bytes' own size and address.
+pub(crate) fn provenance_upload(
+    clock: &ManualClock,
+    adjust: impl FnOnce(&mut serde_json::Value),
+) -> (serde_json::Value, Vec<u8>) {
+    let mut request = create_request(clock, b"a signed manifest", "provenance");
+    request["manifest_envelope"]["metadata_blob_hash"] = "22".repeat(32).into();
+    adjust(&mut request);
+    let bytes = signed_provenance(&request);
+    declare_bytes(&mut request, &bytes);
+    (request, bytes)
+}
+
+/// Sign the manifest `request`'s envelope describes ([`signed_provenance`]), declare `request`
+/// at the signed bytes, and return them: a provenance body built any other way, made the
+/// signed manifest a real client would send under it.
+pub(crate) fn sign_provenance_body(request: &mut serde_json::Value) -> Vec<u8> {
+    let bytes = signed_provenance(request);
+    declare_bytes(request, &bytes);
+    bytes
+}
+
+/// Point `request`'s declared size and address at `bytes`.
+pub(crate) fn declare_bytes(request: &mut serde_json::Value, bytes: &[u8]) {
+    let hash = checksum(bytes);
+    request["size"] = bytes.len().into();
+    request["hash"] = hash.clone().into();
+    request["manifest_envelope"]["ciphertext_hash"] = hash.into();
+}
+
+/// `bytes` as the two chunks a case sends: the first 4 KiB, then the rest.
+pub(crate) fn two_chunks(bytes: &[u8]) -> (Vec<u8>, Vec<u8>) {
+    assert!(
+        bytes.len() > 4096,
+        "a signed manifest is larger than one 4 KiB chunk"
+    );
+    (bytes[..4096].to_vec(), bytes[4096..].to_vec())
+}
+
+/// [`signed_provenance`], signed by whatever key `key_for` returns for the named device — a case
+/// signs with the wrong key to watch the signer check refuse.
+pub(crate) fn signed_provenance_by(
+    request: &serde_json::Value,
+    key_for: impl Fn(Uuid) -> HybridSigningKey,
+) -> Vec<u8> {
+    use capsule_core::crypto::hash::Hash32;
+    use capsule_core::crypto::keys::AmkVersion;
+    use capsule_core::crypto::provenance::{
+        ASSET_MANIFEST_VERSION, Action, KeyMode, ManifestCore, ProvenanceRecord,
+    };
+
+    let envelope = &request["manifest_envelope"];
+    let text = |field: &str| envelope[field].as_str().map(str::to_owned);
+    let uuid = |field: &str| {
+        Uuid::parse_str(envelope[field].as_str().expect("the envelope names it"))
+            .expect("the envelope's id is a uuid")
+    };
+    let hash = |field: &str| text(field).map(|hex| Hash32::from_hex(&hex).expect("a hex hash"));
+    let wire = |field: &str| format!("\"{}\"", envelope[field].as_str().expect("a wire enum"));
+    let action: Action = serde_json::from_str(&wire("action")).expect("a known action");
+    let key_mode: KeyMode = serde_json::from_str(&wire("key_mode")).expect("a known key mode");
+    let device = uuid("created_by_device");
+    let prior = hash("prior_provenance_hash");
+    let core = ManifestCore {
+        version: ASSET_MANIFEST_VERSION.into(),
+        crypto_suite_id: u16::try_from(envelope["crypto_suite_id"].as_u64().expect("a suite"))
+            .expect("a suite fits"),
+        protocol_version: text("protocol_version").expect("a protocol version"),
+        file_id: uuid("file_id"),
+        album_id: uuid("album_id"),
+        amk_version: AmkVersion(
+            u32::try_from(envelope["amk_version"].as_u64().expect("an epoch"))
+                .expect("an epoch fits"),
+        ),
+        ciphertext_hash: hash("original_blob_hash").unwrap_or(Hash32([0xC1; 32])),
+        plaintext_size: envelope["plaintext_size"].as_u64().expect("a size"),
+        chunk_size: u32::try_from(envelope["chunk_size"].as_u64().expect("a chunk size"))
+            .expect("a chunk size fits"),
+        nonce_prefix: [0u8; 7],
+        key_mode,
+        wrapped_file_key: None,
+        metadata_blob_hash: hash("metadata_blob_hash"),
+        created_by_user: uuid("created_by_user"),
+        created_by_device: device,
+        client_version: text("client_version").expect("a client version"),
+        timestamp: text("timestamp").expect("a timestamp"),
+        action,
+        prior_provenance_hash: prior,
+        upgraded_from: None,
+        unknown: Default::default(),
+        retention_until: text("retention_until"),
+    };
+    let key = key_for(device);
+    let manifest = core.sign(&key, &key).expect("a software key signs");
+    let record = ProvenanceRecord::new(manifest.core.file_id, manifest, prior);
+    capsule_core::cbor::to_canonical_vec(&record).expect("a provenance record encodes")
 }
 
 // ===========================================================================================

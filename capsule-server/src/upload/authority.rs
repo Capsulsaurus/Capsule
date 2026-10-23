@@ -27,12 +27,14 @@
 //! binary. This slice declares what the gate needs and refuses by default without it; wiring
 //! the adapters is the work of the changes that own those tables.
 //!
-//! # Two methods, one question
+//! # Three methods, one question
 //!
-//! It is one port rather than two because it answers one question — *may this write happen,
-//! and from when was the writing device entitled to make it* — at one moment, ahead of one
-//! write. Splitting it would mean two collaborators on every handler for two halves of a
-//! single decision.
+//! It is one port rather than several because it answers one question — *may this write
+//! happen, and from when was the writing device entitled to make it* — at one moment, ahead of
+//! one write. Splitting it would mean several collaborators on every handler for parts of a
+//! single decision. The third method, [`WriteAuthority::device_directory`], is the same
+//! directory invariant 7 reads, whole: finalization verifies a signed manifest's device
+//! signature under the key it publishes ([`super::signer`]).
 
 use std::fmt;
 use std::future::Future;
@@ -144,4 +146,16 @@ pub trait WriteAuthority: fmt::Debug + Send + Sync {
         user: &'a UserId,
         device: Uuid,
     ) -> AuthorityFuture<'a, Option<Timestamp>>;
+
+    /// `user`'s published device directory as it is in force now, or `None` when the account
+    /// has published none (or the stored one does not decode).
+    ///
+    /// The signer check ([`super::signer`]) verifies a signed manifest's `device_sig` under the
+    /// key this directory publishes for the manifest's `created_by_device`. `None` is a refusal:
+    /// a manifest whose signer has no published key cannot be verified, and an unverified
+    /// manifest is never admitted on the uploader's identity alone.
+    fn device_directory<'a>(
+        &'a self,
+        user: &'a UserId,
+    ) -> AuthorityFuture<'a, Option<capsule_core::crypto::keys::DeviceDirectory>>;
 }

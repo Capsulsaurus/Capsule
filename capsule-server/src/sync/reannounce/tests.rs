@@ -98,6 +98,15 @@ impl WriteAuthority for Authority {
             Ok(devices.get(&(user.as_str().to_owned(), device)).copied())
         })
     }
+
+    fn device_directory<'a>(
+        &'a self,
+        _user: &'a UserId,
+    ) -> AuthorityFuture<'a, Option<capsule_core::crypto::keys::DeviceDirectory>> {
+        // Re-announcement re-indexes manifests through its own checks and never finalizes an
+        // upload, so the signer check that reads this is never reached here.
+        Box::pin(async move { Ok(None) })
+    }
 }
 
 /// One server's stores, with Alice's album writable and her device published.

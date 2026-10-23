@@ -25,6 +25,9 @@
 //!   `GET` (resumable, idempotent) and ingested through the **same backup restore path**
 //!   (`capsule-core::backup`), with chain-aware forward-vs-stale reconciliation so a peer can
 //!   never resurrect a locally-superseded asset.
+//! - [`delegation`] — upload delegation: a device hands sealed, signed upload bundles to another
+//!   device of the account, which uploads them as an opaque courier; the origin releases its
+//!   original only on custody it checked itself.
 //!
 //! Trust is *identity*, never *content*: the channel authenticates **who** you talk to; every
 //! received asset is still re-verified by restore (ciphertext hash, STREAM tags, `verify_asset`).
@@ -34,6 +37,7 @@
 //! [backup artifact]: https://docs/design/backup-recovery/#backup-artifact
 
 pub mod channel;
+pub mod delegation;
 pub mod delta;
 pub mod discovery;
 pub mod session;
@@ -46,6 +50,13 @@ use capsule_core::crypto::CryptoError;
 pub use channel::{
     ArtifactSecret, LocalPeer, PEERING_PROTOCOL, PEERING_PROTOCOL_MIN, PeerHello, PinnedTrust,
     UpdateDevice, VerifiedPeer, VersionWindow, accept, connect,
+};
+pub use delegation::{
+    DelegateInbox, DelegatedUpload, Delegation, DelegationError, DelegationState,
+    DeleteDisposition, HandOff, HandOffAck, HeldFailure, MemoryInbox, OriginLedger,
+    PERMANENT_UPLOAD_REFUSALS, Quarantine, ReleaseOutcome, RequeueReason, SealedHandOff, Settled,
+    VerifiedHandOff, accept_hand_off, dispose_failure, seal, settle, upload_hand_off,
+    verify_hand_off,
 };
 pub use delta::{
     OFFER_PAGE_CAP, Offer, OfferPage, decode_offer_page, missing_from, offer_bucket,

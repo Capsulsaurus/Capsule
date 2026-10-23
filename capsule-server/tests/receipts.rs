@@ -354,8 +354,8 @@ async fn only_the_manifests_own_receipt_names_the_chain_position() {
     let bearer = token(&fixture).await;
 
     // The signed manifest, uploaded as the provenance blob it is.
-    let manifest = support::payload(b'm', 8192);
-    let manifest_upload = fixture.open_session(&manifest, "provenance", &bearer).await;
+    let (request, manifest) = support::provenance_upload(&fixture.clock, |_| {});
+    let manifest_upload = fixture.open_session_with(&request, &bearer).await;
     fixture
         .chunk(&manifest_upload, 0, &manifest, &bearer)
         .send()
@@ -403,10 +403,10 @@ async fn a_client_can_form_the_expectation_before_it_uploads() {
     // the receipt itself.
     let fixture = Fixture::working();
     let bearer = token(&fixture).await;
-    let manifest = support::payload(b'n', 8192);
+    let (request, manifest) = support::provenance_upload(&fixture.clock, |_| {});
     let expected_position = hash_bytes(&manifest);
 
-    let id = fixture.open_session(&manifest, "provenance", &bearer).await;
+    let id = fixture.open_session_with(&request, &bearer).await;
     fixture
         .chunk(&id, 0, &manifest, &bearer)
         .send()

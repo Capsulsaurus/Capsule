@@ -55,6 +55,7 @@ pub mod chunk;
 pub mod envelope;
 pub mod finalize;
 pub mod policy;
+pub mod signer;
 pub mod visibility;
 
 use std::sync::Arc;

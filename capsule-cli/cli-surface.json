@@ -661,6 +661,251 @@
       "name": "match"
     },
     {
+      "about": "Hand uploads to another device of this account, or upload ones handed to this device",
+      "name": "peer",
+      "subcommands": [
+        {
+          "about": "Take hand-off files another device of this account sealed for this one, then upload every hand-off this device holds under its own session, deleting each copy once the server holds it. A hand-off that can never succeed is quarantined: kept, not retried, listed by `capsule peer status` and deleted only by `capsule peer discard`",
+          "args": [
+            {
+              "help": "Path to this device's Capsule library",
+              "id": "library",
+              "long": "library",
+              "positional": false,
+              "repeatable": false,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "PATH"
+              ]
+            },
+            {
+              "help": "A hand-off file to take (repeatable); without one, only the held hand-offs upload",
+              "id": "from",
+              "long": "from",
+              "positional": false,
+              "repeatable": true,
+              "required": false,
+              "takes_value": true,
+              "value_names": [
+                "FILE"
+              ]
+            },
+            {
+              "help": "Open the tier sessions in ladder order, gating the above-index tiers on the connection class, as `capsule push --staged` does",
+              "id": "staged",
+              "long": "staged",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            },
+            {
+              "help": "Read the library passphrase from stdin instead of prompting, so the command works in scripts and CI where there is no terminal",
+              "id": "passphrase_stdin",
+              "long": "passphrase-stdin",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            },
+            {
+              "help": "Print the run as one JSON document on stdout: each hand-off taken with its acknowledgement, each refused, and what became of each held hand-off (removed, kept, failed and kept, or permanently refused and quarantined), each failure with a stable `kind`, the server's `code` when it gave one, and the detail",
+              "id": "json",
+              "long": "json",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            }
+          ],
+          "name": "accept"
+        },
+        {
+          "about": "Seal assets' uploads for another device of this account to upload later. Each asset is written to a hand-off file the other device takes with `capsule peer accept`; this device keeps every original until its own check finds the server holds it",
+          "args": [
+            {
+              "help": "Path to the Capsule library holding the assets",
+              "id": "library",
+              "long": "library",
+              "positional": false,
+              "repeatable": false,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "PATH"
+              ]
+            },
+            {
+              "help": "The device to hand the uploads to: its id in this account's device directory",
+              "id": "to",
+              "long": "to",
+              "positional": false,
+              "repeatable": false,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "DEVICE_ID"
+              ]
+            },
+            {
+              "help": "An asset to hand off (repeatable)",
+              "id": "asset",
+              "long": "asset",
+              "positional": false,
+              "repeatable": true,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "ASSET_ID"
+              ]
+            },
+            {
+              "help": "Directory the hand-off files are written to",
+              "id": "out",
+              "long": "out",
+              "positional": false,
+              "repeatable": false,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "DIR"
+              ]
+            },
+            {
+              "default_values": [
+                "24"
+              ],
+              "help": "Hours to wait for the server to hold the assets before taking the uploads back",
+              "id": "deadline_hours",
+              "long": "deadline-hours",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": true,
+              "value_names": [
+                "HOURS"
+              ]
+            },
+            {
+              "help": "Read the library passphrase from stdin instead of prompting, so the command works in scripts and CI where there is no terminal",
+              "id": "passphrase_stdin",
+              "long": "passphrase-stdin",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            },
+            {
+              "help": "Print the run as one JSON document on stdout: each asset handed off, with its file and content address, and each that was not, with a stable `kind`, the server's `code` when it gave one, and the detail",
+              "id": "json",
+              "long": "json",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            }
+          ],
+          "name": "delegate"
+        },
+        {
+          "about": "Delete a quarantined hand-off this device holds for another device. Only a quarantined copy can be discarded; it may be the account's only copy of the asset, so recover it first if its origin device is lost",
+          "args": [
+            {
+              "help": "Path to this device's Capsule library",
+              "id": "library",
+              "long": "library",
+              "positional": false,
+              "repeatable": false,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "PATH"
+              ]
+            },
+            {
+              "help": "The quarantined hand-off's content address, as `capsule peer status` lists it",
+              "id": "hand_off",
+              "positional": true,
+              "repeatable": false,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "HAND_OFF"
+              ]
+            },
+            {
+              "help": "Read the library passphrase from stdin instead of prompting, so the command works in scripts and CI where there is no terminal",
+              "id": "passphrase_stdin",
+              "long": "passphrase-stdin",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            },
+            {
+              "help": "Print the discarded hand-off as one JSON document on stdout: its content address, its asset and the `kind` it had been quarantined for",
+              "id": "json",
+              "long": "json",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            }
+          ],
+          "name": "discard"
+        },
+        {
+          "about": "Show this device's handed-off assets: take the other device's acknowledgements, take back uploads that are overdue or whose device was revoked, and release what the server holds. Also lists every hand-off this device quarantined",
+          "args": [
+            {
+              "help": "Path to the Capsule library holding the assets",
+              "id": "library",
+              "long": "library",
+              "positional": false,
+              "repeatable": false,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "PATH"
+              ]
+            },
+            {
+              "help": "An acknowledgement file `capsule peer accept` wrote (repeatable)",
+              "id": "ack",
+              "long": "ack",
+              "positional": false,
+              "repeatable": true,
+              "required": false,
+              "takes_value": true,
+              "value_names": [
+                "FILE"
+              ]
+            },
+            {
+              "help": "Read the library passphrase from stdin instead of prompting, so the command works in scripts and CI where there is no terminal",
+              "id": "passphrase_stdin",
+              "long": "passphrase-stdin",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            },
+            {
+              "help": "Print the run as one JSON document on stdout: each delegation with its state, each refused acknowledgement with a stable `kind` and the detail, and each quarantined hand-off with its file, the stable `kind` of its refusal, the server's `code` when it gave one, and the detail",
+              "id": "json",
+              "long": "json",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            }
+          ],
+          "name": "status"
+        }
+      ]
+    },
+    {
       "about": "Upload a local Capsule library to the server",
       "args": [
         {

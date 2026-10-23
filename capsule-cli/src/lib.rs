@@ -22,8 +22,8 @@ use capsule_library::library::{Library, LibraryError, init_library, open_library
 use capsule_library::lifecycle::{DerivativeStatus, Workspace, unmigrated_sidecars};
 use capsule_sdk::cache_budget::DesktopConnectionClass;
 use cli::{
-    AuthCommands, CacheCommands, Cli, Commands, ImportProviderArg, LibraryCommands, RepairCommands,
-    ShareCommands, SyncCommands,
+    AuthCommands, CacheCommands, Cli, Commands, ImportProviderArg, LibraryCommands, PeerCommands,
+    RepairCommands, ShareCommands, SyncCommands,
 };
 use colored::*;
 use dialoguer::{Confirm, Input, Password};
@@ -43,6 +43,7 @@ pub mod i18n;
 pub mod import_report;
 pub mod migrate;
 pub mod oidc;
+pub mod peer;
 pub mod reannounce;
 pub mod remote;
 pub mod repair;
@@ -672,6 +673,58 @@ async fn dispatch(command: Commands) -> Result<()> {
                 .await?;
             }
             ShareCommands::Revoke { opaque_id, json } => share_revoke(&opaque_id, json).await?,
+        },
+
+        // ── Peer ──────────────────────────────────────────────────────────
+        Commands::Peer { command } => match command {
+            PeerCommands::Delegate {
+                library,
+                to,
+                asset,
+                out,
+                deadline_hours,
+                passphrase_stdin,
+                json,
+            } => {
+                let ws = open_workspace(&library, passphrase_stdin)?;
+                let mut options = peer::DelegateOptions::new(to, asset, out);
+                options.deadline_ms = deadline_hours.saturating_mul(60 * 60 * 1000);
+                peer_delegate(&ws, &options, json).await?;
+            }
+            PeerCommands::Accept {
+                library,
+                from,
+                staged,
+                passphrase_stdin,
+                json,
+            } => {
+                let ws = open_workspace(&library, passphrase_stdin)?;
+                let push = push_options(false, false, staged);
+                let options = peer::AcceptOptions {
+                    from,
+                    policy: push.policy,
+                    connection: push.connection,
+                };
+                peer_accept(&ws, &options, json).await?;
+            }
+            PeerCommands::Status {
+                library,
+                ack,
+                passphrase_stdin,
+                json,
+            } => {
+                let ws = open_workspace(&library, passphrase_stdin)?;
+                peer_status(&ws, &ack, json).await?;
+            }
+            PeerCommands::Discard {
+                library,
+                hand_off,
+                passphrase_stdin,
+                json,
+            } => {
+                let ws = open_workspace(&library, passphrase_stdin)?;
+                peer_discard(&ws, &hand_off, json)?;
+            }
         },
 
         // ── Demo ──────────────────────────────────────────────────────────
@@ -2083,6 +2136,207 @@ async fn share_revoke(opaque_id: &str, json: bool) -> Result<()> {
             share::describe_error(&error)
         )),
     }
+}
+
+/// A whole-run `capsule peer` failure, as the line the process exits with.
+fn peer_run_error(command: &str, error: &peer::PeerError) -> eyre::Report {
+    match error {
+        peer::PeerError::Remote(remote::RemoteError::NotAuthenticated) => eyre!(NOT_AUTHENTICATED),
+        peer::PeerError::Remote(remote) => {
+            eyre!("{command} failed: {}", describe_remote_error(remote))
+        }
+        other => eyre!("{command} failed: {other}"),
+    }
+}
+
+/// `capsule peer delegate`: seal each asset for the other device and say where it went.
+async fn peer_delegate(
+    workspace: &Workspace,
+    options: &peer::DelegateOptions,
+    json: bool,
+) -> Result<()> {
+    let remote = remote::RemoteConfig::from_env();
+    let store = session_store()?;
+    let state = peer::PeerState::for_device(workspace.device_id())
+        .map_err(|error| peer_run_error("Hand-off", &error))?;
+    let summary = peer::delegate(
+        &remote,
+        &store,
+        workspace,
+        &state,
+        &peer::SystemBootClock::default(),
+        options,
+    )
+    .await
+    .map_err(|error| peer_run_error("Hand-off", &error))?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&summary)?);
+    } else {
+        for handed in &summary.handed_off {
+            println!(
+                "{}",
+                format!(
+                    "{}: handed to device {}, awaiting server ({})",
+                    handed.asset_id, summary.delegate, handed.file
+                )
+                .green()
+            );
+        }
+        for failed in &summary.failed {
+            println!(
+                "{}",
+                format!("{}: not handed off: {}", failed.subject, failed.message).red()
+            );
+        }
+    }
+    if summary.failed.is_empty() {
+        Ok(())
+    } else {
+        Err(eyre!(
+            "Hand-off failed for {} asset(s)",
+            summary.failed.len()
+        ))
+    }
+}
+
+/// `capsule peer accept`: take the files, then upload what this device holds.
+async fn peer_accept(
+    workspace: &Workspace,
+    options: &peer::AcceptOptions,
+    json: bool,
+) -> Result<()> {
+    let remote = remote::RemoteConfig::from_env();
+    let store = session_store()?;
+    let state = peer::PeerState::for_device(workspace.device_id())
+        .map_err(|error| peer_run_error("Accept", &error))?;
+    let summary = peer::accept(&remote, &store, workspace, &state, options)
+        .await
+        .map_err(|error| peer_run_error("Accept", &error))?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&summary)?);
+    } else {
+        for accepted in &summary.accepted {
+            println!(
+                "{}",
+                format!(
+                    "{}: taken; acknowledgement written to {}",
+                    accepted.ack.asset_id, accepted.ack_file
+                )
+                .green()
+            );
+        }
+        for refused in &summary.refused {
+            println!(
+                "{}",
+                format!("{}: refused: {}", refused.subject, refused.message).red()
+            );
+        }
+        for upload in &summary.uploads {
+            let line = match upload.outcome {
+                "removed" => format!(
+                    "{}: the server holds it; this device's copy is deleted",
+                    upload.asset_id
+                ),
+                "kept" => format!(
+                    "{}: uploaded what this connection allows; kept until the server holds it ({})",
+                    upload.asset_id,
+                    upload.kind.unwrap_or_default()
+                ),
+                "quarantined" => format!(
+                    "{}: permanently refused; this device's copy is quarantined and kept, and \
+                     is not retried (see `capsule peer status`; `capsule peer discard` deletes \
+                     it): {}",
+                    upload.hand_off,
+                    upload.message.as_deref().unwrap_or_default()
+                ),
+                _ => format!(
+                    "{}: upload failed; kept for the next run: {}",
+                    upload.hand_off,
+                    upload.message.as_deref().unwrap_or_default()
+                ),
+            };
+            println!("{line}");
+        }
+    }
+    if summary.has_failures() {
+        Err(eyre!("Accept finished with refused or failed hand-offs"))
+    } else {
+        Ok(())
+    }
+}
+
+/// `capsule peer status`: one line per handed-off asset.
+async fn peer_status(workspace: &Workspace, acks: &[PathBuf], json: bool) -> Result<()> {
+    let remote = remote::RemoteConfig::from_env();
+    let store = session_store()?;
+    let state = peer::PeerState::for_device(workspace.device_id())
+        .map_err(|error| peer_run_error("Status", &error))?;
+    let summary = peer::status(
+        &remote,
+        &store,
+        workspace,
+        &state,
+        &peer::SystemBootClock::default(),
+        acks,
+    )
+    .await
+    .map_err(|error| peer_run_error("Status", &error))?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&summary)?);
+    } else {
+        if summary.delegations.is_empty() {
+            println!("{}", "Nothing is handed to another device.".yellow());
+        }
+        for view in &summary.delegations {
+            println!("{}: {}", view.asset_id, view.status);
+        }
+        for refused in &summary.refused_acks {
+            println!(
+                "{}",
+                format!(
+                    "{}: acknowledgement refused: {}",
+                    refused.subject, refused.message
+                )
+                .red()
+            );
+        }
+        for held in &summary.quarantined {
+            println!(
+                "{}",
+                format!(
+                    "{}: quarantined hand-off for asset {} ({}): {}; kept at {}",
+                    held.hand_off, held.asset_id, held.kind, held.message, held.file
+                )
+                .yellow()
+            );
+        }
+    }
+    if summary.refused_acks.is_empty() {
+        Ok(())
+    } else {
+        Err(eyre!("Some acknowledgements were refused"))
+    }
+}
+
+/// `capsule peer discard`: delete one quarantined hand-off.
+fn peer_discard(workspace: &Workspace, hand_off: &str, json: bool) -> Result<()> {
+    let state = peer::PeerState::for_device(workspace.device_id())
+        .map_err(|error| peer_run_error("Discard", &error))?;
+    let discarded =
+        peer::discard(&state, hand_off).map_err(|error| peer_run_error("Discard", &error))?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&discarded)?);
+    } else {
+        println!(
+            "{}",
+            format!(
+                "{}: quarantined hand-off for asset {} deleted",
+                discarded.hand_off, discarded.asset_id
+            )
+            .green()
+        );
+    }
+    Ok(())
 }
 
 /// `capsule list`: query the sync-fed local store and render it.

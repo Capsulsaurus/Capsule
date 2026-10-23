@@ -1579,7 +1579,7 @@ fn server_origin(endpoint: &str) -> Result<String, RemoteError> {
 /// extended, refused when a pinned key was dropped or replaced
 /// ([`capsule_library::library::pin_attestation_keys`]). The returned pinned history is what every
 /// receipt and signed attestation of the run is verified under.
-async fn pinned_attestation_keys(
+pub(crate) async fn pinned_attestation_keys(
     remote: &RemoteConfig,
     workspace: &Workspace,
     verify: &StorageVerifyClient,

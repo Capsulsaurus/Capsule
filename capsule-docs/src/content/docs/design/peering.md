@@ -123,7 +123,8 @@ origin: seal + sign bundle ──hand-off──▶ delegate: persist, upload ─
    blob, signed manifest) exactly as it would upload it, and records its own content hashes.
 2. **Hand-off.** The delegate pulls the bundle over the channel, verifies every hash against the
    manifest, fsyncs it, and only then acknowledges. The acknowledgement is not custody: the origin
-   keeps the original pinned.
+   keeps the original pinned. The bundle is self-verifying, so the same hand-off may also travel
+   by any other courier (the CLI writes it to a file); its integrity never rests on the channel.
 3. **Upload.** The delegate uploads the bundle through the normal
    [transfer protocol](/design/transfer/upload/) under its own session. The server accepts a
    manifest signed by one device of the account and uploaded by another; quota is charged to
@@ -146,6 +147,7 @@ Edge cases:
 | Partial hand-off | Per asset, all or nothing: a delegate never uploads an incomplete bundle. |
 | Delegate tampers with bytes | Hashes and the manifest signature fail at the server and at the origin's verify. |
 | Delegate on an older protocol | It must speak the bundle's `protocol_version`; otherwise it refuses the hand-off and the origin keeps the upload. |
+| Held hand-off permanently refused | The delegate never deletes a copy the server has not taken custody of. When a held hand-off can never succeed it is **quarantined**: the copy is kept byte for byte, no later run retries it, the delegate reports it once with a stable reason, and only the user deletes it. A revoked origin is often a lost device, so the delegate's copy may be the only one left. Never succeeds: the origin is revoked or gone from the directory after acceptance; the held bytes no longer verify; or the server refuses with `error.upload.envelope_rejected`, `envelope_mismatch` or `stale_revival` (a conflicting provenance), or at creation with `timestamp_out_of_range`, `album_access_denied` or `device_not_authorized`, which are the same conditions met one step earlier. `envelope_rejected` covers a manifest under a stale album epoch, a signer that is revoked, of another account or not verifying, a role conflict, a timestamp out of range, the album closed or the uploader's write access withdrawn since creation, and a signing device no longer authorized. The delegate cannot change a request the origin signed, so retrying cannot help. Any other failure (network, outage, quota, rate limit, this device's own directory state, a newer format) keeps the copy for the next run. Separately, the origin keeps its own original pinned and re-queues the upload at its deadline. |
 | Delegate compromised | It learns what the server learns (ciphertext, sizes, timing), plus the origin's hand-off schedule. It cannot read or forge assets. |
 
 The delegate follows the same battery, metering and scheduling policy as its own uploads

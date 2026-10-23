@@ -220,6 +220,11 @@ pub(crate) enum Commands {
         #[command(subcommand)]
         command: ShareCommands,
     },
+    /// Hand uploads to another device of this account, or upload ones handed to this device
+    Peer {
+        #[command(subcommand)]
+        command: PeerCommands,
+    },
     /// Run the offline end-to-end data-plane showcase (real cryptography, no network)
     Demo {
         /// Working directory for the demo libraries (a temp dir is used if omitted)
@@ -441,6 +446,110 @@ pub(crate) enum ShareCommands {
         #[arg(value_name = "OPAQUE_ID")]
         opaque_id: String,
         /// Print the outcome as one JSON document on stdout: the revoked link's opaque id
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum PeerCommands {
+    /// Seal assets' uploads for another device of this account to upload later. Each asset is
+    /// written to a hand-off file the other device takes with `capsule peer accept`; this device
+    /// keeps every original until its own check finds the server holds it
+    Delegate {
+        /// Path to the Capsule library holding the assets
+        #[arg(long, value_name = "PATH")]
+        library: PathBuf,
+        /// The device to hand the uploads to: its id in this account's device directory
+        #[arg(long, value_name = "DEVICE_ID")]
+        to: Uuid,
+        /// An asset to hand off (repeatable)
+        #[arg(long, value_name = "ASSET_ID", required = true)]
+        asset: Vec<Uuid>,
+        /// Directory the hand-off files are written to
+        #[arg(long, value_name = "DIR")]
+        out: PathBuf,
+        /// Hours to wait for the server to hold the assets before taking the uploads back
+        #[arg(
+            long,
+            value_name = "HOURS",
+            default_value_t = 24,
+            value_parser = clap::value_parser!(u64).range(1..)
+        )]
+        deadline_hours: u64,
+        /// Read the library passphrase from stdin instead of prompting, so the command
+        /// works in scripts and CI where there is no terminal.
+        #[arg(long)]
+        passphrase_stdin: bool,
+        /// Print the run as one JSON document on stdout: each asset handed off, with its file
+        /// and content address, and each that was not, with a stable `kind`, the server's
+        /// `code` when it gave one, and the detail
+        #[arg(long)]
+        json: bool,
+    },
+    /// Take hand-off files another device of this account sealed for this one, then upload
+    /// every hand-off this device holds under its own session, deleting each copy once the
+    /// server holds it. A hand-off that can never succeed is quarantined: kept, not retried,
+    /// listed by `capsule peer status` and deleted only by `capsule peer discard`
+    Accept {
+        /// Path to this device's Capsule library
+        #[arg(long, value_name = "PATH")]
+        library: PathBuf,
+        /// A hand-off file to take (repeatable); without one, only the held hand-offs upload
+        #[arg(long, value_name = "FILE")]
+        from: Vec<PathBuf>,
+        /// Open the tier sessions in ladder order, gating the above-index tiers on the
+        /// connection class, as `capsule push --staged` does
+        #[arg(long)]
+        staged: bool,
+        /// Read the library passphrase from stdin instead of prompting, so the command
+        /// works in scripts and CI where there is no terminal.
+        #[arg(long)]
+        passphrase_stdin: bool,
+        /// Print the run as one JSON document on stdout: each hand-off taken with its
+        /// acknowledgement, each refused, and what became of each held hand-off (removed, kept,
+        /// failed and kept, or permanently refused and quarantined), each failure with a stable
+        /// `kind`, the server's `code` when it gave one, and the detail
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show this device's handed-off assets: take the other device's acknowledgements, take back
+    /// uploads that are overdue or whose device was revoked, and release what the server holds.
+    /// Also lists every hand-off this device quarantined
+    Status {
+        /// Path to the Capsule library holding the assets
+        #[arg(long, value_name = "PATH")]
+        library: PathBuf,
+        /// An acknowledgement file `capsule peer accept` wrote (repeatable)
+        #[arg(long, value_name = "FILE")]
+        ack: Vec<PathBuf>,
+        /// Read the library passphrase from stdin instead of prompting, so the command
+        /// works in scripts and CI where there is no terminal.
+        #[arg(long)]
+        passphrase_stdin: bool,
+        /// Print the run as one JSON document on stdout: each delegation with its state, each
+        /// refused acknowledgement with a stable `kind` and the detail, and each quarantined
+        /// hand-off with its file, the stable `kind` of its refusal, the server's `code` when
+        /// it gave one, and the detail
+        #[arg(long)]
+        json: bool,
+    },
+    /// Delete a quarantined hand-off this device holds for another device. Only a quarantined
+    /// copy can be discarded; it may be the account's only copy of the asset, so recover it
+    /// first if its origin device is lost
+    Discard {
+        /// Path to this device's Capsule library
+        #[arg(long, value_name = "PATH")]
+        library: PathBuf,
+        /// The quarantined hand-off's content address, as `capsule peer status` lists it
+        #[arg(value_name = "HAND_OFF")]
+        hand_off: String,
+        /// Read the library passphrase from stdin instead of prompting, so the command
+        /// works in scripts and CI where there is no terminal.
+        #[arg(long)]
+        passphrase_stdin: bool,
+        /// Print the discarded hand-off as one JSON document on stdout: its content address,
+        /// its asset and the `kind` it had been quarantined for
         #[arg(long)]
         json: bool,
     },

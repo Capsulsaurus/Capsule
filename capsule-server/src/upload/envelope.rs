@@ -210,6 +210,10 @@ pub enum GateReject {
     /// the tier table's structural rejection, never a future codec to ignore. Carries the
     /// unrecognised value.
     UnknownDerivativeFormat(String),
+    /// A provenance blob is not a manifest the device it names signed, under the key the
+    /// uploader's published directory holds for that device ([`super::signer`]). Decided at
+    /// finalization, the one moment the server holds the manifest's bytes.
+    SignatureUnverified,
 }
 
 /// Run the create-time battery: invariants 1–8 and the 15-family consistency checks.
