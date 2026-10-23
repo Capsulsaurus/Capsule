@@ -103,7 +103,13 @@ which device to update. Artifact formats are versioned by
    refuses any asset it has a tombstone for. A deleted asset in
    [trash](/design/organization/#recycling) is not a tombstone, since a `trash-restore`
    still recovers it; its delete manifest is the local chain head, so a peer's older copy is
-   quarantined as stale.
+   quarantined as stale. A device learns of a purge from the
+   [sync feed](/design/sync/#discovering-what-changed), which carries no purge entry: an
+   asset whose delete's `retention_until` has passed can no longer be
+   [restored](/design/organization/#retention-window), so it is purged; so is an asset whose
+   delete the server serves with no manifest. The device judges the deadline by its own clock,
+   floored by the latest server `changed_at` in the feed page it is landing, and a restore that
+   lands first takes the asset out of the trash and out of the reckoning.
 4. **Reconcile.** Assets a device learned by peering are not uploaded again if the server
    holds them; [dedup and merge](/design/transfer/upload/#deduplication-and-merge) resolve
    them. An asset no device has uploaded is uploaded by whichever device holds it first, under

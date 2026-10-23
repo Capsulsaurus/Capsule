@@ -29,6 +29,11 @@ pub struct Model {
     /// Whether the asset is tombstoned (the last applied change was a delete).
     #[sea_orm(indexed)]
     pub tombstoned: bool,
+    /// The `retention_until` of the asset's delete manifest, in unix seconds rounded up, while
+    /// it is in trash: once it has passed, no `trash-restore` recovers the asset, and the sync
+    /// store records the purge and clears this. `None` on a live asset, on a purge already
+    /// recorded, and on a delete whose manifest names no deadline.
+    pub retention_until: Option<i64>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

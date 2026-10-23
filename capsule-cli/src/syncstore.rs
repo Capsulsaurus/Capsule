@@ -17,8 +17,10 @@
 use std::collections::HashMap;
 
 use base64::Engine as _;
-use capsule_sdk::sync::{ChangeKind, SyncCursor, SyncPage, SyncState};
+use capsule_core::crypto::provenance::{Action, ProvenanceRecord};
+use capsule_sdk::sync::{ChangeKind, FeedEntry, SyncCursor, SyncPage, SyncState};
 use entity::{sync_cursor, synced_asset};
+use jiff::Timestamp;
 use sea_orm::ActiveValue::Set;
 use sea_orm::sea_query::OnConflict;
 use sea_orm::{
@@ -26,6 +28,10 @@ use sea_orm::{
     TransactionTrait,
 };
 use thiserror::Error;
+use tracing::instrument;
+use uuid::Uuid;
+
+use crate::peering_state::{feed_asset_uuid, record_purged};
 
 /// The singleton row id for the one opaque feed cursor.
 const CURSOR_ROW_ID: i32 = 0;
@@ -121,19 +127,113 @@ pub async fn reset_for_resync<C: ConnectionTrait + TransactionTrait>(
     Ok(())
 }
 
-/// Land a validated page: upsert every asset and advance the stored cursor, all in
-/// one transaction. Returns the number of entries written.
+/// What a feed entry says about the asset's retention window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Retention {
+    /// The asset is live, or its delete names no deadline this device can read: nothing to
+    /// purge on.
+    Open,
+    /// The asset is in trash until this deadline, in unix seconds rounded up.
+    Until(i64),
+    /// A delete the server serves with no manifest: the purge has dropped the asset's
+    /// provenance, so the asset is purged already.
+    Purged,
+}
+
+/// The retention window `entry` names. Only a `Deleted` entry has one: its manifest is the
+/// asset's delete record, whose `retention_until` is the deadline after which the server refuses
+/// a `trash-restore` ([Organization § Retention Window]). A record that does not decode, is not a
+/// delete of this asset, or names no readable deadline is [`Retention::Open`]: a tombstone is
+/// permanent, so a delete this device cannot read is left in trash rather than recorded.
 ///
-/// A `Deleted` entry marks the asset tombstoned here and nothing more: a delete moves it to
-/// trash, which a later `trash-restore` reverses, so it is not a peering tombstone
-/// ([`crate::peering_state::record_purged`]).
+/// [Organization § Retention Window]: https://docs/design/organization/#retention-window
+fn retention_of(entry: &FeedEntry) -> Retention {
+    if entry.kind != ChangeKind::Deleted {
+        return Retention::Open;
+    }
+    if entry.manifest_cbor.is_empty() {
+        return Retention::Purged;
+    }
+    let record = match ProvenanceRecord::decode(&entry.manifest_cbor) {
+        Ok(record) => record,
+        Err(error) => {
+            tracing::warn!(%error, "sync: a delete's manifest does not decode; it is held in trash with no deadline");
+            return Retention::Open;
+        }
+    };
+    let core = &record.manifest.core;
+    if core.action != Action::Delete || feed_asset_uuid(&entry.asset_id) != Some(record.asset_id) {
+        tracing::warn!(asset = %record.asset_id, action = ?core.action, "sync: a delete's manifest is not a delete of this asset; it is held in trash with no deadline");
+        return Retention::Open;
+    }
+    let Some(until) = core.retention_until.as_deref() else {
+        return Retention::Open;
+    };
+    match until.parse::<Timestamp>() {
+        Ok(until) => Retention::Until(ceil_second(until)),
+        Err(error) => {
+            tracing::warn!(asset = %record.asset_id, until, %error, "sync: a delete's retention_until does not parse; it is held in trash with no deadline");
+            Retention::Open
+        }
+    }
+}
+
+/// `at` in unix seconds, rounded up: a deadline read this way never passes early.
+fn ceil_second(at: Timestamp) -> i64 {
+    let second = at.as_second();
+    if at.subsec_nanosecond() > 0 {
+        second.saturating_add(1)
+    } else {
+        second
+    }
+}
+
+/// The time a page's retention deadlines are judged at: the device's clock `now`, floored by the
+/// latest `changed_at` among the page's entries. A `changed_at` is a reading of the server's
+/// clock, the one that refuses a late `trash-restore`, so a deadline it has passed has passed on
+/// the server too however far behind this device's clock is. A `changed_at` that does not parse
+/// is no floor.
+fn judged_at(now: Timestamp, page: &SyncPage) -> Timestamp {
+    page.entries
+        .iter()
+        .filter_map(|entry| entry.changed_at.parse::<Timestamp>().ok())
+        .fold(now, Timestamp::max)
+}
+
+/// Land a validated page: upsert every asset, record the purges it reveals, and advance the
+/// stored cursor, all in one transaction. Returns the number of entries written.
+///
+/// A `Deleted` entry marks the asset tombstoned and stores its retention deadline
+/// ([`retention_of`]): a delete moves the asset to trash, which a `trash-restore` reverses until
+/// that deadline, so the delete alone is not a peering tombstone. Any other entry clears the
+/// deadline, which is how a restore takes the asset out of the sweep. The sweep
+/// ([`record_elapsed_purges`]) then records as purged every asset in trash whose deadline has
+/// passed at [`judged_at`]`(now, page)`, together with any delete the server serves without a
+/// manifest, in the same transaction.
+#[instrument(level = "debug", skip_all, fields(entries = page.entries.len()), err)]
 pub async fn persist_page<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     page: &SyncPage,
+    now: Timestamp,
 ) -> Result<usize, SyncStoreError> {
+    let at = judged_at(now, page);
     let txn = db.begin().await?;
+    let mut purged = Vec::new();
 
     for entry in &page.entries {
+        let retention_until = match retention_of(entry) {
+            Retention::Open => None,
+            Retention::Until(until) => Some(until),
+            Retention::Purged => {
+                match feed_asset_uuid(&entry.asset_id) {
+                    Some(asset) => purged.push(asset),
+                    None => tracing::debug!(
+                        "sync: a purged asset's id is not a UUID, so no peer can offer it"
+                    ),
+                }
+                None
+            }
+        };
         let model = synced_asset::ActiveModel {
             asset_id: Set(encode_id(&entry.asset_id)),
             album_id: Set(encode_id(&entry.album_id)),
@@ -141,6 +241,7 @@ pub async fn persist_page<C: ConnectionTrait + TransactionTrait>(
             kind: Set(kind_label(entry.kind).to_string()),
             original_held: Set(entry.original_held),
             tombstoned: Set(entry.kind == ChangeKind::Deleted),
+            retention_until: Set(retention_until),
         };
         synced_asset::Entity::insert(model)
             .on_conflict(
@@ -151,12 +252,22 @@ pub async fn persist_page<C: ConnectionTrait + TransactionTrait>(
                         synced_asset::Column::Kind,
                         synced_asset::Column::OriginalHeld,
                         synced_asset::Column::Tombstoned,
+                        synced_asset::Column::RetentionUntil,
                     ])
                     .to_owned(),
             )
             .exec(&txn)
             .await?;
     }
+
+    if !purged.is_empty() {
+        tracing::info!(
+            count = purged.len(),
+            "sync: the server serves deletes with no manifest; their assets are purged"
+        );
+        record_purged(&txn, &purged, at).await?;
+    }
+    record_elapsed_purges(&txn, at).await?;
 
     sync_cursor::Entity::insert(sync_cursor::ActiveModel {
         id: Set(CURSOR_ROW_ID),
@@ -172,6 +283,63 @@ pub async fn persist_page<C: ConnectionTrait + TransactionTrait>(
 
     txn.commit().await?;
     Ok(page.entries.len())
+}
+
+/// Record as purged every asset in trash whose retention deadline has passed at `at`, and return
+/// how many there are. The server refuses a `trash-restore` at or after the deadline, by its own
+/// clock, and a purge ends the asset, so once the deadline has passed nothing brings the asset
+/// back and no peer may ([`record_purged`]). An asset whose id is not a UUID is skipped: no peer
+/// can name it. A swept row's deadline is cleared once its tombstone is written, so each purge is
+/// recorded once; recording an asset again would keep its first record anyway, so the sweep is
+/// safe to repeat. [`persist_page`] runs it in each page's transaction, and a sync run runs it
+/// once more after its last page, since a window closes on the clock and not on a feed entry.
+///
+/// # Errors
+///
+/// [`SyncStoreError::Db`] when the store cannot be read or written,
+/// [`SyncStoreError::CorruptId`] when a stored id does not decode.
+#[instrument(level = "debug", skip(db), err)]
+pub async fn record_elapsed_purges<C: ConnectionTrait>(
+    db: &C,
+    at: Timestamp,
+) -> Result<usize, SyncStoreError> {
+    let rows = synced_asset::Entity::find()
+        .filter(synced_asset::Column::Tombstoned.eq(true))
+        .filter(synced_asset::Column::RetentionUntil.lte(at.as_second()))
+        .all(db)
+        .await?;
+    let mut elapsed: Vec<Uuid> = Vec::with_capacity(rows.len());
+    for row in &rows {
+        match feed_asset_uuid(&decode_id(&row.asset_id)?) {
+            Some(asset) => elapsed.push(asset),
+            None => tracing::debug!(
+                asset_id = %row.asset_id,
+                "sync: an elapsed asset's id is not a UUID, so no peer can offer it"
+            ),
+        }
+    }
+    if !elapsed.is_empty() {
+        record_purged(db, &elapsed, at).await?;
+    }
+    if !rows.is_empty() {
+        // Recorded, so off the sweep: the next run does not record them again. Cleared after the
+        // record, so a crash between the two only repeats a record that keeps its first stamp.
+        synced_asset::Entity::update_many()
+            .col_expr(
+                synced_asset::Column::RetentionUntil,
+                sea_orm::sea_query::Expr::value(Option::<i64>::None),
+            )
+            .filter(synced_asset::Column::Tombstoned.eq(true))
+            .filter(synced_asset::Column::RetentionUntil.lte(at.as_second()))
+            .exec(db)
+            .await?;
+    }
+    tracing::debug!(
+        %at,
+        elapsed = elapsed.len(),
+        "sync: elapsed retention windows are recorded as purges"
+    );
+    Ok(elapsed.len())
 }
 
 /// A row of the sync-fed local store, decoded back to feed-native shapes.
