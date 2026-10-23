@@ -34,6 +34,7 @@ use super::hybrid_sig::HybridSigningKey;
 use super::kem::DekKeypair;
 use super::kem_p256::P256HybridDek;
 use super::master::MasterKey;
+use crate::ambient::IdSource;
 use crate::crypto::primitives::{Argon2Params, DeviceTier};
 use crate::crypto::{CryptoError, pwkdf};
 
@@ -190,8 +191,10 @@ impl Account {
     /// Create a brand-new account with a fresh master key, user IK, and first device, using the
     /// **software** DEK composition. The fallback the design keeps for hosts with no secure
     /// element; [`create_with_hardware_dek`](Self::create_with_hardware_dek) is the bound form.
-    pub fn create() -> Self {
-        Self::generate(DeviceDek::Software(DekKeypair::generate()))
+    ///
+    /// The user and device ids are UUIDv7s minted from `ids`.
+    pub fn create(ids: IdSource<'_>) -> Self {
+        Self::generate(ids, DeviceDek::Software(DekKeypair::generate()))
     }
 
     /// Create a brand-new account whose **DEK's classical half is generated inside `element`**
@@ -204,17 +207,19 @@ impl Account {
     /// that wants best-effort binding probes the element first and calls
     /// [`create`](Self::create) itself.
     pub fn create_with_hardware_dek(
+        ids: IdSource<'_>,
         element: Arc<dyn HardwareKeyAgreement>,
         key_alias: String,
     ) -> Result<Self, HardwareSignerError> {
         let ml_seed = crate::crypto::rng::random_array::<32>();
         let dek = P256HybridDek::enroll(element, key_alias, &ml_seed)?;
-        Ok(Self::generate(DeviceDek::Hardware(dek)))
+        Ok(Self::generate(ids, DeviceDek::Hardware(dek)))
     }
 
-    fn generate(dek: DeviceDek) -> Self {
+    fn generate(ids: IdSource<'_>, dek: DeviceDek) -> Self {
         Self::from_parts(
-            Uuid::now_v7(),
+            ids,
+            ids.uuid_v7(),
             MasterKey::generate(),
             HybridSigningKey::generate(),
             dek,
@@ -229,8 +234,10 @@ impl Account {
     ///
     /// Everything per-device is fresh: a new `device_id` and DSK, plus the caller's `dek`. A
     /// recovered device is a new device — it never resumes a lost device's keys, whose
-    /// classical halves may have been hardware-bound and are gone with it.
+    /// classical halves may have been hardware-bound and are gone with it. The `device_id` is a
+    /// UUIDv7 minted from `ids`.
     pub fn from_parts(
+        ids: IdSource<'_>,
         user_id: Uuid,
         master: MasterKey,
         user_ik: HybridSigningKey,
@@ -241,7 +248,7 @@ impl Account {
             master,
             user_ik,
             device: DeviceKeys {
-                device_id: Uuid::now_v7(),
+                device_id: ids.uuid_v7(),
                 dsk: HybridSigningKey::generate(),
                 dek,
             },
