@@ -196,6 +196,145 @@ fn the_peer_commands_parse_with_json() {
     );
 }
 
+#[test]
+fn the_peering_channel_legs_parse_and_name_exactly_one_destination() {
+    let to = Uuid::from_u128(1).to_string();
+    let asset = Uuid::from_u128(2).to_string();
+    let delegate = |extra: &[&str]| {
+        let mut args = vec![
+            "capsule",
+            "peer",
+            "delegate",
+            "--library",
+            "lib",
+            "--asset",
+            &asset,
+            "--json",
+        ];
+        args.extend_from_slice(extra);
+        crate::cli::try_parse_from(false, &args).is_ok()
+    };
+    // Over the channel, `--to` is optional: the handshake names the delegate.
+    assert!(delegate(&["--peer", "192.168.1.20:7420"]));
+    assert!(delegate(&["--peer", "laptop.local:7420", "--to", &to]));
+    // Files still need both the directory and the device.
+    assert!(delegate(&["--out", "o", "--to", &to]));
+    assert!(
+        !delegate(&["--out", "o"]),
+        "a file hand-off names its device"
+    );
+    assert!(!delegate(&[]), "a hand-off goes somewhere");
+    assert!(
+        !delegate(&["--peer", "192.168.1.20:7420", "--out", "o", "--to", &to]),
+        "one destination, not two"
+    );
+
+    let accept = |extra: &[&str]| {
+        let mut args = vec!["capsule", "peer", "accept", "--library", "lib", "--json"];
+        args.extend_from_slice(extra);
+        crate::cli::try_parse_from(false, &args).is_ok()
+    };
+    assert!(accept(&["--listen", "0.0.0.0:7420"]));
+    assert!(accept(&["--listen", "[::]:7420", "--listen-timeout", "30"]));
+    assert!(accept(&["--listen", "0.0.0.0:7420", "--from", "f"]));
+    assert!(!accept(&["--listen", "not-an-address"]));
+    assert!(!accept(&[
+        "--listen",
+        "0.0.0.0:7420",
+        "--listen-timeout",
+        "0"
+    ]));
+    assert!(
+        !accept(&["--listen-timeout", "30"]),
+        "a timeout without a listener is a mistake"
+    );
+}
+
+#[test]
+fn a_hand_off_over_the_channel_reports_no_file_and_whether_it_was_acknowledged() {
+    let over_channel = serde_json::to_value(DelegateSummary {
+        delegate: Some(Uuid::from_u128(1)),
+        peer: Some("192.168.1.20:7420".into()),
+        handed_off: vec![HandedOff {
+            asset_id: Uuid::from_u128(2),
+            file: None,
+            hand_off: "ab".repeat(32),
+            bytes: 10,
+            acknowledged: true,
+        }],
+        failed: vec![PeerFailure::new(
+            Uuid::from_u128(3).to_string(),
+            "not_acknowledged",
+            "the delegate ended the session",
+        )],
+    })
+    .expect("serializes");
+    assert_eq!(over_channel["peer"], "192.168.1.20:7420");
+    assert!(over_channel["handed_off"][0].get("file").is_none());
+    assert_eq!(over_channel["handed_off"][0]["acknowledged"], true);
+    assert_eq!(over_channel["failed"][0]["kind"], "not_acknowledged");
+
+    // A file hand-off keeps its shape: the file, the delegate, and no peer.
+    let to_file = serde_json::to_value(DelegateSummary {
+        delegate: Some(Uuid::from_u128(1)),
+        peer: None,
+        handed_off: vec![HandedOff {
+            asset_id: Uuid::from_u128(2),
+            file: Some("out/x.capsule-handoff".into()),
+            hand_off: "ab".repeat(32),
+            bytes: 10,
+            acknowledged: false,
+        }],
+        failed: Vec::new(),
+    })
+    .expect("serializes");
+    assert!(to_file.get("peer").is_none());
+    assert_eq!(to_file["delegate"], Uuid::from_u128(1).to_string());
+    assert_eq!(to_file["handed_off"][0]["file"], "out/x.capsule-handoff");
+
+    // No channel was established: the delegate is unknown.
+    let unreached = serde_json::to_value(DelegateSummary {
+        delegate: None,
+        peer: Some("192.0.2.1:7420".into()),
+        handed_off: Vec::new(),
+        failed: Vec::new(),
+    })
+    .expect("serializes");
+    assert!(unreached["delegate"].is_null());
+
+    let taken = serde_json::to_value(Accepted {
+        file: None,
+        peer: Some(Uuid::from_u128(4)),
+        ack: HandOffAck {
+            asset_id: Uuid::from_u128(2),
+            hand_off: "ab".repeat(32),
+            delegate_device: Uuid::from_u128(1),
+        },
+        ack_file: None,
+        acknowledged: Some(false),
+    })
+    .expect("serializes");
+    assert_eq!(taken["peer"], Uuid::from_u128(4).to_string());
+    assert_eq!(taken["acknowledged"], false);
+    assert!(taken.get("file").is_none() && taken.get("ack_file").is_none());
+}
+
+#[tokio::test]
+async fn a_listener_binds_an_ephemeral_port_and_reports_it() {
+    let listener = PeerListener::bind(
+        "127.0.0.1:0".parse().expect("an address"),
+        DEFAULT_LISTEN_TIMEOUT,
+    )
+    .await
+    .expect("binds");
+    assert_ne!(listener.local_addr().expect("bound").port(), 0);
+    let taken = listener.local_addr().expect("bound");
+    assert!(matches!(
+        PeerListener::bind(taken, DEFAULT_LISTEN_TIMEOUT).await,
+        Err(PeerError::Listen { .. })
+    ));
+}
+
 // ─── The `--json` failure contract ────────────────────────────────────────────
 
 fn rejected(status: u16, code: &str) -> DelegationError {
@@ -276,7 +415,14 @@ fn every_delegation_and_peering_error_has_a_distinct_stable_kind() {
     let errors = every_delegation_error();
     let mut kinds: Vec<&str> = errors.iter().map(delegation_kind).collect();
     // The names the CLI gives failures that are not a `DelegationError`.
-    kinds.extend(["bundle", "read", "ack_malformed", "copy_missing"]);
+    kinds.extend([
+        "bundle",
+        "read",
+        "ack_malformed",
+        "copy_missing",
+        "peer_mismatch",
+        "not_acknowledged",
+    ]);
     let total = kinds.len();
     kinds.sort_unstable();
     kinds.dedup();
