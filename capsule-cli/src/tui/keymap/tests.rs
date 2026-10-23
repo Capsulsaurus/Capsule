@@ -141,13 +141,16 @@ fn typing() -> AppState {
 
 #[test]
 fn no_two_bindings_claim_the_same_key_on_the_same_screen() {
-    let states = [
+    let states = vec![
         home(),
         help(),
         at(Screen::Auth),
         at(Screen::Sync),
         at(Screen::Restore),
         at(Screen::Share),
+        at(Screen::Library),
+        at(Screen::Labels),
+        at(Screen::Repair),
         typing(),
         asking(),
     ];

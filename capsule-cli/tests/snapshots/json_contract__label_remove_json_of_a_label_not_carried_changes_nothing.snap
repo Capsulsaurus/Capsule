@@ -1,0 +1,13 @@
+---
+source: capsule-cli/tests/json_contract.rs
+expression: "run_redacted(&scratch,\n&[\"label\", \"remove\", \"beach\", \"--asset\", &asset, \"--library\",\npath(&scratch.library()), \"--passphrase-stdin\", \"--json\",], &asset,)"
+---
+status: 0
+--- stdout ---
+{
+  "edit": "label-remove",
+  "asset_id": "[ASSET]",
+  "changed": false,
+  "labels": []
+}
+--- stderr ---

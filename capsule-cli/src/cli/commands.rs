@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use clap::{Subcommand, ValueEnum};
+use clap::{Args, Subcommand, ValueEnum};
 use uuid::Uuid;
 
 /// The trinary culling flag as a command-line value (`--filter pick`). Maps onto
@@ -220,6 +220,21 @@ pub(crate) enum Commands {
         #[command(subcommand)]
         command: RepairCommands,
     },
+    /// Add or remove a label on an asset, a region of one, a stack or an album
+    Label {
+        #[command(subcommand)]
+        command: LabelCommands,
+    },
+    /// Mark or delete a circle or rectangle region on an asset
+    Region {
+        #[command(subcommand)]
+        command: RegionCommands,
+    },
+    /// Correct an asset's capture time or location; the original's value is always kept
+    Edit {
+        #[command(subcommand)]
+        command: EditCommands,
+    },
     /// Issue and revoke view-only share links on the server
     Share {
         #[command(subcommand)]
@@ -405,6 +420,157 @@ pub(crate) enum RepairCommands {
         /// covers the whole library); only meaningful with --apply
         #[arg(long, value_name = "COUNT", value_parser = clap::value_parser!(u64).range(1..))]
         limit: Option<u64>,
+    },
+}
+
+/// The library an edit opens, and how its outcome is printed: shared by every `label`,
+/// `region` and `edit` subcommand.
+#[derive(Args, Debug)]
+pub(crate) struct EditLibraryArgs {
+    /// Path to the Capsule library
+    #[arg(long, value_name = "PATH")]
+    pub(crate) library: PathBuf,
+    /// Read the library passphrase from stdin instead of prompting, so the command
+    /// works in scripts and CI where there is no terminal.
+    #[arg(long)]
+    pub(crate) passphrase_stdin: bool,
+    /// Print what the edit did as one JSON document on stdout: the target and its labels,
+    /// capture time or location afterwards
+    #[arg(long)]
+    pub(crate) json: bool,
+}
+
+/// What a label edit applies to: exactly one of an asset (or one of its regions), a stack or
+/// an album.
+#[derive(Args, Debug)]
+#[group(required = true, multiple = false, id = "label_target")]
+pub(crate) struct LabelTargetArgs {
+    /// Label this asset: its id, or a prefix of at least 8 hex characters of its SHA-256
+    /// content hash
+    #[arg(long, value_name = "ASSET")]
+    pub(crate) asset: Option<String>,
+    /// Label this stack
+    #[arg(long, value_name = "STACK_ID")]
+    pub(crate) stack: Option<Uuid>,
+    /// Label this album
+    #[arg(long, value_name = "ALBUM_ID")]
+    pub(crate) album: Option<Uuid>,
+}
+
+/// One label edit's arguments.
+#[derive(Args, Debug)]
+pub(crate) struct LabelArgs {
+    /// The label: 1 to 256 bytes once trimmed
+    #[arg(value_name = "LABEL")]
+    pub(crate) label: String,
+    #[command(flatten)]
+    pub(crate) target: LabelTargetArgs,
+    /// Label this region of the asset instead of the asset itself
+    #[arg(long, value_name = "REGION_ID", requires = "asset")]
+    pub(crate) region: Option<Uuid>,
+    #[command(flatten)]
+    pub(crate) library: EditLibraryArgs,
+}
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum LabelCommands {
+    /// Add a label, as a signed edit
+    Add(LabelArgs),
+    /// Remove a label: every add of it this device has seen
+    Remove(LabelArgs),
+}
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum RegionCommands {
+    /// Mark a circle or rectangle region on an asset, in fractions of the image (display
+    /// orientation), and print its id
+    Add {
+        /// The asset: its id, or a prefix of at least 8 hex characters of its content hash
+        #[arg(long, value_name = "ASSET")]
+        asset: String,
+        /// A circle: centre and radius, each a fraction of the image
+        #[arg(
+            long,
+            value_name = "CX,CY,R",
+            value_parser = crate::edit::parse_circle,
+            conflicts_with = "rect",
+            required_unless_present = "rect"
+        )]
+        circle: Option<capsule_core::sidecar::RegionShape>,
+        /// A rectangle: top-left corner, width and height, each a fraction of the image
+        #[arg(long, value_name = "X,Y,W,H", value_parser = crate::edit::parse_rect)]
+        rect: Option<capsule_core::sidecar::RegionShape>,
+        /// Give the region this label (repeatable)
+        #[arg(long, value_name = "LABEL")]
+        label: Vec<String>,
+        #[command(flatten)]
+        library: EditLibraryArgs,
+    },
+    /// Delete a region of an asset. Final: another device's edit of it does not bring it back
+    Delete {
+        /// The region
+        #[arg(value_name = "REGION_ID")]
+        region: Uuid,
+        /// The asset: its id, or a prefix of at least 8 hex characters of its content hash
+        #[arg(long, value_name = "ASSET")]
+        asset: String,
+        #[command(flatten)]
+        library: EditLibraryArgs,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum EditCommands {
+    /// Correct an asset's capture time; the original's capture time is kept beside it
+    CaptureTime {
+        /// The corrected instant, RFC 3339 with an offset (2021-07-04T18:30:00Z)
+        #[arg(value_name = "TIME")]
+        time: jiff::Timestamp,
+        /// The asset: its id, or a prefix of at least 8 hex characters of its content hash
+        #[arg(long, value_name = "ASSET")]
+        asset: String,
+        #[command(flatten)]
+        library: EditLibraryArgs,
+    },
+    /// Correct an asset's location, or record that it has none; the original's location is
+    /// kept beside it
+    Location {
+        /// The asset: its id, or a prefix of at least 8 hex characters of its content hash
+        #[arg(long, value_name = "ASSET")]
+        asset: String,
+        /// Latitude, in degrees
+        #[arg(
+            long,
+            value_name = "DEGREES",
+            value_parser = crate::edit::parse_coordinate,
+            allow_negative_numbers = true,
+            requires = "lon",
+            required_unless_present = "clear"
+        )]
+        lat: Option<f64>,
+        /// Longitude, in degrees
+        #[arg(
+            long,
+            value_name = "DEGREES",
+            value_parser = crate::edit::parse_coordinate,
+            allow_negative_numbers = true,
+            requires = "lat"
+        )]
+        lon: Option<f64>,
+        /// The datum the coordinates are in (stored verbatim, never converted): WGS-84 or
+        /// GCJ-02
+        #[arg(
+            long,
+            value_name = "DATUM",
+            value_parser = crate::edit::parse_datum,
+            default_value = "WGS-84"
+        )]
+        datum: capsule_core::domain::GpsDatum,
+        /// Record that the asset has no location
+        #[arg(long, conflicts_with_all = ["lat", "lon"])]
+        clear: bool,
+        #[command(flatten)]
+        library: EditLibraryArgs,
     },
 }
 

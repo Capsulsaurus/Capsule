@@ -16,7 +16,7 @@ use ratatui::widgets::{Block, Borders, Paragraph, Row, Table, Wrap};
 use super::keymap::{BINDINGS, Scope, available};
 use super::library::{self, PreviewCanvas};
 use super::state::{Action, AppState, Loadable, Screen, SessionSummary};
-use super::{auth, restore, share, sync, transfer};
+use super::{auth, label_editor, metadata_repair, restore, share, sync, transfer};
 
 /// Draw `state` into `frame`, with previews in text.
 pub fn render(frame: &mut Frame, state: &AppState) {
@@ -49,6 +49,12 @@ pub fn render_with(frame: &mut Frame, state: &AppState, canvas: &mut PreviewCanv
         Screen::Import => super::import::render(frame, body, state.import(), title(screen)),
         Screen::Push => super::push::render(frame, body, state.push(), title(screen)),
         Screen::Library => library::render(frame, body, state.library(), title(screen), canvas),
+        Screen::Labels => {
+            label_editor::render(frame, body, state.labels(), state.library(), title(screen));
+        }
+        Screen::Repair => {
+            metadata_repair::render(frame, body, state.repair(), state.library(), title(screen));
+        }
     }
     render_footer(frame, footer, state);
 }
@@ -66,6 +72,8 @@ fn title(screen: Screen) -> &'static str {
         Screen::Import => "Import",
         Screen::Push => "Push",
         Screen::Library => "Library",
+        Screen::Labels => "Labels",
+        Screen::Repair => "Time and place",
     }
 }
 

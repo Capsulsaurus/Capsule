@@ -31,10 +31,11 @@ A `capsule` invocation reads at most two pieces of durable state, and it helps t
   user's configuration directory. Every networked command reads it, and `capsule reset` removes
   it.
 
-Seven commands unseal a library, and all seven take its passphrase: `capsule import`,
+Ten commands unseal a library, and all ten take its passphrase: `capsule import`,
 `capsule push`, `capsule restore`, `capsule cull`, `capsule show`,
-`capsule repair capture-time`, and `capsule sync reannounce` (which `capsule sync --library`
-runs itself when the server has rebuilt the library's index). Each accepts `--passphrase-stdin`
+`capsule repair capture-time`, `capsule label`, `capsule region`, `capsule edit`, and
+`capsule sync reannounce` (which `capsule sync --library` runs itself when the server has
+rebuilt the library's index). Each accepts `--passphrase-stdin`
 as well as prompting, so each runs unattended. The
 `capsule library` subcommands are not among them — `info` and `rebuild` read the version
 file, the sidecars, and the index, none of which is sealed, so they need no passphrase and
@@ -53,7 +54,11 @@ link ask `y` or `n` first in the TUI; the subcommands do not ask, so scripts kee
 Every flow the TUI offers stays reachable as a subcommand, with `--json` where it reports.
 The library browser asks the terminal once, at start-up, whether it draws Kitty, Sixel or
 iTerm2 graphics; where it draws none, the preview pane says so in text and no original is
-decoded for it.
+decoded for it. From the browser, the label editor (`e`) and the time-and-place screen (`m`)
+write to the library it has open with the passphrase it was opened with, kept in memory only
+while it stays open; each edit unlocks the library, writes, and closes it again, through the
+same code as `capsule label`, `capsule region` and `capsule edit`. Regions are drawn over the
+preview in half blocks, which every colour terminal shows.
 
 ## Where the contract lives
 

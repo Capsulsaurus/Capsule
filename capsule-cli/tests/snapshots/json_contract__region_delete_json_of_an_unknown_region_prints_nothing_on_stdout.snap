@@ -1,0 +1,10 @@
+---
+source: capsule-cli/tests/json_contract.rs
+expression: "run_redacted(&scratch,\n&[\"region\", \"delete\", \"0192f1a0-0000-7000-8000-00000000000e\", \"--asset\",\n&asset, \"--library\", path(&scratch.library()), \"--passphrase-stdin\",\n\"--json\",], &asset,)"
+---
+status: 1
+--- stdout ---
+
+--- stderr ---
+Error: 
+   0: Edit failed: This library has no region 0192f1a0-0000-7000-8000-00000000000e of [ASSET].

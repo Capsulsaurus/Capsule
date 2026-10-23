@@ -1,0 +1,14 @@
+---
+source: capsule-cli/tests/json_contract.rs
+expression: "run(&scratch, &[\"label\", \"add\", \"trip\", \"--library\", \"lib\", \"--json\"],)"
+---
+status: 2
+--- stdout ---
+
+--- stderr ---
+error: the following required arguments were not provided:
+  <--asset <ASSET>|--stack <STACK_ID>|--album <ALBUM_ID>>
+
+Usage: capsule label add --library <PATH> --json <--asset <ASSET>|--stack <STACK_ID>|--album <ALBUM_ID>> <LABEL>
+
+For more information, try '--help'.

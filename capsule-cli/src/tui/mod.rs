@@ -30,6 +30,12 @@
 //! [`library`] browses a local library: its timeline, albums and stacks, each asset's metadata,
 //! labels and provenance history, and an inline preview where the terminal draws images.
 //!
+//! From the browser, [`label_editor`] adds and removes labels on the selected asset, album or
+//! stack and draws labelled circle and rectangle regions over an asset's preview, and
+//! [`metadata_repair`] corrects an asset's capture time and location with the assets captured
+//! around it shown for context. Both write through [`crate::edit`], the code `capsule label`,
+//! `capsule region` and `capsule edit` run.
+//!
 //! The CLI and TUI are English-only (ADR-0011): strings are inline English, not catalog keys.
 //! Every flow the TUI offers stays reachable as a non-interactive `capsule` subcommand with
 //! `--json`.
@@ -40,8 +46,10 @@ pub mod form;
 pub mod hook;
 pub mod import;
 pub mod keymap;
+pub mod label_editor;
 pub mod library;
 pub mod log;
+pub mod metadata_repair;
 pub mod ports;
 pub mod push;
 pub mod restore;

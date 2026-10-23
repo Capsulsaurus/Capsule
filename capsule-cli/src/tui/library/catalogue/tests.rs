@@ -1,7 +1,7 @@
 //! Catalogue tests: the snapshot a real workspace yields, and the views drawn from it.
 
 use capsule_core::crypto::primitives::Argon2Params;
-use capsule_core::domain::StackType;
+use capsule_core::domain::{GpsDatum, StackType};
 use capsule_core::sidecar::{CullFlag, StackMembership};
 
 use super::*;
@@ -169,6 +169,94 @@ fn an_empty_library_is_an_empty_catalogue_with_its_album() {
 }
 
 #[test]
+fn labels_regions_and_both_capture_times_and_locations_are_read() {
+    let mut fx = Fixture::with_assets(1);
+    let id = fx.ids[0];
+    fx.ws.tag_add(&id, "beach").expect("tag");
+    let shape = RegionShape::Rect {
+        x: 0.1,
+        y: 0.2,
+        w: 0.3,
+        h: 0.4,
+    };
+    let region = fx.ws.add_region(&id, shape).expect("region");
+    fx.ws
+        .add_region_label(&id, &region, "Ada")
+        .expect("region label");
+    let imported = collect(&fx.ws)
+        .asset(id)
+        .expect("asset")
+        .capture_text
+        .clone();
+    fx.ws
+        .set_capture_timestamp(&id, "2021-07-04T18:30:00Z".parse().expect("instant"))
+        .expect("capture");
+    fx.ws
+        .set_location(&id, 48.5, 2.25, GpsDatum::Gcj02)
+        .expect("location");
+
+    let catalogue = collect(&fx.ws);
+    let asset = catalogue.asset(id).expect("asset");
+    assert_eq!(asset.labels, vec!["beach".to_owned()]);
+    assert_eq!(
+        asset.regions,
+        vec![RegionEntry {
+            region_id: region,
+            outline: Outline(shape),
+            labels: vec!["Ada".to_owned()],
+        }]
+    );
+    assert_eq!(asset.capture_text, "2021-07-04T18:30:00Z");
+    assert_eq!(asset.capture_imported, Some(imported));
+    assert_eq!(
+        asset.location,
+        Some(Place {
+            lat: 48.5,
+            lon: 2.25,
+            datum: GpsDatum::Gcj02,
+            source: GpsSource::Manual,
+        })
+    );
+    assert_eq!(asset.location_imported, None);
+    assert!(asset.location_edited);
+}
+
+#[test]
+fn outlines_and_places_compare_by_kind_and_bits() {
+    let circle = Outline(RegionShape::Circle {
+        cx: 0.5,
+        cy: 0.5,
+        r: 0.1,
+    });
+    assert_eq!(circle, circle);
+    assert_ne!(
+        circle,
+        Outline(RegionShape::Circle {
+            cx: 0.5,
+            cy: 0.5,
+            r: 0.2,
+        })
+    );
+    assert_ne!(
+        circle,
+        Outline(RegionShape::Rect {
+            x: 0.5,
+            y: 0.5,
+            w: 0.1,
+            h: f32::from_bits(u32::MAX),
+        })
+    );
+    let place = Place {
+        lat: f64::NAN,
+        lon: 0.0,
+        datum: GpsDatum::Wgs84,
+        source: GpsSource::Exif,
+    };
+    assert_eq!(place, place, "bitwise, so even a NaN equals itself");
+    assert_ne!(place, Place { lon: -0.0, ..place });
+}
+
+#[test]
 fn debug_prints_counts_not_rows() {
     let fx = Fixture::with_assets(2);
     let printed = format!("{:?}", collect(&fx.ws));
@@ -187,6 +275,13 @@ fn bare(asset_id: Uuid, album_id: Uuid, in_trash: bool) -> AssetEntry {
         stack: None,
         rows: Vec::new(),
         history: Vec::new(),
+        labels: Vec::new(),
+        regions: Vec::new(),
+        capture_text: String::new(),
+        capture_imported: None,
+        location: None,
+        location_imported: None,
+        location_edited: false,
     }
 }
 

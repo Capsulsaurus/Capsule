@@ -1,0 +1,19 @@
+---
+source: capsule-cli/tests/json_contract.rs
+expression: "run_redacted(&scratch,\n&[\"edit\", \"location\", \"--asset\", &asset, \"--lat\", \"-33.8568\", \"--lon\",\n\"151.2153\", \"--library\", path(&scratch.library()), \"--passphrase-stdin\",\n\"--json\",], &asset,)"
+---
+status: 0
+--- stdout ---
+{
+  "edit": "location",
+  "asset_id": "[ASSET]",
+  "changed": true,
+  "location": {
+    "lat": -33.8568,
+    "lon": 151.2153,
+    "datum": "WGS-84",
+    "source": "manual"
+  },
+  "location_imported": null
+}
+--- stderr ---

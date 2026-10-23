@@ -515,6 +515,73 @@ fn tag_add_normalizes_and_refuses_before_any_record() {
     assert_eq!(chain_len(&ws, &id), before + 1);
 }
 
+/// Removing a tag drops every add of it (both spellings of one label) as one signed record;
+/// a tag the asset does not carry, or one the label rule refuses, appends nothing.
+#[test]
+fn tag_remove_drops_every_observed_add_as_one_record() {
+    let lib = TempDir::new().unwrap();
+    let src = TempDir::new().unwrap();
+    let (mut ws, id) = workspace_with(&lib, &src, b"\xFF\xD8\xFF tag remove bytes");
+
+    ws.tag_add(&id, "Cafe\u{301}").unwrap();
+    ws.tag_add(&id, "Caf\u{e9}").unwrap();
+    ws.tag_add(&id, "beach").unwrap();
+    let before = chain_len(&ws, &id);
+
+    assert_eq!(ws.tag_remove(&id, " Caf\u{e9} ").unwrap(), 2);
+    assert_eq!(
+        chain_len(&ws, &id),
+        before + 1,
+        "one record for the removal"
+    );
+    assert_eq!(
+        ws.asset(&id).unwrap().sidecar.tags_user.value(),
+        ["beach".to_string()].into_iter().collect()
+    );
+    assert!(ws.asset(&id).unwrap().sidecar.signature.is_some());
+
+    assert_eq!(ws.tag_remove(&id, "absent").unwrap(), 0);
+    assert!(matches!(
+        ws.tag_remove(&id, "   "),
+        Err(LifecycleError::InvalidLabel(_))
+    ));
+    assert_eq!(chain_len(&ws, &id), before + 1, "nothing else is appended");
+    assert!(matches!(
+        ws.tag_remove(&Uuid::now_v7(), "beach"),
+        Err(LifecycleError::NotFound(_))
+    ));
+}
+
+/// A tag stored before the label rule, unnormalized, is removed by the spelling it is listed
+/// under, and so is one the rule would refuse outright.
+#[test]
+fn tag_remove_matches_a_legacy_unnormalized_tag_as_stored() {
+    let lib = TempDir::new().unwrap();
+    let src = TempDir::new().unwrap();
+    let (mut ws, id) = workspace_with(&lib, &src, b"\xFF\xD8\xFF legacy tag bytes");
+    for legacy in [" padded ", "   "] {
+        ws.append_lifecycle(&id, Action::MetadataUpdate, None, |s, add_id| {
+            s.tags_user.add(legacy.to_owned(), add_id);
+        })
+        .unwrap();
+    }
+    ws.tag_add(&id, "padded").unwrap();
+    let before = chain_len(&ws, &id);
+
+    assert_eq!(
+        ws.tag_remove(&id, " padded ").unwrap(),
+        2,
+        "raw and normalized"
+    );
+    assert_eq!(
+        ws.tag_remove(&id, "   ").unwrap(),
+        1,
+        "refused by the rule, yet stored"
+    );
+    assert_eq!(chain_len(&ws, &id), before + 2);
+    assert!(ws.asset(&id).unwrap().sidecar.tags_user.value().is_empty());
+}
+
 /// Promotion normalizes the AI text into `tags_user`; an AI tag whose text the label rule
 /// refuses cannot be promoted, emits no record, and stays intact in `tags_ai`.
 #[test]

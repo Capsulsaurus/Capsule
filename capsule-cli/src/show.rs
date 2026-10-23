@@ -272,7 +272,7 @@ pub fn describe_error(error: &ShowError) -> String {
     }
 }
 
-const fn gps_source_name(source: GpsSource) -> &'static str {
+pub(crate) const fn gps_source_name(source: GpsSource) -> &'static str {
     match source {
         GpsSource::Exif => "EXIF",
         GpsSource::Manual => "manual",
@@ -280,7 +280,7 @@ const fn gps_source_name(source: GpsSource) -> &'static str {
     }
 }
 
-const fn gps_datum_name(datum: GpsDatum) -> &'static str {
+pub(crate) const fn gps_datum_name(datum: GpsDatum) -> &'static str {
     match datum {
         GpsDatum::Wgs84 => "WGS-84",
         GpsDatum::Gcj02 => "GCJ-02",
