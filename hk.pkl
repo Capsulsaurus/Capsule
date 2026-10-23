@@ -54,6 +54,7 @@ hooks {
       ["i18n-check"]          { glob = List("locales/**", "capsule-i18n/src/**", "capsule-web/src/i18n/messages/**", "capsule-swift/Generated/**", "capsule-android/src/androidMain/res/values*/strings.xml", "xtask/src/i18n.rs"); check = "mise run i18n-check" }
       ["i18n-guard"]          { glob = List("locales/**", "capsule-web/src/{routes,components}/**/*.tsx", "capsule-swift/{App,Modules}/**/*.swift", "capsule-android/src/**/*.kt", "capsule-cli/src/**/*.rs", "xtask/src/i18n_guard.rs"); check = "mise run i18n-guard" }
       ["architecture-check"]  { glob = List("**/*.{js,json,md,rs,toml,ts,tsx,yaml,yml}"); check = "mise run architecture-check" }
+      ["test-layout-check"]   { glob = List("**/*.rs"); check = "mise run test-layout-check" }
       ["license-check"]       { glob = List("**/Cargo.toml", "Cargo.lock", "deny.toml"); check = "mise run license-check" }
 
       ["format-check-web"]    { glob = "capsule-web/**/*.{ts,tsx,js,jsx,json,jsonc,css}"; check = "mise run format-check-web" }
