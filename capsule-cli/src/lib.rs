@@ -45,6 +45,7 @@ pub mod import_run;
 pub mod migrate;
 pub mod oidc;
 pub mod peer;
+pub mod peering_state;
 pub mod reannounce;
 pub mod remote;
 pub mod repair;

@@ -27,6 +27,8 @@ use sea_orm::{
 };
 use thiserror::Error;
 
+use crate::peering_state;
+
 /// The singleton row id for the one opaque feed cursor.
 const CURSOR_ROW_ID: i32 = 0;
 
@@ -52,7 +54,7 @@ fn encode_id(bytes: &[u8]) -> String {
 }
 
 /// Recover the feed's opaque id bytes from their stored base64 form.
-fn decode_id(value: &str) -> Result<Vec<u8>, SyncStoreError> {
+pub(crate) fn decode_id(value: &str) -> Result<Vec<u8>, SyncStoreError> {
     base64::engine::general_purpose::STANDARD
         .decode(value)
         .map_err(|source| SyncStoreError::CorruptId {
@@ -121,13 +123,22 @@ pub async fn reset_for_resync<C: ConnectionTrait + TransactionTrait>(
     Ok(())
 }
 
-/// Land a validated page: upsert every asset and advance the stored cursor, all in
-/// one transaction. Returns the number of entries written.
+/// Land a validated page: upsert every asset, record a peering tombstone for every delete
+/// ([`crate::peering_state`]), and advance the stored cursor, all in one transaction. Returns the
+/// number of entries written.
 pub async fn persist_page<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     page: &SyncPage,
 ) -> Result<usize, SyncStoreError> {
     let txn = db.begin().await?;
+
+    let deleted: Vec<uuid::Uuid> = page
+        .entries
+        .iter()
+        .filter(|entry| entry.kind == ChangeKind::Deleted)
+        .filter_map(|entry| peering_state::feed_asset_uuid(&entry.asset_id))
+        .collect();
+    peering_state::record_tombstones(&txn, &deleted, jiff::Timestamp::now()).await?;
 
     for entry in &page.entries {
         let model = synced_asset::ActiveModel {
