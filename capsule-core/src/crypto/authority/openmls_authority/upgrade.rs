@@ -109,9 +109,9 @@ impl OpenMlsAuthority {
     // ── Step 1: propose (admin) / receive (member) ───────────────────────────
 
     /// **Step 1 (admin).** Issue a hybrid-signed [`UpgradeIntent`] and enter upgrade quiescence.
-    /// The `intent_id` is minted here, a UUIDv7 from `ids`. Returns the signed intent + the MLS application
-    /// message to broadcast to the other members. Refused if the album is already tombstoned or
-    /// already quiescing under another intent.
+    /// The `intent_id` is minted here, a UUIDv7 from `ids`. Returns the signed intent + the MLS
+    /// application message to broadcast to the other members. Refused if the album is already
+    /// tombstoned or already quiescing under another intent.
     #[tracing::instrument(skip_all, fields(album_id = %self.album_id, %to_suite_id))]
     pub fn propose_upgrade(
         &mut self,
