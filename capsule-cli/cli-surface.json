@@ -957,6 +957,18 @@
           "takes_value": false
         },
         {
+          "help": "Push only this asset (repeatable); every asset in the library when omitted. Retries the assets a run reported failed without re-importing them or re-checking the ones that reached custody",
+          "id": "asset",
+          "long": "asset",
+          "positional": false,
+          "repeatable": true,
+          "required": false,
+          "takes_value": true,
+          "value_names": [
+            "ASSET_ID"
+          ]
+        },
+        {
           "help": "Print the run as one JSON document on stdout: the totals and each asset's outcome (verified, failed with its error, or planned on a dry run)",
           "id": "json",
           "long": "json",
