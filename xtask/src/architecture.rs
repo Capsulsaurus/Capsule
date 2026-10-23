@@ -726,13 +726,26 @@ fn check_stateless_core(root: &Path, violations: &mut Vec<String>) -> Result<()>
     Ok(())
 }
 
+/// `std::path::Path` methods that read the filesystem, matched as argument-less calls.
+const PATH_FS_METHODS: &[&str] = &[
+    "is_file",
+    "is_dir",
+    "exists",
+    "try_exists",
+    "read_dir",
+    "canonicalize",
+    "read_link",
+    "symlink_metadata",
+];
+
 /// Every stateful reach in one `capsule-core` source file, one violation line each.
 ///
 /// A reach is a path through `std::fs`, `std::env`, `rusqlite` or `sea_orm`, written out
 /// (`std::fs::read`) or grouped (`use std::{env, fs}`). Comment lines are skipped, so a doc
 /// comment explaining why a module stays `std::fs`-free is not a reach. `env!` and
 /// `option_env!` read the build environment at compile time, not the process's, and do not
-/// match.
+/// match. `Path` filesystem methods (`.exists()`, `.is_file()`, `.read_dir()` and the rest of
+/// [`PATH_FS_METHODS`]) are also reads; `.metadata()` is a documented blind spot.
 fn stateless_core_violations(relative: &str, source: &str) -> Vec<String> {
     const FORBIDDEN: &[(&str, &str)] = &[
         ("std::fs", "the filesystem"),
@@ -757,6 +770,22 @@ fn stateless_core_violations(relative: &str, source: &str) -> Vec<String> {
             if contains_path(line, path) {
                 found.push(format!(
                     "{relative}:{}: names `{path}`; the stateless core reads no {what} \
+                     (move the code to `capsule-library`)",
+                    index + 1
+                ));
+            }
+        }
+    }
+
+    // `Path`'s own filesystem methods need no `std::fs` path to touch the disk. They are matched
+    // as argument-less method calls, which is what keeps `Store::exists(key)`-shaped calls clear.
+    // `.metadata()` is not scanned: the RAW decoders expose an unrelated `metadata()`, so a
+    // textual match cannot tell them apart.
+    for (index, line) in code.iter().enumerate() {
+        for method in PATH_FS_METHODS {
+            if line.contains(&format!(".{method}()")) {
+                found.push(format!(
+                    "{relative}:{}: calls `.{method}()`; the stateless core reads no filesystem \
                      (move the code to `capsule-library`)",
                     index + 1
                 ));
@@ -978,6 +1007,17 @@ mod tests {
         let found = core_violations("let home = ::std::env::var(\"HOME\");\n");
         assert_eq!(found.len(), 1);
         assert!(found[0].contains("`std::env`"));
+    }
+
+    #[test]
+    fn a_path_filesystem_method_is_reported_but_a_keyed_lookup_is_not() {
+        let found = core_violations("fn f(p: &Path) -> bool { p.is_file() || p.exists() }\n");
+        assert_eq!(found.len(), 2, "{found:?}");
+        assert!(found[0].starts_with("capsule-core/src/x.rs:1:"));
+        assert_eq!(
+            core_violations("fn f(s: &Store) -> bool { s.exists(key) }\n"),
+            Vec::<String>::new()
+        );
     }
 
     #[test]

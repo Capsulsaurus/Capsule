@@ -2,7 +2,7 @@
 //!
 //! Built only under the `tpm` feature (see `Cargo.toml`): it links the system `libtss2` through
 //! [`tss-esapi`] and is **never** compiled in CI. Exercising it needs a real TPM or a software
-//! TPM (`swtpm`); see `capsule-core/README-tpm.md` for the `swtpm` round-trip.
+//! TPM (`swtpm`); see `capsule-library/README-tpm.md` for the `swtpm` round-trip.
 //!
 //! # Algorithm caveat (the same one Secure Enclave has)
 //!

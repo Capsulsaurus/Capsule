@@ -1,6 +1,6 @@
 # TPM device signer — building & testing
 
-`capsule_core::crypto::keys::tpm::TpmSigner` is the desktop (Linux / Windows) TPM 2.0 reference
+`capsule_library::signers::tpm::TpmSigner` is the desktop (Linux / Windows) TPM 2.0 reference
 `HardwareSigner`. It is behind the off-by-default `tpm` feature and **not** built in CI, because it
 links the system `libtss2` and needs a real TPM (or a software TPM) to run.
 
@@ -9,11 +9,11 @@ links the system `libtss2` and needs a real TPM (or a software TPM) to run.
 ```sh
 # Debian/Ubuntu: the tss-esapi build needs the TSS2 headers + bindgen's clang.
 sudo apt-get install -y libtss2-dev pkg-config clang
-cargo build -p capsule-core --features tpm
+cargo build -p capsule-library --features tpm
 ```
 
 On macOS there is no TPM; the reference is verified to compile + link on Linux. (See the algorithm
-caveat in `src/crypto/keys/tpm.rs`: shipping TPMs do ECDSA-P256, not Ed25519, so this backend
+caveat in `src/signers/tpm.rs`: shipping TPMs do ECDSA-P256, not Ed25519, so this backend
 awaits the P-256 hybrid-DSK variant before it composes into the device key.)
 
 ## Smoke test with a software TPM (`swtpm`)

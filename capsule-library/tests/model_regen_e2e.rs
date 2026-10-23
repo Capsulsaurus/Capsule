@@ -9,7 +9,7 @@
 //! vector index is **derived state** — rebuilt by re-running inference over the originals, never
 //! restored from a backup.
 //!
-//! The case is entirely inside `capsule-core::ml` × the `capsule-core::db` vector index, so it is
+//! The case is entirely inside `capsule-core::ml` × the `capsule-library` vector index, so it is
 //! unaffected by the server rebuild and runs offline with no network and no fixtures on disk.
 //!
 //! What makes this the *end-to-end* proof rather than the loop's unit test (which lives in

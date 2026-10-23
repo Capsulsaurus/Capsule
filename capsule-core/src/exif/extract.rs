@@ -382,6 +382,31 @@ mod tests {
         assert_eq!(extracted.date_time_original, None);
     }
 
+    /// A Live Photo's still carries its pairing UUID outside the EXIF segment, after the marker
+    /// key. The extractor must rewind the reader it has just consumed for the container parse,
+    /// read to the end, and lowercase what it finds.
+    #[test]
+    fn a_live_photo_content_identifier_is_read_after_the_exif_parse_rewinds() {
+        let mut jpeg = jpeg_with_date_time_original(b"2019:03:04 05:06:07\0");
+        jpeg.extend_from_slice(b"com.apple.quicktime.content.identifier\0");
+        jpeg.extend_from_slice(b"550E8400-E29B-41D4-A716-446655440000 and some trailing text");
+
+        let extracted = extract_exif_from_reader(&mut Cursor::new(jpeg));
+
+        assert_eq!(
+            extracted.content_identifier.as_deref(),
+            Some("550e8400-e29b-41d4-a716-446655440000")
+        );
+        assert!(extracted.date_time_original.is_some());
+    }
+
+    #[test]
+    fn an_exif_container_without_the_marker_has_no_content_identifier() {
+        let extracted =
+            extract_exif_from_bytes(&jpeg_with_date_time_original(b"2019:03:04 05:06:07\0"));
+        assert_eq!(extracted.content_identifier, None);
+    }
+
     #[test]
     fn bytes_that_are_not_an_exif_container_extract_to_nothing() {
         assert_eq!(

@@ -52,7 +52,10 @@ every core behaviour is testable with fixed inputs. Exceptions, each confined to
 Anything else that needs state belongs in `capsule-library` (local) or `capsule-sdk` (network).
 `cargo xtask architecture-check` holds the boundary: `capsule-core` takes no normal dependency on
 a stateful crate (`rusqlite`, `sea-orm`, `sqlite-vec`, `sqlx`, `walkdir`), and no file under
-`capsule-core/src` names `std::fs`, `std::env`, `rusqlite` or `sea_orm`. Routing core's remaining
+`capsule-core/src` names `std::fs`, `std::env`, `rusqlite` or `sea_orm`, or calls a `Path` filesystem method
+(`.exists()`, `.is_file()`, `.is_dir()`, `.try_exists()`, `.read_dir()`, `.canonicalize()`,
+`.read_link()`, `.symlink_metadata()`). The scan is textual, so `.metadata()` on a `Path` is a
+known blind spot (the RAW decoders have an unrelated `metadata()`); review catches it. Routing core's remaining
 clock reads, the UUIDv7 identifiers it mints, through `Clock` and `Rng` is tracked in
 [#846](https://github.com/Capsulsaurus/Capsule/issues/846).
 

@@ -3,10 +3,10 @@
 //!
 //! # Why this is not feature-gated
 //!
-//! `capsule-core`'s `native` feature *implies* `media`, and the whole `lifecycle` module is
-//! `native`-gated, so a build that compiles this file always has the codec stack. The two builds
-//! that drop `media` — `capsule-server` and `capsule-wasm`, both
-//! `default-features = false` — drop `lifecycle` with it. A `#[cfg(feature = "media")]` here
+//! `capsule-library` depends on `capsule-core` with its default features, and `native` (the
+//! default) *implies* `media`, so a build that compiles this file always has the codec stack. The
+//! builds that drop `media` (`capsule-wasm`, and `capsule-server` as a normal dependency, both
+//! `default-features = false`) do not link the library at all. A `#[cfg(feature = "media")]` here
 //! would therefore guard nothing while making every signature read as optional; if the
 //! implication is ever removed, this file fails to compile, which is the right way for that
 //! decision to surface.
