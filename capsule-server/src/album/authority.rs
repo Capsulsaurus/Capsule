@@ -19,7 +19,7 @@
 //!
 //! The floor was account-creation time, with a comment saying "until the directory table lands"
 //! that had outlived the table landing. It is now the device's own `added_at` from the account's
-//! published [`DeviceDirectory`](capsule_core::crypto::keys::DeviceDirectory) — which is what
+//! published [`DeviceDirectory`] — which is what
 //! makes invariant 7 mean what it says: *this* device was in the directory before it signed
 //! that manifest, not merely that the account existed.
 //!

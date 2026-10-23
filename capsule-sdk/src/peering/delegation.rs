@@ -191,8 +191,8 @@ impl fmt::Debug for HandOff {
 }
 
 impl HandOff {
-    /// The container's bytes: [`MAGIC`], the header's length (`u32`, big-endian), the header as
-    /// JSON, then every member's bytes in header order.
+    /// The container's bytes: the magic `CAPSHOF1`, the header's length (`u32`, big-endian), the
+    /// header as JSON, then every member's bytes in header order.
     ///
     /// # Errors
     ///
