@@ -539,6 +539,9 @@ pub mod error_codes {
     /// `error.upload.replace_incomplete`
     pub const UPLOAD_REPLACE_INCOMPLETE: &str = "error.upload.replace_incomplete";
 
+    /// `error.upload.retention_elapsed`
+    pub const UPLOAD_RETENTION_ELAPSED: &str = "error.upload.retention_elapsed";
+
     /// `error.upload.session_not_active`
     pub const UPLOAD_SESSION_NOT_ACTIVE: &str = "error.upload.session_not_active";
 

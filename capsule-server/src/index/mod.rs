@@ -594,6 +594,49 @@ pub fn purge_refusal(row: &AssetRow, now: Timestamp) -> Option<PurgeOutcome> {
     }
 }
 
+/// The signed retention floor a `trash-restore` accepted at `at` comes too late for, or `None`
+/// while the asset is still restorable.
+///
+/// A restore recovers an asset only *within* its retention window (design/organization.md
+/// § Retention Window). The window is closed exactly when [`purge_refusal`] would let a purge at
+/// `at` proceed — a tombstone whose signed floor is present and reached — so the two predicates
+/// partition a tombstone's life with no instant at which both a restore and a purge are
+/// admissible. Absent retention never closes the window, as it never makes a row purgeable.
+///
+/// `at` is the server's clock when it accepted the op, never a client's: a device with a slow
+/// clock must not be able to reach back into a window the server has already closed. The
+/// refusal is fail-safe — it writes nothing, and the asset's bytes stay until the purge — while
+/// a restore the window admits can never meet a purged row, because a purge needs the floor
+/// reached and the restore needed it not to be.
+#[must_use]
+pub fn restore_window_closed(
+    state: AssetState,
+    retention_until: Option<Timestamp>,
+    at: Timestamp,
+) -> Option<Timestamp> {
+    match (state, retention_until) {
+        (AssetState::Tombstoned, Some(retention_until)) if at >= retention_until => {
+            Some(retention_until)
+        }
+        _ => None,
+    }
+}
+
+/// Why `op` may not be applied to `row` because the retention window has closed, or `None`
+/// when it may.
+///
+/// The one definition both adapters check under the row lock, beside [`purge_refusal`]. Only a
+/// [`OpAction::TrashRestore`] is refused: it is the one op that returns a tombstone to the live
+/// set, and every other action leaves a tombstone a tombstone.
+#[must_use]
+pub fn restore_refusal(row: &AssetRow, op: &LifecycleOp) -> Option<OpOutcome> {
+    if op.action != OpAction::TrashRestore {
+        return None;
+    }
+    restore_window_closed(row.state, row.retention_until, op.at)
+        .map(|retention_until| OpOutcome::RetentionElapsed { retention_until })
+}
+
 /// What applying a lifecycle write did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OpOutcome {
@@ -625,6 +668,17 @@ pub enum OpOutcome {
     AmkRegressed {
         /// The album's highest accepted epoch.
         stored: u64,
+    },
+    /// A `trash-restore` arrived at or after the tombstone's signed retention floor
+    /// ([`restore_refusal`]). Nothing was written and no number was minted.
+    ///
+    /// Decided after invariants 17 and 18, so a stale or regressed manifest is answered as such
+    /// first; and after the replay check, so a restore applied inside the window and retried
+    /// after it is still `Replayed`.
+    RetentionElapsed {
+        /// The floor the restore came too late for. Reached only by the asset's owner, whose
+        /// own signed delete fixed it, so it discloses nothing.
+        retention_until: Timestamp,
     },
     /// No such asset, not this caller's, or not in that album.
     ///
@@ -783,6 +837,10 @@ pub trait AssetIndex: std::fmt::Debug + Send + Sync {
     /// and then writes has a window in which a concurrent op lands, and two ops racing through
     /// it can both chain onto the same head — which is the double-apply invariant 17 exists to
     /// catch. An adapter owes atomicity across the whole sequence.
+    ///
+    /// The retention window ([`restore_refusal`]) is decided in the same critical section, for
+    /// the same reason the purge re-checks [`purge_refusal`] under the row lock: a restore and
+    /// a purge of one tombstone serialize on that lock, so each sees the other's outcome.
     fn apply_op(&self, op: LifecycleOp) -> IndexFuture<'_, OpOutcome>;
 
     /// [`apply_op`](Self::apply_op), with the custody receipt appended in the same critical
