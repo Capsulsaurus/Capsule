@@ -1,0 +1,11 @@
+{"at_ms":0,"event":"session_resumed","blob":"6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b","session_id":"sess-7","size":1048576,"offset":393216}
+{"at_ms":10,"event":"chunk_sent","blob":"6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b","session_id":"sess-7","offset":393216,"len":262144}
+{"at_ms":60,"event":"chunk_acked","blob":"6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b","session_id":"sess-7","offset":393216,"len":262144,"acked_offset":655360}
+{"at_ms":65,"event":"chunk_sent","blob":"6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b","session_id":"sess-7","offset":655360,"len":262144}
+{"at_ms":90,"event":"chunk_retried","blob":"6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b","session_id":"sess-7","offset":655360,"len":262144,"reason":"session_lost"}
+{"at_ms":110,"event":"session_created","blob":"6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b","session_id":"sess-8","size":1048576,"resume_offset":0}
+{"at_ms":115,"event":"chunk_sent","blob":"6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b","session_id":"sess-8","offset":0,"len":524288}
+{"at_ms":200,"event":"chunk_acked","blob":"6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b","session_id":"sess-8","offset":0,"len":524288,"acked_offset":524288}
+{"at_ms":205,"event":"chunk_sent","blob":"6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b","session_id":"sess-8","offset":524288,"len":524288}
+{"at_ms":290,"event":"chunk_acked","blob":"6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b","session_id":"sess-8","offset":524288,"len":524288,"acked_offset":1048576}
+{"at_ms":295,"event":"finalize","blob":"6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b","session_id":"sess-8","size":1048576}

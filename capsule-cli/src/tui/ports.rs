@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use capsule_sdk::events::{TransferEvent, TransferEvents};
-use tokio::sync::{Mutex, broadcast, mpsc};
+use tokio::sync::{Mutex, broadcast, mpsc, oneshot};
 
 use super::auth::{AuthAction, AuthEffect, LoginResult};
 use super::form::Secret;
@@ -41,6 +41,13 @@ pub const NOT_OFFERED: &str = "this build of the TUI cannot do that";
 pub trait Ports: Send + Sync + 'static {
     /// The local session summary, as `capsule auth status` reads it: never a network call.
     fn session_summary(&self) -> impl Future<Output = Result<SessionSummary, String>> + Send;
+
+    /// The transfer event handle the transfer screen watches. Every upload, push or fetch the
+    /// TUI starts attaches this handle to its client, so the screen sees it. The default
+    /// publishes nothing.
+    fn transfer_events(&self) -> TransferEvents {
+        TransferEvents::disabled()
+    }
 
     /// Sign in with a password, storing the session on success, as `capsule auth login` does.
     fn login(
@@ -171,12 +178,14 @@ pub async fn perform<P: Ports>(ports: &P, effect: Effect) -> Action {
 }
 
 /// The ports a real `capsule` run uses: the session file, the local store and the server the
-/// CLI's own commands use, through the same functions those commands call.
+/// CLI's own commands use, through the same functions those commands call, and one transfer
+/// event channel for every transfer the TUI starts.
 #[derive(Debug, Clone)]
 pub struct LocalPorts {
     push_progress: Arc<ProgressChannel>,
     session_path: Option<PathBuf>,
     remote: RemoteConfig,
+    transfer_events: TransferEvents,
 }
 
 impl LocalPorts {
@@ -189,6 +198,7 @@ impl LocalPorts {
             push_progress: Arc::new(ProgressChannel::new()),
             session_path,
             remote: RemoteConfig::from_env(),
+            transfer_events: TransferEvents::default_channel(),
         }
     }
 
@@ -272,27 +282,58 @@ impl Drop for CloseOnDrop {
     }
 }
 
-/// Relay the custody steps of a run's transfer events ([`is_custody_step`]) to `tx` until the
-/// run drops its last event handle; a subscriber that fell behind tells how many it missed.
+/// Relay the custody steps of a run's transfer events ([`is_custody_step`]) to `tx` until
+/// `run_done` fires (or its sender is dropped) and what was published before it is relayed, or
+/// the channel closes. The channel is the TUI's shared one, which outlives every run, so the run
+/// ending is what stops the relay. A subscriber that fell behind tells how many it missed.
 pub async fn forward_custody_events(
     mut events: broadcast::Receiver<TransferEvent>,
     tx: mpsc::UnboundedSender<PushProgress>,
+    mut run_done: oneshot::Receiver<()>,
 ) {
-    use tokio::sync::broadcast::error::RecvError;
+    use tokio::sync::broadcast::error::{RecvError, TryRecvError};
     loop {
-        let progress = match events.recv().await {
-            Ok(event) if is_custody_step(&event) => PushProgress::Transfer(event),
-            Ok(_) => continue,
-            Err(RecvError::Lagged(missed)) => {
-                tracing::warn!(target: "capsule_cli::tui", missed, "push progress fell behind the transfer events");
-                PushProgress::Lagged(missed)
+        let received = tokio::select! {
+            // What is already published goes first, so nothing the run told is left behind.
+            biased;
+            received = events.recv() => received,
+            _ = &mut run_done => {
+                // The run returned, so everything it published is already in the channel:
+                // relay that much and stop, even though the channel itself stays open.
+                loop {
+                    let received = match events.try_recv() {
+                        Ok(event) => Ok(event),
+                        Err(TryRecvError::Lagged(missed)) => Err(RecvError::Lagged(missed)),
+                        Err(TryRecvError::Empty | TryRecvError::Closed) => return,
+                    };
+                    if !relay(received, &tx) {
+                        return;
+                    }
+                }
             }
-            Err(RecvError::Closed) => return,
         };
-        if tx.send(progress).is_err() {
+        if matches!(received, Err(RecvError::Closed)) || !relay(received, &tx) {
             return;
         }
     }
+}
+
+/// Relay one received transfer event to `tx` if it is a custody step; whether `tx` is still
+/// read.
+fn relay(
+    received: Result<TransferEvent, broadcast::error::RecvError>,
+    tx: &mpsc::UnboundedSender<PushProgress>,
+) -> bool {
+    use tokio::sync::broadcast::error::RecvError;
+    let progress = match received {
+        Ok(event) if is_custody_step(&event) => PushProgress::Transfer(event),
+        Ok(_) | Err(RecvError::Closed) => return true,
+        Err(RecvError::Lagged(missed)) => {
+            tracing::warn!(target: "capsule_cli::tui", missed, "push progress fell behind the transfer events");
+            PushProgress::Lagged(missed)
+        }
+    };
+    tx.send(progress).is_ok()
 }
 
 /// The English reason for a networked failure, as the CLI's own lines word it.
@@ -321,6 +362,10 @@ where
 }
 
 impl Ports for LocalPorts {
+    fn transfer_events(&self) -> TransferEvents {
+        self.transfer_events.clone()
+    }
+
     async fn session_summary(&self) -> Result<SessionSummary, String> {
         let path = self.session_path()?;
         // A file read: off the async worker so the input loop is never behind it.
@@ -469,15 +514,18 @@ impl Ports for LocalPorts {
             run: request.run,
         };
         let (remote, store) = (self.remote.clone(), self.store()?);
+        // The TUI's one transfer channel: the transfer screen watches this run's uploads on it
+        // too, and the relay below reads its custody steps for the push screen.
+        let events = self.transfer_events.clone();
         off_loop(move || async move {
             let _closed = closed;
             let mut workspace =
                 crate::open_workspace_with(&request.library, request.passphrase.expose())
                     .map_err(|e| e.to_string())?;
-            let events = TransferEvents::default_channel();
-            let forwarder = events
-                .subscribe()
-                .map(|subscriber| tokio::spawn(forward_custody_events(subscriber, tx.clone())));
+            let (run_done, done) = oneshot::channel();
+            let forwarder = events.subscribe().map(|subscriber| {
+                tokio::spawn(forward_custody_events(subscriber, tx.clone(), done))
+            });
             let mut observe = |progress: remote::AssetProgress| {
                 let _ = tx.send(progress.into());
             };
@@ -494,8 +542,9 @@ impl Ports for LocalPorts {
                 run,
             )
             .await;
-            // The run dropped its event handles, so the relay drains what is left and ends;
-            // only then is the run's stream closed.
+            // The relay passes on what the run published and ends; only then is the run's
+            // stream closed.
+            let _ = run_done.send(());
             if let Some(forwarder) = forwarder {
                 let _ = forwarder.await;
             }

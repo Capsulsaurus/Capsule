@@ -1,0 +1,21 @@
+---
+source: capsule-cli/src/tui/transfer/view/tests.rs
+expression: "draw(&b, 17)"
+---
+┌Transfers─────────────────────────────────────────────────────────────────────┐
+│2 transfers, 1 active · 256 B/s · custody: 0 durable, 0 not, 1 receipt        │
+│↓ bbbb  0 B / ?  0 B/s  fetching                                              │
+│size not known yet                                                            │
+│                                                                              │
+│chunk — · 0 retries · 0 rejects                                               │
+│                                                                              │
+│↑ aaaa  1 KiB / 1 KiB 100%  256 B/s  verified (receipt 7)                     │
+│██████████████████████████████████████████████████████████████████████████████│
+│██████████████████████████████████████████████████████████████████████████████│
+│chunk — · 0 retries · 0 rejects · sess-1                                      │
+│resumed at 512 B                                                              │
+│· pending  = held before this run  ░ in flight  ▓ acked  █ verified           │
+│R retrying  X rejected  r acked after a retry  x acked after a reject         │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘

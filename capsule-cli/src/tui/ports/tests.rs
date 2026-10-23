@@ -464,14 +464,17 @@ async fn local_import_reports_a_library_that_does_not_open() {
 }
 
 /// The relay passes the custody steps on in order, drops chunk traffic, and ends once the run
-/// drops its last event handle.
+/// is done — though the shared channel stays open — with everything the run published passed
+/// on first.
 #[tokio::test]
 async fn the_relay_passes_only_custody_steps_and_ends_with_the_run() {
     let events = TransferEvents::default_channel();
     let channel = ProgressChannel::new();
+    let (run_done, done) = oneshot::channel();
     let relay = tokio::spawn(forward_custody_events(
         events.subscribe().expect("a channel handle"),
         channel.sender(),
+        done,
     ));
     let finalize = TransferEvent::Finalize {
         blob: "aa".to_owned(),
@@ -491,10 +494,9 @@ async fn the_relay_passes_only_custody_steps_and_ends_with_the_run() {
     });
     events.emit(|| finalize.clone());
     events.emit(|| receipt.clone());
-    drop(events);
-    relay
-        .await
-        .expect("the relay ends when the run's handles are gone");
+    run_done.send(()).expect("the relay is listening");
+    // `events` is still held here: only the run ending stops the relay.
+    relay.await.expect("the relay ends when the run is done");
     assert_eq!(
         channel.next_batch().await,
         vec![
@@ -502,6 +504,31 @@ async fn the_relay_passes_only_custody_steps_and_ends_with_the_run() {
             PushProgress::Transfer(receipt)
         ]
     );
+}
+
+/// A run that ends without saying so (its port panicked) still ends the relay, and a channel
+/// that closes ends it too.
+#[tokio::test]
+async fn the_relay_ends_when_the_run_is_gone_or_the_channel_closes() {
+    let events = TransferEvents::default_channel();
+    let channel = ProgressChannel::new();
+    let (run_done, done) = oneshot::channel::<()>();
+    let relay = tokio::spawn(forward_custody_events(
+        events.subscribe().expect("a channel handle"),
+        channel.sender(),
+        done,
+    ));
+    drop(run_done);
+    relay.await.expect("a dropped run ends the relay");
+
+    let (_run_done, done) = oneshot::channel::<()>();
+    let relay = tokio::spawn(forward_custody_events(
+        events.subscribe().expect("a channel handle"),
+        channel.sender(),
+        done,
+    ));
+    drop(events);
+    relay.await.expect("a closed channel ends the relay");
 }
 
 /// A subscriber that fell behind says how many events it missed, and goes on.
@@ -519,9 +546,10 @@ async fn the_relay_says_how_many_events_it_missed() {
     events.emit(|| verify(false));
     events.emit(|| verify(false));
     events.emit(|| verify(true));
-    drop(events);
     let channel = ProgressChannel::new();
-    forward_custody_events(subscriber, channel.sender()).await;
+    let (run_done, done) = oneshot::channel();
+    run_done.send(()).expect("the receiver is held");
+    forward_custody_events(subscriber, channel.sender(), done).await;
     assert_eq!(
         channel.next_batch().await,
         vec![

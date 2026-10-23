@@ -13,6 +13,8 @@
 //! - [`runtime`] — the event loop, generic over backend and event source.
 //! - [`driver`] — a scripted key driver on a `TestBackend` that holds effects until the test
 //!   lets them answer.
+//! - [`transfer`] — the real-time transfer screen: a pure fold of the SDK's transfer event
+//!   stream, the feed that stamps it, and its drawing.
 //! - [`hook`] — the panic hook: restores the terminal only for a panic on the loop's thread.
 //! - [`log`] — routes log events to a file while the TUI owns the terminal.
 //! - [`form`] — the text forms the feature screens collect input with, with secrets kept out
@@ -43,6 +45,7 @@ pub mod runtime;
 pub mod share;
 pub mod state;
 pub mod sync;
+pub mod transfer;
 pub mod view;
 
 use std::io::IsTerminal as _;

@@ -1250,6 +1250,7 @@ impl UploadClient {
             self.events.emit(|| TransferEvent::SessionResumed {
                 blob: request.hash.clone(),
                 session_id: session_id.to_string(),
+                size: request.size,
                 offset: info.offset,
             });
             self.drive(

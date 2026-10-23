@@ -98,6 +98,28 @@ fn a_session_answer_does_not_move_the_navigation_stack() {
     assert_eq!(state.screen(), Screen::Help);
 }
 
+/// Transfer actions fold into the board and ask for nothing; none of them moves the stack.
+#[test]
+fn transfer_actions_fold_into_the_board_without_effects() {
+    use capsule_sdk::events::TransferEvent;
+
+    let mut state = ready();
+    let event = Stamped {
+        at_ms: 40,
+        event: TransferEvent::Merged {
+            blob: "b".into(),
+            asset_ref: "a".into(),
+        },
+    };
+    assert!(state.update(Action::Transfer(event)).is_empty());
+    assert!(state.update(Action::TransfersLagged(2)).is_empty());
+    assert!(state.update(Action::Tick(90)).is_empty());
+    assert_eq!(state.transfers().transfers().len(), 1);
+    assert_eq!(state.transfers().missed(), 2);
+    assert_eq!(state.transfers().now_ms(), 90);
+    assert_eq!(state.screen(), Screen::Home);
+}
+
 #[test]
 fn an_answer_reaches_the_screen_on_top_only_while_it_asks() {
     let mut state = ready();

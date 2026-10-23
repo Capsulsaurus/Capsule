@@ -128,6 +128,107 @@ fn events_serialize_with_a_snake_case_tag_and_a_flat_reason() {
     );
 }
 
+/// A recorded stream replays: every variant, the flattened retry reasons included, parses back
+/// from its JSON to the value that was published.
+#[test]
+fn every_event_round_trips_through_json() {
+    let blob = || "ab".to_owned();
+    let session_id = || "s1".to_owned();
+    let retried = |reason| TransferEvent::ChunkRetried {
+        blob: blob(),
+        session_id: session_id(),
+        offset: 0,
+        len: 4096,
+        reason,
+    };
+    let events = vec![
+        TransferEvent::SessionCreated {
+            blob: blob(),
+            session_id: session_id(),
+            size: 8192,
+            resume_offset: 0,
+        },
+        TransferEvent::SessionResumed {
+            blob: blob(),
+            session_id: session_id(),
+            size: 8192,
+            offset: 4096,
+        },
+        TransferEvent::ChunkSent {
+            blob: blob(),
+            session_id: session_id(),
+            offset: 0,
+            len: 4096,
+        },
+        TransferEvent::ChunkAcked {
+            blob: blob(),
+            session_id: session_id(),
+            offset: 0,
+            len: 4096,
+            acked_offset: 4096,
+        },
+        retried(RetryReason::TransportReset { wait_ms: 250 }),
+        retried(RetryReason::OffsetRealign { to: 0 }),
+        retried(RetryReason::SessionLost),
+        retried(RetryReason::ServerWait { wait_ms: 1500 }),
+        TransferEvent::ChecksumRejected {
+            blob: blob(),
+            session_id: session_id(),
+            offset: 0,
+            len: 4096,
+        },
+        TransferEvent::Finalize {
+            blob: blob(),
+            session_id: session_id(),
+            size: 8192,
+        },
+        TransferEvent::Merged {
+            blob: blob(),
+            asset_ref: "asset".into(),
+        },
+        TransferEvent::Verify {
+            asset_id: "asset".into(),
+            durable: true,
+            blobs: 1,
+            not_durable: 0,
+        },
+        TransferEvent::Receipt {
+            asset_id: "asset".into(),
+            blob: blob(),
+            receipt_seq: 3,
+        },
+        TransferEvent::RangeRequested {
+            blob: blob(),
+            offset: 0,
+            max_len: None,
+        },
+        TransferEvent::RangeReceived {
+            blob: blob(),
+            offset: 0,
+            len: 10,
+        },
+        TransferEvent::FetchRetried {
+            blob: blob(),
+            offset: 10,
+            stalled: true,
+            wait_ms: 100,
+        },
+        TransferEvent::FetchVerified {
+            blob: blob(),
+            size: 10,
+        },
+        TransferEvent::IntegrityRejected {
+            blob: blob(),
+            size: 10,
+        },
+    ];
+    for event in events {
+        let json = serde_json::to_string(&event).unwrap();
+        let back: TransferEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, event, "{json}");
+    }
+}
+
 #[test]
 fn millis_saturates() {
     assert_eq!(millis(Duration::from_millis(1500)), 1500);
