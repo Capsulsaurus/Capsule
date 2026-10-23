@@ -203,13 +203,14 @@ fn judged_at(now: Timestamp, page: &SyncPage) -> Timestamp {
 /// Land a validated page: upsert every asset, record the purges it reveals, and advance the
 /// stored cursor, all in one transaction. Returns the number of entries written.
 ///
-/// A `Deleted` entry marks the asset tombstoned and stores its retention deadline
-/// ([`retention_of`]): a delete moves the asset to trash, which a `trash-restore` reverses until
-/// that deadline, so the delete alone is not a peering tombstone. Any other entry clears the
-/// deadline, which is how a restore takes the asset out of the sweep. The sweep
-/// ([`record_elapsed_purges`]) then records as purged every asset in trash whose deadline has
-/// passed at [`judged_at`]`(now, page)`, together with any delete the server serves without a
-/// manifest, in the same transaction.
+/// A `Deleted` entry marks the asset tombstoned and stores its retention deadline, the
+/// `retention_until` of its delete record: a delete moves the asset to trash, which a
+/// `trash-restore` reverses until that deadline, so the delete alone is not a peering tombstone.
+/// Any other entry clears the deadline, which is how a restore takes the asset out of the sweep.
+/// The sweep ([`record_elapsed_purges`]) then records as purged every asset in trash whose
+/// deadline has passed at `now`, floored by the latest `changed_at` in the page (a reading of
+/// the server's clock), together with any delete the server serves without a manifest, in the
+/// same transaction.
 #[instrument(level = "debug", skip_all, fields(entries = page.entries.len()), err)]
 pub async fn persist_page<C: ConnectionTrait + TransactionTrait>(
     db: &C,
