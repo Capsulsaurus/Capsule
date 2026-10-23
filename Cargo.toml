@@ -111,6 +111,15 @@ proptest = { version = "1.12.0", default-features = false, features = ["std"] }
 # Snapshot assertions (dev-dependency only) for the CLI's `--json` and exit-code contract. No
 # default features: `colors` only tints a local diff, and the snapshots are plain strings.
 insta = { version = "1.48.0", default-features = false }
+# The CLI's full-screen TUI (Terminal UI row in design/dependencies.md). No default features:
+# `widget-calendar` pulls the `time` crate, and jiff is the datetime crate. crossterm is pinned
+# to the backend version ratatui is built against so the graph holds one copy; `event-stream`
+# gives the TUI loop an async input stream.
+ratatui = { version = "0.30.2", default-features = false, features = [
+    "crossterm_0_29",
+    "layout-cache",
+] }
+crossterm = { version = "0.29.0", features = ["event-stream"] }
 testcontainers-modules = { version = "0.15.0", features = [
     "postgres",
     "redis",

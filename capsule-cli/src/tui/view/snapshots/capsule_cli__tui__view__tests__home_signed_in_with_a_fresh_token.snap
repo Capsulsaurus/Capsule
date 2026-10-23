@@ -1,0 +1,16 @@
+---
+source: capsule-cli/src/tui/view/tests.rs
+expression: "draw(&loaded(Ok(SessionSummary::SignedIn { access_token_fresh: true })))"
+---
+Capsule · Home · Signed in
+┌Home──────────────────────────────────────────────────────────────────────────┐
+│Signed in.                                                                    │
+│Access token: valid.                                                          │
+│                                                                              │
+│Every flow is also a `capsule <command>` subcommand; `capsule --help` lists   │
+│them.                                                                         │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+q Quit  ? Show the key bindings  r Reload the session status

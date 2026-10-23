@@ -52,6 +52,7 @@ pub mod share;
 pub mod show;
 pub mod status;
 pub mod syncstore;
+pub mod tui;
 pub mod utils;
 pub mod verify;
 
@@ -203,15 +204,22 @@ fn progress_line(path: &Path, outcome: &ImportOutcome) -> ColoredString {
 ///
 /// The CLI is English-only (ADR-0011): help pages and usage errors are the derive's doc
 /// comments, whatever the process locale.
+///
+/// Bare `capsule` on a terminal opens the TUI ([`tui`]); off a terminal it prints the help and
+/// exits 2, as a missing subcommand always did.
 pub async fn run() -> Result<()> {
-    let cli = <Cli as clap::Parser>::parse();
+    let cli: Cli = cli::parse(tui::is_interactive());
     tracing::trace!("Parsed CLI arguments: {:#?}", cli);
-    dispatch(cli).await
+    match cli.command {
+        Some(command) => dispatch(command).await,
+        // `cli::parse` lets a bare invocation through only on a terminal.
+        None => tui::run().await,
+    }
 }
 
-/// Dispatch an already-parsed `Cli`.
-async fn dispatch(cli: Cli) -> Result<()> {
-    match cli.command {
+/// Dispatch an already-parsed command.
+async fn dispatch(command: Commands) -> Result<()> {
+    match command {
         // ── Auth ──────────────────────────────────────────────────────────
         Commands::Auth { command } => match command {
             AuthCommands::Register {
@@ -2076,7 +2084,7 @@ mod oidc_login_tests {
         let parsed = Cli::try_parse_from(["capsule", "auth", "login", "--oidc", "--no-browser"])
             .expect("--oidc --no-browser parses");
         assert!(matches!(
-            parsed.command,
+            parsed.command.expect("a subcommand was given"),
             Commands::Auth {
                 command: AuthCommands::Login {
                     oidc: true,
@@ -2101,7 +2109,7 @@ mod oidc_login_tests {
         let parsed = Cli::try_parse_from(["capsule", "auth", "login", "--oidc", "--device"])
             .expect("--oidc --device parses");
         assert!(matches!(
-            parsed.command,
+            parsed.command.expect("a subcommand was given"),
             Commands::Auth {
                 command: AuthCommands::Login {
                     oidc: true,

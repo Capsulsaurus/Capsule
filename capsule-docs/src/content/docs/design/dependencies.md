@@ -53,10 +53,11 @@ Every Rust version is pinned once in the root `[workspace.dependencies]`; member
 | CBOR | `ciborium` (+ `serde_bytes`, `half`) | Rules: [Metadata — Canonical CBOR](/design/metadata/#canonical-cbor-encoding). |
 | Serialization | `serde` + `serde_json` | — |
 | CLI | `clap` (derive) | — |
+| Terminal UI | `ratatui` **0.30** (`default-features = false`, `crossterm_0_29`, `layout-cache`) + `crossterm` **0.29** (`event-stream`) | `capsule-cli` only. `crossterm` is pinned to the backend version `ratatui` is built against, so the graph holds one copy. No `widget-calendar`: it pulls the `time` crate (Datetime row). |
 | Tooling image processing | `image` (`jpeg`, `png`) | xtask screenshot tooling only; no product crate may depend on it. |
 | Test runner | `cargo-nextest`; `testcontainers` for backing services | Binary smokes use `CARGO_BIN_EXE_<name>`; no `assert_cmd`. |
 | Property tests | `proptest` (dev-dependency, `std` only) | CRDT merge laws, canonical codecs and SDK fault schedules, per the [testing plan](/development/testing/). Seeded and printed; `PROPTEST_RNG_SEED` replays. |
-| Snapshot tests | `insta` (dev-dependency, no default features) | The CLI `--json` and exit-code contract; plain-string snapshots under `tests/snapshots/`. |
+| Snapshot tests | `insta` (dev-dependency, no default features) | The CLI `--json` and exit-code contract; plain-string snapshots under `tests/snapshots/`. TUI frames rendered on ratatui's `TestBackend`, snapshotted as plain text beside their unit tests. |
 | Fuzzing and mutation testing | `cargo-fuzz` (`libfuzzer-sys`), `cargo-mutants` | Tools, not dependencies of any shipped crate: the fuzz harness is its own workspace under `capsule-core/fuzz`. |
 | Unicode normalization | `unicode-normalization` | NFC for user labels ([Organization — Labels](/design/organization/#labels)); already transitive. |
 | FFI bindings | `uniffi` | One workspace version. |

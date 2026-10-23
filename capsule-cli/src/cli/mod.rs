@@ -57,8 +57,33 @@ const COMMAND_TREE_SCHEMA: u32 = 1;
     long_about = "Capsule CLI provides tools for managing your photos and albums:\n\n- Authentication management\n- Sync local and remote data\n- Check status and list files\n- Manage albums and collections"
 )]
 pub(crate) struct Cli {
+    /// The command to run. Absent only for a bare `capsule`, which opens the TUI on a terminal
+    /// and prints this help anywhere else ([`parse`]).
     #[command(subcommand)]
-    pub command: Commands,
+    pub command: Option<Commands>,
+}
+
+/// Parse the process arguments.
+///
+/// Bare `capsule` gets through only when `interactive` (stdin and stdout are terminals), and the
+/// caller opens the TUI for it. Off a terminal it is what a missing subcommand always was for a
+/// script: clap's help on stderr and exit status 2, so a pipeline never blocks on a full-screen
+/// UI.
+pub(crate) fn parse(interactive: bool) -> Cli {
+    try_parse_from(interactive, std::env::args_os()).unwrap_or_else(|e| e.exit())
+}
+
+/// [`parse`] over explicit arguments, returning the usage error instead of exiting.
+pub(crate) fn try_parse_from<I, T>(interactive: bool, args: I) -> Result<Cli, clap::Error>
+where
+    I: IntoIterator<Item = T>,
+    T: Into<std::ffi::OsString> + Clone,
+{
+    use clap::FromArgMatches as _;
+    let matches = Cli::command()
+        .arg_required_else_help(!interactive)
+        .try_get_matches_from(args)?;
+    Cli::from_arg_matches(&matches)
 }
 
 /// The `capsule` command tree as JSON — the committed description artifact
@@ -509,5 +534,38 @@ mod tests {
                 .expect("the tree serializes")
                 .contains("\"id\":\"help\"")
         );
+    }
+
+    /// On a terminal, bare `capsule` parses to no command: the TUI's cue.
+    #[test]
+    fn bare_capsule_on_a_terminal_parses_to_no_command() {
+        let cli = try_parse_from(true, ["capsule"]).expect("bare capsule parses on a terminal");
+        assert!(cli.command.is_none());
+    }
+
+    /// Off a terminal, bare `capsule` is clap's help-on-missing-subcommand usage error: help on
+    /// stderr and exit status 2, never a full-screen UI in a pipeline.
+    #[test]
+    fn bare_capsule_off_a_terminal_is_the_help_usage_error() {
+        let error = try_parse_from(false, ["capsule"]).expect_err("bare capsule is refused");
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+        );
+        assert_eq!(error.exit_code(), 2);
+    }
+
+    /// A subcommand parses the same whether or not a terminal is attached.
+    #[test]
+    fn a_subcommand_parses_the_same_on_and_off_a_terminal() {
+        for interactive in [true, false] {
+            let cli = try_parse_from(interactive, ["capsule", "auth", "status"]).expect("parses");
+            assert!(matches!(
+                cli.command,
+                Some(Commands::Auth {
+                    command: AuthCommands::Status
+                })
+            ));
+        }
     }
 }

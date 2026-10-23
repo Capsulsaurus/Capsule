@@ -4,8 +4,8 @@
 //! stderr: stdout carries only what a command prints, which for `--json` is one document.
 
 use eyre::Result;
+use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
-use tracing_subscriber::{EnvFilter, fmt};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -21,17 +21,12 @@ async fn main() -> Result<()> {
         })
         .expect("built-in log filter directives are valid");
     // stdout is a data channel: `--json` promises exactly one document there, so every log
-    // event goes to stderr, whatever the filter lets through.
-    let fmt_layer = fmt::layer()
-        .with_writer(std::io::stderr)
-        .pretty()
-        .with_thread_ids(true)
-        .with_thread_names(true)
-        .with_file(true)
-        .with_line_number(true);
+    // event goes to stderr, whatever the filter lets through. While the TUI holds the terminal,
+    // the layers send events to its log file instead (without colour), so none is drawn over a
+    // frame.
     tracing_subscriber::registry()
         .with(filter_layer)
-        .with(fmt_layer)
+        .with(capsule_cli::tui::log::layers())
         .init();
 
     capsule_cli::run().await
