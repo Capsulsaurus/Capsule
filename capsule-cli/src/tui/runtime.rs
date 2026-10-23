@@ -21,7 +21,7 @@ use tokio::time::MissedTickBehavior;
 
 use super::keymap::action_for_event;
 use super::ports::{Ports, perform};
-use super::state::{Action, AppState, Effect, Screen};
+use super::state::{Action, AppState, Effect, Screen, canonical_library};
 use super::transfer::{FRAME_INTERVAL, Feed};
 use super::view::render;
 
@@ -72,6 +72,7 @@ where
             action = feed.next() => (Some(action), false),
         };
         if let Some(action) = action {
+            state.resolve_libraries(&action, canonical_library);
             let effects = state.update(action);
             spawn_effects(&ports, &tx, effects);
         }

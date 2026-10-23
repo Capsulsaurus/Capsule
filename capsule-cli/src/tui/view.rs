@@ -38,6 +38,8 @@ pub fn render(frame: &mut Frame, state: &AppState) {
         Screen::Sync => sync::render(frame, body, state.sync(), title(screen)),
         Screen::Restore => restore::render(frame, body, state.restore(), title(screen)),
         Screen::Share => share::render(frame, body, state.share(), title(screen)),
+        Screen::Import => super::import::render(frame, body, state.import(), title(screen)),
+        Screen::Push => super::push::render(frame, body, state.push(), title(screen)),
     }
     render_footer(frame, footer, state);
 }
@@ -52,6 +54,8 @@ fn title(screen: Screen) -> &'static str {
         Screen::Sync => "Sync",
         Screen::Restore => "Restore",
         Screen::Share => "Share links",
+        Screen::Import => "Import",
+        Screen::Push => "Push",
     }
 }
 

@@ -15,6 +15,8 @@ Capsule · Key bindings · Signed out
 │d          Restore originals                                     Home         │
 │l          Share links                                           Home         │
 │t          Watch transfers                                       Home         │
+│i          Import                                                Home         │
+│p          Push                                                  Home         │
 │l          Sign in                                               Account      │
 │o          Sign out                                              Account      │
 │s          Sync now                                              Sync         │
@@ -22,6 +24,15 @@ Capsule · Key bindings · Signed out
 │e          Fill in and run a restore                             Restore      │
 │c          Issue a link                                          Share links  │
 │x          Revoke a link                                         Share links  │
+│a          Add a source                                          Import       │
+│x          Remove a source                                       Import       │
+│k          Switch kind                                           Import       │
+│e          Run the import                                        Import       │
+│p          Push                                                  Import       │
+│Down       Select the next source                                Import       │
+│Up         Select the previous source                            Import       │
+│e          Fill in and run a push                                Push         │
+│r          Retry the assets not in custody                       Push         │
 │Enter      Submit                                                while typing │
 │Tab        Next field                                            while typing │
 │Down       Next field                                            while typing │

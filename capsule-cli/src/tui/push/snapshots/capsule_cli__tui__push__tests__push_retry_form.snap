@@ -1,0 +1,34 @@
+---
+source: capsule-cli/src/tui/push/tests.rs
+expression: draw(&state)
+---
+Capsule · Push · Signed in
+┌Push────────────────────────────────────────────────────────────────────────────────────┐
+│Push a library to the server. An asset counts once the server holds every blob durably  │
+│and a signed receipt for each is stored in the library.                                 │
+│                                                                                        │
+│Retrying 1 asset(s) that did not reach custody.                                         │
+│  Library             /photos/lib                                                       │
+│› Library passphrase  ▏                                                                 │
+│                                                                                        │
+│Custody verified for 1 of 2 assets; 3 receipts stored in the library.                   │
+│1 of 2 assets in custody, 1 failed.                                                     │
+│Asset                                 Uploaded  Durable  Receipts  State                │
+│0192f1a0-0000-7000-8000-00000000000b         1        –         0  failed               │
+│0192f1a0-0000-7000-8000-00000000000a         3      yes         3  verified             │
+│                                                                                        │
+│Did not reach custody (r retries every asset not in custody):                           │
+│0192f1a0-0000-7000-8000-00000000000b: connection reset                                  │
+│                                                                                        │
+│Scriptable: `capsule push --library PATH --json`; `--asset ID` pushes one asset again.  │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+└────────────────────────────────────────────────────────────────────────────────────────┘
+Enter Submit  Tab Next field  Esc Stop editing

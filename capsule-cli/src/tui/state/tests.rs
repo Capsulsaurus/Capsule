@@ -138,3 +138,22 @@ fn an_answer_reaches_the_screen_on_top_only_while_it_asks() {
         vec![Effect::Auth(AuthEffect::Logout)]
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn canonical_library_sees_through_a_symlink_and_a_relative_spelling() {
+    let root = std::env::temp_dir().join(format!("capsule-tui-canon-{}", uuid::Uuid::now_v7()));
+    let real = root.join("real");
+    std::fs::create_dir_all(&real).unwrap();
+    let link = root.join("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+
+    let canonical = canonical_library(&real);
+    assert_eq!(canonical_library(&link), canonical);
+    assert_eq!(canonical_library(&root.join("real/../link")), canonical);
+
+    // A path that does not exist falls back to itself made absolute, never an error.
+    let missing = root.join("missing");
+    assert_eq!(canonical_library(&missing), missing);
+    std::fs::remove_dir_all(&root).unwrap();
+}

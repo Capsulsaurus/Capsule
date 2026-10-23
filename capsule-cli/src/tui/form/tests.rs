@@ -109,6 +109,17 @@ fn lines_mask_secrets_and_mark_the_focus_only_while_editing() {
 }
 
 #[test]
+fn focus_can_be_set_and_past_the_end_is_ignored() {
+    let mut form = form();
+    form.focus_on(1);
+    assert_eq!(form.focus(), 1);
+    type_into(&mut form, "pw");
+    assert_eq!(form.secret(1).expose(), "pw");
+    form.focus_on(2);
+    assert_eq!(form.focus(), 1);
+}
+
+#[test]
 fn status_reports_whether_a_request_is_in_flight() {
     assert!(Status::Working("Doing it…").is_working());
     assert!(!Status::Done("done".to_owned()).is_working());

@@ -809,6 +809,146 @@ async fn serve_escrow_mock(mock: EscrowMock) -> String {
 /// (`RemoteError::Recovery`), which fails the whole run before any asset is sent.
 #[tokio::test]
 async fn a_full_escrow_holds_back_only_that_albums_assets() {
+    let EscrowRun {
+        _scratch,
+        mut ws,
+        full_album,
+        other_album,
+        held_back,
+        other,
+        mock,
+        remote,
+        session,
+    } = escrow_run().await;
+
+    let summary = push_with(
+        &remote,
+        &mut ws,
+        session,
+        PushOptions::default(),
+        PushRun::default(),
+    )
+    .await
+    .expect("a full escrow holds assets back; it does not fail the run");
+
+    let stores = mock.stores();
+    assert_eq!(stores.len(), 2, "both albums were attempted: {stores:?}");
+    assert!(stores.contains(&full_album.to_string()));
+    assert!(stores.contains(&other_album.to_string()));
+    assert_eq!(
+        summary.album_keys_escrowed, 1,
+        "only the album the server accepted counts as escrowed"
+    );
+
+    let failure_of = |asset_id: Uuid| {
+        summary
+            .outcomes
+            .iter()
+            .find(|outcome| outcome.asset_id == asset_id.to_string())
+            .and_then(|outcome| outcome.error.as_ref())
+            .map(|error| error.kind)
+    };
+    assert_eq!(failure_of(held_back), Some("album_keys_not_escrowed"));
+    assert_ne!(
+        failure_of(other),
+        Some("album_keys_not_escrowed"),
+        "an album whose escrow was stored is not held back by another's"
+    );
+    assert!(
+        !mock
+            .seen
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|line| line.contains(&full_album.to_string()) && !line.contains("/escrow/")),
+        "nothing was sent for the held-back album"
+    );
+}
+
+/// A push scoped to named assets (`capsule push --asset`, the TUI's retry) considers those
+/// assets and no other, in the order given with repeats dropped, and tells its observer when
+/// each starts — with every blob of its bundle — and how each finished, exactly as the
+/// summary records it. An id the library does not hold fails as that asset, not silently.
+#[tokio::test]
+async fn a_scoped_push_considers_only_the_named_assets_and_reports_each_as_it_goes() {
+    let EscrowRun {
+        _scratch,
+        mut ws,
+        held_back,
+        other,
+        remote,
+        session,
+        ..
+    } = escrow_run().await;
+    let missing = Uuid::now_v7();
+
+    let mut seen = Vec::new();
+    let mut observe = |progress: AssetProgress| seen.push(progress);
+    let summary = push_with(
+        &remote,
+        &mut ws,
+        session,
+        PushOptions::default(),
+        PushRun {
+            assets: Some(vec![held_back, missing, held_back]),
+            observer: Some(&mut observe),
+            ..PushRun::default()
+        },
+    )
+    .await
+    .expect("the run reaches its assets");
+
+    assert_eq!(summary.assets, 2, "the repeat is dropped");
+    let ids: Vec<&str> = summary
+        .outcomes
+        .iter()
+        .map(|o| o.asset_id.as_str())
+        .collect();
+    assert_eq!(ids, vec![held_back.to_string(), missing.to_string()]);
+    assert!(
+        !ids.contains(&other.to_string().as_str()),
+        "an asset not named is not pushed"
+    );
+    let missing_failure = summary.outcomes[1].error.as_ref().map(|e| e.kind);
+    assert_eq!(missing_failure, Some("bundle"));
+
+    let [
+        AssetProgress::Started { asset_id, blobs },
+        AssetProgress::Finished(first),
+        AssetProgress::Finished(second),
+    ] = seen.as_slice()
+    else {
+        panic!("one start and two finishes, in order: {seen:?}");
+    };
+    assert_eq!(*asset_id, held_back);
+    let bundle = ws.upload_bundle(&held_back).unwrap();
+    let expected: Vec<String> = push::bundle_blobs(&bundle)
+        .into_iter()
+        .map(|(_, hash)| hash)
+        .collect();
+    assert_eq!(
+        blobs, &expected,
+        "every blob of the bundle, in ladder order"
+    );
+    assert_eq!(first, &summary.outcomes[0]);
+    assert_eq!(second, &summary.outcomes[1]);
+}
+
+/// A library of two albums against the escrow mock, which refuses one album's escrow as
+/// full: one asset in each album, and a resumed session against the mock.
+struct EscrowRun {
+    _scratch: Scratch,
+    ws: Workspace,
+    full_album: Uuid,
+    other_album: Uuid,
+    held_back: Uuid,
+    other: Uuid,
+    mock: EscrowMock,
+    remote: RemoteConfig,
+    session: Session,
+}
+
+async fn escrow_run() -> EscrowRun {
     let scratch = Scratch::new();
     let lib = scratch.0.join("library");
     std::fs::create_dir_all(&lib).unwrap();
@@ -862,41 +1002,15 @@ async fn a_full_escrow_holds_back_only_that_albums_assets() {
             access_expires_at_unix: jiff::Timestamp::now().as_second() + 3600,
         })
         .expect("a resumed session");
-
-    let summary = push_with(&remote, &mut ws, session, PushOptions::default())
-        .await
-        .expect("a full escrow holds assets back; it does not fail the run");
-
-    let stores = mock.stores();
-    assert_eq!(stores.len(), 2, "both albums were attempted: {stores:?}");
-    assert!(stores.contains(&full_album.to_string()));
-    assert!(stores.contains(&other_album.to_string()));
-    assert_eq!(
-        summary.album_keys_escrowed, 1,
-        "only the album the server accepted counts as escrowed"
-    );
-
-    let failure_of = |asset_id: Uuid| {
-        summary
-            .outcomes
-            .iter()
-            .find(|outcome| outcome.asset_id == asset_id.to_string())
-            .and_then(|outcome| outcome.error.as_ref())
-            .map(|error| error.kind)
-    };
-    assert_eq!(failure_of(held_back), Some("album_keys_not_escrowed"));
-    assert_ne!(
-        failure_of(other),
-        Some("album_keys_not_escrowed"),
-        "an album whose escrow was stored is not held back by another's"
-    );
-    assert!(
-        !mock
-            .seen
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|line| line.contains(&full_album.to_string()) && !line.contains("/escrow/")),
-        "nothing was sent for the held-back album"
-    );
+    EscrowRun {
+        _scratch: scratch,
+        ws,
+        full_album,
+        other_album,
+        held_back,
+        other,
+        mock,
+        remote,
+        session,
+    }
 }

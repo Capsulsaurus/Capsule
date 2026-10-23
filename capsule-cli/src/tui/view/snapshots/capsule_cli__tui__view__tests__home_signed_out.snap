@@ -8,9 +8,9 @@ Capsule · Home · Signed out
 │Run `capsule auth login` to sign in to a server.                              │
 │                                                                              │
 │a Account   s Sync   d Restore originals   l Share links   t Watch transfers  │
+│i Import   p Push                                                             │
 │                                                                              │
 │Every flow is also a `capsule <command>` subcommand; `capsule --help` lists   │
 │them.                                                                         │
-│                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
 r Reload the session status  q Quit  ? Show the key bindings

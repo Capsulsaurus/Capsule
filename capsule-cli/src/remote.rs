@@ -23,6 +23,7 @@ use capsule_sdk::albums::{AlbumClient, AlbumTransport};
 use capsule_sdk::auth::{AuthClient, AuthError, LoginOutcome, Session};
 use capsule_sdk::client::AuthenticatedClient;
 use capsule_sdk::directory::{DirectoryClient, DirectoryError};
+use capsule_sdk::events::TransferEvents;
 use capsule_sdk::fetch::HttpBlobSource;
 use capsule_sdk::net::ConnectionClass;
 use capsule_sdk::push::{self, PushError};
@@ -1456,10 +1457,86 @@ pub async fn push(
     workspace: &mut Workspace,
     options: PushOptions,
 ) -> Result<PushSummary, RemoteError> {
+    push_run(remote, store, workspace, options, PushRun::default()).await
+}
+
+/// [`push()`] over the assets `run` names, publishing to `run`'s transfer events and telling its
+/// observer which asset the run is on. `capsule push --asset` and the TUI's push screen run
+/// through here: a retry of failed assets is this over just those assets, so nothing is
+/// re-imported and the assets that already reached custody are not asked about again.
+///
+/// # Errors
+///
+/// As [`push()`].
+#[instrument(skip(store, workspace, run), fields(endpoint = %remote.upload_endpoint))]
+pub async fn push_run(
+    remote: &RemoteConfig,
+    store: &SessionStore,
+    workspace: &mut Workspace,
+    options: PushOptions,
+    run: PushRun<'_>,
+) -> Result<PushSummary, RemoteError> {
     let session = resume_session(remote, store).await?;
-    let outcome = push_with(remote, workspace, session.clone(), options).await;
+    let outcome = push_with(remote, workspace, session.clone(), options, run).await;
     checkpoint(store, &session).await;
     outcome
+}
+
+/// Where a push stands for one asset, told to a [`PushRun`]'s observer as the run moves. The
+/// transfer and custody steps themselves (finalize, merge, verify, receipt) are on the run's
+/// [`TransferEvents`]; this only frames them by asset.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AssetProgress {
+    /// The run built the asset's bundle and is about to send it. `blobs` are the content
+    /// addresses of every blob the bundle holds, so an observer can tell which asset a
+    /// blob-keyed transfer event belongs to. A create re-sealed at the album's current epoch is
+    /// started again, with its new blobs.
+    Started {
+        /// The asset.
+        asset_id: Uuid,
+        /// Its blobs' content addresses (lowercase hex), in ladder order.
+        blobs: Vec<String>,
+    },
+    /// The asset's outcome, exactly as the run's summary records it.
+    Finished(AssetPushOutcome),
+}
+
+/// The optional parts of a push: which assets, and who watches it.
+#[derive(Default)]
+pub struct PushRun<'a> {
+    /// The assets to push, in this order; `None` pushes every asset of the library. An id the
+    /// library does not hold fails as that asset's `bundle` error, so a mistyped id is reported
+    /// rather than skipped.
+    pub assets: Option<Vec<Uuid>>,
+    /// Where the run's uploads and custody checks publish their transfer events.
+    pub events: TransferEvents,
+    /// Told when each asset starts and finishes.
+    pub observer: Option<&'a mut dyn FnMut(AssetProgress)>,
+}
+
+impl std::fmt::Debug for PushRun<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PushRun")
+            .field("assets", &self.assets)
+            .field("events", &self.events)
+            .field("observed", &self.observer.is_some())
+            .finish()
+    }
+}
+
+impl PushRun<'_> {
+    /// Tell the observer, building what to tell it only when there is one.
+    fn tell(&mut self, progress: impl FnOnce() -> AssetProgress) {
+        if let Some(observer) = self.observer.as_mut() {
+            observer(progress());
+        }
+    }
+}
+
+/// `assets` with repeats dropped, the first occurrence kept.
+pub(crate) fn distinct(assets: Vec<Uuid>) -> Vec<Uuid> {
+    let mut seen = HashSet::new();
+    assets.into_iter().filter(|id| seen.insert(*id)).collect()
 }
 
 /// The push itself, over a session somebody else is responsible for persisting.
@@ -1468,8 +1545,12 @@ async fn push_with(
     workspace: &mut Workspace,
     session: Session,
     options: PushOptions,
+    mut run: PushRun<'_>,
 ) -> Result<PushSummary, RemoteError> {
-    let asset_ids = workspace.asset_ids();
+    let asset_ids = match run.assets.take() {
+        Some(assets) => distinct(assets),
+        None => workspace.asset_ids(),
+    };
     let mut summary = PushSummary {
         assets: asset_ids.len(),
         dry_run: options.dry_run,
@@ -1508,7 +1589,8 @@ async fn push_with(
         &remote.upload_endpoint,
         &remote.protocol_version,
     ))
-    .with_connection_class(options.connection);
+    .with_connection_class(options.connection)
+    .with_events(run.events.clone());
     let albums = AlbumClient::new(AlbumTransport::with_session(
         session.clone(),
         &remote.albums_endpoint,
@@ -1523,6 +1605,7 @@ async fn push_with(
     if options.dry_run {
         for asset_id in asset_ids {
             let outcome = plan_asset(workspace, &scheduler, &held, options.force, asset_id);
+            run.tell(|| AssetProgress::Finished(outcome.clone()));
             summary.record(outcome);
         }
         summary.log();
@@ -1533,11 +1616,12 @@ async fn push_with(
     // could be confirmed: that is a failure of the run, not of an asset.
     let attestation_keys = pinned_attestation_keys(remote, workspace, &verify).await?;
 
-    let mut run = AssetPusher {
+    let mut pusher = AssetPusher {
         workspace,
         upload,
         albums,
         verify,
+        events: run.events.clone(),
         attestation_keys,
         scheduler,
         held,
@@ -1547,11 +1631,15 @@ async fn push_with(
     };
     for asset_id in asset_ids {
         let mut outcome = AssetPushOutcome::new(asset_id, AssetPushStatus::Verified);
-        if let Err(error) = run.push(asset_id, &mut outcome, &mut summary).await {
+        if let Err(error) = pusher
+            .push(asset_id, &mut outcome, &mut summary, &mut run)
+            .await
+        {
             tracing::warn!(%asset_id, %error, "push: asset failed; continuing with the next");
             outcome.status = AssetPushStatus::Failed;
             outcome.error = Some(error.failure());
         }
+        run.tell(|| AssetProgress::Finished(outcome.clone()));
         summary.record(outcome);
     }
     summary.log();
@@ -1637,6 +1725,8 @@ struct AssetPusher<'a> {
     upload: UploadClient,
     albums: AlbumClient,
     verify: StorageVerifyClient,
+    /// Where the custody check publishes its verdict and receipts.
+    events: TransferEvents,
     attestation_keys: Vec<HybridVerifyingKey>,
     scheduler: StagedScheduler,
     held: HashSet<String>,
@@ -1654,14 +1744,16 @@ impl AssetPusher<'_> {
     /// step completes. A transfer that fails partway leaves `uploaded`, `merged` and `bytes` at
     /// zero for the asset even when some of its blobs landed, because [`push::push_bundle`]
     /// returns only its error; a re-run derives the remaining work from server truth.
-    #[instrument(skip(self, outcome, summary), fields(%asset_id))]
+    #[instrument(skip(self, outcome, summary, run), fields(%asset_id))]
     async fn push(
         &mut self,
         asset_id: Uuid,
         outcome: &mut AssetPushOutcome,
         summary: &mut PushSummary,
+        run: &mut PushRun<'_>,
     ) -> Result<(), AssetError> {
         let bundle = self.workspace.upload_bundle(&asset_id)?;
+        run.tell(|| started(&bundle));
         if self.uncovered.contains(&bundle.album_id) {
             return Err(AssetError::KeysNotEscrowed(bundle.album_id));
         }
@@ -1704,6 +1796,7 @@ impl AssetPusher<'_> {
                     "push: create re-sealed; pushing it again"
                 );
                 let bundle = self.workspace.upload_bundle(&asset_id)?;
+                run.tell(|| started(&bundle));
                 let report = self.push_bundle(&bundle).await?;
                 (bundle, report)
             }
@@ -1719,12 +1812,13 @@ impl AssetPusher<'_> {
             }
         }
 
-        let custody = push::verify_custody(
+        let custody = push::verify_custody_with_events(
             &self.verify,
             &self.attestation_keys,
             &bundle,
             &report,
             jiff::Timestamp::now().as_second(),
+            &self.events,
         )
         .await?;
 
@@ -1758,6 +1852,17 @@ impl AssetPusher<'_> {
             self.force,
         )
         .await
+    }
+}
+
+/// The [`AssetProgress::Started`] for `bundle`.
+fn started(bundle: &capsule_library::lifecycle::UploadBundle) -> AssetProgress {
+    AssetProgress::Started {
+        asset_id: bundle.asset_id,
+        blobs: push::bundle_blobs(bundle)
+            .into_iter()
+            .map(|(_, hash)| hash)
+            .collect(),
     }
 }
 

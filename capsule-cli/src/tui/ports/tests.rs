@@ -317,3 +317,274 @@ async fn an_unresolved_config_directory_is_a_reason() {
         Err("could not resolve the config directory".to_owned())
     );
 }
+
+// ── Import and push ──────────────────────────────────────────────────────────
+
+fn import_request(library: PathBuf) -> ImportRequest {
+    ImportRequest {
+        library,
+        passphrase: Secret::new("pw"),
+        kind: crate::tui::import::SourceKind::Files,
+        sources: vec![PathBuf::from("/photos")],
+    }
+}
+
+fn push_request(run: u64, library: PathBuf) -> PushRequest {
+    PushRequest {
+        run,
+        library,
+        passphrase: Secret::new("pw"),
+        assets: None,
+    }
+}
+
+/// Answers the import and push ports with values echoing what they were asked.
+struct Pushing;
+
+impl Ports for Pushing {
+    async fn session_summary(&self) -> Result<SessionSummary, String> {
+        Ok(SessionSummary::SignedOut)
+    }
+
+    async fn import(&self, request: ImportRequest) -> Result<ImportReport, String> {
+        Ok(ImportReport {
+            candidates: request.sources.len(),
+            ..ImportReport::default()
+        })
+    }
+
+    async fn push(&self, request: PushRequest) -> Result<PushSummary, String> {
+        Ok(PushSummary {
+            assets: request.assets.map_or(0, |assets| assets.len()),
+            ..PushSummary::default()
+        })
+    }
+
+    async fn push_progress(&self) -> Vec<PushProgress> {
+        vec![PushProgress::Lagged(1)]
+    }
+}
+
+#[tokio::test]
+async fn import_and_push_effects_come_back_as_their_screens_actions() {
+    let library = PathBuf::from("/lib");
+    assert_eq!(
+        perform(
+            &Pushing,
+            Effect::Import(ImportEffect::Run(import_request(library.clone())))
+        )
+        .await,
+        Action::Import(ImportAction::Finished(Ok(ImportReport {
+            candidates: 1,
+            ..ImportReport::default()
+        })))
+    );
+    let retry = PushRequest {
+        assets: Some(vec![uuid::Uuid::nil()]),
+        ..push_request(1, library)
+    };
+    assert_eq!(
+        perform(&Pushing, Effect::Push(PushEffect::Run(retry))).await,
+        Action::Push(PushAction::Finished(Ok(PushSummary {
+            assets: 1,
+            ..PushSummary::default()
+        })))
+    );
+    assert_eq!(
+        perform(&Pushing, Effect::Push(PushEffect::Watch)).await,
+        Action::Push(PushAction::Progress(vec![PushProgress::Lagged(1)]))
+    );
+}
+
+#[tokio::test]
+async fn import_and_push_left_out_are_not_offered_and_tell_no_progress() {
+    let ports = Answering(Ok(SessionSummary::SignedOut));
+    let lib = PathBuf::from("/lib");
+    assert_eq!(
+        ports.import(import_request(lib.clone())).await,
+        Err(NOT_OFFERED.to_owned())
+    );
+    assert_eq!(
+        ports.push(push_request(1, lib)).await,
+        Err(NOT_OFFERED.to_owned())
+    );
+    assert_eq!(
+        ports.push_progress().await,
+        vec![PushProgress::Closed { run: None }]
+    );
+}
+
+/// A push that cannot start still closes its run's progress, so the screen's watch ends.
+#[tokio::test]
+async fn local_push_without_a_config_directory_refuses_and_closes_its_run() {
+    let ports = LocalPorts::new(None);
+    let refused = ports.push(push_request(7, PathBuf::from("/lib"))).await;
+    assert_eq!(
+        refused,
+        Err("could not resolve the config directory".to_owned())
+    );
+    assert_eq!(
+        ports.push_progress().await,
+        vec![PushProgress::Closed { run: Some(7) }]
+    );
+}
+
+/// A library that does not open is the push's reason, nothing is asked of the server, and the
+/// run's progress is closed.
+#[tokio::test]
+async fn local_push_reports_a_library_that_does_not_open_and_closes_its_run() {
+    let scratch = Scratch::new();
+    let ports = LocalPorts::new(Some(scratch.session_path()));
+    let reason = ports
+        .push(push_request(3, scratch.0.join("no-library-here")))
+        .await
+        .expect_err("no library");
+    assert!(
+        reason.starts_with("Failed to open signed workspace"),
+        "{reason}"
+    );
+    assert_eq!(
+        ports.push_progress().await,
+        vec![PushProgress::Closed { run: Some(3) }]
+    );
+}
+
+#[tokio::test]
+async fn local_import_reports_a_library_that_does_not_open() {
+    let scratch = Scratch::new();
+    let ports = LocalPorts::new(Some(scratch.session_path()));
+    let reason = ports
+        .import(import_request(scratch.0.join("no-library-here")))
+        .await
+        .expect_err("no library");
+    assert!(
+        reason.starts_with("Failed to open signed workspace"),
+        "{reason}"
+    );
+}
+
+/// The relay passes the custody steps on in order, drops chunk traffic, and ends once the run
+/// is done — though the shared channel stays open — with everything the run published passed
+/// on first.
+#[tokio::test]
+async fn the_relay_passes_only_custody_steps_and_ends_with_the_run() {
+    let events = TransferEvents::default_channel();
+    let channel = ProgressChannel::new();
+    let (run_done, done) = oneshot::channel();
+    let relay = tokio::spawn(forward_custody_events(
+        events.subscribe().expect("a channel handle"),
+        channel.sender(),
+        done,
+    ));
+    let finalize = TransferEvent::Finalize {
+        blob: "aa".to_owned(),
+        session_id: "s".to_owned(),
+        size: 1,
+    };
+    let receipt = TransferEvent::Receipt {
+        asset_id: "a".to_owned(),
+        blob: "aa".to_owned(),
+        receipt_seq: 0,
+    };
+    events.emit(|| TransferEvent::ChunkSent {
+        blob: "aa".to_owned(),
+        session_id: "s".to_owned(),
+        offset: 0,
+        len: 1,
+    });
+    events.emit(|| finalize.clone());
+    events.emit(|| receipt.clone());
+    run_done.send(()).expect("the relay is listening");
+    // `events` is still held here: only the run ending stops the relay.
+    relay.await.expect("the relay ends when the run is done");
+    assert_eq!(
+        channel.next_batch().await,
+        vec![
+            PushProgress::Transfer(finalize),
+            PushProgress::Transfer(receipt)
+        ]
+    );
+}
+
+/// A run that ends without saying so (its port panicked) still ends the relay, and a channel
+/// that closes ends it too.
+#[tokio::test]
+async fn the_relay_ends_when_the_run_is_gone_or_the_channel_closes() {
+    let events = TransferEvents::default_channel();
+    let channel = ProgressChannel::new();
+    let (run_done, done) = oneshot::channel::<()>();
+    let relay = tokio::spawn(forward_custody_events(
+        events.subscribe().expect("a channel handle"),
+        channel.sender(),
+        done,
+    ));
+    drop(run_done);
+    relay.await.expect("a dropped run ends the relay");
+
+    let (_run_done, done) = oneshot::channel::<()>();
+    let relay = tokio::spawn(forward_custody_events(
+        events.subscribe().expect("a channel handle"),
+        channel.sender(),
+        done,
+    ));
+    drop(events);
+    relay.await.expect("a closed channel ends the relay");
+}
+
+/// A subscriber that fell behind says how many events it missed, and goes on.
+#[tokio::test]
+async fn the_relay_says_how_many_events_it_missed() {
+    let events = TransferEvents::channel(1);
+    let subscriber = events.subscribe().expect("a channel handle");
+    let verify = |durable| TransferEvent::Verify {
+        asset_id: "a".to_owned(),
+        durable,
+        blobs: 1,
+        not_durable: 0,
+    };
+    // Three published before the relay reads any: the capacity-1 channel keeps the last.
+    events.emit(|| verify(false));
+    events.emit(|| verify(false));
+    events.emit(|| verify(true));
+    let channel = ProgressChannel::new();
+    let (run_done, done) = oneshot::channel();
+    run_done.send(()).expect("the receiver is held");
+    forward_custody_events(subscriber, channel.sender(), done).await;
+    assert_eq!(
+        channel.next_batch().await,
+        vec![
+            PushProgress::Lagged(2),
+            PushProgress::Transfer(verify(true))
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_batch_takes_what_is_queued_up_to_its_bound() {
+    let channel = ProgressChannel::default();
+    let tx = channel.sender();
+    for missed in 0..(PROGRESS_BATCH as u64 + 3) {
+        tx.send(PushProgress::Lagged(missed)).expect("send");
+    }
+    assert_eq!(channel.next_batch().await.len(), PROGRESS_BATCH);
+    assert_eq!(channel.next_batch().await.len(), 3);
+}
+
+/// A panic unwinding through a port still closes its run's progress.
+#[tokio::test]
+async fn a_run_closes_its_progress_even_when_it_panics() {
+    let channel = ProgressChannel::new();
+    let closed = CloseOnDrop {
+        tx: channel.sender(),
+        run: 9,
+    };
+    let task = tokio::spawn(async move {
+        let _closed = closed;
+        panic!("a port panicked");
+    });
+    assert!(task.await.expect_err("it panicked").is_panic());
+    assert_eq!(
+        channel.next_batch().await,
+        vec![PushProgress::Closed { run: Some(9) }]
+    );
+}

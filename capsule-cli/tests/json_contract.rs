@@ -21,6 +21,9 @@
 //! - `push_json_without_a_session_prints_nothing_on_stdout` — a run-level failure: non-zero
 //!   exit, empty stdout, the reason on stderr.
 //! - `push_json_without_a_library_is_a_usage_error` — the parser's exit status 2.
+//! - `push_json_of_named_assets_without_a_session_prints_nothing_on_stdout` — `--asset` (the
+//!   retry of failed assets) is accepted repeatedly and fails the same way without a session.
+//! - `push_json_with_a_malformed_asset_id_is_a_usage_error` — the parser's exit status 2.
 //! - `restore_json_without_a_session_prints_nothing_on_stdout` — a run-level failure, as for
 //!   push: non-zero exit, empty stdout, the reason on stderr, and nothing written to `--out`.
 //! - `restore_json_without_an_out_directory_is_a_usage_error` — the parser's exit status 2.
@@ -255,6 +258,35 @@ fn push_json_without_a_session_prints_nothing_on_stdout() {
 fn push_json_without_a_library_is_a_usage_error() {
     let scratch = Scratch::new();
     insta::assert_snapshot!(run(&scratch, &["push", "--json"]));
+}
+
+#[test]
+fn push_json_of_named_assets_without_a_session_prints_nothing_on_stdout() {
+    let scratch = Scratch::new();
+    library(&scratch, 1);
+    insta::assert_snapshot!(run(
+        &scratch,
+        &[
+            "push",
+            "--library",
+            path(&scratch.library()),
+            "--passphrase-stdin",
+            "--asset",
+            "0192f1a0-0000-7000-8000-000000000001",
+            "--asset",
+            "0192f1a0-0000-7000-8000-000000000002",
+            "--json",
+        ],
+    ));
+}
+
+#[test]
+fn push_json_with_a_malformed_asset_id_is_a_usage_error() {
+    let scratch = Scratch::new();
+    insta::assert_snapshot!(run(
+        &scratch,
+        &["push", "--library", "lib", "--asset", "nope", "--json"],
+    ));
 }
 
 #[test]
