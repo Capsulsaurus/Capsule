@@ -1,11 +1,11 @@
-//! Slice `S-A10` acceptance for `capsule import`: what one process imports, a **different
+//! The acceptance for `capsule import`: what one process imports, a **different
 //! process** reconstructs from the library directory alone.
 //!
 //! Every step below spawns the real `capsule` binary (`CARGO_BIN_EXE_capsule`, the path Cargo
 //! hands integration tests of the crate that declares the bin). `capsule library init`,
 //! `capsule import`, `capsule cull` and `capsule library rebuild` each get their own process,
 //! and the only thing they share is the library directory on disk. That is the whole point:
-//! `S-A10`'s criterion is that state survives a *new process*, and an in-process second
+//! what is being proved is that state survives a *new process*, and an in-process second
 //! `Workspace::open` cannot tell durable state apart from state that merely survived in a
 //! `HashMap`. A process boundary can — which is why this is a subprocess test, and why (like
 //! `cull_round_trip.rs`, whose pattern it follows) it needs no test dependency to be one.
@@ -19,7 +19,7 @@
 //! real EXIF APP1 segment — no committed binary. The CLI links `capsule-core` with default
 //! features, and `native` implies `media`, so this path **does** decode pixels: the import
 //! reports `DerivativeStatus::Decoded`, writes a chromahash `lqip` into the signed sidecar, and
-//! signs a thumbnail-tier derivative (slices `S-B1`, `S-B13`, `S-B14`). At 8×8 the source is
+//! signs a thumbnail-tier derivative. At 8×8 the source is
 //! well inside the 256 px thumbnail cap, so that derivative is the signed `format = "original"`
 //! sentinel rather than a re-encode — which is exactly the contract's redundant-derivative rule
 //! and worth pinning end to end.
@@ -72,7 +72,7 @@ struct ScratchDir(PathBuf);
 
 impl ScratchDir {
     fn new() -> Self {
-        let path = std::env::temp_dir().join(format!("capsule-cli-s-a10-{}", nanoid::nanoid!()));
+        let path = std::env::temp_dir().join(format!("capsule-cli-scratch-{}", nanoid::nanoid!()));
         std::fs::create_dir_all(&path).expect("create scratch dir");
         Self(path)
     }
@@ -268,7 +268,7 @@ fn destroy_index(library: &Path) {
 
 // ── Tests ────────────────────────────────────────────────────────────────────
 
-/// **`S-A10` "Done when" for `capsule import`.** Import in one process; read the asset back in a
+/// The "Done when" for `capsule import`.** Import in one process; read the asset back in a
 /// second that shares nothing but the directory; then check that what is on disk is the full
 /// signed artifact set, in the layout the design fixes, carrying the metadata the importer
 /// parsed out of the source file.
@@ -380,7 +380,7 @@ fn an_import_is_reconstructed_by_a_later_process_from_disk_alone() {
     );
     assert!(
         sidecar.signature.is_some(),
-        "imports land on the signed path (S-B2), never the legacy unsigned sidecar"
+        "imports land on the signed path, never the legacy unsigned sidecar"
     );
 
     // The EXIF the importer genuinely parsed: neither value exists anywhere but inside the
@@ -392,7 +392,7 @@ fn an_import_is_reconstructed_by_a_later_process_from_disk_alone() {
     assert_eq!((dimensions.width, dimensions.height), (8, 8));
 
     // The LQIP producer ran on the decoded pixels: a 32-byte chromahash payload at
-    // `LQIP_FORMAT_V1`, inside the *signed* sidecar (slice `S-B14`).
+    // `LQIP_FORMAT_V1`, inside the *signed* sidecar.
     let lqip = sidecar
         .lqip
         .as_ref()
@@ -433,7 +433,7 @@ fn an_import_is_reconstructed_by_a_later_process_from_disk_alone() {
     assert_eq!(records.len(), 1, "a fresh import is a chain of one");
     let core = &records[0].manifest.core;
     assert_eq!(core.file_id, asset_id);
-    assert_eq!(core.album_id, fx.album, "S-B12: the derived de facto album");
+    assert_eq!(core.album_id, fx.album, "the derived de facto album");
     assert_eq!(core.action, Action::Create);
     assert_eq!(core.plaintext_size as usize, fx.image.len());
     assert!(
@@ -442,7 +442,7 @@ fn an_import_is_reconstructed_by_a_later_process_from_disk_alone() {
     );
 }
 
-/// **`S-D21`.** `capsule library rebuild` reconstructs the index of a *signed* library — the
+/// `capsule library rebuild` reconstructs the index of a *signed* library — the
 /// case that was rebuilding zero rows — and it does so in a process that starts from nothing but
 /// the sidecars and chains on disk.
 #[test]
@@ -468,7 +468,7 @@ fn library_rebuild_reconstructs_the_index_in_a_new_process() {
     assert!(out.contains("Index rebuilt successfully"), "stdout:\n{out}");
 
     let row = index_row(&fx.library, &asset_id)
-        .expect("S-D21: a signed library must rebuild its rows, not zero of them");
+        .expect("a signed library must rebuild its rows, not zero of them");
     assert_eq!(row.uuid, asset_id.to_string());
     assert_eq!(row.asset_type, "photo");
     assert_eq!(
@@ -485,11 +485,11 @@ fn library_rebuild_reconstructs_the_index_in_a_new_process() {
     assert!(!row.is_deleted, "a live asset must not rebuild as trashed");
     assert!(
         !row.is_hidden,
-        "a never-written `hidden` register rebuilds as visible (S-D19/S-D21)"
+        "a never-written `hidden` register rebuilds as visible"
     );
 
     // And the workspace's own restore never depended on the index: a further process still sees
-    // the asset, because `Workspace::open` reconstructs it from the sidecars (`S-A10`).
+    // the asset, because `Workspace::open` reconstructs it from the sidecars.
     let view = fx.run(
         &[
             "cull",

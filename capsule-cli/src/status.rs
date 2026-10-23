@@ -346,7 +346,7 @@ impl SyncStatus {
     /// The store is the sync feed's local projection, so the counts come from it directly.
     ///
     /// Upload/download/conflict counts stay at zero and are honest about it: the CLI has no
-    /// upload path yet (slice `S-D18`), and the sync feed is apply-only with no conflict
+    /// upload path yet, and the sync feed is apply-only with no conflict
     /// surface, so there is nothing to count rather than something we decline to count.
     pub(crate) async fn check() -> Result<Self> {
         let db = crate::db::init_sqlite()
@@ -454,7 +454,7 @@ mod tests {
         assert!(status.token_expires_at.is_none());
     }
 
-    /// The regression this slice exists for: `auth status` used to read an environment
+    /// The regression this change exists for: `auth status` used to read an environment
     /// variable rather than the session store, so it reported "Not logged in" immediately
     /// after `auth login` had succeeded.
     #[test]

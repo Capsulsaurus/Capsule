@@ -22,7 +22,7 @@ export const Header = () => {
     const intl = useIntl();
 
     // The display name if the account set one, else the address it signs in with. There is no
-    // `username` or `name` any more (`S-C53`, `S-C54`): each was a fact the server stored about a
+    // `username` or `name` any more: each was a fact the server stored about a
     // person, and what is left is what the person chose to be shown as.
     const label = user ? (user.display_name ?? user.email) : '';
     const initials = user

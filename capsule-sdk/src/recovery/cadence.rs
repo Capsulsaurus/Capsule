@@ -1,13 +1,12 @@
 //! The recovery-verification **cadence scheduler** and the **prompt state machine**
-//! the client UX renders (slice `S-D12`; SSoT: [Backup — Recovery Verification
+//! the client UX renders (SSoT: [Backup — Recovery Verification
 //! Cadence]).
 //!
-//! This half of S-D12 is deliberately **pure and network-free**: every method takes
-//! the current wall-clock instant as an argument, so the whole ladder — the 7 d → 90 d
-//! → 180 d back-off, the re-arm triggers, the snooze caps, and the repeated-failure
-//! escalation to a guided re-wrap — is driven by a mocked clock in tests with no
-//! sleeps and no I/O. The scheduler is `serde`-serializable so a client persists it
-//! across launches.
+//! This half of the recovery verification is deliberately **pure and network-free**: every method
+//! takes the current wall-clock instant as an argument, so the whole ladder — the 7 d → 90 d → 180
+//! d back-off, the re-arm triggers, the snooze caps, and the repeated-failure escalation to a
+//! guided re-wrap — is driven by a mocked clock in tests with no sleeps and no I/O. The scheduler
+//! is `serde`-serializable so a client persists it across launches.
 //!
 //! **Advisory by construction.** The scheduler exposes exactly one read surface —
 //! [`RecoveryCadence::state`] — returning a [`VerificationState`] the UX renders. There
@@ -276,7 +275,7 @@ impl RecoveryCadence {
     }
 
     /// Project the scheduler into the flat facts the shared alert predicate consumes
-    /// ([`capsule_core::notify`], slice `S-D29`).
+    /// ([`capsule_core::notify`]).
     ///
     /// The direction matters: `capsule-sdk` depends on `capsule-core` and never the reverse, so
     /// the predicate cannot read this scheduler. It is handed a projection instead, and this is
@@ -555,7 +554,7 @@ mod tests {
         assert_eq!(cad, back);
     }
 
-    // ── `S-D29` projection ──────────────────────────────────────────────────
+    // ── Projection ──────────────────────────────────────────────────
 
     /// The projection walks every [`VerificationState`], and the fact it hands the shared
     /// predicate agrees with the state the UX renders at the same instant.

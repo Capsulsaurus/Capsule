@@ -1,4 +1,4 @@
-//! Device-directory publish and fetch (slice `S-C9`).
+//! Device-directory publish and fetch.
 //!
 //! A user publishes their master-signed [`DeviceDirectory`] as opaque canonical CBOR; any
 //! authenticated caller fetches a user's directory to pin it and to verify the manifests that
@@ -37,7 +37,7 @@
 //! learn which offers were in force. A stale offer is decidable from the ledger alone; an
 //! identity mismatch from the copy, which carries the key.
 //!
-//! # `S-C28` audit
+//! # The status audit
 //!
 //! | Salvo status | Verdict |
 //! | --- | --- |
@@ -45,7 +45,7 @@
 //! | publish `400 error.directory.malformed` | kept, and now also covers a document signed for another account and one past the size ceiling |
 //! | publish `415 error.directory.unsupported_media_type` | **new, and it replaces a phantom.** Kynos's own `Binary` rejection declares `400`, `415` *and* a `422` a raw-bytes body cannot produce, and carries no `error.*` code; [`DirectoryBody`] delegates the enforcement and replaces only the rejection — see [`crate::body`] |
 //! | publish `409 error.directory.version_conflict` | kept — invariant 23's first clause, and the one status the whole surface exists for |
-//! | publish `403 error.directory.identity_mismatch` | **new with `S-C42`** — invariant 23's *second* clause, which nothing enforced on either side |
+//! | publish `403 error.directory.identity_mismatch` | **enforced here** — invariant 23's *second* clause, which nothing enforced on either side |
 //! | fetch `200` (`application/cbor`, verbatim) | kept |
 //! | fetch `404` | kept, and now carries `error.directory.not_published`; the Salvo body had no code |
 //! | `401` | kept, and now the framework's |
@@ -107,7 +107,7 @@ impl CodedMedia for Cbor {
 /// The signed device directory, as it arrives.
 pub type DirectoryBody = OpaqueBody<Cbor>;
 
-/// The identity anchor a publish presents (`S-C42`).
+/// The identity anchor a publish presents.
 ///
 /// Beside the body rather than inside it, deliberately: the document is stored and served back
 /// **verbatim**, so anything the server needs that the signed core does not carry has to travel
@@ -154,7 +154,7 @@ pub enum PublishRejection {
         code: &'static str,
     },
 
-    /// The submitted identity key is not this account's anchor (`S-C42`).
+    /// The submitted identity key is not this account's anchor.
     ///
     /// `403` rather than `400`: the document is well-formed and correctly signed — it is signed
     /// by *somebody else*. Carrying nothing about the stored anchor, because a refusal that

@@ -1,4 +1,4 @@
-//! The upload surface: the envelope gate, the chunk rules, and finalization (slice `S-C1`).
+//! The upload surface: the envelope gate, the chunk rules, and finalization.
 //!
 //! Every case here drives the **real server** through `TestClient` — the same router
 //! production runs, over the in-memory adapters of the two state ports and the blob store. What
@@ -468,7 +468,7 @@ async fn a_full_upload_finalizes_and_the_bytes_become_a_blob() {
 
 #[tokio::test]
 async fn a_provenance_blob_is_stored_exactly_as_it_arrived() {
-    // `S-C30`: the signed manifest rides as a provenance blob and the server stores the signed
+    // The signed manifest rides as a provenance blob and the server stores the signed
     // bytes verbatim. Nothing on this path re-serializes anything into manifest bytes, and this
     // is the case that says so.
     let fixture = Fixture::working();
@@ -2972,7 +2972,7 @@ async fn a_claim_whose_process_died_after_its_index_write_completes_at_boot() {
 }
 
 // ===========================================================================================
-// Member writes (`S-C51`)
+// Member writes
 // ===========================================================================================
 
 /// A second account, on the seeded album's roster in whatever role a case puts it.

@@ -1,4 +1,4 @@
-//! [`PostgresModeration`] — the durable moderation store (`S-C8`, `S-C49`).
+//! [`PostgresModeration`] — the durable moderation store.
 //!
 //! # Three tables
 //!

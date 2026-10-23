@@ -679,7 +679,7 @@ fn the_system_clock_is_a_clock() {
 
 #[tokio::test]
 async fn a_swept_blob_credits_its_bytes_back_to_the_account_they_were_charged_to() {
-    // `S-C44`. Without this an account's usage only ever goes up: emptying the trash frees disk
+    // Without this an account's usage only ever goes up: emptying the trash frees disk
     // and frees nothing the user can see, and after enough cycles a quota reflects storage the
     // server no longer holds.
     let h = Harness::new();

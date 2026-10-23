@@ -328,8 +328,8 @@ async fn serve_resolves_client_addresses_through_the_configured_proxy_trust() {
 
 #[test]
 fn serving_without_valkey_and_without_the_memory_profile_refuses_by_name() {
-    // `store/mod.rs` has documented this refusal since `S-C29` and nothing enforced it, because
-    // there was no boot path to enforce it in.
+    // `store/mod.rs` documents this refusal, and only a boot path can enforce it, so it is pinned
+    // here against the real binary.
     let root = tempfile::tempdir().expect("a scratch directory");
     let (code, _, stderr) = run(server(&[
         "serve",

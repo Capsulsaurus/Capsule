@@ -1,4 +1,4 @@
-//! Contract-driven tests for the S-X2 membership layer. Every deferred-from-S-X1 Validation
+//! Contract-driven tests for the membership layer. Every membership Validation
 //! bullet from [MLS](https://docs/design/cryptography/mls/#validation) has a test here:
 //! four-ceremony round-trip, Welcome correctness (full + capped), history-policy consistency,
 //! epoch-ceiling-from-chain, idempotent commit replay, MLS↔identity LeafNode binding, and
@@ -7,7 +7,7 @@
 //!
 //! The multi-party topology is entirely in-process: two-plus [`OpenMlsAuthority`] instances
 //! exchange real MLS messages by value (the server-side delivery-service transport is out of
-//! scope for this slice).
+//! scope for this change).
 
 use openmls::prelude::KeyPackage;
 use openmls::prelude::tls_codec::Deserialize as _;
@@ -90,7 +90,7 @@ fn add_and_join(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// S-X1 surface — preserved so the backend/authority layer keeps its guarantees
+// Backend/authority surface — single-member guarantees
 // ═══════════════════════════════════════════════════════════════════════════
 
 fn directory_for(user: Uuid, device_id: Uuid, device: &HybridSigningKey) -> DeviceDirectory {
@@ -273,7 +273,7 @@ fn parity_with_reference_authority_over_equivalent_history() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// S-X2 — membership ceremonies + key delivery + history policy
+// Membership ceremonies + key delivery + history policy
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// **Protocol round-trip** across all four ceremony kinds (add user, add device, self-update
@@ -875,13 +875,13 @@ fn export_import_state_round_trips_and_can_continue() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// S-X3 — album upgrade ceremony (tombstone-plus-fork) + MLS resilience
+// Album upgrade ceremony (tombstone-plus-fork) + MLS resilience
 //
 // Every Validation bullet from versioning.md § Validation (upgrade-ceremony bullets) and
 // mls-resilience.md § Validation gets a test here, driven through real OpenMLS state with the
 // two-plus in-process participants the module already uses. Server-side concerns (the server-clock
 // deadline, `409` on stale sessions, the drain of in-flight uploads) are modelled outside the
-// authority per the slice's scope guards.
+// authority per its scope guards.
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// An album-state summary carrying a single synthetic manifest hash, so two members can be made to
@@ -1549,7 +1549,7 @@ fn rekey_atomicity_resumes_after_a_mid_ceremony_crash() {
 /// the upgrade → quiesce → drain (modelled: no in-flight sessions) → tombstone → fork → queued
 /// writes replay, **including one resume-from-crash mid-ceremony**. This is the Module-Map E2E case
 /// 8 in the established in-process multi-participant shape (the server/client-UI halves are out of
-/// this slice's scope); it exercises `capsule-core::crypto::mls` end-to-end for the ceremony.
+/// this change's scope); it exercises `capsule-core::crypto::mls` end-to-end for the ceremony.
 #[test]
 fn e2e_case_8_album_upgrade_ceremony() {
     let album = Uuid::from_u128(0x0E8E);
@@ -1668,7 +1668,7 @@ fn e2e_case_8_album_upgrade_ceremony() {
     );
 }
 
-// ── Per-user block (moderation.md § Blocklists, slice `S-X4`) ──────────────
+// ── Per-user block (moderation.md § Blocklists) ──────────────
 
 /// Join a second device belonging to an **existing** member's user, relaying the add commit to
 /// `others` so every view stays converged. `add_and_join` cannot do this: it assumes the admin is
@@ -1692,7 +1692,7 @@ fn add_and_join_relaying(
     OpenMlsAuthority::join_via_welcome(identity, to_in(outcome.welcome), history, policy).unwrap()
 }
 
-/// **The `S-X4` acceptance — moderation.md's per-user-block bullet, end to end.**
+/// **The acceptance — moderation.md's per-user-block bullet, end to end.**
 ///
 /// Blocking a user removes **all** their devices in a single `Remove` + `Commit` (mls.md's
 /// "removing all Charlie's devices"), so the AMK epoch bumps exactly **once** for the whole user,

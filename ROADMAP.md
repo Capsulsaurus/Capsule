@@ -90,7 +90,6 @@ automatically, for example porting the TUI's transfer visualization and label ed
 
 ## History
 
-The slice ledger (`SLICES.md`) is retired. Slice ids such as `S-D1` that remain in code comments
-refer to its final version,
-[`a0bc92c2:SLICES.md`](https://github.com/Capsulsaurus/Capsule/blob/a0bc92c2/SLICES.md), until
-[#688](https://github.com/Capsulsaurus/Capsule/issues/688) replaces them.
+The slice ledger (`SLICES.md`) is retired and its final version is archived at
+[`a0bc92c2:SLICES.md`](https://github.com/Capsulsaurus/Capsule/blob/a0bc92c2/SLICES.md). Code
+comments state the behaviour they uphold and carry no slice ids.

@@ -128,8 +128,8 @@ impl Inner {
         // by the route because this is where the manifest becomes durable, and a head recorded
         // before the bytes landed would point at a manifest nobody holds.
         //
-        // The value is the record's own `manifest_sha256` and never the content address
-        // (`S-C31`): the two are equal today and are not the same identifier, so deriving one
+        // The value is the record's own `manifest_sha256` and never the content address: the two
+        // are equal today and are not the same identifier, so deriving one
         // from the other would be correct by coincidence and would break silently the day a
         // suite picks a different content-address digest.
         //
@@ -249,7 +249,7 @@ impl Inner {
         if let Some(metadata) = &op.metadata {
             set_singular(&mut row, BlobRole::Metadata, metadata);
         }
-        // A replace's whole point (`S-C43`). It re-points the one role `record_blob` refuses to
+        // A replace's whole point. It re-points the one role `record_blob` refuses to
         // move, and the refusal keeps meaning what it means: an *upload* that swapped the
         // original would swap bytes under a signature that still verifies against the old ones,
         // while this arrives with a manifest that chains onto the one it supersedes — which is
@@ -351,7 +351,7 @@ impl AssetIndex for InMemoryAssetIndex {
                 chain_head: None,
                 amk_version: 0,
                 // A newly reserved asset is under no moderation hold. A hold is placed by an
-                // admin action and never by a write path, which is what keeps `S-C17` from
+                // admin action and never by a write path, which is what keeps a hold from
                 // becoming something an upload can accidentally set.
                 hold: None,
                 retention_until: None,
@@ -531,7 +531,7 @@ impl AssetIndex for InMemoryAssetIndex {
                 .values()
                 .filter(|row| {
                     row.blobs.iter().any(|blob| &blob.address == address)
-                        // A manifest the chain has moved past is still referenced (`S-C52`).
+                        // A manifest the chain has moved past is still referenced.
                         // Without this the collector reclaims the server's own evidence.
                         || row.superseded.contains(address)
                 })
@@ -601,7 +601,7 @@ impl AssetIndex for InMemoryAssetIndex {
             row.blobs.clear();
             // The chain goes with the bytes it describes. A purge is the end of the retention
             // window the user's own signed delete fixed, so there is nothing left to rebut with
-            // and nothing left to rebut about (`S-C52`).
+            // and nothing left to rebut about.
             row.superseded.clear();
             let row = row.clone();
             tracing::info!(%asset, "purged a tombstoned asset's blob references");

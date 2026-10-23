@@ -202,7 +202,7 @@ private let moduleTargets: [Target] =
 
     // Catalog (FFI) — the Rust-backed half: the generated uniffi glue for
     // both namespaces (the `capsule_core_ffi` catalog and `capsule-sdk`'s
-    // `capsule_sdk` user flows, S-F3/S-D9), the record conversions, and the
+    // `capsule_sdk` user flows), the record conversions, and the
     // error mapping onto the FFI-free `CatalogError`. Present only when
     // `TUIST_FFI=1`; nothing above it names a generated type.
     + (ffiEnabled

@@ -1,4 +1,4 @@
-//! The profile surface (slice `S-C54`) — what an account knows about itself, and how it changes
+//! The profile surface — what an account knows about itself, and how it changes
 //! the password its sessions are opened with.
 //!
 //! [`crate::auth::profile`] owns the two ports, the nested-option discipline on a partial update
@@ -21,7 +21,7 @@
 //! The email address changes in neither, and that is a decision rather than an omission; see
 //! [`crate::auth::profile`].
 //!
-//! # `S-C28` audit
+//! # The status audit
 //!
 //! | Status | Verdict |
 //! | --- | --- |
@@ -390,7 +390,7 @@ pub async fn update_profile(
 /// mint with none of `POST /v1/auth/refresh`'s rotation discipline, for no gain.
 ///
 /// The re-opened record's `authenticated_at` is **now**, and that is not bookkeeping: presenting
-/// the current password *is* a credential presentation, so a freshness gate (`S-C7`) measuring
+/// the current password *is* a credential presentation, so a freshness gate measuring
 /// from anything earlier would be measuring from the wrong moment.
 ///
 /// # Why the order is verify, write, revoke

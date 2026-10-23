@@ -1,4 +1,4 @@
-//! The content address, and the on-disk layout it dictates (slice `S-C33`).
+//! The content address, and the on-disk layout it dictates.
 //!
 //! # One type owns the shard
 //!

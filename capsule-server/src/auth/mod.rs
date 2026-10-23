@@ -9,11 +9,11 @@
 //!
 //! | Concern | Lives | Why |
 //! | --- | --- | --- |
-//! | Session records | [`crate::store::AuthStateStore`] (`S-C29`) | landed already; consumed, not re-declared |
+//! | Session records | [`crate::store::AuthStateStore`] | landed already; consumed, not re-declared |
 //! | Who exists, and whether a password is theirs | [`AccountDirectory`] | the one question a sign-in asks |
-//! | Bringing an account into existence | [`AccountRegistry`] (`S-C53`) | registration must disclose what authentication must not |
-//! | What an account keeps about itself | [`AccountProfiles`] (`S-C54`) | an ordinary authenticated write |
-//! | Replacing a password | [`PasswordChange`] (`S-C54`) | a credential rotation, and separate for that reason |
+//! | Bringing an account into existence | [`AccountRegistry`] | registration must disclose what authentication must not |
+//! | What an account keeps about itself | [`AccountProfiles`] | an ordinary authenticated write |
+//! | Replacing a password | [`PasswordChange`] | a credential rotation, and separate for that reason |
 //! | Token minting and reading | [`SessionTokens`] | a pure function of a key and a clock, so a concrete type rather than a port |
 //! | Presenting a credential | [`AccessToken`] | a Kynos `SecurityScheme`, which is the only way to guard an operation *and* describe it |
 //!
@@ -85,19 +85,19 @@ use crate::store::{AuthStateStore, Clock};
 /// Named rather than ordered; see the module docs.
 #[derive(Debug)]
 pub struct AuthCollaborators {
-    /// The session-state store (`S-C29`).
+    /// The session-state store.
     pub sessions: Arc<dyn AuthStateStore>,
     /// Who exists, and whether a presented password is theirs.
     pub accounts: Arc<dyn AccountDirectory>,
-    /// Where accounts are created (`S-C53`).
+    /// Where accounts are created.
     pub registry: Arc<dyn AccountRegistry>,
-    /// The facts an account keeps about itself (`S-C54`).
+    /// The facts an account keeps about itself.
     pub profiles: Arc<dyn AccountProfiles>,
-    /// Where a password is replaced (`S-C54`).
+    /// Where a password is replaced.
     pub passwords: Arc<dyn PasswordChange>,
-    /// The single-use revoke-all challenges (`S-C23`, `S-C29`).
+    /// The single-use revoke-all challenges.
     pub challenges: Arc<dyn crate::store::ChallengeStore>,
-    /// The durable device-cohort map (`S-C13`).
+    /// The durable device-cohort map.
     pub cohorts: Arc<dyn crate::store::CohortStore>,
     /// The token signer.
     pub tokens: Arc<SessionTokens>,
@@ -155,7 +155,7 @@ impl AuthContext {
         }
     }
 
-    /// The session-state store (`S-C29`).
+    /// The session-state store.
     pub fn sessions(&self) -> &dyn AuthStateStore {
         self.sessions.as_ref()
     }
@@ -165,27 +165,27 @@ impl AuthContext {
         self.accounts.as_ref()
     }
 
-    /// Where accounts are created (`S-C53`).
+    /// Where accounts are created.
     pub fn registry(&self) -> &dyn AccountRegistry {
         self.registry.as_ref()
     }
 
-    /// The facts an account keeps about itself (`S-C54`).
+    /// The facts an account keeps about itself.
     pub fn profiles(&self) -> &dyn AccountProfiles {
         self.profiles.as_ref()
     }
 
-    /// Where a password is replaced (`S-C54`).
+    /// Where a password is replaced.
     pub fn passwords(&self) -> &dyn PasswordChange {
         self.passwords.as_ref()
     }
 
-    /// The single-use revoke-all challenges (`S-C23`, `S-C29`).
+    /// The single-use revoke-all challenges.
     pub fn challenges(&self) -> &dyn crate::store::ChallengeStore {
         self.challenges.as_ref()
     }
 
-    /// The durable device-cohort map (`S-C13`).
+    /// The durable device-cohort map.
     pub fn cohorts(&self) -> &dyn crate::store::CohortStore {
         self.cohorts.as_ref()
     }

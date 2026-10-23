@@ -4,9 +4,9 @@
 //! [`ReferenceAuthority`](super::ReferenceAuthority) stands in for — it drops in behind the same
 //! `&dyn AlbumAuthority` seam without touching [`verify_asset`](crate::crypto::verify_asset::verify_asset).
 //!
-//! **Slice S-X1** landed the backend/authority layer: single-member (self) group creation, the
+//! The backend/authority layer provides single-member (self) group creation and the
 //! epoch-ledger semantics `verify_asset` consumes (monotonic ceiling, per-epoch write-tier key,
-//! AMK export, `has_amk` pending window). **Slice S-X2** (this module) lands the membership layer:
+//! AMK export, `has_amk` pending window). The membership layer (this module) adds:
 //!
 //! - the four lifecycle ceremonies — [add member](OpenMlsAuthority::add_member),
 //!   [remove member](OpenMlsAuthority::remove_member), [self-update /
@@ -27,8 +27,8 @@
 //!   [import](OpenMlsAuthority::import_state) blob over an owned, serializable storage
 //!   [provider].
 //!
-//! **Slice S-X3** (this module's [upgrade] and [resilience] submodules) lands the album **upgrade
-//! ceremony** and **MLS resilience**:
+//! The [upgrade] and [resilience] submodules add the album **upgrade ceremony** and **MLS
+//! resilience**:
 //!
 //! - the **tombstone-plus-fork** upgrade ceremony ([upgrade]): a version-pinned album is frozen by
 //!   an `AlbumTombstone` commit and re-founded as a fork at a target `protocol_version` /
@@ -191,7 +191,7 @@ pub enum OpenMlsAuthorityError {
     Resilience(String),
     /// [`block_user`](OpenMlsAuthority::block_user) was asked to block the **local** user. A device
     /// cannot evict itself from its own group, and returning success would tell the caller a block
-    /// took effect when nothing was removed (`S-X4`).
+    /// took effect when nothing was removed.
     #[error(
         "refusing to block the local user {0}: a device cannot remove itself from its own album"
     )]
@@ -199,7 +199,7 @@ pub enum OpenMlsAuthorityError {
 }
 
 impl From<crate::crypto::upgrade::UpgradeError> for OpenMlsAuthorityError {
-    /// The ceremony's wire vocabulary is ungated (`S-C24`), so its errors arrive from outside
+    /// The ceremony's wire vocabulary is ungated, so its errors arrive from outside
     /// this module and are folded into the one variant that already names this ceremony.
     fn from(error: crate::crypto::upgrade::UpgradeError) -> Self {
         Self::Upgrade(error.to_string())
@@ -299,7 +299,7 @@ pub struct RemoveOutcome {
     pub key_delivery: Vec<MlsMessageOut>,
 }
 
-/// The outcome of a [`block_user`](OpenMlsAuthority::block_user) ceremony (`S-X4`).
+/// The outcome of a [`block_user`](OpenMlsAuthority::block_user) ceremony.
 ///
 /// Deliberately distinguishes "removed them" from "they were not here", because the two have
 /// different consequences for the caller: only the first produces a commit to deliver and a new
@@ -353,7 +353,7 @@ pub struct OpenMlsAuthority {
     /// [`discard_pending_and_process`](Self::discard_pending_and_process) (lost). Transient — not
     /// persisted (a pending commit does not survive a restart either).
     staged_write_tier: Option<HybridSigningKey>,
-    // ── S-X3: upgrade ceremony + resilience state ────────────────────────────
+    // ── upgrade ceremony + resilience state ────────────────────────────
     /// If this group is a **fork** produced by an upgrade ceremony, the continuity pointer back to
     /// the album it forked from (the manifest `upgraded_from` field). `None` for an original album.
     upgraded_from: Option<UpgradeLineage>,
@@ -424,8 +424,8 @@ impl OpenMlsAuthority {
     }
 
     /// Create a fresh **single-member (self) album group** with a freshly-generated device
-    /// identity and the default [`HistoryPolicy::Full`]. This is the S-X1 entry point, preserved
-    /// verbatim for the offline/parity surface; multi-member ceremonies use
+    /// identity and the default [`HistoryPolicy::Full`]. This is the single-member entry point,
+    /// kept for the offline/parity surface; multi-member ceremonies use
     /// [`create_album`](Self::create_album) with an explicit [`MlsDeviceIdentity`].
     #[tracing::instrument(skip_all, fields(album_id = %album_id, ciphersuite = PINNED_CIPHERSUITE_ID))]
     pub fn create_self_group(album_id: Uuid) -> Result<Self> {
@@ -579,7 +579,7 @@ impl OpenMlsAuthority {
 
     // ── Ceremony 3b: per-user block (moderation) ─────────────────────────────
 
-    /// **Block a user** from this album (`S-X4`): remove *all* of their devices in one MLS
+    /// **Block a user** from this album: remove *all* of their devices in one MLS
     /// `Remove` + `Commit` and bump the AMK epoch, so the blocked user loses read access to every
     /// future epoch and their write-tier capability is rotated out from under them.
     ///
@@ -647,7 +647,7 @@ impl OpenMlsAuthority {
     /// bumps by one. `amk_present` records whether this epoch's AMK is locally delivered — `true`
     /// in the committer's own view. Returns the new `amk_version`.
     ///
-    /// This is the S-X1 signature, preserved. For the multi-member rotation that also broadcasts
+    /// This is the single-member rotation. For the multi-member rotation that also broadcasts
     /// the fresh AMK to the other members, use [`rotate_epoch`](Self::rotate_epoch).
     #[tracing::instrument(skip_all, fields(album_id = %self.album_id, amk_present))]
     pub fn advance_epoch(&mut self, amk_present: bool) -> Result<AmkVersion> {
@@ -706,7 +706,7 @@ impl OpenMlsAuthority {
     // without merging it, then either merges it (its commit won the delivery-service ordering) or
     // discards it and processes the winning peer's commit (it lost, and rebases). This is how two
     // parallel commits against the same epoch converge with no group split. The full partition /
-    // reconciliation ceremony (`ReconcileOutcome`, tombstone-fork) is slice S-X3.
+    // reconciliation ceremony (`ReconcileOutcome`, tombstone-fork) lives in `resilience`/`upgrade`.
 
     /// Stage a self-update commit **without merging** it, returning the commit for the other
     /// members. Mints (and stashes) the prospective epoch's write-tier keypair; the group holds
@@ -1182,7 +1182,7 @@ impl OpenMlsAuthority {
         self.amk_held.insert(entry.amk_version);
     }
 
-    // ── Accessors (S-X1 surface, preserved) ──────────────────────────────────
+    // ── Accessors ────────────────────────────────────────────────────────────
 
     /// This device's MLS participation identity.
     pub fn identity(&self) -> &MlsDeviceIdentity {
@@ -1417,7 +1417,7 @@ struct PersistedState {
     storage_blob: serde_bytes::ByteBuf,
     epochs: Vec<PersistedEpoch>,
     ceiling: u32,
-    // ── S-X3 ceremony state ──────────────────────────────────────────────────
+    // ── Upgrade ceremony state ───────────────────────────────────────────────
     upgraded_from: Option<UpgradeLineage>,
     tombstoned: Option<Uuid>,
     quiescence: Option<Quiescence>,

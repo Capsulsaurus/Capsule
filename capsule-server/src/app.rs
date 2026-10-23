@@ -11,7 +11,7 @@
 //!
 //! # One field per module
 //!
-//! [`AuthContext`] is one field, not four, and `S-C1`'s [`UploadContext`] is the second field
+//! [`AuthContext`] is one field, not four, and [`UploadContext`] is the second field
 //! beside it rather than five more loose collaborators. `#[derive(Provider)]` emits one
 //! `Provides<T>` per field, and two fields of the same type is a derive error — so the shape
 //! here is "one bundle per cohesive module", which is also the shape design/module-map.md
@@ -57,14 +57,14 @@ use crate::verify::VerifyContext;
 /// `Clone` is cheap and shares everything: every field is a context whose own fields are `Arc`s,
 /// so a clone is a handful of refcount bumps and both copies drive the *same* stores. That is
 /// the property a test needs when it serves the assembled context on a socket while keeping a
-/// handle on what is behind it (`S-D28`).
+/// handle on what is behind it.
 #[derive(Debug, Clone, Provider)]
 pub struct App {
     /// The authentication module's collaborators.
     auth: AuthContext,
-    /// The second factor's collaborators (`S-C55`).
+    /// The second factor's collaborators.
     totp: TotpContext,
-    /// The OIDC relying party's collaborators (`S-N1`).
+    /// The OIDC relying party's collaborators.
     oidc: OidcContext,
     /// The upload module's collaborators.
     upload: UploadContext,
@@ -78,7 +78,7 @@ pub struct App {
     directories: DeviceDirectoryContext,
     /// The album-provisioning module's collaborators.
     albums: AlbumContext,
-    /// The album-membership module's collaborators (`S-C51`).
+    /// The album-membership module's collaborators.
     membership: MembershipContext,
     /// The quota module's collaborators.
     quota: QuotaContext,
@@ -88,7 +88,7 @@ pub struct App {
     discovery: DiscoveryContext,
     /// The master-key escrow's collaborators.
     escrow: EscrowContext,
-    /// The federation module's collaborators (`S-E2`, `S-E5`).
+    /// The federation module's collaborators.
     federation: FederationContext,
     /// The cross-device add's collaborators.
     enrollment: EnrollmentContext,
@@ -98,7 +98,7 @@ pub struct App {
     share: ShareContext,
     /// The guest-drop surface's collaborators.
     drops: DropContext,
-    /// The rate-limit counters (`S-C32`).
+    /// The rate-limit counters.
     counters: CounterContext,
 }
 
@@ -113,9 +113,9 @@ pub struct App {
 pub struct Modules {
     /// The authentication module's collaborators.
     pub auth: AuthContext,
-    /// The second factor's collaborators (`S-C55`).
+    /// The second factor's collaborators.
     pub totp: TotpContext,
-    /// The OIDC relying party's collaborators (`S-N1`).
+    /// The OIDC relying party's collaborators.
     pub oidc: OidcContext,
     /// The upload module's collaborators.
     pub upload: UploadContext,
@@ -129,7 +129,7 @@ pub struct Modules {
     pub directories: DeviceDirectoryContext,
     /// The album-provisioning module's collaborators.
     pub albums: AlbumContext,
-    /// The album-membership module's collaborators (`S-C51`).
+    /// The album-membership module's collaborators.
     pub membership: MembershipContext,
     /// The quota module's collaborators.
     pub quota: QuotaContext,
@@ -139,7 +139,7 @@ pub struct Modules {
     pub discovery: DiscoveryContext,
     /// The master-key escrow's collaborators.
     pub escrow: EscrowContext,
-    /// The federation module's collaborators (`S-E2`, `S-E5`).
+    /// The federation module's collaborators.
     pub federation: FederationContext,
     /// The cross-device add's collaborators.
     pub enrollment: EnrollmentContext,
@@ -149,7 +149,7 @@ pub struct Modules {
     pub share: ShareContext,
     /// The guest-drop surface's collaborators.
     pub drops: DropContext,
-    /// The rate-limit counters (`S-C32`).
+    /// The rate-limit counters.
     pub counters: CounterContext,
 }
 
@@ -225,7 +225,7 @@ impl Authenticates<AccessToken> for App {
 ///
 /// Its authenticator asks [`AuthContext`] first and the capability codec second, so a session
 /// token on `GET /v1/sync` or `GET /v1/blob/{hash}` is admitted exactly as it is everywhere
-/// else (`S-E5`).
+/// else.
 impl Authenticates<ReadBearer> for App {
     type Authenticator = FederationContext;
 

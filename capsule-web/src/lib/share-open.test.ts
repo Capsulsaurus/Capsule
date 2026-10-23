@@ -1,4 +1,4 @@
-// Cross-language share-link Known-Answer Test (slice S-E1).
+// Cross-language share-link Known-Answer Test.
 //
 // The Rust issuer crypto (`capsule_core::sharing`) seals a fixture via `cargo xtask share-kat`;
 // this test reopens it through the `capsule-wasm` browser surface. Passing proves the two

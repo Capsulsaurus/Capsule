@@ -1,4 +1,4 @@
-//! The moderation record a user can read about their own account (slice `S-C8`).
+//! The moderation record a user can read about their own account.
 //!
 //! One operation, and it is the *subject's*, never an admin's. design/moderation.md's structural
 //! rule is that there are **no silent operations**: a user whose asset stops serving or whose

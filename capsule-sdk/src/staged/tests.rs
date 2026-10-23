@@ -1,4 +1,4 @@
-//! Staged upload scheduler tests (slice `S-B4`). Each staged Validation bullet in
+//! Staged upload scheduler tests. Each staged Validation bullet in
 //! the transfer upload doc gets a deterministic test: ladder order (by observed
 //! session sequence), the `awaiting-original` derivation, the release gate (the
 //! core [`ReleaseGate`] refuses while T2 is not durable), resume-from-server-truth

@@ -1,4 +1,4 @@
-// Upload-link fragment parsing (slice S-D3): the route-state logic that turns the URL fragment
+// Upload-link fragment parsing: the route-state logic that turns the URL fragment
 // into a Drop Key (+ optional passphrase params), or a single generic "incomplete" state.
 
 import { describe, expect, test } from 'bun:test';

@@ -16,7 +16,7 @@
  *      Collapsing the run makes this checker reject 5 links `SLICES.md` gets
  *      right (`:21`, `:1895`, `:2142`, `:3643`, `:4616`), and would reject 36
  *      more inside the site if these checks reached there.
- *   2. **Underscores survive.** `### S-C21 — \`feed_seq\` visibility-order fix`
+ *   2. **Underscores survive.** `### C21 — \`feed_seq\` visibility-order fix`
  *      keeps its underscore. Stripping `_` as an emphasis marker renames the
  *      four headings in this repository that carry an identifier (`SLICES.md`
  *      `:1909`, `:2290`, `:4853`, `:4891`), and no heading here actually uses

@@ -1,9 +1,8 @@
-//! Persistent session storage for the CLI (slice `S-D5`).
+//! Persistent session storage for the CLI.
 //!
-//! The `capsule-sdk` owns the session/token store and the refresh engine (slice
-//! `S-D7`); the CLI owns only the **at-rest bytes** — exactly the boundary
-//! [`capsule_sdk::auth::PersistedSession`] documents. `capsule auth login` exports
-//! that snapshot here; `capsule sync` reloads it and hands it back to
+//! The `capsule-sdk` owns the session/token store and the refresh engine; the CLI owns only the
+//! **at-rest bytes** — exactly the boundary [`capsule_sdk::auth::PersistedSession`] documents.
+//! `capsule auth login` exports that snapshot here; `capsule sync` reloads it and hands it back to
 //! [`capsule_sdk::auth::AuthClient::resume`]; `capsule auth logout` clears it.
 //!
 //! On Linux the CLI has no OS keychain to lean on, so the token pair is written to

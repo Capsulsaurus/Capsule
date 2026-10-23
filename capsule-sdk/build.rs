@@ -1,4 +1,4 @@
-//! Build-time code generation for the SDK's **one** typed transport (slice `S-D8`, `S-Z7`).
+//! Build-time code generation for the SDK's **one** typed transport.
 //!
 //! `spargen`, our in-house OpenAPI generator, lowers the committed
 //! `capsule-server/openapi.json` — the **Kynos** document, emitted deterministically from the
@@ -21,7 +21,7 @@ fn main() {
     build_rest_client();
 }
 
-/// Generate the typed REST client from the committed OpenAPI 3.2 schema (slice `S-D8`).
+/// Generate the typed REST client from the committed OpenAPI 3.2 schema.
 fn build_rest_client() {
     let manifest_dir = PathBuf::from(
         std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set by cargo"),
@@ -58,7 +58,7 @@ fn build_rest_client() {
     // declared, and `#[kynos::get(..)]` checks at compile time that a path type's fields are
     // exactly the template's variables. All four are generated now.
     //
-    // **Four different ones take their place, and for a reason outside the contract** (`S-D28`).
+    // **Four different ones take their place, and for a reason outside the contract**.
     // spargen's `classify_media` knows JSON, XML, multipart, form-urlencoded, octet-stream,
     // event-stream, NDJSON, JSON sequences and `text/*` — and no `application/cbor`. Capsule
     // serves four operations in that media type, all of them documents that are **signed** and

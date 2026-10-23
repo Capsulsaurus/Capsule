@@ -1,4 +1,4 @@
-//! [`PostgresAccounts`] — the durable account store (`S-C53`, `S-C54`, #402).
+//! [`PostgresAccounts`] — the durable account store (#402).
 //!
 //! # Four ports, one table, one adapter
 //!

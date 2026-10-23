@@ -48,8 +48,8 @@ cargo run -p "$CRATE" --bin uniffi-bindgen -- \
     generate --library "$REPO_ROOT/target/$DEVICE_TARGET/release/$LIB_NAME" \
     --language swift --out-dir "$GEN_DIR"
 
-# The staticlib is the app umbrella (S-F3): it carries the capsule_core_ffi namespace
-# AND capsule-sdk's capsule_sdk namespace (S-D9), so library-mode bindgen must have
+# The staticlib is the app umbrella: it carries the capsule_core_ffi namespace
+# AND capsule-sdk's capsule_sdk namespace, so library-mode bindgen must have
 # emitted Swift glue for both. Fail loudly if either went missing.
 test -s "$GEN_DIR/capsule_core_ffi.swift"
 test -s "$GEN_DIR/capsule_sdk.swift"

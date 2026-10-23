@@ -1,5 +1,5 @@
 //! Client-side custody receipts — the accountability half of the verify-before-destroy gate
-//! (slice `S-D4` in the repo-root `SLICES.md`; SSoT:
+//! (SSoT:
 //! [Transfer — Durability: Custody Receipts](https://docs/design/transfer/durability/#custody-receipts)).
 //!
 //! A [`CustodyReceipt`] is the server-signed complement of the client-signed provenance chain:
@@ -9,7 +9,7 @@
 //! server that withholds receipts never becomes the sole holder of an only-copy.
 //!
 //! This module is the client's **persistence** path, and only that. The receipt type, its
-//! verification and the blob-role enum moved to [`capsule_core::crypto::receipts`] (`S-C46`) so the
+//! verification and the blob-role enum moved to [`capsule_core::crypto::receipts`] so the
 //! server that *issues* receipts shares one definition instead of mirroring it — a signed
 //! structure defined twice is a signature that eventually stops verifying, and the failure would
 //! look like the server withholding receipts. The receipt type and its verification are

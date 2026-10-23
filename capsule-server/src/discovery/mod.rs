@@ -1,4 +1,4 @@
-//! The server-scoped public record (`S-C18`) — `server-info` and `deprecation`.
+//! The server-scoped public record — `server-info` and `deprecation`.
 //!
 //! # What may be here, and the one rule that governs it
 //!
@@ -80,7 +80,7 @@ pub struct AuthEndpoints {
     pub refresh: String,
     /// Where a session is ended.
     pub logout: String,
-    /// Where a sign-in through an external identity provider begins and ends (slice `S-N1`),
+    /// Where a sign-in through an external identity provider begins and ends,
     /// or `None` when this deployment has no provider.
     ///
     /// Endpoints only — never the issuer, never the client id, never anything user-scoped. The
@@ -229,7 +229,7 @@ impl ServerInfo {
     }
 
     /// Declare that this deployment signs people in through an identity provider, and publish
-    /// where (slice `S-N1`).
+    /// where.
     ///
     /// Absent by default, for the reason [`Self::with_federation`] is: publishing endpoints a
     /// deployment does not serve sends clients to a `404`, and "there is no identity provider" is

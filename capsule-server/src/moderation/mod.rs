@@ -1,4 +1,4 @@
-//! Moderation (`S-C8`) — account standing, and the record a user can read about it.
+//! Moderation — account standing, and the record a user can read about it.
 //!
 //! # Why this has almost no wire surface
 //!
@@ -23,7 +23,7 @@
 //! forget: a takedown that failed to record itself is exactly the silent operation the rule
 //! forbids, and it would fail silently in the direction that hides it.
 //!
-//! # The federated half (`S-C49`)
+//! # The federated half
 //!
 //! Both halves design/moderation.md names are now here. **Federated report intake** is
 //! [`ModerationStore::file_report`], written by `POST /v1/federation/reports` once the report's
@@ -132,7 +132,7 @@ pub struct ModerationEvent {
     pub reason: Option<String>,
 }
 
-/// A moderation report one peer server filed against an account on this one (`S-C49`).
+/// A moderation report one peer server filed against an account on this one.
 ///
 /// # The content is a pointer, not a complaint
 ///
@@ -201,7 +201,7 @@ pub trait ModerationStore: std::fmt::Debug + Send + Sync {
     /// what happened to their account needs it in the order it happened.
     fn events_for_user<'a>(&'a self, user: &'a UserId) -> StoreFuture<'a, Vec<ModerationEvent>>;
 
-    /// Record a federated report (`S-C49`).
+    /// Record a federated report.
     ///
     /// Writes nothing about the reported account's standing: a peer's report is an *input* to a
     /// decision, never a decision. Filing one has no effect a user can observe, which is why it

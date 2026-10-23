@@ -1,7 +1,7 @@
-//! The sync-fed local store (slice `S-D5`): the durable half of `capsule sync`.
+//! The sync-fed local store: the durable half of `capsule sync`.
 //!
 //! `capsule-sdk`'s [`SyncState`] is the *pure* anti-rewind / forward-version state
-//! machine (slice `S-D2`); it is network-free and, by itself, in-memory. This
+//! machine; it is network-free and, by itself, in-memory. This
 //! module is the CLI's durable backing for it: it rehydrates a `SyncState` from the
 //! CLI's SQLite (the opaque cursor plus the per-album high-water marks, the latter
 //! *derived* from `MAX(sync_seq)` so every applied entry re-establishes the mark),

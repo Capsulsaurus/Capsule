@@ -4,10 +4,10 @@
 //! server just sent is one its own description predicts. The other direction — every response
 //! the description promises has been produced by *some* test — is
 //! `every_declared_response_is_exercised` in `conformance.rs`, and it is why the unhappy paths
-//! below are as thorough as the happy ones: a 423 nothing produces is exactly the `S-C28`
-//! defect pointing the other way.
+//! below are as thorough as the happy ones: a 423 nothing produces is exactly a declared-but-
+//! unreachable status, the defect pointing the other way.
 //!
-//! Nothing here needs a container. The session store is `S-C29`'s deterministic in-memory
+//! Nothing here needs a container. The session store is the deterministic in-memory
 //! adapter, the account directory is a double, and the token signer is the **real** one over a
 //! generated key — so a 401 in this file is a token that genuinely does not verify.
 
@@ -155,7 +155,7 @@ async fn login_records_the_advisory_provenance_a_client_volunteered() {
 
 #[tokio::test]
 async fn an_unusable_advisory_field_is_dropped_rather_than_refusing_the_sign_in() {
-    // Neither field gates anything (`S-C13`, `S-N3`), so failing a sign-in over one would let
+    // Neither field gates anything, so failing a sign-in over one would let
     // legibility metadata take down a security operation.
     let fixture = Fixture::working();
 
@@ -226,7 +226,7 @@ async fn a_wrong_password_and_an_unknown_account_are_the_same_answer() {
 
 #[tokio::test]
 async fn a_locked_account_is_refused_with_423_and_says_so() {
-    // The status `S-C28` found rendered and never declared. It is reachable — lockout is
+    // A status that must be declared, not merely rendered. It is reachable — lockout is
     // account state the directory owns, not a counter — so it is documented rather than deleted,
     // and a correct password still gets it, which is exactly why it must be distinguishable
     // from a 401.
@@ -381,8 +381,8 @@ async fn a_refresh_token_is_spent_by_the_first_use() {
 #[tokio::test]
 async fn rotation_carries_the_session_provenance_across() {
     // Without this, the devices listing would lose track of a physical device every time its
-    // tokens turned over — the grouping `S-C13` exists for, and the `(device_id, session_id)`
-    // pair the support bundle carries (`S-N3`), both decay to nothing.
+    // tokens turned over — the device grouping, and the `(device_id, session_id)`
+    // pair the support bundle carries, both decay to nothing.
     let fixture = Fixture::working();
     let device = "018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5e6f";
 
@@ -611,15 +611,16 @@ async fn logout_closes_the_session_the_credential_names() {
 #[tokio::test]
 async fn a_second_logout_is_refused_because_the_first_one_worked() {
     // This case used to assert 204 twice, on the reasoning that "there is no longer a session"
-    // is what the caller asked for either way. `S-C48` changed the answer and the change is the
-    // point: the credential the second attempt presents names a session the ledger no longer
-    // holds, so it is refused at the door and the handler is never entered.
+    // is what the caller asked for either way. The bearer scheme now checks the session ledger,
+    // and that change in the answer is the point: the credential the second attempt presents
+    // names a session the ledger no longer holds, so it is refused at the door and the handler
+    // is never entered.
     //
     // The client is not worse off. It asked for the session to end; the 401 is proof that it
     // did, and it is the same 401 every other operation would now give that token. What would
     // be worse is the old answer — a 204 from a credential that is dead everywhere else, which
-    // is precisely the fifteen-minute window `S-C48` closed, observed on the one operation
-    // whose job is to close it.
+    // is precisely the fifteen-minute window the ledger check closes, observed on the one
+    // operation whose job is to close it.
     let fixture = Fixture::working();
 
     let pair: TokenResponse = post_json!(
@@ -745,7 +746,7 @@ async fn a_refresh_token_is_a_valid_credential_and_an_insufficient_one() {
 
 #[tokio::test]
 async fn logout_answers_500_when_the_session_store_cannot_answer() {
-    // Reached *past* authentication, and since `S-C48` that phrase is load-bearing: the bearer
+    // Reached *past* authentication, and that phrase is load-bearing: the bearer
     // scheme reads the session ledger, so a store that fails *everything* refuses this request
     // at the door with a 401 and the handler's own 500 becomes unreachable. The partial outage
     // is the one this answer was written for — the read succeeds, the close does not.
@@ -932,7 +933,7 @@ async fn a_body_in_the_wrong_media_type_is_415_on_every_operation_that_takes_one
 }
 
 // ===========================================================================================
-// The session ledger on the request path (`S-C48`)
+// The session ledger on the request path
 // ===========================================================================================
 
 /// The `last_active_at` the devices listing publishes for the caller's own session.
@@ -959,9 +960,9 @@ async fn current_last_active(fixture: &Fixture, bearer: &str) -> String {
 
 #[tokio::test]
 async fn an_access_token_dies_with_its_session_and_not_with_its_deadline() {
-    // The property `S-C48` bought. Before it, the bearer scheme checked a signature and a
-    // deadline and never asked whether the session still existed, so closing a session left
-    // every access token minted against it usable for the rest of its fifteen minutes.
+    // The bearer scheme checks the session ledger as well as a signature and a deadline, so
+    // closing a session kills every access token minted against it rather than leaving them
+    // usable for the rest of their fifteen minutes.
     let fixture = Fixture::working();
     let pair = fixture.login().await;
     let bearer = format!("Bearer {}", pair.access_token);
@@ -1062,9 +1063,8 @@ async fn an_unreadable_session_ledger_refuses_rather_than_admits() {
 
 #[tokio::test]
 async fn activity_moves_the_listing_and_is_coalesced_to_one_write_a_minute() {
-    // `touch_session` had no production caller at all before `S-C48` — the port declared it, the
-    // conformance suite exercised it, and no request path used it — so this field was the
-    // sign-in time forever while the listing called it "last used".
+    // Without a request path calling `touch_session`, this field would be the sign-in time
+    // forever while the listing called it "last used"; the bearer scheme must drive it.
     //
     // It moves now, and it is deliberately *coarse*: at most one write per minute per session,
     // because a touch on every request is a store write on every request. The staleness that
@@ -1114,7 +1114,8 @@ async fn activity_moves_the_listing_and_is_coalesced_to_one_write_a_minute() {
 
     // And activity is not a lifetime extension. The store's TTL is absolute, so a session that
     // has been touched every minute for a day is still closed on schedule — a sliding lifetime
-    // would be the caller-supplied TTL `S-C29` deleted, wearing activity as a disguise.
+    // would be a caller-supplied TTL, which the store port does not take, wearing activity as a
+    // disguise.
     fixture.clock.advance(SESSION_TTL);
     fixture
         .client
@@ -1128,7 +1129,7 @@ async fn activity_moves_the_listing_and_is_coalesced_to_one_write_a_minute() {
 }
 
 // ===========================================================================================
-// Registration (`S-C53`)
+// Registration
 // ===========================================================================================
 
 #[tokio::test]

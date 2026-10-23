@@ -1,4 +1,4 @@
-//! Verify-before-destroy: the client half of storage verification (slice `S-D4`; SSoT:
+//! Verify-before-destroy: the client half of storage verification (SSoT:
 //! [Storage Verification — Verify Before Destroy]).
 //!
 //! Before any post-write local cleanup of irreplaceable bytes — releasing a device-owned
@@ -26,7 +26,7 @@
 //! the verdict is a point-in-time fact, so a verdict older than the window is re-fetched before
 //! release. The result is a [`capsule_library::library::ReleaseDecision`]; a non-`Release` outcome
 //! never destroys — the caller retains the local copy, retries with backoff, and surfaces
-//! "not yet confirmed on server". Streaming import (`S-B3`) drives this per asset in its
+//! "not yet confirmed on server". Streaming import drives this per asset in its
 //! import→upload→verify→release window.
 //!
 //! [Storage Verification — Verify Before Destroy]: https://docs/design/transfer/durability/#verify-before-destroy
@@ -125,7 +125,7 @@ pub struct StaticToken(pub String);
 
 #[derive(Clone)]
 enum VerifyAuth {
-    /// Drive requests through the `S-D7` session (pre-flight refresh, single-flight, one `401`
+    /// Drive requests through the SDK session (pre-flight refresh, single-flight, one `401`
     /// refresh-and-replay).
     Session(crate::auth::Session),
     /// A fixed bearer over a plain client (tests).
@@ -144,7 +144,7 @@ pub struct VerifyTransport {
 }
 
 impl VerifyTransport {
-    /// Build a transport that authorizes through an authenticated `S-D7` session — the
+    /// Build a transport that authorizes through an authenticated SDK session — the
     /// sanctioned production path. `base_url` is the API root (`POST {base}/storage/verify`,
     /// `GET {base}/upload/{id}/receipt`, `GET {base}/assets/{id}/receipts`); the attestation-key
     /// record is resolved against its origin instead (see

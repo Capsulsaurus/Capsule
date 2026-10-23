@@ -21,8 +21,8 @@ drop in later:
   capsule-core's model; each field notes its eventual source.
 - `src/data/gateway.ts` — the read-only `CapsuleGateway` interface the UI
   depends on.
-- `src/data/server/` — `createBrowserServerGateway`, the real key-free gateway
-  (slice `S-D6`). It drains the sync feed into an IndexedDB-backed client store
+- `src/data/server/` — `createBrowserServerGateway`, the real key-free gateway.
+  It drains the sync feed into an IndexedDB-backed client store
   and answers reads from it — the browser's `library.sqlite` analogue.
 - `src/data/hooks.ts` — TanStack Query hooks (`useAssets`, `useAlbum`, …). UI
   components consume **only** these, never a data source directly.

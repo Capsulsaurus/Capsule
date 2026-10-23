@@ -1,4 +1,4 @@
-//! S-D14 — Local-gallery security gates: the cache/temp **placement audit** (SR3) and the **NFR1**
+//! Local-gallery security gates: the cache/temp **placement audit** (SR3) and the **NFR1**
 //! no-network-on-read-paths proof, both encoded as executable invariants.
 //!
 //! Contract: [Local Gallery — Security Requirements] (SR3, NFR1).

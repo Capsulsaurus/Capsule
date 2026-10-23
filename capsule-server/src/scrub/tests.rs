@@ -50,11 +50,10 @@ fn asset_id(name: &str) -> AssetId {
     AssetId::new(asset_uuid(name).to_string())
 }
 
-/// A signed manifest for `name`, chaining onto `prior` under `action` (`S-C52`).
+/// A signed manifest for `name`, chaining onto `prior` under `action`.
 ///
-/// The chain walk needs more than one manifest per asset, which is the state `S-C52` made
-/// possible: before it, a lifecycle write dropped the manifest it superseded and there was
-/// nothing to walk back to.
+/// The chain walk needs more than one manifest per asset: the index retains the manifests a
+/// lifecycle write supersedes, so there is something to walk back to.
 fn chained_manifest_bytes(
     name: &str,
     metadata: &ContentAddress,
@@ -178,7 +177,7 @@ impl Harness {
     /// Publish `asset` with its index tier, and return its provenance address.
     ///
     /// The provenance blob is a **real signed manifest** whose facts match the row, not a
-    /// placeholder: check 5 decodes it and compares (`S-C45`), so a fixture that stored
+    /// placeholder: check 5 decodes it and compares, so a fixture that stored
     /// arbitrary bytes there would be seeding a corruption in every case that is supposed to be
     /// clean.
     async fn publish(&self, asset: &str) -> ContentAddress {
@@ -396,8 +395,8 @@ async fn bit_rot_is_found_only_by_a_deep_pass() {
 
     // A blob whose bytes do not hash to its name — what bit rot looks like from outside. The
     // *address* is the one the asset's manifest commits to, because rot is bytes going bad under
-    // a correct name; an address nothing committed to would be a different fault, and since
-    // `S-C45` the scrub would report that one too.
+    // a correct name; an address nothing committed to would be a different fault, and the
+    // scrub would report that one too.
     let honest = hash_bytes(b"rotten-original").to_hex();
     let address = ContentAddress::parse(&honest).expect("an address");
     h.blobs
@@ -480,7 +479,7 @@ async fn the_report_counts_by_class() {
 }
 
 // ===========================================================================================
-// Check 5: mirrored-fact agreement (`S-C45`)
+// Check 5: mirrored-fact agreement
 // ===========================================================================================
 
 #[tokio::test]
@@ -595,7 +594,7 @@ async fn a_provenance_blob_that_is_not_a_manifest_is_reported_rather_than_assume
 }
 
 // ===========================================================================================
-// Check 4: the chain walks back (`S-C52`)
+// Check 4: the chain walks back
 // ===========================================================================================
 
 #[tokio::test]

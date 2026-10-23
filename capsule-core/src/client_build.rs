@@ -1,4 +1,4 @@
-//! Client build identification — the `client_version` / `generated_by_client` grammar (S-D15).
+//! Client build identification — the `client_version` / `generated_by_client` grammar.
 //!
 //! Every *real* manifest producer pins a write to the exact client build that authored it, so a
 //! defect in one shipped build — of any client, in-repo or not — is traceable across every asset

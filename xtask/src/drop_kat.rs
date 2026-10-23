@@ -1,4 +1,4 @@
-//! Cross-language **guest-drop** Known-Answer-Test (KAT) fixture generator (slice `S-D3`).
+//! Cross-language **guest-drop** Known-Answer-Test (KAT) fixture generator.
 //!
 //! The reverse of the share-link KAT: here the **browser seals** and **Rust adopts**. This emits a
 //! deterministic JSON fixture the `capsule-web` `drop-seal` bun test loads to prove the browser

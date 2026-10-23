@@ -5,8 +5,7 @@ import Foundation
 /// Enclave replaces, and the always-runnable path for the P-256 hybrid composition (a CI VM has no
 /// Secure Enclave). It mirrors ``SecureEnclaveSigner``'s wire contract exactly — a 65-byte x9.63
 /// (uncompressed SEC1) public key and a **DER-encoded ECDSA** signature over `msg` (SHA-256 hashed
-/// internally) — so it plugs into `FfiWorkspace.createWithP256HardwareSigner` end to end (slice
-/// S-F2). The private key lives in process memory, derived deterministically (HKDF-SHA256, per
+/// internally) — so it plugs into `FfiWorkspace.createWithP256HardwareSigner` end to end. The private key lives in process memory, derived deterministically (HKDF-SHA256, per
 /// `keyAlias`) from a 32-byte seed the caller seals.
 ///
 /// It offers no hardware non-exportability, which ``assertNonExportable(keyAlias:)`` reports

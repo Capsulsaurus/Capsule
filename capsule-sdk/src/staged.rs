@@ -1,4 +1,4 @@
-//! The client-side **staged upload scheduler** (slice `S-B4`; SSoT:
+//! The client-side **staged upload scheduler** (SSoT:
 //! [Download & Sync — Upload Tiering (Staged Uploads)]).
 //!
 //! Uploads used to be all-or-nothing; staged uploads add the upload-direction

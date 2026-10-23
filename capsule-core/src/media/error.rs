@@ -1,4 +1,4 @@
-//! The typed failure set of the still pipeline (slice `S-B13`).
+//! The typed failure set of the still pipeline.
 //!
 //! Every one of these is a *report*, never a rejection: Capsule is a backup tool, so an original
 //! whose pixels cannot be read is still imported as a signed, encrypted, `verify_asset`-accepting

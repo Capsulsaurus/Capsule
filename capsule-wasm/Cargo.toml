@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "Browser (wasm-bindgen) surface for the Capsule guest web client — the share-link client-side open path (slice S-E1) and the contribute-only guest drop sealing path (slice S-D3)."
+description = "Browser (wasm-bindgen) surface for the Capsule guest web client — the share-link client-side open path and the contribute-only guest drop sealing path."
 
 [lib]
 # `cdylib` is the wasm artifact `wasm-bindgen` post-processes into the JS glue the web app and
@@ -13,9 +13,9 @@ description = "Browser (wasm-bindgen) surface for the Capsule guest web client �
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-# The recipient-open crypto lives in capsule-core::sharing (always-on since S-E1) over `crypto`
+# The recipient-open crypto lives in capsule-core::sharing (always-on) over `crypto`
 # + `cbor`. `default-features = false` drops the native SQLite/lifecycle stack that cannot target
-# wasm32 — exactly the S-A6 sealing-build posture. Feature unification with the rest of the
+# wasm32 — exactly the sealing-build posture. Feature unification with the rest of the
 # workspace (which pulls `native`) is harmless: `sharing` compiles under both.
 capsule-core = { path = "../capsule-core", default-features = false }
 # The browser boundary. Pinned `=0.2.100` to the `wasm-bindgen` CLI the `build-wasm` mise task

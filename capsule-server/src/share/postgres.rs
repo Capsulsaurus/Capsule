@@ -1,4 +1,4 @@
-//! [`PostgresShares`] — the durable share-link store (`S-C4`, #446).
+//! [`PostgresShares`] — the durable share-link store (#446).
 //!
 //! # Two tables, one link
 //!

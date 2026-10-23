@@ -1,4 +1,4 @@
-//! The local-alert surface across the FFI boundary (slice `S-D29`, core half): the flattened
+//! The local-alert surface across the FFI boundary (core half): the flattened
 //! mirror of [`capsule_core::notify`] plus the two functions the apps call.
 //!
 //! # Why free functions

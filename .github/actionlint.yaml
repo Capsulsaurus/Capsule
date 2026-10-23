@@ -4,8 +4,8 @@
 # lanes select on. These runners are provisioned out-of-band; declaring the labels here
 # keeps `actionlint` clean and documents the expected runner classes:
 #   android / strongbox   — an Android device (or attached host) with a StrongBox secure
-#                           element, for the S-F2 StrongBox / S-F5 hardware-DEK runs.
-#   macos / secure-enclave — a provisioned Apple device for the S-F2 Secure Enclave runs.
+#                           element, for the hardware-signer and hardware-DEK runs.
+#   macos / secure-enclave — a provisioned Apple device for the Secure Enclave runs.
 self-hosted-runner:
   labels:
     - android

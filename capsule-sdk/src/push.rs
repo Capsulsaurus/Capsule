@@ -1,4 +1,4 @@
-//! Pushing a locally-imported asset to a server (slice `S-D18`) — the glue between
+//! Pushing a locally-imported asset to a server — the glue between
 //! `capsule_core`'s [`UploadBundle`] and the hand-written [upload client](crate::upload).
 //!
 //! `capsule-core` builds the bundle (ciphertext, sealed metadata blob, derivatives, and the
@@ -319,7 +319,7 @@ pub fn create_request(
 
 // ─── Provisioning the album ───────────────────────────────────────────────────
 
-/// Register `album_id` with the server before any blob session opens for it (slice `S-C25`).
+/// Register `album_id` with the server before any blob session opens for it.
 ///
 /// The album's id is derived from the account master key, so the client knows it and the
 /// server does not. [Invariant 6] refuses an upload whose album does not exist or is not

@@ -1,4 +1,4 @@
-//! Storage verification (`S-C3`) — the key-free durability verdict.
+//! Storage verification — the key-free durability verdict.
 //!
 //! A client is about to delete its only local copy of a photo. Before it does, it asks the
 //! server whether the server really holds what it thinks it holds. That question is this
@@ -40,15 +40,15 @@
 //! - **`deep`** — the opt-in re-hash that catches silent bit-rot — is **not here**, and not
 //!   because it is hard. Its contract is *"rate-limited per user and coalesced, so a client
 //!   cannot turn it into an I/O-amplification attack"*, and the per-user counter that would
-//!   enforce that has no port (`S-C32`). Shipping the re-hash without the limiter would ship
-//!   the amplification, so the two halves land together — see `S-C41`.
-//! - **Moderation holds** landed with `S-C17`: an asset under a
+//!   enforce that has no port. Shipping the re-hash without the limiter would ship
+//!   the amplification, so the two halves must land together.
+//! - **Moderation holds** are reported: an asset under a
 //!   [`ServingHold`](crate::index::ServingHold) reports every blob `stored` and **not**
 //!   `retrievable`. The bytes are present and staying present; the server simply will not hand
 //!   them over. Reporting `retrievable` would tell a client it may release its only local copy
 //!   of something it can never fetch back, which is the exact decision this surface exists to
 //!   inform.
-//! - **GC state** landed with `S-C11`: a blob the collector has marked is `stored` and **not**
+//! - **GC state** is reported: a blob the collector has marked is `stored` and **not**
 //!   `retrievable`, which is the combination that matters most here. Its bytes are on disk
 //!   right now and on their way out, so a client that read `stored` alone and released its copy
 //!   would be releasing it into a window that closes. A **quarantined** blob already reports
@@ -69,7 +69,7 @@ use crate::store::{AssetId, BlobRole, Clock, OwnerId};
 /// The most assets one request may ask about.
 ///
 /// A bound, not a rate limit: it caps the work a single request can buy, which is a different
-/// property from capping how many requests an account may make (`S-C32`). A client releasing
+/// property from capping how many requests an account may make. A client releasing
 /// local originals verifies a page at a time, so this is well above what any real caller sends.
 pub const MAX_ASSETS_PER_REQUEST: usize = 100;
 
@@ -142,7 +142,7 @@ pub struct AssetQuery {
 pub enum Depth {
     /// Ask the index and the store whether the bytes are there. Cheap, and the default.
     Structural,
-    /// Also re-read and re-hash them (`S-C41`).
+    /// Also re-read and re-hash them.
     ///
     /// Rate-limited per account, because a deep scan reads and hashes every declared blob: an
     /// unbounded one is an I/O-amplification attack costing the attacker one small JSON body.
@@ -183,7 +183,7 @@ pub struct BlobVerdict {
     pub indexed: bool,
     /// Nothing is withholding it.
     pub retrievable: bool,
-    /// What a **deep** scan found, when one was asked for and admitted (`S-C41`).
+    /// What a **deep** scan found, when one was asked for and admitted.
     ///
     /// `None` on a structural check, and that absence is load-bearing: it is the difference
     /// between *"we did not look at the bytes"* and *"we looked and they were fine"*, and a
@@ -191,7 +191,7 @@ pub struct BlobVerdict {
     pub deep: Option<DeepVerdict>,
 }
 
-/// What re-reading and re-hashing a blob's bytes found (`S-C41`).
+/// What re-reading and re-hashing a blob's bytes found.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeepVerdict {
     /// The bytes on disk hash to the address they are filed under.
@@ -334,7 +334,7 @@ async fn verify_one(
 
         // The second place `retrievable` is not `stored`, and the one that matters most for a
         // client about to release its only local copy: a marked blob is on disk and on its way
-        // out (`S-C11`).
+        // out.
         let collectable = context
             .marks()
             .marked_since(hash)
@@ -363,7 +363,7 @@ async fn verify_one(
             // A held asset's bytes are present and will stay present — but the server will not
             // hand them over, so promising `retrievable` would be telling a client it can drop
             // its only copy of something it can never fetch back. `stored` stays true, which is
-            // the honest pair: *we have your bytes, and we will not serve them.* (`S-C17`)
+            // the honest pair: *we have your bytes, and we will not serve them.*
             retrievable: stored && !collectable && row.hold.is_none(),
         });
     }
@@ -492,9 +492,9 @@ mod tests {
     };
 
     /// This crate can construct, sign and verify a custody receipt from **core's own type**
-    /// while linking `capsule-core` with `default-features = false` (`S-C46`).
+    /// while linking `capsule-core` with `default-features = false`.
     ///
-    /// The guard, not a feature. Nothing here uses receipts yet — `S-C15` will — and the point
+    /// The guard, not a feature. Nothing here uses receipts yet, and the point
     /// is that the day it does, it must not have to define its own copy. A signed structure
     /// defined at both ends is one added field away from a signature that stops verifying, and
     /// the failure would present as the server withholding receipts, which is exactly the

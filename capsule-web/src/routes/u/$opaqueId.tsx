@@ -1,4 +1,4 @@
-// Guest drop uploader (slice S-D3): `https://server.tld/u/{opaque-id}#{drop_pubkey}`.
+// Guest drop uploader: `https://server.tld/u/{opaque-id}#{drop_pubkey}`.
 //
 // No auth, no account. The `#{drop_pubkey}` fragment (the link's Drop Key, plus any passphrase
 // salt/params) stays in the browser — it is never sent to the server. Each selected file is sealed

@@ -1,5 +1,4 @@
-//! Folding a third-party adapter's [`ExtractedMetadata`] into the **signed sidecar** at import
-//! (slice `S-B10`).
+//! Folding a third-party adapter's [`ExtractedMetadata`] into the **signed sidecar** at import.
 //!
 //! A [source adapter](crate::import::importers) already resolves the [precedence rule] at
 //! extraction — embedded EXIF wins over the exporter's records, **except** for constructs the
@@ -19,7 +18,7 @@
 //! | `albums` | `tags_user` OR-set | exporter-authoritative |
 //!
 //! Two of those mappings are **not** stated by the design docs and are recorded here as the
-//! decision this slice took, so a later slice can revisit them deliberately:
+//! decision this change took, so a later change can revisit them deliberately:
 //!
 //! - **Favorites.** Capsule models no "favorite" flag. The two candidate registers are the
 //!   numeric star `rating` and the trinary `cull` flag, and [Organization — Culling] keeps them
@@ -540,9 +539,9 @@ mod archive_tests {
         let id = asset_for(&ws, &contested);
         let sidecar = &ws.asset(&id).expect("asset").sidecar;
 
-        // Row: taken-time vs EXIF precedence — both sides present and disagreeing. Until
-        // `S-B16` fixed `extract_exif` this case could not arise: the EXIF side was always
-        // absent, so the exporter won by default.
+        // Row: taken-time vs EXIF precedence — both sides present and disagreeing. This
+        // case only arises because `extract_exif` reads real EXIF; were the EXIF side always
+        // absent, the exporter would win by default.
         assert_eq!(
             capture_secs(&ws, &id),
             1_622_505_600 + 12 * 3600,
@@ -602,7 +601,7 @@ mod archive_tests {
         let id = asset_for(&ws, &plain);
         let sidecar = &ws.asset(&id).expect("asset").sidecar;
 
-        // Before this slice these bytes were stamped with the import clock and had no location.
+        // Before this change these bytes were stamped with the import clock and had no location.
         assert_eq!(capture_secs(&ws, &id), 1_609_502_400);
         let gps = sidecar
             .gps

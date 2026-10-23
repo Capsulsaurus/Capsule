@@ -1,4 +1,4 @@
-//! `GET /v1/upload/{id}/receipt` — the custody receipt for a finalized write (slice `S-C15`).
+//! `GET /v1/upload/{id}/receipt` — the custody receipt for a finalized write.
 //!
 //! The server's signed admission of what it accepted, served as the canonical CBOR the client
 //! verifies and persists. [`crate::attestation`] owns the log, the chain and the reason
@@ -8,7 +8,7 @@
 //!
 //! The signature covers the canonical encoding of the receipt's core, so anything that
 //! re-serialises on the way out risks handing a client bytes that no longer verify — the same
-//! discipline as `S-C30`'s manifest and `S-C9`'s directory. What the log holds is what the wire
+//! discipline as the manifest and the device directory. What the log holds is what the wire
 //! carries.
 //!
 //! # `error.upload.receipt_not_available` is a state, not a failure

@@ -538,7 +538,7 @@ mod tests {
         );
     }
 
-    // ── `dek_public` wire presence (slice `S-A11`) ──────────────────────────────
+    // ── `dek_public` wire presence ──────────────────────────────
 
     /// The wire-presence contract for `dek_public`: with no DEK published it is an **ABSENT**
     /// map key, so directories signed before the field existed re-verify byte-identically.
@@ -556,10 +556,10 @@ mod tests {
         assert!(keys.iter().any(|k| k == "revoked_at"));
     }
 
-    /// **The regression this slice must not cause.** `LegacyDirectoryCore` is the *pre-`S-A11`*
-    /// encoder verbatim — the struct that produced every directory signed before `dek_public`
-    /// existed. Bytes it produced and the IK signed must (a) decode under today's type,
-    /// (b) re-derive **byte-identical** signing bytes, and (c) still verify.
+    /// **Directories signed before `dek_public` must keep verifying.** `LegacyDirectoryCore` is
+    /// the encoder from before `dek_public` existed, verbatim — the struct that produced every
+    /// directory signed before then. Bytes it produced and the IK signed must (a) decode under
+    /// today's type, (b) re-derive **byte-identical** signing bytes, and (c) still verify.
     #[test]
     fn a_directory_signed_before_dek_public_existed_still_verifies() {
         #[derive(Serialize)]

@@ -2,7 +2,7 @@
 //!
 //! # Why this is a library module and not `main`
 //!
-//! Until this slice the only composition root in the tree was `tests/support/mod.rs`, which
+//! Until this change the only composition root in the tree was `tests/support/mod.rs`, which
 //! assembles seventeen module contexts out of test doubles. Nothing assembled the server. A
 //! composition root that lives in `main` is a composition root nothing tests: "the router
 //! builds", "every port has an adapter" and "the published signing key is the one the tokens
@@ -21,7 +21,7 @@
 //! `DATABASE_URL`, opens the pool, and refuses to continue against a database whose schema is not
 //! the one this binary was built for — naming the command that fixes it, never the URL.
 //! `valkey` then connects to `VALKEY_URL` and proves it answers `PING`; a server that cannot be
-//! reached is [`BootError::Valkey`] — the refusal `store/mod.rs` has said since `S-C29` a
+//! reached is [`BootError::Valkey`] — the refusal `store/mod.rs` has always said a
 //! required service earns: *"Valkey is required; the server refuses to boot without
 //! `VALKEY_URL`"*. Every durable port is then on one of the two (#402, #403, #446): Postgres for
 //! every record a restart must not lose, Valkey for the volatile state.
@@ -875,7 +875,7 @@ fn compose(
         oidc_authorizations,
         oidc_devices,
     } = ports;
-    // The production write authority (`S-C19`/`S-C20`), not a permissive double: it reads the
+    // The production write authority, not a permissive double: it reads the
     // album's own pin and the account's published device directory, so invariants 6 and 7 mean
     // what they say even in the development profile.
     let authority = Arc::new(ProvisionedAuthority::new(
@@ -1038,7 +1038,7 @@ fn compose(
         albums: AlbumContext::new(albums.clone(), clock.clone()),
         membership: MembershipContext::new(members, clock.clone()),
         // Unlimited, which is what a self-hosted deployment runs. A configurable ceiling is a
-        // quota policy this slice does not own; `QuotaLimits` already takes one.
+        // quota policy this change does not own; `QuotaLimits` already takes one.
         quota: QuotaContext::new(quotas.clone(), clock.clone(), QuotaLimits::unlimited()),
         attestation: attestation.clone(),
         discovery: DiscoveryContext::new(server_info, revocations),

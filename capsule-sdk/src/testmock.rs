@@ -1,8 +1,8 @@
 //! An in-process mock HTTP server for the SDK's hand-written wire clients (test-only).
 //!
 //! Replays the real wire — statuses, headers, `ApiError` JSON with the stable `error.*` codes
-//! straight from the S-C1 handlers — over a real TCP socket, because the SDK's clients are
-//! genuine `reqwest` clients rather than an injectable transport. Shared by the
+//! straight from the server's upload handlers — over a real TCP socket, because the SDK's
+//! clients are genuine `reqwest` clients rather than an injectable transport. Shared by the
 //! [`upload`](crate::upload) client's recovery-matrix tests and the [`push`](crate::push)
 //! bundle tests so there is one mock, not one per module.
 
@@ -64,7 +64,7 @@ impl MockResponse {
         MockResponse::new(0, "")
     }
     /// An `ApiError` rejection carrying the stable `error.*` code — the exact wire
-    /// the S-C1 `UploadError::write` produces.
+    /// the server's `UploadError::write` produces.
     pub(crate) fn api_error(status: u16, reason: &str, code: &str, message: &str) -> Self {
         MockResponse::new(status, reason)
             .json_body(format!(r#"{{"error":{message:?},"code":{code:?}}}"#))
@@ -73,7 +73,7 @@ impl MockResponse {
 
 /// A dropped mock server aborts its accept loop **and every connection it spawned**.
 ///
-/// The second half is the part that is easy to get wrong and was (slice `S-D27`). Aborting only
+/// The second half is the part that is easy to get wrong and was. Aborting only
 /// the accept loop leaves detached per-connection tasks running with their sockets open, which
 /// `nextest` reports as a leaked test — but only under a loaded parallel run, so it does not
 /// reproduce when anyone investigates it directly. Connections therefore live in a `JoinSet` owned

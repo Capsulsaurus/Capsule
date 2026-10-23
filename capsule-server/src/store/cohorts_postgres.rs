@@ -1,4 +1,4 @@
-//! [`PostgresCohorts`] — the durable device-cohort map (`S-C13`, #402).
+//! [`PostgresCohorts`] — the durable device-cohort map (#402).
 //!
 //! # Why this one port in `store` is Postgres and the other five are not
 //!

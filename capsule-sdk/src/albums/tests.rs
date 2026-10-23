@@ -1,4 +1,4 @@
-//! Tests for the S-C25 album-provisioning client.
+//! Tests for the album-provisioning client.
 //!
 //! Driven against the shared in-process mock server ([`crate::testmock`]), which replays the
 //! real `POST /v1/albums` wire — including the `ApiError` JSON with its stable `error.*` code,
@@ -19,7 +19,7 @@
 //! | `a_malformed_id_carries_the_invalid_id_code` | the 400 path |
 //! | `an_echoed_mismatch_is_malformed` | the server cannot silently rebind another album |
 //! | `the_request_is_authorized` | the bearer rides every call |
-//! | `publish_roster_sends_the_signed_bytes_verbatim` | the roster on the wire is the one the device signed (`S-C51`) |
+//! | `publish_roster_sends_the_signed_bytes_verbatim` | the roster on the wire is the one the device signed |
 //! | `a_published_roster_reports_what_the_server_holds` | the success mapping, replay included |
 //! | `a_stale_roster_carries_the_distinct_code` | the `409` is switchable by code |
 //! | `a_roster_echo_mismatch_is_malformed` | the server cannot silently answer for another album |
@@ -244,7 +244,7 @@ async fn the_request_is_authorized() {
     );
 }
 
-// ─── Roster publish (`S-C51`) ─────────────────────────────────────────────────
+// ─── Roster publish ─────────────────────────────────────────────────
 
 /// A roster for [`album`] at `version`, signed by a fresh device key.
 fn signed_roster(version: u64) -> capsule_core::crypto::membership::SignedAlbumRoster {

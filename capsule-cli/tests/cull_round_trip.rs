@@ -1,10 +1,10 @@
-//! Slice `S-D16` acceptance: the `capsule cull` flag → filtered view → reject-sweep loop
+//! The acceptance: the `capsule cull` flag → filtered view → reject-sweep loop
 //! round-trips on a **reopened** library — and it is reopened by a *different process* each time.
 //!
 //! Every step below spawns the real `capsule` binary (`CARGO_BIN_EXE_capsule`, the path Cargo
 //! hands integration tests of the crate that declares the bin). Nothing is shared between steps
 //! but the library directory on disk, so a flag written by one process is only visible to the
-//! next because `S-A10` made album keys, authorities, and per-asset state durable and
+//! next because album keys, authorities, and per-asset state are durable and
 //! `Workspace::open` restores them. An in-process second `Workspace::open` could not distinguish
 //! that from state surviving in a `HashMap`; a process boundary can, which is why this is a
 //! subprocess test rather than a unit test — and why it needs no test dependency to be one.
@@ -37,7 +37,7 @@ struct ScratchDir(PathBuf);
 
 impl ScratchDir {
     fn new() -> Self {
-        let path = std::env::temp_dir().join(format!("capsule-cli-s-d16-{}", nanoid::nanoid!()));
+        let path = std::env::temp_dir().join(format!("capsule-cli-scratch-{}", nanoid::nanoid!()));
         std::fs::create_dir_all(&path).expect("create scratch dir");
         Self(path)
     }
@@ -110,7 +110,7 @@ fn fixture_library(root: &Path) -> Vec<Uuid> {
     ids
 }
 
-/// **S-D16 "Done when".** Flag in one process, read the filtered view back in a second, sweep in a
+/// Flag in one process, read the filtered view back in a second, sweep in a
 /// third, and confirm the sweep in a fourth — the whole culling loop over a library that is
 /// reopened from disk every single time.
 #[test]

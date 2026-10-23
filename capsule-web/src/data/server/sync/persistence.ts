@@ -16,7 +16,7 @@ export interface SyncPersistence {
 const DB_NAME = 'capsule-sync';
 const STORE_NAME = 'snapshot';
 /**
- * Bumped to 2 by `S-C59`, and the bump is load-bearing rather than cosmetic.
+ * Bumped to 2 when the feed moved to REST, and the bump is load-bearing rather than cosmetic.
  *
  * A version-1 snapshot holds a cursor from the retired gRPC feed: base64 of the cursor *bytes*.
  * The REST feed's cursor is a MAC'd string, so a v1 cursor replayed against it is refused —

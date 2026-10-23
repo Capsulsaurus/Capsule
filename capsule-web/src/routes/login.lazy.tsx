@@ -159,11 +159,11 @@ function Login() {
                                     <FormattedMessage id="common.sign_in" />
                                 )}
                             </Button>
-                            {/* No passkey button: passkeys are not in v1 (`S-C56`), and the
+                            {/* No passkey button: passkeys are not in v1, and the
                                 six operations behind this one could never authenticate. No
                                 "forgot password" link either: on an end-to-end-encrypted
                                 account there is no reset, because the server cannot re-wrap a
-                                master key it has never seen (`S-C54`). Recovery is the escrow
+                                master key it has never seen. Recovery is the escrow
                                 blob, and it needs a screen of its own rather than a link that
                                 promises the wrong thing. */}
                             <p className="text-xs text-muted-foreground text-center">

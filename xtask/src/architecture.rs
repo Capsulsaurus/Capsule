@@ -1069,14 +1069,14 @@ mod tests {
     ///
     /// `chromahash`'s **absence** is asserted rather than left implicit. It was on this list as the
     /// enforcement of AGENTS.md's "after its v1 release" gate; 0.7.1 shipped, the gate was amended
-    /// to that version, and `S-B14` adopts it. Re-adding it would silently un-approve a decision
+    /// to that version, and Capsule adopts it. Re-adding it would silently un-approve a decision
     /// the design docs record, and the failure would surface as a confusing dependency error in
     /// whichever crate got there first rather than as "someone changed the policy".
     #[test]
     fn retired_dependency_list_holds_the_retired_but_not_the_approved() {
         assert!(
             !RETIRED_DEPENDENCIES.contains(&"chromahash"),
-            "chromahash is approved as of 0.7.1 — see design/thumbnails.md and slice S-B14"
+            "chromahash is approved as of 0.7.1 — see design/thumbnails.md"
         );
 
         // Still genuinely retired. `thumbhash` is what chromahash replaces and stays listed until

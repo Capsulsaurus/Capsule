@@ -1,4 +1,4 @@
-// Upload-link URL fragment parsing (slice S-D3).
+// Upload-link URL fragment parsing.
 //
 // The upload link is `https://server.tld/u/{opaque-id}#{fragment}`. Browsers never transmit the
 // fragment, so it carries every secret the guest needs and the server never sees (SSoT: the Web

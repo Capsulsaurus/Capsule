@@ -819,7 +819,7 @@ impl ChallengeStore for InMemoryChallenges {
 /// rate they are written at — see that adapter's docs.
 pub const PENDING_AUTHORIZATION_CEILING: usize = 10_000;
 
-/// In-memory [`OidcAuthorizationStore`] (slice `S-N1`).
+/// In-memory [`OidcAuthorizationStore`].
 ///
 /// Expired records are purged on every `begin`, so the map holds live ceremonies plus whatever
 /// expired since the last one — never everything ever begun — and a full map answers

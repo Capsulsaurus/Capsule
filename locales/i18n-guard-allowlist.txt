@@ -1,4 +1,4 @@
-# i18n-guard allowlist (slice S-I1)
+# i18n-guard allowlist
 #
 # The `xtask i18n-guard` gate fails the build when it finds a hardcoded, user-facing
 # string literal in the web (JSX), SwiftUI, or Compose surfaces that is not a catalog
@@ -22,7 +22,7 @@ capsule-swift/Modules/ImagePipeline/Sources/ViewerMediaLoader.swift	fileSize
 # `AssetInfoFormatting.hdrName(_:)` names an HDR encoding "as its owner spells it" (its own
 # doc comment). "Dolby Vision" is a Dolby trademark, spelled the same in every locale — the
 # allowlist's stated category, and the same reason the sibling arms "HDR10" and "HLG" never
-# tripped the guard. Surfaced when `S-I7` widened `swift-computed-property` to `func`
+# tripped the guard. Surfaced once `swift-computed-property` was widened to `func`
 # members; the alternative would be a `locales/` key whose thirteen translations are all
 # the identical trademark.
 capsule-swift/Modules/FeatureViewer/Sources/Info/AssetInfoFormatting.swift	Dolby Vision

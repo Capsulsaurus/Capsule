@@ -1,4 +1,4 @@
-//! Reference-counted garbage collection and the retention purge (`S-C11`).
+//! Reference-counted garbage collection and the retention purge.
 //!
 //! Two workers, and a rule they both obey: **a bug here must bias toward keeping bytes.**
 //! Every asymmetry below follows from that, and none of them is a matter of taste.
@@ -151,7 +151,7 @@ pub struct CollectionReport {
     ///
     /// Never deleted, never marked, never counted as collectable. Surfaced for an operator.
     pub dangling: Vec<ContentAddress>,
-    /// Bytes credited back by the sweep, per account (`S-C44`).
+    /// Bytes credited back by the sweep, per account.
     ///
     /// Reported rather than merely done, because "the trash emptied and my usage did not move"
     /// is exactly the complaint this exists to answer, and an operator needs to be able to say
@@ -433,7 +433,7 @@ async fn visit(
                 detail: error.to_string(),
             })?;
         context.marks.unmark(address).await?;
-        // The credit belongs **here**, to the sweep, and after the removal (`S-C44`).
+        // The credit belongs **here**, to the sweep, and after the removal.
         //
         // After, because crediting bytes that are still on disk would let a failed sweep refund
         // storage the server is still paying for. And to the sweep rather than to the purge,
@@ -550,7 +550,7 @@ pub async fn purge_expired(
             continue;
         }
         // A moderation hold does **not** stop the purge, and that is a decision rather than an
-        // omission — see `S-C47`. The retention floor is *signed by the user's own delete
+        // omission. The retention floor is *signed by the user's own delete
         // manifest*, so honoring it is honoring a deletion the user asked for; a server that
         // kept the bytes anyway would be retaining data against an explicit request, which is
         // the promise this whole path exists to keep. The competing reading — that a legal hold

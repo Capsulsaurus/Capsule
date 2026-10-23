@@ -1,4 +1,4 @@
-//! [`PostgresDeviceDirectory`] — the durable device-directory store (`S-C9`, `S-C42`).
+//! [`PostgresDeviceDirectory`] — the durable device-directory store.
 //!
 //! # One row per account, one lock per publish
 //!

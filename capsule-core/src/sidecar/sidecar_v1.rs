@@ -567,7 +567,7 @@ mod tests {
         assert!(back.verify(&ik.verifying_key()));
     }
 
-    /// S-B1: the generated LQIP (chromahash + version + dominant_color) lands in the sidecar,
+    /// The generated LQIP (chromahash + version + dominant_color) lands in the sidecar,
     /// is covered by the signature, and survives a canonical round-trip byte-identically.
     #[test]
     fn lqip_lands_in_signed_sidecar_and_round_trips() {
@@ -1020,7 +1020,7 @@ mod tests {
         assert_eq!(replay.effective_gps(), ab.effective_gps());
     }
 
-    /// S-A7 datum-verbatim-storage (WGS-84 arm): a `Wgs84` fix omits the `datum` key, so
+    /// Datum-verbatim storage (WGS-84 arm): a `Wgs84` fix omits the `datum` key, so
     /// the encoded `gps` value is byte-identical to the pre-`datum` known-answer shape
     /// (`{lat, lon, source}`), and the whole sidecar carries no `datum` byte on the wire.
     #[test]
@@ -1065,7 +1065,7 @@ mod tests {
         assert_eq!(back.gps.as_ref().unwrap().datum, GpsDatum::Wgs84);
     }
 
-    /// S-A7 datum-verbatim-storage (GCJ-02 arm): a populated-`datum` vector. A `gcj02` fix
+    /// Datum-verbatim storage (GCJ-02 arm): a populated-`datum` vector. A `gcj02` fix
     /// round-trips **unconverted** (lat/lon byte-for-byte unchanged), carries the `datum`
     /// key on the wire, and survives signing.
     #[test]
@@ -1099,7 +1099,7 @@ mod tests {
         assert!(back.verify(&ik.verifying_key()));
     }
 
-    /// S-A8 datum-verbatim-storage (BD-09 arm): BD-09 is **never a storable datum**. A
+    /// Datum-verbatim storage (BD-09 arm): BD-09 is **never a storable datum**. A
     /// BD-09 input is folded at the edge and enters the sidecar as `datum = gcj02`, within
     /// the documented sub-metre bound and deterministically — the same input yields a
     /// byte-identical sidecar every time.

@@ -76,7 +76,7 @@ services:
     volumes:
       - valkey_data:/data:Z,U
 
-  # A development identity provider for the OIDC relying party (slice `S-N1`, issue #407). Not a
+  # A development identity provider for the OIDC relying party (issue #407). Not a
   # dependency of the server — a deployment without `OIDC_ISSUER` never talks to it — so it is a
   # separate profile: `podman compose -f capsule-server/compose.yaml --profile oidc up -d dex`.
   #

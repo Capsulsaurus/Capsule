@@ -1,10 +1,9 @@
 //! The typed ceremony stores that replace `save_temp_data<T>` / `get_temp_data<T>` /
 //! `delete_temp_data`.
 //!
-//! There were four. `S-C56` dropped passkeys from v1, and the WebAuthn ceremony store went with
-//! them — a port nothing consumes, with an adapter and a conformance suite behind it, reads as
-//! live and is not. Its contract is recoverable from the commit that removed it, and the slice
-//! that rebuilds passkeys says so.
+//! There were four. Passkeys are not in v1, so the WebAuthn ceremony store is gone — a port
+//! nothing consumes, with an adapter and a conformance suite behind it, reads as live and is
+//! not. Its contract is recoverable from the commit that removed it.
 //!
 //! # What was there
 //!
@@ -276,7 +275,7 @@ pub trait ChannelStore: std::fmt::Debug + Send + Sync {
 }
 
 // -------------------------------------------------------------------------------------------
-// OIDC authorization (slice `S-N1`)
+// OIDC authorization
 // -------------------------------------------------------------------------------------------
 
 /// What the server holds between the two legs of an OIDC authorization-code ceremony.

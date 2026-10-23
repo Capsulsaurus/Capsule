@@ -25,17 +25,18 @@
 //! token is not an unauthenticated caller — it is a valid credential that is insufficient for
 //! this operation, which is precisely RFC 9110's distinction and precisely what
 //! [`AuthRejection::Forbidden`] means. It also makes the 403 that `Auth<S>` declares *reachable*:
-//! a status the document promises and nothing can produce is the other half of the `S-C28`
-//! defect, and `assert_declared_responses_covered` fails on it.
+//! a status the document promises and nothing can produce is the opposite of a schema omission
+//! (a returned status the document does not declare), and `assert_declared_responses_covered`
+//! fails on it.
 //!
-//! # The ledger is on the request path (slice `S-C48`)
+//! # The ledger is on the request path
 //!
-//! The third row is the one this slice added, and it is a deliberate purchase rather than a
+//! The third row is the one this change added, and it is a deliberate purchase rather than a
 //! refinement. Before it, `authenticate` checked the JWT's signature, issuer, kind and deadline
 //! and never touched [`AuthStateStore`](crate::store::AuthStateStore) — so closing a session,
 //! one or all of them, killed *refresh* immediately and left every already-issued access token
 //! usable for the remainder of its fifteen minutes. Revocation was only ever as fast as the
-//! TTL, which is why the TTL is short, but the revoke-all ceremony (`S-C23`) exists to deny an
+//! TTL, which is why the TTL is short, but the revoke-all ceremony exists to deny an
 //! attacker **now**, and a fifteen-minute window is not now.
 //!
 //! The price is one store round trip per authenticated request. That is real, and it is stated
@@ -63,13 +64,13 @@
 //!    with `error.auth.unavailable` — so the client learns the truth one hop later and backs
 //!    off instead of prompting for a password.
 //!
-//! Recorded on `S-C48` and pointed at the same upstream seam `S-C36` and `S-C38` want: a
-//! framework rejection that can carry a Capsule status and a Capsule `error.*` code.
+//! This wants an upstream Kynos seam: a framework rejection that can carry a Capsule status and
+//! a Capsule `error.*` code.
 //!
 //! ## The touch is coalesced, and the coalescing window is a staleness window
 //!
 //! [`AuthStateStore::touch_session`](crate::store::AuthStateStore::touch_session) had no
-//! production caller at all before this slice — the port declared it, the conformance suite
+//! production caller at all before this change — the port declared it, the conformance suite
 //! exercised it, and no request path used it, so `last_active_at` never moved and the devices
 //! listing's "last used" was the sign-in time forever. It is called here, which is where the
 //! design always meant it to be called.
@@ -111,11 +112,11 @@ pub const TOUCH_INTERVAL: SignedDuration = SignedDuration::from_secs(60);
 ///
 /// **Never the token itself.** A handler that could reach the raw credential could log it.
 ///
-/// The two timestamps are here rather than re-read because `S-C48` already read the record to
-/// decide whether to admit the request at all. A handler that read it again would pay a second
-/// round trip for an answer it was already given, and — worse — could get a *different* answer,
-/// because a concurrent close or re-authentication can land between the two reads. One read,
-/// one truth, carried forward.
+/// The two timestamps are here rather than re-read because the ledger check already read the
+/// record to decide whether to admit the request at all. A handler that read it again would pay
+/// a second round trip for an answer it was already given, and — worse — could get a
+/// *different* answer, because a concurrent close or re-authentication can land between the two
+/// reads. One read, one truth, carried forward.
 ///
 /// Field names match [`VerifiedToken`](super::tokens::VerifiedToken)'s deliberately: this replaced it as the scheme's
 /// credential type, and every `credential.user` in every handler kept meaning what it meant.
@@ -127,7 +128,7 @@ pub struct AuthenticatedSession {
     pub session: crate::store::SessionId,
     /// When the user last presented a credential on this session's lineage.
     ///
-    /// What a freshness gate reads (`S-C7`). Deliberately not moved by a refresh, so a gate
+    /// What a freshness gate reads. Deliberately not moved by a refresh, so a gate
     /// built on it cannot be satisfied by a client that does nothing but rotate.
     pub authenticated_at: jiff::Timestamp,
     /// When the session was last seen, as of the read that admitted this request.
@@ -176,7 +177,7 @@ impl<C: Sync> Authenticator<AccessToken, C> for AuthContext {
             }
         };
 
-        // `S-C48`: the signature says the token was minted here; the ledger says the session it
+        // The signature says the token was minted here; the ledger says the session it
         // names is still open. Without this second question a revoked session survives for the
         // access token's whole TTL.
         let record = match self.sessions().read_session(&verified.session).await {
@@ -193,7 +194,7 @@ impl<C: Sync> Authenticator<AccessToken, C> for AuthContext {
 
             // Fail closed. An authenticator that stops consulting the ledger when the ledger is
             // unreachable is an authenticator an attacker turns off. The status is `401` because
-            // it is the only refusal this trait can render — see the module docs, and `S-C48`.
+            // it is the only refusal this trait can render — see the module docs.
             Err(error) => {
                 tracing::error!(
                     %error,

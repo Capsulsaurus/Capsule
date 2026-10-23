@@ -1,4 +1,4 @@
-// Cross-language guest-drop Known-Answer Test (slice S-D3) — the reverse of the share-link KAT.
+// Cross-language guest-drop Known-Answer Test — the reverse of the share-link KAT.
 //
 // Here the BROWSER seals. `cargo xtask drop-kat` pins the byte-identical Rust `seal_drop_derand`
 // output (and the passphrase abuse-gate proof) for fixed inputs; this test drives the
@@ -11,7 +11,7 @@
 //
 // The very bytes proven here are what `capsule-core/tests/drop_adopt_kat.rs` adopts (same fixed
 // inputs), closing E2E case 13's browser half at the level the repo runs locally (a live-browser
-// run is still owed, as for S-E1/S-D6).
+// run is still owed).
 //
 // The fixture + wasm are build-time generated (`mise run drop-kat` / `build-wasm`), so this test is
 // a pure function of the Rust source — no committed binaries.

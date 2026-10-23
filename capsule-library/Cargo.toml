@@ -60,7 +60,7 @@ walkdir = "2"
 tss-esapi = { version = "7", optional = true }
 
 # ── Free-space probe (`library::space`) ────────────────────────────────────
-# The streaming-import free-space probe (`library::available_bytes`, slice S-B3) is a thin
+# The streaming-import free-space probe (`library::available_bytes`) is a thin
 # `statvfs` / `GetDiskFreeSpaceEx` wrapper. rustix gives the pure-Rust POSIX `statvfs(2)` on Unix
 # (no libc link, aligned with the rustls/no-openssl ethos); windows-sys exposes the Win32
 # `GetDiskFreeSpaceExW`. See the Dependencies design doc.
@@ -69,7 +69,7 @@ rustix = { version = "1", features = ["fs"] }
 
 # `Win32_System_TpmBaseServices` adds the TBS (TPM Base Services) surface —
 # `Tbsi_Context_Create` / `Tbsip_Submit_Command` / `Tbsi_Is_Tpm_Present` — the Windows path of
-# the desktop TPM 2.0 `HardwareSigner` (`signers::tbs`, slice S-F4). TBS is the raw TPM command
+# the desktop TPM 2.0 `HardwareSigner` (`signers::tbs`). TBS is the raw TPM command
 # channel the tss-esapi reference (`signers::tpm`) wraps on Linux; on Windows the adapter
 # marshals the TPM 2.0 commands itself and submits them through `tbs.dll` (raw-dylib — no import
 # library, so the crate cross-`check`s for `x86_64-pc-windows-msvc` off-Windows).

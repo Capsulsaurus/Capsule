@@ -1,4 +1,4 @@
-//! Storage quota accounting and enforcement (`S-C6`).
+//! Storage quota accounting and enforcement.
 //!
 //! # Attribution, and why dedup makes it interesting
 //!
@@ -227,7 +227,7 @@ pub trait QuotaStore: std::fmt::Debug + Send + Sync {
 
     /// Release `address` to whoever the ledger holds it against, returning them and the bytes.
     ///
-    /// The collector's release (`S-C44`), and it is a **separate operation** rather than a
+    /// The collector's release, and it is a **separate operation** rather than a
     /// nullable-user variant of [`QuotaStore::release`] because the two want opposite things
     /// from the same word. Cancellation is one account undoing its own reservation, and
     /// refusing another account's attribution there is the point. A sweep knows an address and

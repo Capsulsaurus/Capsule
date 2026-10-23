@@ -11,10 +11,10 @@
 ///     (The rename actually shipped *inside* v1 and `albums` arrived from a branch that had
 ///     independently stamped 2 — see [`crate::db::migrate`]; both steps are conditional
 ///     because of it.)
-/// v3: added the `embeddings` provenance companion table (S-H1) — the per-task
+/// v3: added the `embeddings` provenance companion table — the per-task
 ///     `sqlite-vec` `vec0` tables are created at runtime from the model registry
 ///     (their vector dimension is registry-declared), so they are not in this DDL.
-/// v4: added `assets.is_hidden` (S-D19) — the index projection of the sidecar `hidden`
+/// v4: added `assets.is_hidden` — the index projection of the sidecar `hidden`
 ///     LWW register. Hidden assets are excluded from every default view and are reachable
 ///     only through the gated Hidden view (SSoT: design/organization § Hidden Assets).
 ///     Distinct from `is_stack_hidden`, which suppresses non-primary stack members.

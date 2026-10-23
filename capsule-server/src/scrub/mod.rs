@@ -1,4 +1,4 @@
-//! The server-side integrity scrub (`S-C14`) — read-only, classifying, never repairing.
+//! The server-side integrity scrub — read-only, classifying, never repairing.
 //!
 //! # Why it may not fix anything
 //!
@@ -103,7 +103,7 @@ pub enum Finding {
     },
     /// An asset's chain head names a provenance blob the store does not hold.
     ///
-    /// The weaker half of the envelope-chain check — see the module docs and `S-C45`.
+    /// The weaker half of the envelope-chain check — see the module docs.
     ChainHeadUnresolvable {
         /// The asset.
         asset: AssetId,
@@ -125,7 +125,7 @@ pub enum Finding {
         /// The `error.*` code naming what failed.
         code: String,
     },
-    /// An asset's provenance blob is not a manifest this server can read (`S-C45`).
+    /// An asset's provenance blob is not a manifest this server can read.
     ///
     /// Reported rather than treated as agreement. The provenance blob is deliberately
     /// server-visible signed CBOR — it carries no plaintext secrets by construction — so a blob
@@ -137,7 +137,7 @@ pub enum Finding {
         /// The address the row points at.
         address: ContentAddress,
     },
-    /// An asset's provenance chain does not walk back to a `create` (`S-C52`).
+    /// An asset's provenance chain does not walk back to a `create`.
     ///
     /// Check 4. The manifest at `broken_at` names a `prior_provenance_hash` the server does not
     /// hold, or the chain reaches a manifest that is not a `create` and has no predecessor at
@@ -151,7 +151,7 @@ pub enum Finding {
         /// The predecessor it named, or `None` when a non-`create` named none at all.
         expected_prior: Option<String>,
     },
-    /// A fact Postgres mirrors out of the signed manifest disagrees with the manifest (`S-C45`).
+    /// A fact Postgres mirrors out of the signed manifest disagrees with the manifest.
     ///
     /// Check 5. Both sides' values, because a report saying "they disagree" tells an operator to
     /// go looking rather than telling them what to look at — and the scrub deliberately does not
@@ -362,7 +362,7 @@ async fn rows_resolve_to_blobs(
             return Ok(());
         }
         for row in &rows {
-            // A superseded manifest is a reference like any other (`S-C52`), so a missing one is
+            // A superseded manifest is a reference like any other, so a missing one is
             // a dangling reference and not an absence to shrug at: it is the server's own
             // evidence about a write it accepted.
             for address in &row.superseded {
@@ -392,8 +392,8 @@ async fn rows_resolve_to_blobs(
                 }
                 // The carve-out: a missing original on an asset still awaiting one is expected
                 // staged-upload state, not corruption. Note this port cannot actually produce
-                // that combination — see `S-C40` — so the arm is here because the *contract*
-                // has it and a future `S-C40` must not have to remember to add it.
+                // that combination today, so the arm is here because the *contract* has it
+                // and a future change to staged uploads must not have to remember to add it.
                 if blob.role == BlobRole::Original && !row.original_held() {
                     continue;
                 }
@@ -429,10 +429,9 @@ async fn rows_resolve_to_blobs(
     }
 }
 
-/// Check 5: the facts the index mirrors out of the signed manifest still agree with it
-/// (`S-C45`).
+/// Check 5: the facts the index mirrors out of the signed manifest still agree with it.
 ///
-/// # The decision this slice needed, and the answer
+/// # The decision this change needed, and the answer
 ///
 /// *May the scrub decode signed CBOR?* Yes, and the question turns out to be easier than it
 /// looked: the provenance blob is **deliberately server-visible** signed CBOR that carries no
@@ -461,8 +460,7 @@ async fn rows_resolve_to_blobs(
 /// server cannot: it holds **one** manifest per asset, not a sequence. A lifecycle write
 /// re-points the provenance role, which leaves the superseded manifest unreferenced and
 /// therefore collectable — so the chain the doc assumes is in the blob store is not. That is a
-/// finding about the *design*, not about a store, and it is filed as `S-C52` rather than
-/// approximated here.
+/// finding about the *design*, not about a store, so it is not approximated here.
 async fn mirrored_facts_agree(
     context: &ScrubContext,
     report: &mut ScrubReport,
@@ -500,16 +498,16 @@ async fn mirrored_facts_agree(
     }
 }
 
-/// Check 4: the asset's chain walks back from its head to a `create` (`S-C52`).
+/// Check 4: the asset's chain walks back from its head to a `create`.
 ///
 /// # Why this is possible now and was not before
 ///
 /// It asks the scrub to follow `prior_provenance_hash` from the head to the beginning, which
-/// needs the server to *hold* every manifest in the chain. Until `S-C52` it held one: a lifecycle
-/// write re-pointed the provenance role and left the manifest it superseded referenced by
-/// nothing, so the collector reclaimed it on its ordinary schedule. The chain the doc assumed was
-/// in the blob store was not there to walk, and `S-C45` could only report the weaker
-/// `chain_head_unresolvable`.
+/// needs the server to *hold* every manifest in the chain. A server that held only one would
+/// have a lifecycle write re-point the provenance role and leave the manifest it superseded
+/// referenced by nothing, so the collector would reclaim it on its ordinary schedule; the chain
+/// would not be there to walk, and the scrub could only report the weaker
+/// `chain_head_unresolvable`. The index retains the superseded manifests, so the walk works.
 ///
 /// # What it reports and what it does not
 ///

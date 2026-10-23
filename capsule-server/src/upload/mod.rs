@@ -1,5 +1,5 @@
 //! The upload module: the envelope gate, the session lifecycle, and the collaborators both
-//! need (slice `S-C1`).
+//! need.
 //!
 //! One cohesive module, per design/module-map.md's "Planned Server Modules" — the operations
 //! themselves live in [`crate::routes::upload`], because a route is a description of a surface
@@ -9,17 +9,17 @@
 //!
 //! | Concern | Lives | Why |
 //! | --- | --- | --- |
-//! | Session records, chunk replay, the finalize claim | [`crate::store::UploadSessionStore`] (`S-C29`) | landed already; consumed, not re-declared |
-//! | Staged bytes and the content-addressed store | [`crate::blob::BlobStore`] (`S-C35`) | landed already; the **only** path to bytes |
+//! | Session records, chunk replay, the finalize claim | [`crate::store::UploadSessionStore`] | landed already; consumed, not re-declared |
+//! | Staged bytes and the content-addressed store | [`crate::blob::BlobStore`] | landed already; the **only** path to bytes |
 //! | The keyless invariants | [`capsule_core::validation`] | shared with the client's own `verify_asset`; a second implementation would be a second answer |
-//! | The durable asset row, and the sequence its changes mint | [`crate::index::AssetIndex`] (`S-C37`) | landed already; consumed, not re-declared |
+//! | The durable asset row, and the sequence its changes mint | [`crate::index::AssetIndex`] | landed already; consumed, not re-declared |
 //! | Album capability, album pin, device floor | [`WriteAuthority`] | the two facts the request cannot carry |
 //! | The tunable half of the contract | [`UploadPolicy`] | protocol window, ceiling, closed content-type enum, drift, chunk-body read deadline |
 //!
 //! # The three things this port refuses to do
 //!
 //! - **It never produces manifest bytes.** The signed manifest arrives as a `provenance` blob
-//!   and is stored verbatim (`S-C30`); [`envelope::ManifestEnvelope`] is the server's
+//!   and is stored verbatim; [`envelope::ManifestEnvelope`] is the server's
 //!   *projection* for validation and is never re-encoded into anything a client is handed.
 //! - **It never touches the filesystem.** Staging, appending, verifying and committing all go
 //!   through the blob port, which is why finalization reads the stage back through
@@ -40,7 +40,7 @@
 //!
 //! # What this port still does not carry
 //!
-//! Quota (`S-C6`) and custody receipts (`S-C15`) are owned elsewhere and consumed here.
+//! Quota and custody receipts are owned elsewhere and consumed here.
 //!
 //! # A duplicate is adopted, not merely refused
 //!
@@ -109,17 +109,17 @@ impl UploadContext {
         }
     }
 
-    /// The upload-session store (`S-C29`).
+    /// The upload-session store.
     pub fn sessions(&self) -> &dyn UploadSessionStore {
         self.sessions.as_ref()
     }
 
-    /// The blob store (`S-C35`) — the only path to bytes.
+    /// The blob store — the only path to bytes.
     pub fn blobs(&self) -> &dyn BlobStore {
         self.blobs.as_ref()
     }
 
-    /// The durable asset index (`S-C37`). The **same** index the feed reads, which is what
+    /// The durable asset index. The **same** index the feed reads, which is what
     /// makes an upload observable rather than merely stored.
     pub fn index(&self) -> &dyn AssetIndex {
         self.index.as_ref()

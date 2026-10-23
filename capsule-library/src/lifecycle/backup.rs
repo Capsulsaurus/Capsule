@@ -36,7 +36,7 @@ const RECOVERED_ALBUM_NAME: &str = "Recovered album";
 
 impl Workspace {
     /// Wrap this account's master key under `recovery_secret` into the escrow blob a client
-    /// stores server-side (`PUT /backup/escrow`, slice `S-C12`; driven from the SDK by
+    /// stores server-side (`PUT /backup/escrow`; driven from the SDK by
     /// `capsule_sdk::recovery`).
     ///
     /// The master key **never leaves this workspace**: the raw bytes are handed straight to
@@ -72,8 +72,7 @@ impl Workspace {
     }
 
     /// Local, network-free check that `recovery_secret` still opens `blob` **to this device's
-    /// master key** — the derived-tag compare that backs the recovery verification cadence
-    /// (`S-D12`).
+    /// master key** — the derived-tag compare that backs the recovery verification cadence.
     ///
     /// Delegates wholesale to [`backup::verify_recovery_secret`]; nothing is compared here, and
     /// no key bytes are surfaced either way. The stale-cache rule (refresh the blob once before
@@ -145,7 +144,7 @@ impl Workspace {
         for asset in self.assets.values() {
             // The per-asset re-encrypt (plaintext → the ciphertext the manifest's recorded
             // nonce prefix pins) is the `upload_bundle` accessor's job — one copy of that
-            // crypto, shared with `capsule push` (S-D18). It also self-checks the re-derived
+            // crypto, shared with `capsule push`. It also self-checks the re-derived
             // ciphertext against the manifest's content address, which this loop never did.
             let bundle = self.upload_bundle(&asset.asset_id)?;
             let album = self.album(&asset.album_id)?;
@@ -392,9 +391,9 @@ impl Workspace {
 
         // Fold the artifact's escrowed AMKs into the durable keystore **before** writing any
         // asset: this is the step that makes a keyless library whole again, and an asset on disk
-        // whose key was never persisted is exactly the failure `S-A10` exists to end. An album
-        // already known keeps its write capability and authority and simply gains missing epochs;
-        // an unknown album lands read-only with the public authority the artifact carried, since
+        // whose key was never persisted is exactly the failure the durable album keystore exists
+        // to prevent. An album already known keeps its write capability and authority and simply
+        // gains missing epochs; an unknown album lands read-only with the public authority the artifact carried, since
         // a backup escrows content keys and the admin-signed ledger but no signing capability.
         self.absorb_recovered_amks(&artifact)?;
         // Then the albums' and stacks' label records, which need those keys to open: this is

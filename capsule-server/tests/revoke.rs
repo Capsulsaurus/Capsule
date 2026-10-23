@@ -1,6 +1,6 @@
-//! The global sign-out ceremony (`S-C23`), end to end.
+//! The global sign-out ceremony, end to end.
 //!
-//! The property the whole slice exists for is
+//! The property the whole suite exists for is
 //! `a_stolen_session_token_cannot_log_the_owner_out_of_everything`: an attacker holding a live
 //! token can revoke *that* token and nothing else. Every other case here is a way that property
 //! could be lost — a challenge that survives a failed attempt, a proof checked against a
@@ -109,11 +109,9 @@ async fn a_valid_proof_closes_every_session_including_the_callers() {
             .assert_status(StatusCode::UNAUTHORIZED);
     }
 
-    // And the already-issued **access** tokens are dead too, immediately. This assertion used to
-    // read the other way — a 200 here, with a comment saying the window was a window and `S-C48`
-    // was where closing it would be decided. It is decided: the bearer scheme reads the session
-    // ledger on every request, so a token whose session was removed is refused on the next
-    // request rather than on the next quarter hour.
+    // And the already-issued **access** tokens are dead too, immediately. The bearer scheme reads
+    // the session ledger on every request, so a token whose session was removed is refused on
+    // the next request rather than on the next quarter hour.
     //
     // This is the assertion the ceremony is *for*. Killing refresh alone leaves an attacker
     // fifteen minutes of unimpeded access after the owner has done everything the product told

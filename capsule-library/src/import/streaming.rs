@@ -1,5 +1,4 @@
-//! Streaming import — the storage-constrained drive mode over the signed executor (slice
-//! `S-B3` in the repo-root `SLICES.md`; SSoT:
+//! Streaming import — the storage-constrained drive mode over the signed executor (SSoT:
 //! [Import — Pipeline: Import-Upload Streaming Mode](https://docs/design/import/pipeline/#import-upload-streaming-mode)).
 //!
 //! The default [`execute`](crate::import::execute) imports every file into the local
@@ -10,7 +9,7 @@
 //! 1. Import the next file onto the signed path — with source release *deferred*
 //!    ([`Workspace::import_asset_streaming`](crate::lifecycle::Workspace::import_asset_streaming)).
 //! 2. Upload its bundle via the injected [`AssetUploader`] seam.
-//! 3. Confirm durability + custody through the `S-D4` [`ReleaseGate`] over the injected
+//! 3. Confirm durability + custody through the [`ReleaseGate`] over the injected
 //!    [`StorageVerifier`] seam.
 //! 4. **Release** the local original (and delete the Move-mode source) *only* on the `durable`
 //!    verdict, so the device never drops the only copy of bytes the server has not confirmed.
@@ -98,10 +97,9 @@ pub enum StreamingError {
     Probe(#[from] crate::library::LibraryError),
 
     /// The run was configured with a [`UploadPolicy::Staged`](crate::import::UploadPolicy)
-    /// policy, which is mutually exclusive with streaming import (staged uploads,
-    /// slice `S-B4`). Streaming releases local bytes quickly; staged defers exactly
-    /// the T2 upload release depends on — so a staged policy can never enter the
-    /// streaming window. Surfaced *before* any file is imported, mirroring the
+    /// policy, which is mutually exclusive with streaming import. Streaming releases local
+    /// bytes quickly; staged defers exactly the T2 upload release depends on — so a staged
+    /// policy can never enter the streaming window. Surfaced *before* any file is imported, mirroring the
     /// planner's confirmation-time rejection.
     #[error(transparent)]
     StagedPolicyConflict(#[from] capsule_core::import::upload::StagedStreamingConflict),
@@ -244,7 +242,7 @@ pub struct StreamingOptions<'a, U: AssetUploader, V: StorageVerifier> {
     pub source: &'a SourceMetadataIndex,
     /// The injected upload seam. `capsule-core` performs no network I/O of its own.
     pub uploader: &'a U,
-    /// The injected durability/custody seam behind the `S-D4` release gate.
+    /// The injected durability/custody seam behind the release gate.
     pub verifier: &'a V,
     /// The free-space cushion the minimum-headroom check and the implicit recommendation apply.
     pub headroom_margin: u64,
@@ -259,8 +257,7 @@ pub struct StreamingOptions<'a, U: AssetUploader, V: StorageVerifier> {
 /// same single write path the bulk executor drives, so the drive mode a user picks never changes
 /// what a migrated library keeps: a storage-constrained device streaming a Takeout export lands
 /// the exporter's capture time, GPS, caption, favorite, and album membership exactly as an
-/// unconstrained one does (slice `S-B11`, closing the gap `S-B10` left open). This is the
-/// streaming twin of
+/// unconstrained one does. This is the streaming twin of
 /// [`execute_with_source_metadata`](crate::import::execute_with_source_metadata).
 ///
 /// Returns a [`StreamingReport`]; a hard failure to *start* (insufficient headroom, a failed
@@ -300,7 +297,7 @@ where
     // defer exactly the T2 (original) upload that release depends on. The planner
     // rejects the combination at confirmation; this is the by-construction backstop
     // so a staged policy cannot reach `execute_streaming` even if a caller skips
-    // confirmation. Surfaces before any file is imported (staged uploads, S-B4).
+    // confirmation. Surfaces before any file is imported (staged uploads).
     crate::import::ensure_streaming_compatible(config.upload_policy, true)?;
 
     // Same single resolution the executor runs: bind the library's derived de facto album
@@ -431,7 +428,7 @@ where
         let membership = crate::import::executor::stack_membership(stack, *role, is_primary, seq);
 
         // 1. Import onto the signed path with deferred release, carrying whatever the source
-        //    adapter folded for this member (`S-B11`). Resolved through the *same* helper the
+        //    adapter folded for this member. Resolved through the *same* helper the
         //    bulk executor uses, so the two drive modes cannot drift apart.
         let enrichment = crate::import::executor::member_enrichment(source, path);
         let imported = match workspace.import_asset_streaming(
@@ -470,7 +467,7 @@ where
         }
 
         // 3–4. Gate on durability + custody, then release the local original (and Move source)
-        //       only on a Release decision — the S-D4 verify-before-destroy rule per asset.
+        //       only on a Release decision — the verify-before-destroy rule per asset.
         let state = release_after_verify(workspace, verifier, &imported, on_event)?;
         outcomes.push(StreamedOutcome {
             asset_id: Some(imported.asset_id),
@@ -637,7 +634,7 @@ mod tests {
         }
     }
 
-    // ── Injected verify seam mock (the S-D4 StorageVerifier) ────────────────────
+    // ── Injected verify seam mock (the StorageVerifier) ────────────────────
 
     /// Returns a canned verdict + receipt fact, building one safely-stored (or not) blob verdict
     /// per declared hash so `release_is_safe`'s per-blob re-check is exercised.
@@ -792,7 +789,7 @@ mod tests {
     }
 
     /// Move-mode streaming release: the external source is deleted only on a durable verdict, and
-    /// retained otherwise (the S-D4 verify-before-destroy rule per asset).
+    /// retained otherwise (the verify-before-destroy rule per asset).
     #[test]
     fn streaming_move_source_released_only_on_durable() {
         // Durable → external source deleted.
@@ -1142,12 +1139,11 @@ mod tests {
         );
     }
 
-    // ── Third-party enrichment through the window (S-B11) ───────────────────────
+    // ── Third-party enrichment through the window ───────────────────────
     //
-    // `S-B10` wired the adapter's folded metadata into the *bulk* executor and left the
-    // streaming window passing `enrichment: None` — a streamed Takeout import silently
-    // discarded exactly what that slice recovered. These two tests are the contract for
-    // closing it:
+    // The adapter's folded metadata reaches the signed sidecar through the streaming window
+    // exactly as through the *bulk* executor — a streamed Takeout import must not silently
+    // discard what the adapter recovered. These two tests are the contract for that:
     //
     // - `a_streamed_import_carries_the_exporter_metadata_into_the_signed_sidecar` — a file the
     //   index covers lands its exporter caption, favorite rating, album tags, capture time and

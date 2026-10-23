@@ -1,4 +1,4 @@
-// Guest-drop chunked uploader (slices S-D3, S-C61).
+// Guest-drop chunked uploader.
 //
 // Speaks the drop endpoints' HTTP protocol directly. It opens a drop session
 // (`POST /d/{opaque-id}`) and streams the sealed ciphertext in chunks

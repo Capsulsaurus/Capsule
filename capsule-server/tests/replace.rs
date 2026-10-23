@@ -1,4 +1,4 @@
-//! `replace` rides the upload protocol (slice `S-C43`), end to end.
+//! `replace` rides the upload protocol, end to end.
 //!
 //! The action the authorization doc always listed beside `create` — *"a write that moves blob
 //! bytes is an upload by definition"* — and which neither surface served: the upload gate

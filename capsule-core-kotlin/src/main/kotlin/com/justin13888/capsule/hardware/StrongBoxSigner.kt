@@ -23,7 +23,7 @@ import java.security.interfaces.ECPublicKey
  * material: a 65-byte **uncompressed SEC1** (`0x04‖x‖y`) public key — the same encoding Secure
  * Enclave's x9.63 representation uses, which `P256HybridSigningKey` normalizes on the Rust side —
  * and an ASN.1/DER ECDSA signature over `msg` that `p256::ecdsa` verifies verbatim. It therefore
- * plugs into the P-256 `createWithP256HardwareSigner` path end to end (slice S-F2); the Ed25519
+ * plugs into the P-256 `createWithP256HardwareSigner` path end to end; the Ed25519
  * [SoftwareSigner] drives the separate `createWithHardwareSigner` path.
  *
  * Requires API 23+ (StrongBox: API 28+ on devices that ship a secure element).

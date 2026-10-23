@@ -1,4 +1,4 @@
-//! [`PostgresDrops`] — the durable guest-drop store (`S-C5`, #446).
+//! [`PostgresDrops`] — the durable guest-drop store (#446).
 //!
 //! # Three tables
 //!

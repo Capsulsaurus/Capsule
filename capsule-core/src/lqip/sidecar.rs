@@ -80,7 +80,7 @@ mod tests {
         assert_eq!(record.dominant_color, lqip.dominant_color());
     }
 
-    /// The `S-B14` acceptance case: a **signed** sidecar carrying a real chromahash payload
+    /// The acceptance case: a **signed** sidecar carrying a real chromahash payload
     /// signs, survives a canonical round trip byte-identically, and still verifies — with the
     /// schema version unchanged at `SIDECAR_SCHEMA_V1`.
     #[test]

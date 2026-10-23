@@ -1,13 +1,13 @@
 //! [`AccountProfiles`] and [`PasswordChange`] — the two mutable facts about an account that are
-//! not its existence (slice `S-C54`).
+//! not its existence.
 //!
 //! # Why these are two ports and not one, and neither is a method on the directory
 //!
 //! [`AccountDirectory`](super::AccountDirectory) answers one question — *is this person who they
 //! say they are* — and its own docs say what the alternative would have been: *"a directory that
-//! also listed accounts, created them or changed passwords would be the grab-bag `S-C29`
-//! deleted, rebuilt one method at a time."* `S-C53` took creation out to its own port on exactly
-//! that reasoning. This slice takes the remaining two.
+//! also listed accounts, created them or changed passwords would be the grab-bag state trait
+//! rebuilt one method at a time."* Creation already has its own port on exactly that reasoning.
+//! This port takes the remaining two.
 //!
 //! They are separate from each other for a sharper reason than tidiness. Reading and editing a
 //! display name is an ordinary authenticated write: if it fails, a person's name is stale.
@@ -26,10 +26,10 @@
 //! addresses them. The address is fixed at registration until there is a way to prove control of
 //! a new one, and this port has no method for it rather than a method that refuses.
 //!
-//! **It cannot reset a forgotten password.** `S-C53` recorded that verdict for the retired
-//! `/v1/auth/password-reset` pair and it stands: on an end-to-end-encrypted account a
+//! **It cannot reset a forgotten password.** The retired
+//! `/v1/auth/password-reset` pair is not coming back: on an end-to-end-encrypted account a
 //! server-issued reset is not a recovery, because the server cannot re-wrap a master key it has
-//! never seen. The recovery story is the escrow blob (`S-C12`). What *this* port offers is a
+//! never seen. The recovery story is the escrow blob. What *this* port offers is a
 //! password **change**, which is a different operation — it is authenticated by the password
 //! being replaced.
 //!

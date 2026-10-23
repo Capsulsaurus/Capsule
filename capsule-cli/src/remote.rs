@@ -1,5 +1,5 @@
 //! The CLI's networked commands — `auth login/logout`, `sync`, `list` — expressed
-//! entirely over `capsule-sdk` (slice `S-D5`).
+//! entirely over `capsule-sdk`.
 //!
 //! The CLI is a client: it **never hand-rolls a network flow**. Every request here
 //! goes through an SDK primitive — [`AuthClient`]/[`Session`] for auth, and
@@ -60,7 +60,7 @@ pub struct RemoteConfig {
     /// `PATCH`/`HEAD`/`DELETE` hang under `{upload_endpoint}/{id}`.
     pub upload_endpoint: String,
     /// Base URL of the album surface — `POST` provisions the caller's derived album id
-    /// there (slice `S-C25`), and the lifecycle-write surface hangs under
+    /// there, and the lifecycle-write surface hangs under
     /// `{albums_endpoint}/{album_id}/ops`.
     pub albums_endpoint: String,
     /// The client's max-known protocol version (`YYYY-MM-DD`), sent on the
@@ -246,7 +246,7 @@ pub(crate) async fn settle_login(
             tracing::info!("login persisted to the session store");
             Ok(LoginStep::Complete)
         }
-        // The sign-in is not finished (`S-C55`). Nothing is persisted: there is no session yet,
+        // The sign-in is not finished. Nothing is persisted: there is no session yet,
         // and writing a half-authentication to the store would leave a later command believing
         // it was signed in.
         LoginOutcome::SecondFactorRequired { mfa_token, .. } => {
@@ -965,8 +965,7 @@ async fn sync_with<C: ConnectionTrait + TransactionTrait>(
     from_start: bool,
 ) -> Result<SyncSummary, RemoteError> {
     // One endpoint now: the feed is `GET /v1/sync` on the same REST base URL every other call
-    // uses, so there is no second connection to dial and no second transport to configure
-    // (`S-D28`).
+    // uses, so there is no second connection to dial and no second transport to configure.
     let consumer = SyncConsumer::with_session(&remote.sync_endpoint, session)?;
 
     let mut state = syncstore::load_sync_state(db, &remote.protocol_version).await?;
@@ -1038,7 +1037,7 @@ async fn sync_with<C: ConnectionTrait + TransactionTrait>(
     Ok(summary)
 }
 
-// ─── Push (S-D18) ────────────────────────────────────────────────────────────
+// ─── Push ────────────────────────────────────────────────────────────
 
 /// How a `capsule push` run is configured.
 #[derive(Debug, Clone, Copy)]
@@ -1223,7 +1222,7 @@ pub struct PushSummary {
     pub deferred_blobs: usize,
     /// Bytes handed to the upload client this run.
     pub bytes: u64,
-    /// Distinct albums registered with the server this run (slice `S-C25`). Provisioning is
+    /// Distinct albums registered with the server this run. Provisioning is
     /// idempotent, so this counts requests made, not rows created.
     pub provisioned_albums: usize,
     /// How many of those registrations actually created a server-side album row. Zero on a
@@ -1424,7 +1423,7 @@ async fn restore_with(
 /// the ordering rides `capsule_sdk::staged`'s scheduler, and the bundle comes from
 /// `capsule_core`'s `Workspace::upload_bundle` — this function only stitches them together.
 ///
-/// **Provisioning comes first** (slice `S-C25`). An asset's album id is derived from the
+/// **Provisioning comes first**. An asset's album id is derived from the
 /// account master key, so the server has never heard of it; invariant 6 refuses an upload
 /// into an album that does not exist or is not writable by the caller. Each *distinct* album
 /// the run touches is registered once, lazily, before its first blob session opens — and

@@ -1,6 +1,6 @@
-//! `GET /v1/upload/sessions` — the resumption listing (slice `S-C57`), end to end.
+//! `GET /v1/upload/sessions` — the resumption listing, end to end.
 //!
-//! The case that carries the slice is `a_client_that_lost_its_session_ids_can_find_them_again`:
+//! The case that carries the acceptance is `a_client_that_lost_its_session_ids_can_find_them_again`:
 //! that is the whole reason the operation exists. Beside it,
 //! `an_unknown_status_filter_is_refused_rather_than_ignored` pins the defect the retired handler
 //! had — it parsed the filter with `.ok()` and dropped the `None`, so one letter off returned

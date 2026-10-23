@@ -1,5 +1,5 @@
 //! `capsule auth login --oidc`: signing in through the server's identity provider from a
-//! terminal (slice `S-N2`).
+//! terminal.
 //!
 //! # The flow
 //!

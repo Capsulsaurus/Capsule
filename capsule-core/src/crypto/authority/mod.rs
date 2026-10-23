@@ -14,7 +14,7 @@
 //!   It preserves every property `verify_asset` tests for with no MLS dependency, and remains
 //!   available on every build (including the wasm sealing build).
 //! - [`OpenMlsAuthority`] — the design-target backend over a live OpenMLS group pinned to the
-//!   X-Wing ciphersuite `0x004D` (slice S-X1). Host-only, behind the `mls` feature (implied by
+//!   X-Wing ciphersuite `0x004D`. Host-only, behind the `mls` feature (implied by
 //!   `native`, excluded from wasm since its libcrux provider does not target wasm32).
 //!
 //! Because `verify_asset` consumes only `&dyn AlbumAuthority`, the two are interchangeable; the
@@ -102,7 +102,7 @@ impl Authority {
 
     /// The reference backend, mutably, if this is the offline/reference authority. Returns
     /// `None` for the live MLS backend — whose epoch advances are self-update commits, not
-    /// ledger attestations, and so ride the MLS ceremonies (S-X2) rather than this path.
+    /// ledger attestations, and so ride the MLS ceremonies rather than this path.
     pub fn as_reference_mut(&mut self) -> Option<&mut ReferenceAuthority> {
         match self {
             Authority::Reference(a) => Some(a.as_mut()),

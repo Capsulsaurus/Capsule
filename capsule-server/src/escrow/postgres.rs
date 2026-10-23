@@ -1,4 +1,4 @@
-//! [`PostgresEscrow`] — the durable master-key escrow (`S-C12`, #446) and the sealed identity
+//! [`PostgresEscrow`] — the durable master-key escrow (#446) and the sealed identity
 //! beside it (#544).
 //!
 //! # The replace is one statement

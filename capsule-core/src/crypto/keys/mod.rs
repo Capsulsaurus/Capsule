@@ -8,7 +8,7 @@
 //! [Cryptography — Keys]: https://docs/design/cryptography/keys/
 
 pub(crate) mod album;
-// The sealed album-key store (slice `S-A10`): its format, sealing and escrow. Persisting it to
+// The sealed album-key store: its format, sealing and escrow. Persisting it to
 // `{root}/.library/albums.cbor` is `capsule-library`'s. Gated with the rest of the native surface,
 // which no browser sealing path needs.
 #[cfg(feature = "native")]

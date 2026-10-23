@@ -1,4 +1,4 @@
-//! Applying a **remote** asset entry — the receiving half of the lifecycle (slice `S-P1`).
+//! Applying a **remote** asset entry — the receiving half of the lifecycle.
 //!
 //! Everything else in [`lifecycle`](super) authors state this device owns. This module is the
 //! other direction: a signed manifest + sealed metadata blob that arrived from a server feed

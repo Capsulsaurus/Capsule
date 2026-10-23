@@ -1,6 +1,6 @@
-//! The devices-grouping view model and the one-tap support bundle (slice `S-D11`).
+//! The devices-grouping view model and the one-tap support bundle.
 //!
-//! Consumes the server's `GET /devices` `{devices, cohorts}` body (slice `S-C13`)
+//! Consumes the server's `GET /devices` `{devices, cohorts}` body
 //! into [`DevicesView`] — the session ledger grouped by device cohort so one physical
 //! device's re-enrollments collapse into a single row the UI renders. The copy is
 //! **assert-don't-litigate**: a group is labelled "a device you've used before (last
@@ -33,7 +33,7 @@ pub mod keys {
 // ─── Wire types (GET /devices) ───────────────────────────────────────────────
 
 /// One active session ("device") from the session listing. Mirrors the server's
-/// `Device` (slice `S-C13`); `id` is the session id, `cohort_hash` its advisory
+/// `Device`; `id` is the session id, `cohort_hash` its advisory
 /// grouping value (absent when the client asserted none).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeviceEntry {
@@ -54,7 +54,7 @@ pub struct DeviceEntry {
     /// The advisory device-cohort hash asserted at session creation, if any.
     #[serde(default)]
     pub cohort_hash: Option<String>,
-    /// The hardware device id asserted at session creation, if any (S-N3).
+    /// The hardware device id asserted at session creation, if any.
     ///
     /// Client-asserted and unverified, like [`cohort_hash`](Self::cohort_hash) — it gates
     /// nothing and is absent from the JWT claims. It exists so a support bundle can report
@@ -147,7 +147,7 @@ impl CohortGroup {
                 .sessions
                 .iter()
                 .map(|d| SupportBundleEntry {
-                    // The S-C13 listing surfaces only the session id; the hardware
+                    // The listing surfaces only the session id; the hardware
                     device_id: d.device_id.clone(),
                     session_id: d.id.clone(),
                     first_seen: d.created_at,
@@ -261,8 +261,8 @@ impl DevicesView {
 /// One session's row in a [`SupportBundle`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SupportBundleEntry {
-    /// The hardware `device_id` the session was created with, when the client asserted one
-    /// (S-N3). `None` for a session opened by a client that sent no device id.
+    /// The hardware `device_id` the session was created with, when the client asserted one. `None`
+    /// for a session opened by a client that sent no device id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub device_id: Option<String>,
     /// The session id.
@@ -308,7 +308,7 @@ mod tests {
         }
     }
 
-    /// The same fixture, but for a client that asserted a hardware device id (S-N3).
+    /// The same fixture, but for a client that asserted a hardware device id.
     fn device_with_id(
         id: &str,
         device_id: &str,
@@ -436,8 +436,8 @@ mod tests {
     }
 
     /// The authentication doc's support-bundle contract: each session line carries the
-    /// `(device_id, session_id)` **pair**. Before S-N3 the listing exposed only the session
-    /// id, so `device_id` was hard-coded `None` here and the pair could never be reported.
+    /// `(device_id, session_id)` **pair**. A listing that exposed only the session
+    /// id would leave `device_id` hard-coded `None` here, and the pair could never be reported.
     #[test]
     fn support_bundle_carries_the_device_id_session_id_pair() {
         let listing = SessionListing {

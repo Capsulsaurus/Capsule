@@ -1,6 +1,6 @@
-//! `S-D18` — the bundle → wire mapping and the ladder a push drives.
+//! The bundle → wire mapping and the ladder a push drives.
 //!
-//! The envelope mapping is the highest-risk part of the slice, so it is asserted against a
+//! The envelope mapping is the highest-risk part of the push client, so it is asserted against a
 //! manifest a **real** `capsule_core::Workspace` produced (import a file, read the bundle back)
 //! rather than a hand-built fixture that could agree with a wrong mapping. The wire behaviour
 //! rides the shared in-process mock HTTP server, following `upload/tests.rs`.

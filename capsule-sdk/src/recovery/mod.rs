@@ -1,9 +1,9 @@
-//! Recovery-secret verification cadence and the guided re-wrap flow (slice `S-D12`;
+//! Recovery-secret verification cadence and the guided re-wrap flow (
 //! SSoT: [Backup — Recovery Verification Cadence] and [§ On Repeated Failure: Guided
 //! Re-Wrap]).
 //!
 //! This module owns the **client half** of the master-key recovery story that the
-//! server escrow surface (slice `S-C12`, `PUT`/`GET /v1/auth/escrow`) and the core
+//! server escrow surface (`PUT`/`GET /v1/auth/escrow`) and the core
 //! crypto ([`capsule_core::backup`]) make possible. It has two cohesive halves:
 //!
 //! - **[`cadence`]** — the pure, network-free scheduler and prompt state machine
@@ -13,8 +13,8 @@
 //! - **[`RecoveryClient`]** — the networked side: the cached copy of the escrow blob
 //!   ([`EscrowCache`]), the stale-cache-aware [`verify`](RecoveryClient::verify), and the
 //!   [`guided_rewrap`](RecoveryClient::guided_rewrap) that mints a fresh secret, re-wraps
-//!   the **same** master key, and replaces the server escrow through S-C12. It also stores and
-//!   fetches the **sealed identity** beside the escrow
+//!   the **same** master key, and replaces the server escrow through the server's
+//!   escrow endpoint. It also stores and fetches the **sealed identity** beside the escrow
 //!   ([`store_sealed_identity`](RecoveryClient::store_sealed_identity),
 //!   [`fetch_sealed_identity`](RecoveryClient::fetch_sealed_identity),
 //!   `/v1/auth/escrow/identity`, #544): the user identity key sealed under the master key,
@@ -497,7 +497,7 @@ impl RecoveryClient {
     }
 
     /// Store or replace the caller's escrow blob (`PUT /v1/auth/escrow`). Single active
-    /// escrow: the server overwrites any prior blob in the same transaction (S-C12).
+    /// escrow: the server overwrites any prior blob in the same transaction.
     ///
     /// The canonical CBOR goes on the wire verbatim. The answer comes back as
     /// [`EscrowStored`]: `stored_at` for the stale-cache rule, `replaced` to tell a first
@@ -1099,7 +1099,7 @@ mod tests {
     use crate::auth::{AuthClient, PersistedSession};
 
     /// Fast Argon2id params so the escrow crypto does not dominate the smoke tests
-    /// (same posture as the S-C12 server integration test).
+    /// (same posture as the server's escrow integration test).
     fn fast_params() -> Argon2Params {
         Argon2Params {
             mem_kib: 64,
@@ -1836,7 +1836,7 @@ mod tests {
     /// The mock's route guard is live: a client pointed one segment off the documented path
     /// gets a loud `Unexpected`, not a plausible-looking `NotEnrolled`.
     ///
-    /// This is the regression this slice exists for, asserted as a property of the *test
+    /// This is the regression this change exists for, asserted as a property of the *test
     /// harness*: without it the mock would answer any path at all, and a wrong route would
     /// once again read as "this account has escrowed nothing" — which is what let
     /// `backup/escrow` survive a contract re-source.

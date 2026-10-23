@@ -1,6 +1,6 @@
-//! `GET /v1/upload/{id}/receipt` — custody receipts (slice `S-C15`), end to end.
+//! `GET /v1/upload/{id}/receipt` — custody receipts, end to end.
 //!
-//! The case that carries the slice is `a_finalized_upload_yields_a_verifiable_receipt`: it
+//! The case that carries the acceptance is `a_finalized_upload_yields_a_verifiable_receipt`: it
 //! verifies the fetched bytes the way a **client** does — through `capsule_core`'s own
 //! `verify_receipt`, under the key the fixture holds — because a receipt the client cannot
 //! verify is worse than no receipt at all. It is the server claiming accountability it does not
@@ -339,7 +339,7 @@ async fn the_published_key_history_verifies_a_fetched_receipt() {
 }
 
 // ===========================================================================================
-// The chain position the receipt attests (`S-C31`)
+// The chain position the receipt attests
 // ===========================================================================================
 
 /// The provenance blob's receipt names the manifest's SHA-256; nothing else's does.
@@ -439,7 +439,7 @@ async fn a_client_can_form_the_expectation_before_it_uploads() {
 }
 
 // ===========================================================================================
-// The durable chain — `GET /v1/assets/{asset_id}/receipts` (slice `S-C58`)
+// The durable chain — `GET /v1/assets/{asset_id}/receipts`
 // ===========================================================================================
 
 /// Fetch the whole chain for `asset`, asserting the status.
@@ -570,8 +570,8 @@ async fn an_asset_with_nothing_finalized_has_an_empty_chain() {
 #[tokio::test]
 async fn another_accounts_chain_is_404_and_not_403() {
     // One answer for "no such asset" and "not yours". A stranger must not be able to tell a
-    // real asset id from a guessed one by reading the status line — the same rule `S-C39`
-    // settled for blob reads.
+    // real asset id from a guessed one by reading the status line — the same rule
+    // blob reads follow.
     let fixture = Fixture::working();
     let bearer = token(&fixture).await;
     let (first, second, whole) = blob();

@@ -1,4 +1,4 @@
-//! The sync feed: what changed in a library, and the cursor that resumes it (slice `S-C2`).
+//! The sync feed: what changed in a library, and the cursor that resumes it.
 //!
 //! # The transport changed; the contract did not
 //!
@@ -12,17 +12,18 @@
 //! The feed owns no state. Positions come from [`crate::index::AssetIndex`], manifest bytes
 //! come from [`crate::blob::BlobStore`], and the cursor is a pure function of a position and a
 //! key. That is what makes the whole surface testable without a container, and it is also what
-//! keeps `S-C30` enforceable: the module that serves a manifest has no way to *make* one.
+//! keeps the verbatim-manifest rule enforceable: the module that serves a manifest has no way
+//! to *make* one.
 //!
 //! # Where the manifest comes from
 //!
-//! `S-C30` settled that the signed manifest rides as a `provenance` blob, so an entry's
+//! The signed manifest rides as a `provenance` blob, so an entry's
 //! manifest is the blob's bytes read back and emitted verbatim. There is no re-serialization
 //! step to get wrong — the retired server had one, `prepare_feed_input`, and it produced bytes
 //! carrying neither `device_sig` nor `write_sig`, so a receiving client could not run
 //! `verify_asset` on a feed entry at all.
 //!
-//! **What this port does not do, and it is `S-C30`'s open question, not an oversight:** the
+//! **What this port does not do, and it is an open question, not an oversight:** the
 //! server never parses the provenance blob. It gates publication on the blob being *present*,
 //! not on its agreeing with the envelope projection it validated at upload. A device authorized
 //! to write can therefore upload a well-formed envelope beside manifest bytes that say
@@ -90,22 +91,22 @@ impl SyncContext {
         }
     }
 
-    /// The albums, for deciding whose album a member's page is (`S-C51`).
+    /// The albums, for deciding whose album a member's page is.
     pub fn albums(&self) -> &dyn crate::album::AlbumStore {
         self.albums.as_ref()
     }
 
-    /// The roster, for deciding whether the caller may read an album's page (`S-C51`).
+    /// The roster, for deciding whether the caller may read an album's page.
     pub fn members(&self) -> &dyn crate::membership::MembershipStore {
         self.members.as_ref()
     }
 
-    /// The asset index (`S-C37`) — the only source of positions and entries.
+    /// The asset index — the only source of positions and entries.
     pub fn index(&self) -> &dyn AssetIndex {
         self.index.as_ref()
     }
 
-    /// The blob store (`S-C35`) — where a manifest's bytes are read from, verbatim.
+    /// The blob store — where a manifest's bytes are read from, verbatim.
     pub fn blobs(&self) -> &dyn BlobStore {
         self.blobs.as_ref()
     }

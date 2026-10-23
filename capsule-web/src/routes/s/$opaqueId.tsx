@@ -1,4 +1,4 @@
-// Guest share-link viewer (slice S-E1): `https://server.tld/s/{opaque-id}#{secret}`.
+// Guest share-link viewer: `https://server.tld/s/{opaque-id}#{secret}`.
 //
 // No auth, no account. The `#{secret}` fragment stays in the browser (it is never sent to the
 // server); a passphrase, when the link is protected, is unwrapped entirely client-side via the

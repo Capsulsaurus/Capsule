@@ -1,4 +1,4 @@
-//! Tiered, on-demand **blob fetch** (slice `S-D2`; SSoT: [Download & Sync]).
+//! Tiered, on-demand **blob fetch** (SSoT: [Download & Sync]).
 //!
 //! Where [`crate::sync`] discovers *what* changed, this module fetches *the
 //! smallest representation that satisfies the user's current intent, and nothing
@@ -584,7 +584,7 @@ fn classify_status(status: u16, code: Option<String>) -> FetchError {
 
 // ─── Resumable ranged fetch (adverse-hardened) ───────────────────────────────
 
-/// The resumable ranged-fetch engine (slice `S-D10`): stall-cut-resume, bounded
+/// The resumable ranged-fetch engine: stall-cut-resume, bounded
 /// transfer windows under `adverse`, and the shared [`RetryEngine`] backoff — the
 /// `bulk-transfer` retry class the download-resume ladder instantiates.
 ///
@@ -1295,12 +1295,12 @@ async fn fetch_representation<S: BlobSource>(
 // ─── Production HTTP source ──────────────────────────────────────────────────
 
 /// The production ranged blob source: `reqwest` `GET /blob/{hash}` with a `Range`
-/// header, authorized through the `S-D7` session. rustls only.
+/// header, authorized through the SDK session. rustls only.
 ///
 /// The mid-stream-drop resume path ([`RangeOutcome::Partial`]) is exercised by the
 /// module's mocks; this impl reads each `Range` window whole (a clean drop surfaces
 /// as a transport error and the loop resumes from the persisted offset), and the
-/// streaming-partial wiring lands with the media-serving slice.
+/// streaming-partial wiring lands with media serving.
 #[derive(Clone)]
 pub struct HttpBlobSource {
     session: crate::auth::Session,

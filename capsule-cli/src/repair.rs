@@ -1,12 +1,10 @@
-//! `capsule repair capture-time` — recover capture timestamps stamped with import time
-//! (slice `S-B17`).
+//! `capsule repair capture-time` — recover capture timestamps stamped with import time.
 //!
-//! Before `S-B16`, `extract_exif` could never parse a well-formed `DateTimeOriginal`, so every
-//! import wrote its own clock as the asset's capture time — **inside the signed sidecar**, and
-//! as the `media/{YYYY}/{YYYY-MM}` shard. Fixing the parser did not fix the data: the wrong
-//! value is under signature, a rebuild reconstructs from those same sidecars and would
-//! faithfully preserve it, and nothing else ever goes back to the original to ask. This pass
-//! does.
+//! Before the parser fix, `extract_exif` could never parse a well-formed `DateTimeOriginal`, so
+//! every import wrote its own clock as the asset's capture time — **inside the signed sidecar**,
+//! and as the `media/{YYYY}/{YYYY-MM}` shard. Fixing the parser did not fix the data: the wrong
+//! value is under signature, a rebuild reconstructs from those same sidecars and would faithfully
+//! preserve it, and nothing else ever goes back to the original to ask. This pass does.
 //!
 //! ## The rule
 //!
@@ -28,7 +26,7 @@
 //!   read: appending an irreversible signed record to an asset the user has decided to
 //!   discard is not a repair, and a restored asset is picked up by the next run.
 //!
-//! By construction the pass is a no-op on a library imported after `S-B16`: that importer
+//! By construction the pass is a no-op on a library imported after the parser fix: that importer
 //! already wrote the resolved instant wherever one existed, and where none existed this pass
 //! skips. Assets whose capture time came from a Takeout record (`CaptureSource::Folded`) have
 //! no EXIF instant of their own and are left alone.
@@ -551,9 +549,9 @@ mod tests {
 
     // ── detect / apply over a workspace ──────────────────────────────────────
 
-    /// The `S-B17` acceptance case, in-process: a library whose sidecars carry the wrong
+    /// The acceptance case, in-process: a library whose sidecars carry the wrong
     /// instant reports every affected asset, corrects them under `--apply` as one signed
-    /// revision each, and a second pass finds nothing — while a post-`S-B16` import is
+    /// revision each, and a second pass finds nothing — while a post-fix import is
     /// untouched from the start.
     #[test]
     fn detect_and_apply_correct_only_the_assets_that_disagree_with_their_exif() {
@@ -576,7 +574,7 @@ mod tests {
             )
             .expect("import");
 
-        // A post-S-B16 import already carries the EXIF instant: a no-op by construction.
+        // A post-fix import already carries the EXIF instant: a no-op by construction.
         assert_eq!(
             ws.asset(&good).expect("asset").sidecar.capture_timestamp,
             ts(EXIF_SECS).to_string()
@@ -586,7 +584,7 @@ mod tests {
         assert!(clean.affected.is_empty(), "{clean:?}");
         assert_eq!((clean.agrees, clean.no_instant), (2, 1));
 
-        // Reproduce the pre-S-B16 state on one asset: its as-imported value says "now".
+        // Reproduce the pre-fix state on one asset: its as-imported value says "now".
         let wrong = Timestamp::now();
         ws.correct_imported_capture_timestamp(&broken, wrong)
             .expect("stamp");

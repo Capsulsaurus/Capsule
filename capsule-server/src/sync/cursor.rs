@@ -16,7 +16,7 @@
 //! perfectly for another. Under a single global `feed_seq` that was close to harmless — a
 //! foreign cursor was just some position in a shared ordering.
 //!
-//! It is **not** harmless here. `S-C37` mints sequence numbers **per owner**, so position 500
+//! It is **not** harmless here. The index mints sequence numbers **per owner**, so position 500
 //! means a different point in every library, and an unbound cursor would let a client skip
 //! past its own unseen entries by presenting someone else's. Binding is therefore a
 //! correctness requirement of the new sequence design and not merely compliance with the
@@ -27,7 +27,7 @@
 //! identifier out of a token clients hand around, and still makes a foreign cursor fail
 //! verification rather than decode into a position.
 //!
-//! # Scope (`S-C51`, `S-E5`)
+//! # Scope
 //!
 //! A cursor is issued for one of three shapes — the caller's own feed, one album's page read by
 //! the caller as its owner or a member, or one album's page pulled by a federated peer — and all
@@ -124,7 +124,7 @@ pub enum CursorError {
 }
 
 /// What a cursor is issued for: a caller's own feed, one album's page, or one album's page as a
-/// federated peer pulls it (`S-C51`, `S-E5`).
+/// federated peer pulls it.
 ///
 /// Part of the MAC input, so a cursor minted for one shape cannot be presented on another:
 /// positions are the owner's sequence numbers in every shape, and a cursor that crossed between

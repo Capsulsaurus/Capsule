@@ -1,5 +1,5 @@
 //! Custody receipts — the server-signed complement of the client-signed provenance chain
-//! (`S-C46`; SSoT:
+//! (SSoT:
 //! [Transfer — Durability: Custody Receipts](https://docs/design/transfer/durability/#custody-receipts)).
 //!
 //! The envelope proves what a client *claimed and signed*; a receipt proves what the server
@@ -58,7 +58,7 @@ pub enum BlobRole {
 /// The signed core of a [`CustodyReceipt`] — every field the server attestation key covers.
 ///
 /// The one definition of the receipt's signed core. `capsule-server`'s attestation module signs
-/// exactly this type rather than a mirror of it (`S-C46`), because canonical CBOR sorts map keys
+/// exactly this type rather than a mirror of it, because canonical CBOR sorts map keys
 /// and two definitions of a signed structure disagree the moment either gains a field. Canonical
 /// CBOR with the manifest wire-presence discipline (absent optionals encode as absent keys).
 ///
@@ -102,7 +102,7 @@ pub struct CustodyReceiptCore {
     /// every suite that content-addresses with SHA-256 and they are not the same identifier: an
     /// address is whatever digest the suite selects, while a chain position is fixed at SHA-256
     /// because `prior_provenance_hash` is. Deriving one from the other is correct by
-    /// coincidence, which is the trap `S-C31` names.
+    /// coincidence, which is a trap.
     ///
     /// **Present on one receipt per manifest, and that is the whole design.** The provenance
     /// blob *is* the signed manifest, so its receipt names the manifest twice — once as the

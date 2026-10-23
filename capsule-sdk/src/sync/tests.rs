@@ -1,5 +1,5 @@
 //! Pure reconciliation tests for the client-side halves of the sync doc's
-//! Validation bullets (slice `S-D2`): forward-version rejection, rewind
+//! Validation bullets: forward-version rejection, rewind
 //! rejection, and the client-side of cursor authenticity (a validly-MAC'd but
 //! *older* cursor is refused by the high-water mark). No network — the
 //! anti-rewind contract is exercised entirely through [`SyncState::apply_page`].
@@ -222,7 +222,7 @@ fn per_album_high_water_is_independent_and_cursor_round_trips() {
     assert_eq!(state.cursor().as_bytes(), &[0x71u8; 41]);
 }
 
-/// **Persistence round-trip (slice `S-D5`).** A state advanced by a page is torn
+/// **Persistence round-trip.** A state advanced by a page is torn
 /// down to its persistable parts (cursor + per-album high-water marks) and
 /// rehydrated through [`SyncState::restore`]; the restored state enforces the same
 /// anti-rewind floor — an older authentic cursor's page is still refused — proving

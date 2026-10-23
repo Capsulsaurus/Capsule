@@ -1,4 +1,4 @@
-//! Describing the extension members Capsule's problems actually carry (slice `S-C38`).
+//! Describing the extension members Capsule's problems actually carry.
 //!
 //! # The regression this closes
 //!
@@ -16,10 +16,10 @@
 //! reaching past the generated type. It was also a **regression against the surface being
 //! retired**: the Salvo document described `code` in six places.
 //!
-//! `S-C28` was statuses the code returns and the schema omits, and Kynos makes that
-//! unrepresentable because status is part of the return type. This is *members* the code returns
-//! and the schema omits, which Kynos does not make unrepresentable — so the class the rebuild
-//! claimed to close was only half closed.
+//! The Salvo surface's failure was statuses the code returns and the schema omits, and Kynos
+//! makes that unrepresentable because status is part of the return type. This is *members* the
+//! code returns and the schema omits, which Kynos does not make unrepresentable — so the class
+//! the rebuild claimed to close was only half closed.
 //!
 //! # What this does
 //!
@@ -32,8 +32,8 @@
 //! Two kinds of member:
 //!
 //! - **`code` is universal and required.** Every rejection this crate owns declares one, and
-//!   since `S-C36` every rejection it does *not* own is given one by
-//!   [`crate::problem::CodedProblems`]. The two slices are one change: this one makes the
+//!   every rejection it does *not* own is given one by
+//!   [`crate::problem::CodedProblems`]. The two are one contract: this module makes the
 //!   document claim it, that one makes the claim true for the framework's own responses.
 //! - **Everything else is per-response and optional**, listed in [`EXTRAS`]. Optional because a
 //!   status carries one response in a description while an enum may reach it from several
@@ -51,8 +51,8 @@
 //! stale, so it cannot rot in the other direction. The `code` member, which is the one the i18n
 //! contract turns on and 104 of the 120 extension fields on this surface, needs no table at all.
 //! And the real fix is upstream: `#[problem(extension)]` should carry a schema, which is the
-//! same seam `S-C36` wanted for framework rejections. Recorded on `S-C38` rather than papered
-//! over.
+//! same seam framework rejections need to carry an `error.*` code. Recorded here rather than
+//! papered over.
 //!
 //! # Why the served document is not this one
 //!
@@ -141,8 +141,7 @@ const EXTRAS: &[Extra] = &[
             json_type: "string",
             format: None,
             description: "The asset already holding these exact bytes in the same album. \
-                          Structured so a client merges rather than re-parsing a sentence \
-                          (slice `S-C22`).",
+                          Structured so a client merges rather than re-parsing a sentence.",
             nullable: false,
         }],
     },
@@ -371,7 +370,7 @@ const UPLOAD_RETRY_AFTER: &[Member] = &[Member {
     nullable: false,
 }];
 
-/// The retry hint every throttled response carries (`S-C32`).
+/// The retry hint every throttled response carries.
 ///
 /// One `429` reaches a caller from two causes — the key's own budget spent, or the limiter's
 /// partition full — and the `code` tells them apart. `retry_after` is what a client acts on
@@ -385,7 +384,7 @@ const RETRY_AFTER: &[Member] = &[Member {
     format: Some("uint64"),
     description: "When the caller may retry, as Unix seconds. From the limiter's own window \
                   when a budget is spent, and an upper bound of one window when the limiter \
-                  is at capacity (slice `S-C32`).",
+                  is at capacity.",
     nullable: false,
 }];
 
@@ -418,7 +417,7 @@ const PROTOCOL_RANGE: &[Member] = &[
 ///
 /// Does nothing if the document carries no `Problem` component, which is the state a document
 /// with no failing operation would be in — an empty router rather than an error.
-/// Gives every raw-byte body and response an explicit binary schema (`S-Z7`).
+/// Gives every raw-byte body and response an explicit binary schema.
 ///
 /// # What Kynos emits, and why a generator cannot use it
 ///
@@ -439,7 +438,7 @@ const PROTOCOL_RANGE: &[Member] = &[
 /// Only an *empty* schema is filled. A media object that already describes its payload is left
 /// exactly as the router emitted it, so this can never overwrite a real declaration.
 ///
-/// Owed upstream, like `S-C36`'s and `S-C38`'s seams: Kynos knows the body is bytes — that is
+/// Owed upstream, like the problem-extension schema seam: Kynos knows the body is bytes — that is
 /// what `Binary<M>` means — so it is the natural place to say so.
 pub(crate) fn describe_raw_byte_payloads(document: &mut Document) {
     for item in document.paths.items.values_mut() {

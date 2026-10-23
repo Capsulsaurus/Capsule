@@ -1,4 +1,4 @@
-//! The **SDK's own client**, over a socket, against the real router (slice `S-D28`).
+//! The **SDK's own client**, over a socket, against the real router.
 //!
 //! Every other case in this suite drives the router in-process through
 //! `kynos::test::TestClient` — no socket, no port, nothing to flake — and that is the right
@@ -21,7 +21,7 @@
 //!   provide, because a hostile server can always hand back one of its own older, validly-MAC'd
 //!   cursors;
 //! - and a forged cursor is refused with the stable `error.*` code the client localizes, which
-//!   is the whole `S-C36`/`S-C38` contract observed from the far end of a wire.
+//!   is the whole error-code contract observed from the far end of a wire.
 //!
 //! It replaces `capsule-api/sync/src/tests/sdk_client.rs`, which proved the same properties
 //! against the gRPC feed and the crate that served it. Both are gone.
@@ -191,7 +191,7 @@ async fn a_forged_cursor_is_refused_with_the_code_the_client_localizes() {
     // The `error.*` code is the client half of the i18n contract, and this is the only place it
     // is observed the way a client observes it: parsed out of a problem body that crossed a
     // socket, from a document that had to *declare* the member for the generated type to carry
-    // it (`S-C36`, `S-C38`).
+    // it.
     let fixture = Fixture::working();
     publish(&fixture, "018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5e03").await;
     let base_url = serve(&fixture).await;
@@ -489,7 +489,7 @@ async fn the_sdk_completes_a_real_second_factor_over_a_socket() {
 
 /// The escrow round trip, over a socket, against the router that actually serves it.
 ///
-/// This is the case the slice was missing. `capsule_sdk::recovery` used to build
+/// This is the case that was missing. `capsule_sdk::recovery` used to build
 /// `{api_root}/backup/escrow` by hand — the Salvo document's path — and its own in-module mock
 /// answered whatever path it was handed, so every escrow test passed while no real server had
 /// that route. Only a client pointed at the router can tell the difference, and the bytes are
@@ -776,7 +776,7 @@ async fn the_sdk_stores_and_lists_album_key_escrows_over_a_socket() {
     );
 }
 
-/// **`S-D17`'s Done-when, against the server that decides.** A token the client still believes
+/// **Refresh-and-replay, against the server that decides.** A token the client still believes
 /// in and the server has stopped honouring is refreshed once and the call replayed once.
 ///
 /// The unit tests cover the layer against a mock; this covers the one thing a mock cannot rule
@@ -1620,7 +1620,7 @@ async fn the_sdk_fetches_a_custody_receipt_and_verifies_it_under_the_attestation
 }
 
 /// The SDK's device-directory publish, over a socket, against the server that anchors and
-/// verifies it (`S-P1` over `S-C9`/`S-C42`).
+/// verifies it.
 ///
 /// A mock cannot prove this: the server requires the user identity verifying key beside the
 /// document (`X-Capsule-Identity-Key`), anchors it on first publish, and verifies the document

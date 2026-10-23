@@ -12,7 +12,7 @@
 //!
 //! It used to take one role and answer "did finalizing *this* flip visibility", which read
 //! naturally and was wrong. The upload protocol says an asset becomes visible "once its
-//! **manifest and metadata blob** are finalized" — two blobs — and since `S-C30` the manifest is
+//! **manifest and metadata blob** are finalized" — two blobs — and the manifest is
 //! a blob of its own rather than a JSON field on the session, which is precisely what the
 //! protocol means when it says the amendment "makes the visibility gate literal". A per-role
 //! predicate cannot express a conjunction over two roles: asked about the metadata blob it has

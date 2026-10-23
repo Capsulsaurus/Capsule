@@ -4,7 +4,7 @@
 //!
 //! - **Invariant 23.** A publish whose version does not strictly exceed the stored one is
 //!   [`PublishOutcome::Stale`] carrying the stored version, and changes nothing.
-//! - **The anchor is set once (`S-C42`).** The first publish's identity key is the account's for
+//! - **The anchor is set once.** The first publish's identity key is the account's for
 //!   good; a later publish under any other key is [`PublishOutcome::IdentityMismatch`] and
 //!   changes nothing — and that refusal wins over staleness, so a wrong key is never told which
 //!   of the two checks it failed.

@@ -27,7 +27,7 @@ pub enum LibraryError {
     /// is released, because an older binary cannot know what invariants the newer schema
     /// added. The recovery is to update Capsule (SSoT: Versioning — Client Catalog
     /// Migration). Typed here rather than flattened into [`Db`](Self::Db) so a client can
-    /// tell the user *which* two versions disagree (slice `S-D23`).
+    /// tell the user *which* two versions disagree.
     #[error(
         "catalog schema v{found} is newer than this build supports (v{supported}); \
          update Capsule to open this library"

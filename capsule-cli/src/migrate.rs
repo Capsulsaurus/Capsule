@@ -1,5 +1,5 @@
 //! `capsule library migrate` — admit a pre-signed-path library's unsigned sidecars as signed
-//! assets (issue `#456`, over slice `S-D24`).
+//! assets (issue `#456`).
 //!
 //! The verb itself is [`Workspace::migrate_unsigned_sidecars`]; this module is only the CLI's
 //! half of it: the options the command line resolves ([`options`]), the rendering of

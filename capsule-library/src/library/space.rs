@@ -1,5 +1,5 @@
 //! Free-space probe + streaming-import recommendation — the storage-constrained-import
-//! seam (slice `S-B3` in the repo-root `SLICES.md`; SSoT:
+//! seam (SSoT:
 //! [Import — Pipeline](https://docs/design/import/pipeline/)).
 //!
 //! The probe is I/O and runs *outside* the pure planner: it is attached at plan
@@ -134,7 +134,7 @@ mod tests {
         assert!(!largest_asset_fits(1, 1_000, u64::MAX));
     }
 
-    /// `S-B3` acceptance: the probe reports the real volume's free bytes on every supported
+    /// The acceptance: the probe reports the real volume's free bytes on every supported
     /// platform, and the executor's streaming drive mode keys off `streaming_recommended` fed
     /// by it. We assert the probe returns a plausible non-zero figure for the temp volume and
     /// that the two pure verdicts agree with it at both extremes (a trivially small plan never

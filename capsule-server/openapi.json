@@ -11,7 +11,7 @@
           "auth"
         ],
         "summary": "Create an account, and open its first session.",
-        "description": "# Why it signs you in\n\nThe alternative is `201` with no body and a client that immediately posts the same\ncredentials to `/v1/auth/login`, which is one more round trip for one more chance to fail and\nnothing gained. It also makes the CLI's `capsule register` mean what a person expects: after\nit, you are registered *and* signed in.\n\n# What it does not do\n\n**It does not publish a device directory**, and the account is therefore unable to upload\nuntil its client publishes one. That is not an omission here: `S-C20` removed the\naccount-creation fallback for invariant 7's floor precisely so that \"was this device in the\ndirectory\" has an honest answer for a brand-new account, and the honest answer is *no*. A\nclient's first action after registering is `POST /v1/auth/devices/directory`.\n\n**It is not rate-limited**, and that is a real gap rather than an oversight — see\n[`crate::auth::registry`] for the fact the limiter is waiting on. This is the one\nunauthenticated write on the surface.\n\n# `200`, where Salvo answered `201`\n\nKynos's `Created` requires a `Location` — a `201` that does not say *where* tells a client\nsomething exists and not how to reach it, which is a defect the type refuses to let you\ncommit. This server exposes no URL for an account: `GET /v1/auth/profile` is among the\noperations `S-C53` records as unported. Inventing a location to satisfy a status would be\ninventing a surface, so the status moved instead. What a caller actually needs — the token\npair — is in the body either way.",
+        "description": "# Why it signs you in\n\nThe alternative is `201` with no body and a client that immediately posts the same\ncredentials to `/v1/auth/login`, which is one more round trip for one more chance to fail and\nnothing gained. It also makes the CLI's `capsule register` mean what a person expects: after\nit, you are registered *and* signed in.\n\n# What it does not do\n\n**It does not publish a device directory**, and the account is therefore unable to upload\nuntil its client publishes one. That is not an omission here: there is deliberately no\naccount-creation fallback for invariant 7's floor, precisely so that \"was this device in the\ndirectory\" has an honest answer for a brand-new account, and the honest answer is *no*. A\nclient's first action after registering is `POST /v1/auth/devices/directory`.\n\n**It is not rate-limited**, and that is a real gap rather than an oversight — see\n[`crate::auth::registry`] for the fact the limiter is waiting on. This is the one\nunauthenticated write on the surface.\n\n# `200`, where Salvo answered `201`\n\nKynos's `Created` requires a `Location` — a `201` that does not say *where* tells a client\nsomething exists and not how to reach it, which is a defect the type refuses to let you\ncommit. This server exposes no URL for an account: `GET /v1/auth/profile` is among the\noperations not ported to this server. Inventing a location to satisfy a status would be\ninventing a surface, so the status moved instead. What a caller actually needs — the token\npair — is in the body either way.",
         "operationId": "register_user",
         "parameters": [
           {
@@ -355,7 +355,7 @@
           "auth"
         ],
         "summary": "Exchange an email and password for a session — or for a second-factor challenge.",
-        "description": "The two advisory identifiers a client may send — `cohort_hash` and `device_id` — are recorded\non the session for the devices listing and gate nothing; an unusable one is dropped rather\nthan refused.\n\n# Two statuses, because there are two outcomes\n\nAn account with a confirmed second factor (`S-C55`) gets **`202`** and a short-lived\nchallenge: the credentials were accepted and the request is not complete. No session is\nopened, no cohort is recorded and no refresh token is minted, because none of those may exist\nfor an authentication that has not finished — and the client's advisory identifiers ride the\n*completing* request instead, since that is what creates the session they describe.\n\nThe retired surface got this wrong in the most consequential way available: it had all four\nTOTP operations and its login never issued a challenge, so a confirmed second factor gated\nnothing at all.",
+        "description": "The two advisory identifiers a client may send — `cohort_hash` and `device_id` — are recorded\non the session for the devices listing and gate nothing; an unusable one is dropped rather\nthan refused.\n\n# Two statuses, because there are two outcomes\n\nAn account with a confirmed second factor gets **`202`** and a short-lived\nchallenge: the credentials were accepted and the request is not complete. No session is\nopened, no cohort is recorded and no refresh token is minted, because none of those may exist\nfor an authentication that has not finished — and the client's advisory identifiers ride the\n*completing* request instead, since that is what creates the session they describe.\n\nThe retired surface got this wrong in the most consequential way available: it had all four\nTOTP operations and its login never issued a challenge, so a confirmed second factor gated\nnothing at all.",
         "operationId": "login_user",
         "parameters": [
           {
@@ -1425,7 +1425,7 @@
           "auth"
         ],
         "summary": "Prove a credential again on the current session, without opening a new one.",
-        "description": "**The only way to satisfy the freshness gate `S-C7` enforces**, and it exists because\nwithout it the gate is unusable: `authenticated_at` is deliberately *not* reset by a refresh,\nso a user signed in an hour ago would otherwise have to sign out entirely to add a device —\nand the session they abandoned would linger in their own devices listing.\n\nIt does not mint tokens and does not rotate the session. The caller keeps the credential\nthey already hold; what changes is one timestamp on the record behind it.\n\n# Errors\n\nThe same refusals as a sign-in, for the same reasons: a wrong password is\n`401 error.auth.invalid_credentials`, a locked account is `403`, and the account directory\nfailing is `500`. A caller that guessed a password here learns exactly what it would learn\nat `/v1/auth/login`, and no more.",
+        "description": "**The only way to satisfy the freshness gate sensitive operations enforce**, and it exists\nbecause without it the gate is unusable: `authenticated_at` is deliberately *not* reset by a\nrefresh, so a user signed in an hour ago would otherwise have to sign out entirely to add a\ndevice — and the session they abandoned would linger in their own devices listing.\n\nIt does not mint tokens and does not rotate the session. The caller keeps the credential\nthey already hold; what changes is one timestamp on the record behind it.\n\n# Errors\n\nThe same refusals as a sign-in, for the same reasons: a wrong password is\n`401 error.auth.invalid_credentials`, a locked account is `403`, and the account directory\nfailing is `500`. A caller that guessed a password here learns exactly what it would learn\nat `/v1/auth/login`, and no more.",
         "operationId": "reauthenticate",
         "parameters": [
           {
@@ -5076,7 +5076,7 @@
           "profile"
         ],
         "summary": "Replace the password this account's sessions are opened with.",
-        "description": "# Every *other* session ends\n\nA password change whose point is that a credential has leaked would be worthless if the\nsessions opened with the leaked credential kept working. So the change closes every session\nof the account — and then re-opens the caller's own, **under its own session id**, so the\nperson doing the rotation is not signed out of the device they are doing it on while\neverybody else is.\n\nRe-opening the same id rather than minting a new one is what lets this answer `204` with no\nbody: the caller's existing token pair keeps working, because the session it names is still\nthere. Returning a fresh pair was considered and rejected — it would make this a second token\nmint with none of `POST /v1/auth/refresh`'s rotation discipline, for no gain.\n\nThe re-opened record's `authenticated_at` is **now**, and that is not bookkeeping: presenting\nthe current password *is* a credential presentation, so a freshness gate (`S-C7`) measuring\nfrom anything earlier would be measuring from the wrong moment.\n\n# Why the order is verify, write, revoke\n\nVerification first, because a wrong current password must change nothing. The write next,\nbecause a revocation that ran before it would sign everybody out and then fail. The\nrevocation last, and its failure is **logged and not returned**: the password is already\nchanged, so answering `500` would tell the caller the rotation did not happen when it did,\nand they would try again with a current password that is no longer current.",
+        "description": "# Every *other* session ends\n\nA password change whose point is that a credential has leaked would be worthless if the\nsessions opened with the leaked credential kept working. So the change closes every session\nof the account — and then re-opens the caller's own, **under its own session id**, so the\nperson doing the rotation is not signed out of the device they are doing it on while\neverybody else is.\n\nRe-opening the same id rather than minting a new one is what lets this answer `204` with no\nbody: the caller's existing token pair keeps working, because the session it names is still\nthere. Returning a fresh pair was considered and rejected — it would make this a second token\nmint with none of `POST /v1/auth/refresh`'s rotation discipline, for no gain.\n\nThe re-opened record's `authenticated_at` is **now**, and that is not bookkeeping: presenting\nthe current password *is* a credential presentation, so a freshness gate measuring\nfrom anything earlier would be measuring from the wrong moment.\n\n# Why the order is verify, write, revoke\n\nVerification first, because a wrong current password must change nothing. The write next,\nbecause a revocation that ran before it would sign everybody out and then fail. The\nrevocation last, and its failure is **logged and not returned**: the password is already\nchanged, so answering `500` would tell the caller the rotation did not happen when it did,\nand they would try again with a current password that is no longer current.",
         "operationId": "change_password",
         "parameters": [
           {
@@ -21459,7 +21459,7 @@
           {
             "name": "album_id",
             "in": "query",
-            "description": "One album's page rather than the caller's own feed (`S-C51`).\n\nFor the album's owner or any account on its current roster. Positions are the owner's\nsequence numbers filtered to the album, and the cursor is bound to `(caller, album)`, so\nit cannot be presented on the caller's own feed or on another album. Absent: the caller's\nown library, as before.",
+            "description": "One album's page rather than the caller's own feed.\n\nFor the album's owner or any account on its current roster. Positions are the owner's\nsequence numbers filtered to the album, and the cursor is bound to `(caller, album)`, so\nit cannot be presented on the caller's own feed or on another album. Absent: the caller's\nown library, as before.",
             "required": false,
             "schema": {
               "type": [
@@ -21811,7 +21811,7 @@
           "media"
         ],
         "summary": "Fetch a ciphertext blob by its content address, ranged.",
-        "description": "Opaque octets: the server holds no key and this route never learns what it is serving. An\naccount fetches the blobs of its own assets and of the albums it is currently a member of; a\nformer member is told `403`, and everyone else is told what an unknown address is told —\nsee [`crate::serve`] for the boundary and its reasons.\n\nThe one answer that *is* account-scoped is the transient `409`: it reports the caller's own\nin-flight upload and nobody else's (`S-C40`).\n\nA federated peer fetches here with a capability instead of a session token (`S-E5`), through\nthe same resolution and the same authority.",
+        "description": "Opaque octets: the server holds no key and this route never learns what it is serving. An\naccount fetches the blobs of its own assets and of the albums it is currently a member of; a\nformer member is told `403`, and everyone else is told what an unknown address is told —\nsee [`crate::serve`] for the boundary and its reasons.\n\nThe one answer that *is* account-scoped is the transient `409`: it reports the caller's own\nin-flight upload and nobody else's.\n\nA federated peer fetches here with a capability instead of a session token, through\nthe same resolution and the same authority.",
         "operationId": "get_blob",
         "parameters": [
           {
@@ -26206,14 +26206,14 @@
               "string",
               "null"
             ],
-            "description": "An advisory device-cohort hash grouping one physical device's re-enrollments\n(slice `S-C13`).\n\nLegibility metadata only: no authorization path reads it, and an unusable value is\ndropped rather than refused — a sign-in must not fail over a field that gates nothing."
+            "description": "An advisory device-cohort hash grouping one physical device's re-enrollments.\n\nLegibility metadata only: no authorization path reads it, and an unusable value is\ndropped rather than refused — a sign-in must not fail over a field that gates nothing."
           },
           "device_id": {
             "type": [
               "string",
               "null"
             ],
-            "description": "The directory device the client claims to be (slice `S-N3`), as a UUID.\n\nClient-asserted and unverified. Dropped, not refused, when it is not a usable UUID, for\nthe same reason as `cohort_hash`."
+            "description": "The directory device the client claims to be, as a UUID.\n\nClient-asserted and unverified. Dropped, not refused, when it is not a usable UUID, for\nthe same reason as `cohort_hash`."
           }
         },
         "type": "object",
@@ -26286,7 +26286,7 @@
             "type": "integer",
             "minimum": 0.0,
             "format": "uint64",
-            "description": "How many sessions were closed — the caller's own among them.\n\nCounted from the records the store actually removed, never from a separately maintained\nindex. The Salvo implementation read a per-user set that `revoke_session` did not clean\nup, so this number inflated by one for every prior refresh; `S-C29` made the record and\nits listing entry one fact, so there is nothing left to disagree."
+            "description": "How many sessions were closed — the caller's own among them.\n\nCounted from the records the store actually removed, never from a separately maintained\nindex. The Salvo implementation read a per-user set that `revoke_session` did not clean\nup, so this number inflated by one for every prior refresh; here the record and\nits listing entry are one fact, so there is nothing left to disagree."
           }
         },
         "type": "object",
@@ -26503,14 +26503,14 @@
               "string",
               "null"
             ],
-            "description": "An advisory device-cohort hash grouping one physical device's re-enrollments (`S-C13`)."
+            "description": "An advisory device-cohort hash grouping one physical device's re-enrollments."
           },
           "device_id": {
             "type": [
               "string",
               "null"
             ],
-            "description": "The directory device the client claims to be (`S-N3`), as a UUID."
+            "description": "The directory device the client claims to be, as a UUID."
           }
         },
         "additionalProperties": false,
@@ -26519,7 +26519,7 @@
           "mfa_token",
           "totp_code"
         ],
-        "description": "Completing a sign-in with a second factor.\n\nIt carries the same two advisory identifiers `LoginRequest` does, because *this* is the\nrequest that opens the session: without them a TOTP sign-in would land in the devices view as\nan unknown, ungrouped device (`S-N3`)."
+        "description": "Completing a sign-in with a second factor.\n\nIt carries the same two advisory identifiers `LoginRequest` does, because *this* is the\nrequest that opens the session: without them a TOTP sign-in would land in the devices view as\nan unknown, ungrouped device."
       },
       "OidcAuthorizeRequest": {
         "properties": {
@@ -26584,14 +26584,14 @@
               "string",
               "null"
             ],
-            "description": "An advisory device-cohort hash (slice `S-C13`). Legibility metadata only; an unusable\nvalue is dropped rather than refused."
+            "description": "An advisory device-cohort hash. Legibility metadata only; an unusable\nvalue is dropped rather than refused."
           },
           "device_id": {
             "type": [
               "string",
               "null"
             ],
-            "description": "The directory device the client claims to be (slice `S-N3`), as a UUID. Dropped, not\nrefused, when it is not a usable UUID."
+            "description": "The directory device the client claims to be, as a UUID. Dropped, not\nrefused, when it is not a usable UUID."
           }
         },
         "additionalProperties": false,
@@ -26676,14 +26676,14 @@
               "string",
               "null"
             ],
-            "description": "An advisory device-cohort hash (slice `S-C13`). Legibility metadata only."
+            "description": "An advisory device-cohort hash. Legibility metadata only."
           },
           "device_id": {
             "type": [
               "string",
               "null"
             ],
-            "description": "The directory device the client claims to be (slice `S-N3`), as a UUID."
+            "description": "The directory device the client claims to be, as a UUID."
           }
         },
         "additionalProperties": false,
@@ -26931,7 +26931,7 @@
           },
           "deep": {
             "type": "boolean",
-            "description": "Also re-read and re-hash the bytes (`S-C41`).\n\nAbsent or `false` is the structural check: ask the index and the store whether the bytes\nare there. `true` additionally re-hashes them, which is the only way to catch silent\ncorruption — `stored` is a question about the filesystem, and a corrupt blob is still\nstored.\n\n**Rate-limited per account**, because a deep scan reads and hashes every declared blob\nand an unbounded one is an I/O-amplification attack costing the caller one small JSON\nbody. Past the budget the *structural* verdict still comes back and each blob's `deep`\nreads `rate_limited`: throwing away a good structural answer because the optional half\nwas throttled would make the limiter cost more than it saves."
+            "description": "Also re-read and re-hash the bytes.\n\nAbsent or `false` is the structural check: ask the index and the store whether the bytes\nare there. `true` additionally re-hashes them, which is the only way to catch silent\ncorruption — `stored` is a question about the filesystem, and a corrupt blob is still\nstored.\n\n**Rate-limited per account**, because a deep scan reads and hashes every declared blob\nand an unbounded one is an I/O-amplification attack costing the caller one small JSON\nbody. Past the budget the *structural* verdict still comes back and each blob's `deep`\nreads `rate_limited`: throwing away a good structural answer because the optional half\nwas throttled would make the limiter cost more than it saves."
           },
           "attestation_nonce": {
             "type": [
@@ -26974,7 +26974,7 @@
               "string",
               "null"
             ],
-            "description": "What a deep scan found: `intact`, `corrupt`, or `rate_limited` (`S-C41`).\n\n**Absent when no deep scan ran**, and the absence is load-bearing: it is the difference\nbetween \"we did not look at the bytes\" and \"we looked and they were fine\", and a client\ndeciding whether to release its only copy has to be able to tell those apart."
+            "description": "What a deep scan found: `intact`, `corrupt`, or `rate_limited`.\n\n**Absent when no deep scan ran**, and the absence is load-bearing: it is the difference\nbetween \"we did not look at the bytes\" and \"we looked and they were fine\", and a client\ndeciding whether to release its only copy has to be able to tell those apart."
           }
         },
         "type": "object",
@@ -27245,7 +27245,7 @@
           },
           "ciphertext_hash": {
             "type": "string",
-            "description": "The ciphertext content hash, lowercase hex. Must equal the top-level `hash`.\n\n**This names the blob this session is uploading, not the manifest's own\n`ciphertext_hash`.** For the original the two coincide; for a metadata or provenance\nsession they do not, and the projection reuses the manifest's field name for a per-blob\ndeclaration. Invisible for a `create`, because the bundle is assembled in a pending row\nnobody can see and no member has to name another. It is not invisible for a `replace`,\nwhich is why [`Self::original_blob_hash`] exists (`S-C43`)."
+            "description": "The ciphertext content hash, lowercase hex. Must equal the top-level `hash`.\n\n**This names the blob this session is uploading, not the manifest's own\n`ciphertext_hash`.** For the original the two coincide; for a metadata or provenance\nsession they do not, and the projection reuses the manifest's field name for a per-blob\ndeclaration. Invisible for a `create`, because the bundle is assembled in a pending row\nnobody can see and no member has to name another. It is not invisible for a `replace`,\nwhich is why [`Self::original_blob_hash`] exists."
           },
           "plaintext_size": {
             "type": "integer",
@@ -27276,7 +27276,7 @@
               "string",
               "null"
             ],
-            "description": "The content hash of the bundle's **original** blob, when the manifest commits to one\n(`S-C43`).\n\nThe manifest's own `ciphertext_hash`, under a name that cannot be confused with\n[`Self::ciphertext_hash`]'s per-session meaning. Optional on the wire and **required on a\n`replace`**: a replace re-points roles that already have bytes, so it has to be applied\nas one act, and the only member of the bundle that can carry the whole change is the\nmanifest — which therefore has to be able to name the original it commits to.\n\nA `create` may omit it. Its bundle is assembled incrementally in a row nobody can see,\nso no member needs to name another and requiring it would be a wire change for no gain."
+            "description": "The content hash of the bundle's **original** blob, when the manifest commits to one.\n\nThe manifest's own `ciphertext_hash`, under a name that cannot be confused with\n[`Self::ciphertext_hash`]'s per-session meaning. Optional on the wire and **required on a\n`replace`**: a replace re-points roles that already have bytes, so it has to be applied\nas one act, and the only member of the bundle that can carry the whole change is the\nmanifest — which therefore has to be able to name the original it commits to.\n\nA `create` may omit it. Its bundle is assembled incrementally in a row nobody can see,\nso no member needs to name another and requiring it would be a wire change for no gain."
           },
           "derivative_role": {
             "type": [
@@ -27477,14 +27477,14 @@
               "string",
               "null"
             ],
-            "description": "The owner the asset is filed under, when the client wants to say so.\n\nAdvisory, never decisive: the asset is filed under the **album's** owner, which the write\nauthority answers from the album record — the uploader when it is their album, the owner\nwhen the uploader is a writer on its roster (`S-C51`). A declared owner that is anyone\nelse, the uploading member included, is refused `error.upload.owner_not_permitted`."
+            "description": "The owner the asset is filed under, when the client wants to say so.\n\nAdvisory, never decisive: the asset is filed under the **album's** owner, which the write\nauthority answers from the album record — the uploader when it is their album, the owner\nwhen the uploader is a writer on its roster. A declared owner that is anyone\nelse, the uploading member included, is refused `error.upload.owner_not_permitted`."
           },
           "intent_id": {
             "type": [
               "string",
               "null"
             ],
-            "description": "The album-upgrade intent this write belongs to, when it belongs to one.\n\nCarried onto the session verbatim and read by nobody in this port; the ceremony that\ngives it meaning is `S-C24`."
+            "description": "The album-upgrade intent this write belongs to, when it belongs to one.\n\nCarried onto the session verbatim and read by nobody in this port; the album-upgrade\nceremony gives it meaning."
           }
         },
         "additionalProperties": false,
@@ -27533,7 +27533,7 @@
           },
           "manifest_cbor": {
             "type": "string",
-            "description": "The signed manifest itself, base64 of the canonical CBOR.\n\nStored verbatim as the asset's new provenance blob, so the feed serves the exact bytes\nthe client signed (`S-C30`) for a lifecycle write as it already does for an upload. The\nserver does not parse it: base64 is a transport encoding, and `decode(encode(b)) == b`."
+            "description": "The signed manifest itself, base64 of the canonical CBOR.\n\nStored verbatim as the asset's new provenance blob, so the feed serves the exact bytes\nthe client signed for a lifecycle write as it already does for an upload. The\nserver does not parse it: base64 is a transport encoding, and `decode(encode(b)) == b`."
           },
           "metadata_blob": {
             "type": [
@@ -27860,11 +27860,11 @@
           },
           "authenticated_at": {
             "type": "string",
-            "description": "When the user last proved a credential on this session's lineage, RFC 3339.\n\nCarried forward across refreshes, so it is the one timestamp here that means what a\nuser reading a devices list expects \"signed in\" to mean. It is also what the\ncross-device add's freshness gate reads (`S-C7`), so a client can show why an add is\nabout to ask for a password again."
+            "description": "When the user last proved a credential on this session's lineage, RFC 3339.\n\nCarried forward across refreshes, so it is the one timestamp here that means what a\nuser reading a devices list expects \"signed in\" to mean. It is also what the\ncross-device add's freshness gate reads, so a client can show why an add is\nabout to ask for a password again."
           },
           "last_active_at": {
             "type": "string",
-            "description": "When it was last seen, RFC 3339.\n\nEqual to `created_at` until `S-C48` puts the session ledger on the request path. A\nclient must not label this \"last used\" before then."
+            "description": "When it was last seen, RFC 3339.\n\nMoved forward by any authenticated request on the session, so it is current to within\nthe touch interval."
           },
           "user_agent": {
             "type": [
@@ -27892,7 +27892,7 @@
               "string",
               "null"
             ],
-            "description": "The directory device the client claimed to be (`S-N3`), if any.\n\nA different identifier space from `cohort_hash`: this names one directory device, the\ncohort groups re-enrollments of one physical device. Both are client-asserted; neither\ngates anything."
+            "description": "The directory device the client claimed to be, if any.\n\nA different identifier space from `cohort_hash`: this names one directory device, the\ncohort groups re-enrollments of one physical device. Both are client-asserted; neither\ngates anything."
           },
           "current": {
             "type": "boolean",
@@ -28208,7 +28208,7 @@
               "string",
               "null"
             ],
-            "description": "The signed manifest, base64 of the provenance blob's exact bytes (`S-C30`).\n\nAbsent on a tombstone, and absent — with a loud server-side log — when the index names a\nprovenance blob the store cannot produce."
+            "description": "The signed manifest, base64 of the provenance blob's exact bytes.\n\nAbsent on a tombstone, and absent — with a loud server-side log — when the index names a\nprovenance blob the store cannot produce."
           },
           "metadata_blob": {
             "type": [
@@ -28229,7 +28229,7 @@
               "type": "string"
             },
             "type": "array",
-            "description": "The asset's signed derivative manifests, each base64 of its `derivative_manifest`\nblob's exact bytes, in address order (#556).\n\nWhat a receiver opens a thumbnail or preview with: the manifest names the derivative's\n`ciphertext_hash`, `nonce_prefix` and AMK epoch, and the blob list carries none of\nthem. Served verbatim for the reason [`Self::manifest_cbor`] is (`S-C30`). Empty on a\ntombstone; a manifest the store cannot produce is left out with a loud server-side log."
+            "description": "The asset's signed derivative manifests, each base64 of its `derivative_manifest`\nblob's exact bytes, in address order (#556).\n\nWhat a receiver opens a thumbnail or preview with: the manifest names the derivative's\n`ciphertext_hash`, `nonce_prefix` and AMK epoch, and the blob list carries none of\nthem. Served verbatim for the reason [`Self::manifest_cbor`] is. Empty on a\ntombstone; a manifest the store cannot produce is left out with a loud server-side log."
           },
           "original_held": {
             "type": "boolean",
@@ -28499,7 +28499,7 @@
           "name",
           "version"
         ],
-        "description": "Identifies the running server.\n\nDeliberately incurious: a name and a version, no build host, no commit, no uptime, no\nfeature list. This endpoint is unauthenticated, so everything it returns is public, and a\nkey-free server has no reason to hand an anonymous caller a fingerprint of its deployment.\nExact client build identification runs the other way (`S-D15`) — clients tell the server\nwhat they are, not the reverse."
+        "description": "Identifies the running server.\n\nDeliberately incurious: a name and a version, no build host, no commit, no uptime, no\nfeature list. This endpoint is unauthenticated, so everything it returns is public, and a\nkey-free server has no reason to hand an anonymous caller a fingerprint of its deployment.\nExact client build identification runs the other way — clients tell the server\nwhat they are, not the reverse."
       },
       "PublishedKeyResponse": {
         "properties": {
@@ -28573,7 +28573,7 @@
           "authorize",
           "callback"
         ],
-        "description": "The OIDC ceremony's endpoints (slice `S-N1`)."
+        "description": "The OIDC ceremony's endpoints."
       },
       "AuthEndpointsResponse": {
         "properties": {
@@ -28973,7 +28973,7 @@
           },
           "existing_asset": {
             "type": "string",
-            "description": "The asset already holding these exact bytes in the same album. Structured so a client merges rather than re-parsing a sentence (slice `S-C22`)."
+            "description": "The asset already holding these exact bytes in the same album. Structured so a client merges rather than re-parsing a sentence."
           }
         },
         "additionalProperties": true,
@@ -29261,7 +29261,7 @@
           "retry_after": {
             "type": "integer",
             "format": "uint64",
-            "description": "When the caller may retry, as Unix seconds. From the limiter's own window when a budget is spent, and an upper bound of one window when the limiter is at capacity (slice `S-C32`)."
+            "description": "When the caller may retry, as Unix seconds. From the limiter's own window when a budget is spent, and an upper bound of one window when the limiter is at capacity."
           }
         },
         "additionalProperties": true,
@@ -29301,7 +29301,7 @@
           "retry_after": {
             "type": "integer",
             "format": "uint64",
-            "description": "When the caller may retry, as Unix seconds. From the limiter's own window when a budget is spent, and an upper bound of one window when the limiter is at capacity (slice `S-C32`)."
+            "description": "When the caller may retry, as Unix seconds. From the limiter's own window when a budget is spent, and an upper bound of one window when the limiter is at capacity."
           }
         },
         "additionalProperties": true,
@@ -29341,7 +29341,7 @@
           "retry_after": {
             "type": "integer",
             "format": "uint64",
-            "description": "When the caller may retry, as Unix seconds. From the limiter's own window when a budget is spent, and an upper bound of one window when the limiter is at capacity (slice `S-C32`)."
+            "description": "When the caller may retry, as Unix seconds. From the limiter's own window when a budget is spent, and an upper bound of one window when the limiter is at capacity."
           }
         },
         "additionalProperties": true,
@@ -29381,7 +29381,7 @@
           "retry_after": {
             "type": "integer",
             "format": "uint64",
-            "description": "When the caller may retry, as Unix seconds. From the limiter's own window when a budget is spent, and an upper bound of one window when the limiter is at capacity (slice `S-C32`)."
+            "description": "When the caller may retry, as Unix seconds. From the limiter's own window when a budget is spent, and an upper bound of one window when the limiter is at capacity."
           }
         },
         "additionalProperties": true,
@@ -29421,7 +29421,7 @@
           "retry_after": {
             "type": "integer",
             "format": "uint64",
-            "description": "When the caller may retry, as Unix seconds. From the limiter's own window when a budget is spent, and an upper bound of one window when the limiter is at capacity (slice `S-C32`)."
+            "description": "When the caller may retry, as Unix seconds. From the limiter's own window when a budget is spent, and an upper bound of one window when the limiter is at capacity."
           }
         },
         "additionalProperties": true,
@@ -29461,7 +29461,7 @@
           "retry_after": {
             "type": "integer",
             "format": "uint64",
-            "description": "When the caller may retry, as Unix seconds. From the limiter's own window when a budget is spent, and an upper bound of one window when the limiter is at capacity (slice `S-C32`)."
+            "description": "When the caller may retry, as Unix seconds. From the limiter's own window when a budget is spent, and an upper bound of one window when the limiter is at capacity."
           }
         },
         "additionalProperties": true,
