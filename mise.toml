@@ -97,6 +97,7 @@ run = [
   "mise run openapi-check-kynos",
   "mise run cli-surface-check",
   "mise run architecture-check",
+  "mise run test-layout-check",
   "mise run license-check",
   "mise run translate-readme-check",
   "mise run build-rust",
@@ -321,6 +322,14 @@ run = [
 [tasks.architecture-check]
 description = "Verify active-workspace, retired-component and stateless-core boundaries"
 run = "cargo run -q -p xtask -- architecture-check"
+
+# Unit tests live in a sibling file: `foo.rs` ends with `#[cfg(test)] mod tests;` and the tests sit
+# in `foo/tests.rs` (CLAUDE.md, Rust Architecture Decisions). Rejects any inline module under a
+# workspace member's `src/` that is named `tests` or gated on `cfg(test)`. See
+# xtask/src/test_layout.rs.
+[tasks.test-layout-check]
+description = "Verify unit tests live in sibling tests.rs files, never inline modules"
+run = "cargo run -q -p xtask -- test-layout-check"
 
 # Compile the canonical locales/ catalogs into each platform's native i18n format
 # (Rust bundle, web JSON, Android strings.xml, iOS .xcstrings). See xtask/src/i18n.rs.
