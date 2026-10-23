@@ -415,6 +415,75 @@ fn reopening_resets_the_views_and_ignores_a_stale_preview() {
     assert_eq!(answer(&mut screen, 1, Ok(image(4, 4))), vec![preview_of(1)]);
 }
 
+// ── A snapshot after an edit ──────────────────────────────────────────────
+
+/// A browser opened through the form on `/lib`, with `catalogue()` loaded.
+fn opened_on_lib() -> LibraryScreen {
+    let (mut screen, _) = submitted("/lib", "pw");
+    screen.update(LibraryAction::Opened(Ok(catalogue())));
+    screen
+}
+
+/// `catalogue()` without asset 5 and its album, Trips, and with the stack dissolved.
+fn without_trips_or_stack() -> Catalogue {
+    let mut assets = assets();
+    assets.pop();
+    for asset in &mut assets {
+        asset.stack = None;
+    }
+    Catalogue::new(assets, albums()[..1].to_vec(), Vec::new())
+}
+
+#[test]
+fn a_replaced_catalogue_leaves_an_album_or_stack_that_is_gone() {
+    let mut screen = opened_on_lib();
+    screen.update(LibraryAction::NextView);
+    screen.update(LibraryAction::SelectNext);
+    screen.update(LibraryAction::Enter);
+    assert_eq!(screen.group(), Some(Group::Album(TRIPS)));
+    screen.replace_catalogue(Path::new("/lib"), without_trips_or_stack());
+    assert_eq!(screen.group(), None);
+    // The Trips row is gone too: the albums cursor is clamped onto the last album left.
+    assert_eq!(screen.selected(), Some(Row::Album(ALBUM)));
+
+    let mut screen = opened_on_lib();
+    screen.update(LibraryAction::NextView);
+    screen.update(LibraryAction::NextView);
+    screen.update(LibraryAction::Enter);
+    assert_eq!(screen.group(), Some(Group::Stack(STACK)));
+    screen.replace_catalogue(Path::new("/lib"), without_trips_or_stack());
+    assert_eq!(screen.group(), None);
+    assert_eq!(screen.selected(), None, "no stacks are left");
+}
+
+#[test]
+fn a_replaced_catalogue_clamps_the_cursor_when_the_selected_row_is_gone() {
+    let mut screen = opened_on_lib();
+    answer(&mut screen, 1, Ok(image(4, 4)));
+    screen.update(LibraryAction::SelectNext);
+    assert_eq!(screen.selected(), Some(Row::Asset(asset_id(5))));
+    let mut assets = assets();
+    assets.pop();
+    screen.replace_catalogue(
+        Path::new("/lib"),
+        Catalogue::new(assets, albums(), stacks()),
+    );
+    // Asset 5 is gone and the timeline is the stack alone: the cursor is clamped onto it
+    // rather than left past the end.
+    assert_eq!(screen.rows(), vec![Row::Asset(asset_id(1))]);
+    assert_eq!(screen.cursor(), 0);
+    assert_eq!(screen.selected(), Some(Row::Asset(asset_id(1))));
+
+    // A snapshot before any library is open is dropped.
+    let mut closed = LibraryScreen::default();
+    assert!(
+        closed
+            .replace_catalogue(Path::new("/lib"), catalogue())
+            .is_empty()
+    );
+    assert_eq!(closed.catalogue(), None);
+}
+
 // ── A large library ───────────────────────────────────────────────────────
 
 const LARGE: u128 = 50_000;
