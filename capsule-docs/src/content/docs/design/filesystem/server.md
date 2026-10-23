@@ -121,7 +121,11 @@ accepted it. The **owner ledger** carries those facts:
   purge, at the `purge` entry's position. A purge the
   index refused (the asset was restored, or re-deleted under a later floor, after the worker
   listed it) is never confirmed, so a rebuild keeps every reference the live row kept, whatever
-  order the purge and the concurrent op reached the ledger in. The confirmation is
+  order the purge and the concurrent op reached the ledger in. The only restore that can race
+  a purge is one the server accepted before `retention_until` that reached the index after the
+  worker listed the row: a `trash-restore` accepted at or after the floor is refused
+  ([Retention Window](/design/organization/#retention-window)), so no restore follows a
+  committed purge. The confirmation is
   best-effort: a lost one keeps references to blobs GC may since have swept, which a rebuild
   reports as dangling rather than losing.
 - Two processes append to one ledger: the server and an operator's `purge --apply`. An append
@@ -160,7 +164,9 @@ when it finds a fault ([`capsule-server::ledger::rebuild`](https://github.com/Ca
 2. Replay entries in ledger order: uploads and drop adoptions (custody entries the index did
    not refuse) and lifecycle ops, including confirmed retention purges. Decode each named manifest and
    write the rows they imply, the way the index's own writes would. An op with no recorded
-   position is replayed only if it still chains onto the head the replay has reached. Each
+   position is replayed only if it still chains onto the head the replay has reached and, for a
+  `trash-restore`, only if it was recorded before the floor of the tombstone it restores, since
+  the index refuses one at or after it ([Retention Window](/design/organization/#retention-window)). Each
    manifest's `device_sig` is verified against the signer's directory version in force at that
    point: the last one before the manifest's entry when the signer's ledger is the one replayed,
    and otherwise the last one the server's clock recorded no later than it, since two ledgers
