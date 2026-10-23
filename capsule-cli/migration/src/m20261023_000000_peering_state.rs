@@ -1,9 +1,11 @@
 //! Peering's durable local state: the anti-rollback floor on the account's device directory and
-//! the tombstones a peer may never resurrect ([Peering § Trust Model], [Peering § Sync]).
+//! the tombstones of purged assets, which a peer may never resurrect ([Peering § Trust Model],
+//! [Peering § Sync]).
 //!
 //! Both are security state, so the store itself refuses to weaken them, whatever writes to it:
 //! the floor's version never decreases and its row is never deleted, and a tombstone is never
-//! updated or deleted. Each refusal aborts the statement that attempted it, except an insert
+//! updated or deleted. A tombstone is written only for a purge, which nothing reverses, so no
+//! removal of one is legitimate; a delete is a reversible move to trash and writes none. Each refusal aborts the statement that attempted it, except an insert
 //! below the stored floor, which is skipped: that is how a lower raise is a no-op, and how
 //! `INSERT OR REPLACE` (whose implicit delete fires no trigger) cannot lower it either.
 //!

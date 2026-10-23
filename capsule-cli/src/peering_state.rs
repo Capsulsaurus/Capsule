@@ -8,9 +8,13 @@
 //!   verified. It is raised by one SQLite upsert taking the maximum of the stored and the new
 //!   value, so a crash leaves the old floor or the new one, and the store's own triggers refuse
 //!   to lower or delete it. A read error or a value out of range is an error, never a floor of
-//!   zero: only a device that has never recorded a floor starts at zero.
-//! - **Tombstones** ([`load_tombstones`]) are every asset the sync feed delivered as deleted,
-//!   kept past purge in a table the store refuses to update or delete from. The set is what
+//!   zero: only a device that has never recorded a floor starts at zero, and a device whose peer
+//!   state survives while its floor row does not is refused
+//!   ([`DbDirectoryVersions::refuse_lost_floor`]).
+//! - **Tombstones** ([`load_tombstones`]) are the assets this device recorded as **purged**
+//!   ([`record_purged`]), kept in a table the store refuses to update or delete from. A delete is
+//!   not a tombstone: it moves the asset to trash, and a `trash-restore` reverses it until its
+//!   retention window closes, so the sync feed's `Deleted` records nothing here. The set is what
 //!   [`capsule_sdk::peering::ingest`] takes as [`LocalLibrary::tombstones`]; a row that does not
 //!   decode fails the whole load rather than leaving a gap a peer could resurrect through.
 //!
@@ -57,6 +61,25 @@ pub enum PeeringStateError {
         /// Why it could not be read.
         error: String,
     },
+    /// This device's peer state exists but the store holds no floor for it: the database was
+    /// lost or replaced, and starting the floor over at zero would admit a rolled-back directory.
+    #[error(
+        "the peer state at {path} exists but the CLI database holds no directory floor for this \
+         device, so the database was reset or replaced; restore the database, or remove {path} \
+         to start peering state over"
+    )]
+    FloorLost {
+        /// The surviving peer state directory.
+        path: String,
+    },
+    /// Whether this device's peer state exists could not be established.
+    #[error("the peer state at {path}: {error}")]
+    StateDir {
+        /// The peer state directory.
+        path: String,
+        /// Why it could not be checked.
+        error: String,
+    },
 }
 
 impl From<SyncStoreError> for PeeringStateError {
@@ -74,9 +97,10 @@ impl From<PeeringStateError> for PeeringError {
             PeeringStateError::Corrupt(_) | PeeringStateError::OutOfRange(_) => {
                 Self::Codec(error.to_string())
             }
-            PeeringStateError::Db(_) | PeeringStateError::Legacy { .. } => {
-                Self::Io(error.to_string())
-            }
+            PeeringStateError::Db(_)
+            | PeeringStateError::Legacy { .. }
+            | PeeringStateError::FloorLost { .. }
+            | PeeringStateError::StateDir { .. } => Self::Io(error.to_string()),
         }
     }
 }
@@ -94,19 +118,28 @@ pub async fn load_floor<C: ConnectionTrait>(
     db: &C,
     device: Uuid,
 ) -> Result<u64, PeeringStateError> {
-    let floor = peering_floor::Entity::find_by_id(device.hyphenated().to_string())
+    let floor = stored_floor(db, device).await?.unwrap_or(0);
+    tracing::debug!(%device, floor, "peering: the directory floor is loaded");
+    Ok(floor)
+}
+
+/// The floor row stored for `device`, `None` when it has never recorded one.
+async fn stored_floor<C: ConnectionTrait>(
+    db: &C,
+    device: Uuid,
+) -> Result<Option<u64>, PeeringStateError> {
+    peering_floor::Entity::find_by_id(device.hyphenated().to_string())
         .one(db)
         .await?
-        .map_or(Ok(0), |row| {
+        .map(|row| {
             u64::try_from(row.directory_version).map_err(|_| {
                 PeeringStateError::Corrupt(format!(
                     "the directory floor of device {device} is {}",
                     row.directory_version
                 ))
             })
-        })?;
-    tracing::debug!(%device, floor, "peering: the directory floor is loaded");
-    Ok(floor)
+        })
+        .transpose()
 }
 
 /// Raise the floor stored for `device` to at least `version`, in one statement, and return the
@@ -200,6 +233,35 @@ impl DbDirectoryVersions {
         Ok(())
     }
 
+    /// Refuse a store that has lost this device's floor: no floor row, yet the device's peer
+    /// state directory at `state_dir` exists. Every peer command writes that directory only after
+    /// [`admit`](Self::admit) has stored a floor row, so the two together mean the database was
+    /// deleted or replaced, and a floor of zero would admit a rolled-back directory. Call it after
+    /// [`adopt_legacy_file`](Self::adopt_legacy_file), whose file lives in that directory.
+    ///
+    /// # Errors
+    ///
+    /// [`PeeringStateError::FloorLost`] for a lost floor, [`PeeringStateError::StateDir`] when
+    /// whether the directory exists cannot be established, or the errors of [`load_floor`].
+    #[instrument(level = "debug", skip_all, fields(device = %self.device, state_dir = %state_dir.display()), err)]
+    pub async fn refuse_lost_floor(&self, state_dir: &Path) -> Result<(), PeeringStateError> {
+        if stored_floor(&self.db, self.device).await?.is_some() {
+            return Ok(());
+        }
+        let path = state_dir.display().to_string();
+        match state_dir.try_exists() {
+            Ok(false) => Ok(()),
+            Ok(true) => {
+                tracing::error!(device = %self.device, %path, "peering: the peer state survives but its directory floor is gone");
+                Err(PeeringStateError::FloorLost { path })
+            }
+            Err(error) => Err(PeeringStateError::StateDir {
+                path,
+                error: error.to_string(),
+            }),
+        }
+    }
+
     /// Admit a verified directory at `version`: refused as a rollback when it is below the
     /// floor the store holds now (re-read, so another process's raise counts), otherwise
     /// persisted as the new floor before this returns.
@@ -210,8 +272,20 @@ impl DbDirectoryVersions {
     /// [`PeeringError::Codec`] when the store cannot be read or written.
     #[instrument(level = "debug", skip(self), fields(device = %self.device), err)]
     pub async fn admit(&self, version: u64) -> Result<(), PeeringError> {
-        let floor = load_floor(&self.db, self.device).await?;
-        self.persisted.fetch_max(floor, Ordering::AcqRel);
+        let loaded = load_floor(&self.db, self.device).await?;
+        self.admit_over(version, loaded).await
+    }
+
+    /// The rest of [`admit`](Self::admit), given the floor it loaded. Another process may raise
+    /// the floor between that load and this raise, so the floor the raise returns is checked
+    /// too: a directory below it is refused even though it cleared `loaded`.
+    async fn admit_over(&self, version: u64, loaded: u64) -> Result<(), PeeringError> {
+        self.persisted.fetch_max(loaded, Ordering::AcqRel);
+        let floor = if version < loaded {
+            loaded
+        } else {
+            self.raise(version).await?
+        };
         if version < floor {
             tracing::warn!(device = %self.device, version, floor, "peering: a stale directory is refused");
             return Err(PeeringError::DirectoryRollback {
@@ -219,14 +293,14 @@ impl DbDirectoryVersions {
                 highest: floor,
             });
         }
-        self.raise(version).await?;
         Ok(())
     }
 
-    async fn raise(&self, version: u64) -> Result<(), PeeringStateError> {
+    /// Raise the stored floor to at least `version` and return the floor now stored.
+    async fn raise(&self, version: u64) -> Result<u64, PeeringStateError> {
         let floor = raise_floor(&self.db, self.device, version).await?;
         self.persisted.fetch_max(floor, Ordering::AcqRel);
-        Ok(())
+        Ok(floor)
     }
 }
 
@@ -259,13 +333,15 @@ pub fn feed_asset_uuid(id: &[u8]) -> Option<Uuid> {
         .or_else(|| std::str::from_utf8(id).ok()?.parse().ok())
 }
 
-/// Record a tombstone for each of `assets`, recorded at `at`. An asset already tombstoned keeps
-/// its first record. Called inside the transaction that lands the deletes.
+/// Record a tombstone for each of `assets`, purged at `at`: the asset has left the trash for
+/// good, so no `trash-restore` can bring it back and no peer may. An
+/// asset already tombstoned keeps its first record. Called by a purge, in the transaction that
+/// applies it; never for a delete, which only moves the asset to trash.
 ///
 /// # Errors
 ///
 /// When a row cannot be written.
-pub async fn record_tombstones<C: ConnectionTrait>(
+pub async fn record_purged<C: ConnectionTrait>(
     db: &C,
     assets: &[Uuid],
     at: Timestamp,
@@ -282,13 +358,17 @@ pub async fn record_tombstones<C: ConnectionTrait>(
             ],
         ))
         .await?;
-        tracing::debug!(%asset, "peering: tombstone recorded");
+        tracing::info!(%asset, "peering: purge tombstone recorded");
     }
     Ok(())
 }
 
-/// Every asset this device holds a tombstone for: the recorded tombstones, and every asset the
-/// sync store marks deleted (which covers deletes landed before tombstones were recorded).
+/// Every asset this device holds a tombstone for: the purges it recorded, less any asset the sync
+/// store holds live. An asset in trash is not in the set: it is still restorable, and its delete
+/// manifest is the local chain head, so ingest already quarantines a peer's older copy as stale.
+/// A live sync row for a purged asset is not a sequence the protocol allows (a `trash-restore`
+/// recovers only an asset still in trash, and a purge is what ends that); the device follows its
+/// sync store and logs it rather than refusing a live asset.
 ///
 /// # Errors
 ///
@@ -307,12 +387,14 @@ pub async fn load_tombstones<C: ConnectionTrait>(
     }
     let recorded = tombstones.len();
     for row in synced_asset::Entity::find()
-        .filter(synced_asset::Column::Tombstoned.eq(true))
+        .filter(synced_asset::Column::Tombstoned.eq(false))
         .all(db)
         .await?
     {
-        if let Some(asset) = feed_asset_uuid(&decode_id(&row.asset_id)?) {
-            tombstones.insert(asset);
+        if let Some(asset) = feed_asset_uuid(&decode_id(&row.asset_id)?)
+            && tombstones.remove(&asset)
+        {
+            tracing::warn!(%asset, "peering: a purged asset is live in the sync store; it is not held as a tombstone");
         }
     }
     tracing::debug!(

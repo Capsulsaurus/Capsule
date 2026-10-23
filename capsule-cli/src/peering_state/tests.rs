@@ -1,5 +1,6 @@
 //! The durable peering store: the floor only rises and survives a restart, an unreadable store
-//! is refused rather than read as empty, and tombstones outlive the purge and the process.
+//! is refused rather than read as empty, a lost floor is detected, a delete stays restorable, and
+//! a purge's tombstone outlives the process.
 
 use std::path::PathBuf;
 
@@ -109,6 +110,105 @@ async fn admit_rereads_the_store_so_another_process_raise_counts() {
         Err(PeeringError::DirectoryRollback { highest: 8, .. })
     ));
     assert_eq!(versions.highest().expect("reads"), 8);
+}
+
+#[tokio::test]
+async fn a_raise_between_admits_load_and_its_raise_still_refuses_a_stale_directory() {
+    let file = TempDb::new();
+    let versions = DbDirectoryVersions::open(file.connect().await, DEVICE)
+        .await
+        .expect("opens");
+    raise_floor(&file.connect().await, DEVICE, 5)
+        .await
+        .expect("raises");
+    // `admit` loads the floor...
+    let loaded = load_floor(&file.connect().await, DEVICE)
+        .await
+        .expect("reads");
+    assert_eq!(loaded, 5);
+    // ...another process raises it before `admit` raises...
+    raise_floor(&file.connect().await, DEVICE, 9)
+        .await
+        .expect("another process raises");
+    // ...and a directory that cleared the loaded floor is refused against the stored one.
+    assert!(matches!(
+        versions.admit_over(7, loaded).await,
+        Err(PeeringError::DirectoryRollback {
+            pinned: 7,
+            highest: 9
+        })
+    ));
+    assert_eq!(versions.highest().expect("reads"), 9);
+    assert_eq!(
+        load_floor(&file.connect().await, DEVICE)
+            .await
+            .expect("reads"),
+        9
+    );
+    versions
+        .admit_over(9, loaded)
+        .await
+        .expect("the stored floor itself is admitted");
+}
+
+/// A scratch peer state directory beside the database file, removed when dropped.
+struct StateDir(PathBuf);
+
+impl StateDir {
+    fn beside(file: &TempDb) -> Self {
+        Self(file.0.with_extension("peer"))
+    }
+}
+
+impl Drop for StateDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+#[tokio::test]
+async fn peer_state_that_outlives_its_floor_is_refused_not_started_at_zero() {
+    let file = TempDb::new();
+    let state = StateDir::beside(&file);
+    let versions = DbDirectoryVersions::open(file.connect().await, DEVICE)
+        .await
+        .expect("opens");
+    versions
+        .refuse_lost_floor(&state.0)
+        .await
+        .expect("a device with no peer state starts at zero");
+
+    // The peer state a run left, with the database it wrote its floor to gone.
+    std::fs::create_dir_all(state.0.join("inbox")).expect("creates");
+    std::fs::write(state.0.join("origin.json"), "{}").expect("writes");
+    assert!(matches!(
+        versions.refuse_lost_floor(&state.0).await,
+        Err(PeeringStateError::FloorLost { .. })
+    ));
+
+    versions.admit(0).await.expect("admits");
+    versions
+        .refuse_lost_floor(&state.0)
+        .await
+        .expect("a stored floor, even zero, is continuity");
+}
+
+#[tokio::test]
+async fn a_legacy_floor_file_in_the_peer_state_is_continuity_once_adopted() {
+    let file = TempDb::new();
+    let state = StateDir::beside(&file);
+    std::fs::create_dir_all(&state.0).expect("creates");
+    let legacy = state.0.join("directory_version");
+    std::fs::write(&legacy, "3").expect("writes");
+    let versions = DbDirectoryVersions::open(file.connect().await, DEVICE)
+        .await
+        .expect("opens");
+    versions.adopt_legacy_file(&legacy).await.expect("adopts");
+    versions
+        .refuse_lost_floor(&state.0)
+        .await
+        .expect("the adopted floor is the stored one");
+    assert_eq!(versions.highest().expect("reads"), 3);
 }
 
 #[tokio::test]
@@ -257,12 +357,12 @@ async fn a_legacy_floor_file_is_adopted_once_and_a_corrupt_one_refused() {
     let _ = std::fs::remove_file(&legacy);
 }
 
-fn deleted(asset: &[u8], seq: u64) -> FeedEntry {
+fn entry(kind: ChangeKind, asset: &[u8], seq: u64) -> FeedEntry {
     FeedEntry {
         album_id: b"album".to_vec(),
         sync_seq: seq,
         protocol_version: "2026-05-31".to_string(),
-        kind: ChangeKind::Deleted,
+        kind,
         asset_id: asset.to_vec(),
         manifest_cbor: vec![0xa0],
         metadata_blob: Vec::new(),
@@ -293,24 +393,89 @@ fn a_feed_id_names_a_peering_asset_only_when_it_is_a_uuid() {
 }
 
 #[tokio::test]
+async fn a_deleted_then_restored_asset_is_never_a_tombstone() {
+    let file = TempDb::new();
+    let db = file.connect().await;
+    let raw = Uuid::from_u128(5);
+    let text = Uuid::from_u128(6);
+    let text_id = text.hyphenated().to_string();
+    persist_page(
+        &db,
+        &page(vec![
+            entry(ChangeKind::Created, raw.as_bytes(), 1),
+            entry(ChangeKind::Created, text_id.as_bytes(), 2),
+        ]),
+    )
+    .await
+    .expect("lands");
+    persist_page(
+        &db,
+        &page(vec![
+            entry(ChangeKind::Deleted, raw.as_bytes(), 3),
+            entry(ChangeKind::Deleted, text_id.as_bytes(), 4),
+        ]),
+    )
+    .await
+    .expect("lands the deletes");
+    assert!(
+        load_tombstones(&db).await.expect("loads").is_empty(),
+        "an asset in trash is still restorable, so it is not a tombstone"
+    );
+    // The trash-restore, which the feed carries as an update.
+    persist_page(
+        &db,
+        &page(vec![
+            entry(ChangeKind::Updated, raw.as_bytes(), 5),
+            entry(ChangeKind::Updated, text_id.as_bytes(), 6),
+        ]),
+    )
+    .await
+    .expect("lands the restores");
+    assert!(
+        load_tombstones(&file.connect().await)
+            .await
+            .expect("loads")
+            .is_empty()
+    );
+    assert!(
+        peering_tombstone::Entity::find()
+            .all(&db)
+            .await
+            .expect("reads")
+            .is_empty(),
+        "a delete records nothing permanent"
+    );
+}
+
+#[tokio::test]
 async fn a_purged_asset_stays_tombstoned_after_a_restart() {
     let file = TempDb::new();
     let purged = Uuid::from_u128(1);
     let by_text = Uuid::from_u128(2);
+    let by_text_id = by_text.hyphenated().to_string();
     {
         let db = file.connect().await;
         persist_page(
             &db,
             &page(vec![
-                deleted(purged.as_bytes(), 1),
-                deleted(by_text.hyphenated().to_string().as_bytes(), 2),
-                deleted(b"not-a-uuid", 3),
+                entry(ChangeKind::Created, purged.as_bytes(), 1),
+                entry(ChangeKind::Created, by_text_id.as_bytes(), 2),
+                entry(ChangeKind::Created, b"not-a-uuid", 3),
             ]),
         )
         .await
         .expect("lands");
-        // The purge: the synced row goes, the tombstone stays.
-        exec(&db, "DELETE FROM synced_assets")
+        persist_page(
+            &db,
+            &page(vec![
+                entry(ChangeKind::Deleted, purged.as_bytes(), 4),
+                entry(ChangeKind::Deleted, by_text_id.as_bytes(), 5),
+                entry(ChangeKind::Deleted, b"not-a-uuid", 6),
+            ]),
+        )
+        .await
+        .expect("lands the deletes");
+        record_purged(&db, &[purged, by_text], Timestamp::now())
             .await
             .expect("purges");
     }
@@ -331,24 +496,20 @@ async fn a_purged_asset_stays_tombstoned_after_a_restart() {
 }
 
 #[tokio::test]
-async fn a_delete_landed_before_tombstones_were_recorded_still_counts() {
+async fn a_purged_asset_the_sync_store_holds_live_is_not_returned() {
     let file = TempDb::new();
     let db = file.connect().await;
     let asset = Uuid::from_u128(3);
-    persist_page(&db, &page(vec![deleted(asset.as_bytes(), 1)]))
+    record_purged(&db, &[asset], Timestamp::now())
         .await
-        .expect("lands");
-    // As a store migrated from a build that kept only the synced row.
-    exec(
+        .expect("purges");
+    persist_page(
         &db,
-        "DROP TRIGGER peering_tombstones_never_deleted; DELETE FROM peering_tombstones",
+        &page(vec![entry(ChangeKind::Updated, asset.as_bytes(), 1)]),
     )
     .await
-    .expect("clears");
-    assert_eq!(
-        load_tombstones(&db).await.expect("loads"),
-        BTreeSet::from([asset])
-    );
+    .expect("lands");
+    assert!(load_tombstones(&db).await.expect("loads").is_empty());
 }
 
 #[tokio::test]
@@ -357,10 +518,8 @@ async fn a_tombstone_keeps_its_first_record() {
     let db = file.connect().await;
     let asset = Uuid::from_u128(4);
     let first: Timestamp = "2026-01-01T00:00:00Z".parse().expect("a timestamp");
-    record_tombstones(&db, &[asset], first)
-        .await
-        .expect("records");
-    record_tombstones(&db, &[asset], Timestamp::now())
+    record_purged(&db, &[asset], first).await.expect("records");
+    record_purged(&db, &[asset], Timestamp::now())
         .await
         .expect("recording again is not an error");
     let row = peering_tombstone::Entity::find_by_id(asset.hyphenated().to_string())
@@ -393,7 +552,7 @@ async fn an_unreadable_synced_id_refuses_the_whole_set() {
     let db = file.connect().await;
     exec(
         &db,
-        "INSERT INTO synced_assets VALUES ('!!not base64!!', 'YQ==', 1, 'deleted', 0, 1)",
+        "INSERT INTO synced_assets VALUES ('!!not base64!!', 'YQ==', 1, 'created', 0, 0)",
     )
     .await
     .expect("writes");

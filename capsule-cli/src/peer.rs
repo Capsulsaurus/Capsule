@@ -182,6 +182,12 @@ impl PeerState {
         }
     }
 
+    /// The directory every piece of this device's peer state lives under.
+    #[must_use]
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
     /// Where an earlier build kept the directory floor, which
     /// [`DbDirectoryVersions::adopt_legacy_file`] moves into the CLI database.
     #[must_use]

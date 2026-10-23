@@ -2174,8 +2174,8 @@ fn peer_run_error(command: &str, error: &peer::PeerError) -> eyre::Report {
 }
 
 /// The directory floor `workspace`'s device persists in the CLI database, with any floor an
-/// earlier build kept in a file under `state` adopted into it. An unreadable store refuses the
-/// run rather than starting the floor over.
+/// earlier build kept in a file under `state` adopted into it. An unreadable store, or one that
+/// has lost the floor while `state` survives, refuses the run rather than starting the floor over.
 async fn peer_floor(
     workspace: &Workspace,
     state: &peer::PeerState,
@@ -2189,6 +2189,10 @@ async fn peer_floor(
         .map_err(|error| eyre!("{command} failed: the directory floor: {error}"))?;
     versions
         .adopt_legacy_file(&state.legacy_floor_path())
+        .await
+        .map_err(|error| eyre!("{command} failed: the directory floor: {error}"))?;
+    versions
+        .refuse_lost_floor(state.root())
         .await
         .map_err(|error| eyre!("{command} failed: the directory floor: {error}"))?;
     Ok(versions)
