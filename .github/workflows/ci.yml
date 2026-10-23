@@ -362,7 +362,7 @@ jobs:
           fi
       - name: Upload the processes' logs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: kill-anywhere-logs
           path: target/kill-anywhere-logs/
