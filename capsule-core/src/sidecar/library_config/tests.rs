@@ -1,0 +1,33 @@
+use super::*;
+
+fn cbor_roundtrip<
+    T: serde::Serialize + for<'de> serde::Deserialize<'de> + PartialEq + std::fmt::Debug,
+>(
+    val: &T,
+) -> T {
+    let mut buf = vec![];
+    ciborium::ser::into_writer(val, &mut buf).unwrap();
+    ciborium::de::from_reader(buf.as_slice()).unwrap()
+}
+
+#[test]
+fn test_round_trip_with_scrubbed() {
+    let cfg = LibraryConfigCbor {
+        schema_version: 1,
+        library_name: "My Photos".to_string(),
+        last_opened_at: 1_720_000_000,
+        last_scrubbed_at: Some(1_719_990_000),
+    };
+    assert_eq!(cfg, cbor_roundtrip(&cfg));
+}
+
+#[test]
+fn test_round_trip_no_scrubbed() {
+    let cfg = LibraryConfigCbor {
+        schema_version: 1,
+        library_name: "Library".to_string(),
+        last_opened_at: 1_720_000_000,
+        last_scrubbed_at: None,
+    };
+    assert_eq!(cfg, cbor_roundtrip(&cfg));
+}
