@@ -542,7 +542,7 @@ impl AppState {
             Action::RepairMetadata => match self.library.selected_asset() {
                 Some(asset_id) if self.library.ready().is_some() => {
                     self.stack.push(Screen::Repair);
-                    self.repair.begin(asset_id, &self.library);
+                    self.repair.begin(asset_id);
                     Vec::new()
                 }
                 _ => Vec::new(),

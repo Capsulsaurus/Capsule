@@ -313,7 +313,117 @@ fn a_drawn_circle_moves_resizes_and_is_written_with_its_label() {
             labels: vec!["Ada".to_owned()],
         })
     );
+    // Kept while it is written, dropped once it is.
+    assert!(state.labels().draft().is_some());
+    label(
+        &mut state,
+        LabelAction::Applied(Ok(edited("Region added."))),
+    );
     assert_eq!(state.labels().draft(), None);
+}
+
+/// A written edit's answer, with the snapshot unchanged.
+fn edited(summary: &str) -> Edited {
+    Edited {
+        library: PathBuf::from(LIBRARY),
+        summary: summary.to_owned(),
+        catalogue: catalogue(),
+    }
+}
+
+#[test]
+fn a_region_that_fails_to_write_keeps_its_draft() {
+    let (mut state, _) = editing_asset();
+    label(&mut state, LabelAction::DrawRect);
+    label(&mut state, LabelAction::Finish);
+    assert!(applied(&state.update(Action::Form(FormKey::Submit))).is_some());
+    label(
+        &mut state,
+        LabelAction::Applied(Err("disk full".to_owned())),
+    );
+    assert_eq!(state.labels().draft(), Some(Draft::RECT));
+    // Enter writes it again.
+    label(&mut state, LabelAction::Finish);
+    assert!(applied(&state.update(Action::Form(FormKey::Submit))).is_some());
+}
+
+#[test]
+fn no_second_edit_starts_however_the_status_is_rewritten() {
+    let (mut state, _) = editing_asset();
+    assert!(applied(&label(&mut state, LabelAction::Remove)).is_some());
+
+    // Each of these rewrites the status line; the first edit is still in flight.
+    label(&mut state, LabelAction::DrawCircle);
+    state.update(Action::Back);
+    label(&mut state, LabelAction::Add);
+    assert!(state.update(Action::Form(FormKey::Submit)).is_empty());
+    assert!(matches!(state.labels().status(), Status::Failed(_)));
+    type_text(&mut state, "sunset");
+    assert!(state.update(Action::Form(FormKey::Submit)).is_empty());
+    state.update(Action::Form(FormKey::Cancel));
+
+    label(&mut state, LabelAction::DrawRect);
+    label(&mut state, LabelAction::Finish);
+    assert!(state.update(Action::Form(FormKey::Submit)).is_empty());
+    state.update(Action::Form(FormKey::Cancel));
+    state.update(Action::Back);
+
+    label(&mut state, LabelAction::Nudge(Nudge::Down));
+    label(&mut state, LabelAction::Remove);
+    assert!(state.is_confirming());
+    assert!(state.update(Action::Answer(Answer::Yes)).is_empty());
+    assert!(state.labels().is_working());
+    assert_eq!(state.labels().status(), &Status::Working(WRITING));
+
+    label(
+        &mut state,
+        LabelAction::Applied(Ok(edited("Label removed."))),
+    );
+    assert!(!state.labels().is_working());
+    label(&mut state, LabelAction::Remove);
+    assert!(applied(&state.update(Action::Answer(Answer::Yes))).is_some());
+}
+
+#[test]
+fn reopening_on_another_subject_keeps_the_edit_in_flight_and_names_it() {
+    let (mut state, _) = editing_asset();
+    assert!(applied(&label(&mut state, LabelAction::Remove)).is_some());
+    state.update(Action::Back);
+    state.update(Action::Library(LibraryAction::NextView));
+    state.update(Action::EditLabels);
+    assert_eq!(state.labels().subject(), Some(LabelTarget::Album(ALBUM)));
+    assert!(state.labels().is_working());
+    assert_eq!(state.labels().status(), &Status::Working(WRITING_EARLIER));
+    assert!(
+        label(&mut state, LabelAction::Remove).is_empty(),
+        "one at a time"
+    );
+
+    label(
+        &mut state,
+        LabelAction::Applied(Ok(edited("Label removed."))),
+    );
+    assert_eq!(
+        state.labels().status(),
+        &Status::Done("Earlier edit on asset 00000101: Label removed.".to_owned())
+    );
+    assert!(applied(&label(&mut state, LabelAction::Remove)).is_some());
+}
+
+#[test]
+fn a_preview_of_another_asset_is_dropped() {
+    let (mut state, _) = editing_asset();
+    label(
+        &mut state,
+        LabelAction::PreviewLoaded {
+            asset_id: OTHER,
+            result: Err("late".to_owned()),
+        },
+    );
+    assert_eq!(
+        state.labels().preview().map(|(id, l)| (*id, l.clone())),
+        Some((ASSET, Loadable::Loading))
+    );
 }
 
 #[test]
@@ -544,9 +654,9 @@ fn compose_fits_the_image_and_samples_its_pixels() {
 }
 
 #[test]
-fn a_circle_is_round_on_a_wide_image() {
-    // A 20×10 pixel grid; a circle of radius 0.5 of the shorter side touches the top and the
-    // bottom and spans only the middle half horizontally.
+fn a_circles_radius_scales_with_width_across_and_height_down() {
+    // A 20×10 pixel grid; radius 0.5 is half the width across and half the height down, as
+    // the sidecar records it, so the outline reaches all four edges.
     let lines = compose(
         None,
         20,
@@ -566,8 +676,11 @@ fn a_circle_is_round_on_a_wide_image() {
         })
     };
     assert!(drawn(10));
-    assert!(!drawn(2), "a circle, not an ellipse stretched to the width");
-    assert!(!drawn(17));
+    assert!(
+        drawn(0),
+        "r is a fraction of the width across, not of the shorter side"
+    );
+    assert!(drawn(19));
 }
 
 fn draw(state: &AppState) -> String {

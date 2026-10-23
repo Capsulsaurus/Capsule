@@ -11,8 +11,9 @@
 //! terminal draws, so a region's outline lands on exactly the cells it covers, whatever image
 //! protocol the terminal speaks. The draft is kept in hundredths of the image, so arrow keys
 //! move it in exact steps and the shape written is the one drawn. Coordinates are normalized
-//! to `[0, 1]` over the display orientation; a circle's radius is a fraction of the image's
-//! shorter side, so it is round on any aspect ratio.
+//! to `[0, 1]` over the display orientation; a circle's radius is a fraction of the width
+//! across and of the height down, as the sidecar records it, so on a non-square image it is
+//! drawn as the ellipse it covers.
 //!
 //! The scriptable twins are `capsule label add|remove`, `capsule region add|delete` and
 //! `capsule edit`, each with `--json`.
@@ -41,6 +42,12 @@ pub const STEP: i16 = 2;
 
 /// The smallest radius, width or height a draft shrinks to, in hundredths of the image.
 pub const MIN_EXTENT: i16 = 2;
+
+/// The status while an edit asked on this subject is being written.
+const WRITING: &str = "Writing the edit…";
+
+/// The status while an edit asked on an earlier subject is being written.
+const WRITING_EARLIER: &str = "Writing an edit on the earlier selection…";
 
 /// An edit to write to the library the browser has open.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -138,7 +145,7 @@ impl LabelEffect {
 /// A region being drawn, in hundredths of the image so every step is exact.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Draft {
-    /// A circle: centre and radius (a fraction of the shorter side).
+    /// A circle: centre and radius (a fraction of width across, of height down).
     Circle {
         /// Centre, horizontal.
         cx: i16,
@@ -280,6 +287,14 @@ enum Typing {
     Draft,
 }
 
+/// An edit being written: the subject it was asked on, and the draft it writes, if it writes
+/// one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct InFlight {
+    subject: LabelTarget,
+    draft: Option<Draft>,
+}
+
 /// The label editor's state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LabelEditor {
@@ -292,6 +307,9 @@ pub struct LabelEditor {
     /// The region whose deletion waits for a yes or no.
     deleting: Option<Uuid>,
     status: Status,
+    /// The edit being written. Kept apart from `status`, which any key may rewrite, and
+    /// cleared only when the edit's answer arrives.
+    in_flight: Option<InFlight>,
     /// The subject asset's decoded preview, for drawing regions on.
     preview: Option<(Uuid, Loadable<PreviewImage>)>,
 }
@@ -306,6 +324,7 @@ impl Default for LabelEditor {
             draft: None,
             deleting: None,
             status: Status::Idle,
+            in_flight: None,
             preview: None,
         }
     }
@@ -353,7 +372,7 @@ impl LabelEditor {
     /// Whether an edit is being written.
     #[must_use]
     pub fn is_working(&self) -> bool {
-        self.status.is_working()
+        self.in_flight.is_some()
     }
 
     /// The asset, album or stack being labelled.
@@ -390,16 +409,19 @@ impl LabelEditor {
     /// an asset's original is decoded for drawing regions on.
     pub fn begin(&mut self, subject: LabelTarget, library: &LibraryScreen) -> Vec<Effect> {
         tracing::debug!(target: "capsule_cli::tui", ?subject, "label editor opened");
-        // An edit still being written keeps its status, so its answer lands somewhere visible.
-        let status = if self.is_working() {
-            self.status.clone()
-        } else {
-            Status::Idle
+        // An edit still being written stays in flight, so a second one cannot start, and its
+        // answer lands here; one asked on another subject says so when it lands.
+        let in_flight = self.in_flight;
+        let status = match in_flight {
+            Some(flight) if flight.subject == subject => Status::Working(WRITING),
+            Some(_) => Status::Working(WRITING_EARLIER),
+            None => Status::Idle,
         };
         let preview = self.preview.take();
         *self = Self {
             subject: Some(subject),
             status,
+            in_flight,
             ..Self::default()
         };
         let LabelTarget::Asset(asset_id) = subject else {
@@ -474,7 +496,9 @@ impl LabelEditor {
     /// whether it did.
     pub fn cancel_draft(&mut self) -> bool {
         if self.typing.is_none() && self.draft.take().is_some() {
-            self.status = Status::Idle;
+            if !self.is_working() {
+                self.status = Status::Idle;
+            }
             return true;
         }
         false
@@ -482,10 +506,29 @@ impl LabelEditor {
 
     /// An edit finished: what it did, or why it was not written. The new snapshot has already
     /// reached the browser.
+    ///
+    /// The edit is no longer in flight. An answer for another subject than the one now open
+    /// names it; a region written from the draft drops the draft, and one that was not keeps
+    /// it, so a failed write loses nothing drawn.
     pub fn finish(&mut self, result: Result<String, String>) {
+        let flight = self.in_flight.take();
+        let elsewhere = flight
+            .map(|f| f.subject)
+            .filter(|asked| Some(*asked) != self.subject);
+        if result.is_ok()
+            && elsewhere.is_none()
+            && let Some(written) = flight.and_then(|f| f.draft)
+            && self.draft == Some(written)
+        {
+            self.draft = None;
+        }
+        let text = |text: String| match elsewhere {
+            Some(asked) => format!("Earlier edit on {}: {text}", target_name(asked)),
+            None => text,
+        };
         self.status = match result {
-            Ok(summary) => Status::Done(summary),
-            Err(reason) => Status::Failed(reason),
+            Ok(summary) => Status::Done(text(summary)),
+            Err(reason) => Status::Failed(text(reason)),
         };
     }
 
@@ -536,6 +579,7 @@ impl LabelEditor {
                         target: subject,
                         label,
                     },
+                    None,
                     library,
                     busy,
                 ),
@@ -548,6 +592,7 @@ impl LabelEditor {
                             },
                             label,
                         },
+                        None,
                         library,
                         busy,
                     )
@@ -569,7 +614,9 @@ impl LabelEditor {
                     } else {
                         Draft::RECT
                     });
-                    self.status = Status::Idle;
+                    if !self.is_working() {
+                        self.status = Status::Idle;
+                    }
                 }
                 Vec::new()
             }
@@ -616,9 +663,21 @@ impl LabelEditor {
         self.typing = Some(typing);
     }
 
-    /// Write `edit` to the open library, unless an edit is already being written.
-    fn request(&mut self, edit: Edit, library: &LibraryScreen, busy: bool) -> Vec<Effect> {
+    /// Write `edit` to the open library, unless an edit is already being written. `draft` is
+    /// the drawn region `edit` writes, which is kept until the write succeeds.
+    fn request(
+        &mut self,
+        edit: Edit,
+        draft: Option<Draft>,
+        library: &LibraryScreen,
+        busy: bool,
+    ) -> Vec<Effect> {
+        let Some(subject) = self.subject else {
+            return Vec::new();
+        };
         if self.is_working() {
+            // Ignored, and the status shows again that the earlier edit is still running.
+            self.status = Status::Working(WRITING);
             return Vec::new();
         }
         if busy {
@@ -632,7 +691,8 @@ impl LabelEditor {
             return Vec::new();
         };
         tracing::debug!(target: "capsule_cli::tui", edit = edit.name(), "label edit requested");
-        self.status = Status::Working("Writing the edit…");
+        self.status = Status::Working(WRITING);
+        self.in_flight = Some(InFlight { subject, draft });
         vec![Effect::Labels(LabelEffect::Apply(EditRequest {
             library: credentials.library.clone(),
             passphrase: credentials.passphrase.clone(),
@@ -682,12 +742,11 @@ impl LabelEditor {
                         }
                     }
                 };
-                let effects = self.request(edit, library, busy);
+                // The draft stays until the region is written, so a failed write loses nothing.
+                let draft = (typing == Typing::Draft).then_some(self.draft).flatten();
+                let effects = self.request(edit, draft, library, busy);
                 if !effects.is_empty() {
                     self.typing = None;
-                    if typing == Typing::Draft {
-                        self.draft = None;
-                    }
                 }
                 effects
             }
@@ -706,13 +765,18 @@ impl LabelEditor {
         else {
             return Vec::new();
         };
-        self.status = Status::Idle;
+        self.status = if self.is_working() {
+            Status::Working(WRITING)
+        } else {
+            Status::Idle
+        };
         match answer {
             Answer::Yes => self.request(
                 Edit::DeleteRegion {
                     asset_id,
                     region_id,
                 },
+                None,
                 library,
                 busy,
             ),
@@ -725,6 +789,16 @@ impl LabelEditor {
 fn short(id: Uuid) -> String {
     let simple = id.simple().to_string();
     simple[simple.len() - 8..].to_owned()
+}
+
+/// What a label target is called in a status line: `asset 1a2b3c4d`.
+fn target_name(target: LabelTarget) -> String {
+    match target {
+        LabelTarget::Asset(id) => format!("asset {}", short(id)),
+        LabelTarget::Album(id) => format!("album {}", short(id)),
+        LabelTarget::Stack(id) => format!("stack {}", short(id)),
+        LabelTarget::Region { region_id, .. } => format!("region {}", short(region_id)),
+    }
 }
 
 /// How an outline is drawn.
@@ -748,15 +822,14 @@ impl Highlight {
     }
 }
 
-/// Whether the point `(u, v)`, in fractions of a `width`×`height` pixel image, is inside
-/// `shape`. A circle's radius is a fraction of the shorter side.
-fn inside(shape: RegionShape, u: f32, v: f32, width: f32, height: f32) -> bool {
+/// Whether the point `(u, v)`, in fractions of the image's width and height, is inside
+/// `shape`. A circle's radius is a fraction of width horizontally and of height vertically, as
+/// [`RegionShape::Circle`] records it, so on a non-square image it covers an ellipse.
+fn inside(shape: RegionShape, u: f32, v: f32) -> bool {
     match shape {
         RegionShape::Circle { cx, cy, r } => {
-            let radius = r * width.min(height);
-            let dx = (u - cx) * width;
-            let dy = (v - cy) * height;
-            dx * dx + dy * dy <= radius * radius
+            let (dx, dy) = ((u - cx) / r, (v - cy) / r);
+            dx * dx + dy * dy <= 1.0
         }
         RegionShape::Rect { x, y, w, h } => u >= x && u <= x + w && v >= y && v <= y + h,
     }
@@ -800,7 +873,7 @@ pub fn compose(
             && py >= 0
             && px < fit_w.cast_signed()
             && py < fit_h.cast_signed()
-            && inside(shape, u, v, fw, fh)
+            && inside(shape, u, v)
     };
     let pixel = |gx: usize, gy: usize| -> Option<Color> {
         if gx < left || gy < top || gx >= left + fit_w || gy >= top + fit_h {

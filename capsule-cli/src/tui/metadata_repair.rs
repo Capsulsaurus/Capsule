@@ -82,23 +82,35 @@ const LAT: usize = 0;
 const LON: usize = 1;
 const DATUM: usize = 2;
 
+/// The status while a correction asked on this asset is being written.
+const WRITING: &str = "Writing the correction…";
+
+/// The status while a correction asked on an earlier asset is being written.
+const WRITING_EARLIER: &str = "Writing a correction on the earlier asset…";
+
 /// The metadata repair screen's state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MetadataRepair {
     asset: Option<Uuid>,
-    /// The selected row of the context, the asset itself included.
-    cursor: usize,
+    /// The selected row of the context, the asset itself included, by id: a correction that
+    /// moves the asset along the timeline reorders the context, and the selection follows
+    /// the asset it was on rather than the index.
+    selection: Option<Uuid>,
     time: Form,
     location: Form,
     mode: Option<Mode>,
     status: Status,
+    /// The asset whose correction is being written. Kept apart from `status`, which any key
+    /// may rewrite, and cleared only when the correction's answer arrives.
+    in_flight: Option<Uuid>,
 }
 
 impl Default for MetadataRepair {
     fn default() -> Self {
         Self {
             asset: None,
-            cursor: 0,
+            selection: None,
+            in_flight: None,
             time: Form::new(vec![Field::text("Capture time (RFC 3339)")]),
             location: Form::new(vec![
                 Field::text("Latitude"),
@@ -181,7 +193,7 @@ impl MetadataRepair {
     /// Whether an edit is being written.
     #[must_use]
     pub fn is_working(&self) -> bool {
-        self.status.is_working()
+        self.in_flight.is_some()
     }
 
     /// The asset being repaired.
@@ -212,38 +224,58 @@ impl MetadataRepair {
     }
 
     /// Repair `asset_id` in the library `library` has open; the asset itself is selected.
-    pub fn begin(&mut self, asset_id: Uuid, library: &LibraryScreen) {
+    ///
+    /// A correction still being written stays in flight, so a second one cannot start, and
+    /// its answer lands here; one asked on another asset says so when it lands.
+    pub fn begin(&mut self, asset_id: Uuid) {
         tracing::debug!(target: "capsule_cli::tui", %asset_id, "metadata repair opened");
-        let status = if self.is_working() {
-            self.status.clone()
-        } else {
-            Status::Idle
+        let in_flight = self.in_flight;
+        let status = match in_flight {
+            Some(asked) if asked == asset_id => Status::Working(WRITING),
+            Some(_) => Status::Working(WRITING_EARLIER),
+            None => Status::Idle,
         };
-        let cursor = library
-            .ready()
-            .and_then(|c| context(c, asset_id, SPAN))
-            .map_or(0, |(_, at)| at);
         *self = Self {
             asset: Some(asset_id),
-            cursor,
+            selection: Some(asset_id),
             status,
+            in_flight,
             ..Self::default()
         };
+    }
+
+    /// The context and the selected row's index in it: the row selected by id, or the asset
+    /// itself when that row has left the context.
+    fn rows(&self, catalogue: &Catalogue) -> Option<(Vec<Uuid>, usize)> {
+        let (rows, at) = context(catalogue, self.asset?, SPAN)?;
+        let index = self
+            .selection
+            .and_then(|id| rows.iter().position(|row| *row == id))
+            .unwrap_or(at);
+        Some((rows, index))
     }
 
     /// The selected row of the context, kept inside it.
     #[must_use]
     pub fn selected(&self, catalogue: &Catalogue) -> Option<Uuid> {
-        let (rows, _) = context(catalogue, self.asset?, SPAN)?;
-        let last = rows.len().checked_sub(1)?;
-        rows.get(self.cursor.min(last)).copied()
+        let (rows, index) = self.rows(catalogue)?;
+        rows.get(index).copied()
     }
 
-    /// An edit finished: what it did, or why it was not written.
+    /// An edit finished: what it did, or why it was not written. An answer for another asset
+    /// than the one now open names it.
     pub fn finish(&mut self, result: Result<String, String>) {
+        let elsewhere = self
+            .in_flight
+            .take()
+            .filter(|asked| Some(*asked) != self.asset);
+        let text = |text: String| match elsewhere {
+            Some(asked) => format!("Earlier correction on asset {}: {text}", short(asked)),
+            None => text,
+        };
         self.status = match result {
-            Ok(summary) => Status::Done(summary),
-            Err(reason) => Status::Failed(reason),
+            Ok(summary) => Status::Done(text(summary)),
+            Err(reason) => Status::Failed(text(reason)),
         };
     }
 
@@ -316,13 +348,14 @@ impl MetadataRepair {
                 }
             }
             RepairAction::SelectNext | RepairAction::SelectPrevious => {
-                let len = context(catalogue, asset_id, SPAN).map_or(0, |(rows, _)| rows.len());
-                let cursor = self.cursor.min(len.saturating_sub(1));
-                self.cursor = if action == RepairAction::SelectNext {
-                    (cursor + 1).min(len.saturating_sub(1))
-                } else {
-                    cursor.saturating_sub(1)
-                };
+                if let Some((rows, index)) = self.rows(catalogue) {
+                    let index = if action == RepairAction::SelectNext {
+                        (index + 1).min(rows.len().saturating_sub(1))
+                    } else {
+                        index.saturating_sub(1)
+                    };
+                    self.selection = rows.get(index).copied();
+                }
                 Vec::new()
             }
             RepairAction::Applied(_) => Vec::new(),
@@ -331,7 +364,12 @@ impl MetadataRepair {
 
     /// Write `edit` to the open library, unless an edit is already being written.
     fn request(&mut self, edit: Edit, library: &LibraryScreen, busy: bool) -> Vec<Effect> {
+        let Some(asset_id) = self.asset else {
+            return Vec::new();
+        };
         if self.is_working() {
+            // Ignored, and the status shows again that the earlier one is still running.
+            self.status = Status::Working(WRITING);
             return Vec::new();
         }
         if busy {
@@ -345,7 +383,8 @@ impl MetadataRepair {
             return Vec::new();
         };
         tracing::debug!(target: "capsule_cli::tui", edit = edit.name(), "metadata repair requested");
-        self.status = Status::Working("Writing the correction…");
+        self.status = Status::Working(WRITING);
+        self.in_flight = Some(asset_id);
         vec![Effect::Repair(RepairEffect::Apply(EditRequest {
             library: credentials.library.clone(),
             passphrase: credentials.passphrase.clone(),

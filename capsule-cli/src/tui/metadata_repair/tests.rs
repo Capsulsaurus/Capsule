@@ -340,6 +340,76 @@ fn a_written_correction_moves_the_asset_and_the_browser_follows_it() {
 }
 
 #[test]
+fn the_selected_neighbour_stays_selected_when_a_correction_reorders_the_timeline() {
+    let mut state = repairing(1);
+    repair(&mut state, RepairAction::SelectNext);
+    assert_eq!(state.repair().selected(&catalogue()), Some(id(3)));
+    repair(&mut state, RepairAction::EditTime);
+    // id 2 becomes the oldest: the context is now 3, 5, 6, 2, and index 2 would be id 6.
+    let mut assets = catalogue().assets().to_vec();
+    let mut moved = assets.remove(1);
+    moved.captured = "2020-01-01T00:00:00Z".parse().ok();
+    assets.push(moved);
+    let after = Catalogue::new(assets, Vec::new(), Vec::new());
+    assert_eq!(state.repair().selected(&after), Some(id(3)));
+    repair(&mut state, RepairAction::SelectNext);
+    assert_eq!(state.repair().selected(&after), Some(id(5)));
+
+    // A selection that has left the context falls back to the asset itself.
+    let only = Catalogue::new(
+        vec![entry(2, "2024-06-01T18:00:00Z")],
+        Vec::new(),
+        Vec::new(),
+    );
+    assert_eq!(state.repair().selected(&only), Some(id(2)));
+}
+
+#[test]
+fn no_second_correction_starts_however_the_status_is_rewritten() {
+    let mut state = repairing(0);
+    assert!(written(&repair(&mut state, RepairAction::ClearLocation)).is_some());
+    // A refused copy and a refused parse each rewrite the status line.
+    assert!(repair(&mut state, RepairAction::CopyLocation).is_empty());
+    assert!(matches!(state.repair().status(), Status::Failed(_)));
+    repair(&mut state, RepairAction::EditTime);
+    clear_field(&mut state);
+    type_text(&mut state, "soon");
+    assert!(state.update(Action::Form(FormKey::Submit)).is_empty());
+    state.update(Action::Form(FormKey::Cancel));
+    assert!(repair(&mut state, RepairAction::ClearLocation).is_empty());
+    assert!(state.repair().is_working());
+    assert_eq!(state.repair().status(), &Status::Working(WRITING));
+}
+
+#[test]
+fn reopening_on_another_asset_keeps_the_correction_in_flight_and_names_it() {
+    let mut state = repairing(1);
+    assert!(written(&repair(&mut state, RepairAction::ClearLocation)).is_some());
+    state.update(Action::Back);
+    state.update(Action::Library(LibraryAction::SelectNext));
+    state.update(Action::RepairMetadata);
+    assert_eq!(state.repair().asset(), Some(id(3)));
+    assert!(state.repair().is_working());
+    assert_eq!(state.repair().status(), &Status::Working(WRITING_EARLIER));
+    assert!(
+        repair(&mut state, RepairAction::ClearLocation).is_empty(),
+        "one at a time"
+    );
+
+    let edited = Edited {
+        library: PathBuf::from(LIBRARY),
+        summary: "No location recorded.".to_owned(),
+        catalogue: catalogue(),
+    };
+    repair(&mut state, RepairAction::Applied(Ok(edited)));
+    assert_eq!(
+        state.repair().status(),
+        &Status::Done("Earlier correction on asset 00000102: No location recorded.".to_owned())
+    );
+    assert!(written(&repair(&mut state, RepairAction::ClearLocation)).is_some());
+}
+
+#[test]
 fn a_failed_correction_reports_why() {
     let mut state = repairing(0);
     repair(&mut state, RepairAction::ClearLocation);
