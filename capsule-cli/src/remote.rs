@@ -1021,9 +1021,14 @@ async fn sync_with<C: ConnectionTrait + TransactionTrait>(
         if dry_run {
             summary.applied += page.entries.len();
         } else {
-            summary.applied += syncstore::persist_page(db, &page).await?;
+            summary.applied += syncstore::persist_page(db, &page, jiff::Timestamp::now()).await?;
         }
         summary.pages += 1;
+    }
+    if !dry_run {
+        // Each page swept the trash as it landed; a run that landed none still owes the sweep,
+        // since a retention window closes on the clock and not on a feed entry.
+        syncstore::record_elapsed_purges(db, jiff::Timestamp::now()).await?;
     }
 
     summary.albums = albums.len();
