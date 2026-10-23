@@ -19,7 +19,7 @@ fn db() -> DatabaseDriver {
     DatabaseDriver::open_in_memory().expect("an in-memory catalog opens")
 }
 
-/// Index an asset at the embedder's current canonical version (the S-H1 indexing path), so the
+/// Index an asset at the embedder's current canonical version (the indexing path), so the
 /// tests can seed a pre-bump index without the regeneration loop.
 fn index(
     db: &DatabaseDriver,

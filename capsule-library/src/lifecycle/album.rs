@@ -50,8 +50,8 @@ impl Workspace {
     /// Create a container album: mint AMK_v1 + write-tier + admin keys and an attested
     /// authority, then **persist** the album keystore. Returns the new album id.
     ///
-    /// Fallible since `S-A10`: the keys only exist once they are on disk, and a workspace that
-    /// reports an album it could not persist would hand the caller an album whose assets become
+    /// Fallible because the keys only exist once they are on disk: a workspace that reports an
+    /// album it could not persist would hand the caller an album whose assets become
     /// undecryptable at the next close.
     pub fn create_album(&mut self, name: &str) -> Result<Uuid> {
         self.create_album_with_id(Uuid::now_v7(), name)
@@ -116,9 +116,9 @@ impl Workspace {
 
     /// Resolve `album_id` to the album this workspace already holds, or create it under `name`.
     ///
-    /// This is the verb a client's "default album" wiring wants: before `S-A10` the CLI minted a
-    /// fresh `Imports` album on **every run**, which is precisely how a reopened library ended up
-    /// unable to decrypt or extend its own prior imports.
+    /// This is the verb a client's "default album" wiring wants: minting a fresh
+    /// `Imports` album on **every run** would leave a reopened library unable to decrypt or
+    /// extend its own prior imports.
     pub fn ensure_album(&mut self, album_id: Uuid, name: &str) -> Result<Uuid> {
         if self.albums.contains_key(&album_id) {
             tracing::debug!(album_id = %album_id, "album resolved from the durable keystore");

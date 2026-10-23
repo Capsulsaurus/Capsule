@@ -141,7 +141,7 @@ mod tests {
         assert!(!root.join(".library/lock").exists());
     }
 
-    /// **S-D23, the owed half.** A catalog stamped by a newer build is refused with a typed
+    /// **Newer-catalog refusal.** A catalog stamped by a newer build is refused with a typed
     /// error naming both versions — never downgraded, never opened, and never flattened into
     /// the generic `Db` arm a client can only print. The file is left byte-for-byte untouched
     /// and the lock is released, so the user's *current* build can still open it after an

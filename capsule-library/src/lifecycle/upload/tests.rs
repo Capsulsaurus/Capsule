@@ -1,4 +1,4 @@
-//! `S-D18` — the upload-bundle accessor, including its `S-A10` interaction.
+//! The upload-bundle accessor, including its interaction with durable album keys.
 
 use std::fs;
 
@@ -126,10 +126,11 @@ fn wire_content_type_passes_the_closed_enum_and_masks_the_rest() {
     }
 }
 
-/// **The `S-A10` interaction.** A bundle built after closing and reopening the library is
+/// **The durable-keys interaction.** A bundle built after closing and reopening the library is
 /// byte-identical to one built before the close: album keys, authorities, the asset's chain and
-/// its exact sealed metadata blob all survive, so a push is re-runnable across processes. Before
-/// `S-A10` the reopened workspace held no AMK at all and this could not even be attempted.
+/// its exact sealed metadata blob all survive, so a push is re-runnable across processes. Were
+/// album keys not persisted, the reopened workspace would hold no AMK at all and this could not
+/// even be attempted.
 #[test]
 fn upload_bundle_survives_a_reopen() {
     let lib = TempDir::new().unwrap();
@@ -161,7 +162,7 @@ fn upload_bundle_survives_a_reopen() {
     assert_eq!(before.timestamp, after.timestamp);
     assert_eq!(before.content_type, after.content_type);
 
-    // The durable artifacts `S-A10` promises are actually on disk.
+    // The durable artifacts the library promises are actually on disk.
     assert!(lib.path().join(".library").join("albums.cbor").exists());
     let blob = walk_find(lib.path(), &format!("{}.metadata.bin", asset_id.simple()));
     assert!(blob, "the sealed metadata blob is persisted per asset");
@@ -222,7 +223,7 @@ fn walk_find(root: &std::path::Path, name: &str) -> bool {
         .any(|e| e.file_name().to_string_lossy() == name)
 }
 
-// ── Derivative blobs cross the network encrypted (S-B1 / encryption.md) ──────
+// ── Derivative blobs cross the network encrypted (encryption.md) ─────────────
 
 /// A library with one **decodable** asset large enough to earn a real derivative, so the
 /// derivative path is exercised rather than the `original` sentinel.
@@ -626,7 +627,7 @@ fn a_derivative_survives_a_reopen_and_still_reaches_the_bundle() {
     let src = TempDir::new().unwrap();
     let (_album, asset_id) = library_with_a_thumbnailed_asset(&lib, &src);
 
-    // A second `Workspace::open` — the S-A10 shape: nothing shared but the directory.
+    // A second `Workspace::open` — a cold start: nothing shared but the directory.
     let ws = Workspace::open(lib.path(), b"passphrase", FAST).unwrap();
     let bundle = ws.upload_bundle(&asset_id).unwrap();
     assert_eq!(

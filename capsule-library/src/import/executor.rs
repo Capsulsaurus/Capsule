@@ -164,7 +164,7 @@ pub fn execute_with_source_metadata(
         imported = summary.imported_count(),
         duplicates = summary.duplicate_count(),
         errors = summary.error_count(),
-        // Imported, but with no thumbnail/preview: the first is the expected S-B13 codec gap,
+        // Imported, but with no thumbnail/preview: the first is the expected no-codec gap,
         // the second a genuine decode failure of a format we do support.
         derivatives_deferred = summary.deferred_derivative_count(),
         derivatives_decode_failed = summary.decode_failed_count(),
@@ -182,8 +182,8 @@ pub fn execute_with_source_metadata(
 ///
 /// The single place a [`SourceMetadataIndex`] is turned into a [`SidecarEnrichment`], shared by
 /// this executor and the [streaming window](crate::import::streaming) so a *streamed*
-/// third-party import writes exactly what a bulk one does (`S-B11` closed the gap `S-B10` left open). A path the index does not
-/// cover, or a record that folds to nothing, yields [`None`] — the untouched write path.
+/// third-party import writes exactly what a bulk one does. A path the index does not cover, or a record that folds to nothing, yields
+/// [`None`] — the untouched write path.
 pub(crate) fn member_enrichment(
     source: &SourceMetadataIndex,
     path: &Path,
@@ -419,17 +419,16 @@ mod tests {
         ws
     }
 
-    /// **The S-B13 contract.** An original whose format has no codec in this
+    /// **The no-codec contract.** An original whose format has no codec in this
     /// build is imported as a signed, encrypted, verifiable asset — it simply arrives without a
     /// thumbnail, and the run summary says so.
     ///
-    /// **The distinction is observable again.** `S-C59` retired the decoder and collapsed both
-    /// files below into deferrals, which made the logs' most useful property untestable. With
-    /// `capsule_core::media` on `rawshift-image` the two are apart once more, and they are apart
-    /// for the reason that matters rather than by extension: `iphone.heic` is a format Capsule
-    /// *recognises and cannot decode* (an expected, backfillable gap), while `snap.jpg` is a
-    /// format it can decode whose bytes are not a JPEG (a real problem). Both still land as
-    /// signed, encrypted, self-verifying backups, which is the half that would be worst to lose.
+    /// **The distinction is observable.** With `capsule_core::media` on `rawshift-image` the two
+    /// files below are told apart, and for the reason that matters rather than by extension:
+    /// `iphone.heic` is a format Capsule *recognises and cannot decode* (an expected,
+    /// backfillable gap), while `snap.jpg` is a format it can decode whose bytes are not a JPEG
+    /// (a real problem). Both still land as signed, encrypted, self-verifying backups, which is
+    /// the half that would be worst to lose.
     #[test]
     fn originals_with_no_codec_are_still_imported_and_signed() {
         use crate::lifecycle::DerivativeStatus;
@@ -770,9 +769,9 @@ mod tests {
             "only the primary member is visible"
         );
 
-        // S-B15: the grouping is *durable* — every member carries the signed
-        // `stack_membership` register, sharing one stack id, with exactly one primary. Before
-        // that slice the executor's placement was index columns and nothing else.
+        // The grouping is *durable* — every member carries the signed `stack_membership`
+        // register, sharing one stack id, with exactly one primary, rather than only index
+        // columns.
         let mut stack_ids = Vec::new();
         let mut primaries = 0;
         for id in ws.asset_ids() {

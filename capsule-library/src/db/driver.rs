@@ -720,7 +720,7 @@ mod tests {
         assert_eq!(timeline[0].uuid, "uuid-1");
     }
 
-    /// S-D19: a user-hidden asset is excluded from **every** default projection — timeline,
+    /// A user-hidden asset is excluded from **every** default projection — timeline,
     /// filtered timeline, and album — and surfaces only in `query_hidden`. Hiding is
     /// view-layer only, so it keeps its album membership and stays directly reachable by
     /// uuid and by hash (SSoT: design/organization § Hidden Assets).

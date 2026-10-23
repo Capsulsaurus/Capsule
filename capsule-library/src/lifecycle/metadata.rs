@@ -345,7 +345,7 @@ mod tests {
         (ws, id)
     }
 
-    /// S-H3: AI tags land in the **signed sidecar** as a structurally-separate namespace and
+    /// AI tags land in the **signed sidecar** as a structurally-separate namespace and
     /// survive the seal → canonical-CBOR round-trip; promotion/dismissal are explicit and
     /// per-tag. `add_ai_tags` succeeding at all proves the metadata↔manifest binding self-check
     /// passed — the signed sidecar carrying `tags_ai` re-decrypts to the committed bytes.
@@ -421,7 +421,7 @@ mod tests {
         assert_eq!(remaining, vec!["beach".to_string()]);
     }
 
-    /// S-H3: `current_ai_tags` excludes a suggestion tagged with a superseded model version
+    /// `current_ai_tags` excludes a suggestion tagged with a superseded model version
     /// (mirroring the vector-index stale rule), while the sidecar retains every AI tag.
     #[test]
     fn current_ai_tags_excludes_a_superseded_model_version() {
@@ -459,9 +459,9 @@ mod tests {
 
     // ── Capture-time correction ──────────────────────────────────────────────────────
 
-    /// The `S-B17` write, end to end: the correction lands as a new signed revision, the bundle
-    /// stays in the directory the import chose, the index row follows the sidecar at once, and
-    /// a rebuild from disk agrees with the live row — the two projections
+    /// The capture-time write, end to end: the correction lands as a new signed revision, the
+    /// bundle stays in the directory the import chose, the index row follows the sidecar at
+    /// once, and a rebuild from disk agrees with the live row — the two projections
     /// (`asset_row_from_state` and `rebuild::signed_asset_row`) name the same instant.
     #[test]
     fn a_capture_correction_is_a_signed_revision_that_leaves_the_bundle_in_place() {
@@ -471,8 +471,8 @@ mod tests {
         let src = TempDir::new().unwrap();
         let (mut ws, id) = workspace_with(&lib, &src, b"\xFF\xD8\xFF capture correction bytes");
 
-        // No EXIF in those bytes, so the import stamped the import clock — the pre-`S-B16`
-        // shape every affected asset has.
+        // No EXIF in those bytes, so the import stamped the import clock — the shape of any
+        // asset whose capture time was never read from EXIF.
         let before = ws.asset(&id).unwrap();
         let shard = before.capture_utc;
         let original = ws

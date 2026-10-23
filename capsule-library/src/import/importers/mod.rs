@@ -1,4 +1,4 @@
-//! Third-party **source adapters** (the shared seam `S-B7`/`S-B8`/`S-B9` implement).
+//! Third-party **source adapters** (the shared seam every importer implements).
 //!
 //! Migration from another photo service is an import, not a new pipeline: a [`SourceAdapter`]
 //! yields `(bytes-source, extracted-metadata)` entries into the same [Scan & Extract] stage the

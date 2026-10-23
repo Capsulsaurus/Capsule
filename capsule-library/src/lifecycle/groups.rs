@@ -26,8 +26,8 @@ impl Workspace {
     /// `album_id` constituent's [`AlbumGroupAssertion`] (device-signed, stamped for LWW
     /// convergence). Returns the [`AlbumGroupInvite`] the creator hands to contributors — the
     /// `group_id` plus the creator's own constituent as a sibling hint. The interactive
-    /// membership ceremony is `S-X2`'s; this produces the invite *data*. `home_server` is this
-    /// constituent's origin identity.
+    /// membership ceremony is not performed here; this produces the invite *data*.
+    /// `home_server` is this constituent's origin identity.
     #[tracing::instrument(skip(self), fields(album_id = %album_id))]
     pub fn create_album_group(
         &mut self,
@@ -62,8 +62,9 @@ impl Workspace {
 
     /// Join an existing group as a contributor: write this workspace's own `album_id` constituent's
     /// assertion (asserting the invite's `group_id`, seeded with the invite's siblings + this
-    /// constituent), device-signed. Rides the existing album invite as data (`S-X2` owns the
-    /// membership ceremony). `home_server` is this constituent's origin.
+    /// constituent), device-signed. Rides the existing album invite as data; the
+    /// membership ceremony itself is not performed here. `home_server` is this constituent's
+    /// origin.
     #[tracing::instrument(skip(self, invite), fields(album_id = %album_id, group_id = %invite.group_id))]
     pub fn join_album_group(
         &mut self,
@@ -288,7 +289,7 @@ mod tests {
         let bob_remote = capsule_core::federation::Constituent {
             album_id: b_album,
             home_server: "bob.tld".into(),
-            is_member: true, // Alice holds Bob's AMK via the album invite (S-X2 ceremony).
+            is_member: true, // Alice holds Bob's AMK via the album invite.
             assertion: Some(bob_assertion),
             reachable: false, // bob.tld is down.
             blocked: false,

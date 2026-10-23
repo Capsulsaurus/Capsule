@@ -36,7 +36,7 @@ const RECOVERED_ALBUM_NAME: &str = "Recovered album";
 
 impl Workspace {
     /// Wrap this account's master key under `recovery_secret` into the escrow blob a client
-    /// stores server-side (`PUT /backup/escrow`, slice `S-C12`; driven from the SDK by
+    /// stores server-side (`PUT /backup/escrow`; driven from the SDK by
     /// `capsule_sdk::recovery`).
     ///
     /// The master key **never leaves this workspace**: the raw bytes are handed straight to
@@ -392,9 +392,9 @@ impl Workspace {
 
         // Fold the artifact's escrowed AMKs into the durable keystore **before** writing any
         // asset: this is the step that makes a keyless library whole again, and an asset on disk
-        // whose key was never persisted is exactly the failure `S-A10` exists to end. An album
-        // already known keeps its write capability and authority and simply gains missing epochs;
-        // an unknown album lands read-only with the public authority the artifact carried, since
+        // whose key was never persisted is exactly the failure the durable album keystore exists
+        // to prevent. An album already known keeps its write capability and authority and simply
+        // gains missing epochs; an unknown album lands read-only with the public authority the artifact carried, since
         // a backup escrows content keys and the admin-signed ledger but no signing capability.
         self.absorb_recovered_amks(&artifact)?;
         // Then the albums' and stacks' label records, which need those keys to open: this is

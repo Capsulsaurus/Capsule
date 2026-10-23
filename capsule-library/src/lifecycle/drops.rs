@@ -537,7 +537,7 @@ mod tests {
     use super::super::fast_workspace;
     use super::*;
 
-    /// S-A6: the full guest-drop path through the `Workspace` — issue an upload link, seal a
+    /// The full guest-drop path through the `Workspace` — issue an upload link, seal a
     /// drop to its Drop Key (the WASM/browser half), stage it, and adopt it into an album.
     /// The adopting `create` manifest is `key_mode = wrapped`, self-verifies, and a second
     /// member (holding the same AMK) unwraps `wrapped_file_key` and decrypts the unchanged
@@ -849,7 +849,7 @@ mod tests {
         assert!(ws.asset_ids().is_empty(), "nothing was registered");
     }
 
-    /// S-A6: a rejected drop is discarded — removed from the inbox with no library trace.
+    /// A rejected drop is discarded — removed from the inbox with no library trace.
     #[test]
     fn discarded_drop_leaves_no_trace() {
         use capsule_core::drop::{DropAdopter, UploadLinkIssuer, seal_drop};

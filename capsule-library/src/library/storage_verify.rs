@@ -1,5 +1,4 @@
-//! The verify-before-destroy gate — client half of storage verification (slices `S-C3`
-//! server endpoint / `S-D4` client wiring in the repo-root `SLICES.md`; SSoT:
+//! The verify-before-destroy gate — client half of storage verification (SSoT:
 //! [Transfer — Durability](https://docs/design/transfer/durability/)).
 //!
 //! Before any post-write local cleanup of irreplaceable bytes (releasing a device-owned
@@ -7,7 +6,8 @@
 //! **both** halves to pass: `verify_asset` accepts the asset (crypto validity — the
 //! offline core already implements it) and the server's `POST /storage/verify` verdict is
 //! `durable` (stored ∧ indexed ∧ retrievable for every required blob). The predicate here
-//! is the pure conjunction those call sites consume; fetching the verdict is `S-D4`.
+//! is the pure conjunction those call sites consume; fetching the verdict goes through the
+//! `StorageVerifier` seam.
 
 use std::fs;
 use std::path::Path;
@@ -271,7 +271,7 @@ mod tests {
         assert!(!release_is_safe(&verdict(true, vec![]), true));
     }
 
-    // ─── S-D4 wiring: the gate over the `StorageVerifier` seam ──────────────────
+    // ─── Wiring: the gate over the `StorageVerifier` seam ──────────────────
 
     use std::cell::Cell;
 

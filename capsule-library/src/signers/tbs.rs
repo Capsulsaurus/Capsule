@@ -1,5 +1,4 @@
-//! Windows TPM 2.0 [`HardwareSigner`](capsule_core::crypto::keys::HardwareSigner) over **TBS** (TPM Base Services) —
-//! slice `S-F4`.
+//! Windows TPM 2.0 [`HardwareSigner`](capsule_core::crypto::keys::HardwareSigner) over **TBS** (TPM Base Services).
 //!
 //! The `tpm` reference adapter (`tpm`-feature-gated, so undocumented in a default build) drives a
 //! TPM through `tss-esapi`'s high-level ESAPI and links the system `libtss2` — the Linux path.

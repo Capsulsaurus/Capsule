@@ -282,11 +282,11 @@ pub struct AssetState {
 /// The **index projection** of an asset's stack membership: the two `assets` columns
 /// (`stack_id`, `is_stack_hidden`) that keep a non-primary member out of the timeline.
 ///
-/// Since `S-B15` this is a *derived* value, not a source of truth: the durable record is the
+/// This is a *derived* value, not a source of truth: the durable record is the
 /// sidecar's signed `stack_membership` register, which both the importer and
 /// [`Workspace::set_stack_membership`] write. It survives here for the one case the register
-/// cannot serve — an asset imported **before** `S-B15`, whose placement was written only to the
-/// index and therefore exists nowhere else (see [`Workspace::open`] step (6) and
+/// cannot serve — an asset imported **before** the importer wrote that register, whose
+/// placement was written only to the index and therefore exists nowhere else (see [`Workspace::open`] step (6) and
 /// [`library::rebuild_index`](crate::library::rebuild_index)).
 #[derive(Debug, Clone)]
 pub struct StackPlacement {
@@ -353,7 +353,7 @@ pub struct SignedImportOptions {
     /// Delete the source file after a durable commit (Move mode).
     pub move_source: bool,
     /// Defer Move-mode source deletion to the caller's verify-before-destroy gate
-    /// (`S-D4` [`release_move_source`](crate::library::release_move_source)) instead of
+    /// ([`release_move_source`](crate::library::release_move_source)) instead of
     /// releasing on the local durable commit. Set by every import of a user's file — the
     /// executor and streaming import — because the source is the only other copy until
     /// the *server* durably holds it (invariant 7); the caller releases it through
@@ -386,7 +386,7 @@ pub struct SignedImport {
     /// Whether thumbnail/preview derivatives were generated, and if not, why.
     pub derivatives: DerivativeStatus,
     /// How many `(tier, format)` pairs the tier table commits to and this build cannot encode
-    /// — the per-format half of the `S-B13` gap, which is orthogonal to
+    /// — the per-format half of the no-codec gap, which is orthogonal to
     /// [`derivatives`](Self::derivatives): a `Decoded` asset can still carry deferred formats.
     /// Zero when the still did not decode at all, because nothing was attempted.
     pub deferred_formats: u32,
@@ -551,7 +551,7 @@ impl Workspace {
     /// This workspace's **signed device directory** — the user-IK-signed list of enrolled
     /// device signing keys `verify_asset` resolves a manifest's `created_by_device` against.
     ///
-    /// Exposed so a client can publish it (the `S-C9` device-directory surface, driven from
+    /// Exposed so a client can publish it (the device-directory surface, driven from
     /// the SDK by `capsule_sdk::directory`). The directory is a signed, self-verifying
     /// document: it carries no private key material, and a reader checks it under
     /// [`user_ik_public`](Self::user_ik_public) before trusting a single entry.
@@ -585,7 +585,7 @@ impl Workspace {
     /// bytes the asset's metadata-bearing manifest commits to via `metadata_blob_hash`
     /// ([`AssetState::metadata_blob`]).
     ///
-    /// Persisted since `S-A10`. The blob is AMK ciphertext, so it is safe at rest beside the
+    /// Persisted to disk. The blob is AMK ciphertext, so it is safe at rest beside the
     /// plaintext original, and it cannot be regenerated: [`seal_metadata_blob`] draws a fresh
     /// nonce per call which is folded into the blob key, so re-sealing the same sidecar produces
     /// different bytes and a different content address. Without these bytes on disk a reopened

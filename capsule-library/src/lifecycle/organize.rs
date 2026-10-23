@@ -543,7 +543,7 @@ mod tests {
         ids
     }
 
-    /// S-D13 done-when (round-trip): the flag → filter → sweep loop round-trips on a fixture
+    /// Round-trip: the flag → filter → sweep loop round-trips on a fixture
     /// library. Flag pick/reject/neutral, filter the view by each flag, sweep the rejects to
     /// trash (soft, retention-carrying, the only destructive step), and restore to prove
     /// reversibility.
@@ -598,7 +598,7 @@ mod tests {
         assert!(ws.reject_sweep(30).unwrap().is_empty());
     }
 
-    /// S-D13 done-when (convergence): concurrent flags from two devices converge. Driven
+    /// Convergence: concurrent flags from two devices converge. Driven
     /// exactly as the CRDT tests — two register writes with distinct actors/timestamps merged
     /// in both orders — and through the engine's sync-apply path.
     #[test]
@@ -843,7 +843,7 @@ mod tests {
         assert_eq!(ws.db().query_timeline(0, 100).unwrap().len(), 3);
     }
 
-    /// S-D13: a stack/group's cull state is *derived* from its members (all-rejected → any-pick
+    /// A stack/group's cull state is *derived* from its members (all-rejected → any-pick
     /// → mixed), and flagging a collapsed stack applies the flag to each member.
     #[test]
     fn group_cull_state_derives_from_stack_members() {

@@ -540,9 +540,9 @@ mod archive_tests {
         let id = asset_for(&ws, &contested);
         let sidecar = &ws.asset(&id).expect("asset").sidecar;
 
-        // Row: taken-time vs EXIF precedence — both sides present and disagreeing. Until
-        // `S-B16` fixed `extract_exif` this case could not arise: the EXIF side was always
-        // absent, so the exporter won by default.
+        // Row: taken-time vs EXIF precedence — both sides present and disagreeing. This
+        // case only arises because `extract_exif` reads real EXIF; were the EXIF side always
+        // absent, the exporter would win by default.
         assert_eq!(
             capture_secs(&ws, &id),
             1_622_505_600 + 12 * 3600,

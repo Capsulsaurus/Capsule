@@ -254,7 +254,7 @@ mod tests {
     use super::super::fast_workspace;
     use super::*;
 
-    /// S-A3: the `Workspace` populates `metadata_blob_hash` per the sealing order, the sidecar
+    /// The `Workspace` populates `metadata_blob_hash` per the sealing order, the sidecar
     /// binds to the manifest through the prior head, and a one-byte sidecar mutation quarantines.
     #[test]
     fn metadata_binding_populated_and_enforced() {

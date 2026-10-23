@@ -521,7 +521,7 @@ mod tests {
         assert!(matches!(err, GatedQueryError::Gate(GateError::Locked)));
     }
 
-    /// S-D19 — the Hidden view under the *same* gate contract as Recently Deleted. This is
+    /// The Hidden view under the *same* gate contract as Recently Deleted. This is
     /// the deliberate mirror of `gated_trash_query_refuses_without_grant_and_serves_with_one`
     /// above: one policy, two views. Refuses without a grant, serves with one, and a
     /// Recently Deleted grant never substitutes for a Hidden one.

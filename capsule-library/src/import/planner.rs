@@ -515,7 +515,7 @@ mod tests {
         );
     }
 
-    /// S-B12: the planner consumes the resolution context instead of a raw album id, and
+    /// The planner consumes the resolution context instead of a raw album id, and
     /// records **which rule fired** so a surprising destination is explainable from the plan
     /// alone (SSoT: organization § The Default Album).
     #[test]

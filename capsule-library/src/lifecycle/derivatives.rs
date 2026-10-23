@@ -551,8 +551,8 @@ impl Workspace {
             // does not cost the thumbnail JXL — this arm is the asset with no derivative at all.
             // The signed original, its dimensions and its
             // placeholder are all still right, and failing the import would trade a missing
-            // thumbnail for a missing backup — which is the whole of `S-B13`'s reasoning and
-            // this module's stated contract. Reported as `DecodeFailed`, the "a supported path
+            // thumbnail for a missing backup — which is the whole of the no-codec reasoning
+            // and this module's stated contract. Reported as `DecodeFailed`, the "a supported path
             // produced no derivative and somebody should look at it" bucket, so the run summary
             // counts it instead of staying silent.
             Err(error) => {
