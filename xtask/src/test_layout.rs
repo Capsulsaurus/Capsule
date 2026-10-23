@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use eyre::{ContextCompat, Result, WrapErr, bail};
 use tracing::debug;
 
-use crate::architecture::{cargo_metadata, walk_files};
+use crate::architecture::cargo_metadata;
 
 pub(crate) fn run(root: &Path) -> Result<()> {
     let metadata = cargo_metadata(root)?;
@@ -60,7 +60,7 @@ fn check_source_dirs(root: &Path, source_dirs: &[PathBuf]) -> Result<Vec<String>
     let mut violations = Vec::new();
     let mut scanned = 0usize;
     for dir in source_dirs.iter().filter(|dir| dir.is_dir()) {
-        walk_files(dir, &mut |path| {
+        walk_source_files(dir, &mut |path| {
             if path.extension().and_then(|extension| extension.to_str()) != Some("rs") {
                 return Ok(());
             }
@@ -93,6 +93,24 @@ fn check_source_dirs(root: &Path, source_dirs: &[PathBuf]) -> Result<Vec<String>
     }
     violations.sort();
     Ok(violations)
+}
+
+/// Visit every file under a crate's `src/`. Unlike the repo-wide walk this skips nothing: a module
+/// directory named `build`, `dist` or `target` is source, and cargo's own `target/` is never
+/// inside a `src/`.
+fn walk_source_files(directory: &Path, visit: &mut impl FnMut(&Path) -> Result<()>) -> Result<()> {
+    for entry in fs::read_dir(directory)
+        .with_context(|| format!("reading directory {}", directory.display()))?
+    {
+        let entry = entry?;
+        let path = entry.path();
+        if entry.file_type()?.is_dir() {
+            walk_source_files(&path, visit)?;
+        } else {
+            visit(&path)?;
+        }
+    }
+    Ok(())
 }
 
 /// An inline test module: where its `mod` keyword sits and its path from the file's own module.

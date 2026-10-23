@@ -133,6 +133,30 @@ fn a_tree_is_checked_file_by_file_and_reports_relative_paths() {
 }
 
 #[test]
+fn module_directories_named_like_build_output_are_still_checked() {
+    let root = tempfile::tempdir().unwrap();
+    let src = root.path().join("crate/src");
+    for name in ["build", "dist", "target"] {
+        fs::create_dir_all(src.join(name)).unwrap();
+        fs::write(
+            src.join(name).join("mod.rs"),
+            "#[cfg(test)]\nmod tests {\n}\n",
+        )
+        .unwrap();
+    }
+
+    let violations = check_source_dirs(root.path(), &[src]).unwrap();
+    assert_eq!(
+        violations,
+        vec![
+            "crate/src/build/mod.rs:2: inline test module `tests`".to_string(),
+            "crate/src/dist/mod.rs:2: inline test module `tests`".to_string(),
+            "crate/src/target/mod.rs:2: inline test module `tests`".to_string(),
+        ]
+    );
+}
+
+#[test]
 fn a_tree_with_no_rust_source_is_a_violation() {
     let root = tempfile::tempdir().unwrap();
     let violations = check_source_dirs(root.path(), &[root.path().join("src")]).unwrap();
