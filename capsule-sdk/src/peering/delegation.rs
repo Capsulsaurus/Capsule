@@ -49,10 +49,13 @@
 //! # Transport
 //!
 //! The hand-off is a self-verifying byte string with a content address ([`HandOff::address`]),
-//! so it rides any channel: the peering channel's ranged pull ([`super::pull_artifact`]), or a
-//! file a CLI writes and another reads. Integrity never depends on the channel: the delegate
-//! re-verifies every hash and the manifest's signature, the server verifies the signature again,
-//! and the origin trusts only custody it fetched itself.
+//! so it rides any channel: the peering channel ([`offer_hand_offs`] on the origin,
+//! [`take_hand_offs`] on the delegate, a resumable ranged pull and the acknowledgement over the
+//! same verified TLS session), or a file a CLI writes and another reads. Integrity never depends
+//! on the channel: the delegate re-verifies every hash and the manifest's signature, the server
+//! verifies the signature again, and the origin trusts only custody it fetched itself. What the
+//! channel adds is identity: a peer serves only hand-offs it sealed itself, and an
+//! acknowledgement counts only from the device the hand-off was sealed for.
 //!
 //! [Peering § Delegation]: https://docs/design/peering/#delegation
 
@@ -75,8 +78,12 @@ use tracing::instrument;
 use uuid::Uuid;
 
 use super::PeeringError;
-use super::channel::{PinnedTrust, admit_device, admit_directory};
-use super::session::DirectoryVersions;
+use super::channel::{
+    Offering, PeerChannel, PeerClient, PinnedTrust, ServeReport, admit_device, admit_directory,
+    serve,
+};
+use super::session::{DirectoryVersions, TrustSource};
+use super::transfer::pull_over_channel;
 use crate::push::{bundle_blobs, create_request};
 use crate::staged::{StagedAsset, StagedScheduler, TierBlob};
 use crate::upload::{BlobRole, CreateUploadRequest, UploadClient, UploadError, UploadOutcome};
@@ -146,6 +153,15 @@ pub enum DelegationError {
     /// An acknowledgement names another hand-off or another delegate than the one recorded.
     #[error("the acknowledgement does not match the recorded hand-off")]
     AckMismatch,
+    /// A hand-off pulled over the peering channel was sealed by another device than the peer the
+    /// handshake verified: a peer serves only its own hand-offs.
+    #[error("the hand-off was sealed by device {origin}, not by the verified peer {peer}")]
+    WrongOrigin {
+        /// The origin the hand-off names.
+        origin: Uuid,
+        /// The peer the channel verified.
+        peer: Uuid,
+    },
 }
 
 /// The server's `error.*` codes that refuse a hand-off's requests for good. The delegate sends
@@ -178,6 +194,27 @@ pub const PERMANENT_UPLOAD_REFUSALS: [&str; 6] = [
 ];
 
 impl DelegationError {
+    /// The stable name a `--json` report and a channel refusal carry this error under. A refused
+    /// device or directory is named by its [`PeeringError::kind`]; every other variant has its
+    /// own name, never renamed.
+    #[must_use]
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Peering(error) => error.kind(),
+            Self::SelfDelegation => "self_delegation",
+            Self::Malformed(_) => "malformed",
+            Self::UnsupportedFormat { .. } => "unsupported_format",
+            Self::WrongDelegate { .. } => "wrong_delegate",
+            Self::ProtocolUnsupported { .. } => "protocol_unsupported",
+            Self::Tampered(_) => "tampered",
+            Self::Inbox(_) => "inbox",
+            Self::Upload(_) => "upload",
+            Self::UnknownDelegation(_) => "unknown_delegation",
+            Self::AckMismatch => "ack_mismatch",
+            Self::WrongOrigin { .. } => "wrong_origin",
+        }
+    }
+
     /// The stable `error.*` code the server supplied, when there was one.
     #[must_use]
     pub fn error_code(&self) -> Option<&str> {
@@ -1149,6 +1186,41 @@ pub fn accept_hand_off(
     inbox: &dyn DelegateInbox,
 ) -> Result<(VerifiedHandOff, HandOffAck), DelegationError> {
     let verified = verify_hand_off(bytes, trust, versions, delegate_device, max_protocol)?;
+    persist_and_acknowledge(verified, bytes, delegate_device, inbox)
+}
+
+/// [`accept_hand_off`] for a hand-off pulled over a peering channel from `peer`, the device the
+/// channel's handshake verified: the hand-off must also have been sealed by that peer, so a
+/// peer can hand over only its own uploads.
+///
+/// # Errors
+///
+/// Whatever [`accept_hand_off`] refuses, or [`DelegationError::WrongOrigin`] — checked before
+/// anything is persisted.
+pub fn accept_hand_off_from(
+    bytes: &[u8],
+    peer: Uuid,
+    trust: &PinnedTrust,
+    versions: &dyn DirectoryVersions,
+    delegate_device: Uuid,
+    max_protocol: &str,
+    inbox: &dyn DelegateInbox,
+) -> Result<(VerifiedHandOff, HandOffAck), DelegationError> {
+    let verified = verify_hand_off(bytes, trust, versions, delegate_device, max_protocol)?;
+    let origin = verified.hand_off.header.origin_device;
+    if origin != peer {
+        tracing::warn!(%origin, %peer, "delegation: a peer served a hand-off it did not seal");
+        return Err(DelegationError::WrongOrigin { origin, peer });
+    }
+    persist_and_acknowledge(verified, bytes, delegate_device, inbox)
+}
+
+fn persist_and_acknowledge(
+    verified: VerifiedHandOff,
+    bytes: &[u8],
+    delegate_device: Uuid,
+    inbox: &dyn DelegateInbox,
+) -> Result<(VerifiedHandOff, HandOffAck), DelegationError> {
     inbox
         .persist(&verified.address, bytes)
         .map_err(|error| DelegationError::Inbox(format!("persist the hand-off: {error}")))?;
@@ -1159,6 +1231,191 @@ pub fn accept_hand_off(
     };
     tracing::info!(asset_id = %ack.asset_id, hand_off = %ack.hand_off, "delegation: persisted and acknowledged");
     Ok((verified, ack))
+}
+
+// ─── Over the peering channel ─────────────────────────────────────────────────
+
+/// **The origin's side** of a hand-off over a verified peering channel: offer each sealed
+/// hand-off to the channel's peer, serve its ranged pulls, and take its acknowledgements,
+/// authorizing every request against `trust` ([`serve`]).
+///
+/// Every hand-off must be sealed for the peer the handshake verified. An acknowledgement must
+/// name that peer and one of these hand-offs, and the asset it was sealed for, before `on_ack`
+/// (which records it in the origin ledger) sees it.
+///
+/// # Errors
+///
+/// [`DelegationError::WrongDelegate`] for a hand-off sealed for another device (nothing is sent),
+/// or the [`PeeringError`] that ended the session.
+#[instrument(skip_all, fields(peer = %channel.peer().device_id, hand_offs = sealed.len()))]
+pub async fn offer_hand_offs<T, F>(
+    channel: &mut PeerChannel,
+    sealed: &[SealedHandOff],
+    trust: &T,
+    versions: &dyn DirectoryVersions,
+    mut on_ack: F,
+) -> Result<ServeReport, DelegationError>
+where
+    T: TrustSource,
+    F: FnMut(&HandOffAck) -> Result<(), DelegationError> + Send,
+{
+    let peer = channel.peer().device_id;
+    let mut offering = Offering::new();
+    let mut assets = BTreeMap::new();
+    for hand_off in sealed {
+        if hand_off.delegate != peer {
+            return Err(DelegationError::WrongDelegate {
+                addressed: hand_off.delegate,
+            });
+        }
+        let address = offering.offer(hand_off.bytes.clone())?;
+        assets.insert(address, hand_off.asset_id);
+    }
+    let report = serve(channel, &offering, trust, versions, |ack| {
+        if assets.get(&ack.hand_off) != Some(&ack.asset_id) {
+            return Err(DelegationError::AckMismatch);
+        }
+        on_ack(ack)
+    })
+    .await?;
+    Ok(report)
+}
+
+/// What became of one hand-off a peer offered.
+#[derive(Debug)]
+pub struct TakenHandOff {
+    /// The hand-off's content address, as offered.
+    pub address: String,
+    /// The acknowledgement, when the hand-off verified and was persisted durably: the delegate
+    /// holds it and uploads it, whether or not the origin took the acknowledgement.
+    pub ack: Option<HandOffAck>,
+    /// Why it was not taken (`ack` is `None`), or why its acknowledgement did not reach the
+    /// origin (`ack` is `Some`).
+    pub error: Option<DelegationError>,
+}
+
+/// What one session of [`take_hand_offs`] did.
+#[derive(Debug, Default)]
+pub struct TakenHandOffs {
+    /// Each offered hand-off this session reached, in listing order.
+    pub taken: Vec<TakenHandOff>,
+    /// Whether the channel failed before every offered hand-off was reached: the partial pulls
+    /// are kept, and a later session with the same origin resumes them.
+    pub severed: bool,
+}
+
+/// **The delegate's side** of a hand-off over a verified peering channel: pull each hand-off the
+/// peer offers, verify it ([`accept_hand_off_from`], so it must be the verified peer's own),
+/// persist it durably, and only then acknowledge it over the same channel.
+///
+/// `partials` holds the bytes of pulls an earlier session lost with its channel, by address: a
+/// pull resumes after them and re-fetches none of them, and a pull severed now leaves what it
+/// received there. A hand-off the inbox already holds (taken in an earlier session whose
+/// acknowledgement was lost) is re-verified from the inbox and acknowledged again, not pulled.
+///
+/// The session ends with [`PeerClient::finish`] unless the channel broke or the peer refused a
+/// request, which ends it on the peer's side.
+#[allow(clippy::too_many_arguments)]
+#[instrument(skip_all, fields(peer = %client.peer().device_id, offered = client.listing().len()))]
+pub async fn take_hand_offs(
+    client: &PeerClient,
+    trust: &PinnedTrust,
+    versions: &dyn DirectoryVersions,
+    delegate_device: Uuid,
+    max_protocol: &str,
+    inbox: &dyn DelegateInbox,
+    partials: &mut BTreeMap<String, Vec<u8>>,
+) -> TakenHandOffs {
+    let peer = client.peer().device_id;
+    let mut outcome = TakenHandOffs::default();
+    let mut ended = false;
+    for offered in client.listing() {
+        let address = offered.address.clone();
+        let held = match inbox.load(&address) {
+            Ok(held) => held,
+            Err(error) => {
+                outcome.taken.push(TakenHandOff {
+                    address,
+                    ack: None,
+                    error: Some(DelegationError::Inbox(format!("read the inbox: {error}"))),
+                });
+                continue;
+            }
+        };
+        let bytes = if let Some(bytes) = held {
+            bytes
+        } else {
+            let mut partial = partials.remove(&address).unwrap_or_default();
+            match pull_over_channel(client, &address, offered.len, &mut partial).await {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    if !partial.is_empty() {
+                        partials.insert(address.clone(), partial);
+                    }
+                    let refused = matches!(error, PeeringError::PeerRefused { .. });
+                    outcome.taken.push(TakenHandOff {
+                        address,
+                        ack: None,
+                        error: Some(error.into()),
+                    });
+                    if client.is_broken() {
+                        outcome.severed = true;
+                        ended = true;
+                        break;
+                    }
+                    if refused {
+                        ended = true;
+                        break;
+                    }
+                    continue;
+                }
+            }
+        };
+        let accepted = accept_hand_off_from(
+            &bytes,
+            peer,
+            trust,
+            versions,
+            delegate_device,
+            max_protocol,
+            inbox,
+        );
+        let ack = match accepted {
+            Ok((_, ack)) => ack,
+            Err(error) => {
+                tracing::warn!(%address, %error, "delegation: an offered hand-off was refused");
+                outcome.taken.push(TakenHandOff {
+                    address,
+                    ack: None,
+                    error: Some(error),
+                });
+                continue;
+            }
+        };
+        // A refused acknowledgement is the origin's verdict on that one hand-off, and the
+        // session goes on; a broken channel ends it.
+        let delivered = client.acknowledge(&ack).await;
+        outcome.taken.push(TakenHandOff {
+            address,
+            ack: Some(ack),
+            error: delivered.err().map(DelegationError::from),
+        });
+        if client.is_broken() {
+            outcome.severed = true;
+            ended = true;
+            break;
+        }
+    }
+    if !ended && let Err(error) = client.finish().await {
+        tracing::debug!(%error, "delegation: could not end the session cleanly");
+    }
+    tracing::info!(
+        taken = outcome.taken.iter().filter(|t| t.ack.is_some()).count(),
+        offered = client.listing().len(),
+        severed = outcome.severed,
+        "delegation: hand-off session over"
+    );
+    outcome
 }
 
 /// What [`upload_hand_off`] did.

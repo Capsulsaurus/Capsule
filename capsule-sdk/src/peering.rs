@@ -48,14 +48,16 @@ use std::net::IpAddr;
 use capsule_core::backup::BackupError;
 use capsule_core::crypto::CryptoError;
 pub use channel::{
-    ArtifactSecret, LocalPeer, PEERING_PROTOCOL, PEERING_PROTOCOL_MIN, PeerHello, PinnedTrust,
-    UpdateDevice, VerifiedPeer, VersionWindow, accept, connect,
+    ArtifactSecret, LocalPeer, Message, Offered, Offering, PEERING_PROTOCOL, PEERING_PROTOCOL_MIN,
+    PeerChannel, PeerClient, PeerHello, PinnedTrust, RangeFailure, ServeReport, ServedRange,
+    UpdateDevice, VerifiedPeer, VersionWindow, accept, connect, serve,
 };
 pub use delegation::{
     DelegateInbox, DelegatedUpload, Delegation, DelegationError, DelegationState,
     DeleteDisposition, HandOff, HandOffAck, HeldFailure, MemoryInbox, OriginLedger,
     PERMANENT_UPLOAD_REFUSALS, Quarantine, ReleaseOutcome, RequeueReason, SealedHandOff, Settled,
-    VerifiedHandOff, accept_hand_off, dispose_failure, seal, settle, upload_hand_off,
+    TakenHandOff, TakenHandOffs, VerifiedHandOff, accept_hand_off, accept_hand_off_from,
+    dispose_failure, offer_hand_offs, seal, settle, take_hand_offs, upload_hand_off,
     verify_hand_off,
 };
 pub use delta::{
@@ -66,11 +68,14 @@ pub use discovery::{
     DiscoveredPeer, Discovery, MockDiscovery, OpaqueAdvertisement, RotationEpoch, SERVICE_TYPE,
     new_boot_id, rotation_epoch,
 };
-pub use session::{DirectoryVersions, HandshakeLimiter, MemoryDirectoryVersions, PeerSession};
+pub use session::{
+    DirectoryVersions, HandshakeLimiter, MemoryDirectoryVersions, PeerSession, SharedTrust,
+    TrustSource,
+};
 use thiserror::Error;
 pub use transfer::{
-    ArtifactBlobSource, DeltaExport, LocalLibrary, PeerRestore, artifact_address,
-    build_delta_artifact, ingest, pull_artifact,
+    ArtifactBlobSource, ChannelBlobSource, DeltaExport, LocalLibrary, PeerRestore,
+    artifact_address, build_delta_artifact, ingest, pull_artifact, pull_over_channel,
 };
 use uuid::Uuid;
 
@@ -153,6 +158,75 @@ pub enum PeeringError {
     /// The ranged artifact transfer failed (drop budget exhausted, integrity mismatch).
     #[error("peering transfer failed: {0}")]
     Transfer(String),
+    /// The peer did not complete a read or write on the channel within its bound: the handshake
+    /// within [`channel::HANDSHAKE_TIMEOUT`], a frame within the channel's I/O timeout.
+    #[error("peering channel timed out: {0}")]
+    Timeout(&'static str),
+    /// The peer answered a request with a refusal. `kind` is the peer's stable name for why
+    /// (one of [`PeeringError::kind`] or [`DelegationError::kind`]); it is the peer's claim,
+    /// reported, never acted on as a fact about this device.
+    #[error("the peer refused the request ({kind}): {message}")]
+    PeerRefused {
+        /// The peer's stable name for the refusal.
+        kind: String,
+        /// The peer's English detail.
+        message: String,
+    },
+    /// The address is not on the local network: peering is LAN-only ([`is_lan`]).
+    #[error("{0} is not a local-network address; peering is LAN-only")]
+    NotLan(IpAddr),
+    /// The account's device directory could not be fetched to authorize a request; the request
+    /// is refused rather than served under trust that may be stale (fail closed).
+    #[error("the device directory is unavailable: {0}")]
+    Directory(String),
+}
+
+impl PeeringError {
+    /// The stable name a `--json` report and a channel refusal carry this error under. One per
+    /// variant; never renamed.
+    #[must_use]
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Tls(_) => "peering_tls",
+            Self::Io(_) => "peering_io",
+            Self::VersionDisjoint { .. } => "version_disjoint",
+            Self::ForeignIdentity => "foreign_identity",
+            Self::DirectoryRollback { .. } => "directory_rollback",
+            Self::PeerDirectoryStale { .. } => "peer_directory_stale",
+            Self::RateLimited(_) => "rate_limited",
+            Self::OutOfScope(_) => "out_of_scope",
+            Self::UnknownDevice(_) => "unknown_device",
+            Self::RevokedDevice(_) => "revoked_device",
+            Self::HybridCheckFailed => "hybrid_check_failed",
+            Self::Discovery(_) => "discovery",
+            Self::Codec(_) => "codec",
+            Self::Crypto(_) => "crypto",
+            Self::Backup(_) => "backup",
+            Self::Transfer(_) => "transfer",
+            Self::Timeout(_) => "peering_timeout",
+            Self::PeerRefused { .. } => "peer_refused",
+            Self::NotLan(_) => "not_lan",
+            Self::Directory(_) => "directory_unavailable",
+        }
+    }
+}
+
+/// Whether `ip` is on the local network: loopback, an RFC 1918 private or link-local IPv4
+/// address, or an IPv6 unique-local (`fc00::/7`) or link-local (`fe80::/10`) address, including
+/// an IPv4-mapped one of those. Peering dials and admits only these, so a peering channel never
+/// leaves the LAN.
+#[must_use]
+pub fn is_lan(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => v4.is_loopback() || v4.is_private() || v4.is_link_local(),
+        IpAddr::V6(v6) => {
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return is_lan(IpAddr::V4(v4));
+            }
+            let first = v6.segments()[0];
+            v6.is_loopback() || (first & 0xfe00) == 0xfc00 || (first & 0xffc0) == 0xfe80
+        }
+    }
 }
 
 #[cfg(test)]

@@ -27,10 +27,9 @@ use jiff::Timestamp;
 use tokio::net::{TcpListener, TcpStream};
 use uuid::Uuid;
 
-use super::PeeringError;
 use super::channel::{
-    ArtifactSecret, LocalPeer, PEERING_PROTOCOL, PEERING_PROTOCOL_MIN, PeerHello, PinnedTrust,
-    UpdateDevice, VerifiedPeer, VersionWindow, accept, connect, verify_hello,
+    ArtifactSecret, LocalPeer, PEERING_PROTOCOL, PEERING_PROTOCOL_MIN, PeerChannel, PeerHello,
+    PinnedTrust, UpdateDevice, VerifiedPeer, VersionWindow, accept, connect, verify_hello,
 };
 use super::delta::{
     MIN_OFFER_BUCKET, OFFER_PAGE_CAP, Offer, decode_offer_page, missing_from, offer_bucket,
@@ -46,6 +45,7 @@ use super::transfer::{
     ArtifactBlobSource, DeltaExport, LocalLibrary, artifact_address, build_delta_artifact, ingest,
     pull_artifact,
 };
+use super::{PeeringError, is_lan};
 use crate::fetch::FetchScope;
 
 const ALBUM: u128 = 0xA1;
@@ -391,7 +391,9 @@ async fn run_limited_handshake(
             trust: &server_trust,
             versions: &versions,
         };
-        accept(tcp, local, &limiter).await
+        accept(tcp, local, &limiter)
+            .await
+            .map(PeerChannel::into_peer)
     });
 
     let tcp = TcpStream::connect(addr).await.unwrap();
@@ -402,7 +404,7 @@ async fn run_limited_handshake(
         trust: &client_trust,
         versions: &versions,
     };
-    let client_res = connect(tcp, local).await;
+    let client_res = connect(tcp, local).await.map(PeerChannel::into_peer);
     let server_res = server.await.unwrap();
     (server_res, client_res)
 }
@@ -1364,7 +1366,9 @@ async fn e2e_lan_sync_then_server_reconciliation() {
             trust: &server_trust,
             versions: &versions,
         };
-        accept(tcp, local, &HandshakeLimiter::default()).await
+        accept(tcp, local, &HandshakeLimiter::default())
+            .await
+            .map(PeerChannel::into_peer)
     });
     let tcp = TcpStream::connect(peer_addr).await.unwrap();
     let a_trust = fx.trust(false);
@@ -1379,7 +1383,8 @@ async fn e2e_lan_sync_then_server_reconciliation() {
         },
     )
     .await
-    .unwrap();
+    .unwrap()
+    .into_peer();
     assert_eq!(a_view.device_id, fx.id_b);
     let b_view = server.await.unwrap().unwrap();
 
@@ -1441,4 +1446,34 @@ async fn e2e_lan_sync_then_server_reconciliation() {
         to_upload.is_empty(),
         "content-addressed dedup: A never re-uploads a blob the server already holds"
     );
+}
+
+/// Peering dials and admits only the local network.
+#[test]
+fn only_local_network_addresses_are_lan() {
+    let lan = [
+        "127.0.0.1",
+        "10.1.2.3",
+        "172.16.0.9",
+        "192.168.1.20",
+        "169.254.7.7",
+        "::1",
+        "fd12:3456::1",
+        "fe80::1",
+        "::ffff:192.168.1.20",
+    ];
+    let wan = [
+        "8.8.8.8",
+        "192.0.2.1",
+        "172.32.0.1",
+        "2001:db8::1",
+        "::ffff:8.8.8.8",
+        "0.0.0.0",
+    ];
+    for address in lan {
+        assert!(is_lan(address.parse().unwrap()), "{address}");
+    }
+    for address in wan {
+        assert!(!is_lan(address.parse().unwrap()), "{address}");
+    }
 }

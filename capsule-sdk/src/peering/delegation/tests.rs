@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -16,10 +17,15 @@ use capsule_library::library::{
     BlobVerdict, CustodyReceipt, CustodyReceiptCore, StorageVerdict, VerifierError,
 };
 use capsule_library::lifecycle::Workspace;
+use tokio::net::{TcpListener, TcpStream};
 
 use super::*;
 use crate::net::ConnectionClass;
-use crate::peering::session::MemoryDirectoryVersions;
+use crate::peering::channel::{
+    LocalPeer, MAX_ARTIFACT_LEN, MAX_LISTING, Message, Offered, RangeFailure, ServedRange, accept,
+    connect,
+};
+use crate::peering::session::{HandshakeLimiter, MemoryDirectoryVersions, SharedTrust};
 use crate::testmock::{MockRequest, MockResponse, MockServer};
 use crate::verify::{StaticToken as VerifyToken, StorageVerifyClient, VerifyTransport};
 
@@ -1457,4 +1463,472 @@ async fn a_hand_off_the_server_refuses_for_now_is_kept() {
     assert_eq!(disposed, HeldFailure::Kept);
     assert_eq!(inbox.addresses().expect("reads"), vec![hand_off.address]);
     assert!(inbox.quarantined().expect("reads").is_empty());
+}
+
+// ─── Over the peering channel ─────────────────────────────────────────────────
+
+/// The delegate's signing key: the one `delegate_entry` publishes.
+fn delegate_signer() -> HybridSigningKey {
+    HybridSigningKey::from_seed64(&[0xDE; 64])
+}
+
+/// A real mutual TLS 1.3 channel over loopback between the origin (dialing, signing with the
+/// library's own device signer) and the delegate (listening), both pinning `trust`. Returns
+/// `(origin's channel, delegate's channel)`.
+async fn channel_pair(fixture: &Fixture, trust: &PinnedTrust) -> (PeerChannel, PeerChannel) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("binds");
+    let address = listener.local_addr().expect("an address");
+    let delegate_key = delegate_signer();
+    let delegate_versions = MemoryDirectoryVersions::default();
+    let origin_versions = MemoryDirectoryVersions::default();
+    let limiter = HandshakeLimiter::default();
+    let delegate_side = async {
+        let (tcp, _) = listener.accept().await.expect("accepts");
+        let local = LocalPeer {
+            device_id: fixture.delegate,
+            signer: &delegate_key,
+            trust,
+            versions: &delegate_versions,
+        };
+        accept(tcp, local, &limiter).await
+    };
+    let origin_side = async {
+        let tcp = TcpStream::connect(address).await.expect("dials");
+        let local = LocalPeer {
+            device_id: fixture.origin(),
+            signer: fixture.workspace.device_signer(),
+            trust,
+            versions: &origin_versions,
+        };
+        connect(tcp, local).await
+    };
+    let (delegate, origin) = tokio::join!(delegate_side, origin_side);
+    (
+        origin.expect("the origin verifies the delegate"),
+        delegate.expect("the delegate verifies the origin"),
+    )
+}
+
+/// The delegate's half of a session: read the listing and take every hand-off.
+async fn take(
+    fixture: &Fixture,
+    channel: PeerChannel,
+    trust: &PinnedTrust,
+    inbox: &MemoryInbox,
+    partials: &mut BTreeMap<String, Vec<u8>>,
+) -> TakenHandOffs {
+    let client = PeerClient::open(channel).await.expect("the listing reads");
+    take_hand_offs(
+        &client,
+        trust,
+        &MemoryDirectoryVersions::default(),
+        fixture.delegate,
+        &fixture.bundle.protocol_version,
+        inbox,
+        partials,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn a_hand_off_crosses_a_verified_tls_channel_and_is_acknowledged_over_it() {
+    let fixture = Fixture::new();
+    let trust = fixture.trust();
+    let sealed = fixture.sealed();
+    let (mut origin, delegate) = channel_pair(&fixture, &trust).await;
+    // Each side holds the identity the handshake proved, from the library's own device signer.
+    assert_eq!(origin.peer().device_id, fixture.delegate);
+    assert_eq!(delegate.peer().device_id, fixture.origin());
+
+    let mut ledger = OriginLedger::new();
+    ledger.hand_off(&sealed, BOOT, 0, 60_000);
+    let inbox = MemoryInbox::default();
+    let mut partials = BTreeMap::new();
+    let versions = MemoryDirectoryVersions::default();
+    let serving = offer_hand_offs(
+        &mut origin,
+        std::slice::from_ref(&sealed),
+        &trust,
+        &versions,
+        |ack| ledger.acknowledge(ack),
+    );
+    let taking = take(&fixture, delegate, &trust, &inbox, &mut partials);
+    let (served, taken) = tokio::join!(serving, taking);
+    let served = served.expect("the session ends when the delegate is done");
+
+    assert!(!taken.severed);
+    assert_eq!(taken.taken.len(), 1);
+    let ack = taken.taken[0].ack.clone().expect("taken");
+    assert!(taken.taken[0].error.is_none(), "{taken:?}");
+    assert_eq!(ack.hand_off, sealed.address);
+    assert_eq!(ack.delegate_device, fixture.delegate);
+    assert_eq!(served.acks, vec![ack]);
+    assert_eq!(
+        served.served,
+        vec![ServedRange {
+            address: sealed.address.clone(),
+            start: 0,
+            len: sealed.bytes.len() as u64,
+        }]
+    );
+    // Persisted durably before the acknowledgement, byte for byte.
+    assert_eq!(
+        inbox.load(&sealed.address).expect("reads"),
+        Some(sealed.bytes.clone())
+    );
+    assert!(partials.is_empty());
+    assert_eq!(
+        ledger.get(&sealed.asset_id).expect("recorded").state,
+        DelegationState::Acknowledged
+    );
+}
+
+#[tokio::test]
+async fn a_severed_pull_resumes_on_a_new_channel_without_re_fetching_a_byte() {
+    let fixture = Fixture::new();
+    let trust = fixture.trust();
+    let sealed = fixture.sealed();
+    let total = sealed.bytes.len() as u64;
+    let half = total / 2;
+    let inbox = MemoryInbox::default();
+    let mut partials = BTreeMap::new();
+
+    // Session 1: the channel is cut after half the hand-off crossed it.
+    let mut severing = Offering::new();
+    severing.offer(sealed.bytes.clone()).expect("offers");
+    severing.sever_after = Some(half);
+    let (mut origin, delegate) = channel_pair(&fixture, &trust).await;
+    let versions = MemoryDirectoryVersions::default();
+    let serving = serve(&mut origin, &severing, &trust, &versions, |_| Ok(()));
+    let taking = take(&fixture, delegate, &trust, &inbox, &mut partials);
+    let (served, taken) = tokio::join!(serving, taking);
+    assert!(served.is_err());
+    assert!(taken.severed);
+    assert!(taken.taken[0].ack.is_none());
+    assert_eq!(
+        taken.taken[0].error.as_ref().map(DelegationError::kind),
+        Some("peering_io")
+    );
+    assert_eq!(
+        partials.get(&sealed.address).map(Vec::len),
+        Some(half as usize),
+        "the delegate keeps what crossed before the cut"
+    );
+    assert!(
+        inbox.addresses().expect("reads").is_empty(),
+        "nothing partial is persisted"
+    );
+
+    // Session 2: a fresh handshake, and the pull resumes after what is held.
+    let mut whole = Offering::new();
+    whole.offer(sealed.bytes.clone()).expect("offers");
+    let (mut origin, delegate) = channel_pair(&fixture, &trust).await;
+    let serving = serve(&mut origin, &whole, &trust, &versions, |_| Ok(()));
+    let taking = take(&fixture, delegate, &trust, &inbox, &mut partials);
+    let (served, taken) = tokio::join!(serving, taking);
+    let served = served.expect("the session ends cleanly");
+    assert!(taken.taken[0].ack.is_some(), "{taken:?}");
+    assert_eq!(
+        served.served,
+        vec![ServedRange {
+            address: sealed.address.clone(),
+            start: half,
+            len: total - half,
+        }],
+        "zero bytes cross the channel twice"
+    );
+    assert!(partials.is_empty());
+    assert_eq!(
+        inbox.load(&sealed.address).expect("reads"),
+        Some(sealed.bytes)
+    );
+}
+
+#[tokio::test]
+async fn a_delegate_revoked_mid_session_is_refused_at_its_next_request() {
+    let fixture = Fixture::new();
+    let trust = fixture.trust();
+    let sealed = fixture.sealed();
+    let (mut origin, delegate) = channel_pair(&fixture, &trust).await;
+    let current = SharedTrust::new(trust.clone());
+    let revoked = fixture.trust_of(fixture.directory(
+        6,
+        vec![fixture.origin_entry(), fixture.delegate_entry(true)],
+    ));
+    let mut offering = Offering::new();
+    let address = offering.offer(sealed.bytes.clone()).expect("offers");
+    let versions = MemoryDirectoryVersions::default();
+
+    let serving = serve(&mut origin, &offering, &current, &versions, |_| Ok(()));
+    let pulling = async {
+        let client = PeerClient::open(delegate).await.expect("the listing reads");
+        let first = client.range(&address, 0, Some(16)).await.expect("served");
+        assert_eq!(first, sealed.bytes[..16]);
+        // The directory refreshes on the origin between two requests of one session.
+        current.replace(revoked);
+        client.range(&address, 16, None).await
+    };
+    let (served, second) = tokio::join!(serving, pulling);
+    let refusal = second.expect_err("the next request is refused");
+    assert!(refusal.received.is_empty(), "not one more byte crosses");
+    assert!(
+        matches!(&refusal.error, PeeringError::PeerRefused { kind, .. } if kind == "revoked_device"),
+        "{:?}",
+        refusal.error
+    );
+    assert!(
+        matches!(served, Err(PeeringError::RevokedDevice(id)) if id == fixture.delegate),
+        "the origin ends the session: {served:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_acknowledgement_counts_only_for_the_verified_peer_and_an_offered_hand_off() {
+    let fixture = Fixture::new();
+    let trust = fixture.trust();
+    let sealed = fixture.sealed();
+    let (mut origin, delegate) = channel_pair(&fixture, &trust).await;
+    let mut seen = Vec::new();
+    let versions = MemoryDirectoryVersions::default();
+    let serving = offer_hand_offs(
+        &mut origin,
+        std::slice::from_ref(&sealed),
+        &trust,
+        &versions,
+        |ack| {
+            seen.push(ack.clone());
+            Ok(())
+        },
+    );
+    let genuine = HandOffAck {
+        asset_id: sealed.asset_id,
+        hand_off: sealed.address.clone(),
+        delegate_device: fixture.delegate,
+    };
+    let acking = async {
+        let client = PeerClient::open(delegate).await.expect("the listing reads");
+        // Claiming to speak for another device, or for a hand-off this session did not offer,
+        // or for another asset, is refused; the session goes on.
+        let mut outcomes = Vec::new();
+        for forged in [
+            HandOffAck {
+                delegate_device: fixture.origin(),
+                ..genuine.clone()
+            },
+            HandOffAck {
+                hand_off: "0".repeat(64),
+                ..genuine.clone()
+            },
+            HandOffAck {
+                asset_id: Uuid::from_u128(9),
+                ..genuine.clone()
+            },
+        ] {
+            outcomes.push(client.acknowledge(&forged).await);
+        }
+        outcomes.push(client.acknowledge(&genuine).await);
+        client.finish().await.expect("ends");
+        outcomes
+    };
+    let (served, outcomes) = tokio::join!(serving, acking);
+    for refused in &outcomes[..3] {
+        assert!(
+            matches!(refused, Err(PeeringError::PeerRefused { kind, .. }) if kind == "ack_mismatch"),
+            "{refused:?}"
+        );
+    }
+    assert!(outcomes[3].is_ok());
+    assert_eq!(seen, vec![genuine.clone()]);
+    assert_eq!(served.expect("ends cleanly").acks, vec![genuine]);
+}
+
+#[tokio::test]
+async fn the_origin_offers_only_hand_offs_sealed_for_the_verified_peer() {
+    let fixture = Fixture::new();
+    let trust = fixture.trust();
+    let mut sealed = fixture.sealed();
+    sealed.delegate = Uuid::from_u128(7);
+    let (mut origin, _delegate) = channel_pair(&fixture, &trust).await;
+    let offered = offer_hand_offs(
+        &mut origin,
+        &[sealed],
+        &trust,
+        &MemoryDirectoryVersions::default(),
+        |_| Ok(()),
+    )
+    .await;
+    assert!(matches!(
+        offered,
+        Err(DelegationError::WrongDelegate { addressed }) if addressed == Uuid::from_u128(7)
+    ));
+}
+
+#[test]
+fn a_hand_off_a_peer_did_not_seal_itself_is_refused_before_it_is_persisted() {
+    let fixture = Fixture::new();
+    let sealed = fixture.sealed();
+    let inbox = MemoryInbox::default();
+    let other = Uuid::from_u128(7);
+    let refused = accept_hand_off_from(
+        &sealed.bytes,
+        other,
+        &fixture.trust(),
+        &MemoryDirectoryVersions::default(),
+        fixture.delegate,
+        &fixture.bundle.protocol_version,
+        &inbox,
+    );
+    assert!(matches!(
+        refused,
+        Err(DelegationError::WrongOrigin { origin, peer }) if origin == fixture.origin() && peer == other
+    ));
+    assert!(inbox.addresses().expect("reads").is_empty());
+    let (_, ack) = accept_hand_off_from(
+        &sealed.bytes,
+        fixture.origin(),
+        &fixture.trust(),
+        &MemoryDirectoryVersions::default(),
+        fixture.delegate,
+        &fixture.bundle.protocol_version,
+        &inbox,
+    )
+    .expect("the origin's own hand-off is taken");
+    assert_eq!(ack.hand_off, sealed.address);
+}
+
+#[tokio::test]
+async fn a_listing_past_its_bounds_is_refused_whole() {
+    let fixture = Fixture::new();
+    let trust = fixture.trust();
+    for artifacts in [
+        vec![
+            Offered {
+                address: "a".repeat(64),
+                len: 1,
+            };
+            MAX_LISTING + 1
+        ],
+        vec![Offered {
+            address: "not an address".into(),
+            len: 1,
+        }],
+        vec![Offered {
+            address: "a".repeat(64),
+            len: MAX_ARTIFACT_LEN + 1,
+        }],
+    ] {
+        let (mut origin, delegate) = channel_pair(&fixture, &trust).await;
+        origin
+            .send(&Message::Listing { artifacts })
+            .await
+            .expect("sends");
+        assert!(matches!(
+            PeerClient::open(delegate).await,
+            Err(PeeringError::Codec(_))
+        ));
+    }
+}
+
+#[tokio::test]
+async fn a_frame_past_what_was_asked_breaks_the_pull_before_it_is_read() {
+    let fixture = Fixture::new();
+    let trust = fixture.trust();
+    let address = "b".repeat(64);
+    let listing = Message::Listing {
+        artifacts: vec![Offered {
+            address: address.clone(),
+            len: 64,
+        }],
+    };
+
+    // A reply longer than the request asked for.
+    let (mut origin, delegate) = channel_pair(&fixture, &trust).await;
+    origin.send(&listing).await.expect("sends");
+    let client = PeerClient::open(delegate).await.expect("opens");
+    let lying = async {
+        let request = origin.recv().await.expect("a request");
+        assert!(matches!(
+            request,
+            Message::Range {
+                max_len: Some(4),
+                ..
+            }
+        ));
+        origin
+            .send(&Message::RangeReply { len: 5 })
+            .await
+            .expect("sends");
+    };
+    let ((), pulled) = tokio::join!(lying, client.range(&address, 0, Some(4)));
+    assert!(matches!(
+        pulled,
+        Err(RangeFailure {
+            error: PeeringError::Codec(_),
+            ..
+        })
+    ));
+    assert!(client.is_broken());
+    assert!(
+        client
+            .acknowledge(&HandOffAck {
+                asset_id: Uuid::nil(),
+                hand_off: address.clone(),
+                delegate_device: fixture.delegate,
+            })
+            .await
+            .is_err(),
+        "a broken client sends nothing more"
+    );
+
+    // A data frame larger than the bytes still owed.
+    let (mut origin, delegate) = channel_pair(&fixture, &trust).await;
+    origin.send(&listing).await.expect("sends");
+    let client = PeerClient::open(delegate).await.expect("opens");
+    let flooding = async {
+        origin.recv().await.expect("a request");
+        origin
+            .send(&Message::RangeReply { len: 4 })
+            .await
+            .expect("sends");
+        origin.send_data(&[0; 8]).await.expect("sends");
+    };
+    let ((), pulled) = tokio::join!(flooding, client.range(&address, 0, Some(4)));
+    assert!(matches!(
+        pulled,
+        Err(RangeFailure {
+            error: PeeringError::Codec(_),
+            ..
+        })
+    ));
+}
+
+#[tokio::test]
+async fn a_peer_that_stops_answering_times_out() {
+    let fixture = Fixture::new();
+    let trust = fixture.trust();
+    let address = "c".repeat(64);
+    let (mut origin, delegate) = channel_pair(&fixture, &trust).await;
+    origin
+        .send(&Message::Listing {
+            artifacts: vec![Offered {
+                address: address.clone(),
+                len: 64,
+            }],
+        })
+        .await
+        .expect("sends");
+    let client = PeerClient::open(delegate.with_io_timeout(Duration::from_millis(100)))
+        .await
+        .expect("opens");
+    // The origin holds its end open and never answers.
+    let pulled = client.range(&address, 0, None).await;
+    assert!(matches!(
+        pulled,
+        Err(RangeFailure {
+            error: PeeringError::Timeout(_),
+            ..
+        })
+    ));
+    assert!(client.is_broken());
+    drop(origin);
 }

@@ -500,46 +500,19 @@ impl PeerFailure {
     }
 }
 
-/// The stable name `--json` reports a [`DelegationError`] under. A refused device or directory
-/// is named by its [`PeeringError`] ([`peering_kind`]); every other variant has its own name.
+/// The stable name `--json` reports a [`DelegationError`] under ([`DelegationError::kind`]). A
+/// refused device or directory is named by its [`PeeringError`] ([`peering_kind`]); every other
+/// variant has its own name.
 #[must_use]
 pub fn delegation_kind(error: &DelegationError) -> &'static str {
-    match error {
-        DelegationError::Peering(error) => peering_kind(error),
-        DelegationError::SelfDelegation => "self_delegation",
-        DelegationError::Malformed(_) => "malformed",
-        DelegationError::UnsupportedFormat { .. } => "unsupported_format",
-        DelegationError::WrongDelegate { .. } => "wrong_delegate",
-        DelegationError::ProtocolUnsupported { .. } => "protocol_unsupported",
-        DelegationError::Tampered(_) => "tampered",
-        DelegationError::Inbox(_) => "inbox",
-        DelegationError::Upload(_) => "upload",
-        DelegationError::UnknownDelegation(_) => "unknown_delegation",
-        DelegationError::AckMismatch => "ack_mismatch",
-    }
+    error.kind()
 }
 
-/// The stable name `--json` reports a [`PeeringError`] under.
+/// The stable name `--json` reports a [`PeeringError`] under ([`PeeringError::kind`]): the same
+/// name a peering channel carries a refusal under.
 #[must_use]
 pub fn peering_kind(error: &PeeringError) -> &'static str {
-    match error {
-        PeeringError::Tls(_) => "peering_tls",
-        PeeringError::Io(_) => "peering_io",
-        PeeringError::VersionDisjoint { .. } => "version_disjoint",
-        PeeringError::ForeignIdentity => "foreign_identity",
-        PeeringError::DirectoryRollback { .. } => "directory_rollback",
-        PeeringError::PeerDirectoryStale { .. } => "peer_directory_stale",
-        PeeringError::RateLimited(_) => "rate_limited",
-        PeeringError::OutOfScope(_) => "out_of_scope",
-        PeeringError::UnknownDevice(_) => "unknown_device",
-        PeeringError::RevokedDevice(_) => "revoked_device",
-        PeeringError::HybridCheckFailed => "hybrid_check_failed",
-        PeeringError::Discovery(_) => "discovery",
-        PeeringError::Codec(_) => "codec",
-        PeeringError::Crypto(_) => "crypto",
-        PeeringError::Backup(_) => "backup",
-        PeeringError::Transfer(_) => "transfer",
-    }
+    error.kind()
 }
 
 /// The `capsule peer delegate` run, as `--json` prints it.

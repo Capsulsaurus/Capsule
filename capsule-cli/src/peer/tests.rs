@@ -239,6 +239,13 @@ fn every_delegation_error() -> Vec<DelegationError> {
         PeeringError::Crypto(capsule_core::crypto::CryptoError::Auth("sig")),
         PeeringError::Backup(capsule_core::backup::BackupError::Format("tar".into())),
         PeeringError::Transfer("budget".into()),
+        PeeringError::Timeout("reading a frame"),
+        PeeringError::PeerRefused {
+            kind: "revoked_device".into(),
+            message: "revoked".into(),
+        },
+        PeeringError::NotLan(std::net::IpAddr::from([8, 8, 8, 8])),
+        PeeringError::Directory("unreachable".into()),
     ];
     let mut errors: Vec<DelegationError> =
         peering.into_iter().map(DelegationError::Peering).collect();
@@ -256,6 +263,10 @@ fn every_delegation_error() -> Vec<DelegationError> {
         rejected(400, capsule_i18n::error_codes::UPLOAD_ENVELOPE_REJECTED),
         DelegationError::UnknownDelegation(device),
         DelegationError::AckMismatch,
+        DelegationError::WrongOrigin {
+            origin: device,
+            peer: Uuid::nil(),
+        },
     ]);
     errors
 }

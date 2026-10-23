@@ -1,8 +1,9 @@
 //! Establishing the channel: mutually-authenticated TLS 1.3 with an application-layer hybrid
 //! identity check.
 //!
-//! A peer connection is HTTP over a **mutually-authenticated TLS 1.3** channel with **no CA** —
-//! the device keys are the trust anchor. TLS 1.3 has no ML-DSA certificate path, so the split
+//! A peer connection is a framed request/response exchange over a **mutually-authenticated TLS
+//! 1.3** channel with **no CA** — the device keys are the trust anchor. TLS 1.3 has no ML-DSA
+//! certificate path, so the split
 //! the peering doc mandates is honored exactly:
 //!
 //! 1. **Classical, at the TLS layer.** Each side presents a self-signed leaf ([`rcgen`]) and the
@@ -31,11 +32,36 @@
 //! - **Artifact secret.** A second exporter label yields the per-session [`ArtifactSecret`]
 //!   that seals a sync artifact: fresh per session, never stored, never a user passphrase.
 //!
+//! # After the handshake
+//!
+//! [`accept`] and [`connect`] keep the verified TLS stream and return it as a [`PeerChannel`],
+//! bound to the [`VerifiedPeer`] the hybrid check proved. There is no other path to a payload
+//! byte: nothing is ever sent outside the verified TLS session, and a failed check returns no
+//! channel at all.
+//!
+//! Over it the pair speaks small framed messages ([`Message`]): a one-byte tag, a big-endian
+//! `u32` length, and the payload — JSON for a control frame, raw bytes for a data frame. Every
+//! length is checked against its ceiling **before** a byte of the payload is read
+//! ([`MAX_FRAME`], [`MAX_DATA_FRAME`], [`MAX_RANGE`]), and every read and write is bounded in
+//! time, so a peer can neither make this device allocate without bound nor hold it forever.
+//!
+//! One side **serves** ([`serve`]): it lists the artifacts it offers ([`Offering`]), then
+//! answers ranged pulls of exactly those and takes acknowledgements, authorizing **each
+//! request** against the trust its [`TrustSource`] pins now ([`PeerSession::authorize`]), so a
+//! peer revoked mid-session is refused at its next request. The other side **pulls**
+//! ([`PeerClient`]): the transfer layer drives it through the shared resumable ranged fetch
+//! ([`super::pull_over_channel`]), which verifies the reassembled bytes against their content
+//! address. Every check runs against the identity the handshake verified
+//! ([`PeerChannel::peer`]), never against a device id a frame claims.
+//!
 //! [device directory]: https://docs/design/cryptography/keys/#device-directory
 
+use std::collections::BTreeMap;
 use std::fmt;
+use std::future::Future;
 use std::sync::Arc;
-use std::time::Instant;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use capsule_core::crypto::keys::{
     DeviceDirectory, DeviceEntry, HybridSignature, HybridVerifyingKey, Signer,
@@ -50,25 +76,53 @@ use rustls::{
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio_rustls::{TlsAcceptor, TlsConnector};
+use tokio::sync::Mutex as AsyncMutex;
+use tokio_rustls::{TlsAcceptor, TlsConnector, TlsStream};
 use tracing::instrument;
 use uuid::Uuid;
 
 use super::PeeringError;
-use super::session::{DirectoryVersions, HandshakeLimiter};
+use super::delegation::{DelegationError, HandOffAck};
+use super::session::{DirectoryVersions, HandshakeLimiter, PeerSession, TrustSource};
 use crate::net::negotiation::is_protocol_date;
 
 /// The newest peering **transport protocol** version this build speaks — the top of its
 /// [`VersionWindow`]. Date-based (`YYYY-MM-DD`), it shares the date grammar with the
 /// client-server protocol but is its **own version space**: peering values compare only against
 /// peering values, and the transport revs independently of the server protocol.
-pub const PEERING_PROTOCOL: &str = "2026-10-22";
+pub const PEERING_PROTOCOL: &str = "2026-10-23";
 
 /// The oldest peering transport protocol version this build still speaks — the bottom of its
-/// [`VersionWindow`]. `2026-10-22` added the directory version, the window itself and the
-/// exporter-derived artifact secret to the handshake; a peer older than that cannot satisfy the
-/// anti-rollback rule, so it is outside the window.
-pub const PEERING_PROTOCOL_MIN: &str = "2026-10-22";
+/// [`VersionWindow`]. `2026-10-23` added the framed exchange after the hello ([`Message`]); a
+/// peer older than that closes the channel after its hello and carries no payload, so it is
+/// outside the window and the pair is told which device to update.
+pub const PEERING_PROTOCOL_MIN: &str = "2026-10-23";
+
+/// The bound on the whole handshake: TLS, both hellos and the hybrid check. A peer that stalls
+/// it is dropped.
+pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// The default bound on every frame read and write after the handshake
+/// ([`PeerChannel::with_io_timeout`]).
+pub const DEFAULT_IO_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// The largest data frame. A ranged answer is cut into frames of at most this many bytes.
+pub const MAX_DATA_FRAME: usize = 1024 * 1024;
+
+/// The most bytes one ranged request is answered with, whatever it asked for.
+pub const MAX_RANGE: u64 = crate::fetch::SINK_WINDOW;
+
+/// The most artifacts one [`Offering`] lists; it keeps a listing within [`MAX_FRAME`].
+pub const MAX_LISTING: usize = 256;
+
+/// The largest artifact an [`Offering`] lists and a [`PeerClient`] pulls.
+pub const MAX_ARTIFACT_LEN: u64 = 4 * 1024 * 1024 * 1024;
+
+/// The tag of a control frame: a JSON [`Message`].
+const TAG_CONTROL: u8 = 1;
+
+/// The tag of a data frame: raw bytes of the ranged answer in flight.
+const TAG_DATA: u8 = 2;
 
 /// Length of the exported channel-binding material the hybrid proof covers.
 const EXPORTER_LEN: usize = 32;
@@ -85,9 +139,9 @@ const ARTIFACT_EXPORTER_LABEL: &[u8] = b"EXPORTER-capsule-peering-artifact-v1";
 /// app-layer hybrid check — so this is only a syntactically-valid placeholder.
 const PEER_SNI: &str = "capsule-peer.local";
 
-/// Frame ceiling for the tiny handshake hello (a `device_id`, a protocol string, and a hybrid
-/// signature). Bounds a malicious length prefix.
-const MAX_FRAME: usize = 64 * 1024;
+/// Frame ceiling for the handshake hello (a `device_id`, a protocol string, and a hybrid
+/// signature) and for every control frame after it. Bounds a malicious length prefix.
+pub const MAX_FRAME: usize = 64 * 1024;
 
 /// The trust a device pins to authenticate its peers: the shared account's User IK and the
 /// IK-signed [`DeviceDirectory`]. Both same-user devices pin the *same* directory; a foreign
@@ -591,57 +645,745 @@ fn finish(
     })
 }
 
+/// Run `step`, refusing with [`PeeringError::Timeout`] naming `what` once `limit` passes.
+async fn within<T>(
+    limit: Duration,
+    what: &'static str,
+    step: impl Future<Output = Result<T, PeeringError>>,
+) -> Result<T, PeeringError> {
+    tokio::time::timeout(limit, step)
+        .await
+        .map_err(|_| PeeringError::Timeout(what))?
+}
+
 /// **Server side** of the peering handshake. Admits the source address through `limiter`
 /// (refusing with [`PeeringError::RateLimited`] before any TLS byte), completes a real mutual
 /// TLS 1.3 handshake over `tcp`, derives the channel-binding exporter, exchanges hellos
-/// (read-then-write, so the pair never deadlocks), and runs the [`verify_hello`] check. Returns
-/// the verified peer or the specific rejection — a wrong/revoked/foreign/stale peer fails the
-/// whole handshake before any payload.
+/// (read-then-write, so the pair never deadlocks), and runs the [`verify_hello`] check, all
+/// within [`HANDSHAKE_TIMEOUT`]. Returns the verified channel or the specific rejection — a
+/// wrong/revoked/foreign/stale peer fails the whole handshake before any payload, and no channel
+/// exists to send one over.
 #[instrument(skip(tcp, local, limiter), fields(local = %local.device_id))]
 pub async fn accept(
     tcp: TcpStream,
     local: LocalPeer<'_>,
     limiter: &HandshakeLimiter,
-) -> Result<VerifiedPeer, PeeringError> {
+) -> Result<PeerChannel, PeeringError> {
     let source = tcp.peer_addr().map_err(io_err)?.ip();
     if !limiter.admit(source, Instant::now()) {
         tracing::warn!(%source, "peering handshake rate limit reached; refusing");
         return Err(PeeringError::RateLimited(source));
     }
     let acceptor = TlsAcceptor::from(Arc::new(server_config()?));
-    let mut tls = acceptor.accept(tcp).await.map_err(io_err)?;
+    within(HANDSHAKE_TIMEOUT, "the handshake", async {
+        let mut tls = acceptor.accept(tcp).await.map_err(io_err)?;
 
-    let (exporter, secret) = {
-        let (_io, conn) = tls.get_ref();
-        derive_exporters(|label| conn.export_keying_material([0u8; EXPORTER_LEN], label, None))?
-    };
+        let (exporter, secret) = {
+            let (_io, conn) = tls.get_ref();
+            derive_exporters(|label| conn.export_keying_material([0u8; EXPORTER_LEN], label, None))?
+        };
 
-    let peer_bytes = read_frame(&mut tls).await?;
-    let our_hello = build_hello(&local, &exporter)?;
-    write_frame(&mut tls, &encode(&our_hello)?).await?;
+        let peer_bytes = read_frame(&mut tls).await?;
+        let our_hello = build_hello(&local, &exporter)?;
+        write_frame(&mut tls, &encode(&our_hello)?).await?;
 
-    finish(&peer_bytes, exporter, secret, &local)
+        let peer = finish(&peer_bytes, exporter, secret, &local)?;
+        Ok(PeerChannel::new(TlsStream::Server(tls), peer))
+    })
+    .await
 }
 
-/// **Client side** of the peering handshake. The dialing (behind) device connects, drives the
-/// TLS 1.3 handshake to completion, derives the same exporters, exchanges hellos
-/// (write-then-read), and runs the hybrid check. See [`accept`] for the security contract.
+/// **Client side** of the peering handshake. The dialing device connects, drives the TLS 1.3
+/// handshake to completion, derives the same exporters, exchanges hellos (write-then-read), and
+/// runs the hybrid check, all within [`HANDSHAKE_TIMEOUT`]. See [`accept`] for the security
+/// contract.
 #[instrument(skip(tcp, local), fields(local = %local.device_id))]
-pub async fn connect(tcp: TcpStream, local: LocalPeer<'_>) -> Result<VerifiedPeer, PeeringError> {
+pub async fn connect(tcp: TcpStream, local: LocalPeer<'_>) -> Result<PeerChannel, PeeringError> {
     let connector = TlsConnector::from(Arc::new(client_config()?));
     let name = ServerName::try_from(PEER_SNI)
         .map_err(|e| PeeringError::Tls(e.to_string()))?
         .to_owned();
-    let mut tls = connector.connect(name, tcp).await.map_err(io_err)?;
+    within(HANDSHAKE_TIMEOUT, "the handshake", async {
+        let mut tls = connector.connect(name, tcp).await.map_err(io_err)?;
 
-    let (exporter, secret) = {
-        let (_io, conn) = tls.get_ref();
-        derive_exporters(|label| conn.export_keying_material([0u8; EXPORTER_LEN], label, None))?
+        let (exporter, secret) = {
+            let (_io, conn) = tls.get_ref();
+            derive_exporters(|label| conn.export_keying_material([0u8; EXPORTER_LEN], label, None))?
+        };
+
+        let our_hello = build_hello(&local, &exporter)?;
+        write_frame(&mut tls, &encode(&our_hello)?).await?;
+        let peer_bytes = read_frame(&mut tls).await?;
+
+        let peer = finish(&peer_bytes, exporter, secret, &local)?;
+        Ok(PeerChannel::new(TlsStream::Client(tls), peer))
+    })
+    .await
+}
+
+// ── The verified channel ──────────────────────────────────────────────────────
+
+/// An established, verified peering channel: the TLS 1.3 stream the handshake completed, bound to
+/// the peer whose hybrid identity it verified. Every frame after the handshake travels inside
+/// this TLS session and nowhere else.
+pub struct PeerChannel {
+    stream: TlsStream<TcpStream>,
+    peer: VerifiedPeer,
+    io_timeout: Duration,
+}
+
+impl fmt::Debug for PeerChannel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PeerChannel")
+            .field("peer", &self.peer.device_id)
+            .field("protocol", &self.peer.protocol)
+            .field("io_timeout", &self.io_timeout)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PeerChannel {
+    fn new(stream: TlsStream<TcpStream>, peer: VerifiedPeer) -> Self {
+        tracing::debug!(peer = %peer.device_id, protocol = %peer.protocol, "peering channel established");
+        Self {
+            stream,
+            peer,
+            io_timeout: DEFAULT_IO_TIMEOUT,
+        }
+    }
+
+    /// The peer the handshake verified. Every authorization on this channel is decided against
+    /// this identity, never against a device id a frame claims.
+    #[must_use]
+    pub fn peer(&self) -> &VerifiedPeer {
+        &self.peer
+    }
+
+    /// The verified peer, dropping the stream (closing the channel).
+    #[must_use]
+    pub fn into_peer(self) -> VerifiedPeer {
+        self.peer
+    }
+
+    /// Bound every later frame read and write by `timeout` instead of [`DEFAULT_IO_TIMEOUT`].
+    #[must_use]
+    pub fn with_io_timeout(mut self, timeout: Duration) -> Self {
+        self.io_timeout = timeout;
+        self
+    }
+
+    /// Send one control message.
+    pub(crate) async fn send(&mut self, message: &Message) -> Result<(), PeeringError> {
+        let payload =
+            serde_json::to_vec(message).map_err(|e| PeeringError::Codec(e.to_string()))?;
+        if payload.len() > MAX_FRAME {
+            return Err(PeeringError::Codec(
+                "control frame exceeds its ceiling".into(),
+            ));
+        }
+        tracing::trace!(peer = %self.peer.device_id, kind = message.name(), "peering: send");
+        self.write_tagged(TAG_CONTROL, &payload).await
+    }
+
+    /// Receive one control message.
+    pub(crate) async fn recv(&mut self) -> Result<Message, PeeringError> {
+        let payload = self.read_tagged(TAG_CONTROL, MAX_FRAME).await?;
+        let message: Message =
+            serde_json::from_slice(&payload).map_err(|e| PeeringError::Codec(e.to_string()))?;
+        tracing::trace!(peer = %self.peer.device_id, kind = message.name(), "peering: received");
+        Ok(message)
+    }
+
+    /// Send one data frame (at most [`MAX_DATA_FRAME`] bytes).
+    pub(crate) async fn send_data(&mut self, bytes: &[u8]) -> Result<(), PeeringError> {
+        if bytes.len() > MAX_DATA_FRAME {
+            return Err(PeeringError::Codec("data frame exceeds its ceiling".into()));
+        }
+        self.write_tagged(TAG_DATA, bytes).await
+    }
+
+    /// Receive one data frame of at most `at_most` bytes.
+    pub(crate) async fn recv_data(&mut self, at_most: usize) -> Result<Vec<u8>, PeeringError> {
+        self.read_tagged(TAG_DATA, at_most.min(MAX_DATA_FRAME))
+            .await
+    }
+
+    /// Close the sending half, so the peer reads end-of-stream rather than waiting out its
+    /// timeout. Best effort: the channel is being dropped either way.
+    pub(crate) async fn close(&mut self) {
+        let timeout = self.io_timeout;
+        let _closed = tokio::time::timeout(timeout, self.stream.shutdown()).await;
+    }
+
+    async fn write_tagged(&mut self, tag: u8, payload: &[u8]) -> Result<(), PeeringError> {
+        let len = u32::try_from(payload.len())
+            .map_err(|_| PeeringError::Codec("frame exceeds u32".into()))?;
+        let stream = &mut self.stream;
+        within(self.io_timeout, "writing a frame", async {
+            stream.write_u8(tag).await.map_err(io_err)?;
+            stream.write_u32(len).await.map_err(io_err)?;
+            stream.write_all(payload).await.map_err(io_err)?;
+            stream.flush().await.map_err(io_err)
+        })
+        .await
+    }
+
+    /// Read one frame, which must carry `tag` and at most `max` bytes. The length is checked
+    /// before any of the payload is read or allocated.
+    async fn read_tagged(&mut self, tag: u8, max: usize) -> Result<Vec<u8>, PeeringError> {
+        let stream = &mut self.stream;
+        within(self.io_timeout, "reading a frame", async {
+            let found = stream.read_u8().await.map_err(io_err)?;
+            if found != tag {
+                return Err(PeeringError::Codec(format!(
+                    "expected a frame tagged {tag}, the peer sent {found}"
+                )));
+            }
+            let len = stream.read_u32().await.map_err(io_err)? as usize;
+            if len > max {
+                return Err(PeeringError::Codec(format!(
+                    "a {len}-byte frame exceeds the {max}-byte ceiling"
+                )));
+            }
+            let mut payload = vec![0u8; len];
+            stream.read_exact(&mut payload).await.map_err(io_err)?;
+            Ok(payload)
+        })
+        .await
+    }
+}
+
+/// One artifact a serving peer offers: its content address and length. Both are the server's
+/// claims until the pulled bytes hash to the address.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Offered {
+    /// The artifact's content address (SHA-256, lowercase hex).
+    pub address: String,
+    /// Its length in bytes.
+    pub len: u64,
+}
+
+/// The control messages the channel carries after the handshake. The serving side sends
+/// [`Listing`](Self::Listing) first; the pulling side then sends requests, each answered before
+/// the next is sent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Message {
+    /// Server → client: the artifacts this session serves. Nothing else is served.
+    Listing {
+        /// The offered artifacts.
+        artifacts: Vec<Offered>,
+    },
+    /// Client → server: bytes of `address` from `start`, at most `max_len` (or [`MAX_RANGE`]).
+    Range {
+        /// The artifact's content address.
+        address: String,
+        /// The first byte wanted.
+        start: u64,
+        /// The most bytes wanted; the server never sends more than [`MAX_RANGE`].
+        max_len: Option<u64>,
+    },
+    /// Server → client: `len` bytes follow, in data frames.
+    RangeReply {
+        /// How many bytes follow.
+        len: u64,
+    },
+    /// Client → server: the delegate verified and durably persisted a hand-off.
+    Ack {
+        /// The acknowledgement.
+        ack: HandOffAck,
+    },
+    /// Server → client: the acknowledgement was taken.
+    Acked,
+    /// Server → client: the request was refused. `kind` is a stable name
+    /// ([`PeeringError::kind`], [`DelegationError::kind`]).
+    Refused {
+        /// The stable name of the refusal.
+        kind: String,
+        /// The English detail.
+        message: String,
+    },
+    /// Client → server: the session is over.
+    Done,
+}
+
+impl Message {
+    /// The message's type, for logs.
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Listing { .. } => "listing",
+            Self::Range { .. } => "range",
+            Self::RangeReply { .. } => "range_reply",
+            Self::Ack { .. } => "ack",
+            Self::Acked => "acked",
+            Self::Refused { .. } => "refused",
+            Self::Done => "done",
+        }
+    }
+}
+
+/// Whether `address` is a SHA-256 content address in its canonical spelling.
+fn is_address(address: &str) -> bool {
+    address.len() == 64
+        && address
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+// ── Serving ───────────────────────────────────────────────────────────────────
+
+/// The artifacts one serving session offers, each under the content address this device
+/// computed over its bytes.
+#[derive(Default)]
+pub struct Offering {
+    artifacts: BTreeMap<String, Vec<u8>>,
+    /// Test-only: sever the channel once this many data bytes have been sent.
+    #[cfg(test)]
+    pub(crate) sever_after: Option<u64>,
+}
+
+impl fmt::Debug for Offering {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list().entries(self.listing()).finish()
+    }
+}
+
+impl Offering {
+    /// An empty offering.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Offer `bytes`, returning the content address it is served under.
+    ///
+    /// # Errors
+    ///
+    /// [`PeeringError::Codec`] past [`MAX_LISTING`] artifacts or for an artifact over
+    /// [`MAX_ARTIFACT_LEN`].
+    pub fn offer(&mut self, bytes: Vec<u8>) -> Result<String, PeeringError> {
+        if bytes.len() as u64 > MAX_ARTIFACT_LEN {
+            return Err(PeeringError::Codec(
+                "an artifact exceeds the offer ceiling".into(),
+            ));
+        }
+        let address = super::transfer::artifact_address(&bytes);
+        if !self.artifacts.contains_key(&address) && self.artifacts.len() >= MAX_LISTING {
+            return Err(PeeringError::Codec(format!(
+                "an offering lists at most {MAX_LISTING} artifacts"
+            )));
+        }
+        self.artifacts.insert(address.clone(), bytes);
+        Ok(address)
+    }
+
+    /// Whether `address` is offered.
+    #[must_use]
+    pub fn contains(&self, address: &str) -> bool {
+        self.artifacts.contains_key(address)
+    }
+
+    /// What the listing frame carries.
+    #[must_use]
+    pub fn listing(&self) -> Vec<Offered> {
+        self.artifacts
+            .iter()
+            .map(|(address, bytes)| Offered {
+                address: address.clone(),
+                len: bytes.len() as u64,
+            })
+            .collect()
+    }
+}
+
+/// One ranged answer a serving session sent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServedRange {
+    /// The artifact.
+    pub address: String,
+    /// The first byte sent.
+    pub start: u64,
+    /// How many bytes were sent.
+    pub len: u64,
+}
+
+/// What a serving session did.
+#[derive(Debug, Clone, Default)]
+pub struct ServeReport {
+    /// Every ranged answer, in order.
+    pub served: Vec<ServedRange>,
+    /// Every acknowledgement taken, in order.
+    pub acks: Vec<HandOffAck>,
+}
+
+/// Serve `offering` to the channel's verified peer until it says it is done.
+///
+/// Sends the listing, then answers each request in turn:
+///
+/// - **Every request is authorized first** against the trust `trust` pins now
+///   ([`PeerSession::authorize`]): a peer revoked, or gone from the directory, since the
+///   handshake is refused and the session ends — as it does when `trust` cannot produce current
+///   trust (fail closed).
+/// - **A ranged pull** is answered only for an offered address, with at most [`MAX_RANGE`]
+///   bytes in data frames of at most [`MAX_DATA_FRAME`].
+/// - **An acknowledgement** is taken only when it names the verified peer as the delegate and an
+///   offered address; then `on_ack` decides it. Its refusal is reported to the peer and the
+///   session goes on.
+///
+/// # Errors
+///
+/// The [`PeeringError`] that ended the session: an authorization refusal, a malformed or
+/// unexpected frame, a timeout, or the channel failing.
+#[instrument(skip_all, fields(peer = %channel.peer.device_id, offered = offering.artifacts.len()))]
+pub async fn serve<T, F>(
+    channel: &mut PeerChannel,
+    offering: &Offering,
+    trust: &T,
+    versions: &dyn DirectoryVersions,
+    mut on_ack: F,
+) -> Result<ServeReport, PeeringError>
+where
+    T: TrustSource,
+    F: FnMut(&HandOffAck) -> Result<(), DelegationError> + Send,
+{
+    let mut session = PeerSession::new(&channel.peer);
+    let mut report = ServeReport::default();
+    #[cfg(test)]
+    let mut sent_data: u64 = 0;
+    channel
+        .send(&Message::Listing {
+            artifacts: offering.listing(),
+        })
+        .await?;
+    loop {
+        let request = channel.recv().await?;
+        if request == Message::Done {
+            tracing::info!(
+                served = report.served.len(),
+                acks = report.acks.len(),
+                "peering: session done"
+            );
+            channel.close().await;
+            return Ok(report);
+        }
+        let authorized = match trust.current().await {
+            Ok(now) => session.authorize(&now, versions),
+            Err(error) => Err(error),
+        };
+        if let Err(error) = authorized {
+            tracing::warn!(%error, "peering: request refused; ending the session");
+            refuse(channel, error.kind(), &error.to_string()).await;
+            channel.close().await;
+            return Err(error);
+        }
+        match request {
+            Message::Range {
+                address,
+                start,
+                max_len,
+            } => {
+                let Some(bytes) = offering.artifacts.get(&address) else {
+                    refuse(channel, "not_offered", "the artifact is not offered").await;
+                    continue;
+                };
+                let total = bytes.len() as u64;
+                if start > total {
+                    refuse(
+                        channel,
+                        "range_not_satisfiable",
+                        "the range starts past the end",
+                    )
+                    .await;
+                    continue;
+                }
+                let len = max_len
+                    .unwrap_or(MAX_RANGE)
+                    .min(MAX_RANGE)
+                    .min(total - start);
+                channel.send(&Message::RangeReply { len }).await?;
+                let from = usize::try_from(start)
+                    .map_err(|_| PeeringError::Codec("range start exceeds usize".into()))?;
+                let to = from
+                    + usize::try_from(len)
+                        .map_err(|_| PeeringError::Codec("range exceeds usize".into()))?;
+                for frame in bytes[from..to].chunks(MAX_DATA_FRAME) {
+                    #[cfg(test)]
+                    if let Some(limit) = offering.sever_after
+                        && sent_data + frame.len() as u64 > limit
+                    {
+                        let keep = usize::try_from(limit.saturating_sub(sent_data)).unwrap_or(0);
+                        channel.send_data(&frame[..keep]).await?;
+                        channel.close().await;
+                        return Err(PeeringError::Io("severed by the test".into()));
+                    }
+                    channel.send_data(frame).await?;
+                    #[cfg(test)]
+                    {
+                        sent_data += frame.len() as u64;
+                    }
+                }
+                tracing::debug!(%address, start, len, "peering: served a range");
+                report.served.push(ServedRange {
+                    address,
+                    start,
+                    len,
+                });
+            }
+            Message::Ack { ack } => {
+                let verdict = if ack.delegate_device != channel.peer.device_id
+                    || !offering.contains(&ack.hand_off)
+                {
+                    // An acknowledgement speaks for the verified peer about what this session
+                    // offered, or for nothing.
+                    Err(DelegationError::AckMismatch)
+                } else {
+                    on_ack(&ack)
+                };
+                match verdict {
+                    Ok(()) => {
+                        channel.send(&Message::Acked).await?;
+                        tracing::info!(asset_id = %ack.asset_id, hand_off = %ack.hand_off, "peering: acknowledgement taken");
+                        report.acks.push(ack);
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "peering: acknowledgement refused");
+                        refuse(channel, error.kind(), &error.to_string()).await;
+                    }
+                }
+            }
+            other => {
+                let error = PeeringError::Codec(format!(
+                    "the peer sent {} where a request belongs",
+                    other.name()
+                ));
+                refuse(channel, error.kind(), &error.to_string()).await;
+                channel.close().await;
+                return Err(error);
+            }
+        }
+    }
+}
+
+/// Tell the peer its request was refused. Best effort: a channel that cannot carry the refusal
+/// is ending anyway.
+async fn refuse(channel: &mut PeerChannel, kind: &str, message: &str) {
+    let refusal = Message::Refused {
+        kind: kind.to_owned(),
+        message: message.to_owned(),
     };
+    if let Err(error) = channel.send(&refusal).await {
+        tracing::debug!(%error, "peering: could not deliver a refusal");
+    }
+}
 
-    let our_hello = build_hello(&local, &exporter)?;
-    write_frame(&mut tls, &encode(&our_hello)?).await?;
-    let peer_bytes = read_frame(&mut tls).await?;
+// ── Pulling ───────────────────────────────────────────────────────────────────
 
-    finish(&peer_bytes, exporter, secret, &local)
+/// A ranged pull that failed, with the bytes that arrived before it did, so a resumed pull
+/// starts after them.
+#[derive(Debug)]
+pub struct RangeFailure {
+    /// The bytes received before the failure, from the requested start.
+    pub received: Vec<u8>,
+    /// Why it failed.
+    pub error: PeeringError,
+}
+
+/// The pulling side of a verified channel: it reads the serving peer's listing, then makes
+/// requests one at a time. Its requests take `&self`, so it can back a
+/// [`BlobSource`](crate::fetch::BlobSource) ([`super::ChannelBlobSource`]).
+///
+/// Once any exchange fails part-way, the stream's framing can no longer be trusted: the client
+/// is **broken** and refuses every later request rather than reading a stray frame as an answer.
+pub struct PeerClient {
+    channel: AsyncMutex<PeerChannel>,
+    peer: VerifiedPeer,
+    listing: Vec<Offered>,
+    broken: AtomicBool,
+}
+
+impl fmt::Debug for PeerClient {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PeerClient")
+            .field("peer", &self.peer.device_id)
+            .field("listing", &self.listing)
+            .field("broken", &self.is_broken())
+            .finish_non_exhaustive()
+    }
+}
+
+impl PeerClient {
+    /// Read the serving peer's listing. A listing with more than [`MAX_LISTING`] artifacts, an
+    /// address that is not a content address, or an artifact longer than [`MAX_ARTIFACT_LEN`]
+    /// is refused whole.
+    ///
+    /// # Errors
+    ///
+    /// [`PeeringError::Codec`] for a malformed listing, [`PeeringError::PeerRefused`] when the
+    /// peer refused the session, or the channel's I/O or timeout failure.
+    pub async fn open(mut channel: PeerChannel) -> Result<Self, PeeringError> {
+        let listing = match channel.recv().await? {
+            Message::Listing { artifacts } => artifacts,
+            Message::Refused { kind, message } => {
+                return Err(PeeringError::PeerRefused { kind, message });
+            }
+            other => {
+                return Err(PeeringError::Codec(format!(
+                    "expected a listing, the peer sent {}",
+                    other.name()
+                )));
+            }
+        };
+        if listing.len() > MAX_LISTING
+            || listing
+                .iter()
+                .any(|offered| !is_address(&offered.address) || offered.len > MAX_ARTIFACT_LEN)
+        {
+            return Err(PeeringError::Codec(
+                "the peer's listing is malformed".into(),
+            ));
+        }
+        tracing::debug!(peer = %channel.peer.device_id, offered = listing.len(), "peering: listing received");
+        Ok(Self {
+            peer: channel.peer.clone(),
+            channel: AsyncMutex::new(channel),
+            listing,
+            broken: AtomicBool::new(false),
+        })
+    }
+
+    /// The peer the handshake verified.
+    #[must_use]
+    pub fn peer(&self) -> &VerifiedPeer {
+        &self.peer
+    }
+
+    /// What the peer offers.
+    #[must_use]
+    pub fn listing(&self) -> &[Offered] {
+        &self.listing
+    }
+
+    /// Whether an exchange failed part-way, so the client refuses every later request.
+    #[must_use]
+    pub fn is_broken(&self) -> bool {
+        self.broken.load(Ordering::Acquire)
+    }
+
+    fn check_usable(&self) -> Result<(), PeeringError> {
+        if self.is_broken() {
+            return Err(PeeringError::Io("the channel broke earlier".into()));
+        }
+        Ok(())
+    }
+
+    /// Run one exchange; any failure but a clean refusal breaks the client.
+    fn settle<T>(&self, result: Result<T, PeeringError>) -> Result<T, PeeringError> {
+        if let Err(error) = &result
+            && !matches!(error, PeeringError::PeerRefused { .. })
+        {
+            self.broken.store(true, Ordering::Release);
+        }
+        result
+    }
+
+    /// Pull bytes of `address` from `start`: at most `max_len`, and never more than
+    /// [`MAX_RANGE`]. The bytes are the peer's until the whole artifact hashes to its address.
+    ///
+    /// # Errors
+    ///
+    /// A [`RangeFailure`] carrying whatever arrived before the failure.
+    pub async fn range(
+        &self,
+        address: &str,
+        start: u64,
+        max_len: Option<u64>,
+    ) -> Result<Vec<u8>, RangeFailure> {
+        let fail = |received, error| RangeFailure { received, error };
+        if let Err(error) = self.check_usable() {
+            return Err(fail(Vec::new(), error));
+        }
+        let cap = max_len.unwrap_or(MAX_RANGE).min(MAX_RANGE);
+        let mut channel = self.channel.lock().await;
+        let reply = async {
+            channel
+                .send(&Message::Range {
+                    address: address.to_owned(),
+                    start,
+                    max_len: Some(cap),
+                })
+                .await?;
+            match channel.recv().await? {
+                Message::RangeReply { len } if len <= cap => Ok(len),
+                Message::RangeReply { len } => Err(PeeringError::Codec(format!(
+                    "the peer answered {len} bytes to a request for at most {cap}"
+                ))),
+                Message::Refused { kind, message } => {
+                    Err(PeeringError::PeerRefused { kind, message })
+                }
+                other => Err(PeeringError::Codec(format!(
+                    "expected a range reply, the peer sent {}",
+                    other.name()
+                ))),
+            }
+        }
+        .await;
+        let len = match self.settle(reply) {
+            Ok(len) => len,
+            Err(error) => return Err(fail(Vec::new(), error)),
+        };
+        let mut received = Vec::new();
+        while (received.len() as u64) < len {
+            let remaining = usize::try_from(len - received.len() as u64).unwrap_or(usize::MAX);
+            match self.settle(channel.recv_data(remaining).await) {
+                Ok(frame) if frame.is_empty() => {
+                    // An empty frame makes no progress: a peer sending them would hold this
+                    // loop for ever.
+                    self.broken.store(true, Ordering::Release);
+                    let error = PeeringError::Codec("the peer sent an empty data frame".into());
+                    return Err(fail(received, error));
+                }
+                Ok(frame) => received.extend_from_slice(&frame),
+                Err(error) => return Err(fail(received, error)),
+            }
+        }
+        Ok(received)
+    }
+
+    /// Deliver an acknowledgement and wait for the peer to take it.
+    ///
+    /// # Errors
+    ///
+    /// [`PeeringError::PeerRefused`] when the peer refused it, or the channel's failure.
+    pub async fn acknowledge(&self, ack: &HandOffAck) -> Result<(), PeeringError> {
+        self.check_usable()?;
+        let mut channel = self.channel.lock().await;
+        let result = async {
+            channel.send(&Message::Ack { ack: ack.clone() }).await?;
+            match channel.recv().await? {
+                Message::Acked => Ok(()),
+                Message::Refused { kind, message } => {
+                    Err(PeeringError::PeerRefused { kind, message })
+                }
+                other => Err(PeeringError::Codec(format!(
+                    "expected an acknowledgement reply, the peer sent {}",
+                    other.name()
+                ))),
+            }
+        }
+        .await;
+        self.settle(result)
+    }
+
+    /// End the session: tell the peer, and close the stream.
+    ///
+    /// # Errors
+    ///
+    /// The channel's failure, when the peer could not be told.
+    pub async fn finish(&self) -> Result<(), PeeringError> {
+        self.check_usable()?;
+        let mut channel = self.channel.lock().await;
+        let sent = channel.send(&Message::Done).await;
+        channel.close().await;
+        self.settle(sent)
+    }
 }

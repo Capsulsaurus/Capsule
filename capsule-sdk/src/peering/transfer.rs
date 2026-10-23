@@ -22,10 +22,14 @@
 //! The artifact is sealed under the session's [`ArtifactSecret`], derived from the channel's TLS
 //! exporter — never a user passphrase.
 //!
+//! Over a verified peering channel the ranged pull runs through [`ChannelBlobSource`]
+//! ([`pull_over_channel`]): the same fetch engine, the same content-address check, and a pull
+//! severed with the channel resumes on the next channel after the bytes it already holds.
+//!
 //! [backup artifact]: https://docs/design/backup-recovery/#backup-artifact
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use capsule_core::backup::{
     BackupArtifact, BackupAsset, BackupInput, RestoreMode, RestoredAsset, export,
@@ -36,8 +40,10 @@ use tracing::instrument;
 use uuid::Uuid;
 
 use super::PeeringError;
-use super::channel::ArtifactSecret;
-use crate::fetch::{BlobSource, FetchScope, RangeOutcome, RangedFetcher, Representation};
+use super::channel::{ArtifactSecret, MAX_ARTIFACT_LEN, PeerClient, RangeFailure};
+use crate::fetch::{
+    BlobSource, FetchError, FetchScope, RangeOutcome, RangedFetcher, Representation,
+};
 use crate::net::ConnectionClass;
 
 /// The ciphertext content address of a backup asset — the head manifest's `ciphertext_hash`,
@@ -264,6 +270,143 @@ fn carries_committed_metadata(asset: &RestoredAsset) -> bool {
     match committed {
         Some(hash) => hash_bytes(&asset.metadata_blob) == hash,
         None => !asset.metadata_blob.is_empty(),
+    }
+}
+
+// ── Over the peering channel ─────────────────────────────────────────────────
+
+/// A [`BlobSource`] over a verified peering channel ([`PeerClient`]), resuming after `held`: the
+/// bytes of the artifact this device already holds from an earlier, severed pull. A range inside
+/// `held` is answered locally; only the bytes after it cross the channel, so a resumed pull
+/// re-fetches nothing it already holds. Every byte that arrives is appended to `held`, so a pull
+/// severed again keeps what it got.
+pub struct ChannelBlobSource<'a> {
+    client: &'a PeerClient,
+    held: Mutex<Vec<u8>>,
+    failure: Mutex<Option<PeeringError>>,
+}
+
+impl<'a> ChannelBlobSource<'a> {
+    /// A source over `client` that already holds `held`, the artifact's first bytes.
+    #[must_use]
+    pub fn resuming(client: &'a PeerClient, held: Vec<u8>) -> Self {
+        Self {
+            client,
+            held: Mutex::new(held),
+            failure: Mutex::new(None),
+        }
+    }
+
+    /// The bytes held so far, and the channel failure that stopped the pull, if one did.
+    #[must_use]
+    pub fn into_parts(self) -> (Vec<u8>, Option<PeeringError>) {
+        (
+            self.held
+                .into_inner()
+                .unwrap_or_else(PoisonError::into_inner),
+            self.failure
+                .into_inner()
+                .unwrap_or_else(PoisonError::into_inner),
+        )
+    }
+
+    fn held(&self) -> std::sync::MutexGuard<'_, Vec<u8>> {
+        self.held.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+impl BlobSource for ChannelBlobSource<'_> {
+    async fn get_range(&self, hash: &str, start: u64, max_len: Option<u64>) -> RangeOutcome {
+        {
+            let held = self.held();
+            let held_len = held.len() as u64;
+            if start < held_len {
+                let end = max_len.map_or(held_len, |max| held_len.min(start.saturating_add(max)));
+                return RangeOutcome::Partial {
+                    bytes: held[start as usize..end as usize].to_vec(),
+                };
+            }
+            if start > held_len {
+                // The fetch resumes from what it received, which is what is held; a gap would
+                // be a bug, and is refused rather than papered over.
+                return RangeOutcome::Status {
+                    status: 0,
+                    code: None,
+                };
+            }
+        }
+        match self.client.range(hash, start, max_len).await {
+            Ok(bytes) => {
+                self.held().extend_from_slice(&bytes);
+                RangeOutcome::Complete { bytes }
+            }
+            Err(RangeFailure { received, error }) => {
+                tracing::debug!(%error, received = received.len(), "peering: a ranged pull broke off");
+                self.held().extend_from_slice(&received);
+                *self.failure.lock().unwrap_or_else(PoisonError::into_inner) = Some(error);
+                if received.is_empty() {
+                    RangeOutcome::Status {
+                        status: 0,
+                        code: None,
+                    }
+                } else {
+                    RangeOutcome::Partial { bytes: received }
+                }
+            }
+        }
+    }
+}
+
+/// Pull the artifact `address` (`len` bytes) from the serving peer over `client`, through the
+/// same resumable, content-address-verified ranged fetch as [`pull_artifact`].
+///
+/// `held` is what an earlier, severed pull of the same artifact received (empty for a fresh
+/// pull): the pull resumes after it and **re-fetches none of it**. On success the whole verified
+/// artifact is returned and `held` is left empty; when the channel fails, `held` keeps every
+/// byte received so far for the next attempt; when the bytes do not hash to `address`, `held`
+/// is cleared, since some of it is wrong.
+///
+/// # Errors
+///
+/// The channel's failure ([`PeeringError::PeerRefused`], [`PeeringError::Io`],
+/// [`PeeringError::Timeout`], …), [`PeeringError::Codec`] for a length past
+/// [`MAX_ARTIFACT_LEN`], or [`PeeringError::Transfer`] when the bytes do not verify.
+#[instrument(skip(client, held), fields(peer = %client.peer().device_id, held = held.len()))]
+pub async fn pull_over_channel(
+    client: &PeerClient,
+    address: &str,
+    len: u64,
+    held: &mut Vec<u8>,
+) -> Result<Vec<u8>, PeeringError> {
+    if len > MAX_ARTIFACT_LEN {
+        return Err(PeeringError::Codec(
+            "the artifact exceeds the pull ceiling".into(),
+        ));
+    }
+    if held.len() as u64 > len {
+        held.clear();
+    }
+    let source = ChannelBlobSource::resuming(client, std::mem::take(held));
+    // The fetch hashes every byte as it passes; the source keeps them, so the sink keeps none.
+    let fetched = RangedFetcher::new(ConnectionClass::Unmetered)
+        .fetch_into(&source, address, len, &mut std::io::sink())
+        .await;
+    let (bytes, failure) = source.into_parts();
+    match fetched {
+        Ok(_) => {
+            tracing::info!(address, len, "peering: artifact pulled and verified");
+            Ok(bytes)
+        }
+        Err(FetchError::IntegrityFailed { .. }) => {
+            tracing::warn!(address, "peering: pulled bytes do not hash to the address");
+            Err(PeeringError::Transfer(format!(
+                "the pulled artifact does not hash to {address}"
+            )))
+        }
+        Err(error) => {
+            *held = bytes;
+            Err(failure.unwrap_or_else(|| PeeringError::Transfer(error.to_string())))
+        }
     }
 }
 
