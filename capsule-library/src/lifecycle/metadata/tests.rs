@@ -552,6 +552,36 @@ fn tag_remove_drops_every_observed_add_as_one_record() {
     ));
 }
 
+/// A tag stored before the label rule, unnormalized, is removed by the spelling it is listed
+/// under, and so is one the rule would refuse outright.
+#[test]
+fn tag_remove_matches_a_legacy_unnormalized_tag_as_stored() {
+    let lib = TempDir::new().unwrap();
+    let src = TempDir::new().unwrap();
+    let (mut ws, id) = workspace_with(&lib, &src, b"\xFF\xD8\xFF legacy tag bytes");
+    for legacy in [" padded ", "   "] {
+        ws.append_lifecycle(&id, Action::MetadataUpdate, None, |s, add_id| {
+            s.tags_user.add(legacy.to_owned(), add_id);
+        })
+        .unwrap();
+    }
+    ws.tag_add(&id, "padded").unwrap();
+    let before = chain_len(&ws, &id);
+
+    assert_eq!(
+        ws.tag_remove(&id, " padded ").unwrap(),
+        2,
+        "raw and normalized"
+    );
+    assert_eq!(
+        ws.tag_remove(&id, "   ").unwrap(),
+        1,
+        "refused by the rule, yet stored"
+    );
+    assert_eq!(chain_len(&ws, &id), before + 2);
+    assert!(ws.asset(&id).unwrap().sidecar.tags_user.value().is_empty());
+}
+
 /// Promotion normalizes the AI text into `tags_user`; an AI tag whose text the label rule
 /// refuses cannot be promoted, emits no record, and stays intact in `tags_ai`.
 #[test]
