@@ -13,6 +13,7 @@
 //! - [`runtime`] — the event loop, generic over backend and event source.
 //! - [`driver`] — a scripted key driver on a `TestBackend` that holds effects until the test
 //!   lets them answer.
+//! - [`hook`] — the panic hook: restores the terminal only for a panic on the loop's thread.
 //! - [`log`] — routes log events to a file while the TUI owns the terminal.
 //!
 //! The CLI and TUI are English-only (ADR-0011): strings are inline English, not catalog keys.
@@ -20,6 +21,7 @@
 //! `--json`.
 
 pub mod driver;
+pub mod hook;
 pub mod keymap;
 pub mod log;
 pub mod ports;
@@ -49,7 +51,7 @@ pub fn is_interactive() -> bool {
 
 /// Open the TUI on the process's terminal and run it until the person quits.
 ///
-/// The terminal is restored on every exit path, including a panic (ratatui's hook) and an
+/// The terminal is restored on every exit path, including a panic on the loop's own thread (a panicking effect task is contained instead) and an
 /// error from the loop. Log events go to `tui.log` in the cache directory while it runs.
 ///
 /// # Errors
@@ -67,7 +69,7 @@ pub async fn run() -> Result<()> {
     tracing::info!(target: "capsule_cli::tui", log = %log_path.display(), "opening the TUI");
 
     let ports = Arc::new(LocalPorts::new(get_session_file_path()));
-    let mut terminal = match ratatui::try_init() {
+    let mut terminal = match hook::init_terminal() {
         Ok(terminal) => terminal,
         Err(e) => {
             // Raw mode may already be on; leave the terminal as it was found.

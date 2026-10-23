@@ -18,6 +18,35 @@ impl Ports for SignedOut {
     }
 }
 
+struct Panics;
+
+impl Ports for Panics {
+    async fn session_summary(&self) -> Result<SessionSummary, String> {
+        panic!("the port blew up");
+    }
+}
+
+/// A port that panics is contained on its task: the session leaves `Loading` as a failure the
+/// screen shows, and the loop keeps running until the scripted `q`.
+#[tokio::test(start_paused = true)]
+async fn a_panicking_effect_becomes_a_failure_and_the_loop_survives() {
+    let mut terminal = terminal();
+    let events = Box::pin(stream::once(async {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        press('q')
+    }));
+    let state = event_loop(&mut terminal, events, Arc::new(Panics))
+        .await
+        .expect("loop");
+    assert!(
+        matches!(state.session(), Loadable::Failed(reason) if reason.contains("panicked")),
+        "{:?}",
+        state.session()
+    );
+    let frame = frame_text(terminal.backend().buffer());
+    assert!(frame.contains("panicked"), "{frame}");
+}
+
 fn press(c: char) -> std::io::Result<Event> {
     Ok(Event::Key(KeyEvent::new(
         KeyCode::Char(c),

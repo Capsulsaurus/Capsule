@@ -1,6 +1,8 @@
 //! Log-routing tests. One test drives the whole lifecycle, because the routing target is
 //! process-global and two tests flipping it would race under a threaded test runner.
 
+use tracing_subscriber::prelude::*;
+
 use super::*;
 
 #[test]
@@ -19,12 +21,22 @@ fn a_redirect_sends_events_to_its_file_until_it_drops() {
         sink.write_all(b"while the tui runs\n").expect("write");
         sink.flush().expect("flush");
     }
+    assert!(is_redirected());
+    // An event emitted while redirected lands in the file without colour codes.
+    let subscriber = tracing_subscriber::registry().with(layers());
+    tracing::subscriber::with_default(subscriber, || {
+        tracing::warn!("coloured on a terminal only");
+    });
     drop(redirect);
     assert!(target().is_none(), "back to stderr after the guard drops");
+    assert!(!is_redirected());
 
-    assert_eq!(
-        std::fs::read_to_string(&path).expect("read log"),
-        "while the tui runs\n"
+    let logged = std::fs::read_to_string(&path).expect("read log");
+    assert!(logged.starts_with("while the tui runs\n"), "{logged}");
+    assert!(logged.contains("coloured on a terminal only"), "{logged}");
+    assert!(
+        !logged.contains('\u{1b}'),
+        "no ANSI escapes in the file: {logged:?}"
     );
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -76,6 +76,18 @@ pub enum Effect {
     LoadSession,
 }
 
+impl Effect {
+    /// The action reporting this effect failing with `reason` instead of answering: what the
+    /// runtime sends when the task performing it panicked or was cancelled, so no state is left
+    /// waiting on an outcome that will never come.
+    #[must_use]
+    pub fn failed(self, reason: String) -> Action {
+        match self {
+            Self::LoadSession => Action::SessionLoaded(Err(reason)),
+        }
+    }
+}
+
 /// The TUI's state: a navigation stack, the data the screens show, and whether to keep running.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppState {

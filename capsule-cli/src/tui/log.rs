@@ -11,7 +11,11 @@ use std::io::{self, Write};
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use tracing_subscriber::fmt::MakeWriter;
+use tracing::Subscriber;
+use tracing_subscriber::Layer;
+use tracing_subscriber::filter::filter_fn;
+use tracing_subscriber::fmt::{self, MakeWriter};
+use tracing_subscriber::registry::LookupSpan;
 
 /// The file log events go to while a [`Redirect`] is held; `None` means stderr.
 static TARGET: Mutex<Option<File>> = Mutex::new(None);
@@ -19,6 +23,35 @@ static TARGET: Mutex<Option<File>> = Mutex::new(None);
 fn target() -> MutexGuard<'static, Option<File>> {
     // A panic while writing a log line leaves nothing half-updated worth refusing over.
     TARGET.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Whether log events are currently going to the TUI's log file rather than stderr.
+#[must_use]
+pub fn is_redirected() -> bool {
+    target().is_some()
+}
+
+/// The binary's log layers: the pretty format with the call-site detail, coloured while events
+/// go to stderr and plain while they go to the TUI log file, where escape codes would only
+/// fill `tui.log` with noise. Which of the two formats an event gets is decided as it is
+/// emitted, so the switch follows [`redirect_to`] and its guard.
+pub fn layers<S>() -> impl Layer<S>
+where
+    S: Subscriber + for<'a> LookupSpan<'a>,
+{
+    let format = |ansi: bool| {
+        fmt::layer()
+            .with_writer(LogWriter)
+            .pretty()
+            .with_ansi(ansi)
+            .with_thread_ids(true)
+            .with_thread_names(true)
+            .with_file(true)
+            .with_line_number(true)
+    };
+    format(true)
+        .with_filter(filter_fn(|_| !is_redirected()))
+        .and_then(format(false).with_filter(filter_fn(|_| is_redirected())))
 }
 
 /// The writer the binary's log layer uses: stderr, or the file a [`Redirect`] names.
