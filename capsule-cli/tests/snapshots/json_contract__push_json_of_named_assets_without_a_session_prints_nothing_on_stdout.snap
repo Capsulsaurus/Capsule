@@ -1,0 +1,10 @@
+---
+source: capsule-cli/tests/json_contract.rs
+expression: "run(&scratch,\n&[\"push\", \"--library\", path(&scratch.library()), \"--passphrase-stdin\",\n\"--asset\", \"0192f1a0-0000-7000-8000-000000000001\", \"--asset\",\n\"0192f1a0-0000-7000-8000-000000000002\", \"--json\",],)"
+---
+status: 1
+--- stdout ---
+
+--- stderr ---
+Error: 
+   0: Not authenticated. Run 'capsule auth login' first.
