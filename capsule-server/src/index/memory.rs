@@ -232,6 +232,17 @@ impl Inner {
             return OpOutcome::AmkRegressed { stored };
         }
 
+        // The retention window: a restore at or past the signed floor is refused.
+        if let Some(refusal) = super::restore_refusal(&row, &op) {
+            tracing::info!(
+                asset = %op.asset_id,
+                retention_until = ?row.retention_until,
+                at = %op.at,
+                "a trash-restore was refused: the retention window has closed"
+            );
+            return refusal;
+        }
+
         let mut row = row;
         row.state = match op.action {
             OpAction::Delete => AssetState::Tombstoned,

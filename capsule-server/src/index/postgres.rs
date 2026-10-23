@@ -754,6 +754,19 @@ async fn apply_in(
         });
     }
 
+    // The retention window, under the same row lock the purge re-checks its own predicate
+    // under: a restore and a purge of one tombstone serialize here, so a restore the window
+    // admits never meets a purged row, and one it refuses writes nothing.
+    if let Some(refusal) = super::restore_refusal(&row, op) {
+        tracing::info!(
+            asset = %op.asset_id,
+            retention_until = ?row.retention_until,
+            at = %op.at,
+            "a trash-restore was refused: the retention window has closed"
+        );
+        return Ok(refusal);
+    }
+
     let mut row = row;
     row.state = match op.action {
         OpAction::Delete => AssetState::Tombstoned,
@@ -1161,6 +1174,7 @@ impl AssetIndex for PostgresAssetIndex {
                 }
                 OpOutcome::StaleChain { .. }
                 | OpOutcome::AmkRegressed { .. }
+                | OpOutcome::RetentionElapsed { .. }
                 | OpOutcome::NotFound => None,
             };
             Ok(Receipted { outcome, receipt })

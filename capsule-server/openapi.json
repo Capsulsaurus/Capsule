@@ -17115,7 +17115,7 @@
           "lifecycle"
         ],
         "summary": "Apply one signed lifecycle manifest to an album's asset.",
-        "description": "The whole battery runs before anything is written, and a rejection writes nothing —\nincluding the blobs the bundle carries, which are stored only after the manifest has passed\nevery check the server can make without a key.\n\nAn op carrying a metadata blob is metadata growth: past the quota grace window it is\n`403 error.quota.grace_locked`, and while the operator has suspended the account's quota\n`403 error.quota.suspended`. A `delete` or `trash-restore` is never refused by quota.",
+        "description": "The whole battery runs before anything is written, and a rejection writes nothing —\nincluding the blobs the bundle carries, which are stored only after the manifest has passed\nevery check the server can make without a key.\n\nAn op carrying a metadata blob is metadata growth: past the quota grace window it is\n`403 error.quota.grace_locked`, and while the operator has suspended the account's quota\n`403 error.quota.suspended`. A `delete` or `trash-restore` is never refused by quota.\n\nA `trash-restore` the server accepts at or after the tombstone's signed `retention_until`\nis `409 error.upload.retention_elapsed`: the trash recovers an asset only within its window.",
         "operationId": "album_lifecycle_op",
         "parameters": [
           {
@@ -17467,7 +17467,7 @@
             }
           },
           "409": {
-            "description": "Stale revival",
+            "description": "Stale revival; Retention elapsed",
             "headers": {
               "X-Capsule-Protocol-Min": {
                 "description": "The oldest protocol version this server accepts.",
