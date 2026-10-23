@@ -21,9 +21,10 @@ async fn main() -> Result<()> {
         })
         .expect("built-in log filter directives are valid");
     // stdout is a data channel: `--json` promises exactly one document there, so every log
-    // event goes to stderr, whatever the filter lets through.
+    // event goes to stderr, whatever the filter lets through. While the TUI holds the terminal,
+    // the writer sends events to its log file instead, so none is drawn over a frame.
     let fmt_layer = fmt::layer()
-        .with_writer(std::io::stderr)
+        .with_writer(capsule_cli::tui::LogWriter)
         .pretty()
         .with_thread_ids(true)
         .with_thread_names(true)

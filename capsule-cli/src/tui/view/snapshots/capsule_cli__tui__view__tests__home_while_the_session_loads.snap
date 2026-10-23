@@ -1,0 +1,16 @@
+---
+source: capsule-cli/src/tui/view/tests.rs
+expression: draw(&state)
+---
+Capsule · Home · Session: loading…
+┌Home──────────────────────────────────────────────────────────────────────────┐
+│Reading the session…                                                          │
+│                                                                              │
+│Every flow is also a `capsule <command>` subcommand; `capsule --help` lists   │
+│them.                                                                         │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+q Quit  ? Show the key bindings  r Reload the session status
