@@ -155,10 +155,23 @@ pub enum DelegationError {
 /// - `error.upload.envelope_mismatch`: a request contradicts its own manifest envelope.
 /// - `error.upload.stale_revival`: the asset's chain has moved past the one the manifest
 ///   extends — a conflicting provenance only the origin can rebase.
-pub const PERMANENT_UPLOAD_REFUSALS: [&str; 3] = [
+///
+/// The create-time answers to the conditions finalization answers with `envelope_rejected` are
+/// permanent for the same reason, so a condition is classified the same whichever step meets it:
+///
+/// - `error.upload.timestamp_out_of_range`: the signed manifest's timestamp is outside the
+///   accepted window (past the drift allowance); the timestamp is signed and cannot change.
+/// - `error.upload.album_access_denied`: the album is missing, closed, or not writable by the
+///   uploader.
+/// - `error.upload.device_not_authorized`: the signing device is not authorized in the
+///   uploader's directory.
+pub const PERMANENT_UPLOAD_REFUSALS: [&str; 6] = [
     capsule_i18n::error_codes::UPLOAD_ENVELOPE_REJECTED,
     capsule_i18n::error_codes::UPLOAD_ENVELOPE_MISMATCH,
     capsule_i18n::error_codes::UPLOAD_STALE_REVIVAL,
+    capsule_i18n::error_codes::UPLOAD_TIMESTAMP_OUT_OF_RANGE,
+    capsule_i18n::error_codes::UPLOAD_ALBUM_ACCESS_DENIED,
+    capsule_i18n::error_codes::UPLOAD_DEVICE_NOT_AUTHORIZED,
 ];
 
 impl DelegationError {

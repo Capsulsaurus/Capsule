@@ -1161,6 +1161,13 @@ fn only_a_refusal_no_retry_can_change_is_permanent() {
         rejected(400, capsule_i18n::error_codes::UPLOAD_ENVELOPE_REJECTED),
         rejected(400, capsule_i18n::error_codes::UPLOAD_ENVELOPE_MISMATCH),
         rejected(409, capsule_i18n::error_codes::UPLOAD_STALE_REVIVAL),
+        // The create-time answers to what finalization answers with `envelope_rejected`.
+        rejected(
+            400,
+            capsule_i18n::error_codes::UPLOAD_TIMESTAMP_OUT_OF_RANGE,
+        ),
+        rejected(403, capsule_i18n::error_codes::UPLOAD_ALBUM_ACCESS_DENIED),
+        rejected(403, capsule_i18n::error_codes::UPLOAD_DEVICE_NOT_AUTHORIZED),
     ] {
         assert!(permanent.is_permanent(), "{permanent:?}");
     }
@@ -1258,6 +1265,46 @@ async fn a_hand_off_the_server_refuses_for_good_is_discarded() {
     );
     assert_eq!(disposed, HeldFailure::Discarded);
     assert!(inbox.addresses().expect("reads").is_empty());
+}
+
+/// A server that refuses every `POST /v1/upload` (session creation) with `status` and `code`.
+async fn refusing_create(status: u16, reason: &'static str, code: &'static str) -> MockServer {
+    MockServer::start(move |_: &MockRequest| {
+        MockResponse::api_error(status, reason, code, "refused at creation")
+    })
+    .await
+}
+
+#[tokio::test]
+async fn a_create_time_refusal_no_retry_can_change_is_classified_as_its_finalize_twin() {
+    // Each is what creation answers for a condition finalization answers with
+    // `envelope_rejected`: the same condition is permanent whichever step meets it.
+    for (status, reason, code) in [
+        (
+            400,
+            "Bad Request",
+            capsule_i18n::error_codes::UPLOAD_TIMESTAMP_OUT_OF_RANGE,
+        ),
+        (
+            403,
+            "Forbidden",
+            capsule_i18n::error_codes::UPLOAD_ALBUM_ACCESS_DENIED,
+        ),
+        (
+            403,
+            "Forbidden",
+            capsule_i18n::error_codes::UPLOAD_DEVICE_NOT_AUTHORIZED,
+        ),
+    ] {
+        let fixture = Fixture::new();
+        let inbox = MemoryInbox::default();
+        let hand_off = accepted(&fixture, &inbox);
+        let server = refusing_create(status, reason, code).await;
+        let (error, disposed) = upload_and_dispose(&fixture, &inbox, &hand_off, &server).await;
+        assert_eq!(error.error_code(), Some(code));
+        assert!(error.is_permanent(), "{code}");
+        assert_eq!(disposed, HeldFailure::Discarded, "{code}");
+    }
 }
 
 #[tokio::test]
