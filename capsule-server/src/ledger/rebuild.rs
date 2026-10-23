@@ -726,9 +726,9 @@ fn repoint(facts: &mut Accumulated, role: BlobRole, address: &ContentAddress) {
 /// position was refused by the index, or the process stopped before the second entry: the
 /// replay re-runs invariant 17 (the manifest must chain onto the head the replay has reached),
 /// applies it when it passes, and cannot prove its number. Invariant 18 is album-wide and is not
-/// re-run; an op it refused and that still chains is replayed, and the epoch moves for it. The
-/// retention window is re-run ([`crate::index::restore_window_closed`]): a restore recorded at or
-/// past its tombstone's floor was refused, and is not replayed.
+/// re-run; an op it refused and that still chains is replayed, and the epoch moves for it. Of
+/// the retention window only the purge is re-run: a restore after a confirmed purge was refused
+/// ([`crate::index::restore_refusal`]) and is not replayed.
 async fn apply_lifecycle(
     replay: &Replay<'_>,
     asset: &AssetId,
@@ -808,19 +808,15 @@ async fn apply_lifecycle(
             tracing::debug!(%asset, action = %op.action, "an unrecorded op does not chain; the index refused it");
             return Ok(());
         }
-        // The retention window, re-run as the index ran it: the ops route ledgers the entry at
-        // the instant it hands the index as the op's `at`, so an unrecorded restore at or past
-        // the floor the replay has reached is one the index refused. Replaying it would revive
-        // a tombstone — after a confirmed purge, one whose references are gone.
-        if op.action == OpAction::TrashRestore.as_str()
-            && let Ok(at) = op.recorded_at.parse::<Timestamp>()
-            && let Some(retention_until) = crate::index::restore_window_closed(
-                facts.state.unwrap_or(AssetState::Visible),
-                facts.retention_until.flatten(),
-                at,
-            )
-        {
-            tracing::debug!(%asset, %retention_until, %at, "an unrecorded restore came after the retention window; the index refused it");
+        // A restore after a confirmed purge is one the index refused (#871): replaying it would
+        // revive a tombstone whose references are gone. Only the purge is re-run, not the
+        // clock half of the window: an entry's `recorded_at` is the op's `at` on the ops route
+        // but the re-announce time on a re-announced chain, so judging a restore by it could
+        // drop one the index applied — and a tombstone the rebuild wrongly keeps is purged.
+        // A refused restore with no purge behind it is replayed as invariant 18's refusals
+        // are: the bytes are still held, and the epoch moves for it.
+        if op.action == OpAction::TrashRestore.as_str() && facts.purged {
+            tracing::debug!(%asset, "an unrecorded restore follows a confirmed purge; the index refused it");
             return Ok(());
         }
         facts.unresolved = true;

@@ -598,28 +598,40 @@ pub fn purge_refusal(row: &AssetRow, now: Timestamp) -> Option<PurgeOutcome> {
 /// while the asset is still restorable.
 ///
 /// A restore recovers an asset only *within* its retention window (design/organization.md
-/// § Retention Window). The window is closed exactly when [`purge_refusal`] would let a purge at
-/// `at` proceed — a tombstone whose signed floor is present and reached — so the two predicates
-/// partition a tombstone's life with no instant at which both a restore and a purge are
-/// admissible. Absent retention never closes the window, as it never makes a row purgeable.
+/// § Retention Window). The window is closed when [`purge_refusal`] would let a purge at `at`
+/// proceed — a tombstone whose signed floor is present and reached — so no instant admits both a
+/// restore and a purge. Absent retention never closes the window, as it never makes a row
+/// purgeable.
 ///
-/// `at` is the server's clock when it accepted the op, never a client's: a device with a slow
-/// clock must not be able to reach back into a window the server has already closed. The
-/// refusal is fail-safe — it writes nothing, and the asset's bytes stay until the purge — while
-/// a restore the window admits can never meet a purged row, because a purge needs the floor
-/// reached and the restore needed it not to be.
+/// It is also closed once a purge has committed (`purged`), whatever `at` says. `at` is the
+/// server's clock when the route accepted the op, read before the op reaches the row lock, so a
+/// restore stamped inside the window can arrive after a purge whose `now` was past it; the
+/// purged row is what refuses it. A purge needs the floor present, so a purged row always has
+/// one to report.
+///
+/// `at` is never a client's clock: a device with a slow clock must not be able to reach back
+/// into a window the server has already closed. The refusal is fail-safe — it writes nothing,
+/// and the asset's bytes stay until the purge.
 #[must_use]
 pub fn restore_window_closed(
     state: AssetState,
     retention_until: Option<Timestamp>,
+    purged: bool,
     at: Timestamp,
 ) -> Option<Timestamp> {
     match (state, retention_until) {
-        (AssetState::Tombstoned, Some(retention_until)) if at >= retention_until => {
+        (AssetState::Tombstoned, Some(retention_until)) if purged || at >= retention_until => {
             Some(retention_until)
         }
         _ => None,
     }
+}
+
+/// Whether a purge has emptied `row`: a tombstone holding no blob and no superseded reference,
+/// the shape [`AssetIndex::purge`] leaves and [`AssetIndex::tombstoned`] stops listing.
+#[must_use]
+pub fn is_purged(row: &AssetRow) -> bool {
+    row.state == AssetState::Tombstoned && row.blobs.is_empty() && row.superseded.is_empty()
 }
 
 /// Why `op` may not be applied to `row` because the retention window has closed, or `None`
@@ -633,7 +645,7 @@ pub fn restore_refusal(row: &AssetRow, op: &LifecycleOp) -> Option<OpOutcome> {
     if op.action != OpAction::TrashRestore {
         return None;
     }
-    restore_window_closed(row.state, row.retention_until, op.at)
+    restore_window_closed(row.state, row.retention_until, is_purged(row), op.at)
         .map(|retention_until| OpOutcome::RetentionElapsed { retention_until })
 }
 
@@ -669,8 +681,9 @@ pub enum OpOutcome {
         /// The album's highest accepted epoch.
         stored: u64,
     },
-    /// A `trash-restore` arrived at or after the tombstone's signed retention floor
-    /// ([`restore_refusal`]). Nothing was written and no number was minted.
+    /// A `trash-restore` arrived at or after the tombstone's signed retention floor, or after a
+    /// purge emptied the row ([`restore_refusal`]). Nothing was written and no number was
+    /// minted.
     ///
     /// Decided after invariants 17 and 18, so a stale or regressed manifest is answered as such
     /// first; and after the replay check, so a restore applied inside the window and retried

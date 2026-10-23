@@ -1974,7 +1974,8 @@ pub async fn a_restore_clears_the_retention_floor(index: &dyn AssetIndex) {
 }
 
 /// A `trash-restore` the server accepts at or after the tombstone's signed retention floor is
-/// refused, before and after a purge, writing nothing and minting no number.
+/// refused, writing nothing and minting no number; and once a purge has committed, every
+/// restore is refused, whenever it was stamped.
 ///
 /// The window is the one [`super::purge_refusal`] closes: at the floor exactly, a purge is
 /// admissible and a restore is not, so no instant admits both. A restore applied inside the
@@ -2053,8 +2054,9 @@ pub async fn a_restore_after_the_retention_window_is_refused(index: &dyn AssetIn
         "no refused restore consumed a sequence number",
     );
 
-    // After the purge commits, a restore is refused the same way and cannot revive a row whose
-    // references are gone.
+    // After the purge commits, a restore is refused and cannot revive a row whose references
+    // are gone — even one the server stamped inside the window, which reached the row lock only
+    // after the purge did.
     assert!(matches!(
         ok(index.purge(&asset, floor).await, "purge at the floor"),
         PurgeOutcome::Purged(_)
@@ -2068,7 +2070,7 @@ pub async fn a_restore_after_the_retention_window_is_refused(index: &dyn AssetIn
         manifest(104),
     );
     revive.provenance = address("restore-late-revive");
-    revive.at = after_floor;
+    revive.at = Timestamp::UNIX_EPOCH;
     assert_eq!(
         ok(index.apply_op(revive).await, "restore a purged row"),
         OpOutcome::RetentionElapsed {

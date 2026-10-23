@@ -1088,10 +1088,10 @@ async fn a_ledgered_purge_drops_the_tombstones_references_and_keeps_the_row() {
     assert!(!report.has_faults(), "{report:?}");
 }
 
-/// Ledger a `trash-restore` of `asset` an hour past the fixture's retention floor and hand it
-/// to the index, as the ops route does: the entry first, at the instant the index is given as
-/// the op's `at`. The index refuses it, so no entry carrying a position follows.
-async fn late_restore(server: &Server, owner: &OwnerId, asset: &AssetId) {
+/// Ledger a `trash-restore` of `asset` accepted at `late` and hand it to the index, as the ops
+/// route does: the entry first, at the instant the index is given as the op's `at`. The index
+/// refuses it, so no entry carrying a position follows.
+async fn refused_restore(server: &Server, owner: &OwnerId, asset: &AssetId, late: Timestamp) {
     let row = server
         .index
         .read(asset)
@@ -1102,7 +1102,6 @@ async fn late_restore(server: &Server, owner: &OwnerId, asset: &AssetId) {
     let bytes = op_record(asset, prior, Action::TrashRestore);
     let address = server.store(&bytes).await;
     let manifest_hash = hash_bytes(&bytes);
-    let late = retention() + jiff::SignedDuration::from_hours(1);
     crate::ledger::AnchoredLedger::new(server.ledger.clone(), server.index.clone())
         .append(
             owner,
@@ -1142,46 +1141,81 @@ async fn late_restore(server: &Server, owner: &OwnerId, asset: &AssetId) {
 }
 
 #[tokio::test]
-async fn a_restore_the_index_refused_for_an_elapsed_window_is_not_replayed() {
+async fn a_restore_after_a_confirmed_purge_is_not_replayed() {
     // #871: the ledger holds the restore's entry and no position for it. It chains onto the
-    // delete, so a replay that re-ran invariant 17 alone would revive the tombstone — and,
-    // after a confirmed purge, revive it with its references gone.
-    for purge in [false, true] {
-        let server = Server::new();
-        let alice = owner("alice");
-        let id = server.publish(&alice, "late", false).await;
-        server.delete(&alice, &id, false, None).await;
-        if purge {
-            let purge_seq = server.append(&alice, purge_entry(&id)).await;
-            assert!(matches!(
-                server
-                    .index
-                    .purge(&id, retention())
-                    .await
-                    .expect("the index purges"),
-                crate::index::PurgeOutcome::Purged(_)
-            ));
-            server.append(&alice, purged_entry(&id, purge_seq)).await;
-        }
-        late_restore(&server, &alice, &id).await;
-        let original = rows(&server.index).await;
-        assert_eq!(original[0].state, AssetState::Tombstoned);
-
-        let empty = Arc::new(InMemoryAssetIndex::new());
-        let report = rebuild(&server.rebuild_into(empty.clone()), Mode::Apply)
+    // delete, so a replay that re-ran invariant 17 alone would revive a tombstone whose
+    // references the purge removed. The restore here was stamped inside the window and reached
+    // the index after the purge — the race only the purged row refuses — so the rebuild must
+    // not judge it by its timestamp either.
+    let server = Server::new();
+    let alice = owner("alice");
+    let id = server.publish(&alice, "late", false).await;
+    server.delete(&alice, &id, false, None).await;
+    let purge_seq = server.append(&alice, purge_entry(&id)).await;
+    assert!(matches!(
+        server
+            .index
+            .purge(&id, retention())
             .await
-            .expect("a pass");
-        assert_eq!(
-            rows(&empty).await,
-            original,
-            "the rebuilt row is the tombstone the index kept (purged: {purge})"
-        );
-        assert!(
-            report.owners[0].unprovable.is_empty(),
-            "a refused op is not an unprovable write: {report:?}"
-        );
-        assert!(!report.has_faults(), "{report:?}");
-    }
+            .expect("the index purges"),
+        crate::index::PurgeOutcome::Purged(_)
+    ));
+    server.append(&alice, purged_entry(&id, purge_seq)).await;
+    refused_restore(&server, &alice, &id, at()).await;
+    let original = rows(&server.index).await;
+    assert_eq!(original[0].state, AssetState::Tombstoned);
+    assert!(original[0].blobs.is_empty());
+
+    let empty = Arc::new(InMemoryAssetIndex::new());
+    let report = rebuild(&server.rebuild_into(empty.clone()), Mode::Apply)
+        .await
+        .expect("a pass");
+    assert_eq!(
+        rows(&empty).await,
+        original,
+        "the rebuilt row is the purged tombstone the index kept"
+    );
+    assert!(
+        report.owners[0].unprovable.is_empty(),
+        "a refused op is not an unprovable write: {report:?}"
+    );
+    assert!(!report.has_faults(), "{report:?}");
+}
+
+#[tokio::test]
+async fn a_restore_refused_before_any_purge_is_replayed_as_unprovable() {
+    // The clock half of the window is not re-run: a re-announced chain ledgers its ops at the
+    // re-announce time, so `recorded_at` does not prove when the server accepted a restore.
+    // A refused restore with no purge behind it is replayed the way invariant 18's refusals
+    // are — the bytes are still held, nothing is lost, and the owner's epoch moves for it.
+    let server = Server::new();
+    let alice = owner("alice");
+    let id = server.publish(&alice, "late", false).await;
+    server.delete(&alice, &id, false, None).await;
+    refused_restore(
+        &server,
+        &alice,
+        &id,
+        retention() + jiff::SignedDuration::from_hours(1),
+    )
+    .await;
+    assert_eq!(rows(&server.index).await[0].state, AssetState::Tombstoned);
+
+    let empty = Arc::new(InMemoryAssetIndex::new());
+    let report = rebuild(&server.rebuild_into(empty.clone()), Mode::Apply)
+        .await
+        .expect("a pass");
+    let rebuilt = rows(&empty).await;
+    assert_eq!(rebuilt[0].state, AssetState::Visible);
+    assert!(
+        rebuilt[0]
+            .blobs
+            .iter()
+            .any(|blob| blob.role == BlobRole::Metadata),
+        "the replayed restore holds the asset's references"
+    );
+    assert_eq!(report.owners[0].unprovable, vec![id], "{report:?}");
+    assert!(report.owners[0].epoch_bump_needed);
 }
 
 /// A retention purge entry for `asset`, as the purge worker writes it before the index call.

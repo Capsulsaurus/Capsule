@@ -194,7 +194,7 @@ Delete defaults to trash (a soft delete, synced as a metadata change). A hard de
 - The server **cannot accelerate** a purge: a hard purge before `retention_until` is rejected; server config is irrelevant.
 - The server **cannot delay** a purge beyond a user-issued `trash-restore` or signed shorter-retention re-issue.
 - `trash-restore` before `retention_until` recovers the asset and appends a record; the delete manifest stays in the chain.
-- A `trash-restore` the server accepts at or after `retention_until`, by the same trusted clock, is refused `409 error.upload.retention_elapsed` and writes nothing, whether or not the purge has run. A purged asset cannot be restored. A restore is admissible exactly when a purge is not, so a restore the server accepts never meets a purged row, and a refused one leaves the asset in the trash until the purge.
+- A `trash-restore` the server accepts at or after `retention_until`, by the same trusted clock, is refused `409 error.upload.retention_elapsed` and writes nothing, whether or not the purge has run. A purged asset cannot be restored: a restore that reaches the asset after its purge committed is refused the same way, even if the server accepted it just before the window closed. No restore ever meets a purged row, and a refused one leaves the asset in the trash until the purge.
 
 ## Validation
 
