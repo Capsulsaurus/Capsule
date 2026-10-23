@@ -63,6 +63,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
 use std::{fmt, io};
 
+use bytes::Bytes;
 use capsule_core::cbor;
 use capsule_core::crypto::hash::{Hash32, hash_bytes};
 use capsule_core::crypto::provenance::{DerivativeManifest, ProvenanceRecord};
@@ -399,8 +400,12 @@ pub struct OwnBlob {
 /// A sealed hand-off: the container to send and what the origin records about it.
 #[derive(Debug, Clone)]
 pub struct SealedHandOff {
-    /// The encoded container.
-    pub bytes: Vec<u8>,
+    /// The encoded container. Shared, not copied, by every clone and by the [`Offering`] that
+    /// serves it, so a hand-off of up to [`MAX_ARTIFACT_LEN`] bytes is held in memory once.
+    ///
+    /// [`Offering`]: super::channel::Offering
+    /// [`MAX_ARTIFACT_LEN`]: super::channel::MAX_ARTIFACT_LEN
+    pub bytes: Bytes,
     /// Its content address.
     pub address: String,
     /// The asset.
@@ -485,7 +490,7 @@ pub fn seal(
         "delegation: hand-off sealed"
     );
     Ok(SealedHandOff {
-        bytes,
+        bytes: Bytes::from(bytes),
         address,
         asset_id: bundle.asset_id,
         delegate,
@@ -1268,6 +1273,7 @@ where
                 addressed: hand_off.delegate,
             });
         }
+        // A reference-count bump: the offering shares the sealed bytes.
         let address = offering.offer(hand_off.bytes.clone())?;
         assets.insert(address, hand_off.asset_id);
     }

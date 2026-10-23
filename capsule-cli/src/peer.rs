@@ -871,7 +871,8 @@ async fn delegate_over_peer(
     let mut redials = 0;
     let ended: Option<(&'static str, String)> = loop {
         // Served even when empty (nothing sealed, or everything acknowledged before a sever),
-        // so the delegate's session ends cleanly instead of waiting out its timeout.
+        // so the delegate's session ends cleanly instead of waiting out its timeout. A clone
+        // shares the sealed bytes; only the small per-blob records are copied.
         let pending: Vec<SealedHandOff> = sealed
             .iter()
             .filter(|hand_off| !acknowledged.contains(&hand_off.asset_id))

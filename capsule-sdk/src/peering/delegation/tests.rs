@@ -253,7 +253,7 @@ fn the_container_round_trips_and_refuses_anything_malformed() {
             "cut at {cut}"
         );
     }
-    let mut trailing = sealed.bytes.clone();
+    let mut trailing = sealed.bytes.to_vec();
     trailing.push(0);
     assert!(matches!(
         HandOff::decode(&trailing),
@@ -533,7 +533,7 @@ fn the_delegate_acknowledges_only_what_it_persisted() {
     );
     assert_eq!(
         inbox.load(&sealed.address).expect("reads"),
-        Some(sealed.bytes.clone())
+        Some(sealed.bytes.to_vec())
     );
 
     // Nothing persisted, nothing acknowledged: the origin keeps the upload.
@@ -1574,7 +1574,7 @@ async fn a_hand_off_crosses_a_verified_tls_channel_and_is_acknowledged_over_it()
     // Persisted durably before the acknowledgement, byte for byte.
     assert_eq!(
         inbox.load(&sealed.address).expect("reads"),
-        Some(sealed.bytes.clone())
+        Some(sealed.bytes.to_vec())
     );
     assert!(partials.is_empty());
     assert_eq!(
@@ -1640,7 +1640,7 @@ async fn a_severed_pull_resumes_on_a_new_channel_without_re_fetching_a_byte() {
     assert!(partials.is_empty());
     assert_eq!(
         inbox.load(&sealed.address).expect("reads"),
-        Some(sealed.bytes)
+        Some(sealed.bytes.to_vec())
     );
 }
 
@@ -1740,6 +1740,23 @@ async fn an_acknowledgement_counts_only_for_the_verified_peer_and_an_offered_han
     assert!(outcomes[3].is_ok());
     assert_eq!(seen, vec![genuine.clone()]);
     assert_eq!(served.expect("ends cleanly").acks, vec![genuine]);
+}
+
+/// The origin holds a hand-off's bytes once: a clone of the sealed hand-off and the offering
+/// that serves it share one allocation rather than copying it.
+#[test]
+fn a_sealed_hand_off_is_shared_not_copied_when_cloned_and_offered() {
+    let fixture = Fixture::new();
+    let sealed = fixture.sealed();
+    let clone = sealed.clone();
+    assert_eq!(clone.bytes.as_ptr(), sealed.bytes.as_ptr());
+
+    let mut offering = Offering::new();
+    let address = offering.offer(clone.bytes).expect("offers");
+    assert_eq!(address, sealed.address);
+    let served = offering.served(&address).expect("offered");
+    assert_eq!(served.as_ptr(), sealed.bytes.as_ptr());
+    assert_eq!(served.len(), sealed.bytes.len());
 }
 
 #[tokio::test]

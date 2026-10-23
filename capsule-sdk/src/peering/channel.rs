@@ -63,6 +63,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+use bytes::Bytes;
 use capsule_core::crypto::keys::{
     DeviceDirectory, DeviceEntry, HybridSignature, HybridVerifyingKey, Signer,
 };
@@ -1013,7 +1014,7 @@ fn is_address(address: &str) -> bool {
 /// computed over its bytes.
 #[derive(Default)]
 pub struct Offering {
-    artifacts: BTreeMap<String, Vec<u8>>,
+    artifacts: BTreeMap<String, Bytes>,
     /// Test-only: sever the channel once this many data bytes have been sent.
     #[cfg(test)]
     pub(crate) sever_after: Option<u64>,
@@ -1032,13 +1033,16 @@ impl Offering {
         Self::default()
     }
 
-    /// Offer `bytes`, returning the content address it is served under.
+    /// Offer `bytes`, returning the content address it is served under. The offering shares
+    /// `bytes` rather than copying them: a `Vec<u8>` converts without a copy, and a [`Bytes`]
+    /// the caller keeps is the same allocation.
     ///
     /// # Errors
     ///
     /// [`PeeringError::Codec`] past [`MAX_LISTING`] artifacts or for an artifact over
     /// [`MAX_ARTIFACT_LEN`].
-    pub fn offer(&mut self, bytes: Vec<u8>) -> Result<String, PeeringError> {
+    pub fn offer(&mut self, bytes: impl Into<Bytes>) -> Result<String, PeeringError> {
+        let bytes = bytes.into();
         if bytes.len() as u64 > MAX_ARTIFACT_LEN {
             return Err(PeeringError::Codec(
                 "an artifact exceeds the offer ceiling".into(),
@@ -1052,6 +1056,12 @@ impl Offering {
         }
         self.artifacts.insert(address.clone(), bytes);
         Ok(address)
+    }
+
+    /// Test-only: the bytes served under `address`.
+    #[cfg(test)]
+    pub(crate) fn served(&self, address: &str) -> Option<&Bytes> {
+        self.artifacts.get(address)
     }
 
     /// Whether `address` is offered.
