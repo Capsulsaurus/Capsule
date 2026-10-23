@@ -225,11 +225,12 @@ pub async fn persist_page<C: ConnectionTrait + TransactionTrait>(
             Retention::Open => None,
             Retention::Until(until) => Some(until),
             Retention::Purged => {
-                match feed_asset_uuid(&entry.asset_id) {
-                    Some(asset) => purged.push(asset),
-                    None => tracing::debug!(
+                if let Some(asset) = feed_asset_uuid(&entry.asset_id) {
+                    purged.push(asset);
+                } else {
+                    tracing::debug!(
                         "sync: a purged asset's id is not a UUID, so no peer can offer it"
-                    ),
+                    );
                 }
                 None
             }
@@ -310,12 +311,13 @@ pub async fn record_elapsed_purges<C: ConnectionTrait>(
         .await?;
     let mut elapsed: Vec<Uuid> = Vec::with_capacity(rows.len());
     for row in &rows {
-        match feed_asset_uuid(&decode_id(&row.asset_id)?) {
-            Some(asset) => elapsed.push(asset),
-            None => tracing::debug!(
+        if let Some(asset) = feed_asset_uuid(&decode_id(&row.asset_id)?) {
+            elapsed.push(asset);
+        } else {
+            tracing::debug!(
                 asset_id = %row.asset_id,
                 "sync: an elapsed asset's id is not a UUID, so no peer can offer it"
-            ),
+            );
         }
     }
     if !elapsed.is_empty() {
