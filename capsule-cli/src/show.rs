@@ -310,6 +310,19 @@ const UNSET: &str = "(unset)";
 /// absent value spelled out as unset.
 #[must_use]
 pub fn render(view: &AssetView) -> String {
+    let header = format!("Asset {}", view.asset_id).green();
+    let mut out = format!("{header}\n");
+    for (label, value) in rows(view) {
+        let _ = writeln!(out, "  {label:<17}{value}");
+    }
+    out
+}
+
+/// The labelled rows [`render`] prints, uncoloured, in order: one per field, every absent
+/// value spelled out as unset. The TUI's library browser draws its detail pane from these, so
+/// the two never word a field differently.
+#[must_use]
+pub fn rows(view: &AssetView) -> Vec<(&'static str, String)> {
     let yes_no = |flag: bool| if flag { "yes" } else { "no" }.to_owned();
     let or_unset = |value: Option<String>| value.unwrap_or_else(|| UNSET.to_owned());
     let list = |items: &[String]| {
@@ -352,7 +365,7 @@ pub fn render(view: &AssetView) -> String {
     let original_gps = view
         .location_edited
         .then(|| ("Orig. GPS:", fix(view.gps_imported)));
-    let rows: Vec<(&str, String)> = [
+    [
         Some(("Album:", view.album_id.to_string())),
         Some(("Content type:", view.content_type.clone())),
         Some(("SHA-256:", view.hash.clone())),
@@ -380,14 +393,7 @@ pub fn render(view: &AssetView) -> String {
             format!("{} signed record(s)", view.provenance_records),
         ),
     ])
-    .collect();
-
-    let header = format!("Asset {}", view.asset_id).green();
-    let mut out = format!("{header}\n");
-    for (label, value) in rows {
-        let _ = writeln!(out, "  {label:<17}{value}");
-    }
-    out
+    .collect()
 }
 
 #[cfg(test)]
