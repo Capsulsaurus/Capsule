@@ -3,7 +3,9 @@
 //!
 //! Both are security state, so the store itself refuses to weaken them, whatever writes to it:
 //! the floor's version never decreases and its row is never deleted, and a tombstone is never
-//! updated or deleted. Each refusal aborts the statement that attempted it.
+//! updated or deleted. Each refusal aborts the statement that attempted it, except an insert
+//! below the stored floor, which is skipped: that is how a lower raise is a no-op, and how
+//! `INSERT OR REPLACE` (whose implicit delete fires no trigger) cannot lower it either.
 //!
 //! [Peering § Trust Model]: https://docs/design/peering/#trust-model
 //! [Peering § Sync]: https://docs/design/peering/#sync
@@ -19,6 +21,16 @@ CREATE TABLE IF NOT EXISTS peering_floor (
     device_id TEXT NOT NULL PRIMARY KEY,
     directory_version BIGINT NOT NULL CHECK (directory_version >= 0)
 );
+
+CREATE TRIGGER IF NOT EXISTS peering_floor_insert_never_lowers
+BEFORE INSERT ON peering_floor
+WHEN EXISTS (
+    SELECT 1 FROM peering_floor
+    WHERE device_id = NEW.device_id AND directory_version > NEW.directory_version
+)
+BEGIN
+    SELECT RAISE(IGNORE);
+END;
 
 CREATE TRIGGER IF NOT EXISTS peering_floor_never_lowers
 BEFORE UPDATE ON peering_floor

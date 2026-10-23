@@ -149,13 +149,27 @@ async fn the_store_refuses_to_lower_or_delete_the_floor() {
     assert!(
         exec(
             &db,
-            &format!("INSERT OR REPLACE INTO peering_floor VALUES ('{device}', -1)")
+            "INSERT INTO peering_floor VALUES ('00000000-0000-0000-0000-0000000000d3', -1)"
         )
         .await
         .is_err(),
         "a negative floor is refused"
     );
+    // A replace deletes the row without firing a delete trigger; the lower insert is skipped.
+    exec(
+        &db,
+        &format!("INSERT OR REPLACE INTO peering_floor VALUES ('{device}', 2)"),
+    )
+    .await
+    .expect("a lower replace is skipped, not applied");
     assert_eq!(load_floor(&db, DEVICE).await.expect("reads"), 7);
+    exec(
+        &db,
+        &format!("INSERT OR REPLACE INTO peering_floor VALUES ('{device}', 9)"),
+    )
+    .await
+    .expect("a higher replace raises");
+    assert_eq!(load_floor(&db, DEVICE).await.expect("reads"), 9);
 }
 
 #[tokio::test]
