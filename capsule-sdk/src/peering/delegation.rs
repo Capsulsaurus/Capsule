@@ -40,8 +40,11 @@
 //! metering policy), and [`settle`] deletes the delegate's copy once custody of every blob it
 //! sent is confirmed. A delegate copy is never a library asset. A held hand-off that can never
 //! succeed — its origin revoked after acceptance, its bytes no longer verifying, or a server
-//! refusal the delegate cannot act on — is discarded by [`dispose_failure`]; a transient failure
-//! keeps it for the next run ([`DelegationError::is_permanent`]).
+//! refusal the delegate cannot act on — is **quarantined** by [`dispose_failure`], never deleted:
+//! a revoked origin is often a lost device, and the delegate's copy may be the only one left. A
+//! quarantined copy keeps its bytes, is no longer retried, and is deleted only when the user
+//! asks ([`DelegateInbox::discard`]). A transient failure keeps the copy for the next run
+//! ([`DelegationError::is_permanent`]).
 //!
 //! # Transport
 //!
@@ -188,7 +191,7 @@ impl DelegationError {
     }
 
     /// Whether a hand-off the delegate holds, failing with this error, can never succeed, so
-    /// [`dispose_failure`] discards the delegate's copy.
+    /// [`dispose_failure`] quarantines the delegate's copy rather than retrying it.
     ///
     /// Permanent: the origin is no longer an unrevoked device of the pinned directory (revoked
     /// or removed after the hand-off was accepted); the held bytes no longer verify (malformed,
@@ -1002,26 +1005,73 @@ pub fn verify_hand_off(
     Ok(VerifiedHandOff { address, hand_off })
 }
 
+/// Why a held hand-off was quarantined, recorded beside its copy when it was.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Quarantine {
+    /// The asset the hand-off uploads; nil when its header could not be read.
+    pub asset_id: Uuid,
+    /// The caller's stable name for the failure (the CLI's `--json` `kind`).
+    pub kind: String,
+    /// The server's stable `error.*` code, when it supplied one.
+    pub code: Option<String>,
+    /// The English detail.
+    pub message: String,
+}
+
+impl Quarantine {
+    /// The note for a held hand-off of `asset_id` that failed for good with `error`, named
+    /// `kind`.
+    #[must_use]
+    pub fn new(asset_id: Uuid, kind: &str, error: &DelegationError) -> Self {
+        Self {
+            asset_id,
+            kind: kind.to_owned(),
+            code: error.error_code().map(str::to_owned),
+            message: error.to_string(),
+        }
+    }
+}
+
 /// Where a delegate keeps the hand-offs it accepted until custody is confirmed. Never a library:
 /// a delegate copy is not an asset of the delegate's.
+///
+/// A copy is either **held** (listed by [`addresses`](Self::addresses) and uploaded on every
+/// run) or **quarantined** (kept byte for byte with its [`Quarantine`] note, never retried, and
+/// deleted only by [`discard`](Self::discard)).
 pub trait DelegateInbox: Send + Sync {
     /// Persist `bytes` under `address` **durably** — written and synced, its directory entry
     /// too — before returning. An acknowledgement follows only after this returns.
     fn persist(&self, address: &str, bytes: &[u8]) -> io::Result<()>;
     /// The bytes held under `address`.
     fn load(&self, address: &str) -> io::Result<Option<Vec<u8>>>;
-    /// Every address held.
+    /// Every address held. A quarantined copy is not held.
     fn addresses(&self) -> io::Result<Vec<String>>;
     /// Delete the copy under `address`. Removing an absent one is not an error.
     fn remove(&self, address: &str) -> io::Result<()>;
+    /// Move the held copy under `address` to quarantine with `note`, **durably**, keeping its
+    /// bytes. Quarantining an absent copy is not an error.
+    fn quarantine(&self, address: &str, note: &Quarantine) -> io::Result<()>;
+    /// Every quarantined copy's address and note, each once.
+    fn quarantined(&self) -> io::Result<Vec<(String, Quarantine)>>;
+    /// The bytes of the quarantined copy under `address`.
+    fn load_quarantined(&self, address: &str) -> io::Result<Option<Vec<u8>>>;
+    /// Delete the quarantined copy under `address`, returning its note, or `None` when no copy
+    /// under `address` is quarantined (a held copy is left alone).
+    fn discard(&self, address: &str) -> io::Result<Option<Quarantine>>;
 }
 
 /// An in-memory [`DelegateInbox`]: durable for the life of the process.
 #[derive(Debug, Default)]
-pub struct MemoryInbox(Mutex<BTreeMap<String, Vec<u8>>>);
+pub struct MemoryInbox(Mutex<MemoryHeld>);
+
+#[derive(Debug, Default)]
+struct MemoryHeld {
+    held: BTreeMap<String, Vec<u8>>,
+    quarantined: BTreeMap<String, (Vec<u8>, Quarantine)>,
+}
 
 impl MemoryInbox {
-    fn held(&self) -> io::Result<std::sync::MutexGuard<'_, BTreeMap<String, Vec<u8>>>> {
+    fn held(&self) -> io::Result<std::sync::MutexGuard<'_, MemoryHeld>> {
         self.0
             .lock()
             .map_err(|_| io::Error::other("the inbox lock is poisoned"))
@@ -1030,21 +1080,56 @@ impl MemoryInbox {
 
 impl DelegateInbox for MemoryInbox {
     fn persist(&self, address: &str, bytes: &[u8]) -> io::Result<()> {
-        self.held()?.insert(address.to_owned(), bytes.to_vec());
+        self.held()?.held.insert(address.to_owned(), bytes.to_vec());
         Ok(())
     }
 
     fn load(&self, address: &str) -> io::Result<Option<Vec<u8>>> {
-        Ok(self.held()?.get(address).cloned())
+        Ok(self.held()?.held.get(address).cloned())
     }
 
     fn addresses(&self) -> io::Result<Vec<String>> {
-        Ok(self.held()?.keys().cloned().collect())
+        Ok(self.held()?.held.keys().cloned().collect())
     }
 
     fn remove(&self, address: &str) -> io::Result<()> {
-        self.held()?.remove(address);
+        self.held()?.held.remove(address);
         Ok(())
+    }
+
+    fn quarantine(&self, address: &str, note: &Quarantine) -> io::Result<()> {
+        let mut inbox = self.held()?;
+        if let Some(bytes) = inbox.held.remove(address) {
+            inbox
+                .quarantined
+                .insert(address.to_owned(), (bytes, note.clone()));
+        }
+        Ok(())
+    }
+
+    fn quarantined(&self) -> io::Result<Vec<(String, Quarantine)>> {
+        Ok(self
+            .held()?
+            .quarantined
+            .iter()
+            .map(|(address, (_, note))| (address.clone(), note.clone()))
+            .collect())
+    }
+
+    fn load_quarantined(&self, address: &str) -> io::Result<Option<Vec<u8>>> {
+        Ok(self
+            .held()?
+            .quarantined
+            .get(address)
+            .map(|(bytes, _)| bytes.clone()))
+    }
+
+    fn discard(&self, address: &str) -> io::Result<Option<Quarantine>> {
+        Ok(self
+            .held()?
+            .quarantined
+            .remove(address)
+            .map(|(_, note)| note))
     }
 }
 
@@ -1192,24 +1277,29 @@ pub async fn settle<C: ReleaseClock>(
 pub enum HeldFailure {
     /// The failure is transient: the copy stays for the next run.
     Kept,
-    /// The failure is permanent ([`DelegationError::is_permanent`]): the copy is deleted.
-    Discarded,
+    /// The failure is permanent ([`DelegationError::is_permanent`]): the copy is quarantined,
+    /// its bytes kept, and no later run retries it.
+    Quarantined,
 }
 
-/// Decide the fate of the hand-off held under `address` after `error`: a permanent refusal
-/// deletes the delegate's copy, so it neither stays in the inbox forever nor fails every later
-/// run; a transient one keeps it.
+/// Decide the fate of the hand-off of `asset_id` held under `address` after `error`: a
+/// permanent refusal quarantines the delegate's copy under a [`Quarantine`] note naming `kind`,
+/// so it neither fails every later run nor is lost; a transient one keeps it held.
 ///
-/// Discarding loses nothing: the origin keeps its original pinned until its own custody check
-/// passes, and re-queues the upload itself when its deadline expires.
+/// The copy is never deleted here. A revoked origin is often a lost device whose original is
+/// gone, and a refused bundle may be the account's only copy of the asset; only the user deletes
+/// a quarantined copy ([`DelegateInbox::discard`]).
 ///
 /// # Errors
 ///
-/// [`DelegationError::Inbox`] when a permanently refused copy could not be deleted.
-#[instrument(skip_all, fields(hand_off = %address, permanent = error.is_permanent()))]
+/// [`DelegationError::Inbox`] when a permanently refused copy could not be quarantined; it then
+/// stays held and is tried again.
+#[instrument(skip_all, fields(hand_off = %address, %asset_id, permanent = error.is_permanent()))]
 pub fn dispose_failure(
     inbox: &dyn DelegateInbox,
     address: &str,
+    asset_id: Uuid,
+    kind: &str,
     error: &DelegationError,
 ) -> Result<HeldFailure, DelegationError> {
     if !error.is_permanent() {
@@ -1217,10 +1307,10 @@ pub fn dispose_failure(
         return Ok(HeldFailure::Kept);
     }
     inbox
-        .remove(address)
-        .map_err(|io| DelegationError::Inbox(format!("discard the copy: {io}")))?;
-    tracing::warn!(%error, "delegation: permanently refused; the copy is discarded");
-    Ok(HeldFailure::Discarded)
+        .quarantine(address, &Quarantine::new(asset_id, kind, error))
+        .map_err(|io| DelegationError::Inbox(format!("quarantine the copy: {io}")))?;
+    tracing::warn!(%error, kind, "delegation: permanently refused; the copy is quarantined");
+    Ok(HeldFailure::Quarantined)
 }
 
 #[cfg(test)]

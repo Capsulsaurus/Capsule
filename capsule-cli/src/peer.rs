@@ -10,10 +10,13 @@
 //! - **`peer accept`** (the delegate): verifies a hand-off against the account's published
 //!   directory, persists it in the delegate inbox (synced) and only then writes its
 //!   acknowledgement beside it; then uploads every hand-off in the inbox under its own session
-//!   and policy, and deletes each copy once the server holds it.
+//!   and policy, and deletes each copy once the server holds it. A hand-off that can never
+//!   succeed is quarantined, its bytes kept, and is not retried.
 //! - **`peer status`** (the origin): takes the delegate's acknowledgements, re-queues what is
 //!   overdue or whose delegate was revoked, and releases what the server holds by the origin's
-//!   own custody check of its own hashes and a read-back of its own copy.
+//!   own custody check of its own hashes and a read-back of its own copy, and lists every
+//!   hand-off this device quarantined.
+//! - **`peer discard`** (the delegate): deletes one quarantined hand-off, on the user's word.
 //!
 //! The hand-off rides a file here: the courier is opaque and the hand-off self-verifying, so
 //! the channel carries no trust ([`capsule_sdk::peering::delegation`]). The account's directory
@@ -40,9 +43,10 @@ use capsule_sdk::directory::DirectoryClient;
 use capsule_sdk::net::ConnectionClass;
 use capsule_sdk::peering::delegation::DEFAULT_HAND_OFF_DEADLINE_MS;
 use capsule_sdk::peering::{
-    DelegateInbox, DelegationError, DelegationState, DirectoryVersions, HandOffAck, HeldFailure,
-    OriginLedger, PeeringError, PinnedTrust, ReleaseOutcome, RequeueReason, Settled,
-    accept_hand_off, dispose_failure, seal, settle, upload_hand_off, verify_hand_off,
+    DelegateInbox, DelegationError, DelegationState, DirectoryVersions, HandOff, HandOffAck,
+    HeldFailure, OriginLedger, PeeringError, PinnedTrust, Quarantine, ReleaseOutcome,
+    RequeueReason, Settled, accept_hand_off, dispose_failure, seal, settle, upload_hand_off,
+    verify_hand_off,
 };
 use capsule_sdk::staged::StagedScheduler;
 use capsule_sdk::upload::{UploadClient, UploadTransport};
@@ -74,6 +78,9 @@ pub enum PeerError {
     /// Reading or writing this device's peer state failed.
     #[error("peer state: {0}")]
     State(String),
+    /// `peer discard` named a hand-off this device does not hold in quarantine.
+    #[error("no quarantined hand-off {0} on this device")]
+    NotQuarantined(String),
 }
 
 impl From<PeeringError> for PeerError {
@@ -198,6 +205,40 @@ impl FileInbox {
         }
         Ok(self.dir.join(format!("{address}.{HAND_OFF_SUFFIX}")))
     }
+
+    fn quarantine_dir(&self) -> PathBuf {
+        self.dir.join("quarantine")
+    }
+
+    /// Where the quarantined copy under `address` is kept: the file a user recovers it from.
+    ///
+    /// # Errors
+    ///
+    /// When `address` is not a content address.
+    pub fn quarantined_path(&self, address: &str) -> io::Result<PathBuf> {
+        let held = self.path(address)?;
+        let name = held
+            .file_name()
+            .ok_or_else(|| io::Error::other("no file name"))?;
+        Ok(self.quarantine_dir().join(name))
+    }
+
+    fn note_path(&self, address: &str) -> io::Result<PathBuf> {
+        Ok(self
+            .quarantined_path(address)?
+            .with_extension(QUARANTINE_NOTE_SUFFIX))
+    }
+}
+
+/// The file suffix a quarantined copy's note is written under, beside the copy.
+const QUARANTINE_NOTE_SUFFIX: &str = "quarantine.json";
+
+fn remove_if_present(path: &Path) -> io::Result<bool> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
 }
 
 impl DelegateInbox for FileInbox {
@@ -237,6 +278,66 @@ impl DelegateInbox for FileInbox {
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
             Err(error) => Err(error),
         }
+    }
+
+    /// The note is written durably first, then the copy is renamed into `quarantine/` and both
+    /// directories synced: a crash leaves the copy held (and a stale note a later quarantine
+    /// overwrites) or quarantined with its note, never a quarantined copy without one.
+    fn quarantine(&self, address: &str, note: &Quarantine) -> io::Result<()> {
+        let held = self.path(address)?;
+        if !held.exists() {
+            return Ok(());
+        }
+        let bytes = serde_json::to_vec_pretty(note).map_err(io::Error::other)?;
+        write_durably(&self.note_path(address)?, &bytes)?;
+        fs::rename(&held, self.quarantined_path(address)?)?;
+        fs::File::open(&self.dir)?.sync_all()?;
+        fs::File::open(self.quarantine_dir())?.sync_all()
+    }
+
+    fn quarantined(&self) -> io::Result<Vec<(String, Quarantine)>> {
+        let entries = match fs::read_dir(self.quarantine_dir()) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error),
+        };
+        let suffix = format!(".{HAND_OFF_SUFFIX}");
+        let mut quarantined = Vec::new();
+        for entry in entries {
+            let name = entry?.file_name();
+            let Some(address) = name.to_str().and_then(|n| n.strip_suffix(&suffix)) else {
+                continue;
+            };
+            let note = fs::read(self.note_path(address)?)?;
+            let note = serde_json::from_slice(&note)
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+            quarantined.push((address.to_owned(), note));
+        }
+        quarantined.sort_by(|a, b| a.0.cmp(&b.0));
+        Ok(quarantined)
+    }
+
+    fn load_quarantined(&self, address: &str) -> io::Result<Option<Vec<u8>>> {
+        match fs::read(self.quarantined_path(address)?) {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// The copy is removed before its note, so a crash between the two leaves an orphaned note
+    /// no listing reports, never a copy without its note.
+    fn discard(&self, address: &str) -> io::Result<Option<Quarantine>> {
+        let copy = self.quarantined_path(address)?;
+        if !copy.exists() {
+            return Ok(None);
+        }
+        let note = serde_json::from_slice(&fs::read(self.note_path(address)?)?)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        remove_if_present(&copy)?;
+        remove_if_present(&self.note_path(address)?)?;
+        fs::File::open(self.quarantine_dir())?.sync_all()?;
+        Ok(Some(note))
     }
 }
 
@@ -586,12 +687,14 @@ pub struct Courier {
     /// The hand-off's content address.
     pub hand_off: String,
     /// `removed` (the server holds it; the copy is gone), `kept` (not yet), `failed` (a
-    /// transient failure; the copy is kept for the next run) or `discarded` (a permanent
-    /// refusal; the copy is gone and the origin re-queues the upload at its deadline).
+    /// transient failure; the copy is kept for the next run) or `quarantined` (a permanent
+    /// refusal; the copy and its bytes are kept, no later run retries it, `peer status` lists
+    /// it and `peer discard` deletes it).
     pub outcome: &'static str,
     /// A stable name for why it was kept (a retain reason: `not_durable`, `receipt_missing`,
     /// `verify_unavailable`, `receipt_unavailable` or `read_back_mismatch`), failed or was
-    /// discarded (a [`PeerFailure::kind`], or `copy_missing` when the inbox no longer holds it).
+    /// quarantined (a [`PeerFailure::kind`], or `copy_missing` when the inbox no longer holds
+    /// it).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kind: Option<&'static str>,
     /// The server's stable `error.*` code, when it supplied one.
@@ -650,7 +753,7 @@ impl AcceptSummary {
             || self
                 .uploads
                 .iter()
-                .any(|u| matches!(u.outcome, "failed" | "discarded"))
+                .any(|u| matches!(u.outcome, "failed" | "quarantined"))
     }
 }
 
@@ -767,7 +870,7 @@ async fn accept_with(
 
 /// Upload one hand-off the inbox holds and settle it. Re-verified first: the inbox is local
 /// state, and what was verified when it was taken is checked again before it is sent. A failure
-/// that can never clear discards the copy ([`refused`]).
+/// that can never clear quarantines the copy ([`refused`]).
 #[allow(clippy::too_many_arguments)]
 async fn courier(
     inbox: &dyn DelegateInbox,
@@ -795,7 +898,12 @@ async fn courier(
     let verified = match verify_hand_off(&bytes, trust, versions, device, &remote.protocol_version)
     {
         Ok(verified) => verified,
-        Err(error) => return refused(inbox, address, Uuid::nil(), &error),
+        Err(error) => {
+            // The asset is named from the unverified header, so a quarantined copy says which
+            // asset it would recover; nil when even the header does not read.
+            let asset_id = HandOff::decode(&bytes).map_or(Uuid::nil(), |h| h.header.asset_id);
+            return refused(inbox, address, asset_id, &error);
+        }
     };
     let asset_id = verified.asset_id();
     let report = match upload_hand_off(upload, scheduler, &verified).await {
@@ -811,26 +919,28 @@ async fn courier(
     }
 }
 
-/// Report a held hand-off that failed with `error`: `discarded`, its copy deleted, when the
-/// failure is permanent ([`dispose_failure`]); `failed`, its copy kept for the next run,
-/// otherwise.
+/// Report a held hand-off that failed with `error`: `quarantined`, its copy kept but no longer
+/// retried, when the failure is permanent ([`dispose_failure`]); `failed`, its copy kept for the
+/// next run, otherwise.
 fn refused(
     inbox: &dyn DelegateInbox,
     address: &str,
     asset_id: Uuid,
     error: &DelegationError,
 ) -> Courier {
-    let (outcome, message) = match dispose_failure(inbox, address, error) {
-        Ok(HeldFailure::Discarded) => ("discarded", error.to_string()),
+    let kind = delegation_kind(error);
+    let (outcome, message) = match dispose_failure(inbox, address, asset_id, kind, error) {
+        Ok(HeldFailure::Quarantined) => ("quarantined", error.to_string()),
         Ok(HeldFailure::Kept) => ("failed", error.to_string()),
-        // A permanent refusal whose copy could not be deleted stays, and is tried again.
-        Err(discard) => ("failed", format!("{error}; {discard}")),
+        // A permanent refusal whose copy could not be quarantined stays held, and is tried
+        // again.
+        Err(quarantine) => ("failed", format!("{error}; {quarantine}")),
     };
     Courier {
         asset_id,
         hand_off: address.to_owned(),
         outcome,
-        kind: Some(delegation_kind(error)),
+        kind: Some(kind),
         code: error.error_code().map(str::to_owned),
         message: Some(message),
     }
@@ -866,6 +976,50 @@ pub struct DelegationView {
     pub kept_because: Option<&'static str>,
 }
 
+/// One hand-off this device quarantined, as `capsule peer status` reports it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct QuarantinedView {
+    /// The hand-off's content address: what `capsule peer discard` takes.
+    pub hand_off: String,
+    /// The asset it uploads; nil when its header could not be read.
+    pub asset_id: Uuid,
+    /// The file the copy is kept in, byte for byte as it was accepted.
+    pub file: String,
+    /// The stable name of the refusal that quarantined it (a [`PeerFailure::kind`]).
+    pub kind: String,
+    /// The server's stable `error.*` code, when it supplied one.
+    pub code: Option<String>,
+    /// The English detail.
+    pub message: String,
+}
+
+/// Every hand-off `inbox` holds in quarantine, each once.
+///
+/// # Errors
+///
+/// [`PeerError::State`] when the quarantine cannot be read.
+pub fn quarantined(inbox: &FileInbox) -> Result<Vec<QuarantinedView>, PeerError> {
+    let listed = inbox
+        .quarantined()
+        .map_err(state_error("list the quarantine"))?;
+    listed
+        .into_iter()
+        .map(|(address, note)| {
+            let file = inbox
+                .quarantined_path(&address)
+                .map_err(state_error("name a quarantined copy"))?;
+            Ok(QuarantinedView {
+                file: file.display().to_string(),
+                hand_off: address,
+                asset_id: note.asset_id,
+                kind: note.kind,
+                code: note.code,
+                message: note.message,
+            })
+        })
+        .collect()
+}
+
 /// The `capsule peer status` run, as `--json` prints it.
 #[derive(Debug, Clone, Serialize)]
 pub struct StatusSummary {
@@ -873,6 +1027,8 @@ pub struct StatusSummary {
     pub delegations: Vec<DelegationView>,
     /// Acknowledgements that were refused, with why.
     pub refused_acks: Vec<PeerFailure>,
+    /// Every hand-off this device quarantined: kept, not retried, until `peer discard`.
+    pub quarantined: Vec<QuarantinedView>,
 }
 
 /// `capsule peer status`: take `acks`, re-queue what is due, and release what the server holds
@@ -984,6 +1140,46 @@ async fn status_with(
     Ok(StatusSummary {
         delegations,
         refused_acks,
+        quarantined: quarantined(&state.inbox())?,
+    })
+}
+
+// ─── peer discard ────────────────────────────────────────────────────────────
+
+/// The `capsule peer discard` run, as `--json` prints it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Discarded {
+    /// The hand-off deleted.
+    pub hand_off: String,
+    /// The asset it would have uploaded.
+    pub asset_id: Uuid,
+    /// The refusal it had been quarantined for.
+    pub kind: String,
+}
+
+/// `capsule peer discard`: delete the quarantined hand-off under `address`, on the user's word.
+/// Local only: a held hand-off is never deleted this way, and nothing reaches the network.
+///
+/// # Errors
+///
+/// [`PeerError::NotQuarantined`] when this device holds no quarantined copy under `address`
+/// (including a held one, which is still being uploaded), or [`PeerError::State`] when it could
+/// not be deleted.
+#[instrument(skip_all, fields(hand_off = %address))]
+pub fn discard(state: &PeerState, address: &str) -> Result<Discarded, PeerError> {
+    let inbox = state.inbox();
+    let not_quarantined = || PeerError::NotQuarantined(address.to_owned());
+    // A name that is not a content address names nothing this device holds.
+    inbox.path(address).map_err(|_| not_quarantined())?;
+    let note = inbox
+        .discard(address)
+        .map_err(state_error("discard the quarantined copy"))?
+        .ok_or_else(not_quarantined)?;
+    tracing::warn!(asset_id = %note.asset_id, kind = %note.kind, "peer discard: the quarantined copy is deleted");
+    Ok(Discarded {
+        hand_off: address.to_owned(),
+        asset_id: note.asset_id,
+        kind: note.kind,
     })
 }
 

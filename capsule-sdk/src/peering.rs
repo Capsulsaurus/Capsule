@@ -54,7 +54,7 @@ pub use channel::{
 pub use delegation::{
     DelegateInbox, DelegatedUpload, Delegation, DelegationError, DelegationState,
     DeleteDisposition, HandOff, HandOffAck, HeldFailure, MemoryInbox, OriginLedger,
-    PERMANENT_UPLOAD_REFUSALS, ReleaseOutcome, RequeueReason, SealedHandOff, Settled,
+    PERMANENT_UPLOAD_REFUSALS, Quarantine, ReleaseOutcome, RequeueReason, SealedHandOff, Settled,
     VerifiedHandOff, accept_hand_off, dispose_failure, seal, settle, upload_hand_off,
     verify_hand_off,
 };

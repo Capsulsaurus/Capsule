@@ -477,7 +477,8 @@ pub(crate) enum PeerCommands {
     },
     /// Take hand-off files another device of this account sealed for this one, then upload
     /// every hand-off this device holds under its own session, deleting each copy once the
-    /// server holds it
+    /// server holds it. A hand-off that can never succeed is quarantined: kept, not retried,
+    /// listed by `capsule peer status` and deleted only by `capsule peer discard`
     Accept {
         /// Path to this device's Capsule library
         #[arg(long, value_name = "PATH")]
@@ -495,13 +496,14 @@ pub(crate) enum PeerCommands {
         passphrase_stdin: bool,
         /// Print the run as one JSON document on stdout: each hand-off taken with its
         /// acknowledgement, each refused, and what became of each held hand-off (removed, kept,
-        /// failed and kept, or permanently refused and discarded), each failure with a stable
+        /// failed and kept, or permanently refused and quarantined), each failure with a stable
         /// `kind`, the server's `code` when it gave one, and the detail
         #[arg(long)]
         json: bool,
     },
     /// Show this device's handed-off assets: take the other device's acknowledgements, take back
-    /// uploads that are overdue or whose device was revoked, and release what the server holds
+    /// uploads that are overdue or whose device was revoked, and release what the server holds.
+    /// Also lists every hand-off this device quarantined
     Status {
         /// Path to the Capsule library holding the assets
         #[arg(long, value_name = "PATH")]
@@ -513,8 +515,29 @@ pub(crate) enum PeerCommands {
         /// works in scripts and CI where there is no terminal.
         #[arg(long)]
         passphrase_stdin: bool,
-        /// Print the run as one JSON document on stdout: each delegation with its state, and
-        /// each refused acknowledgement with a stable `kind` and the detail
+        /// Print the run as one JSON document on stdout: each delegation with its state, each
+        /// refused acknowledgement with a stable `kind` and the detail, and each quarantined
+        /// hand-off with its file, the stable `kind` of its refusal, the server's `code` when
+        /// it gave one, and the detail
+        #[arg(long)]
+        json: bool,
+    },
+    /// Delete a quarantined hand-off this device holds for another device. Only a quarantined
+    /// copy can be discarded; it may be the account's only copy of the asset, so recover it
+    /// first if its origin device is lost
+    Discard {
+        /// Path to this device's Capsule library
+        #[arg(long, value_name = "PATH")]
+        library: PathBuf,
+        /// The quarantined hand-off's content address, as `capsule peer status` lists it
+        #[arg(value_name = "HAND_OFF")]
+        hand_off: String,
+        /// Read the library passphrase from stdin instead of prompting, so the command
+        /// works in scripts and CI where there is no terminal.
+        #[arg(long)]
+        passphrase_stdin: bool,
+        /// Print the discarded hand-off as one JSON document on stdout: its content address,
+        /// its asset and the `kind` it had been quarantined for
         #[arg(long)]
         json: bool,
     },

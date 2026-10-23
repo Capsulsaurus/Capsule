@@ -488,6 +488,18 @@ impl DelegateInbox for FullDisk {
     fn remove(&self, _: &str) -> io::Result<()> {
         Ok(())
     }
+    fn quarantine(&self, _: &str, _: &Quarantine) -> io::Result<()> {
+        Err(io::Error::other("no space left on device"))
+    }
+    fn quarantined(&self) -> io::Result<Vec<(String, Quarantine)>> {
+        Ok(Vec::new())
+    }
+    fn load_quarantined(&self, _: &str) -> io::Result<Option<Vec<u8>>> {
+        Ok(None)
+    }
+    fn discard(&self, _: &str) -> io::Result<Option<Quarantine>> {
+        Ok(None)
+    }
 }
 
 #[test]
@@ -1138,8 +1150,43 @@ async fn upload_and_dispose(
     )
     .await
     .expect_err("the server refuses the upload");
-    let disposed = dispose_failure(inbox, &hand_off.address, &error).expect("disposes");
+    let disposed = dispose_failure(
+        inbox,
+        &hand_off.address,
+        hand_off.asset_id(),
+        "upload",
+        &error,
+    )
+    .expect("disposes");
     (error, disposed)
+}
+
+/// The inbox no longer retries the copy under `address`, still holds its bytes byte for byte,
+/// and lists it once with a note naming `kind` and `code`.
+fn assert_quarantined(
+    inbox: &MemoryInbox,
+    address: &str,
+    bytes: &[u8],
+    asset_id: Uuid,
+    kind: &str,
+    code: Option<&str>,
+) {
+    assert!(
+        inbox.addresses().expect("reads").is_empty(),
+        "a quarantined copy is not retried"
+    );
+    assert_eq!(
+        inbox.load_quarantined(address).expect("reads").as_deref(),
+        Some(bytes),
+        "the bytes are kept"
+    );
+    let listed = inbox.quarantined().expect("reads");
+    assert_eq!(listed.len(), 1, "listed once: {listed:?}");
+    let (listed_address, note) = &listed[0];
+    assert_eq!(listed_address, address);
+    assert_eq!(note.asset_id, asset_id);
+    assert_eq!(note.kind, kind);
+    assert_eq!(note.code.as_deref(), code);
 }
 
 #[test]
@@ -1199,7 +1246,7 @@ fn only_a_refusal_no_retry_can_change_is_permanent() {
 }
 
 #[test]
-fn a_held_hand_off_whose_origin_was_revoked_after_acceptance_is_discarded() {
+fn a_held_hand_off_whose_origin_was_revoked_after_acceptance_is_quarantined_not_deleted() {
     let fixture = Fixture::new();
     let inbox = MemoryInbox::default();
     let hand_off = accepted(&fixture, &inbox);
@@ -1217,11 +1264,74 @@ fn a_held_hand_off_whose_origin_was_revoked_after_acceptance_is_discarded() {
         &fixture.bundle.protocol_version,
     )
     .expect_err("a revoked origin's hand-off no longer verifies");
+    assert!(matches!(
+        error,
+        DelegationError::Peering(PeeringError::RevokedDevice(_))
+    ));
+    // A revoked origin is often a lost device: this copy may be the only one left.
     assert_eq!(
-        dispose_failure(&inbox, &hand_off.address, &error).expect("disposes"),
-        HeldFailure::Discarded
+        dispose_failure(
+            &inbox,
+            &hand_off.address,
+            hand_off.asset_id(),
+            "revoked_device",
+            &error
+        )
+        .expect("disposes"),
+        HeldFailure::Quarantined
     );
-    assert!(inbox.addresses().expect("reads").is_empty());
+    assert_quarantined(
+        &inbox,
+        &hand_off.address,
+        &held,
+        hand_off.asset_id(),
+        "revoked_device",
+        None,
+    );
+    // Quarantining again (a crash before the move was observed) changes nothing.
+    assert_eq!(
+        dispose_failure(
+            &inbox,
+            &hand_off.address,
+            hand_off.asset_id(),
+            "revoked_device",
+            &error
+        )
+        .expect("disposes"),
+        HeldFailure::Quarantined
+    );
+    assert_eq!(inbox.quarantined().expect("reads").len(), 1);
+
+    // Only the user deletes it, and only a quarantined copy.
+    let note = inbox
+        .discard(&hand_off.address)
+        .expect("discards")
+        .expect("it was quarantined");
+    assert_eq!(note.kind, "revoked_device");
+    assert!(inbox.quarantined().expect("reads").is_empty());
+    assert_eq!(
+        inbox.load_quarantined(&hand_off.address).expect("reads"),
+        None
+    );
+    assert_eq!(inbox.discard(&hand_off.address).expect("discards"), None);
+}
+
+#[test]
+fn a_copy_that_cannot_be_quarantined_is_reported_and_not_lost() {
+    let error = DelegationError::Peering(PeeringError::RevokedDevice(Uuid::from_u128(9)));
+    assert!(matches!(
+        dispose_failure(&FullDisk, "ab", Uuid::nil(), "revoked_device", &error),
+        Err(DelegationError::Inbox(_))
+    ));
+}
+
+#[test]
+fn discarding_leaves_a_held_copy_alone() {
+    let fixture = Fixture::new();
+    let inbox = MemoryInbox::default();
+    let hand_off = accepted(&fixture, &inbox);
+    assert_eq!(inbox.discard(&hand_off.address).expect("discards"), None);
+    assert_eq!(inbox.addresses().expect("reads"), vec![hand_off.address]);
 }
 
 #[test]
@@ -1240,18 +1350,28 @@ fn a_held_hand_off_this_device_cannot_judge_now_is_kept() {
     )
     .expect_err("a rolled-back directory is refused");
     assert_eq!(
-        dispose_failure(&inbox, &hand_off.address, &error).expect("disposes"),
+        dispose_failure(
+            &inbox,
+            &hand_off.address,
+            hand_off.asset_id(),
+            "directory_rollback",
+            &error
+        )
+        .expect("disposes"),
         HeldFailure::Kept
     );
     assert_eq!(inbox.addresses().expect("reads"), vec![hand_off.address]);
+    assert!(inbox.quarantined().expect("reads").is_empty());
 }
 
 #[tokio::test]
-async fn a_hand_off_the_server_refuses_for_good_is_discarded() {
+async fn a_hand_off_the_server_refuses_for_good_is_quarantined() {
     let fixture = Fixture::new();
     let inbox = MemoryInbox::default();
     let hand_off = accepted(&fixture, &inbox);
-    // The answer a stale-epoch create, a revoked signer or a conflicting role meets.
+    let held = inbox.load(&hand_off.address).expect("reads").expect("held");
+    // The answer a stale-epoch create, a revoked signer, a closed album, withdrawn write access
+    // or a conflicting role meets.
     let server = refusing_server(
         400,
         "Bad Request",
@@ -1263,8 +1383,15 @@ async fn a_hand_off_the_server_refuses_for_good_is_discarded() {
         error.error_code(),
         Some(capsule_i18n::error_codes::UPLOAD_ENVELOPE_REJECTED)
     );
-    assert_eq!(disposed, HeldFailure::Discarded);
-    assert!(inbox.addresses().expect("reads").is_empty());
+    assert_eq!(disposed, HeldFailure::Quarantined);
+    assert_quarantined(
+        &inbox,
+        &hand_off.address,
+        &held,
+        hand_off.asset_id(),
+        "upload",
+        Some(capsule_i18n::error_codes::UPLOAD_ENVELOPE_REJECTED),
+    );
 }
 
 /// A server that refuses every `POST /v1/upload` (session creation) with `status` and `code`.
@@ -1299,11 +1426,20 @@ async fn a_create_time_refusal_no_retry_can_change_is_classified_as_its_finalize
         let fixture = Fixture::new();
         let inbox = MemoryInbox::default();
         let hand_off = accepted(&fixture, &inbox);
+        let held = inbox.load(&hand_off.address).expect("reads").expect("held");
         let server = refusing_create(status, reason, code).await;
         let (error, disposed) = upload_and_dispose(&fixture, &inbox, &hand_off, &server).await;
         assert_eq!(error.error_code(), Some(code));
         assert!(error.is_permanent(), "{code}");
-        assert_eq!(disposed, HeldFailure::Discarded, "{code}");
+        assert_eq!(disposed, HeldFailure::Quarantined, "{code}");
+        assert_quarantined(
+            &inbox,
+            &hand_off.address,
+            &held,
+            hand_off.asset_id(),
+            "upload",
+            Some(code),
+        );
     }
 }
 
@@ -1320,4 +1456,5 @@ async fn a_hand_off_the_server_refuses_for_now_is_kept() {
     );
     assert_eq!(disposed, HeldFailure::Kept);
     assert_eq!(inbox.addresses().expect("reads"), vec![hand_off.address]);
+    assert!(inbox.quarantined().expect("reads").is_empty());
 }

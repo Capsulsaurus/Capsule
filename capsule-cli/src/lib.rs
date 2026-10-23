@@ -715,6 +715,15 @@ async fn dispatch(command: Commands) -> Result<()> {
                 let ws = open_workspace(&library, passphrase_stdin)?;
                 peer_status(&ws, &ack, json).await?;
             }
+            PeerCommands::Discard {
+                library,
+                hand_off,
+                passphrase_stdin,
+                json,
+            } => {
+                let ws = open_workspace(&library, passphrase_stdin)?;
+                peer_discard(&ws, &hand_off, json)?;
+            }
         },
 
         // ── Demo ──────────────────────────────────────────────────────────
@@ -2048,9 +2057,10 @@ async fn peer_accept(
                     upload.asset_id,
                     upload.kind.unwrap_or_default()
                 ),
-                "discarded" => format!(
-                    "{}: permanently refused; this device's copy is discarded and the origin \
-                     keeps the upload: {}",
+                "quarantined" => format!(
+                    "{}: permanently refused; this device's copy is quarantined and kept, and \
+                     is not retried (see `capsule peer status`; `capsule peer discard` deletes \
+                     it): {}",
                     upload.hand_off,
                     upload.message.as_deref().unwrap_or_default()
                 ),
@@ -2105,12 +2115,43 @@ async fn peer_status(workspace: &Workspace, acks: &[PathBuf], json: bool) -> Res
                 .red()
             );
         }
+        for held in &summary.quarantined {
+            println!(
+                "{}",
+                format!(
+                    "{}: quarantined hand-off for asset {} ({}): {}; kept at {}",
+                    held.hand_off, held.asset_id, held.kind, held.message, held.file
+                )
+                .yellow()
+            );
+        }
     }
     if summary.refused_acks.is_empty() {
         Ok(())
     } else {
         Err(eyre!("Some acknowledgements were refused"))
     }
+}
+
+/// `capsule peer discard`: delete one quarantined hand-off.
+fn peer_discard(workspace: &Workspace, hand_off: &str, json: bool) -> Result<()> {
+    let state = peer::PeerState::for_device(workspace.device_id())
+        .map_err(|error| peer_run_error("Discard", &error))?;
+    let discarded =
+        peer::discard(&state, hand_off).map_err(|error| peer_run_error("Discard", &error))?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&discarded)?);
+    } else {
+        println!(
+            "{}",
+            format!(
+                "{}: quarantined hand-off for asset {} deleted",
+                discarded.hand_off, discarded.asset_id
+            )
+            .green()
+        );
+    }
+    Ok(())
 }
 
 /// `capsule list`: query the sync-fed local store and render it.

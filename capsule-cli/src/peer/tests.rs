@@ -164,6 +164,15 @@ fn the_peer_commands_parse_with_json() {
         vec![
             "capsule",
             "peer",
+            "discard",
+            "--library",
+            "lib",
+            "ab",
+            "--json",
+        ],
+        vec![
+            "capsule",
+            "peer",
             "status",
             "--library",
             "lib",
@@ -344,36 +353,108 @@ fn holding_one() -> (Scratch, PeerState, String) {
 }
 
 #[test]
-fn a_permanently_refused_held_hand_off_is_discarded_and_reported_once() {
+fn a_permanently_refused_held_hand_off_is_quarantined_and_reported_once() {
     let asset = Uuid::from_u128(3);
     for error in [
-        // The origin was revoked after the hand-off was accepted.
+        // The origin was revoked after the hand-off was accepted: often a lost device, whose
+        // original may survive only in this copy.
         DelegationError::Peering(PeeringError::RevokedDevice(Uuid::from_u128(9))),
-        // A create sealed under an album epoch the album has moved past.
+        // A stale album epoch, a closed album or withdrawn write access at finalization.
         rejected(400, capsule_i18n::error_codes::UPLOAD_ENVELOPE_REJECTED),
+        // The create-time twin of a closed album.
+        rejected(403, capsule_i18n::error_codes::UPLOAD_ALBUM_ACCESS_DENIED),
         // A conflicting provenance chain.
         rejected(409, capsule_i18n::error_codes::UPLOAD_STALE_REVIVAL),
     ] {
         let (_dir, state, address) = holding_one();
         let inbox = state.inbox();
         let courier = refused(&inbox, &address, asset, &error);
-        assert_eq!(courier.outcome, "discarded", "{error:?}");
+        assert_eq!(courier.outcome, "quarantined", "{error:?}");
         assert_eq!(courier.kind, Some(delegation_kind(&error)));
         assert_eq!(courier.code.as_deref(), error.error_code());
         assert!(
             inbox.addresses().expect("lists").is_empty(),
-            "the copy is gone, so no later run reports it: {error:?}"
+            "no later `peer accept` retries it: {error:?}"
+        );
+        assert_eq!(
+            inbox.load_quarantined(&address).expect("reads"),
+            Some(b"a held hand-off".to_vec()),
+            "the bytes are kept: {error:?}"
         );
         let summary = AcceptSummary {
             accepted: Vec::new(),
             refused: Vec::new(),
             uploads: vec![courier],
         };
-        assert!(summary.has_failures(), "the run that discards it says so");
+        assert!(
+            summary.has_failures(),
+            "the run that quarantines it says so"
+        );
         let json = serde_json::to_value(&summary).expect("serializes");
-        assert_eq!(json["uploads"][0]["outcome"], "discarded");
+        assert_eq!(json["uploads"][0]["outcome"], "quarantined");
         assert_eq!(json["uploads"][0]["asset_id"], asset.to_string());
+
+        // `peer status` lists it once, with the stable kind, from a fresh read of the state.
+        let listed = quarantined(&PeerState::new(state.root.clone()).inbox()).expect("lists");
+        assert_eq!(listed.len(), 1, "{listed:?}");
+        let view = serde_json::to_value(&listed[0]).expect("serializes");
+        assert_eq!(view["hand_off"], address);
+        assert_eq!(view["asset_id"], asset.to_string());
+        assert_eq!(view["kind"], delegation_kind(&error));
+        assert_eq!(
+            view["code"],
+            error
+                .error_code()
+                .map_or(serde_json::Value::Null, |code| code.into())
+        );
+        assert_eq!(view["message"], error.to_string());
+        assert_eq!(
+            fs::read(view["file"].as_str().expect("a path")).expect("the file is there"),
+            b"a held hand-off"
+        );
     }
+}
+
+#[test]
+fn the_quarantine_survives_a_reopen_and_only_discard_deletes_it() {
+    let (_dir, state, address) = holding_one();
+    let error = DelegationError::Peering(PeeringError::RevokedDevice(Uuid::from_u128(9)));
+    let courier = refused(&state.inbox(), &address, Uuid::from_u128(3), &error);
+    assert_eq!(courier.outcome, "quarantined");
+
+    // A held copy and a name that is no content address are not discardable.
+    let held = "cd".repeat(32);
+    state
+        .inbox()
+        .persist(&held, b"still held")
+        .expect("persists");
+    for name in [held.as_str(), "../../etc/passwd", ""] {
+        assert!(
+            matches!(discard(&state, name), Err(PeerError::NotQuarantined(_))),
+            "{name:?}"
+        );
+    }
+    assert_eq!(state.inbox().addresses().expect("lists"), vec![held]);
+
+    let reopened = PeerState::new(state.root.clone());
+    let discarded = discard(&reopened, &address).expect("discards");
+    assert_eq!(
+        serde_json::to_value(&discarded).expect("serializes"),
+        serde_json::json!({
+            "hand_off": address,
+            "asset_id": Uuid::from_u128(3).to_string(),
+            "kind": "revoked_device",
+        })
+    );
+    assert!(quarantined(&reopened.inbox()).expect("lists").is_empty());
+    assert_eq!(
+        reopened.inbox().load_quarantined(&address).expect("reads"),
+        None
+    );
+    assert!(matches!(
+        discard(&reopened, &address),
+        Err(PeerError::NotQuarantined(_))
+    ));
 }
 
 #[test]
@@ -394,5 +475,6 @@ fn a_transiently_failed_held_hand_off_is_kept_for_the_next_run() {
         assert_eq!(courier.kind, Some(delegation_kind(&error)));
         assert_eq!(courier.code.as_deref(), error.error_code());
         assert_eq!(inbox.addresses().expect("lists"), vec![address]);
+        assert!(quarantined(&inbox).expect("lists").is_empty());
     }
 }
