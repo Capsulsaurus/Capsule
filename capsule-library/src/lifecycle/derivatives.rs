@@ -704,17 +704,25 @@ mod tests {
     use super::super::{DerivativeStatus, SignedImportOptions, Workspace, fast_workspace};
     use super::*;
 
-    /// Delivery formats this build encodes: JXL, plus AVIF under `media-linked-codecs`.
-    const DELIVERY_FORMATS_ENCODED: usize = if cfg!(feature = "media-linked-codecs") {
-        2
-    } else {
-        1
-    };
+    /// Delivery formats this build encodes: JXL, plus AVIF under `capsule-core`'s
+    /// `media-linked-codecs`.
+    ///
+    /// Read from what core generates rather than from a `cfg!` here: the codec feature is
+    /// `capsule-core`'s, and a workspace build can turn it on through another dependent (the CLI)
+    /// without turning on this crate's pass-through of the same name. The preview tier is
+    /// generated exactly when the linked codecs are.
+    fn delivery_formats_encoded() -> usize {
+        if DerivativeTier::GENERATED.contains(&DerivativeTier::Preview) {
+            2
+        } else {
+            1
+        }
+    }
 
     /// Manifests a still larger than the thumbnail cap yields: every generated tier times every
     /// encoded delivery format.
     fn encoded_pairs_per_large_still() -> usize {
-        DerivativeTier::GENERATED.len() * DELIVERY_FORMATS_ENCODED
+        DerivativeTier::GENERATED.len() * delivery_formats_encoded()
     }
 
     /// A deterministic RGB gradient, `width` x `height`, as interleaved RGB `u16`.
@@ -1031,7 +1039,7 @@ mod tests {
         // defers whatever this build cannot encode — WebP.
         let preview_deferred: u32 = if DerivativeTier::GENERATED.contains(&DerivativeTier::Preview)
         {
-            (DerivativeFormat::STILL_DELIVERY_ORDER.len() - DELIVERY_FORMATS_ENCODED) as u32
+            (DerivativeFormat::STILL_DELIVERY_ORDER.len() - delivery_formats_encoded()) as u32
         } else {
             0
         };
