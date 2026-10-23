@@ -32,6 +32,7 @@ use super::{
     CommitAad, OpenMlsAuthority, OpenMlsAuthorityError, Result, WriteTierIngest, describe_content,
     parse_commit_aad, protocol_message,
 };
+use crate::ambient::IdSource;
 use crate::crypto::hash::{self, Hash32};
 use crate::crypto::keys::{DeviceDirectory, HybridSigningKey};
 pub use crate::crypto::upgrade::{
@@ -108,12 +109,13 @@ impl OpenMlsAuthority {
     // ── Step 1: propose (admin) / receive (member) ───────────────────────────
 
     /// **Step 1 (admin).** Issue a hybrid-signed [`UpgradeIntent`] and enter upgrade quiescence.
-    /// The `intent_id` is minted here (UUIDv7). Returns the signed intent + the MLS application
+    /// The `intent_id` is minted here, a UUIDv7 from `ids`. Returns the signed intent + the MLS application
     /// message to broadcast to the other members. Refused if the album is already tombstoned or
     /// already quiescing under another intent.
     #[tracing::instrument(skip_all, fields(album_id = %self.album_id, %to_suite_id))]
     pub fn propose_upgrade(
         &mut self,
+        ids: IdSource<'_>,
         from_protocol_version: impl Into<String>,
         from_suite_id: u16,
         to_protocol_version: impl Into<String>,
@@ -129,7 +131,7 @@ impl OpenMlsAuthority {
         }
         let deadline_secs = u64::try_from(deadline.as_secs().max(0)).unwrap_or(0);
         let intent = UpgradeIntent {
-            intent_id: Uuid::now_v7(),
+            intent_id: ids.uuid_v7(),
             from_protocol_version: from_protocol_version.into(),
             to_protocol_version: to_protocol_version.into(),
             from_suite_id,
