@@ -695,28 +695,48 @@ async fn dispatch(command: Commands) -> Result<()> {
                 to,
                 asset,
                 out,
+                peer,
                 deadline_hours,
                 passphrase_stdin,
                 json,
             } => {
-                let ws = open_workspace(&library, passphrase_stdin)?;
-                let mut options = peer::DelegateOptions::new(to, asset, out);
+                let mut options = match (peer, out, to) {
+                    (Some(peer), _, to) => peer::DelegateOptions::over_peer(peer, to, asset),
+                    (None, Some(out), Some(to)) => peer::DelegateOptions::new(to, asset, out),
+                    _ => {
+                        return Err(eyre!(
+                            "Name where the hand-offs go: --out DIR with --to DEVICE_ID, or \
+                             --peer HOST:PORT"
+                        ));
+                    }
+                };
                 options.deadline_ms = deadline_hours.saturating_mul(60 * 60 * 1000);
+                let ws = open_workspace(&library, passphrase_stdin)?;
                 peer_delegate(&ws, &options, json).await?;
             }
             PeerCommands::Accept {
                 library,
                 from,
+                listen,
+                listen_timeout,
                 staged,
                 passphrase_stdin,
                 json,
             } => {
                 let ws = open_workspace(&library, passphrase_stdin)?;
                 let push = push_options(false, false, staged);
+                let listen = match listen {
+                    Some(address) => Some(
+                        peer_listen(address, std::time::Duration::from_secs(listen_timeout))
+                            .await?,
+                    ),
+                    None => None,
+                };
                 let options = peer::AcceptOptions {
                     from,
                     policy: push.policy,
                     connection: push.connection,
+                    listen,
                 };
                 peer_accept(&ws, &options, json).await?;
             }
@@ -2223,12 +2243,20 @@ async fn peer_delegate(
     if json {
         println!("{}", serde_json::to_string_pretty(&summary)?);
     } else {
+        let delegate = summary.delegate.map_or_else(
+            || "the other device".to_owned(),
+            |id| format!("device {id}"),
+        );
         for handed in &summary.handed_off {
+            let via = handed.file.as_deref().map_or_else(
+                || "acknowledged over the peering channel".to_owned(),
+                str::to_owned,
+            );
             println!(
                 "{}",
                 format!(
-                    "{}: handed to device {}, awaiting server ({})",
-                    handed.asset_id, summary.delegate, handed.file
+                    "{}: handed to {delegate}, awaiting server ({via})",
+                    handed.asset_id
                 )
                 .green()
             );
@@ -2250,6 +2278,25 @@ async fn peer_delegate(
     }
 }
 
+/// Bind `capsule peer accept --listen`, and say on stderr where it listens (stdout stays the
+/// `--json` document).
+async fn peer_listen(
+    address: std::net::SocketAddr,
+    timeout: std::time::Duration,
+) -> Result<peer::PeerListener> {
+    let listener = peer::PeerListener::bind(address, timeout)
+        .await
+        .map_err(|error| peer_run_error("Accept", &error))?;
+    let bound = listener
+        .local_addr()
+        .map_err(|error| peer_run_error("Accept", &error))?;
+    eprintln!(
+        "Listening for a peer on {bound} for up to {}s",
+        timeout.as_secs()
+    );
+    Ok(listener)
+}
+
 /// `capsule peer accept`: take the files, then upload what this device holds.
 async fn peer_accept(
     workspace: &Workspace,
@@ -2268,14 +2315,23 @@ async fn peer_accept(
         println!("{}", serde_json::to_string_pretty(&summary)?);
     } else {
         for accepted in &summary.accepted {
-            println!(
-                "{}",
-                format!(
-                    "{}: taken; acknowledgement written to {}",
-                    accepted.ack.asset_id, accepted.ack_file
-                )
-                .green()
-            );
+            let line = match (&accepted.ack_file, accepted.peer, accepted.acknowledged) {
+                (Some(ack_file), _, _) => format!(
+                    "{}: taken; acknowledgement written to {ack_file}",
+                    accepted.ack.asset_id
+                ),
+                (None, Some(peer), Some(false)) => format!(
+                    "{}: taken from device {peer} over the peering channel and held for upload; \
+                     the device did not take the acknowledgement",
+                    accepted.ack.asset_id
+                ),
+                (None, peer, _) => format!(
+                    "{}: taken from device {} over the peering channel; acknowledged",
+                    accepted.ack.asset_id,
+                    peer.map_or_else(|| "?".to_owned(), |id| id.to_string())
+                ),
+            };
+            println!("{}", line.green());
         }
         for refused in &summary.refused {
             println!(

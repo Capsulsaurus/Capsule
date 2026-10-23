@@ -5,7 +5,9 @@
 //! computed itself. B's death mid-upload makes A re-queue it, and A's own upload then releases
 //! it. Both legs are the CLI's orchestration (`capsule_cli::peer`), which is what
 //! `capsule peer delegate`, `capsule peer accept` and `capsule peer status` run, over the
-//! sessions `capsule auth login` persists, against the real server composition root.
+//! sessions `capsule auth login` persists, against the real server composition root. The
+//! hand-off travels by file and over the LAN peering channel (`peer delegate --peer` against
+//! `peer accept --listen` on loopback, a real mutual TLS 1.3 channel).
 //!
 //! The server half is asserted too: it admits a manifest one device signed and another uploaded
 //! on the signer's signature, and refuses one signed by a key that is not the named device's —
@@ -18,8 +20,11 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
-use capsule_cli::peer::{self, ACK_SUFFIX, AcceptOptions, BootClock, DelegateOptions, PeerState};
+use capsule_cli::peer::{
+    self, ACK_SUFFIX, AcceptOptions, BootClock, DelegateOptions, PeerListener, PeerState,
+};
 use capsule_cli::peering_state::DbDirectoryVersions;
 use capsule_cli::remote::{self, PushOptions, RemoteConfig};
 use capsule_cli::session::SessionStore;
@@ -235,6 +240,7 @@ async fn e2e_case_15_a_delegate_uploads_a_sealed_bundle_and_the_origin_releases_
             from: vec![file.clone()],
             policy: UploadPolicy::Full,
             connection: ConnectionClass::Unmetered,
+            listen: None,
         },
     )
     .await
@@ -284,6 +290,215 @@ async fn e2e_case_15_a_delegate_uploads_a_sealed_bundle_and_the_origin_releases_
         DelegationState::Released,
         "{after:#?}"
     );
+}
+
+/// `capsule peer delegate --peer` against `capsule peer accept --listen` on loopback: A dials B's
+/// listener, the pair completes the mutual TLS handshake and the hybrid identity check, B pulls
+/// the hand-off over the verified channel, persists it and acknowledges it over the same channel,
+/// then uploads it; A records the acknowledgement as it arrives and releases the original only on
+/// its own custody check.
+#[tokio::test]
+async fn e2e_case_15_peer_delegate_hands_off_over_the_lan_channel_to_peer_accept_listening() {
+    let server = Server::boot().await;
+    let remote = remote_for(&server);
+    let mut a = Device::register(&server, "delegation-channel").await;
+    let asset = a.import_file("carried.jpg", &synthetic_jpeg());
+    let (_b_root, b, session_b) = second_device(&server, &a).await;
+    let cli_a = Cli::signed_in(&a.login_again(&server).await, a.workspace.device_id()).await;
+    let cli_b = Cli::signed_in(&session_b, b.device_id()).await;
+    let clock = Clock(AtomicU64::new(1_000));
+
+    let listener = PeerListener::bind(
+        "127.0.0.1:0".parse().expect("an address"),
+        Duration::from_secs(60),
+    )
+    .await
+    .expect("B listens on loopback");
+    let address = listener.local_addr().expect("bound").to_string();
+    let accept_options = AcceptOptions {
+        from: Vec::new(),
+        policy: UploadPolicy::Full,
+        connection: ConnectionClass::Unmetered,
+        listen: Some(listener),
+    };
+    let accepting = peer::accept(
+        &remote,
+        &cli_b.store,
+        &b,
+        &cli_b.state,
+        &cli_b.versions,
+        &accept_options,
+    );
+    let delegate_options = DelegateOptions::over_peer(address, Some(b.device_id()), vec![asset]);
+    let delegating = peer::delegate(
+        &remote,
+        &cli_a.store,
+        &a.workspace,
+        &cli_a.state,
+        &cli_a.versions,
+        &clock,
+        &delegate_options,
+    );
+    let (accepted, handed) = tokio::join!(accepting, delegating);
+    let accepted = accepted.expect("the accept runs");
+    let handed = handed.expect("the hand-off runs");
+
+    // A: handed to the device the channel verified, and acknowledged over it.
+    assert!(handed.failed.is_empty(), "{handed:#?}");
+    assert_eq!(handed.delegate, Some(b.device_id()));
+    assert_eq!(handed.handed_off.len(), 1);
+    assert!(handed.handed_off[0].acknowledged, "{handed:#?}");
+    assert!(
+        handed.handed_off[0].file.is_none(),
+        "nothing was written to a file"
+    );
+
+    // B: pulled from the verified origin, persisted, acknowledged, uploaded and cleaned up.
+    assert!(accepted.refused.is_empty(), "{accepted:#?}");
+    assert_eq!(accepted.accepted.len(), 1);
+    let taken = &accepted.accepted[0];
+    assert_eq!(taken.peer, Some(a.workspace.device_id()));
+    assert_eq!(taken.acknowledged, Some(true));
+    assert_eq!(taken.ack.hand_off, handed.handed_off[0].hand_off);
+    assert_eq!(
+        accepted.uploads.len(),
+        1,
+        "B uploads what it pulled: {accepted:#?}"
+    );
+    assert_eq!(accepted.uploads[0].outcome, "removed", "{accepted:#?}");
+    use capsule_sdk::peering::DelegateInbox as _;
+    assert!(cli_b.state.inbox().addresses().expect("reads").is_empty());
+    assert!(b.asset_ids().is_empty(), "never an asset of B's library");
+
+    // A took the acknowledgement over the channel (no ack file) and releases on its own check.
+    let after = peer::status(
+        &remote,
+        &cli_a.store,
+        &a.workspace,
+        &cli_a.state,
+        &cli_a.versions,
+        &clock,
+        &[],
+    )
+    .await
+    .expect("status runs");
+    assert_eq!(
+        after.delegations[0].state,
+        DelegationState::Released,
+        "{after:#?}"
+    );
+}
+
+/// A `--peer` that is not on the local network is refused before a byte is sent, and the run
+/// reports every asset under the stable `not_lan` kind.
+#[tokio::test]
+async fn e2e_case_15_peer_delegate_refuses_a_peer_off_the_local_network() {
+    let server = Server::boot().await;
+    let remote = remote_for(&server);
+    let mut a = Device::register(&server, "delegation-not-lan").await;
+    let asset = a.import_file("kept.jpg", &synthetic_jpeg());
+    let cli_a = Cli::signed_in(&a.login_again(&server).await, a.workspace.device_id()).await;
+    let handed = peer::delegate(
+        &remote,
+        &cli_a.store,
+        &a.workspace,
+        &cli_a.state,
+        &cli_a.versions,
+        &Clock(AtomicU64::new(0)),
+        &DelegateOptions::over_peer("192.0.2.1:7420", None, vec![asset]),
+    )
+    .await
+    .expect("the run reports per asset");
+    assert!(handed.handed_off.is_empty());
+    assert_eq!(handed.delegate, None);
+    assert_eq!(handed.failed.len(), 1);
+    assert_eq!(handed.failed[0].kind, "not_lan");
+    assert!(
+        cli_a
+            .state
+            .load_ledger()
+            .expect("reads")
+            .get(&asset)
+            .is_none(),
+        "nothing was handed off, so nothing is waited on"
+    );
+}
+
+/// The device at `--peer` verifies as a device of the account, but not the `--to` device the
+/// user named: nothing is sealed or sent, every asset is reported under `peer_mismatch`, and
+/// the listener, whose session ends with no listing, keeps waiting until its timeout.
+#[tokio::test]
+async fn e2e_case_15_peer_delegate_refuses_a_peer_that_is_not_the_named_device() {
+    let server = Server::boot().await;
+    let remote = remote_for(&server);
+    let mut a = Device::register(&server, "delegation-mismatch").await;
+    let asset = a.import_file("named.jpg", &synthetic_jpeg());
+    let (_b_root, b, session_b) = second_device(&server, &a).await;
+    let cli_a = Cli::signed_in(&a.login_again(&server).await, a.workspace.device_id()).await;
+    let cli_b = Cli::signed_in(&session_b, b.device_id()).await;
+
+    let listener = PeerListener::bind(
+        "127.0.0.1:0".parse().expect("an address"),
+        Duration::from_secs(3),
+    )
+    .await
+    .expect("B listens on loopback");
+    let address = listener.local_addr().expect("bound").to_string();
+    let accept_options = AcceptOptions {
+        from: Vec::new(),
+        policy: UploadPolicy::Full,
+        connection: ConnectionClass::Unmetered,
+        listen: Some(listener),
+    };
+    let someone_else = Uuid::now_v7();
+    let delegate_options = DelegateOptions::over_peer(address, Some(someone_else), vec![asset]);
+    let clock = Clock(AtomicU64::new(0));
+    let (accepted, handed) = tokio::join!(
+        peer::accept(
+            &remote,
+            &cli_b.store,
+            &b,
+            &cli_b.state,
+            &cli_b.versions,
+            &accept_options,
+        ),
+        peer::delegate(
+            &remote,
+            &cli_a.store,
+            &a.workspace,
+            &cli_a.state,
+            &cli_a.versions,
+            &clock,
+            &delegate_options,
+        )
+    );
+    let handed = handed.expect("the run reports per asset");
+    assert_eq!(
+        handed.delegate,
+        Some(b.device_id()),
+        "the channel verified B"
+    );
+    assert!(handed.handed_off.is_empty());
+    assert_eq!(handed.failed.len(), 1);
+    assert_eq!(handed.failed[0].kind, "peer_mismatch");
+    assert!(
+        cli_a
+            .state
+            .load_ledger()
+            .expect("reads")
+            .get(&asset)
+            .is_none()
+    );
+
+    let accepted = accepted.expect("the accept runs");
+    assert!(accepted.accepted.is_empty());
+    let kinds: Vec<&str> = accepted.refused.iter().map(|f| f.kind).collect();
+    assert!(
+        kinds.contains(&"peering_timeout"),
+        "no session completed before the listen timeout: {kinds:?}"
+    );
+    use capsule_sdk::peering::DelegateInbox as _;
+    assert!(cli_b.state.inbox().addresses().expect("reads").is_empty());
 }
 
 #[tokio::test]

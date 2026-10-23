@@ -1,3 +1,4 @@
+use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use clap::{Subcommand, ValueEnum};
@@ -459,21 +460,34 @@ pub(crate) enum ShareCommands {
 #[derive(Subcommand, Debug)]
 pub(crate) enum PeerCommands {
     /// Seal assets' uploads for another device of this account to upload later. Each asset is
-    /// written to a hand-off file the other device takes with `capsule peer accept`; this device
-    /// keeps every original until its own check finds the server holds it
+    /// written to a hand-off file the other device takes with `capsule peer accept`, or with
+    /// `--peer` handed over the LAN peering channel to `capsule peer accept --listen`; this
+    /// device keeps every original until its own check finds the server holds it
     Delegate {
         /// Path to the Capsule library holding the assets
         #[arg(long, value_name = "PATH")]
         library: PathBuf,
-        /// The device to hand the uploads to: its id in this account's device directory
-        #[arg(long, value_name = "DEVICE_ID")]
-        to: Uuid,
+        /// The device to hand the uploads to: its id in this account's device directory.
+        /// Required with `--out`; with `--peer`, the device the channel verifies must be this one
+        #[arg(long, value_name = "DEVICE_ID", required_unless_present = "peer")]
+        to: Option<Uuid>,
         /// An asset to hand off (repeatable)
         #[arg(long, value_name = "ASSET_ID", required = true)]
         asset: Vec<Uuid>,
         /// Directory the hand-off files are written to
-        #[arg(long, value_name = "DIR")]
-        out: PathBuf,
+        #[arg(
+            long,
+            value_name = "DIR",
+            required_unless_present = "peer",
+            conflicts_with = "peer"
+        )]
+        out: Option<PathBuf>,
+        /// Hand the uploads over the LAN peering channel instead of files: dial the other
+        /// device's `capsule peer accept --listen` at HOST:PORT, verify it over mutual TLS as a
+        /// device of this account, and serve it each hand-off to pull and acknowledge over the
+        /// same channel. Only a local-network address is dialed
+        #[arg(long, value_name = "HOST:PORT")]
+        peer: Option<String>,
         /// Hours to wait for the server to hold the assets before taking the uploads back
         #[arg(
             long,
@@ -486,9 +500,10 @@ pub(crate) enum PeerCommands {
         /// works in scripts and CI where there is no terminal.
         #[arg(long)]
         passphrase_stdin: bool,
-        /// Print the run as one JSON document on stdout: each asset handed off, with its file
-        /// and content address, and each that was not, with a stable `kind`, the server's
-        /// `code` when it gave one, and the detail
+        /// Print the run as one JSON document on stdout: the delegate, each asset handed off,
+        /// with its file or whether the delegate acknowledged it over the channel, and its
+        /// content address, and each that was not, with a stable `kind`, the server's `code`
+        /// when it gave one, and the detail
         #[arg(long)]
         json: bool,
     },
@@ -503,6 +518,22 @@ pub(crate) enum PeerCommands {
         /// A hand-off file to take (repeatable); without one, only the held hand-offs upload
         #[arg(long, value_name = "FILE")]
         from: Vec<PathBuf>,
+        /// Also take hand-offs over the LAN peering channel: listen on ADDR (e.g.
+        /// `0.0.0.0:7420`) for the other device's `capsule peer delegate --peer`, verify it over
+        /// mutual TLS as a device of this account, pull each hand-off it sealed for this device,
+        /// and acknowledge each over the same channel once it is persisted. Only local-network
+        /// peers are admitted. The address bound is printed on stderr
+        #[arg(long, value_name = "ADDR")]
+        listen: Option<SocketAddr>,
+        /// Seconds `--listen` waits for a peer to complete a hand-off session
+        #[arg(
+            long,
+            value_name = "SECONDS",
+            default_value_t = 300,
+            value_parser = clap::value_parser!(u64).range(1..),
+            requires = "listen"
+        )]
+        listen_timeout: u64,
         /// Open the tier sessions in ladder order, gating the above-index tiers on the
         /// connection class, as `capsule push --staged` does
         #[arg(long)]
@@ -512,9 +543,10 @@ pub(crate) enum PeerCommands {
         #[arg(long)]
         passphrase_stdin: bool,
         /// Print the run as one JSON document on stdout: each hand-off taken with its
-        /// acknowledgement, each refused, and what became of each held hand-off (removed, kept,
-        /// failed and kept, or permanently refused and quarantined), each failure with a stable
-        /// `kind`, the server's `code` when it gave one, and the detail
+        /// acknowledgement (and, over the channel, the peer it came from and whether the peer
+        /// took the acknowledgement), each refused, and what became of each held hand-off
+        /// (removed, kept, failed and kept, or permanently refused and quarantined), each
+        /// failure with a stable `kind`, the server's `code` when it gave one, and the detail
         #[arg(long)]
         json: bool,
     },
