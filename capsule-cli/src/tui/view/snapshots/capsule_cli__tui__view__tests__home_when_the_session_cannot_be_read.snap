@@ -1,0 +1,16 @@
+---
+source: capsule-cli/src/tui/view/tests.rs
+expression: "draw(&loaded(Err(\"could not read the session: malformed session file\".to_owned())))"
+---
+Capsule · Home · Session unavailable
+┌Home──────────────────────────────────────────────────────────────────────────┐
+│The session could not be read.                                                │
+│could not read the session: malformed session file                            │
+│                                                                              │
+│Every flow is also a `capsule <command>` subcommand; `capsule --help` lists   │
+│them.                                                                         │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+q Quit  ? Show the key bindings  r Reload the session status

@@ -1,0 +1,16 @@
+---
+source: capsule-cli/src/tui/view/tests.rs
+expression: frame
+---
+Capsule · Key bindings · Signed out
+┌Key bindings──────────────────────────────────────────────────────────────────┐
+│Key      Action                                                   Where       │
+│q        Quit                                                     everywhere  │
+│Ctrl-C   Quit                                                     everywhere  │
+│?        Show the key bindings                                    everywhere  │
+│Esc      Back to the previous screen                              everywhere  │
+│r        Reload the session status                                Home        │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+q Quit  Esc Back to the previous screen

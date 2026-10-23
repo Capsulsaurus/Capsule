@@ -40,6 +40,15 @@ as well as prompting, so each runs unattended. The
 file, the sidecars, and the index, none of which is sealed, so they need no passphrase and
 offer no flag for one.
 
+## Bare `capsule`
+
+Run with no command while stdin and stdout are both terminals, `capsule` opens a full-screen
+TUI; `q` or Ctrl-C leaves it and `?` lists its keys. Anywhere else (a pipe, a redirect, a CI
+runner) bare `capsule` prints the help on stderr and exits 2, as a missing command always has,
+so a script never blocks on a screen. While the TUI holds the terminal, log output goes to
+`tui.log` in the CLI's cache directory instead of stderr, replaced each time the TUI opens.
+Every flow the TUI offers stays reachable as a subcommand, with `--json` where it reports.
+
 ## Where the contract lives
 
 - The behaviour of the import pipeline is [Import Pipeline](/design/import/pipeline/); what
