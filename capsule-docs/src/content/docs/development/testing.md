@@ -23,6 +23,8 @@ reducer exist partly so that the test suites drive exactly what a user drives.
   adapter, including the in-memory test double, must pass.
 - **Adjacent, not inline.** A module's unit tests live in its sibling `tests.rs`
   (`foo.rs` → `foo/tests.rs`); `<crate>/tests/` exercises only the public API.
+  `mise run test-layout-check`, part of `check-rust`, rejects any inline module under a
+  crate's `src/` that is named `tests` or gated on `cfg(test)`.
 - **Tests guard the data, not the coverage number.** Mutation testing on the critical modules
   shows whether a test actually constrains behaviour.
 

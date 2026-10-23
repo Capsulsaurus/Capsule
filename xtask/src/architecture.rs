@@ -141,7 +141,8 @@ pub(crate) fn run(root: &Path) -> Result<()> {
     )
 }
 
-fn cargo_metadata(root: &Path) -> Result<Value> {
+/// `cargo metadata --no-deps` for the workspace at `root`.
+pub(crate) fn cargo_metadata(root: &Path) -> Result<Value> {
     let output = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
         .args([
             "metadata",
@@ -911,7 +912,12 @@ fn check_retired_references(root: &Path, violations: &mut Vec<String>) -> Result
     })
 }
 
-fn walk_files(directory: &Path, visit: &mut impl FnMut(&Path) -> Result<()>) -> Result<()> {
+/// Visit every file under `directory`, skipping build output, dependencies, `legacy-review/` and
+/// agent worktrees (see [`is_ignored_directory`]).
+pub(crate) fn walk_files(
+    directory: &Path,
+    visit: &mut impl FnMut(&Path) -> Result<()>,
+) -> Result<()> {
     for entry in fs::read_dir(directory)
         .with_context(|| format!("reading directory {}", directory.display()))?
     {

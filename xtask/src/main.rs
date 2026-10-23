@@ -20,6 +20,8 @@
 //!   buildable review-only code, stale component references, and any reach for the
 //!   filesystem, the environment or a database from the stateless `capsule-core` (see
 //!   [`architecture`]).
+//! - `test-layout-check` rejects inline test modules under any workspace member's `src/`: unit
+//!   tests live in a sibling `tests.rs` (see [`test_layout`]).
 //! - `screenshot-seed` / `screenshot-compose` are the platform-independent halves of the
 //!   README hero screenshot pipeline driven by `mise run screenshot-ios` (see [`screenshot`]).
 
@@ -29,6 +31,7 @@ mod i18n;
 mod i18n_guard;
 mod screenshot;
 mod share_kat;
+mod test_layout;
 mod translate_readme;
 
 use std::fs;
@@ -39,7 +42,7 @@ use regex::{Captures, Regex};
 use semver::Version;
 use toml_edit::Item;
 
-const USAGE: &str = "usage: xtask <set-version <X.Y.Z> | i18n [--check] | i18n-guard | translate-readme [--check | --extract] | share-kat [<out-path>] | drop-kat [<out-path>] | architecture-check | screenshot-seed [--anchor YYYY-MM-DD] | screenshot-compose --input <png> --output <png>>";
+const USAGE: &str = "usage: xtask <set-version <X.Y.Z> | i18n [--check] | i18n-guard | translate-readme [--check | --extract] | share-kat [<out-path>] | drop-kat [<out-path>] | architecture-check | test-layout-check | screenshot-seed [--anchor YYYY-MM-DD] | screenshot-compose --input <png> --output <png>>";
 
 /// Default output path (repo-relative) for the share-link KAT fixture the bun test consumes.
 const SHARE_KAT_OUT: &str = "capsule-web/src/generated/share-kat.json";
@@ -69,6 +72,7 @@ fn main() -> Result<()> {
         }
         Some("i18n-guard") => i18n_guard::run(&repo_root()),
         Some("architecture-check") => architecture::run(&repo_root()),
+        Some("test-layout-check") => test_layout::run(&repo_root()),
         Some("translate-readme") => {
             let mode = match args.next().as_deref() {
                 None => translate_readme::Mode::Generate { api: false },
