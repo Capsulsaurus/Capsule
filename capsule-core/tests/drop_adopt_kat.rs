@@ -1,4 +1,4 @@
-//! Guest-drop adoption Known-Answer Test (slice `S-D3`) — the **Rust adoption half** of the
+//! Guest-drop adoption Known-Answer Test — the **Rust adoption half** of the
 //! cross-language KAT whose browser half lives in `capsule-web`'s `drop-seal.test.ts`.
 //!
 //! The browser seals a guest drop; the album owner's native (trusted) client adopts it. This test

@@ -39,7 +39,7 @@ use crate::exif::ExifExtract;
 pub(super) struct IssuedLink {
     /// The random 128-bit opaque URL-path id.
     opaque_id: [u8; 16],
-    /// The per-link caps the serve path (S-C5) enforces at drop-session creation.
+    /// The per-link caps the serve path enforces at drop-session creation.
     caps: LinkCaps,
     /// The Drop Key public half (KEM encapsulation key; travels in the URL fragment only).
     drop_pubkey: Vec<u8>,
@@ -100,7 +100,7 @@ impl Workspace {
     }
 
     /// The optional Argon2id write-abuse verifier of an issued link — the record the serve
-    /// path (S-C5) consults to gate a drop-session on passphrase possession.
+    /// path consults to gate a drop-session on passphrase possession.
     pub fn upload_link_passphrase(&self, link: &UploadLinkId) -> Option<&PassphraseVerifier> {
         self.upload_links
             .get(link)
@@ -124,7 +124,7 @@ impl Workspace {
     }
 
     /// Stage a guest's [`SealedDrop`] into this owner's inbox, modeling the server's stage
-    /// step (S-C5) so the offline core can drive the full seal → stage → adopt path. Refuses
+    /// step so the offline core can drive the full seal → stage → adopt path. Refuses
     /// a drop through an unknown or revoked link (a fail-closed stand-in for the serve
     /// path's cap/quota checks). Returns the new inbox drop id.
     pub fn receive_drop(

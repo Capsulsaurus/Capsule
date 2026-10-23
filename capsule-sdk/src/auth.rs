@@ -45,7 +45,7 @@
 //! The wire flows (login/refresh/logout, `401` recovery, error mapping) are proven
 //! against a focused in-process mock HTTP server rather than a booted server: booting one
 //! from this crate would invert the dependency — the *server* dev-depends on this crate, not
-//! the other way round (`S-D28`) — and a mock keeps every wire case deterministic. The round
+//! the other way round — and a mock keeps every wire case deterministic. The round
 //! trip against the real router, over a real socket, lives where the dependency points:
 //! `capsule-server/tests/sdk_client.rs`. The pre-flight and single-flight guarantees are proven with an injected
 //! [`Clock`] — no sleeps, no wall-clock dependence.
@@ -367,9 +367,9 @@ impl Endpoint {
 struct LoginRequestBody<'a> {
     email: &'a str,
     password: &'a str,
-    /// Advisory device-cohort hash (slice `S-D11`). Rides the session-creation body
+    /// Advisory device-cohort hash. Rides the session-creation body
     /// only; **omitted entirely when absent** so "absent stays legal" is literal on
-    /// the wire (no `null` field). Never read by any authorization decision (S-C13).
+    /// the wire (no `null` field). Never read by any authorization decision.
     #[serde(skip_serializing_if = "Option::is_none")]
     cohort_hash: Option<&'a str>,
 }
@@ -385,7 +385,7 @@ struct RegisterRequestBody<'a> {
     password: &'a str,
 }
 
-/// The body that completes a sign-in with a code (`S-C55`).
+/// The body that completes a sign-in with a code.
 ///
 /// The advisory cohort rides **here** rather than on the login, because this is the request that
 /// opens the session: a second-factor sign-in that sent its cohort on the first leg would attach
@@ -507,7 +507,7 @@ impl AuthEndpoints {
     }
 }
 
-/// A begun sign-in through the identity provider (`S-N2`).
+/// A begun sign-in through the identity provider.
 ///
 /// The platform sends the person to `authorization_url`, receives the provider's redirect at
 /// the `redirect_uri` it named, and hands this value with the redirect's `state` and `code` to
@@ -604,7 +604,7 @@ fn oidc_binding_challenge(binding: &SecretString) -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest)
 }
 
-/// What a password login answered with (`S-C55`).
+/// What a password login answered with.
 ///
 /// Two variants because the server has two outcomes and says so with a status: `200` with a
 /// token pair, `202` with a challenge. Neither is a failure — an account having a second factor
@@ -663,7 +663,7 @@ pub struct AuthClient {
     clock: Arc<dyn Clock>,
     refresh_skew_secs: i64,
     /// The advisory device-cohort hash to ride every session-creation request
-    /// (slice `S-D11`). `None` ⇒ nothing is sent — the server behaves identically
+    ///. `None` ⇒ nothing is sent — the server behaves identically
     /// (S-C13's advisory-only invariant). Computed by the platform app from its
     /// primary identifier via [`crate::cohort`] and set with
     /// [`with_cohort_hash`](AuthClient::with_cohort_hash).
@@ -720,12 +720,12 @@ impl AuthClient {
     }
 
     /// Attach the advisory device-cohort hash that rides every subsequent
-    /// session-creation request (login/register) from this client (slice `S-D11`).
+    /// session-creation request (login/register) from this client.
     ///
     /// The value is a lowercase-hex SHA-256 digest computed by the platform app from
     /// its primary identifier and the account's `user_id`
     /// ([`crate::cohort::compute_cohort_hash`]). It is a **grouping aid only** — the
-    /// server never reads it for any authorization decision (S-C13). Not setting it
+    /// server never reads it for any authorization decision. Not setting it
     /// (the default) is fully legal: nothing is sent and the server behaves
     /// identically.
     #[must_use]
@@ -765,7 +765,7 @@ impl AuthClient {
         Ok(outcome)
     }
 
-    /// Begin a sign-in through the server's identity provider (`S-N2`).
+    /// Begin a sign-in through the server's identity provider.
     ///
     /// `redirect_uri` is where the provider will send the person back — this client's own
     /// callback, which the server admits if it is the deployment's configured one or a loopback
@@ -817,7 +817,7 @@ impl AuthClient {
         })
     }
 
-    /// Finish a sign-in through the identity provider with what its redirect carried (`S-N2`).
+    /// Finish a sign-in through the identity provider with what its redirect carried.
     ///
     /// Answers a [`LoginOutcome`] exactly as [`login`](AuthClient::login) does — a session, or a
     /// second-factor challenge for an account that enrolled one — and the configured cohort hash
@@ -1076,7 +1076,7 @@ impl AuthClient {
         Ok(LoginOutcome::Session(self.session_with_tokens(tokens)))
     }
 
-    /// Complete a sign-in with the code an authenticator app is showing (`S-C55`).
+    /// Complete a sign-in with the code an authenticator app is showing.
     ///
     /// `mfa_token` is the challenge [`LoginOutcome::SecondFactorRequired`] carried. It is good
     /// once and for five minutes; a code is good once, full stop, so a retry after a wrong code
@@ -1991,7 +1991,7 @@ mod tests {
         assert_eq!(protected_calls.load(Ordering::SeqCst), 2);
     }
 
-    /// A `202` is a second-factor challenge, not a malformed token pair (`S-C55`, `S-C63`).
+    /// A `202` is a second-factor challenge, not a malformed token pair.
     ///
     /// Before this, `read_tokens` treated every 2xx as a pair and the challenge body failed to
     /// deserialize — so a user with a second factor was told their server had sent a malformed
@@ -2226,7 +2226,7 @@ mod tests {
         assert!(matches!(error, AuthError::NotAuthenticated));
     }
 
-    // ── OIDC (S-N2) ───────────────────────────────────────────────────────────
+    // ── OIDC ───────────────────────────────────────────────────────────
 
     /// An RFC 9457 problem carrying the stable code, as the server's coded-problem interceptor
     /// renders one — the generated client parses refusals into this shape.
@@ -2688,7 +2688,7 @@ mod tests {
         ));
     }
 
-    // ── Cohort emission (S-D11) ───────────────────────────────────────────────
+    // ── Cohort emission ───────────────────────────────────────────────
 
     /// Capture the JSON body a session-creation endpoint received, so a test can
     /// assert what rode the wire.
@@ -2730,7 +2730,7 @@ mod tests {
     /// Registration sends an address and a password, and **nothing else**.
     ///
     /// It used to send a username, a display name and the advisory cohort hash. The server takes
-    /// none of them (`S-C53`), and its body is strict — so a field this client added for
+    /// none of them, and its body is strict — so a field this client added for
     /// old times' sake would be a `422` rather than a value quietly ignored. Asserted as an
     /// exact key set, because the failure mode here is a field creeping back in.
     #[tokio::test]

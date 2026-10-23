@@ -1,4 +1,4 @@
-//! The signed federated moderation report, and what verifies one (`S-C49`).
+//! The signed federated moderation report, and what verifies one.
 //!
 //! # Why a report is signed rather than authenticated
 //!

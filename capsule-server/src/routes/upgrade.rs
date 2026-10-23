@@ -1,4 +1,4 @@
-//! The album-upgrade ceremony's **server halves** (slice `S-C24`).
+//! The album-upgrade ceremony's **server halves**.
 //!
 //! [Versioning — Album Upgrade Ceremony](../../../capsule-docs/src/content/docs/design/versioning.md#album-upgrade-ceremony)
 //! is a client ceremony carried on MLS application messages the server cannot read. Four of its
@@ -56,7 +56,7 @@ use crate::upload::UploadContext;
 ///
 /// An `UpgradeIntent` is a handful of strings and two hybrid signatures; 64 KiB is three orders
 /// of magnitude more than one needs and still small enough that a refusal costs nothing. The
-/// transport backstop (`S-C33`) is 32 MiB, which is not a bound on a ceremony message.
+/// transport backstop is 32 MiB, which is not a bound on a ceremony message.
 pub const MAX_INTENT_BYTES: usize = 64 * 1024;
 
 /// `application/cbor` — the encoding the intent is *signed* in.

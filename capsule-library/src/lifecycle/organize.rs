@@ -34,7 +34,7 @@ impl Workspace {
         self.append_lifecycle(asset_id, Action::TrashRestore, None, |_, _| {})
     }
 
-    // ── Culling workflow (S-D13) ────────────────────────────────────────────────
+    // ── Culling workflow ────────────────────────────────────────────────
     //
     // The client review pass: flag → filter → act. Flagging writes the trinary `cull` LWW
     // register as a signed `metadata-update` (never touches bytes, fully reversible); the
@@ -96,7 +96,7 @@ impl Workspace {
         ids
     }
 
-    // ── Hidden assets (S-D19/S-D25) ─────────────────────────────────────────────
+    // ── Hidden assets ─────────────────────────────────────────────
     //
     // Hiding is metadata, never a copy or a move: the `hidden` LWW register is written into the
     // signed sidecar as a `metadata-update`, so it is durable, reversible, and survives a
@@ -528,7 +528,7 @@ mod tests {
     use super::super::fast_workspace;
     use super::*;
 
-    // ── Culling workflow (S-D13) ────────────────────────────────────────────────
+    // ── Culling workflow ────────────────────────────────────────────────
 
     /// Import three distinct assets into `ws`'s `album` and return their ids in import order.
     fn import_trio(ws: &mut Workspace, album: Uuid, src: &Path) -> [Uuid; 3] {
@@ -644,7 +644,7 @@ mod tests {
         assert_eq!(ws.verify(&asset).unwrap(), VerifyOutcome::Accept);
     }
 
-    // ── Hidden assets (S-D25) ───────────────────────────────────────────────────
+    // ── Hidden assets ───────────────────────────────────────────────────
 
     /// A [`LocalAuthGate`] that always grants — the platform adapter's decision is not what is
     /// under test here; what the Hidden view *contains* is.
@@ -658,7 +658,7 @@ mod tests {
         }
     }
 
-    /// **The `S-D25` acceptance case.** Hiding an asset through the public API takes it out of
+    /// **The acceptance case.** Hiding an asset through the public API takes it out of
     /// every default projection, puts it in the gated Hidden view, and — because the register
     /// is written into the signed sidecar, not just the index — it is *still* hidden after the
     /// index is deleted and rebuilt from disk.
@@ -798,7 +798,7 @@ mod tests {
     }
 
     /// The manual stacking path writes through to the index the same way the importer does
-    /// (`S-B15`): the `assets` stack columns are a projection of the signed register, so
+    ///: the `assets` stack columns are a projection of the signed register, so
     /// `set_stack_membership` immediately suppresses a non-primary member from the timeline,
     /// and leaving the stack (a stamped `None`) puts it back.
     #[test]

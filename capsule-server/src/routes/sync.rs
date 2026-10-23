@@ -1,10 +1,10 @@
-//! `GET /v1/sync` — the key-free sync feed (slice `S-C2`).
+//! `GET /v1/sync` — the key-free sync feed.
 //!
 //! The port of the retired `capsule.sync.v1` gRPC feed onto Kynos REST, per
 //! design/api-surfaces.md. The transport changed; the cursor, the per-album `sync_seq`
 //! monotonicity and the `original_held` completeness fact did not.
 //!
-//! # The status audit (`S-C28`)
+//! # The status audit
 //!
 //! | Retired gRPC | Verdict here |
 //! | --- | --- |
@@ -26,7 +26,7 @@
 //! The refusal names no epoch; the client starts from an empty cursor, which is valid in every
 //! epoch.
 //!
-//! # A peer reads the same page (`S-E5`)
+//! # A peer reads the same page
 //!
 //! `Authorization: Bearer` also carries a federation capability. The album arm is then bound to
 //! the capability's album — a peer has no "own feed", so `album_id` absent or different is
@@ -50,7 +50,7 @@
 //! no byte string. That is a transport encoding: `decode(encode(b)) == b` for every `b`, so the
 //! bytes the client signed are the bytes it verifies. The retired feed's defect was categorically
 //! different — it re-encoded a *parsed projection*, producing bytes carrying neither `device_sig`
-//! nor `write_sig` (`S-C30`).
+//! nor `write_sig`.
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -97,7 +97,7 @@ pub struct SyncQuery {
     /// right to — a schema whose bounds depend on the server's pointer size is a schema no
     /// client can rely on.
     pub page_size: Option<u32>,
-    /// One album's page rather than the caller's own feed (`S-C51`).
+    /// One album's page rather than the caller's own feed.
     ///
     /// For the album's owner or any account on its current roster. Positions are the owner's
     /// sequence numbers filtered to the album, and the cursor is bound to `(caller, album)`, so
@@ -154,7 +154,7 @@ pub struct SyncEntry {
     pub sync_seq: u64,
     /// What this is to the client that asked.
     pub change: WireChangeKind,
-    /// The signed manifest, base64 of the provenance blob's exact bytes (`S-C30`).
+    /// The signed manifest, base64 of the provenance blob's exact bytes.
     ///
     /// Absent on a tombstone, and absent — with a loud server-side log — when the index names a
     /// provenance blob the store cannot produce.
@@ -168,7 +168,7 @@ pub struct SyncEntry {
     ///
     /// What a receiver opens a thumbnail or preview with: the manifest names the derivative's
     /// `ciphertext_hash`, `nonce_prefix` and AMK epoch, and the blob list carries none of
-    /// them. Served verbatim for the reason [`Self::manifest_cbor`] is (`S-C30`). Empty on a
+    /// them. Served verbatim for the reason [`Self::manifest_cbor`] is. Empty on a
     /// tombstone; a manifest the store cannot produce is left out with a loud server-side log.
     #[serde(default)]
     pub derivative_manifests: Vec<String>,
@@ -227,7 +227,7 @@ pub enum SyncRejection {
         code: &'static str,
     },
 
-    /// The album is not the caller's and the caller is not on its roster (`S-C51`).
+    /// The album is not the caller's and the caller is not on its roster.
     ///
     /// One answer for unprovisioned, never-a-member and removed alike, as the write routes give.
     #[error("no access to that album")]
@@ -238,7 +238,7 @@ pub enum SyncRejection {
         code: &'static str,
     },
 
-    /// The capability is revoked (`S-E5`).
+    /// The capability is revoked.
     #[error("this capability has been revoked")]
     #[problem(status = 403, title = "Capability revoked")]
     CapabilityRevoked {
@@ -247,7 +247,7 @@ pub enum SyncRejection {
         code: &'static str,
     },
 
-    /// The capability is for another album, or no album was named (`S-E5`).
+    /// The capability is for another album, or no album was named.
     #[error("this capability is for a different album")]
     #[problem(status = 403, title = "Audience mismatch")]
     AudienceMismatch {
@@ -256,7 +256,7 @@ pub enum SyncRejection {
         code: &'static str,
     },
 
-    /// The peer is on this server's blocklist (`S-C49`).
+    /// The peer is on this server's blocklist.
     #[error("this server is blocked")]
     #[problem(status = 403, title = "Server blocked")]
     PeerBlocked {
@@ -369,9 +369,9 @@ pub async fn sync_feed(
     let requested = query.album_id.as_deref().map(AlbumId::new);
 
     // Who is asking, and which page they may have. An account reads its own feed, or — with
-    // `album_id` — one album's page as its owner or a member of its current roster (`S-C51`).
+    // `album_id` — one album's page as its owner or a member of its current roster.
     // A peer reads exactly the album its capability names, as the member it was minted for
-    // (`S-E5`). Each relationship is decided first, and one refusal covers every way it fails.
+    //. Each relationship is decided first, and one refusal covers every way it fails.
     let (reader, album) = match principal {
         Principal::Session(credential) => {
             let album = match requested {
@@ -530,7 +530,7 @@ pub async fn sync_feed(
 }
 
 /// Whether the member `capability` was minted for is still on `album`'s roster at the epoch the
-/// grant was made at — answering the album's owner, whose rows the page is (`S-E5`).
+/// grant was made at — answering the album's owner, whose rows the page is.
 ///
 /// The epoch is the server-side half of the grant: a member removed and re-admitted at a later
 /// epoch gets a fresh membership, and a capability minted for the earlier one is refused without

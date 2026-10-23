@@ -191,7 +191,7 @@ fn an_implausibly_large_document_is_refused_without_decoding_it() {
 
 #[test]
 fn a_document_that_does_not_verify_under_the_submitted_key_is_refused() {
-    // Invariant 23's second clause (`S-C42`). Before this, an authenticated caller could
+    // Invariant 23's second clause. Before this, an authenticated caller could
     // publish a document that verifies under no key at all, and the server would serve it to
     // every peer that asked — and, worse, `S-C23`'s revoke-all anchors on that document, so a
     // stolen session token could permanently disable the account's global sign-out.

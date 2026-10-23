@@ -1,4 +1,4 @@
-//! Provisioned albums (`S-C25`), with the upgrade ceremony in flight against each (`S-C24`).
+//! Provisioned albums, with the upgrade ceremony in flight against each.
 
 use sea_orm_migration::prelude::*;
 

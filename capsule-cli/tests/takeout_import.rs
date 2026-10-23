@@ -1,4 +1,4 @@
-//! Slice `S-B11` acceptance for `capsule import --provider takeout`: the [Google Photos
+//! The acceptance for `capsule import --provider takeout`: the [Google Photos
 //! migration guide]'s import + verification checklist, run against a **synthesized** Takeout
 //! archive by spawning the real binary.
 //!

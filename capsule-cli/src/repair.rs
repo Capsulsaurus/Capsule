@@ -1,5 +1,5 @@
 //! `capsule repair capture-time` — recover capture timestamps stamped with import time
-//! (slice `S-B17`).
+//!.
 //!
 //! Before `S-B16`, `extract_exif` could never parse a well-formed `DateTimeOriginal`, so every
 //! import wrote its own clock as the asset's capture time — **inside the signed sidecar**, and
@@ -551,7 +551,7 @@ mod tests {
 
     // ── detect / apply over a workspace ──────────────────────────────────────
 
-    /// The `S-B17` acceptance case, in-process: a library whose sidecars carry the wrong
+    /// The acceptance case, in-process: a library whose sidecars carry the wrong
     /// instant reports every affected asset, corrects them under `--apply` as one signed
     /// revision each, and a second pass finds nothing — while a post-`S-B16` import is
     /// untouched from the start.

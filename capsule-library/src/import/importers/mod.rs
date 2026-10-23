@@ -1,4 +1,4 @@
-//! Third-party **source adapters** (slice `S-B6`; the shared seam `S-B7`/`S-B8`/`S-B9` implement).
+//! Third-party **source adapters** (the shared seam `S-B7`/`S-B8`/`S-B9` implement).
 //!
 //! Migration from another photo service is an import, not a new pipeline: a [`SourceAdapter`]
 //! yields `(bytes-source, extracted-metadata)` entries into the same [Scan & Extract] stage the
@@ -15,13 +15,13 @@
 //!
 //! The folded record is not planner input only. The
 //! [executor](crate::import::execute_with_source_metadata) writes it into the **signed
-//! sidecar** at import through [`enrichment`](crate::import::enrichment) (`S-B10`) — capture time
+//! sidecar** at import through [`enrichment`](crate::import::enrichment) — capture time
 //! and GPS as fallbacks behind the file's own EXIF, and the exporter-authoritative constructs
 //! (description, favorites, album membership) unconditionally — so a migrated library keeps what
 //! the exporting service carried instead of discarding it once the plan is built.
 //!
-//! The committed adapter is [`takeout::TakeoutAdapter`] (Google Takeout, `S-B6`); the iCloud
-//! (`S-B7`), Immich (`S-B8`), and tethered-camera (`S-B9`) adapters are post-v1 and land on this
+//! The committed adapter is [`takeout::TakeoutAdapter`] (Google Takeout); the iCloud
+//!, Immich, and tethered-camera adapters are post-v1 and land on this
 //! same seam.
 //!
 //! [Scan & Extract]: https://docs/design/import/pipeline/#scan--extract
@@ -37,13 +37,13 @@ use thiserror::Error;
 /// The exporting service an adapter migrates from (for logs / telemetry / user-facing labels).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImportProvider {
-    /// Google Photos via Google Takeout (`S-B6`).
+    /// Google Photos via Google Takeout.
     GoogleTakeout,
-    /// iCloud Photos export (`S-B7`, post-v1).
+    /// iCloud Photos export (post-v1).
     ICloud,
-    /// Immich export/API (`S-B8`, post-v1).
+    /// Immich export/API (post-v1).
     Immich,
-    /// Tethered camera over PTP/IP (`S-B9`, post-v1).
+    /// Tethered camera over PTP/IP (post-v1).
     Camera,
 }
 

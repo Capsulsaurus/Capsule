@@ -1,4 +1,4 @@
-//! Share links (`S-C4`): the link record, and the addresses it — and only it — may serve.
+//! Share links: the link record, and the addresses it — and only it — may serve.
 
 use sea_orm_migration::prelude::*;
 

@@ -17,8 +17,8 @@
 //!    ledger and fsynced, after the blob commit and before anything is indexed.
 //! 6. **Record and receipt**, in one transaction: the blob is recorded against its asset — where
 //!    the asset's next sequence number is minted when the change is one a client can observe
-//!    (`S-C37`) — and the custody receipt, the server's signed admission of what it accepted
-//!    (`S-C15`), is signed and logged with it.
+//! — and the custody receipt, the server's signed admission of what it accepted
+//!, is signed and logged with it.
 //! 7. **Ledger the index write**: a [`LedgerEvent::Indexed`] entry carries the sequence number
 //!    and the receipt step 6 minted — or, when the index refused the write, a
 //!    [`LedgerEvent::Refused`] entry resolves the custody entry so a rebuild does not replay it.
@@ -108,7 +108,7 @@
 //! lease because a deployment runs one process over its blob root, and the snapshot is taken
 //! before that process has claimed anything.
 //!
-//! # Nothing here produces manifest bytes (`S-C30`)
+//! # Nothing here produces manifest bytes
 //!
 //! Finalization stores what the client sent and nothing else. It does not re-serialize the
 //! envelope projection into CBOR, does not hash such a re-serialization into an attestation,
@@ -187,7 +187,7 @@ pub enum FinalizeFailure {
         on_disk: Option<u64>,
     },
 
-    /// A `replace` names a blob the store does not hold yet (`S-C43`).
+    /// A `replace` names a blob the store does not hold yet.
     ///
     /// Transient and the client's to fix: the manifest is the member that applies a replace, so
     /// it is the member that lands last. Retrying the manifest once the rest of the bundle has
@@ -198,7 +198,7 @@ pub enum FinalizeFailure {
         field: &'static str,
     },
 
-    /// A `replace` was refused by the index (`S-C43`).
+    /// A `replace` was refused by the index.
     ///
     /// Invariant 17's stale chain, invariant 18's epoch regression, or an asset that is no
     /// longer there. One variant because the client's action is the same for all three — re-read
@@ -511,7 +511,7 @@ async fn run_claimed(
         Source::Committed(_) => Placement::AlreadyPresent,
     };
 
-    // The asset's chain position, and only for the blob that *is* the manifest (`S-C31`). It
+    // The asset's chain position, and only for the blob that *is* the manifest. It
     // travels as its own value rather than being read back off the content address, because
     // `prior_provenance_hash` is a SHA-256 by definition while an address is whatever digest the
     // suite chose — equal today, not the same identifier.
@@ -860,7 +860,7 @@ async fn record_against_asset(
     }
 }
 
-/// Apply one member of a `replace` bundle (`S-C43`).
+/// Apply one member of a `replace` bundle.
 ///
 /// # Why the manifest is the only member that writes
 ///
@@ -901,7 +901,7 @@ async fn apply_replace(
     if record.blob_role != crate::store::BlobRole::Provenance {
         // Bytes committed, index untouched. If the manifest never lands the blob is unreferenced
         // and the collector reclaims it on its ordinary schedule, crediting the quota back
-        // (`S-C44`) — an abandoned replace costs its uploader nothing permanent.
+        // — an abandoned replace costs its uploader nothing permanent.
         //
         // The receipt is this finalization's only durable write, so it is atomic on its own:
         // there is no index row for it to be committed apart from.
@@ -1033,7 +1033,7 @@ async fn named_blob(
 /// What one pass over the staged bytes established.
 ///
 /// Two fields from one hasher, because they are two *identifiers* that happen to share a
-/// digest today and must not share a variable (`S-C31`): the content address is whatever digest
+/// digest today and must not share a variable: the content address is whatever digest
 /// the crypto suite selects, and the chain position is a SHA-256 by definition. The day a suite
 /// selects something else, this struct grows a second hasher and every caller keeps compiling —
 /// which is the whole reason they are separate here while they are equal.

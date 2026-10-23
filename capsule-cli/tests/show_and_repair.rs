@@ -296,7 +296,7 @@ fn fixture(count: usize) -> Fixture {
     }
 }
 
-// ── `capsule show` (S-B18) ───────────────────────────────────────────────────
+// ── `capsule show` ───────────────────────────────────────────────────
 
 /// The guide's metadata-sampling step, executed: the SHA-256 a user computed over the source
 /// file (here, its first eight hex digits) resolves to the imported asset, and the page shows
@@ -381,7 +381,7 @@ fn show_refuses_a_malformed_or_unknown_selector() {
     assert!(short.contains("at least 8"), "{short}");
 }
 
-// ── `capsule repair capture-time` (S-B17) ────────────────────────────────────
+// ── `capsule repair capture-time` ────────────────────────────────────
 
 impl Fixture {
     /// `capsule repair capture-time --library <library> [--apply]`.

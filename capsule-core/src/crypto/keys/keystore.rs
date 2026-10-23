@@ -115,7 +115,7 @@ impl std::fmt::Debug for DeviceDek {
     }
 }
 
-/// Where the DEK's classical half lives, as recorded in the [`AccountFile`] (`S-F8`).
+/// Where the DEK's classical half lives, as recorded in the [`AccountFile`].
 ///
 /// Persisted in the clear: it is a routing decision plus a lookup handle, never key material. It
 /// is what lets `open` know an element must be attached *before* it tries — the alternative
@@ -179,7 +179,7 @@ pub struct AccountFile {
     /// never here — it is non-exportable by contract.
     #[serde(with = "serde_bytes")]
     pub sealed_dek: Vec<u8>,
-    /// Where the DEK's classical half lives (`S-F8`). Absent in pre-`S-F8` account files, which
+    /// Where the DEK's classical half lives. Absent in pre-`S-F8` account files, which
     /// are software-DEK by construction — hence the `default`, which is what keeps every existing
     /// library on disk openable.
     #[serde(default)]
@@ -253,7 +253,7 @@ impl Account {
     ///
     /// The user IK is drawn at random at account creation, not derived from the master key —
     /// rotating the master key must not rotate the identity, and the server pins the identity
-    /// public key on the first directory publish (`S-C42`). So a device that recovers only the
+    /// public key on the first directory publish. So a device that recovers only the
     /// master key would otherwise have to mint a *new* IK, which the server refuses for an
     /// account it has already anchored. This blob is a wrap *reachable from* the master key, not
     /// a second root: whoever recovers the master key opens it, nobody else can.
@@ -496,9 +496,9 @@ mod tests {
         assert!(file.unlock(b"wrong").is_err());
     }
 
-    // ── S-F8: the DEK's classical half in a secure element ──────────────────────────────
+    // ── the DEK's classical half in a secure element ──────────────────────────────
 
-    /// **S-F8 acceptance (keystore half).** An account created against an element seals and
+    /// **The keystore half of the acceptance.** An account created against an element seals and
     /// unlocks: the published DEK public key is byte-identical across the round trip, and a
     /// secret encapsulated to it is recovered *through the element's ECDH*. That is the whole
     /// claim — the classical half was never in the account file, yet the DEK still works.

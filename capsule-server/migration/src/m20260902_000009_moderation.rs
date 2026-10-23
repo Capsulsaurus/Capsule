@@ -1,4 +1,4 @@
-//! Moderation (`S-C8`, `S-C49`): account standing, the record a user reads about it, and the
+//! Moderation: account standing, the record a user reads about it, and the
 //! federated report queue.
 
 use sea_orm_migration::prelude::*;

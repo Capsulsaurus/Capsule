@@ -259,7 +259,7 @@ pub struct StreamingOptions<'a, U: AssetUploader, V: StorageVerifier> {
 /// same single write path the bulk executor drives, so the drive mode a user picks never changes
 /// what a migrated library keeps: a storage-constrained device streaming a Takeout export lands
 /// the exporter's capture time, GPS, caption, favorite, and album membership exactly as an
-/// unconstrained one does (slice `S-B11`, closing the gap `S-B10` left open). This is the
+/// unconstrained one does (closing the gap `S-B10` left open). This is the
 /// streaming twin of
 /// [`execute_with_source_metadata`](crate::import::execute_with_source_metadata).
 ///
@@ -300,7 +300,7 @@ where
     // defer exactly the T2 (original) upload that release depends on. The planner
     // rejects the combination at confirmation; this is the by-construction backstop
     // so a staged policy cannot reach `execute_streaming` even if a caller skips
-    // confirmation. Surfaces before any file is imported (staged uploads, S-B4).
+    // confirmation. Surfaces before any file is imported (staged uploads).
     crate::import::ensure_streaming_compatible(config.upload_policy, true)?;
 
     // Same single resolution the executor runs: bind the library's derived de facto album
@@ -431,7 +431,7 @@ where
         let membership = crate::import::executor::stack_membership(stack, *role, is_primary, seq);
 
         // 1. Import onto the signed path with deferred release, carrying whatever the source
-        //    adapter folded for this member (`S-B11`). Resolved through the *same* helper the
+        //    adapter folded for this member. Resolved through the *same* helper the
         //    bulk executor uses, so the two drive modes cannot drift apart.
         let enrichment = crate::import::executor::member_enrichment(source, path);
         let imported = match workspace.import_asset_streaming(
@@ -1142,7 +1142,7 @@ mod tests {
         );
     }
 
-    // ── Third-party enrichment through the window (S-B11) ───────────────────────
+    // ── Third-party enrichment through the window ───────────────────────
     //
     // `S-B10` wired the adapter's folded metadata into the *bulk* executor and left the
     // streaming window passing `enrichment: None` — a streamed Takeout import silently

@@ -24,7 +24,7 @@ pub struct ImportConfig {
     pub album: DefaultAlbumContext,
     /// If true, import even if a file with the same SHA-256 hash already exists.
     pub force_reimport_duplicates: bool,
-    /// The per-device upload policy (staged uploads, slice `S-B4`). `Full` (the
+    /// The per-device upload policy (staged uploads). `Full` (the
     /// default) opens every bundle session eagerly; `Staged` opens them in tier
     /// order gated by the connection class, and is **mutually exclusive** with a
     /// streaming import — the planner rejects the combination at confirmation
@@ -138,7 +138,7 @@ impl ImportActionPlan {
         recommended
     }
 
-    /// **Confirmation-time upload-policy gate** (staged uploads, slice `S-B4`).
+    /// **Confirmation-time upload-policy gate** (staged uploads).
     ///
     /// A [`UploadPolicy::Staged`] run and a streaming import are mutually exclusive
     /// per import (transfer upload doc): streaming exists to release local bytes
@@ -429,7 +429,7 @@ mod tests {
         );
     }
 
-    /// **Regression guard (slice `S-B13`).** Codec coverage must never gate *admission*.
+    /// **Regression guard.** Codec coverage must never gate *admission*.
     ///
     /// Capsule is a backup tool: declining to back up every HEIC because we cannot thumbnail it
     /// turns a cosmetic gap into data loss. Formats with no decoder in this build —

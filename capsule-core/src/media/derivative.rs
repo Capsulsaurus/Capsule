@@ -125,7 +125,7 @@ impl DerivativeTier {
     }
 
     /// Long-edge cap in pixels, or `None` to keep the source resolution. The 1080p cap in the
-    /// tier table governs the *video* preview transcode (slice `S-B5`), not the still preview.
+    /// tier table governs the *video* preview transcode, not the still preview.
     pub const fn max_long_edge(self) -> Option<u32> {
         match self {
             Self::Thumbnail => Some(256),

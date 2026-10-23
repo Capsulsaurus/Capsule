@@ -1,4 +1,4 @@
-//! **MLS resilience** (slice S-X3): reconciliation over the server-authoritative commit chain, the
+//! **MLS resilience**: reconciliation over the server-authoritative commit chain, the
 //! lost-commit retry primitive, and the group re-keying ceremony.
 //!
 //! SSoT: [MLS Resilience](https://docs/design/mls-resilience/).

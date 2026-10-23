@@ -1,5 +1,5 @@
 //! The server's state ports: two typed stores, four typed ceremony stores, and the adapters
-//! behind them (slice `S-C29`).
+//! behind them.
 //!
 //! # What this module replaces
 //!

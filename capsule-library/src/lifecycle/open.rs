@@ -34,7 +34,7 @@ const DEVICE_ADDED_AT: &str = "2020-01-01T00:00:00Z";
 const DIRECTORY_FILE: &str = "directory.cbor";
 
 /// A request to bind this workspace's **device encryption key** to a per-platform secure element
-/// (`S-F8`): the P-256 key-agreement element itself plus the alias its key is held under.
+///: the P-256 key-agreement element itself plus the alias its key is held under.
 ///
 /// Supplying one makes the DEK's classical half hardware-held for the life of the account — see
 /// [`DeviceDek`](capsule_core::crypto::keys::DeviceDek). Omitting it keeps the software X-Wing DEK,
@@ -61,7 +61,7 @@ impl std::fmt::Debug for HardwareDekBinding {
 
 /// Recover `device`'s `add_id` high-water mark by sweeping the signed sidecars under
 /// `root/media` — the maximum `add_id.counter` this device has ever written, across every
-/// `AddId`-bearing OR-set of every sidecar (slice `S-A9`).
+/// `AddId`-bearing OR-set of every sidecar.
 ///
 /// `None` means the device provably issued nothing: no sidecar on disk bears its `device_id` in
 /// any OR-set, so [`Counter::reseed_from_max`] may safely reset to zero. Anything else is one
@@ -205,7 +205,7 @@ impl Workspace {
     }
 
     /// As [`create_with_params`](Self::create_with_params) but with the device **encryption** key's
-    /// classical half generated inside `binding`'s secure element and never leaving it (`S-F8`).
+    /// classical half generated inside `binding`'s secure element and never leaving it.
     /// The ML-KEM-768 half is software-sealed under the master key as usual, so the account file
     /// round-trips; reopening the library needs the same element back, via
     /// [`open_with_hardware_dek`](Self::open_with_hardware_dek).
@@ -502,7 +502,7 @@ impl Workspace {
         Self::persist_directory(root, &directory)?;
         // A freshly minted `device_id` over a freshly initialised (provably empty) library has
         // provably issued no `add_id`, so it starts at zero with no sweep — the one case the
-        // add-id durability rule licenses a reset (`S-A9`). Every *re*-open goes through
+        // add-id durability rule licenses a reset. Every *re*-open goes through
         // [`open`](Self::open), which reseeds from the sidecars on disk.
         let counter = Counter::new(account.device.device_id);
         Ok(Self {
@@ -526,7 +526,7 @@ impl Workspace {
     }
 
     /// Set the reporting client identity every manifest and derivative this workspace authors
-    /// carries (S-D15): `client_id` names the product (`capsule-cli`, `capsule-ios`, …) and
+    /// carries: `client_id` names the product (`capsule-cli`, `capsule-ios`, …) and
     /// `semver` is that client's own version. The build-embedded commit + dirty flag are appended
     /// per the [`client_version` grammar](capsule_core::client_build), so an in-repo app supplies only
     /// its id and version. Without this, a workspace reports the bare-core
@@ -548,7 +548,7 @@ impl Workspace {
     /// - **every managed asset** from its signed artifacts on disk (chain, sidecar, sealed
     ///   metadata blob), a `warn`-and-skip per asset rather than a failed open;
     /// - **the `add_id` counter**, reseeded past everything this device has ever written
-    ///   (`S-A9`);
+    ///;
     /// - **the signed device directory** from `{root}/.library/directory.cbor` (#562), once it
     ///   verifies under the user IK and lists this device live (re-signed under this account's
     ///   id at the next version when it still names the id from before a rebind); otherwise a
@@ -557,7 +557,7 @@ impl Workspace {
     /// A library with no `albums.cbor` predates this and opens with zero albums plus a `warn`
     /// naming backup restore — see [`AlbumStore::load`].
     ///
-    /// A library holding **unsigned pre-signed-path sidecars** still opens (`S-D24`): those
+    /// A library holding **unsigned pre-signed-path sidecars** still opens: those
     /// assets have no provenance chain, so they are not restored, but each is reported through
     /// [`unmigrated_sidecars`](Self::unmigrated_sidecars) with a `warn` naming
     /// [`migrate_unsigned_sidecars`](Self::migrate_unsigned_sidecars) as the way in.
@@ -574,7 +574,7 @@ impl Workspace {
     }
 
     /// As [`open`](Self::open), re-attaching the secure element that holds this device's
-    /// hardware-bound DEK (`S-F8`). Required for a library created by
+    /// hardware-bound DEK. Required for a library created by
     /// [`create_with_hardware_dek`](Self::create_with_hardware_dek): its DEK's classical half is
     /// non-exportable, so plain [`open`](Self::open) refuses it rather than degrading to software.
     ///
@@ -674,7 +674,7 @@ impl Workspace {
         Ok(ws)
     }
 
-    /// Restore the durable half of the workspace after unlocking the account (`S-A10`):
+    /// Restore the durable half of the workspace after unlocking the account:
     /// album key material + authorities from `{root}/.library/albums.cbor`, then every managed
     /// asset's in-memory state from the artifacts on disk.
     ///
@@ -755,7 +755,7 @@ impl Workspace {
             "workspace open: assets restored from disk"
         );
 
-        // Second pass (`S-D24`): the sidecars no chain anchors. An unsigned pre-signed-path
+        // Second pass: the sidecars no chain anchors. An unsigned pre-signed-path
         // record has never had one; a signed sidecar without one is an interrupted migration.
         // Neither is restorable here — open holds no album write capability and must not author
         // signed records unasked — so each is recorded and named, never silently dropped.
@@ -897,7 +897,7 @@ impl Workspace {
                 dsk_public,
                 // The published half of this device's encryption key, so a peer can encapsulate
                 // to it using the directory alone. `public_bytes()` is the single seam for both
-                // compositions and the recipient tells them apart by length (S-F8), which is why
+                // compositions and the recipient tells them apart by length, which is why
                 // nothing here says which one it is holding.
                 dek_public: Some(DekPublic(account.device.dek.public_bytes())),
                 added_at: DEVICE_ADDED_AT.into(),
@@ -2124,7 +2124,7 @@ mod tests {
         );
     }
 
-    // ── S-F8: the device encryption key bound to a secure element, in a real workspace ──
+    // ── the device encryption key bound to a secure element, in a real workspace ──
 
     /// The mock element + alias every S-F8 workspace test binds to. A real Secure Enclave /
     /// StrongBox / TPM adapter substitutes for the mock without a change above this line — that
@@ -2138,7 +2138,7 @@ mod tests {
         }
     }
 
-    /// **S-F8 acceptance.** A workspace created with a `HardwareKeyAgreement` round-trips
+    /// **The acceptance case.** A workspace created with a `HardwareKeyAgreement` round-trips
     /// lock/unlock: close it, reopen it with the same element, and the DEK is still the same
     /// hardware-bound key — a secret encapsulated to it *before* the close is recovered *after*
     /// the reopen, with the classical ECDH done inside the element both times.

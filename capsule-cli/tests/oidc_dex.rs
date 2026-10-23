@@ -1,5 +1,5 @@
 //! `capsule auth login --oidc` round-tripped against a real identity provider: the dex service
-//! `capsule-server/compose.yaml` ships (slice `S-N2`) — the loopback flow, and the device
+//! `capsule-server/compose.yaml` ships — the loopback flow, and the device
 //! authorization grant `--device` runs (RFC 8628, issue #635), whose other device the test also
 //! plays: it opens dex's verification page, submits the code, and signs in.
 //!

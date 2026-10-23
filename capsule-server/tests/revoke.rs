@@ -1,4 +1,4 @@
-//! The global sign-out ceremony (`S-C23`), end to end.
+//! The global sign-out ceremony, end to end.
 //!
 //! The property the whole slice exists for is
 //! `a_stolen_session_token_cannot_log_the_owner_out_of_everything`: an attacker holding a live

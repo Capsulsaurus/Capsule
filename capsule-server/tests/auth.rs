@@ -155,7 +155,7 @@ async fn login_records_the_advisory_provenance_a_client_volunteered() {
 
 #[tokio::test]
 async fn an_unusable_advisory_field_is_dropped_rather_than_refusing_the_sign_in() {
-    // Neither field gates anything (`S-C13`, `S-N3`), so failing a sign-in over one would let
+    // Neither field gates anything, so failing a sign-in over one would let
     // legibility metadata take down a security operation.
     let fixture = Fixture::working();
 
@@ -382,7 +382,7 @@ async fn a_refresh_token_is_spent_by_the_first_use() {
 async fn rotation_carries_the_session_provenance_across() {
     // Without this, the devices listing would lose track of a physical device every time its
     // tokens turned over — the grouping `S-C13` exists for, and the `(device_id, session_id)`
-    // pair the support bundle carries (`S-N3`), both decay to nothing.
+    // pair the support bundle carries, both decay to nothing.
     let fixture = Fixture::working();
     let device = "018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5e6f";
 
@@ -932,7 +932,7 @@ async fn a_body_in_the_wrong_media_type_is_415_on_every_operation_that_takes_one
 }
 
 // ===========================================================================================
-// The session ledger on the request path (`S-C48`)
+// The session ledger on the request path
 // ===========================================================================================
 
 /// The `last_active_at` the devices listing publishes for the caller's own session.
@@ -1128,7 +1128,7 @@ async fn activity_moves_the_listing_and_is_coalesced_to_one_write_a_minute() {
 }
 
 // ===========================================================================================
-// Registration (`S-C53`)
+// Registration
 // ===========================================================================================
 
 #[tokio::test]

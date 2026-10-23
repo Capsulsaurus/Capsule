@@ -1,4 +1,4 @@
-//! Album membership (`S-C51`): the roster the owner attested, and who it makes a member.
+//! Album membership: the roster the owner attested, and who it makes a member.
 
 use sea_orm_migration::prelude::*;
 

@@ -457,7 +457,7 @@ mod tests {
         assert_eq!(ws.ai_tags(&id).unwrap().len(), 2);
     }
 
-    // ── Capture-time correction (S-B17) ──────────────────────────────────────────────────────
+    // ── Capture-time correction ──────────────────────────────────────────────────────
 
     /// The `S-B17` write, end to end: the correction lands as a new signed revision, the bundle
     /// stays in the directory the import chose, the index row follows the sidecar at once, and

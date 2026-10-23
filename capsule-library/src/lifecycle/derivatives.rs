@@ -1,5 +1,5 @@
 //! The one `lifecycle` file that reaches [`capsule_core::media`]: decode a still once at import and
-//! derive everything that needs pixels (slices `S-B1`, `S-B13`).
+//! derive everything that needs pixels.
 //!
 //! # Why this is not feature-gated
 //!
@@ -111,7 +111,7 @@ impl PreparedStill {
 }
 
 /// Map a decode failure onto the status the run summary counts, logging the distinction that
-/// makes the two reasons useful (slice `S-B13`).
+/// makes the two reasons useful.
 fn classify(error: &MediaError, src: &Path, format: Option<StillFormat>) -> DerivativeStatus {
     match error {
         MediaError::UnsupportedFormat { format, op } => {
@@ -846,7 +846,7 @@ mod tests {
         panic!("no bucket for {asset_id}");
     }
 
-    /// **The `S-B14` acceptance case, and the first production caller of `capsule_core::lqip`.**
+    /// **The acceptance case, and the first production caller of `capsule_core::lqip`.**
     ///
     /// A decodable still imports with real pixel dimensions and a 32-byte chromahash placeholder
     /// inside the *signed* sidecar, and the sidecar still verifies — the placeholder is
@@ -1185,7 +1185,7 @@ mod tests {
 
     /// A format with no codec here, and bytes that are no still at all: both import as signed,
     /// verifiable originals, with EXIF-or-nothing dimensions, no placeholder, no derivative
-    /// files, and the reason recorded (slice `S-B13`).
+    /// files, and the reason recorded.
     #[test]
     fn an_undecodable_original_still_imports_with_the_reason_recorded() {
         let lib = TempDir::new().unwrap();

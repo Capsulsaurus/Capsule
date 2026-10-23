@@ -12,7 +12,7 @@
 //! - the emitted document promises a response the server cannot send, which is the `S-C28`
 //!   defect this rebuild exists to make unrepresentable — and `assert_declared_responses_covered`
 //!   fails on it, correctly;
-//! - the `415` it does send is a bare RFC 9457 problem with **no `error.*` code** (`S-C36`), so
+//! - the `415` it does send is a bare RFC 9457 problem with **no `error.*` code**, so
 //!   a client cannot localize a rejection the i18n contract says is localized by code.
 //!
 //! # What this is

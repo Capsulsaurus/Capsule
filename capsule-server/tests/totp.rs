@@ -1,4 +1,4 @@
-//! The second factor (slice `S-C55`), end to end.
+//! The second factor, end to end.
 //!
 //! Two cases carry the slice, and both are about the defect it fixes. `a_confirmed_factor_makes_
 //! a_password_alone_insufficient` is the whole point: the retired surface had all four TOTP

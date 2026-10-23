@@ -1,4 +1,4 @@
-//! Moderation, end to end (slice `S-C8`).
+//! Moderation, end to end.
 //!
 //! The case that carries the slice is
 //! `a_suspended_account_is_told_why_and_keeps_every_recovery_path`: design/moderation.md's

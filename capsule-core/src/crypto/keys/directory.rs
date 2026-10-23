@@ -538,7 +538,7 @@ mod tests {
         );
     }
 
-    // ── `dek_public` wire presence (slice `S-A11`) ──────────────────────────────
+    // ── `dek_public` wire presence ──────────────────────────────
 
     /// The wire-presence contract for `dek_public`: with no DEK published it is an **ABSENT**
     /// map key, so directories signed before the field existed re-verify byte-identically.

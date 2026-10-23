@@ -1,5 +1,5 @@
 //! Folding a third-party adapter's [`ExtractedMetadata`] into the **signed sidecar** at import
-//! (slice `S-B10`).
+//!.
 //!
 //! A [source adapter](crate::import::importers) already resolves the [precedence rule] at
 //! extraction — embedded EXIF wins over the exporter's records, **except** for constructs the

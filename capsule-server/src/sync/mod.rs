@@ -1,4 +1,4 @@
-//! The sync feed: what changed in a library, and the cursor that resumes it (slice `S-C2`).
+//! The sync feed: what changed in a library, and the cursor that resumes it.
 //!
 //! # The transport changed; the contract did not
 //!
@@ -90,22 +90,22 @@ impl SyncContext {
         }
     }
 
-    /// The albums, for deciding whose album a member's page is (`S-C51`).
+    /// The albums, for deciding whose album a member's page is.
     pub fn albums(&self) -> &dyn crate::album::AlbumStore {
         self.albums.as_ref()
     }
 
-    /// The roster, for deciding whether the caller may read an album's page (`S-C51`).
+    /// The roster, for deciding whether the caller may read an album's page.
     pub fn members(&self) -> &dyn crate::membership::MembershipStore {
         self.members.as_ref()
     }
 
-    /// The asset index (`S-C37`) — the only source of positions and entries.
+    /// The asset index — the only source of positions and entries.
     pub fn index(&self) -> &dyn AssetIndex {
         self.index.as_ref()
     }
 
-    /// The blob store (`S-C35`) — where a manifest's bytes are read from, verbatim.
+    /// The blob store — where a manifest's bytes are read from, verbatim.
     pub fn blobs(&self) -> &dyn BlobStore {
         self.blobs.as_ref()
     }

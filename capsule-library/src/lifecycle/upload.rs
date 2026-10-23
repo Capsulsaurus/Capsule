@@ -1,5 +1,5 @@
 //! The per-asset **upload bundle** — everything a network layer needs to push one managed
-//! asset to a server, and nothing of the [`Workspace`] itself (slice `S-D18`).
+//! asset to a server, and nothing of the [`Workspace`] itself.
 //!
 //! Clients store plaintext locally; the ciphertext that crosses a boundary is re-derived on
 //! demand from the manifest's recorded `nonce_prefix` (the same trick

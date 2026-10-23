@@ -1,4 +1,4 @@
-//! Guest drops, end to end (slice `S-C5`).
+//! Guest drops, end to end.
 //!
 //! Three cases carry the slice. `a_guest_drop_lands_in_the_owners_inbox_and_never_in_an_album`
 //! is invariant 30's absence clause: nothing a guest sends can put bytes into an album.
@@ -1438,7 +1438,7 @@ async fn probing_a_link_that_does_not_exist_still_costs_the_prober() {
 }
 
 // ===========================================================================================
-// The passphrase abuse gate (slice `S-C61`)
+// The passphrase abuse gate
 // ===========================================================================================
 
 #[tokio::test]

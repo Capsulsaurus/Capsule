@@ -1,4 +1,4 @@
-//! The master-key escrow (`S-C12`): one wrapped master key per account, and nothing older.
+//! The master-key escrow: one wrapped master key per account, and nothing older.
 
 use sea_orm_migration::prelude::*;
 

@@ -13,7 +13,7 @@
 //! Kynos derives the description from the types the server runs on. There is no second
 //! declaration of a status, a path parameter or a body shape, so there is nothing for the
 //! description to drift from. That matters here specifically: the Salvo surface had **thirteen
-//! response variants that rendered a status the published schema never declared** (`S-C28`) —
+//! response variants that rendered a status the published schema never declared** —
 //! a `Writer` said `423`, its `EndpointOutRegister` never registered one, and the generated
 //! client could not map it. That failure is not expressible in this crate, because the status
 //! is part of the return type.
@@ -182,7 +182,7 @@ pub fn router() -> Router<App, Propagate, ServerInterceptors, impl Sized> {
                     routes::escrow::store_album_keys,
                 ])
                 // What an account changes about itself, its second factor, and the other way
-                // a session is opened: through an external identity provider (`S-N1`).
+                // a session is opened: through an external identity provider.
                 .mount(kynos::routes![
                     routes::profile::update_profile,
                     routes::profile::change_password,

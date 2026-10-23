@@ -1,4 +1,4 @@
-//! `POST /v1/albums/{album_id}/ops` — the lifecycle-write surface (slice `S-C16`), end to end.
+//! `POST /v1/albums/{album_id}/ops` — the lifecycle-write surface, end to end.
 //!
 //! This is the only producer of a tombstone the sync feed has, so half of what these cases
 //! assert is not about the response at all: it is about what a *second device* sees on the feed
@@ -68,7 +68,7 @@ async fn publish(fixture: &Fixture) -> AssetId {
                 &id,
                 BlobRecord {
                     // A provenance blob carries the chain position finalization computed over
-                    // its bytes (`S-C31`); the addresses here are SHA-256 digests, so it is the
+                    // its bytes; the addresses here are SHA-256 digests, so it is the
                     // same value, arriving the way the port requires rather than by inference.
                     manifest_sha256: (role == BlobRole::Provenance)
                         .then(|| Hash32::from_hex(address.as_str()).expect("a digest")),
@@ -607,7 +607,7 @@ async fn a_lifecycle_write_requires_a_credential() {
 }
 
 // ===========================================================================================
-// Member writes (`S-C51`)
+// Member writes
 // ===========================================================================================
 
 /// A second account, on the seeded album's roster in whatever role a case puts it.

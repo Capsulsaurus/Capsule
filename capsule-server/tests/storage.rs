@@ -1,4 +1,4 @@
-//! `POST /v1/storage/verify` — the key-free durability verdict (slice `S-C3`), end to end.
+//! `POST /v1/storage/verify` — the key-free durability verdict, end to end.
 //!
 //! Every case here is really the same question asked from a different angle: *would a client
 //! that believed this answer and deleted its local copy have lost the photo?* That is why the

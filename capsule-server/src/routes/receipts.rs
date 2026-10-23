@@ -1,4 +1,4 @@
-//! `GET /v1/upload/{id}/receipt` — the custody receipt for a finalized write (slice `S-C15`).
+//! `GET /v1/upload/{id}/receipt` — the custody receipt for a finalized write.
 //!
 //! The server's signed admission of what it accepted, served as the canonical CBOR the client
 //! verifies and persists. [`crate::attestation`] owns the log, the chain and the reason

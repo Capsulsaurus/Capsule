@@ -1,4 +1,4 @@
-//! Share links over the wire (slice `S-C4`) — one public serve path and two owner operations.
+//! Share links over the wire — one public serve path and two owner operations.
 //!
 //! [`crate::share`] owns the record, the liveness rule, and the three decisions that shaped
 //! this surface: why the privacy strip cannot happen here, why every refusal is one answer, and
@@ -23,8 +23,8 @@
 //! | --- | --- |
 //! | issue `201` / revoke `204` | the owner's two operations |
 //! | issue `400 error.share.malformed` | a body that cannot be a link record, including a `metadata_blob` that is not base64, exceeds 8 MiB, or does not hash to `metadata_hash` |
-//! | issue `403 error.quota.grace_locked` | any link from an account past its quota grace window (`S-C6`) |
-//! | issue `403 error.quota.exceeded` | a `metadata_blob` whose new bytes would carry the account to its hard limit (`S-C6`) |
+//! | issue `403 error.quota.grace_locked` | any link from an account past its quota grace window |
+//! | issue `403 error.quota.exceeded` | a `metadata_blob` whose new bytes would carry the account to its hard limit |
 //! | issue `403 error.quota.suspended` | any link from an account whose quota the operator suspended (#705) |
 //! | serve `200` / `206` / `416` | the metadata, the wrapped secret, and ranged ciphertext |
 //! | serve `404` | **one answer** for a malformed id, an unknown link, a revoked one, an expired one, a blob the link does not name, and a link with no wrapped secret |
@@ -177,7 +177,7 @@ pub enum IssueShareRejection {
     /// The account is over its storage limit and past the grace window.
     ///
     /// The same refusal, and the same code, a lifecycle write's metadata blob gets: a share
-    /// link is metadata growth (`S-C6`), whether or not it carries its record. Never returned
+    /// link is metadata growth, whether or not it carries its record. Never returned
     /// by a revocation, which frees nothing but must never be refused either.
     #[error("this account is over its storage limit and past the grace window")]
     #[problem(status = 403, title = "Quota grace expired")]
@@ -529,7 +529,7 @@ pub async fn share_blob(
         })
 }
 
-/// Charge the contract's two limiters, and refuse if either is spent (`S-C4`, `S-C32`, #704).
+/// Charge the contract's two limiters, and refuse if either is spent (#704).
 ///
 /// Charged **before** the link is resolved, so probing costs the prober whether or not the id
 /// exists — a limiter that only ran for real links would be a free oracle for the rest.
@@ -657,7 +657,7 @@ pub(crate) async fn metadata_growth_refusal(
     }
 }
 
-/// Refuse a share link from an account past its quota grace window (`S-C6`), or whose quota the
+/// Refuse a share link from an account past its quota grace window, or whose quota the
 /// operator suspended (#705).
 async fn admit_metadata_growth(
     quota: &QuotaContext,
@@ -717,7 +717,7 @@ async fn store_metadata_record(
 }
 
 /// Attribute a metadata record to the link's owner before it is stored, refusing one that would
-/// cross the hard limit (`S-C6`).
+/// cross the hard limit.
 ///
 /// Charged, not only admitted: a link holds its record from the collector for as long as it is
 /// live, which may be forever, so an uncharged record would be storage an account could grow

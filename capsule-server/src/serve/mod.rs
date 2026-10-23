@@ -1,4 +1,4 @@
-//! Key-free ranged blob serving (`S-C10`) — the read side of the store.
+//! Key-free ranged blob serving — the read side of the store.
 //!
 //! Resolves a bare **content address** to a serve decision. The server holds no key, so it
 //! serves opaque ciphertext octets and never plaintext; what it decides is not *what* the bytes
@@ -13,7 +13,7 @@
 //! | [`ServeResolution::AwaitingUpload`] | `409` | nothing references the address **yet** — the caller's own device has an upload of exactly these bytes in flight. **Transient**, so the client waits |
 //! | [`ServeResolution::NotFound`] | `404` | no live reference names the address, or it is malformed |
 //! | [`ServeResolution::Gone`] | `410` | referenced but not retrievable per policy — **permanent**, so the client degrades to a lower representation |
-//! | [`ServeResolution::ScopeInsufficient`] | `403` | a peer's capability does not cover this blob's role (`S-E5`) |
+//! | [`ServeResolution::ScopeInsufficient`] | `403` | a peer's capability does not cover this blob's role |
 //!
 //! Three distinct facts collapse into that one `410` — a deleted asset, a blob awaiting
 //! collection, and a moderation hold — and they collapse deliberately. The client's action is
@@ -22,7 +22,7 @@
 //! taken down is exactly what a takedown does not owe a peer. The distinction is in the log
 //! line and, for the owner, in the audit record — not on the wire.
 //!
-//! # Where the transient `409` comes from, and where it deliberately does not (`S-C40`)
+//! # Where the transient `409` comes from, and where it deliberately does not
 //!
 //! An original that is legitimately still uploading is `409` and **transient**, explicitly not
 //! the permanent `410`, so a client waits instead of degrading to a thumbnail forever. The port
@@ -39,7 +39,7 @@
 //!   transient `409` into a permanent one — the precise failure the `409`/`410` split exists to
 //!   prevent — so it would need a lifetime and a reconciliation of its own;
 //! - and every in-flight upload would become a **reference with no bytes**, which is exactly
-//!   what the integrity scrub (`S-C14`) is built to report as a dangling reference. The fix
+//!   what the integrity scrub is built to report as a dangling reference. The fix
 //!   would have made a normal Tuesday afternoon look like corruption.
 //!
 //! An active upload session declaring that hash already *is* the promise. It already carries a
@@ -64,7 +64,7 @@
 //! arbitrary strings. A reference is looked up **before** the store is touched, so a fetch for
 //! an address nothing references never reaches the bytes. Only then is presence asked about.
 //!
-//! # What is disclosed, stated plainly (`S-C39`, `S-C51`)
+//! # What is disclosed, stated plainly
 //!
 //! **An account fetches the blobs of its own assets and of the albums it is currently a member
 //! of, and nothing else.** Until `S-C39` any authenticated account could fetch any live address
@@ -83,7 +83,7 @@
 //! `403`/`404` boundary is drawn there and not one step further out, and [`crate::membership`]
 //! for where the fact behind the `403` comes from.
 //!
-//! # A peer reads through the same path (`S-E5`)
+//! # A peer reads through the same path
 //!
 //! A federated peer presenting a capability on `GET /v1/blob/{hash}` resolves here too, as
 //! [`ReadPrincipal::Peer`], and every rule above holds unchanged: the authority is asked first,
@@ -171,12 +171,12 @@ impl ServeContext {
         self.blobs.as_ref()
     }
 
-    /// The collector's marks (`S-C11`).
+    /// The collector's marks.
     pub fn marks(&self) -> &dyn crate::gc::CollectionStore {
         self.marks.as_ref()
     }
 
-    /// The upload sessions, which are where an unfinalized blob's promise lives (`S-C40`).
+    /// The upload sessions, which are where an unfinalized blob's promise lives.
     ///
     /// The **same** store the upload routes open sessions in, for the same reason the index is
     /// the same one the feed reads: two stores would mean a transient answer about an upload
@@ -185,7 +185,7 @@ impl ServeContext {
         self.uploads.as_ref()
     }
 
-    /// Who may read a blob (`S-C39`).
+    /// Who may read a blob.
     pub fn authority(&self) -> &dyn ReadAuthority {
         self.authority.as_ref()
     }
@@ -207,7 +207,7 @@ pub enum ServeResolution {
         size: u64,
     },
     /// Nothing references the address **yet**, and the caller has an upload of exactly these
-    /// bytes in flight (`S-C40`).
+    /// bytes in flight.
     ///
     /// Transient. The client waits and retries rather than degrading, which is the whole reason
     /// this is not folded into [`Self::NotFound`].
@@ -219,14 +219,14 @@ pub enum ServeResolution {
     /// No live reference names the address, it is not an address at all, or the caller has no
     /// relationship to the asset that holds it.
     NotFound,
-    /// The caller once had access to the album that holds it and does not now (`S-C51`).
+    /// The caller once had access to the album that holds it and does not now.
     ///
     /// The one refusal that discloses the address is live, and it discloses it only to an
     /// account the server holds a revoked membership row for. Decided **before** every policy
     /// refusal below, so a former member learns nothing about holds or deletions either.
     Forbidden,
     /// The reader is entitled to the album but its grant does not cover this blob's role
-    /// (`S-E5`).
+    ///.
     ///
     /// Only a peer under a capability reaches it. Decided in the same place as
     /// [`Self::Forbidden`] and for the same reason: it is an authorization answer, and it is
@@ -271,7 +271,7 @@ pub async fn resolve(
 
     if references.is_empty() {
         // Nothing references it. Before answering "unknown", ask whether the caller's own
-        // account is in the middle of putting it there (`S-C40`) — the difference between
+        // account is in the middle of putting it there — the difference between
         // "never heard of it" and "your other device is still sending it" is the difference
         // between a client degrading permanently and a client waiting. Asked only for an
         // account: a peer has no upload here, and offering it the answer would report on
@@ -297,7 +297,7 @@ pub async fn resolve(
         return Ok(ServeResolution::NotFound);
     }
 
-    // Who is asking (`S-C39`). **First among the refusals**, and the order is the security
+    // Who is asking. **First among the refusals**, and the order is the security
     // property: every answer below this line — the takedown `410`, the tombstone `410`, the
     // collection `410`, the dangling `410` — is a fact about somebody's asset, and a caller with
     // no relationship to it must not be able to read any of them off the status line. Deciding
@@ -308,7 +308,7 @@ pub async fn resolve(
         Err(refusal) => return Ok(refusal),
     };
 
-    // Moderation takedown (`S-C17`). First among the refusals and **before any read**: a held
+    // Moderation takedown. First among the refusals and **before any read**: a held
     // asset's bytes are on disk and completely intact — the hold is a serving constraint, not a
     // destruction — so nothing about the store can produce this answer and it has to come from
     // the index. `410` rather than `404` is the moderation doc's explicit per-surface rule:
@@ -330,7 +330,7 @@ pub async fn resolve(
         return Ok(ServeResolution::Gone);
     }
 
-    // Mid-collection (`S-C11`). Decided before the store is touched, so a marked blob's bytes
+    // Mid-collection. Decided before the store is touched, so a marked blob's bytes
     // are never read — the bytes are still there, and that is exactly why the check has to come
     // from the mark rather than from their presence.
     if context

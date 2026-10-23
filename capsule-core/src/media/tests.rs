@@ -1,4 +1,4 @@
-//! Unit coverage for the still pipeline (slices `S-B1`, `S-B13`).
+//! Unit coverage for the still pipeline.
 //!
 //! # Fixtures are built, never committed
 //!

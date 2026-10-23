@@ -1,4 +1,4 @@
-//! [`PostgresQuota`] — the durable quota ledger (`S-C6`, #402).
+//! [`PostgresQuota`] — the durable quota ledger (#402).
 //!
 //! # The total is derived, and the clock is not
 //!
@@ -289,7 +289,7 @@ impl QuotaStore for PostgresQuota {
     ) -> StoreFuture<'a, Option<(UserId, u64)>> {
         Box::pin(async move {
             let transaction = begin(&self.connection).await?;
-            // The collector's release (`S-C44`): a sweep knows an address and nothing else, so
+            // The collector's release: a sweep knows an address and nothing else, so
             // the ledger names the account rather than the caller guessing one. `RETURNING` is
             // what makes the delete and the answer one operation.
             let released = transaction

@@ -1,4 +1,4 @@
-//! `GET /v1/upload/{id}/receipt` — custody receipts (slice `S-C15`), end to end.
+//! `GET /v1/upload/{id}/receipt` — custody receipts, end to end.
 //!
 //! The case that carries the slice is `a_finalized_upload_yields_a_verifiable_receipt`: it
 //! verifies the fetched bytes the way a **client** does — through `capsule_core`'s own
@@ -339,7 +339,7 @@ async fn the_published_key_history_verifies_a_fetched_receipt() {
 }
 
 // ===========================================================================================
-// The chain position the receipt attests (`S-C31`)
+// The chain position the receipt attests
 // ===========================================================================================
 
 /// The provenance blob's receipt names the manifest's SHA-256; nothing else's does.
@@ -439,7 +439,7 @@ async fn a_client_can_form_the_expectation_before_it_uploads() {
 }
 
 // ===========================================================================================
-// The durable chain — `GET /v1/assets/{asset_id}/receipts` (slice `S-C58`)
+// The durable chain — `GET /v1/assets/{asset_id}/receipts`
 // ===========================================================================================
 
 /// Fetch the whole chain for `asset`, asserting the status.

@@ -1,4 +1,4 @@
-//! Library-mode binding generator for the SDK's uniffi surface (slice `S-D9`).
+//! Library-mode binding generator for the SDK's uniffi surface.
 //!
 //! Build the cdylib with `--features ffi`, then run this (`--features ffi-bindgen`)
 //! against it to emit the Swift/Kotlin sources; see the `gen-bindings` mise task.

@@ -1,4 +1,4 @@
-//! Guest drops (`S-C5`) — upload links, the inbox, and the promotion that ends one.
+//! Guest drops — upload links, the inbox, and the promotion that ends one.
 //!
 //! # A drop is not a small upload
 //!
@@ -45,7 +45,7 @@
 //! # Rate limiting is absent, and named
 //!
 //! Invariant 31 wants the same two limiters the share-link serve path wants, and they need the
-//! same counter port `S-C32` owns. The `429` is **not declared** (`S-C28`). The caps are not a
+//! same counter port `S-C32` owns. The `429` is **not declared**. The caps are not a
 //! substitute — they bound total damage, not request rate — and saying so is the point.
 //!
 //! # Adapters

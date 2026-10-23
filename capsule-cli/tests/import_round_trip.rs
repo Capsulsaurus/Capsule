@@ -1,4 +1,4 @@
-//! Slice `S-A10` acceptance for `capsule import`: what one process imports, a **different
+//! The acceptance for `capsule import`: what one process imports, a **different
 //! process** reconstructs from the library directory alone.
 //!
 //! Every step below spawns the real `capsule` binary (`CARGO_BIN_EXE_capsule`, the path Cargo
@@ -19,7 +19,7 @@
 //! real EXIF APP1 segment — no committed binary. The CLI links `capsule-core` with default
 //! features, and `native` implies `media`, so this path **does** decode pixels: the import
 //! reports `DerivativeStatus::Decoded`, writes a chromahash `lqip` into the signed sidecar, and
-//! signs a thumbnail-tier derivative (slices `S-B1`, `S-B13`, `S-B14`). At 8×8 the source is
+//! signs a thumbnail-tier derivative. At 8×8 the source is
 //! well inside the 256 px thumbnail cap, so that derivative is the signed `format = "original"`
 //! sentinel rather than a re-encode — which is exactly the contract's redundant-derivative rule
 //! and worth pinning end to end.
@@ -268,7 +268,7 @@ fn destroy_index(library: &Path) {
 
 // ── Tests ────────────────────────────────────────────────────────────────────
 
-/// **`S-A10` "Done when" for `capsule import`.** Import in one process; read the asset back in a
+/// The "Done when" for `capsule import`.** Import in one process; read the asset back in a
 /// second that shares nothing but the directory; then check that what is on disk is the full
 /// signed artifact set, in the layout the design fixes, carrying the metadata the importer
 /// parsed out of the source file.
@@ -392,7 +392,7 @@ fn an_import_is_reconstructed_by_a_later_process_from_disk_alone() {
     assert_eq!((dimensions.width, dimensions.height), (8, 8));
 
     // The LQIP producer ran on the decoded pixels: a 32-byte chromahash payload at
-    // `LQIP_FORMAT_V1`, inside the *signed* sidecar (slice `S-B14`).
+    // `LQIP_FORMAT_V1`, inside the *signed* sidecar.
     let lqip = sidecar
         .lqip
         .as_ref()
@@ -489,7 +489,7 @@ fn library_rebuild_reconstructs_the_index_in_a_new_process() {
     );
 
     // And the workspace's own restore never depended on the index: a further process still sees
-    // the asset, because `Workspace::open` reconstructs it from the sidecars (`S-A10`).
+    // the asset, because `Workspace::open` reconstructs it from the sidecars.
     let view = fx.run(
         &[
             "cull",

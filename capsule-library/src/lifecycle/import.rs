@@ -249,7 +249,7 @@ fn capture_rfc3339(secs: i64) -> String {
         .to_string()
 }
 
-/// The sidecar `stack_membership` register an import starts life with (`S-B15`).
+/// The sidecar `stack_membership` register an import starts life with.
 ///
 /// A standalone import returns the **never-written** register, which is wire-absent — the
 /// absent-key discipline every signed-struct field carries, and what keeps an unstacked
@@ -272,7 +272,7 @@ fn stack_membership_register(
 enum CaptureSource {
     /// This file's own EXIF, resolved to a UTC instant at the write site.
     Embedded,
-    /// The adapter's folded value (`S-B10`): an EXIF time the write site could not resolve on
+    /// The adapter's folded value: an EXIF time the write site could not resolve on
     /// its own, else the exporter's taken-time. Which of the two is recorded by the executor's
     /// `taken_time_source` log line for the same file.
     Folded,
@@ -373,7 +373,7 @@ fn asset_row_from_state(asset: &AssetState) -> AssetRow {
         }
     }
     debug_assert_eq!(is_deleted, asset_is_deleted(asset));
-    // Stack columns are a projection of the signed `stack_membership` register (`S-B15`) — the
+    // Stack columns are a projection of the signed `stack_membership` register — the
     // same projection `library::rebuild::signed_asset_row` applies, so the write path and a
     // rebuild agree on what the views show. A *written* register is authoritative in both arms:
     // `Some(m)` is a placement, a stamped `None` is an explicit departure from a stack. Only a
@@ -391,7 +391,7 @@ fn asset_row_from_state(asset: &AssetState) -> AssetRow {
     // Capture time is projected from the **signed sidecar**, not from `AssetState::capture_utc`
     // — exactly as `library::rebuild::signed_asset_row` projects it, so the write path and a
     // rebuild agree. The two values are equal at import; they part ways after a capture-time
-    // correction (`Workspace::set_capture_timestamp`, `S-B17`), which by design re-signs the
+    // correction (`Workspace::set_capture_timestamp`), which by design re-signs the
     // sidecar and leaves the `media/{YYYY}/{YYYY-MM}` shard — and therefore `capture_utc`,
     // which names it — where the files already are. Reading the shard here would keep the
     // timeline on the wrong date until the next rebuild while the rebuild read the right one.
@@ -428,7 +428,7 @@ fn asset_row_from_state(asset: &AssetState) -> AssetRow {
         rating: asset.sidecar.rating.get().copied().unwrap_or(0) as i64,
         is_deleted,
         deleted_at,
-        // Projection of the sidecar `hidden` LWW register (S-D19): a never-written register
+        // Projection of the sidecar `hidden` LWW register: a never-written register
         // means visible, the wire-absent default.
         is_hidden: asset.sidecar.hidden.get().copied().unwrap_or(false),
     }
@@ -444,7 +444,7 @@ fn is_same_file(a: &Path, b: &Path) -> bool {
 
 /// One signed create, as [`Workspace::commit_signed_create`] takes it: everything a caller
 /// decides *before* the sealing order starts. A fresh import fills the defaults; the
-/// unsigned-sidecar migration (`S-D24`) is the one caller that pins an id, a bucket, an import
+/// unsigned-sidecar migration is the one caller that pins an id, a bucket, an import
 /// time, and a fold.
 pub(super) struct CreateRequest<'a> {
     /// The asset id. An import mints `Uuid::now_v7()`; the migration keeps the legacy id.
@@ -527,7 +527,7 @@ impl Workspace {
         let prov = cbor::to_canonical_vec(&asset.chain.records().to_vec())
             .map_err(|e| LifecycleError::Cbor(e.to_string()))?;
         let sidecar = stage(&self.sidecar_path(asset), &asset.sidecar.to_canonical_vec())?;
-        // The sealed metadata blob (`S-A10`). Un-regenerable (its nonce is folded into the blob
+        // The sealed metadata blob. Un-regenerable (its nonce is folded into the blob
         // key), AMK ciphertext, and required by `export_backup` and upload — so it is written
         // beside the chain rather than held only in memory. An action that mints no blob
         // (`delete` / `trash-restore`) leaves the previous file in place.
@@ -657,17 +657,17 @@ impl Workspace {
 
     /// As [`import_asset`](Self::import_asset) but with executor-supplied [`SignedImportOptions`]
     /// (Move-mode source release + stack placement). This is the single signed write path the
-    /// import executor drives (S-B2): every imported member lands as a signed `SidecarV1` +
+    /// import executor drives: every imported member lands as a signed `SidecarV1` +
     /// manifest + append-only provenance, self-verified through
     /// [`verify_asset`](capsule_core::crypto::verify_asset::verify_asset), and — when the
     /// still decodes — with a chromahash `lqip` in the sidecar and signed thumbnail derivatives
-    /// on disk (the private `prepare_still`, slices `S-B1`/`S-B14`).
+    /// on disk (the private `prepare_still`).
     ///
     /// Returns a [`SignedImport`]: the asset id, the
     /// [`DerivativeStatus`] saying whether derivatives were generated
     /// and, if not, why, and the per-format deferral count. A format this build has no
     /// codec for **still imports** — the original is the backup, the thumbnail is a bonus — so
-    /// the status is a report, never a rejection (slice `S-B13`).
+    /// the status is a report, never a rejection.
     #[tracing::instrument(skip_all, fields(album_id = %album_id, src = %src.display()))]
     pub fn import_asset_with(
         &mut self,
@@ -751,7 +751,7 @@ impl Workspace {
         });
         let gps = folded_gps(embedded_gps, enrichment.and_then(|e| e.gps.as_ref()));
 
-        // Exporter-authoritative registers (`S-B10`): the description, favorite flag, and album
+        // Exporter-authoritative registers: the description, favorite flag, and album
         // membership the file bytes never carried. Each is stamped `(now, device_id)` exactly as
         // the `stack_membership` register is, so a later edit on any device converges under the
         // same LWW rule; each album title gets its own `add_id` so it stays individually
@@ -882,7 +882,7 @@ impl Workspace {
         // Never fatal. A still this build cannot decode — or cannot decode *these bytes* of —
         // commits exactly as before: EXIF dimensions, no LQIP, no derivatives, and a
         // `DerivativeStatus` recording which reason applied so the gap is reportable rather
-        // than silent (`S-B13`).
+        // than silent.
         let PreparedStill {
             format,
             dimensions,
@@ -1042,7 +1042,7 @@ impl Workspace {
         self.index_original_representation(&asset, enc.plaintext_size as usize)?;
 
         // Move mode: release the source only after the durable, self-verified commit — unless
-        // the caller defers release to its server-side verify-before-destroy gate (S-D4/S-B3),
+        // the caller defers release to its server-side verify-before-destroy gate,
         // where the source is the only copy until the *server* durably holds it.
         if opts.move_source && !opts.defer_source_release && !in_place {
             let _ = fs::remove_file(src);
@@ -1064,7 +1064,7 @@ impl Workspace {
     /// after the server's `durable` verdict + custody receipt clear the `S-D4` gate.
     ///
     /// `enrichment` carries the folded third-party exporter metadata for this file exactly as
-    /// [`import_asset_with`](Self::import_asset_with) takes it (`S-B11`). It is a parameter and
+    /// [`import_asset_with`](Self::import_asset_with) takes it. It is a parameter and
     /// not a hard-wired `None` because the enrichment is written *inside the signed sidecar*:
     /// dropping it here would make a streamed Takeout import silently lossier than a bulk one,
     /// and the difference would be unrecoverable without re-importing.
@@ -1201,7 +1201,7 @@ mod tests {
     use super::super::{FAST_PARAMS, fast_workspace};
     use super::*;
 
-    // ── Write-site precedence (S-B10) ───────────────────────────────────────
+    // ── Write-site precedence ───────────────────────────────────────
     //
     // The [precedence rule] the pipeline doc fixes: embedded EXIF wins over an exporter-side
     // record for capture time and GPS. The adapter resolves it once at extraction; these two
@@ -1224,7 +1224,7 @@ mod tests {
     }
 
     /// Both sides present and disagreeing — the case that was unreachable while `extract_exif`
-    /// returned `None` for every well-formed EXIF file (`S-B16`).
+    /// returned `None` for every well-formed EXIF file.
     #[test]
     fn embedded_exif_capture_wins_over_the_folded_record() {
         assert_eq!(
@@ -1678,7 +1678,7 @@ mod tests {
         assert_eq!(ws.verify(&id).unwrap(), VerifyOutcome::Accept);
     }
 
-    // ── Importer-formed stacks (S-B15) ──────────────────────────────────────────
+    // ── Importer-formed stacks ──────────────────────────────────────────
 
     /// Write `n` distinct fixture files into `dir` and return their paths.
     fn fixture_files(dir: &Path, n: usize) -> Vec<std::path::PathBuf> {
@@ -1693,7 +1693,7 @@ mod tests {
             .collect()
     }
 
-    /// **The `S-B15` acceptance case.** A stack formed by the *importer* — never touched by
+    /// **The acceptance case.** A stack formed by the *importer* — never touched by
     /// hand — is written into the signed sidecar, so it survives losing `index/library.sqlite`
     /// entirely and rebuilding from the artifacts on disk.
     ///

@@ -1,4 +1,4 @@
-//! Album provisioning — telling the server an album exists (slice `S-C25`).
+//! Album provisioning — telling the server an album exists.
 //!
 //! A container album's id is **derived from the account master key**
 //! ([Organization — The Default Album]), so the client knows it before the server does. This
@@ -27,7 +27,7 @@ pub use crate::upload::StaticToken;
 
 // ─── Errors ───────────────────────────────────────────────────────────────────
 
-/// A failure on the album surface: provisioning, or publishing a roster (`S-C51`).
+/// A failure on the album surface: provisioning, or publishing a roster.
 #[derive(Debug, thiserror::Error)]
 pub enum AlbumError {
     /// The HTTP request failed on the wire, or the session could not authorize it.
@@ -242,7 +242,7 @@ pub struct ProvisionedAlbum {
     pub created: bool,
 }
 
-/// What the server holds for an album after a roster publish (`S-C51`).
+/// What the server holds for an album after a roster publish.
 ///
 /// `replayed` is informational: the same bytes again are a success that wrote nothing, exactly
 /// as re-provisioning is, so a client that lost an acknowledgement re-PUTs without branching.
@@ -327,7 +327,7 @@ impl AlbumClient {
         })
     }
 
-    /// Publish `signed` as the roster of the album it names (`S-C51`).
+    /// Publish `signed` as the roster of the album it names.
     ///
     /// Orchestration only, and deliberately thin: the roster is signed in
     /// `capsule_core::crypto::membership` by one of the owner's devices, base64-encoded, and

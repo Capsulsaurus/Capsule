@@ -339,9 +339,9 @@ fn ffi_asset_metadata_reports_the_effective_capture_time() {
     assert_eq!(imported.capture_timestamp, "2021-06-01T12:00:00Z");
 }
 
-// ─── S-P1: the workspace verbs ───────────────────────────────────────────────
+// ─── the workspace verbs ───────────────────────────────────────────────
 
-/// The app's build identity every manifest this workspace authors reports (S-D15).
+/// The app's build identity every manifest this workspace authors reports.
 fn client_build() -> FfiClientBuild {
     FfiClientBuild {
         client_id: "capsule-ffi-test".into(),
@@ -1514,7 +1514,7 @@ async fn ffi_escrow_and_device_directory_round_trip() {
     assert_eq!(version, 1);
 }
 
-// ─── S-P1: hardware-signer constructor parity ────────────────────────────────
+// ─── hardware-signer constructor parity ────────────────────────────────
 
 /// A software stand-in for a P-256 secure element, implementing **this namespace's**
 /// [`FfiHardwareSigner`] exactly as a Swift `SecureEnclaveSigner` or a Kotlin

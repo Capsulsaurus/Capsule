@@ -1,4 +1,4 @@
-//! **E2E case 10 — model regen after a model-version bump** (slice `S-Q6`).
+//! **E2E case 10 — model regen after a model-version bump**.
 //!
 //! Contract: [Module Map — E2E Test Surface] case 10, whose normative wording is "bump the
 //! canonical model version; assert stale embeddings are excluded from queries; background regen
@@ -110,7 +110,7 @@ fn provenance_of(ws: &Workspace, asset: Uuid) -> (ModelId, ModelVersion) {
 }
 
 /// Index every asset at `runner`'s canonical version over its **decrypted original** — the
-/// first-time indexing path (`S-H1`/`S-H3`), which regeneration must later reproduce exactly.
+/// first-time indexing path, which regeneration must later reproduce exactly.
 fn index_all(
     ws: &Workspace,
     runner: &FixtureRunner,

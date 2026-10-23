@@ -1,4 +1,4 @@
-//! [`AccountRegistry`] — bringing an account into existence (slice `S-C53`).
+//! [`AccountRegistry`] — bringing an account into existence.
 //!
 //! # Why this is not a method on [`AccountDirectory`](super::AccountDirectory)
 //!

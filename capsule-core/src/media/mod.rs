@@ -1,5 +1,5 @@
 //! Still-image decode, orientation, metadata normalisation and derivative generation — the
-//! Capsule-side owner of the media pipeline (slices `S-B1`, `S-B13`).
+//! Capsule-side owner of the media pipeline.
 //!
 //! SSoT: [Thumbnails and Previews](https://docs/design/thumbnails/).
 //!
@@ -28,14 +28,14 @@
 //! path that resolves under both.
 //!
 //! LQIP is *not* here: it lives in the unconditional [`crate::lqip`] module so the import
-//! pipeline, the app FFI and `capsule-wasm` share one implementation (slice `S-B14`). This
+//! pipeline, the app FFI and `capsule-wasm` share one implementation. This
 //! module produces the pixels [`crate::lqip::Lqip::encode`] consumes.
 //!
 //! # What this build can and cannot do
 //!
 //! Every gap is a typed
 //! [`UnsupportedFormat`](crate::media::MediaError::UnsupportedFormat) or a recorded per-format
-//! deferral — never a silent absence, and never a panic (slice `S-B13`).
+//! deferral — never a silent absence, and never a panic.
 //!
 //! **Decode** covers JPEG, PNG, JXL, TIFF and GIF, the ARW and DNG RAW families (issue #589,
 //! through `rawshift-image`'s RAW pipeline rather than its standard-image one; see

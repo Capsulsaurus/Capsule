@@ -4,7 +4,7 @@
 //! The first surface of the Stage 6 rebuild with state behind it. What it is a port *of* is the
 //! Salvo `capsule-api/auth/src/routes/auth.rs`; what it is not is a transcription of it.
 //!
-//! # The status audit (`S-C28`)
+//! # The status audit
 //!
 //! `S-C28` found thirteen response variants across the Salvo surface that render a status the
 //! Salvo document never declared (it was committed as `capsule-sdk/openapi.json`, deleted with
@@ -18,7 +18,7 @@
 //! | register `201` | **`200` here.** Kynos's `Created` requires a `Location`, and this server exposes no URL for an account — see [`register_user`] |
 //! | register `400` / `409` / `500` | kept, and now coded (`error.auth.registration_invalid`, `error.auth.user_already_exists`, `error.auth.unavailable`) |
 //! | login `200` | kept — [`TokenResponse`] |
-//! | login `202` | **added** (`S-C55`). The account has a confirmed second factor, so the credentials were accepted and the sign-in is not finished. Salvo had the TOTP operations and never issued a challenge |
+//! | login `202` | **added**. The account has a confirmed second factor, so the credentials were accepted and the sign-in is not finished. Salvo had the TOTP operations and never issued a challenge |
 //! | login `400` "Bad request" | **deleted as unreachable.** `LoginResponses::BadRequest` was never constructed; the 400 a malformed body actually produces comes from the `Json` extractor, and Kynos declares it |
 //! | login `401` | kept — [`LoginRejection::InvalidCredentials`], now carrying `error.auth.invalid_credentials` |
 //! | login `423` | **kept and now documented.** Reachable: lockout is account state the directory owns, not a counter, so it ports. Carries the new `error.auth.account_locked` |
@@ -192,13 +192,13 @@ pub struct LoginRequest {
     pub password: String,
 
     /// An advisory device-cohort hash grouping one physical device's re-enrollments
-    /// (slice `S-C13`).
+    ///.
     ///
     /// Legibility metadata only: no authorization path reads it, and an unusable value is
     /// dropped rather than refused — a sign-in must not fail over a field that gates nothing.
     pub cohort_hash: Option<String>,
 
-    /// The directory device the client claims to be (slice `S-N3`), as a UUID.
+    /// The directory device the client claims to be, as a UUID.
     ///
     /// Client-asserted and unverified. Dropped, not refused, when it is not a usable UUID, for
     /// the same reason as `cohort_hash`.
@@ -301,7 +301,7 @@ pub enum LoginReply {
     )]
     Signed(TokenResponse),
 
-    /// The password verified and a code is still needed (`S-C55`).
+    /// The password verified and a code is still needed.
     ///
     /// `202 Accepted`, which is what it is: understood, and not complete. A client that cannot
     /// tell it from `200` gets a body with no `access_token` and fails loudly.
@@ -551,7 +551,7 @@ pub async fn register_user(
 ///
 /// # Two statuses, because there are two outcomes
 ///
-/// An account with a confirmed second factor (`S-C55`) gets **`202`** and a short-lived
+/// An account with a confirmed second factor gets **`202`** and a short-lived
 /// challenge: the credentials were accepted and the request is not complete. No session is
 /// opened, no cohort is recorded and no refresh token is minted, because none of those may exist
 /// for an authentication that has not finished — and the client's advisory identifiers ride the
@@ -644,7 +644,7 @@ pub async fn login_user(
 /// Open a session for `user` and mint its pair.
 ///
 /// Shared by the password-only sign-in above, by the second factor's completing request
-/// (`S-C55`) and by the OIDC callback (`S-N1`), which is the point: a session opened down one
+/// and by the OIDC callback, which is the point: a session opened down one
 /// path and not the other is how a TOTP sign-in ends up in the devices view as an unknown,
 /// ungrouped device.
 ///
@@ -689,7 +689,7 @@ pub(super) async fn open_session_for(
         })
         .await?;
 
-    // The durable cohort map (`S-C13`), written **after** the session and **never** allowed to
+    // The durable cohort map, written **after** the session and **never** allowed to
     // fail the sign-in. A cohort is legibility metadata: it groups a physical device's
     // re-enrollments in the devices view and gates nothing. Refusing a sign-in because a
     // grouping aid could not be recorded would let an advisory value take down the one
@@ -1129,7 +1129,7 @@ pub async fn revoke_all(
         return Err(RevokeAllRejection::invalid());
     };
 
-    // The anchor, not a key the request supplied (`S-C42`). A proof checked against a
+    // The anchor, not a key the request supplied. A proof checked against a
     // caller-supplied key would prove only that the caller can sign something, which is not a
     // fact about the account.
     let published = directories

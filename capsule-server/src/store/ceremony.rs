@@ -276,7 +276,7 @@ pub trait ChannelStore: std::fmt::Debug + Send + Sync {
 }
 
 // -------------------------------------------------------------------------------------------
-// OIDC authorization (slice `S-N1`)
+// OIDC authorization
 // -------------------------------------------------------------------------------------------
 
 /// What the server holds between the two legs of an OIDC authorization-code ceremony.

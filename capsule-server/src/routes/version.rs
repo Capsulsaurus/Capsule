@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 /// Deliberately incurious: a name and a version, no build host, no commit, no uptime, no
 /// feature list. This endpoint is unauthenticated, so everything it returns is public, and a
 /// key-free server has no reason to hand an anonymous caller a fingerprint of its deployment.
-/// Exact client build identification runs the other way (`S-D15`) — clients tell the server
+/// Exact client build identification runs the other way — clients tell the server
 /// what they are, not the reverse.
 #[derive(Schema, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct VersionResponse {

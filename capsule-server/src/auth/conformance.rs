@@ -65,15 +65,15 @@ use crate::store::{StoreFuture, UserId};
 /// tighter one must still pass — and a suite that hardcoded ten would silently stop testing the
 /// ceiling the moment a deployment moved it.
 pub trait Harness: Send + Sync {
-    /// Where accounts are created (`S-C53`).
+    /// Where accounts are created.
     fn registry(&self) -> &dyn AccountRegistry;
     /// Who exists, and whether a presented password is theirs.
     fn directory(&self) -> &dyn AccountDirectory;
-    /// The facts an account keeps about itself (`S-C54`).
+    /// The facts an account keeps about itself.
     fn profiles(&self) -> &dyn AccountProfiles;
-    /// Where a password is replaced (`S-C54`).
+    /// Where a password is replaced.
     fn passwords(&self) -> &dyn PasswordChange;
-    /// Which account a verified OpenID Connect identity is (`S-N1`, #460) — over the same rows
+    /// Which account a verified OpenID Connect identity is (#460) — over the same rows
     /// as the other four, which is what the federated cases below assert.
     fn federated(&self) -> &dyn FederatedAccounts;
 

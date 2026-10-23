@@ -1,4 +1,4 @@
-//! Publishing and fetching the **signed device directory** (slice `S-P1`, over the `S-C9`
+//! Publishing and fetching the **signed device directory** (over the `S-C9`
 //! server surface).
 //!
 //! The directory is the user-IK-signed list of enrolled device signing keys that
@@ -21,7 +21,7 @@
 //!
 //! - **A publish names the key it is signed under.** The document carries the user identity
 //!   key's signature but not the key, so [`DirectoryClient::publish`] sends the verifying key
-//!   beside it, base64 in `X-Capsule-Identity-Key` (`S-C42`). The server anchors that key on
+//!   beside it, base64 in `X-Capsule-Identity-Key`. The server anchors that key on
 //!   first publish, refuses any other thereafter, and refuses a document that does not verify
 //!   under it — invariant 23's second clause. Without the header every publish is a `400`.
 //!
@@ -66,7 +66,7 @@ pub enum DirectoryError {
     /// The server rejected the document as malformed (`400`).
     #[error("the server rejected the device directory as malformed")]
     Malformed,
-    /// The presented identity key is not the account's anchored one (`403`, `S-C42`): the
+    /// The presented identity key is not the account's anchored one (`403`): the
     /// document is well-formed and verifies, but under somebody else's key.
     #[error("the device directory is signed under a key that is not the account's identity anchor")]
     IdentityMismatch,

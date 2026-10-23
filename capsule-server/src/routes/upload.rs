@@ -1,11 +1,11 @@
 //! `POST /v1/upload`, `PATCH`, `HEAD` and `DELETE /v1/upload/{id}` — the upload session's life.
 //!
-//! The port of the Salvo `capsule-api/upload` surface onto Kynos (slice `S-C1`). What carries
+//! The port of the Salvo `capsule-api/upload` surface onto Kynos. What carries
 //! over is the *contract*: the envelope gate ahead of every write, the chunk rules, the
 //! idempotency tuple, the finalization order. What does not carry over is the Salvo handler,
 //! its response writers, and its three-writes-per-chunk accounting.
 //!
-//! # The status audit (`S-C28`)
+//! # The status audit
 //!
 //! Kynos makes an undeclared status unrepresentable — the status *is* the return type — so
 //! every status the Salvo surface could render was audited as this port was written. The
@@ -28,7 +28,7 @@
 //! | chunk `403` | **folded into the `404`.** Only the uploader may append, and anyone else is told what a caller naming an unknown session is told — "foreign is unknown" (transfer/upload.md, Hostile Clients). The `403` that remains declared is the bearer scheme's |
 //! | chunk `404` | kept — unknown, expired, discarded and foreign sessions are one answer |
 //! | chunk `409` | kept — offset mismatch (carrying the authoritative offset), chunk conflict, session not active |
-//! | chunk `413` | kept — the 16 MiB protocol ceiling, reachable because the transport backstop sits above it (`S-C33`) |
+//! | chunk `413` | kept — the 16 MiB protocol ceiling, reachable because the transport backstop sits above it |
 //! | chunk `415` | kept, and it keeps its code. Kynos's own `Binary` rejection declares `400`, `415` *and* a `422` a raw-bytes body cannot produce, and carries no `error.*` code; [`ChunkBody`] delegates the enforcement to `Binary` and replaces only the rejection, so the `415` is `error.upload.unsupported_media_type` and the phantom `422` is gone |
 //! | chunk `408` | **added** (#717) — a body that did not finish arriving within the chunk read deadline, `error.upload.chunk_timeout`. [`ChunkBody`] bounds the read and nothing after it, so finalization is never cut short by it |
 //! | chunk `409 finalize_in_progress` | **deleted.** Losing the finalize claim is a normal race and the chunk that triggered it was still accepted, so it answers `204`. Telling a client its accepted chunk failed was the Salvo behaviour and it was wrong |
@@ -133,7 +133,7 @@ pub enum WireBlobRole {
     Derivative,
     /// The encrypted CBOR metadata blob.
     Metadata,
-    /// The signed manifest, stored verbatim (`S-C30`).
+    /// The signed manifest, stored verbatim.
     Provenance,
     /// A backup copy.
     Backup,
@@ -206,7 +206,7 @@ pub struct CreateUploadRequest {
     ///
     /// Advisory, never decisive: the asset is filed under the **album's** owner, which the write
     /// authority answers from the album record — the uploader when it is their album, the owner
-    /// when the uploader is a writer on its roster (`S-C51`). A declared owner that is anyone
+    /// when the uploader is a writer on its roster. A declared owner that is anyone
     /// else, the uploading member included, is refused `error.upload.owner_not_permitted`.
     pub owner_id: Option<String>,
     /// The album-upgrade intent this write belongs to, when it belongs to one.
@@ -341,7 +341,7 @@ pub struct UploadPath {
 /// the bare status.
 #[derive(Debug, thiserror::Error, ApiError)]
 pub enum CreateRejection {
-    /// The album is quiescing under an upgrade ceremony this write does not name (`S-C24`).
+    /// The album is quiescing under an upgrade ceremony this write does not name.
     ///
     /// Transient by construction: the ceremony either completes — and the client writes into the
     /// fork — or its deadline passes and the album returns to normal operation. Carries the live
@@ -358,7 +358,7 @@ pub enum CreateRejection {
         code: &'static str,
     },
 
-    /// The account is suspended (`S-C8`).
+    /// The account is suspended.
     ///
     /// Distinct from a quota refusal and from a permission one, deliberately: the three send a
     /// client to three different screens, and design/moderation.md asks for a *structured*
@@ -560,7 +560,7 @@ pub enum ChunkRejection {
         code: &'static str,
     },
 
-    /// A `replace`'s manifest arrived before the bundle it commits to (`S-C43`).
+    /// A `replace`'s manifest arrived before the bundle it commits to.
     ///
     /// Transient, and the only ordering rule this protocol has: a replace mutates an asset that
     /// is already visible, so it is applied as one act at the moment its manifest lands — which
@@ -575,7 +575,7 @@ pub enum ChunkRejection {
         code: &'static str,
     },
 
-    /// A `replace` did not chain onto the asset's current state (`S-C43`).
+    /// A `replace` did not chain onto the asset's current state.
     ///
     /// Invariant 17's stale revival, invariant 18's epoch regression, or an asset that has been
     /// deleted since the session opened. One answer for all three: the client's move is the same
@@ -859,7 +859,7 @@ pub async fn create_upload(
         Throttled::Unavailable => CreateRejection::unavailable(upload.clock()),
     })?;
 
-    // Account standing (`S-C8`), checked before anything is reserved. A suspension removes the
+    // Account standing, checked before anything is reserved. A suspension removes the
     // ability to *write*, so refusing here — before a session exists, before a quota is charged
     // — is what keeps a suspended account from leaving half-built state behind that a
     // reinstatement would then have to reconcile.
@@ -904,7 +904,7 @@ pub async fn create_upload(
     // The namespace is the authority's answer; a declared owner may only agree with it.
     resolve_owner(&uploader, &owner, request.owner_id.as_deref())?;
 
-    // Upgrade quiescence (`S-C24`, versioning.md step 2). An album whose members have stopped
+    // Upgrade quiescence (versioning.md step 2). An album whose members have stopped
     // writing and are draining accepts **only** the ceremony's own writes, so a stale client that
     // never saw the `UpgradeIntent` cannot write past the freeze. The intent is client-asserted
     // here and that is fine: it is not an authorization, it is a *ticket* the server checks
@@ -994,7 +994,7 @@ pub async fn create_upload(
         device_added_at,
         server_clock: now,
     };
-    // Two actions ride this surface and no others (`S-C43`): a write that moves blob bytes is an
+    // Two actions ride this surface and no others: a write that moves blob bytes is an
     // upload by definition, and `create` and `replace` are the two that do. The dispatch is on
     // the envelope's own token so an unknown action reaches `check_create` and is refused there
     // by name, rather than falling into a default arm that would have to guess.
@@ -1184,7 +1184,7 @@ pub async fn create_upload(
         }
     }
 
-    // Quota's one hard enforcement point (`S-C6`). After the duplicate check and the
+    // Quota's one hard enforcement point. After the duplicate check and the
     // reservation, because a refused duplicate must not be charged; before the stage, because a
     // refusal must not leave bytes. The reserved-but-unpublished row a refusal leaves behind
     // publishes nothing and is the discard worker's, exactly as an abandoned session's is.
@@ -1377,7 +1377,7 @@ pub async fn append_chunk(
     }
 
     // The rules themselves live in `upload::chunk`, shared verbatim with the guest-drop path
-    // (`S-C5`): invariants 9–12 mean the same thing on both surfaces, and two copies would
+    //: invariants 9–12 mean the same thing on both surfaces, and two copies would
     // drift on exactly the case a client hits after losing a connection. What stays here is
     // what genuinely differs — who is allowed to append, and how a refusal is spelled on the
     // wire.
@@ -1624,7 +1624,7 @@ pub async fn cancel_upload(
         CancelRejection::unavailable(upload.clock())
     })?;
 
-    // The reservation goes back (`S-C6`). Best-effort and logged rather than fatal: the session
+    // The reservation goes back. Best-effort and logged rather than fatal: the session
     // is already gone, so failing the response here would tell a client its cancellation did
     // not happen when it did. A stranded attribution is what the scrub reconciles.
     if let Ok(address) = ContentAddress::parse(&record.expected_hash)
@@ -1680,7 +1680,7 @@ async fn session_for(
 ///
 /// The owner is **not** taken from the request: it is the album's own, answered by the write
 /// authority from the album record, and an uploader who is a writer member of somebody else's
-/// album is filed under that owner whether or not they said so (`S-C51`). What the request may
+/// album is filed under that owner whether or not they said so. What the request may
 /// do is *agree* — name the album owner, or, when the uploader is the owner, themselves. Naming
 /// anyone else is refused: a member declaring their own account as owner would be asking for an
 /// asset the owner's feed never carries, and a stranger's declaration is not a permission.

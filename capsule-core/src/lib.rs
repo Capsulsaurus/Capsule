@@ -21,14 +21,14 @@ pub mod crypto;
 pub mod drop;
 
 /// Share-link generation, encapsulation crypto, and the recipient-side [`sharing::open_scope`]
-/// path. Always compiled (slice S-E1): it depends only on `cbor` + `crypto`, both of which
+/// path. Always compiled: it depends only on `cbor` + `crypto`, both of which
 /// target `wasm32-unknown-unknown`, so the browser share viewer (via `capsule-wasm`) can unwrap
 /// a link client-side. The native issuer (`ShareLinkIssuer` on `capsule-library`'s `Workspace`)
 /// is not needed in the browser; only the pure crypto + recipient-open path is.
 pub mod sharing;
 
 /// Client build identification — the `client_version` / `generated_by_client` grammar and the
-/// build-embedded git commit (S-D15). Always compiled: pure string formatting, no native deps.
+/// build-embedded git commit. Always compiled: pure string formatting, no native deps.
 pub mod client_build;
 
 /// The closed set of still-derivative formats and the structural check over it — the tier
@@ -39,7 +39,7 @@ pub mod client_build;
 /// re-export them.
 pub mod derivative_format;
 
-/// LQIP — the chromahash placeholder carried in the signed sidecar's `lqip` field (S-B14).
+/// LQIP — the chromahash placeholder carried in the signed sidecar's `lqip` field.
 /// Always compiled, and deliberately so: the placeholder is produced by the import pipeline,
 /// read by the apps through the FFI crates, and read by the browser through `capsule-wasm`, so
 /// there is exactly one implementation and every surface links it. `chromahash` has zero
@@ -74,7 +74,7 @@ pub mod federation;
 #[cfg(feature = "native")]
 pub mod import;
 /// Still decode, orientation, metadata normalisation and derivative generation over
-/// `rawshift-image` (`media` feature, implied by `native`; slices `S-B1`/`S-B13`). Feature-gated
+/// `rawshift-image` (`media` feature, implied by `native`). Feature-gated
 /// rather than `native`-gated so the codec stack is one manifest edit away from being dropped
 /// from a size-constrained build, and so the `wasm32-unknown-unknown` sealing surface provably
 /// does not link it. See [`media`].
@@ -84,7 +84,7 @@ pub mod media;
 pub mod metadata;
 #[cfg(feature = "native")]
 pub mod ml;
-// `notify` — alert classes and their trigger predicates (`S-D29`): one shared decision
+// `notify` — alert classes and their trigger predicates: one shared decision
 // function every platform evaluates, so the taxonomy is not reimplemented per client.
 // `native`-gated because an alert is composed from *decrypted device state*, and the
 // un-gated surface here is the key-free guest sealing path, which holds none of it. The

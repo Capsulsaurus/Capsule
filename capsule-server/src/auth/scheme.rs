@@ -28,14 +28,14 @@
 //! a status the document promises and nothing can produce is the other half of the `S-C28`
 //! defect, and `assert_declared_responses_covered` fails on it.
 //!
-//! # The ledger is on the request path (slice `S-C48`)
+//! # The ledger is on the request path
 //!
 //! The third row is the one this slice added, and it is a deliberate purchase rather than a
 //! refinement. Before it, `authenticate` checked the JWT's signature, issuer, kind and deadline
 //! and never touched [`AuthStateStore`](crate::store::AuthStateStore) — so closing a session,
 //! one or all of them, killed *refresh* immediately and left every already-issued access token
 //! usable for the remainder of its fifteen minutes. Revocation was only ever as fast as the
-//! TTL, which is why the TTL is short, but the revoke-all ceremony (`S-C23`) exists to deny an
+//! TTL, which is why the TTL is short, but the revoke-all ceremony exists to deny an
 //! attacker **now**, and a fifteen-minute window is not now.
 //!
 //! The price is one store round trip per authenticated request. That is real, and it is stated
@@ -127,7 +127,7 @@ pub struct AuthenticatedSession {
     pub session: crate::store::SessionId,
     /// When the user last presented a credential on this session's lineage.
     ///
-    /// What a freshness gate reads (`S-C7`). Deliberately not moved by a refresh, so a gate
+    /// What a freshness gate reads. Deliberately not moved by a refresh, so a gate
     /// built on it cannot be satisfied by a client that does nothing but rotate.
     pub authenticated_at: jiff::Timestamp,
     /// When the session was last seen, as of the read that admitted this request.

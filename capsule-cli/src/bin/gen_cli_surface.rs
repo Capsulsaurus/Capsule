@@ -1,4 +1,4 @@
-//! Deterministic dump of the `capsule` command tree (slice `S-Z8`).
+//! Deterministic dump of the `capsule` command tree.
 //!
 //! Serializes [`capsule_cli::cli::command_tree`] to `capsule-cli/cli-surface.json` and, with
 //! `--check`, fails when the committed copy is stale. It is the CLI's half of the rule that

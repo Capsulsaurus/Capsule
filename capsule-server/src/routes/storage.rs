@@ -1,4 +1,4 @@
-//! `POST /v1/storage/verify` — the key-free durability verdict (slice `S-C3`).
+//! `POST /v1/storage/verify` — the key-free durability verdict.
 //!
 //! The question this answers is asked immediately before a destructive action: a client is
 //! about to release the only local copy of a photo and wants to know whether the server really
@@ -67,7 +67,7 @@ pub struct AssetVerifyRequest {
 pub struct StorageVerifyRequest {
     /// The assets to verify.
     pub assets: Vec<AssetVerifyRequest>,
-    /// Also re-read and re-hash the bytes (`S-C41`).
+    /// Also re-read and re-hash the bytes.
     ///
     /// Absent or `false` is the structural check: ask the index and the store whether the bytes
     /// are there. `true` additionally re-hashes them, which is the only way to catch silent
@@ -108,7 +108,7 @@ pub struct BlobVerdictResponse {
     pub indexed: bool,
     /// Nothing is withholding it.
     pub retrievable: bool,
-    /// What a deep scan found: `intact`, `corrupt`, or `rate_limited` (`S-C41`).
+    /// What a deep scan found: `intact`, `corrupt`, or `rate_limited`.
     ///
     /// **Absent when no deep scan ran**, and the absence is load-bearing: it is the difference
     /// between "we did not look at the bytes" and "we looked and they were fine", and a client
@@ -243,7 +243,7 @@ pub async fn verify_storage(
     // a verdict about another account's asset is disclosure about another account.
     let owner = OwnerId::new(credential.user.as_str());
 
-    // The limiter is half the feature, not a refinement of it (`S-C41`): a deep scan reads and
+    // The limiter is half the feature, not a refinement of it: a deep scan reads and
     // re-hashes every declared blob, so an unbounded one lets one authenticated account make
     // the server walk its whole store, repeatedly, for the price of a small JSON body. A signed
     // verdict is priced the same way (transfer/durability.md, Signed Storage Attestation): each

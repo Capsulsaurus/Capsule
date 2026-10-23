@@ -1,4 +1,4 @@
-//! The upload surface: the envelope gate, the chunk rules, and finalization (slice `S-C1`).
+//! The upload surface: the envelope gate, the chunk rules, and finalization.
 //!
 //! Every case here drives the **real server** through `TestClient` — the same router
 //! production runs, over the in-memory adapters of the two state ports and the blob store. What
@@ -2849,7 +2849,7 @@ async fn a_claim_whose_process_died_after_its_index_write_completes_at_boot() {
 }
 
 // ===========================================================================================
-// Member writes (`S-C51`)
+// Member writes
 // ===========================================================================================
 
 /// A second account, on the seeded album's roster in whatever role a case puts it.

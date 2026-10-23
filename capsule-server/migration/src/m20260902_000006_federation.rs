@@ -1,4 +1,4 @@
-//! Federation (`S-E2`, `S-E5`): the capabilities this server issued, the revocation list it
+//! Federation: the capabilities this server issued, the revocation list it
 //! publishes, and the peers an operator has pinned or blocked.
 
 use sea_orm_migration::prelude::*;

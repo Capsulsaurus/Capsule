@@ -1,4 +1,4 @@
-//! The `.well-known/capsule/*` registry, end to end (slices `S-C15`, `S-C18`).
+//! The `.well-known/capsule/*` registry, end to end.
 //!
 //! Every record here is fetched **with no credential**, and that omission is the assertion: a
 //! client deciding whether it can talk to this server at all has no token yet, and a peer

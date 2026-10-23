@@ -1,4 +1,4 @@
-//! The OpenID Connect relying party (slice `S-N1`).
+//! The OpenID Connect relying party.
 //!
 //! # What it is, and what it is not
 //!

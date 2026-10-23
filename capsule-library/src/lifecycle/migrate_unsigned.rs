@@ -1,4 +1,4 @@
-//! Migrate the unsigned pre-signed-path sidecars into signed assets (slice `S-D24`).
+//! Migrate the unsigned pre-signed-path sidecars into signed assets.
 //!
 //! A library written before the signed path existed holds, beside each original, a flat
 //! unsigned CBOR map (`version: 1`, text keys) with no provenance chain, no sealed metadata
@@ -480,7 +480,7 @@ impl Workspace {
     }
 
     /// Migrate every unsigned pre-signed-path sidecar under `media/` into a signed asset, then
-    /// rebuild the index so stack rows are reconstructed uniformly (slice `S-D24`).
+    /// rebuild the index so stack rows are reconstructed uniformly.
     ///
     /// For each legacy sidecar, in asset-id order:
     ///
@@ -1182,7 +1182,7 @@ mod tests {
 
     // ── T1: the acceptance case ─────────────────────────────────────────────
 
-    /// **The `S-D24` acceptance case.** After the verb, every legacy asset is a signed asset:
+    /// **The acceptance case.** After the verb, every legacy asset is a signed asset:
     /// `verify_asset` accepts it, its sidecar verifies under the user IK, its chain, sealed
     /// metadata blob, and index row exist, and the legacy rating, tags, GPS, and capture time
     /// are carried into their signed homes.

@@ -1,4 +1,4 @@
-//! `PUT /v1/albums/{album_id}/roster` — publishing an album's membership roster (slice `S-C51`).
+//! `PUT /v1/albums/{album_id}/roster` — publishing an album's membership roster.
 //!
 //! The one endpoint that tells the key-free server who may read and write a shared album.
 //! [`crate::membership`] owns the port and the reasoning; this is the wire shape.
@@ -68,7 +68,7 @@ use crate::store::{AlbumId, UserId};
 ///
 /// A roster member is a UUID and a role — well under a hundred bytes each in canonical CBOR —
 /// so 512 KiB is several thousand members and still far below the transport backstop
-/// (`S-C33`, 32 MiB), which is not a bound on a membership document.
+/// (32 MiB), which is not a bound on a membership document.
 pub const MAX_ROSTER_BYTES: usize = 512 * 1024;
 
 /// The publish request.
@@ -382,7 +382,7 @@ pub async fn publish_album_roster(
     match outcome {
         RosterOutcome::Applied(record) => {
             // A roster the owner just narrowed is a set of federated grants the owner just
-            // withdrew (`S-E5`). Published to `/.well-known/capsule/revoked-jti` here so a peer
+            // withdrew. Published to `/.well-known/capsule/revoked-jti` here so a peer
             // learns from the list rather than from a refusal it cannot explain — and logged
             // rather than surfaced, because the roster is the fact this operation answers for
             // and a capability whose member has gone is refused at its next presentation

@@ -1,5 +1,5 @@
 //! The recovery-verification **cadence scheduler** and the **prompt state machine**
-//! the client UX renders (slice `S-D12`; SSoT: [Backup — Recovery Verification
+//! the client UX renders (SSoT: [Backup — Recovery Verification
 //! Cadence]).
 //!
 //! This half of S-D12 is deliberately **pure and network-free**: every method takes
@@ -276,7 +276,7 @@ impl RecoveryCadence {
     }
 
     /// Project the scheduler into the flat facts the shared alert predicate consumes
-    /// ([`capsule_core::notify`], slice `S-D29`).
+    /// ([`capsule_core::notify`]).
     ///
     /// The direction matters: `capsule-sdk` depends on `capsule-core` and never the reverse, so
     /// the predicate cannot read this scheduler. It is handed a projection instead, and this is

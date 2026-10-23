@@ -1,4 +1,4 @@
-//! The session ledger — listing a user's devices and revoking one (slices `S-C13`, `S-N3`).
+//! The session ledger — listing a user's devices and revoking one.
 //!
 //! Items 1 and 2 of design/authentication.md's session ledger: *list all active sessions*, and
 //! *revoke any single session, authenticated by any active session token*. Item 3 — the global
@@ -69,7 +69,7 @@ pub struct SessionView {
     ///
     /// Carried forward across refreshes, so it is the one timestamp here that means what a
     /// user reading a devices list expects "signed in" to mean. It is also what the
-    /// cross-device add's freshness gate reads (`S-C7`), so a client can show why an add is
+    /// cross-device add's freshness gate reads, so a client can show why an add is
     /// about to ask for a password again.
     pub authenticated_at: String,
     /// When it was last seen, RFC 3339.
@@ -86,7 +86,7 @@ pub struct SessionView {
     /// The advisory cohort this session asserted, if any. Grouping only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cohort_hash: Option<String>,
-    /// The directory device the client claimed to be (`S-N3`), if any.
+    /// The directory device the client claimed to be, if any.
     ///
     /// A different identifier space from `cohort_hash`: this names one directory device, the
     /// cohort groups re-enrollments of one physical device. Both are client-asserted; neither

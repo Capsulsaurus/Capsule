@@ -1,4 +1,4 @@
-//! The session-composed typed REST client (slice `S-D8`).
+//! The session-composed typed REST client.
 //!
 //! [`AuthenticatedClient`] revives the shape the parked wrapper in the crate root promised —
 //! a thin skin over the `spargen`-generated [`rest::Client`] that owns
@@ -11,7 +11,7 @@
 //! touch a raw token. The refresh/expiry/single-flight logic is reused wholesale from
 //! [`crate::auth`]; nothing is duplicated here.
 //!
-//! # Both halves of the refresh contract (slice `S-D17`)
+//! # Both halves of the refresh contract
 //!
 //! The token provider is the **proactive** half: it refreshes when the stored token is within
 //! its skew of expiry, before the request leaves. That cannot cover a token the server stops
@@ -140,7 +140,7 @@ impl Deref for AuthenticatedClient {
 /// [`RefreshOn401`] recognises as a token it can refresh.
 const BEARER_PREFIX: &str = "Bearer ";
 
-/// The reactive half of the refresh contract (slice `S-D17`): an [`rest::HttpBackend`] that,
+/// The reactive half of the refresh contract: an [`rest::HttpBackend`] that,
 /// on a `401` coded [`EXPIRED_TOKEN_CODE`], refreshes the session once and replays the request
 /// exactly once. Any other `401` is returned as the server sent it.
 ///
@@ -887,7 +887,7 @@ mod tests {
             .collect()
     }
 
-    // ── S-D17: the reactive half ────────────────────────────────────────────────────────
+    // ── the reactive half ────────────────────────────────────────────────────────
 
     /// **The slice's Done-when.** A token that is valid as far as the *client* can tell and
     /// refused by the server — the race the pre-flight check cannot close — is refreshed once

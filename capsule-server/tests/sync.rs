@@ -1,4 +1,4 @@
-//! `GET /v1/sync` — the key-free sync feed (slice `S-C2`), end to end.
+//! `GET /v1/sync` — the key-free sync feed, end to end.
 //!
 //! Every case drives the built service in-process. What is asserted against the *index* is
 //! asserted against the store the server actually read, never against a second reading of the
@@ -719,7 +719,7 @@ async fn upload(fixture: &Fixture, bearer: &str, role: &str, marker: u8) -> Cont
 }
 
 // ===========================================================================================
-// Album pages for members (`S-C51`)
+// Album pages for members
 // ===========================================================================================
 
 /// A second account, on the seeded album's roster in whatever state a case puts it.

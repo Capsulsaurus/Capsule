@@ -1,4 +1,4 @@
-//! `GET /v1/upload/sessions` — the resumption listing (slice `S-C57`), end to end.
+//! `GET /v1/upload/sessions` — the resumption listing, end to end.
 //!
 //! The case that carries the slice is `a_client_that_lost_its_session_ids_can_find_them_again`:
 //! that is the whole reason the operation exists. Beside it,

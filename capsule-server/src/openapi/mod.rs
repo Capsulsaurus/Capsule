@@ -1,4 +1,4 @@
-//! Describing the extension members Capsule's problems actually carry (slice `S-C38`).
+//! Describing the extension members Capsule's problems actually carry.
 //!
 //! # The regression this closes
 //!
@@ -371,7 +371,7 @@ const UPLOAD_RETRY_AFTER: &[Member] = &[Member {
     nullable: false,
 }];
 
-/// The retry hint every throttled response carries (`S-C32`).
+/// The retry hint every throttled response carries.
 ///
 /// One `429` reaches a caller from two causes — the key's own budget spent, or the limiter's
 /// partition full — and the `code` tells them apart. `retry_after` is what a client acts on
@@ -418,7 +418,7 @@ const PROTOCOL_RANGE: &[Member] = &[
 ///
 /// Does nothing if the document carries no `Problem` component, which is the state a document
 /// with no failing operation would be in — an empty router rather than an error.
-/// Gives every raw-byte body and response an explicit binary schema (`S-Z7`).
+/// Gives every raw-byte body and response an explicit binary schema.
 ///
 /// # What Kynos emits, and why a generator cannot use it
 ///

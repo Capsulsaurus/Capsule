@@ -1,4 +1,4 @@
-//! [`PostgresCapabilities`] and [`PostgresPeers`] — the durable federation stores (`S-E2`).
+//! [`PostgresCapabilities`] and [`PostgresPeers`] — the durable federation stores.
 //!
 //! # Two tables behind one port, written in one transaction
 //!

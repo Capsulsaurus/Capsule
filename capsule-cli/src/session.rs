@@ -1,4 +1,4 @@
-//! Persistent session storage for the CLI (slice `S-D5`).
+//! Persistent session storage for the CLI.
 //!
 //! The `capsule-sdk` owns the session/token store and the refresh engine (slice
 //! `S-D7`); the CLI owns only the **at-rest bytes** — exactly the boundary

@@ -1,4 +1,4 @@
-//! The device-directory surface (slice `S-C9`), end to end.
+//! The device-directory surface, end to end.
 //!
 //! Two properties carry the whole slice: the bytes come back exactly as they went in, and a
 //! version that does not strictly advance changes nothing. The first is what makes a signature
@@ -18,7 +18,7 @@ use uuid::Uuid;
 /// An account's identity key.
 ///
 /// Held by the caller rather than generated inside `signed`, because the server anchors an
-/// account to the first key it sees (`S-C42`) and a fresh key per publish would make every
+/// account to the first key it sees and a fresh key per publish would make every
 /// second one a `403`.
 fn ik() -> HybridSigningKey {
     HybridSigningKey::generate()
@@ -309,7 +309,7 @@ async fn the_directory_surface_requires_a_credential() {
         .assert_status(StatusCode::UNAUTHORIZED);
 }
 
-/// The account is anchored to the first identity key it publishes under (`S-C42`).
+/// The account is anchored to the first identity key it publishes under.
 ///
 /// This is invariant 23's second clause reaching the wire. Before it, an authenticated caller
 /// could publish a document that verifies under no key, and `S-C23`'s revoke-all — which

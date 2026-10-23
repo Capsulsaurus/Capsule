@@ -1,4 +1,4 @@
-//! Aggregated federated albums (`S-E4`) — album-group assertions, their AMK-sealed op path,
+//! Aggregated federated albums — album-group assertions, their AMK-sealed op path,
 //! and the local constituent view. The only `lifecycle` file that reaches [`capsule_core::federation`].
 
 use capsule_core::cbor;
@@ -12,12 +12,12 @@ use uuid::Uuid;
 use super::{LifecycleError, Result, Workspace, asset_is_deleted, now_rfc3339};
 
 impl Workspace {
-    // ── Aggregated federated albums (S-E4) ──────────────────────────────────────
+    // ── Aggregated federated albums ──────────────────────────────────────
     //
     // An album-group assertion is written into *this* workspace's own container album's
     // collaborative-metadata stream — a device-signed operation, AMK-sealed so no server ever
     // learns a group exists (zero new server surface). Reading the *other* constituents rides
-    // the existing per-album feed/pull (S-D2/S-E2); the aggregate itself is a computed view.
+    // the existing per-album feed/pull; the aggregate itself is a computed view.
     // SSoT: [Federation — Federated Shared Albums].
     //
     // [Federation — Federated Shared Albums]: https://docs/design/federation/#federated-shared-albums-aggregated-albums
@@ -207,7 +207,7 @@ mod tests {
 
     use super::super::fast_workspace;
 
-    // ── Aggregated federated albums (S-E4) ──────────────────────────────────────
+    // ── Aggregated federated albums ──────────────────────────────────────
 
     /// The op-path write half is **server-opaque**: the sealed group-assertion operation the
     /// server would store carries no plaintext group facts — they live only inside the AMK

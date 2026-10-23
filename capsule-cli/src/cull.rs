@@ -1,6 +1,6 @@
-//! `capsule cull` — the standalone culling command (slice `S-D16`).
+//! `capsule cull` — the standalone culling command.
 //!
-//! The photographer's review pass, exposed over the landed culling engine (`S-D13`, in
+//! The photographer's review pass, exposed over the landed culling engine (in
 //! `capsule_library::lifecycle`) and `S-A10`'s durable open plumbing. One invocation runs the
 //! design's loop in order:
 //!

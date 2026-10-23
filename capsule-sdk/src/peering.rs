@@ -1,5 +1,5 @@
 //! LAN peering: direct device-to-device sync within a single user's own devices
-//! (SSoT: [Peering]; slice `S-E3` in the repo-root `SLICES.md`).
+//! (SSoT: [Peering]).
 //!
 //! Peering is an **accelerator, never a replacement** for server sync: two of a user's
 //! devices on the same network move a freshly-imported asset directly instead of

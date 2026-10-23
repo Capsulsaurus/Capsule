@@ -1,4 +1,4 @@
-//! Phase 4 — execute an import plan onto the **signed lifecycle path** (slice `S-B2`).
+//! Phase 4 — execute an import plan onto the **signed lifecycle path**.
 //!
 //! Each `ImportDecision::Import` candidate is imported through
 //! [`Workspace::import_asset_with`](crate::lifecycle::Workspace::import_asset_with): every member
@@ -6,12 +6,12 @@
 //! append-only provenance, self-verified through
 //! [`verify_asset`](capsule_core::crypto::verify_asset::verify_asset), and — when the still decodes —
 //! with a chromahash `lqip` in the sidecar and signed thumbnail derivatives on disk
-//! ([`capsule_core::media`], slices `S-B1`/`S-B13`/`S-B14`). A format with no
+//! ([`capsule_core::media`]). A format with no
 //! codec in this build still imports, as a signed original with the gap recorded rather than
 //! hidden.
 //!
 //! This retired the legacy unsigned `AssetSidecar` write path from the executor; the production
-//! write path itself is now gone (`S-G4`) — no code writes unsigned sidecars anymore. Only the
+//! write path itself is now gone — no code writes unsigned sidecars anymore. Only the
 //! *read* path survives, for the recovery-first index rebuild
 //! ([`rebuild_index`](crate::library::rebuild_index)) that still ingests unsigned `.cbor`
 //! sidecars left by pre-signed-path libraries. The pure planner (`import::planner`) is unchanged:
@@ -62,7 +62,7 @@ pub fn execute(
 }
 
 /// [`execute`], with the folded metadata a third-party [source adapter] extracted attached to
-/// each file it covers (slice `S-B10`).
+/// each file it covers.
 ///
 /// The adapter resolved the [precedence rule] at extraction; the executor is what makes the
 /// result *durable* — each member's record is mapped onto sidecar fields by
@@ -169,7 +169,7 @@ pub fn execute_with_source_metadata(
         derivatives_deferred = summary.deferred_derivative_count(),
         derivatives_decode_failed = summary.decode_failed_count(),
         // How much of this run carried third-party exporter metadata into the signed sidecars
-        // (`S-B10`); zero for a plain filesystem import.
+        //; zero for a plain filesystem import.
         enriched_candidates,
         "import: execution complete"
     );
@@ -323,7 +323,7 @@ fn import_error_outcome(e: &LifecycleError) -> ImportOutcome {
     }
 }
 
-/// The signed [`StackMembership`] one member of a multi-file candidate carries (`S-B15`), or
+/// The signed [`StackMembership`] one member of a multi-file candidate carries, or
 /// `None` for a standalone candidate.
 ///
 /// `is_primary` is the executor's own rule (the declared primary, or the first member when none
@@ -419,7 +419,7 @@ mod tests {
         ws
     }
 
-    /// **The S-B13 contract (slice `S-B13`).** An original whose format has no codec in this
+    /// **The S-B13 contract.** An original whose format has no codec in this
     /// build is imported as a signed, encrypted, verifiable asset — it simply arrives without a
     /// thumbnail, and the run summary says so.
     ///
@@ -499,7 +499,7 @@ mod tests {
 
     /// A RAW-only candidate — no same-stem JPEG to fall back on — still lands as a signed,
     /// self-verifying original even when no derivative can be made from it, which is why this
-    /// needs pinning: the archive is the whole point, the derivative is a bonus (slice `S-B13`).
+    /// needs pinning: the archive is the whole point, the derivative is a bonus.
     ///
     /// ARW decodes in this build (issue #589), so the deferral here is not "RAW has no decoder".
     /// A Sony ARW is a TIFF container, so its *header* says TIFF and only the extension names

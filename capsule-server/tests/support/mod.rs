@@ -173,7 +173,7 @@ pub(crate) fn op_bundle(
 /// An account's identity key, generated once per test and reused across its publishes.
 ///
 /// A publish carries the key its document verifies under, and the server anchors the account to
-/// the first one it sees (`S-C42`). A helper that generated a fresh key per call would make
+/// the first one it sees. A helper that generated a fresh key per call would make
 /// every second publish an `IdentityMismatch`, which is why the key is the caller's to hold.
 pub(crate) fn identity_key() -> HybridSigningKey {
     HybridSigningKey::generate()
@@ -194,7 +194,7 @@ pub(crate) fn signed_directory_by(ik: &HybridSigningKey, version: u64) -> Vec<u8
     capsule_core::cbor::to_canonical_vec(&directory).expect("a directory serializes")
 }
 
-/// The base64 revoke-all proof `ik` makes over `challenge` (`S-C23`).
+/// The base64 revoke-all proof `ik` makes over `challenge`.
 ///
 /// Built through `capsule_core::crypto::revoke`, the same path a client takes: a test that
 /// assembled the signed bytes itself would pass while the two ends disagreed.
@@ -235,7 +235,7 @@ const REFUSAL: &str = "the double refuses on purpose";
 pub(crate) const CURSOR_KEY: [u8; CURSOR_KEY_LEN] = [0x5C; CURSOR_KEY_LEN];
 
 // ===========================================================================================
-// Identity provider double (`S-N1`)
+// Identity provider double
 // ===========================================================================================
 
 /// The authorization code the double redeems; every other code is `invalid_grant`.
@@ -753,7 +753,7 @@ impl capsule_server::store::OidcDeviceStore for SwitchableOidcDevices {
 #[derive(Debug, Default)]
 pub(crate) struct InMemoryAccounts {
     accounts: Mutex<BTreeMap<String, Account>>,
-    /// `(issuer, subject)` → the account a federated sign-in resolved to (`S-N1`).
+    /// `(issuer, subject)` → the account a federated sign-in resolved to.
     federated: Mutex<BTreeMap<(String, String), UserId>>,
     unavailable: AtomicBool,
     forget_after_authentication: AtomicBool,
@@ -1064,7 +1064,7 @@ fn profile_of(email: &str, held: &Account) -> ProfileRecord {
 // Second-factor double
 // ===========================================================================================
 
-/// The second-factor enrollments (`S-C55`), with the switch every other double here carries.
+/// The second-factor enrollments, with the switch every other double here carries.
 ///
 /// A real implementation of the port's contract rather than a stub: the check-and-write in
 /// `begin`, the pending-only `activate` and the compare-and-set in `consume` are the three
@@ -2451,7 +2451,7 @@ impl SwallowingBlobs {
     /// Built from the port's own `remove` + `put` rather than from a test-only hook, so what it
     /// produces is a state the real store can genuinely be in: a committed address whose bytes
     /// are not its digest. That is the state a deep verify exists to find and a structural one
-    /// cannot (`S-C41`).
+    /// cannot.
     pub(crate) async fn corrupt(&self, address: &ContentAddress) {
         self.inner
             .remove(address)
@@ -2672,7 +2672,7 @@ impl BlobStore for SwallowingBlobs {
 pub(crate) struct TestAuthority {
     /// Each album's owner and protocol pin.
     albums: Mutex<BTreeMap<String, (String, String)>>,
-    /// Each `(album, member)`'s role on the roster (`S-C51`).
+    /// Each `(album, member)`'s role on the roster.
     shares: Mutex<BTreeMap<(String, String), MemberRole>>,
     upgrades: Mutex<BTreeMap<(String, String), Uuid>>,
     devices: Mutex<BTreeMap<(String, Uuid), Timestamp>>,
@@ -2693,7 +2693,7 @@ impl TestAuthority {
         );
     }
 
-    /// Put `member` on `album`'s roster with `role` (`S-C51`).
+    /// Put `member` on `album`'s roster with `role`.
     pub(crate) fn share(&self, album: &AlbumId, member: &UserId, role: MemberRole) {
         self.shares().insert(
             (album.as_str().to_owned(), member.as_str().to_owned()),
@@ -2707,7 +2707,7 @@ impl TestAuthority {
             .remove(&(album.as_str().to_owned(), member.as_str().to_owned()));
     }
 
-    /// Put an album into upgrade quiescence under `intent` (`S-C24`).
+    /// Put an album into upgrade quiescence under `intent`.
     ///
     /// The double carries the fact the production authority reads off the album record, so a
     /// case can assert what a quiescing album does to an upload without standing up the ceremony
@@ -3702,7 +3702,7 @@ pub(crate) struct Fixture {
     pub(crate) directories: Arc<SwitchableDirectories>,
     /// The albums the server has provisioned.
     pub(crate) albums: Arc<SwitchableAlbums>,
-    /// The album rosters the server holds, and who they make a member (`S-C51`).
+    /// The album rosters the server holds, and who they make a member.
     pub(crate) members: Arc<SwitchableMembership>,
     /// The quota ledger the server charges against.
     pub(crate) quotas: Arc<SwitchableQuota>,
@@ -3744,12 +3744,12 @@ pub(crate) struct Fixture {
     pub(crate) dropstore: Arc<SwitchableDrops>,
     /// The rate-limit counters.
     pub(crate) counters: Arc<InMemoryCounters>,
-    /// The second-factor enrollments (`S-C55`).
+    /// The second-factor enrollments.
     pub(crate) totp: Arc<InMemoryTotp>,
     /// The code generator the server verifies with — the *same* one, so a case can compute the
     /// code an authenticator app would be showing rather than guessing at one.
     pub(crate) codes: Arc<TotpCodes>,
-    /// The identity provider double (`S-N1`), when the fixture was built with one.
+    /// The identity provider double, when the fixture was built with one.
     pub(crate) idp: Arc<SwitchableIdentityProvider>,
     /// The pending OIDC ceremonies.
     pub(crate) oidc_authorizations: Arc<SwitchableOidcAuthorizations>,
@@ -4591,7 +4591,7 @@ pub(crate) fn signer_from(der: &[u8], clock: Arc<ManualClock>) -> SessionTokens 
     SessionTokens::from_pkcs8(der, clock).expect("a key just generated parses")
 }
 
-/// A `POST /v1/upload` body for one member of a **replace** bundle (`S-C43`).
+/// A `POST /v1/upload` body for one member of a **replace** bundle.
 ///
 /// `prior` is the chain head the manifest supersedes. `bundle` is `Some((original, metadata))`
 /// on the manifest's own session and `None` on the others — which is the shape of the rule: a
@@ -4614,7 +4614,7 @@ pub(crate) fn replace_request(
     body
 }
 
-/// A signed device directory holding one device, whose DSK is `dsk` (`S-C24`).
+/// A signed device directory holding one device, whose DSK is `dsk`.
 ///
 /// The empty directory `signed_directory_by` produces is enough for `S-C42`'s anchor check and
 /// not enough for an upgrade proposal, which is verified against the *proposing device's* DSK.
@@ -4646,7 +4646,7 @@ pub(crate) fn signed_directory_with_device(
 }
 
 /// A signed album roster, base64-encoded as `PUT /v1/albums/{album_id}/roster` carries it
-/// (`S-C51`).
+///.
 ///
 /// Attested by the seeded account through `capsule_core::crypto::membership` — the same types
 /// the server verifies with — so a fixture cannot pass while the two ends disagree about what
@@ -4683,7 +4683,7 @@ pub(crate) fn signed_roster(
         .encode(capsule_core::cbor::to_canonical_vec(&signed).expect("a signed roster serializes"))
 }
 
-/// A signed upgrade intent, as the proposing admin device's client would produce it (`S-C24`).
+/// A signed upgrade intent, as the proposing admin device's client would produce it.
 ///
 /// Built through `capsule_core::crypto::upgrade` — the *same* types the server verifies with —
 /// because a fixture that assembled the signed bytes itself would pass while the two ends

@@ -73,7 +73,7 @@ impl Workspace {
 
     /// Local, network-free check that `recovery_secret` still opens `blob` **to this device's
     /// master key** — the derived-tag compare that backs the recovery verification cadence
-    /// (`S-D12`).
+    ///.
     ///
     /// Delegates wholesale to [`backup::verify_recovery_secret`]; nothing is compared here, and
     /// no key bytes are surfaced either way. The stale-cache rule (refresh the blob once before
@@ -145,7 +145,7 @@ impl Workspace {
         for asset in self.assets.values() {
             // The per-asset re-encrypt (plaintext → the ciphertext the manifest's recorded
             // nonce prefix pins) is the `upload_bundle` accessor's job — one copy of that
-            // crypto, shared with `capsule push` (S-D18). It also self-checks the re-derived
+            // crypto, shared with `capsule push`. It also self-checks the re-derived
             // ciphertext against the manifest's content address, which this loop never did.
             let bundle = self.upload_bundle(&asset.asset_id)?;
             let album = self.album(&asset.album_id)?;

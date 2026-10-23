@@ -1,4 +1,4 @@
-//! Tell the two sidecar shapes apart **without reading either** (slice `S-D24`).
+//! Tell the two sidecar shapes apart **without reading either**.
 //!
 //! The signed [`SidecarV1`](crate::sidecar::SidecarV1) carries its schema version at CBOR
 //! integer key `0` and has no text key `version`; the retired unsigned pre-signed-path shape

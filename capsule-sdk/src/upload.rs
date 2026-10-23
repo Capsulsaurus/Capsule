@@ -2,7 +2,7 @@
 //!
 //! The hand-written, chunked, resumable, adaptive upload client (slice `S-D1` in
 //! the repo-root `SLICES.md`). The protocol is too stateful for codegen — the
-//! spargen-generated REST client (`S-D8`) covers the plain request/response
+//! spargen-generated REST client covers the plain request/response
 //! surfaces instead — so this module owns the wire directly:
 //!
 //! - `create`/`PATCH`/`HEAD`/`DELETE`/`list` with `application/octet-stream`
@@ -135,7 +135,7 @@ impl AdaptiveChunkSizeStrategy {
         }
     }
 
-    /// Couple the chunk size to a detected [`ConnectionClass`] (S-D10). On
+    /// Couple the chunk size to a detected [`ConnectionClass`]. On
     /// [`ConnectionClass::Adverse`] the strategy pins to the tier floor
     /// (`min_size`) and suppresses adaptive growth for the rest of the transfer;
     /// any other class releases the pin and lets the normative adaptive algorithm
@@ -845,7 +845,7 @@ fn retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
 pub struct UploadClient {
     transport: UploadTransport,
     /// The detected connection class, coupling the chunk strategy to the network
-    /// (S-D10): under [`ConnectionClass::Adverse`] the transfer pins to the tier
+    ///: under [`ConnectionClass::Adverse`] the transfer pins to the tier
     /// chunk floor. Defaults to [`ConnectionClass::Unmetered`].
     connection: ConnectionClass,
     /// The backoff sleeper for the shared retry engine's transient-reset retries.

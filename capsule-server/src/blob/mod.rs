@@ -21,7 +21,7 @@
 //! `blobs/{hash[0:2]}/{hash[2:4]}/{hash}.bin` was settled (design/filesystem/server.md) on a
 //! sizing case that is *not* lookup: a lookup is a `stat` at a known address and costs the same
 //! flat or sharded. The cost lands on the three full-store walks — the integrity scrub's
-//! blob→row pass (`S-C14`), the refcount GC's orphan sweep (`S-C11`), and the index rebuild
+//! blob→row pass, the refcount GC's orphan sweep, and the index rebuild
 //! (`S-C1`'s recovery counterpart) — each a complete `readdir` + `stat`, each an integrity or
 //! recovery path that must stay affordable exactly when a deployment is already in trouble.
 //!
@@ -329,7 +329,7 @@ pub trait BlobStore: fmt::Debug + Send + Sync {
     /// that address. Without a staged read the caller would have to reach past the port to the
     /// filesystem to perform that verification, which is exactly what a port exists to
     /// prevent; with it, finalization streams the stage in bounded windows and hashes them
-    /// (`S-C1`, invariant 14).
+    /// (invariant 14).
     fn read_staged_at<'a>(
         &'a self,
         upload: &'a UploadId,

@@ -1,4 +1,4 @@
-//! Cross-device add over the wire (slice `S-C7`).
+//! Cross-device add over the wire.
 //!
 //! Four operations: device A issues a code, device B redeems it for a channel, either device
 //! relays opaque payloads through that channel, and A closes it. [`crate::enrollment`] owns the
@@ -289,7 +289,7 @@ pub async fn redeem_enrollment_code(
     let presented = EnrollmentCode::new(offered);
 
     // Charged **before** the redemption is attempted, and charged on every attempt whatever the
-    // outcome (`S-C32`). A limiter that only counted failures would let a caller who guesses
+    // outcome. A limiter that only counted failures would let a caller who guesses
     // right on the last try escape it, and one charged after the fact would let a burst through
     // while the first attempt was still resolving.
     //

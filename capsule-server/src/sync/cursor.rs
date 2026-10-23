@@ -27,7 +27,7 @@
 //! identifier out of a token clients hand around, and still makes a foreign cursor fail
 //! verification rather than decode into a position.
 //!
-//! # Scope (`S-C51`, `S-E5`)
+//! # Scope
 //!
 //! A cursor is issued for one of three shapes — the caller's own feed, one album's page read by
 //! the caller as its owner or a member, or one album's page pulled by a federated peer — and all
@@ -124,7 +124,7 @@ pub enum CursorError {
 }
 
 /// What a cursor is issued for: a caller's own feed, one album's page, or one album's page as a
-/// federated peer pulls it (`S-C51`, `S-E5`).
+/// federated peer pulls it.
 ///
 /// Part of the MAC input, so a cursor minted for one shape cannot be presented on another:
 /// positions are the owner's sequence numbers in every shape, and a cursor that crossed between

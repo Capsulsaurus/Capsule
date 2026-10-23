@@ -191,7 +191,7 @@ pub enum OpenMlsAuthorityError {
     Resilience(String),
     /// [`block_user`](OpenMlsAuthority::block_user) was asked to block the **local** user. A device
     /// cannot evict itself from its own group, and returning success would tell the caller a block
-    /// took effect when nothing was removed (`S-X4`).
+    /// took effect when nothing was removed.
     #[error(
         "refusing to block the local user {0}: a device cannot remove itself from its own album"
     )]
@@ -199,7 +199,7 @@ pub enum OpenMlsAuthorityError {
 }
 
 impl From<crate::crypto::upgrade::UpgradeError> for OpenMlsAuthorityError {
-    /// The ceremony's wire vocabulary is ungated (`S-C24`), so its errors arrive from outside
+    /// The ceremony's wire vocabulary is ungated, so its errors arrive from outside
     /// this module and are folded into the one variant that already names this ceremony.
     fn from(error: crate::crypto::upgrade::UpgradeError) -> Self {
         Self::Upgrade(error.to_string())
@@ -299,7 +299,7 @@ pub struct RemoveOutcome {
     pub key_delivery: Vec<MlsMessageOut>,
 }
 
-/// The outcome of a [`block_user`](OpenMlsAuthority::block_user) ceremony (`S-X4`).
+/// The outcome of a [`block_user`](OpenMlsAuthority::block_user) ceremony.
 ///
 /// Deliberately distinguishes "removed them" from "they were not here", because the two have
 /// different consequences for the caller: only the first produces a commit to deliver and a new
@@ -353,7 +353,7 @@ pub struct OpenMlsAuthority {
     /// [`discard_pending_and_process`](Self::discard_pending_and_process) (lost). Transient — not
     /// persisted (a pending commit does not survive a restart either).
     staged_write_tier: Option<HybridSigningKey>,
-    // ── S-X3: upgrade ceremony + resilience state ────────────────────────────
+    // ── upgrade ceremony + resilience state ────────────────────────────
     /// If this group is a **fork** produced by an upgrade ceremony, the continuity pointer back to
     /// the album it forked from (the manifest `upgraded_from` field). `None` for an original album.
     upgraded_from: Option<UpgradeLineage>,
@@ -579,7 +579,7 @@ impl OpenMlsAuthority {
 
     // ── Ceremony 3b: per-user block (moderation) ─────────────────────────────
 
-    /// **Block a user** from this album (`S-X4`): remove *all* of their devices in one MLS
+    /// **Block a user** from this album: remove *all* of their devices in one MLS
     /// `Remove` + `Commit` and bump the AMK epoch, so the blocked user loses read access to every
     /// future epoch and their write-tier capability is rotated out from under them.
     ///

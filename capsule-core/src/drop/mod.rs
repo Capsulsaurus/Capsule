@@ -232,7 +232,7 @@ impl PassphraseVerifier {
     }
 
     /// Constant-time check that `passphrase` reproduces the stored verifier. The serve path
-    /// (S-C5) calls this to gate a drop-session; a wrong passphrase is refused.
+    /// calls this to gate a drop-session; a wrong passphrase is refused.
     pub fn verify(&self, passphrase: &str) -> bool {
         let params = Argon2Params {
             mem_kib: self.mem_kib,

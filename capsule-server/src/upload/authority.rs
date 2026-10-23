@@ -22,7 +22,7 @@
 //!
 //! There is no implementation in `src/`, for the reason [`crate::auth`] records for
 //! [`AccountDirectory`](crate::auth::AccountDirectory): the real one is Postgres — the album
-//! table (`S-C25`), its pin column (`S-C19`) and the device directory (`S-C9`/`S-C20`) — and
+//! table, its pin column and the device directory — and
 //! the test one is a double, which belongs in a test binary rather than inside a server
 //! binary. This slice declares what the gate needs and refuses by default without it; wiring
 //! the adapters is the work of the slices that own those tables.
@@ -81,7 +81,7 @@ impl AuthorityError {
 pub enum WriteRole {
     /// The account the album was provisioned to.
     Owner,
-    /// A writer on the album's current roster (`S-C51`).
+    /// A writer on the album's current roster.
     Member,
 }
 
@@ -104,7 +104,7 @@ pub enum AlbumWriteAccess {
         role: WriteRole,
         /// The album's pinned protocol version (`YYYY-MM-DD`), set when it was provisioned.
         protocol_pin: String,
-        /// The upgrade ceremony the album is quiescing under, if any (`S-C24`).
+        /// The upgrade ceremony the album is quiescing under, if any.
         ///
         /// Carried on the *write access* rather than fetched separately, for the reason the
         /// serving path carries a hold on the blob reference: the answer has to come from the
@@ -138,7 +138,7 @@ pub trait WriteAuthority: fmt::Debug + Send + Sync {
     /// `None` is a refusal, not an absence to work around: an upload whose manifest names a
     /// device the directory does not carry is invariant 7's rejecting case. An adapter for an
     /// account with no directory yet may answer with the documented account-creation floor
-    /// (`S-C20`), which is a decision about *that adapter*, not about this contract.
+    ///, which is a decision about *that adapter*, not about this contract.
     fn device_added_at<'a>(
         &'a self,
         user: &'a UserId,

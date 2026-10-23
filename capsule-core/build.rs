@@ -1,4 +1,4 @@
-//! Build-time client build identification for `client_version` / `generated_by_client` (S-D15).
+//! Build-time client build identification for `client_version` / `generated_by_client`.
 //!
 //! Embeds the capsule-core source tree's git commit (a ≥12-hex prefix) and a dirty flag as the
 //! `CAPSULE_BUILD_COMMIT` / `CAPSULE_BUILD_DIRTY` compile-time env vars, consumed by

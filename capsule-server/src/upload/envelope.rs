@@ -9,7 +9,7 @@
 //! module or a comparison between two fields of the request; nothing here decrypts, and
 //! nothing here needs to.
 //!
-//! # The projection is never manifest bytes (`S-C30`)
+//! # The projection is never manifest bytes
 //!
 //! [`ManifestEnvelope`] is the *server-visible projection* of the signed manifest — the
 //! unencrypted fields the server validates. It is **not** the manifest. The signed manifest
@@ -74,7 +74,7 @@ pub struct ManifestEnvelope {
     /// session they do not, and the projection reuses the manifest's field name for a per-blob
     /// declaration. Invisible for a `create`, because the bundle is assembled in a pending row
     /// nobody can see and no member has to name another. It is not invisible for a `replace`,
-    /// which is why [`Self::original_blob_hash`] exists (`S-C43`).
+    /// which is why [`Self::original_blob_hash`] exists.
     pub ciphertext_hash: String,
     /// The plaintext length the manifest commits to.
     pub plaintext_size: u64,
@@ -85,7 +85,7 @@ pub struct ManifestEnvelope {
     /// The content hash of the bundle's metadata blob, when the manifest commits to one.
     pub metadata_blob_hash: Option<String>,
     /// The content hash of the bundle's **original** blob, when the manifest commits to one
-    /// (`S-C43`).
+    ///.
     ///
     /// The manifest's own `ciphertext_hash`, under a name that cannot be confused with
     /// [`Self::ciphertext_hash`]'s per-session meaning. Optional on the wire and **required on a
@@ -156,7 +156,7 @@ pub struct DeclaredBlob<'a> {
 pub struct GateContext<'a> {
     /// The tunable half of the contract.
     pub policy: &'a UploadPolicy,
-    /// The album's own protocol pin — never the request's own value (`S-C19`).
+    /// The album's own protocol pin — never the request's own value.
     pub album_pin: &'a str,
     /// When the writing device entered the uploader's published directory (invariant 7).
     pub device_added_at: Timestamp,
@@ -198,13 +198,13 @@ pub enum GateReject {
     TimestampOutOfRange,
     /// The manifest's `action` is not one this surface accepts.
     ActionNotAllowed,
-    /// A `replace` did not chain: `prior_provenance_hash` is absent (`S-C43`).
+    /// A `replace` did not chain: `prior_provenance_hash` is absent.
     ///
     /// Distinct from a stale chain, which is a `409` decided by the index against stored state.
     /// This is a `400`: the manifest never claimed to follow anything, and every non-create
     /// action chains by definition.
     ReplaceDoesNotChain,
-    /// A `replace`'s manifest does not name the bundle it commits to (`S-C43`). Carries the
+    /// A `replace`'s manifest does not name the bundle it commits to. Carries the
     /// field that is missing.
     ReplaceIncomplete(&'static str),
     /// A `thumbnail` or `preview` derivative declares a format outside the closed still set —
@@ -373,7 +373,7 @@ fn check_derivative(
     }
 }
 
-/// Run the same battery for a `replace`, plus the three things a replace must say (`S-C43`).
+/// Run the same battery for a `replace`, plus the three things a replace must say.
 ///
 /// Everything invariants 1–8 and 15 check is identical — a replace is an upload, and the
 /// keyless battery does not care what the write is *for*. What differs is entirely about
@@ -460,7 +460,7 @@ pub fn check_finalize(
     map_reject(check_manifest_envelope(&core, &ctx))
 }
 
-/// The gate for a **lifecycle write** (`S-C16`): everything a `POST /albums/{id}/ops` manifest
+/// The gate for a **lifecycle write**: everything a `POST /albums/{id}/ops` manifest
 /// must satisfy before the index is asked to apply it.
 ///
 /// Returns the action, so the caller does not re-parse a string the gate has already resolved.
@@ -1175,7 +1175,7 @@ mod tests {
 
     #[test]
     fn only_a_create_or_a_replace_may_open_an_upload_session() {
-        // The two actions that move blob bytes, and no others (`S-C43`). An action that only
+        // The two actions that move blob bytes, and no others. An action that only
         // re-points blobs the server already holds is a lifecycle op, and admitting one here
         // would let a `delete` arrive carrying bytes.
         let policy = policy();

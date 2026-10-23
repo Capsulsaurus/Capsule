@@ -73,7 +73,7 @@ impl MockResponse {
 
 /// A dropped mock server aborts its accept loop **and every connection it spawned**.
 ///
-/// The second half is the part that is easy to get wrong and was (slice `S-D27`). Aborting only
+/// The second half is the part that is easy to get wrong and was. Aborting only
 /// the accept loop leaves detached per-connection tasks running with their sockets open, which
 /// `nextest` reports as a leaked test — but only under a loaded parallel run, so it does not
 /// reproduce when anyone investigates it directly. Connections therefore live in a `JoinSet` owned

@@ -1,4 +1,4 @@
-//! `GET /v1/assets/{asset_id}/receipts` — the whole custody chain for one asset (slice `S-C58`).
+//! `GET /v1/assets/{asset_id}/receipts` — the whole custody chain for one asset.
 //!
 //! The **durable** counterpart to `GET /v1/upload/{id}/receipt`. That one answers "what did you
 //! admit taking, for this transfer", and its answer disappears from the caller's reach when the
@@ -24,7 +24,7 @@
 //!
 //! Not the uploader. The receipts name their uploading account, so admitting one would be
 //! possible — and it is exactly wrong for the case that makes it possible: a guest depositing
-//! into somebody's inbox through a drop link (`S-C5`) gives the asset up, and letting them read
+//! into somebody's inbox through a drop link gives the asset up, and letting them read
 //! its later chain would tell them when the owner amended, culled or restored it. The authority
 //! is the same one `S-C39` settled for blob reads: an account reads its own assets.
 //!
@@ -164,7 +164,7 @@ pub async fn get_asset_receipts(
     let caller = UserId::new(credential.user.as_str());
 
     // The ownership read comes first and decides everything, exactly as `serve::resolve` does
-    // (`S-C39`): a caller who is not the owner must not be able to tell a tombstoned asset from
+    //: a caller who is not the owner must not be able to tell a tombstoned asset from
     // one that never existed by reading the status line.
     let row = verify
         .index()

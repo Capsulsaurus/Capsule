@@ -112,7 +112,7 @@ pub fn recover_master_key(
         .map_err(|_| BackupError::Auth("escrowed master key wrong length"))
 }
 
-// ── Recovery verification cadence (S-D12) ───────────────────────────────────
+// ── Recovery verification cadence ───────────────────────────────────
 
 /// Domain-separation label for the recovery-verification derived-tag compare
 /// (SSoT: [Backup — Recovery Verification Cadence]).
@@ -135,7 +135,7 @@ pub enum VerifyOutcome {
 /// unwrap the cached escrow blob, then compare an HKDF-derived tag against the
 /// tag derived from the device-held master key (derived-tag compare — raw key
 /// bytes are never compared or surfaced). Zero network I/O by construction; the
-/// cadence, snooze, and refresh-before-fail policy live in the client (S-D12).
+/// cadence, snooze, and refresh-before-fail policy live in the client.
 pub fn verify_recovery_secret(
     cached_escrow: &WrappedSecret,
     passphrase: &[u8],

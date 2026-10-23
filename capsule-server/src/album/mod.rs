@@ -1,4 +1,4 @@
-//! Album provisioning (`S-C25`), and the write authority it grounds (`S-C20`).
+//! Album provisioning, and the write authority it grounds.
 //!
 //! # The gap this closes
 //!
@@ -21,7 +21,7 @@
 //! is created, never from anything the request carries. That is `S-C19` in one line: invariant 6
 //! compares a write against the album's own pin, and an album whose pin came from a request
 //! would be comparing a request against itself. Moving a pin forward is an album upgrade
-//! (`S-C24`), which is a ceremony rather than a field.
+//!, which is a ceremony rather than a field.
 //!
 //! # No name, and the refusal is deliberate rather than an omission
 //!
@@ -54,7 +54,7 @@ pub struct AlbumRecord {
     pub protocol_version: String,
     /// When it was provisioned.
     pub created_at: Timestamp,
-    /// The upgrade ceremony in flight against this album, if any (`S-C24`).
+    /// The upgrade ceremony in flight against this album, if any.
     ///
     /// `None` is the ordinary state. While it is `Some` and unexpired the album is **quiescing**:
     /// the members have stopped writing and are draining, and the server refuses any upload that
@@ -62,7 +62,7 @@ pub struct AlbumRecord {
     pub upgrade: Option<UpgradeQuiescence>,
 }
 
-/// An album-upgrade ceremony the server has accepted (`S-C24`).
+/// An album-upgrade ceremony the server has accepted.
 ///
 /// # Why the whole intent is stored rather than its fields
 ///
@@ -158,7 +158,7 @@ pub trait AlbumStore: std::fmt::Debug + Send + Sync {
     fn read<'a>(&'a self, album: &'a AlbumId) -> StoreFuture<'a, Option<AlbumRecord>>;
 
     /// Put `album` into upgrade quiescence under `quiescence`, if nothing else holds it
-    /// (`S-C24`).
+    ///.
     ///
     /// One operation for the same reason [`Self::provision`] is one: a caller that read the
     /// album, saw no ceremony, and then wrote one has a window in which a second proposer does
@@ -176,7 +176,7 @@ pub trait AlbumStore: std::fmt::Debug + Send + Sync {
         now: Timestamp,
     ) -> StoreFuture<'a, UpgradeOutcome>;
 
-    /// End the ceremony `intent_id` names, returning the album to normal operation (`S-C24`).
+    /// End the ceremony `intent_id` names, returning the album to normal operation.
     ///
     /// Idempotent in the direction that matters: an album that is not quiescing is already in the
     /// state this asks for, so it answers [`UpgradeOutcome::Cleared`] rather than an error. A

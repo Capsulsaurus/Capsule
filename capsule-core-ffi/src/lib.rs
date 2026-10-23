@@ -2,12 +2,12 @@
 //! future, other UniFFI targets such as Android/Kotlin).
 //!
 //! One of the two uniffi namespaces in the workspace, on a single pinned uniffi version
-//! (slice `S-F1`): `capsule_core_ffi` here, and `capsule_sdk` in `capsule-sdk`, which carries
+//!: `capsule_core_ffi` here, and `capsule_sdk` in `capsule-sdk`, which carries
 //! the crypto `FfiWorkspace` and the `FfiHardwareSigner` / `FfiHardwareKeyAgreement` foreign
 //! traits. `capsule-core` itself exports no namespace, so no dependency this crate links
 //! contributes generated scaffolding of its own (ADR-0005).
 //!
-//! This crate is also the **app umbrella staticlib** (slice `S-F3`): it links
+//! This crate is also the **app umbrella staticlib**: it links
 //! `capsule-sdk`'s uniffi surface (the `capsule_sdk` namespace — the S-D9 user-flow
 //! primitives and the S-P1 workspace verbs) so the iOS app consumes ONE Rust library
 //! carrying both namespaces. Two separate Rust staticlibs cannot share a binary (each
@@ -20,11 +20,11 @@
 //! - [`Catalog`] — a thread-safe handle over the SQLite catalog.
 //! - [`render_lqip`] / [`LqipPlaceholder`] — the sidecar `lqip` record rendered to packed RGBA8
 //!   through `capsule_core::lqip`, the same implementation the import pipeline encodes with and
-//!   `capsule-wasm` decodes with (slice `S-B14`).
+//!   `capsule-wasm` decodes with.
 //! - [`AssetRecord`], [`AssetStackRecord`], [`StackMemberRecord`],
 //!   [`AlbumRecord`] — catalog row mirrors.
 //! - No sidecar codec: the unsigned CBOR shape this crate once (de)serialised was retired
-//!   with the unsigned-sidecar migration (slice `S-D24`), and the signed `SidecarV1` is
+//!   with the unsigned-sidecar migration, and the signed `SidecarV1` is
 //!   authored only by `capsule-core`'s lifecycle, never re-encoded by a client.
 //! - [`GatedView`] / [`LocalAuthGate`] / [`LocalAuthError`] — the fresh-local-auth seam
 //!   the platform implements, and the views it unlocks ([Local Gallery — SR1]).
@@ -71,7 +71,7 @@ pub fn init_logging() {
 /// The `tracing` → Apple unified-logging (`os_log`) bridge.
 ///
 /// Replaces the former `log`-facade `oslog::OsLogger` sink: the Rust core now
-/// emits `tracing` throughout (slice S-F6), so the platform bridge is a
+/// emits `tracing` throughout, so the platform bridge is a
 /// [`tracing_subscriber::Layer`] driving the low-level `oslog::OsLog` bindings
 /// directly rather than a `log::Log` implementation.
 #[cfg(target_vendor = "apple")]

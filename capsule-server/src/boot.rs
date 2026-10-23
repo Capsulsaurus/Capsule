@@ -875,7 +875,7 @@ fn compose(
         oidc_authorizations,
         oidc_devices,
     } = ports;
-    // The production write authority (`S-C19`/`S-C20`), not a permissive double: it reads the
+    // The production write authority, not a permissive double: it reads the
     // album's own pin and the account's published device directory, so invariants 6 and 7 mean
     // what they say even in the development profile.
     let authority = Arc::new(ProvisionedAuthority::new(

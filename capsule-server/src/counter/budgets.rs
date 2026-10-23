@@ -95,7 +95,7 @@ pub const DROP_SOURCE: Budget = Budget::new(60, SignedDuration::from_hours(1));
 /// because a code that expires mid-typing costs an attempt through no fault of the user.
 pub const SECOND_FACTOR: Budget = Budget::new(5, SignedDuration::from_mins(5));
 
-/// Begun OIDC ceremonies per **admitted** redirect host (`S-N1`).
+/// Begun OIDC ceremonies per **admitted** redirect host.
 ///
 /// Sixty a minute. A person signing in begins one; a browser that retries a few times begins a
 /// handful; a script filling the pending-ceremony store begins thousands. The key space is
@@ -105,7 +105,7 @@ pub const SECOND_FACTOR: Budget = Budget::new(5, SignedDuration::from_mins(5));
 /// well under two thousand live records against its ten-thousand ceiling.
 pub const OIDC_AUTHORIZE: Budget = Budget::new(60, SignedDuration::from_mins(1));
 
-/// OIDC authorizes whose redirect the policy refused, deployment-wide (`S-N1`).
+/// OIDC authorizes whose redirect the policy refused, deployment-wide.
 ///
 /// Sixty a minute, the same number as the admitted path, against
 /// [`CounterKey::OidcAuthorizeRefused`](crate::counter::CounterKey::OidcAuthorizeRefused)'s one
@@ -197,7 +197,7 @@ pub const PEER_REQUESTS: Budget = Budget::new(10_000, SignedDuration::from_hours
 /// twenty bounds it without silencing a peer that has two things to say.
 pub const FEDERATED_REPORTS: Budget = Budget::new(20, SignedDuration::from_hours(1));
 
-/// Federated moderation reports from one peer against **every** account (`S-C49`).
+/// Federated moderation reports from one peer against **every** account.
 ///
 /// Two hundred an hour. Ten times the per-account allowance, so a peer with a genuinely bad hour
 /// — a spam wave it is reporting honestly — is not silenced, while a peer cycling `reported_user`
@@ -205,7 +205,7 @@ pub const FEDERATED_REPORTS: Budget = Budget::new(20, SignedDuration::from_hours
 /// which account it named.
 pub const PEER_REPORTS: Budget = Budget::new(200, SignedDuration::from_hours(1));
 
-/// Attempts at `POST /v1/federation/reports` from one **claimed** origin (`S-C49`).
+/// Attempts at `POST /v1/federation/reports` from one **claimed** origin.
 ///
 /// Three hundred an hour, charged before the peer is looked up. Deliberately above
 /// [`PEER_REPORTS`], because it is not a policy on reporting — it is the bound on how much work

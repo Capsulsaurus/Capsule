@@ -86,7 +86,7 @@ impl Workspace {
             true,
         );
         // Offline default: the reference ledger authority. The live `OpenMlsAuthority` drops into
-        // the same `Authority` slot behind the seam once membership ceremonies land (S-X2).
+        // the same `Authority` slot behind the seam once membership ceremonies land.
         self.authorities
             .insert(album_id, Authority::Reference(Box::new(authority)));
         self.albums.insert(
@@ -352,7 +352,7 @@ impl Workspace {
         };
         // Disjoint fields: read the album's keys while mutably attesting in its authority. Offline
         // rotation is a reference-ledger attestation; the live MLS backend rotates via a
-        // self-update commit through the membership ceremonies (S-X2), not this path — hence the
+        // self-update commit through the membership ceremonies, not this path — hence the
         // reference-only accessor.
         let album = self.albums.get(&album_id).expect("album just mutated");
         let admin = album.admin_signer()?.clone();

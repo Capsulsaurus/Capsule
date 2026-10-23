@@ -171,7 +171,7 @@ pub struct ManifestCore {
     pub prior_provenance_hash: Option<Hash32>,
     /// Server-visible retention deadline (RFC3339); set only for `action = delete`.
     pub retention_until: Option<String>,
-    /// The album this asset's album was **forked from**, when it is a fork (slice `S-C24`).
+    /// The album this asset's album was **forked from**, when it is a fork.
     ///
     /// The normative link between an upgraded album and its predecessor — never the MLS group
     /// name, which is an internal detail. A device that joins the fork reads this and can walk
@@ -685,7 +685,7 @@ mod tests {
     }
     /// An absent lineage is **wire-absent**, and adding the field moved no signature.
     ///
-    /// The `S-A11` discipline, applied to `upgraded_from` (`S-C24`). A present-`null` inside a
+    /// The `S-A11` discipline, applied to `upgraded_from`. A present-`null` inside a
     /// signed core changes `signing_bytes` and silently breaks re-verification of every manifest
     /// written before the field existed — a failure that shows up as "the signature is wrong"
     /// long after the commit that caused it.

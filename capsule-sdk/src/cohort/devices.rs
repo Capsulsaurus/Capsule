@@ -1,6 +1,6 @@
-//! The devices-grouping view model and the one-tap support bundle (slice `S-D11`).
+//! The devices-grouping view model and the one-tap support bundle.
 //!
-//! Consumes the server's `GET /devices` `{devices, cohorts}` body (slice `S-C13`)
+//! Consumes the server's `GET /devices` `{devices, cohorts}` body
 //! into [`DevicesView`] — the session ledger grouped by device cohort so one physical
 //! device's re-enrollments collapse into a single row the UI renders. The copy is
 //! **assert-don't-litigate**: a group is labelled "a device you've used before (last
@@ -33,7 +33,7 @@ pub mod keys {
 // ─── Wire types (GET /devices) ───────────────────────────────────────────────
 
 /// One active session ("device") from the session listing. Mirrors the server's
-/// `Device` (slice `S-C13`); `id` is the session id, `cohort_hash` its advisory
+/// `Device`; `id` is the session id, `cohort_hash` its advisory
 /// grouping value (absent when the client asserted none).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeviceEntry {
@@ -54,7 +54,7 @@ pub struct DeviceEntry {
     /// The advisory device-cohort hash asserted at session creation, if any.
     #[serde(default)]
     pub cohort_hash: Option<String>,
-    /// The hardware device id asserted at session creation, if any (S-N3).
+    /// The hardware device id asserted at session creation, if any.
     ///
     /// Client-asserted and unverified, like [`cohort_hash`](Self::cohort_hash) — it gates
     /// nothing and is absent from the JWT claims. It exists so a support bundle can report
@@ -262,7 +262,7 @@ impl DevicesView {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SupportBundleEntry {
     /// The hardware `device_id` the session was created with, when the client asserted one
-    /// (S-N3). `None` for a session opened by a client that sent no device id.
+    ///. `None` for a session opened by a client that sent no device id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub device_id: Option<String>,
     /// The session id.
@@ -308,7 +308,7 @@ mod tests {
         }
     }
 
-    /// The same fixture, but for a client that asserted a hardware device id (S-N3).
+    /// The same fixture, but for a client that asserted a hardware device id.
     fn device_with_id(
         id: &str,
         device_id: &str,

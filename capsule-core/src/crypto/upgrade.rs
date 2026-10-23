@@ -1,5 +1,5 @@
 //! The album-upgrade ceremony's **wire vocabulary** — the parts both ends need and neither end
-//! needs MLS for (slices `S-X3`, `S-C24`).
+//! needs MLS for.
 //!
 //! SSoT: [Versioning — Album Upgrade Ceremony](https://docs/design/versioning/#album-upgrade-ceremony).
 //!

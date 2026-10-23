@@ -1,4 +1,4 @@
-//! Custody receipts (`S-C15`) — the server's signed admission of what it accepted — and the
+//! Custody receipts — the server's signed admission of what it accepted — and the
 //! signed storage attestation ([`sign_storage_attestation`]) the same key puts on a durability
 //! verdict when a client asks for one.
 //!
@@ -11,7 +11,7 @@
 //! later loses the bytes has already signed a statement it cannot take back.
 //!
 //! The type is [`capsule_core::crypto::receipts::CustodyReceipt`], shared with the client rather
-//! than mirrored (`S-C46`). A signed structure defined at both ends is one added field away from
+//! than mirrored. A signed structure defined at both ends is one added field away from
 //! a signature that stops verifying.
 //!
 //! # The chain is the log, and it is minted where it is written

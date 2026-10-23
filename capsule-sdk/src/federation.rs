@@ -1,4 +1,4 @@
-//! [`FederationPull`] — a peer server pulling one shared album from its home server (`S-E2`).
+//! [`FederationPull`] — a peer server pulling one shared album from its home server.
 //!
 //! # There is no federation protocol to speak
 //!

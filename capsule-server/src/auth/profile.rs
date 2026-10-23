@@ -1,5 +1,5 @@
 //! [`AccountProfiles`] and [`PasswordChange`] — the two mutable facts about an account that are
-//! not its existence (slice `S-C54`).
+//! not its existence.
 //!
 //! # Why these are two ports and not one, and neither is a method on the directory
 //!
@@ -29,7 +29,7 @@
 //! **It cannot reset a forgotten password.** `S-C53` recorded that verdict for the retired
 //! `/v1/auth/password-reset` pair and it stands: on an end-to-end-encrypted account a
 //! server-issued reset is not a recovery, because the server cannot re-wrap a master key it has
-//! never seen. The recovery story is the escrow blob (`S-C12`). What *this* port offers is a
+//! never seen. The recovery story is the escrow blob. What *this* port offers is a
 //! password **change**, which is a different operation — it is authenticated by the password
 //! being replaced.
 //!

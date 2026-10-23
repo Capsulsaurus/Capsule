@@ -112,7 +112,7 @@ pub struct BackupAsset {
     pub provenance: Vec<ProvenanceRecord>,
     /// The asset's custody-receipt log (`{uuid}.receipts.cbor` bytes; empty = none). Evidence,
     /// not a cache — a server destroying the record of its own liability is the adversary — so
-    /// it rides the artifact verbatim (S-D4).
+    /// it rides the artifact verbatim.
     pub receipts: Vec<u8>,
     /// The asset's signed storage-attestation log (`{uuid}.attestations.cbor` bytes; empty =
     /// none). Evidence for the same reason as `receipts` — a signed attestation is how a client
@@ -850,7 +850,7 @@ pub struct RestoredAsset {
     /// The provenance chain.
     pub provenance: Vec<ProvenanceRecord>,
     /// The asset's custody-receipt log (`{uuid}.receipts.cbor` bytes; empty if the artifact
-    /// carried none) — written back beside the provenance chain on commit (S-D4).
+    /// carried none) — written back beside the provenance chain on commit.
     pub receipts: Vec<u8>,
     /// The asset's signed storage-attestation log (`{uuid}.attestations.cbor` bytes; empty if
     /// the artifact carried none) — written back beside the receipts on commit.
@@ -1056,7 +1056,7 @@ impl BackupArtifact {
             .cloned()
             .unwrap_or_default();
 
-        // The custody-receipt log rides the artifact when the exporter held one (S-D4).
+        // The custody-receipt log rides the artifact when the exporter held one.
         let receipts = self
             .files
             .get(&format!("receipts/{asset_id}"))
@@ -1137,7 +1137,7 @@ impl BackupArtifact {
 
     /// The `(asset_id, head_hash)` provenance heads the artifact carries — the same list
     /// [`restore`](Self::restore) reconciles against local state. Exposed so a chain-aware
-    /// consumer (LAN peering, slice `S-E3`) can decide *forward-update vs. stale* per asset
+    /// consumer (LAN peering) can decide *forward-update vs. stale* per asset
     /// before restoring, rather than treating every differing head as an opaque conflict.
     pub fn provenance_heads(&self) -> &[(Uuid, Hash32)] {
         &self.core.provenance_heads

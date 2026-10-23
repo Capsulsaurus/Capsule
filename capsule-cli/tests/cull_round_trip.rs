@@ -1,4 +1,4 @@
-//! Slice `S-D16` acceptance: the `capsule cull` flag → filtered view → reject-sweep loop
+//! The acceptance: the `capsule cull` flag → filtered view → reject-sweep loop
 //! round-trips on a **reopened** library — and it is reopened by a *different process* each time.
 //!
 //! Every step below spawns the real `capsule` binary (`CARGO_BIN_EXE_capsule`, the path Cargo
@@ -110,7 +110,7 @@ fn fixture_library(root: &Path) -> Vec<Uuid> {
     ids
 }
 
-/// **S-D16 "Done when".** Flag in one process, read the filtered view back in a second, sweep in a
+/// The "Done when".** Flag in one process, read the filtered view back in a second, sweep in a
 /// third, and confirm the sweep in a fourth — the whole culling loop over a library that is
 /// reopened from disk every single time.
 #[test]

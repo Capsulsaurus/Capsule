@@ -1,4 +1,4 @@
-//! Rate-limit and attempt counters (`S-C32`) — the fourth thing the Salvo grab-bag carried.
+//! Rate-limit and attempt counters — the fourth thing the Salvo grab-bag carried.
 //!
 //! # Why this is a port of its own and not a field on another
 //!
@@ -132,7 +132,7 @@ pub enum CounterKey {
     /// Failed sign-in attempts for one account.
     LoginAttempts(UserId),
     /// Enrollment-code redemptions presenting one [`EnrollmentSpelling`], deployment-wide
-    /// (`S-C7`, issue #528).
+    /// (issue #528).
     ///
     /// Keyed on the **spelling** of the presented code and never on its value. A key built from
     /// the value is not guess-invariant: every wrong guess is a different string, so every wrong
@@ -147,13 +147,13 @@ pub enum CounterKey {
     /// is built only from an admitted redirect host; anything malformed goes to
     /// [`Self::EnrollmentRedemptionMalformed`]. The key space is two values by construction.
     EnrollmentRedemption(EnrollmentSpelling),
-    /// Every enrollment redemption presenting a code that is not even shaped like one (`S-C7`).
+    /// Every enrollment redemption presenting a code that is not even shaped like one.
     ///
     /// One bucket, as [`Self::OidcAuthorizeRefused`] is one bucket, and for the same reasons:
     /// a malformed attempt must still be throttled, and it must not be throttled *per code*,
     /// because the code is whatever the caller typed.
     EnrollmentRedemptionMalformed,
-    /// Requests against one share link's opaque id (`S-C4`).
+    /// Requests against one share link's opaque id.
     ShareLink(String),
     /// Requests from one source address, on the public share path (#704).
     ///
@@ -161,13 +161,13 @@ pub enum CounterKey {
     /// client the router resolved through the trusted proxies, never a forwarding header taken on
     /// its word.
     ShareSource(String),
-    /// Drop-session creations against one upload link (`S-C5`, invariant 31).
+    /// Drop-session creations against one upload link (invariant 31).
     DropLink(String),
-    /// Drop-session creations from one source address (`S-C5`, invariant 31, #704).
+    /// Drop-session creations from one source address (invariant 31, #704).
     ///
     /// Keyed as [`Self::ShareSource`] is.
     DropSource(String),
-    /// Deep storage verifications for one account (`S-C41`).
+    /// Deep storage verifications for one account.
     DeepVerify(UserId),
     /// Upload sessions opened by one account (transfer/upload.md, Hostile Clients).
     ///
@@ -194,7 +194,7 @@ pub enum CounterKey {
     ///
     /// Keyed and ordered as [`Self::UploadSessionsSource`] is, after [`Self::UploadChunks`].
     UploadChunksSource(String),
-    /// Code attempts against one second-factor challenge (`S-C55`).
+    /// Code attempts against one second-factor challenge.
     ///
     /// Keyed on the **challenge** and not the account, deliberately. A per-account key would let
     /// anyone who knows an address exhaust its budget with first-factor sign-ins they cannot
@@ -202,7 +202,7 @@ pub enum CounterKey {
     /// The challenge id is minted per ceremony and lives five minutes, so the budget it carries
     /// bounds exactly the thing being guessed: six digits, against one half-finished sign-in.
     SecondFactor(String),
-    /// Account registrations from one source address (`S-C53`).
+    /// Account registrations from one source address.
     ///
     /// Declared and consumed nowhere yet. The client address it needs now exists
     /// ([`crate::client_addr`], #704) and the share and drop paths charge their source keys with
@@ -211,7 +211,7 @@ pub enum CounterKey {
     /// which would bound repeated probes against one address while doing nothing about a sweep
     /// across many.
     RegistrationSource(String),
-    /// Begun OIDC ceremonies naming one **admitted** redirect host (`S-N1`).
+    /// Begun OIDC ceremonies naming one **admitted** redirect host.
     ///
     /// Keyed on the redirect URI's host, and constructed only after
     /// [`IdentityProvider::admits_redirect`](crate::auth::oidc::IdentityProvider::admits_redirect)
@@ -226,7 +226,7 @@ pub enum CounterKey {
     /// A per-source key is the better one and is waiting on the same missing fact as
     /// [`Self::RegistrationSource`].
     OidcAuthorize(String),
-    /// Every OIDC authorize whose redirect the policy refused, in one bucket (`S-N1`).
+    /// Every OIDC authorize whose redirect the policy refused, in one bucket.
     ///
     /// A refusal must still be throttled — otherwise the cheapest request on the surface is the
     /// one nothing counts — but it must not be throttled *per host*, because the host of a
@@ -248,7 +248,7 @@ pub enum CounterKey {
     /// write into a store the authorize is, so it is bounded the way the authorize's admitted
     /// path is in effect — a ceiling on how fast pending ceremonies can be begun.
     OidcDevice,
-    /// Requests from one federated peer server, across the sync and blob reads (`S-E2`,
+    /// Requests from one federated peer server, across the sync and blob reads (
     /// invariant 21).
     ///
     /// Keyed on the peer's origin, never on the capability: a peer holding ten capabilities is
@@ -256,10 +256,10 @@ pub enum CounterKey {
     /// asking for more tokens. Events per hour only; bytes and CPU per hour need a weighted
     /// counter this port does not have and are post-v1.
     PeerRequests(String),
-    /// Federated moderation reports from one peer against one account (`S-C49`, invariant
+    /// Federated moderation reports from one peer against one account (invariant
     /// 24), keyed on `"{reporting_server}:{reported_user}"` as the contract bounds them.
     FederatedReports(String),
-    /// Federated moderation reports from one peer against **every** account (`S-C49`).
+    /// Federated moderation reports from one peer against **every** account.
     ///
     /// The ceiling the per-account budget cannot provide: `reported_user` is a string a peer
     /// chooses, so a peer cycling accounts gets a fresh per-account allowance each time, and

@@ -1,4 +1,4 @@
-//! The profile surface (slice `S-C54`), end to end.
+//! The profile surface, end to end.
 //!
 //! Two cases carry the slice. `a_password_change_ends_every_other_session_and_keeps_this_one` is
 //! the whole reason a password change is its own operation: a rotation that left the leaked

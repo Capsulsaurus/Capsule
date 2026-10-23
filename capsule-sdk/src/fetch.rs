@@ -1,4 +1,4 @@
-//! Tiered, on-demand **blob fetch** (slice `S-D2`; SSoT: [Download & Sync]).
+//! Tiered, on-demand **blob fetch** (SSoT: [Download & Sync]).
 //!
 //! Where [`crate::sync`] discovers *what* changed, this module fetches *the
 //! smallest representation that satisfies the user's current intent, and nothing
@@ -584,7 +584,7 @@ fn classify_status(status: u16, code: Option<String>) -> FetchError {
 
 // ─── Resumable ranged fetch (adverse-hardened) ───────────────────────────────
 
-/// The resumable ranged-fetch engine (slice `S-D10`): stall-cut-resume, bounded
+/// The resumable ranged-fetch engine: stall-cut-resume, bounded
 /// transfer windows under `adverse`, and the shared [`RetryEngine`] backoff — the
 /// `bulk-transfer` retry class the download-resume ladder instantiates.
 ///

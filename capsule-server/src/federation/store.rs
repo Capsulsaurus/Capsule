@@ -4,7 +4,7 @@
 //! # The store is the revocation list
 //!
 //! `/.well-known/capsule/revoked-jti` was served from a standalone list before federation had a
-//! minting side (`S-C18`). Once a capability is a stored record, "is this `jti` revoked" has a
+//! minting side. Once a capability is a stored record, "is this `jti` revoked" has a
 //! second possible answer — the record's `revoked_at` — and two answers to that question is the
 //! one shape revocation cannot afford. So every adapter here **is** a
 //! [`RevocationList`]: revoking an issued capability sets its `revoked_at` and publishes its

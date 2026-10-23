@@ -1,4 +1,4 @@
-//! `POST /v1/albums/{album_id}/ops` — the lifecycle-write surface (slice `S-C16`).
+//! `POST /v1/albums/{album_id}/ops` — the lifecycle-write surface.
 //!
 //! One endpoint for every lifecycle write that does **not** move blob bytes: `delete`,
 //! `trash-restore`, `metadata-update`, and a derivative over blobs the server already holds. A
@@ -46,7 +46,7 @@
 //!
 //! 1. the **bearer token** — the caller is an authenticated account, and everything below is
 //!    about that account rather than about a field in the body;
-//! 2. **standing** (`S-C8`) — a suspended account may not write, whoever the manifest names;
+//! 2. **standing** — a suspended account may not write, whoever the manifest names;
 //! 3. **write capability** — [`WriteAuthority::album_write_access`](crate::upload::WriteAuthority::album_write_access) answers
 //!    owner-or-writer-member for *this caller* on *this album*, and a reader, a former member and
 //!    a stranger get one indistinguishable `403`;
@@ -152,7 +152,7 @@ pub struct OpRequest {
     /// The signed manifest itself, base64 of the canonical CBOR.
     ///
     /// Stored verbatim as the asset's new provenance blob, so the feed serves the exact bytes
-    /// the client signed (`S-C30`) for a lifecycle write as it already does for an upload. The
+    /// the client signed for a lifecycle write as it already does for an upload. The
     /// server does not parse it: base64 is a transport encoding, and `decode(encode(b)) == b`.
     pub manifest_cbor: String,
     /// The encrypted metadata blob, base64, present exactly when the action carries one.
@@ -233,7 +233,7 @@ pub enum OpRejection {
         code: &'static str,
     },
 
-    /// The account is suspended (`S-C8`).
+    /// The account is suspended.
     ///
     /// The same status, code and reasoning as `POST /v1/upload`'s: a suspension removes the
     /// ability to *write*, and a lifecycle op is a write. Distinct from the quota `403` and from
@@ -336,7 +336,7 @@ pub async fn apply_op(
         ));
     }
 
-    // Account standing (`S-C8`), on the seam `POST /v1/upload` uses and for the same reason: a
+    // Account standing, on the seam `POST /v1/upload` uses and for the same reason: a
     // suspension removes the ability to write, and a lifecycle op is a write — the only one that
     // never moves blob bytes, which is exactly why it was easy to miss. Checked before the
     // authority, before the quota and before anything is stored.
@@ -356,7 +356,7 @@ pub async fn apply_op(
     }
 
     // Invariant 6, the half only the authority can answer — and the namespace the op is filed
-    // under, which is the album owner's whoever the caller is (`S-C51`): the owner's feed is the
+    // under, which is the album owner's whoever the caller is: the owner's feed is the
     // one every member's devices read.
     let AlbumWriteAccess::Writable {
         owner_id: owner,
@@ -439,7 +439,7 @@ pub async fn apply_op(
         }
     };
 
-    // Quota (`S-C6`), classified by what the op actually costs. A metadata blob is storage; a
+    // Quota, classified by what the op actually costs. A metadata blob is storage; a
     // delete or a restore is not, and is admitted in every state.
     let class = if metadata.is_some() {
         crate::quota::WriteClass::MetadataGrowth
@@ -661,7 +661,7 @@ fn parse_address(hex: &str) -> Result<ContentAddress, OpRejection> {
 /// The retention floor the manifest signed, parsed.
 ///
 /// Read from the *envelope*, never from a server policy — that is what stops a hostile server
-/// accelerating a purge and a buggy one retaining past the window the user chose (`S-C11`). An
+/// accelerating a purge and a buggy one retaining past the window the user chose. An
 /// unparseable value is a refusal rather than an absence: absent means "no floor and never
 /// purge", so silently turning a malformed instant into `None` would be the safe-looking
 /// mistake that hides a client bug forever.

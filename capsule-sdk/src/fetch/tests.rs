@@ -1,5 +1,5 @@
 //! Mocked tests for the transfer download doc's client fetch Validation bullets
-//! (slice `S-D2`): tiered fetch correctness, cross-asset dedup, resume-after-
+//!: tiered fetch correctness, cross-asset dedup, resume-after-
 //! interrupt (zero duplicate bytes), above-tier permanent unavailability with the
 //! degrade ladder and automatic re-fetch, the `403` authorization-change path, the
 //! `awaiting-original` pending state, and content-hash self-verification. All
@@ -597,7 +597,7 @@ async fn pending_upload_is_distinct_from_gone() {
     ));
 }
 
-// ─── Adverse-network stall-cut-resume (S-D10) ────────────────────────────────
+// ─── Adverse-network stall-cut-resume ────────────────────────────────
 
 /// A mock monotonic clock the source advances; the fetch loop reads the same cell,
 /// so the stall cut is deterministic with no wall-clock sleep.

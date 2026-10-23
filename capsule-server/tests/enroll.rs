@@ -1,4 +1,4 @@
-//! Cross-device add (slice `S-C7`), end to end.
+//! Cross-device add, end to end.
 //!
 //! The case that carries the slice is `a_stolen_session_token_cannot_start_a_device_add`: step 1
 //! of design/device-enrollment.md exists so that a remotely-exfiltrated token cannot enroll a

@@ -326,7 +326,7 @@ pub trait UploadSessionStore: std::fmt::Debug + Send + Sync {
     /// both views, together. Returns the record that was removed, or `None`.
     fn discard<'a>(&'a self, upload: &'a UploadId) -> StoreFuture<'a, Option<UploadSessionRecord>>;
 
-    /// The active session `uploader` currently has open for `expected_hash`, if any (`S-C40`).
+    /// The active session `uploader` currently has open for `expected_hash`, if any.
     ///
     /// The question the blob serve path asks when nothing references an address: *are these
     /// exact bytes on their way?* An active upload session declaring that hash **is** the
@@ -355,7 +355,7 @@ pub trait UploadSessionStore: std::fmt::Debug + Send + Sync {
         expected_hash: &'a str,
     ) -> StoreFuture<'a, Option<UploadId>>;
 
-    /// How many sessions are still in flight against `album` (`S-C24`).
+    /// How many sessions are still in flight against `album`.
     ///
     /// The drain count versioning.md step 3 asks the server to expose: *"the upgrade cannot
     /// proceed while any session for this album is in `Uploading` or `WaitingForProcessing`"*.

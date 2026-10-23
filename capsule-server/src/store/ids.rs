@@ -125,7 +125,7 @@ secret_id! {
 }
 
 secret_id! {
-    /// The `state` an OIDC authorization request carries (slice `S-N1`).
+    /// The `state` an OIDC authorization request carries.
     ///
     /// The key to one pending authorization: whoever presents it at the callback redeems the
     /// nonce and PKCE verifier it names, so it is a bearer credential for the length of the

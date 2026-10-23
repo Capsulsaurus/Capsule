@@ -1,4 +1,4 @@
-//! Share links (`S-C4`) — the public serve path, and what a key-free server can enforce on it.
+//! Share links — the public serve path, and what a key-free server can enforce on it.
 //!
 //! # The one thing this path must never do
 //!
@@ -46,7 +46,7 @@
 //!
 //! The contract's two limiters — per source IP and per `{opaque-id}` — need the counter port
 //! `S-C32` owns. The `429` is therefore **not declared** rather than declared and unreachable
-//! (`S-C28`). What still holds without it is the structural defense the contract calls
+//!. What still holds without it is the structural defense the contract calls
 //! *independent of rate limiting*: 128 bits of opaque id, so enumeration is not a matter of
 //! throttling.
 //!

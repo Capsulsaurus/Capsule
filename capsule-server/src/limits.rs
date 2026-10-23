@@ -1,4 +1,4 @@
-//! The transport limits the server applies before a handler is entered (slice `S-C33`).
+//! The transport limits the server applies before a handler is entered.
 //!
 //! # Why this module exists
 //!
@@ -108,7 +108,7 @@ pub fn bounded_body_size() -> BodySize {
     BodySize::new(MAX_BOUNDED_BODY_BYTES)
 }
 
-/// The cap on a federation write's body: **16 KiB** (`S-E2`, `S-C49`).
+/// The cap on a federation write's body: **16 KiB**.
 ///
 /// The transport backstop above is sized for a 16 MiB upload chunk. A federation write is
 /// nothing like one — the largest legitimate body on that surface is a signed moderation report,

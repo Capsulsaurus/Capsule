@@ -1,5 +1,5 @@
 //! `POST /v1/auth/oidc/authorize`, `POST /v1/auth/oidc/callback` — signing in through an
-//! external identity provider (slice `S-N1`).
+//! external identity provider.
 //!
 //! # Two requests, one ceremony
 //!
@@ -145,10 +145,10 @@ pub struct OidcCallbackRequest {
     /// The secret whose S256 hash the authorize carried as `binding_challenge`. A callback whose
     /// secret does not hash to it is refused as an unknown `state` is, and burns the `state`.
     pub binding_verifier: String,
-    /// An advisory device-cohort hash (slice `S-C13`). Legibility metadata only; an unusable
+    /// An advisory device-cohort hash. Legibility metadata only; an unusable
     /// value is dropped rather than refused.
     pub cohort_hash: Option<String>,
-    /// The directory device the client claims to be (slice `S-N3`), as a UUID. Dropped, not
+    /// The directory device the client claims to be, as a UUID. Dropped, not
     /// refused, when it is not a usable UUID.
     pub device_id: Option<String>,
 }
@@ -200,7 +200,7 @@ pub enum OidcAuthorizeRejection {
         code: &'static str,
     },
 
-    /// Too many ceremonies were begun for this redirect host in the window (`S-C32`).
+    /// Too many ceremonies were begun for this redirect host in the window.
     #[error("too many sign-ins were started; wait and try again")]
     #[problem(status = 429, title = "Too many sign-ins")]
     RateLimited {
@@ -770,9 +770,9 @@ pub struct OidcDevicePollRequest {
     /// The secret whose S256 hash the begin carried as `binding_challenge`. A poll whose secret
     /// does not hash to it ends the ceremony and is answered as an unknown handle is.
     pub binding_verifier: String,
-    /// An advisory device-cohort hash (slice `S-C13`). Legibility metadata only.
+    /// An advisory device-cohort hash. Legibility metadata only.
     pub cohort_hash: Option<String>,
-    /// The directory device the client claims to be (slice `S-N3`), as a UUID.
+    /// The directory device the client claims to be, as a UUID.
     pub device_id: Option<String>,
 }
 

@@ -1668,7 +1668,7 @@ fn e2e_case_8_album_upgrade_ceremony() {
     );
 }
 
-// ── Per-user block (moderation.md § Blocklists, slice `S-X4`) ──────────────
+// ── Per-user block (moderation.md § Blocklists) ──────────────
 
 /// Join a second device belonging to an **existing** member's user, relaying the add commit to
 /// `others` so every view stays converged. `add_and_join` cannot do this: it assumes the admin is
@@ -1692,7 +1692,7 @@ fn add_and_join_relaying(
     OpenMlsAuthority::join_via_welcome(identity, to_in(outcome.welcome), history, policy).unwrap()
 }
 
-/// **The `S-X4` acceptance — moderation.md's per-user-block bullet, end to end.**
+/// **The acceptance — moderation.md's per-user-block bullet, end to end.**
 ///
 /// Blocking a user removes **all** their devices in a single `Remove` + `Commit` (mls.md's
 /// "removing all Charlie's devices"), so the AMK epoch bumps exactly **once** for the whole user,

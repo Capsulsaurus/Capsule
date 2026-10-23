@@ -1,5 +1,5 @@
 //! Proposing an **album upgrade** — the client half of the ceremony's one server-side step
-//! (slice `S-C24`, over the `S-D28` wire).
+//! (over the `S-D28` wire).
 //!
 //! [Versioning — Album Upgrade Ceremony] is a client ceremony carried on MLS application
 //! messages the server cannot read. Four of its steps are the server's, and the first is the
@@ -22,7 +22,7 @@
 //!
 //! The request body is `application/cbor`, and `spargen` 0.5's `classify_media` does not know
 //! that media type, so `capsule-sdk/build.rs` narrows the operation out of the generated client
-//! (`S-D28`) — the *surface* is narrowed, the document is never mutilated. Only the **request**
+//! — the *surface* is narrowed, the document is never mutilated. Only the **request**
 //! is hand-written: the path, the media type, and the verbatim CBOR body. Every JSON document
 //! the operation answers with decodes into the generated types — the phase into
 //! [`crate::rest::types::UpgradePhaseResponse`], every refusal into

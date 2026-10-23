@@ -54,7 +54,7 @@ pub trait HardwareSigner: Send + Sync {
 /// ECDH, TPM 2.0 ECDH), so the DEK's X25519 half of [the X-Wing KEM](super::DekKeypair) is replaced by a
 /// hardware-held P-256 static key while the ML-KEM-768 half stays software-sealed. The element
 /// holds the P-256 private key and performs the ECDH so it never leaves hardware; Rust drives the
-/// ML-KEM half and the hybrid combiner (SSoT: [Cryptography — Keys § Device Keys], slice `S-F5`).
+/// ML-KEM half and the hybrid combiner (SSoT: [Cryptography — Keys § Device Keys]).
 ///
 /// [Cryptography — Keys § Device Keys]: https://docs/design/cryptography/keys/#device-keys
 pub trait HardwareKeyAgreement: Send + Sync {

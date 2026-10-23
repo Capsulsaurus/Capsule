@@ -1,4 +1,4 @@
-//! [`PostgresAlbums`] — the durable album store (`S-C25`, `S-C24`).
+//! [`PostgresAlbums`] — the durable album store.
 //!
 //! # One table, two kinds of critical section
 //!

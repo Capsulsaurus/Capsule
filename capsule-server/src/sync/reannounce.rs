@@ -30,7 +30,7 @@
 //! The row the chain head implies: the head as its provenance blob, the metadata blob of the
 //! most recent manifest that names one, and the original every manifest names. The head is
 //! walked back through the store, one `prior_provenance_hash` at a time, to the asset's `create`:
-//! every manifest before the head is the row's superseded chain (`S-C52`), which the scrub walks
+//! every manifest before the head is the row's superseded chain, which the scrub walks
 //! back to the `create` and the collector counts as referenced, so a partial chain would read as
 //! broken and lose its older manifests to collection. Every blob, the chain's manifests included,
 //! must be in the store, or the answer names what is missing and nothing is written: the client
@@ -367,7 +367,7 @@ impl Chain {
 /// metadata blob on the way.
 ///
 /// To the `create` and not only to the metadata: every manifest before the head is the row's
-/// superseded chain (`S-C52`), which the scrub walks back to a `create` and the collector
+/// superseded chain, which the scrub walks back to a `create` and the collector
 /// counts as referenced. A row restored with only part of it would read as a broken chain, and
 /// the manifests left out would be collected as orphans.
 async fn walk(

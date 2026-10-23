@@ -1,5 +1,5 @@
 //! The album roster attestation — the one membership fact a **key-free server** can verify
-//! (slice `S-C51`).
+//!.
 //!
 //! # What the server cannot see, and what this gives it instead
 //!

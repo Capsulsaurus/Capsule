@@ -1,4 +1,4 @@
-//! The **SDK's own client**, over a socket, against the real router (slice `S-D28`).
+//! The **SDK's own client**, over a socket, against the real router.
 //!
 //! Every other case in this suite drives the router in-process through
 //! `kynos::test::TestClient` — no socket, no port, nothing to flake — and that is the right
@@ -191,7 +191,7 @@ async fn a_forged_cursor_is_refused_with_the_code_the_client_localizes() {
     // The `error.*` code is the client half of the i18n contract, and this is the only place it
     // is observed the way a client observes it: parsed out of a problem body that crossed a
     // socket, from a document that had to *declare* the member for the generated type to carry
-    // it (`S-C36`, `S-C38`).
+    // it.
     let fixture = Fixture::working();
     publish(&fixture, "018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5e03").await;
     let base_url = serve(&fixture).await;

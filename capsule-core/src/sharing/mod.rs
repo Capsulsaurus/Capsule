@@ -256,7 +256,7 @@ pub struct RevocationRecord {
 }
 
 /// The issuer-held record for one live share link — the authoritative state the serving
-/// endpoint (S-C4) consults: the opaque id it is addressed by, the scope it resolves to,
+/// endpoint consults: the opaque id it is addressed by, the scope it resolves to,
 /// the server-held wrapped material, expiry, and any revocation record.
 #[derive(Debug, Clone)]
 pub struct ShareLinkRecord {
@@ -666,7 +666,7 @@ mod tests {
         }
     }
 
-    /// `S-A5` acceptance / doc "Opaque-id entropy (unit)": generated opaque ids are
+    /// The acceptance / doc "Opaque-id entropy (unit)": generated opaque ids are
     /// 128-bit CSPRNG values, never structured; a generator producing shorter or
     /// guessable/sequential ids fails.
     #[test]
@@ -702,7 +702,7 @@ mod tests {
         );
     }
 
-    /// `S-A5` acceptance / doc "Passphrase unwrap locality (unit)": with a passphrase set,
+    /// The acceptance / doc "Passphrase unwrap locality (unit)": with a passphrase set,
     /// the server-held material is the **wrapped** form and unwraps **client-side** via the
     /// password-based KDF; the passphrase itself never appears in any wire-bound structure.
     #[test]

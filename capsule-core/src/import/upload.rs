@@ -1,5 +1,5 @@
 //! Staged-upload contract types — the **one canonical** `UploadPolicy`/`UploadTier`
-//! set (slice `S-B4` in the repo-root `SLICES.md`; SSoT:
+//! set (SSoT:
 //! [Transfer — Upload: Upload Tiering (Staged Uploads)](https://docs/design/transfer/upload/#upload-tiering-staged-uploads)).
 //!
 //! Uploads used to be all-or-nothing; **staged uploads** add the upload-direction

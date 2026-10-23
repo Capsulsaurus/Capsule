@@ -32,7 +32,7 @@ impl DatabaseDriver {
     /// [`MigrationError::CatalogTooNew`] is the one variant a caller acts on differently: the
     /// catalog was left untouched and the recovery is to update the app, so `library::open`
     /// maps it to [`LibraryError::CatalogTooNew`](crate::library::LibraryError::CatalogTooNew)
-    /// instead of folding it into a generic database error (slice `S-D23`).
+    /// instead of folding it into a generic database error.
     pub(crate) fn open_typed(path: &Path) -> Result<Self, MigrationError> {
         crate::db::vector::ensure_vec_extension();
         let conn = Connection::open(path)?;

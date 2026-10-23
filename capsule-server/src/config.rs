@@ -309,7 +309,7 @@ pub struct Overrides {
     pub grace_window_hours: Option<u64>,
 }
 
-/// The OpenID Connect relying party, when a deployment has one (slice `S-N1`).
+/// The OpenID Connect relying party, when a deployment has one.
 ///
 /// Present only when `OIDC_ISSUER` is set. A half-configured relying party — an issuer with no
 /// client id, or the reverse — is a configuration fault rather than a feature that is quietly

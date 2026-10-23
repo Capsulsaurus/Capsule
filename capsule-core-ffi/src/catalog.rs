@@ -322,7 +322,7 @@ impl Catalog {
     }
 }
 
-// ── LQIP placeholder rendering (slice S-B14) ────────────────────────────────
+// ── LQIP placeholder rendering ────────────────────────────────
 
 /// A decoded LQIP placeholder handed to the native clients: packed RGBA8, ready for a
 /// `CGImage` / `Bitmap`.
@@ -345,7 +345,7 @@ pub struct LqipPlaceholder {
 ///
 /// The mirror of `capsule-wasm`'s `decodeLqip`, over the same
 /// [`capsule_core::lqip::render`] the import pipeline encodes against — one implementation, so
-/// a photo's placeholder does not depend on which client is painting it (slice `S-B14`).
+/// a photo's placeholder does not depend on which client is painting it.
 ///
 /// **A free function rather than a [`Catalog`] method, deliberately.** The `assets` table has
 /// `chromahash` and `dominant_color` columns, and they are NULL: the signed sidecar is the
@@ -532,7 +532,7 @@ mod tests {
         assert_eq!(videos[0].uuid, "v1");
     }
 
-    // ── SR1 gated views (slice S-D22) ────────────────────────────────────────
+    // ── SR1 gated views ────────────────────────────────────────
     //
     // The FFI mirror of `capsule-core`'s
     // `gated_hidden_query_refuses_without_grant_and_serves_with_one`: the surface the

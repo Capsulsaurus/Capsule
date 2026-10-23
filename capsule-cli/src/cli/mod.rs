@@ -3,7 +3,7 @@
 //!
 //! `Cli` stays `pub(crate)`: the parsed command is dispatch state, not API. What crosses
 //! the crate boundary is [`command_tree`], the description artifact behind
-//! `/reference/cli/` (slice `S-Z8`).
+//! `/reference/cli/`.
 
 pub(crate) mod commands;
 
@@ -63,7 +63,7 @@ pub(crate) struct Cli {
 
 /// The `capsule` command tree as JSON — the committed description artifact
 /// `capsule-cli/cli-surface.json`, emitted by the `gen_cli_surface` binary and rendered
-/// into `/reference/cli/` by the documentation build (slice `S-Z8`).
+/// into `/reference/cli/` by the documentation build.
 ///
 /// # This output is deterministic, and independent of the process locale
 ///

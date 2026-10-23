@@ -1,5 +1,5 @@
 //! Browser (wasm-bindgen) surface for the Capsule guest web client — the **share-link
-//! client-side open path** (slice `S-E1` in the repo-root `SLICES.md`; SSoT: [Share Links]).
+//! client-side open path** (SSoT: [Share Links]).
 //!
 //! A guest opening `https://server.tld/s/{opaque-id}#{secret}` never sends the fragment
 //! `#{secret}` to the server (browsers never transmit the fragment) and, for a
@@ -22,7 +22,7 @@
 //! sealed record at the link's `metadata_hash`: the covered assets' key-free parameters and, for
 //! a link with no passphrase, the scope [`open_share`] takes.
 //!
-//! The crate also carries the **inbound** guest surface (slice `S-D3`; SSoT: [Web Upload]) — the
+//! The crate also carries the **inbound** guest surface (SSoT: [Web Upload]) — the
 //! browser half of a *guest drop*. A guest opening `https://server.tld/u/{opaque-id}#{drop_pubkey}`
 //! seals each selected asset entirely client-side and can never read anything back:
 //!
@@ -34,7 +34,7 @@
 //!    fragment. Byte-identical to the server's stored verifier, so the guest proves possession
 //!    without transmitting the passphrase (SSoT: [Web Upload] — Optional passphrase abuse gate).
 //!
-//! The crate additionally carries the **LQIP decode** entry point (slices `S-B14`/`S-B1`), which
+//! The crate additionally carries the **LQIP decode** entry point, which
 //! is the one surface here that is not about crypto:
 //!
 //! 6. [`decode_lqip`] (`decodeLqip`) — render a sidecar `lqip` record to packed RGBA the viewer
@@ -395,7 +395,7 @@ impl SharedAssetView {
     }
 }
 
-// ─────────────────────────── Guest drop sealing (slice S-D3) ────────────────────────────────
+// ─────────────────────────── Guest drop sealing ────────────────────────────────
 
 /// A sealed guest drop, ready for the uploader to open a drop session and stream its chunks.
 ///
@@ -472,7 +472,7 @@ impl WasmSealedDrop {
     }
 }
 
-/// Seal one selected asset for a guest drop, entirely in the browser (slice `S-D3`).
+/// Seal one selected asset for a guest drop, entirely in the browser.
 ///
 /// - `plaintext` — the asset bytes read from the file picker.
 /// - `drop_pubkey` — the link's Drop Key public half, decoded from the URL `#{drop_pubkey}`
@@ -566,7 +566,7 @@ pub fn drop_passphrase_proof(
 // `JsValue`. The wasm-side behaviour of the `#[wasm_bindgen]` entry points is covered by
 // `capsule-web`'s bun KATs.
 
-// ─────────────────────────── LQIP placeholder decode (slice S-B14) ──────────────────────────
+// ─────────────────────────── LQIP placeholder decode ──────────────────────────
 
 /// A decoded LQIP placeholder: packed RGBA8, ready for `putImageData`.
 ///
@@ -814,7 +814,7 @@ mod tests {
         assert_eq!(decoded, bytes);
     }
 
-    // ── LQIP decode (slice S-B14) ───────────────────────────────────────────
+    // ── LQIP decode ───────────────────────────────────────────
 
     /// A gradient frame, the shape `Lqip::encode` takes.
     fn gradient(width: u32, height: u32) -> Vec<u8> {

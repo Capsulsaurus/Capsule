@@ -117,7 +117,7 @@ pub trait AccountDirectory: fmt::Debug + Send + Sync {
         password: &'a str,
     ) -> DirectoryFuture<'a, Authentication>;
 
-    /// The same decision, for an account already identified (`S-C7`).
+    /// The same decision, for an account already identified.
     ///
     /// Re-authentication happens on a session that already names its account, so the account
     /// comes from the credential and never from the request. That distinction is the whole

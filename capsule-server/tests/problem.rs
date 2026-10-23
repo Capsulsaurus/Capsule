@@ -1,5 +1,5 @@
 //! Every rejection carries an `error.*` code, including the ones Capsule does not write
-//! (`S-C36`), and the document says so (`S-C38`).
+//!, and the document says so.
 //!
 //! These two slices are one change. `S-C36` is the interceptor that fills in the member on a
 //! framework-rendered problem; `S-C38` is the document describing it. Either alone leaves the

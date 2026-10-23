@@ -74,7 +74,7 @@ fn warmup_defers_scaling_then_doubles_above_5mbps() {
     assert!(s.current_size > CHUNK_SIZE_1MB);
 }
 
-/// **Chunk-size floor coupling (S-D10).** Under `adverse` the strategy pins to the
+/// **Chunk-size floor coupling.** Under `adverse` the strategy pins to the
 /// tier chunk floor and suppresses adaptive growth, so each request stays small
 /// enough to usually complete between mid-transfer resets; releasing the coupling
 /// lets the normative adaptive algorithm grow again.

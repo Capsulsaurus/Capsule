@@ -17,7 +17,7 @@ use capsule_core::crypto::hash::Hash32;
 ///
 /// Defined in [`capsule_core::crypto::receipts`] and re-exported here, because a custody receipt's
 /// `blob_role` is written from the same enum and the issuer and the verifier must not each
-/// have their own (`S-C46`). This path is the one the transfer durability doc names, so it
+/// have their own. This path is the one the transfer durability doc names, so it
 /// stays.
 pub use capsule_core::crypto::receipts::BlobRole;
 use uuid::Uuid;
@@ -147,7 +147,7 @@ impl ReleaseDecision {
 /// The verify-before-destroy gate over a [`StorageVerifier`]. It never destroys anything itself:
 /// [`may_release`](Self::may_release) is the pure decision the three destructive paths
 /// (device-owned-original release, Move-import source deletion, streaming-mode release) consult
-/// before any local cleanup, and streaming import (`S-B3`) drives its per-asset release window
+/// before any local cleanup, and streaming import drives its per-asset release window
 /// through the same call.
 pub struct ReleaseGate<'a, V: StorageVerifier + ?Sized> {
     verifier: &'a V,
@@ -326,7 +326,7 @@ mod tests {
         }
     }
 
-    /// `S-D4` acceptance: the device-owned-original release, Move-import source deletion, and
+    /// The acceptance: the device-owned-original release, Move-import source deletion, and
     /// streaming-mode release all gate on [`ReleaseGate::may_release`] fed by a
     /// `POST /storage/verify` verdict + custody receipt; a non-`durable` verdict, a missing
     /// receipt, or a transport failure each retains the local copy and surfaces the reason.

@@ -1,4 +1,4 @@
-//! Device-directory publish and fetch (slice `S-C9`).
+//! Device-directory publish and fetch.
 //!
 //! A user publishes their master-signed [`DeviceDirectory`] as opaque canonical CBOR; any
 //! authenticated caller fetches a user's directory to pin it and to verify the manifests that
@@ -107,7 +107,7 @@ impl CodedMedia for Cbor {
 /// The signed device directory, as it arrives.
 pub type DirectoryBody = OpaqueBody<Cbor>;
 
-/// The identity anchor a publish presents (`S-C42`).
+/// The identity anchor a publish presents.
 ///
 /// Beside the body rather than inside it, deliberately: the document is stored and served back
 /// **verbatim**, so anything the server needs that the signed core does not carry has to travel
@@ -154,7 +154,7 @@ pub enum PublishRejection {
         code: &'static str,
     },
 
-    /// The submitted identity key is not this account's anchor (`S-C42`).
+    /// The submitted identity key is not this account's anchor.
     ///
     /// `403` rather than `400`: the document is well-formed and correctly signed — it is signed
     /// by *somebody else*. Carrying nothing about the stored anchor, because a refusal that

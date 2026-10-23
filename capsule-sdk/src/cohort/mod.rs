@@ -1,5 +1,5 @@
 //! Client-side device-cohort emission and the devices-grouping view model
-//! (slice `S-D11`; SSoT: [Authentication — Device Cohorts]).
+//! (SSoT: [Authentication — Device Cohorts]).
 //!
 //! This module owns the **client half** of the cohort story whose server half
 //! (advisory storage + the `{devices, cohorts}` listing) landed in slice `S-C13`,

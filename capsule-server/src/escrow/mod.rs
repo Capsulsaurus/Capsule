@@ -1,4 +1,4 @@
-//! The master-key escrow (`S-C12`) — the one blob a server holds that can reconstruct a
+//! The master-key escrow — the one blob a server holds that can reconstruct a
 //! library, and cannot read.
 //!
 //! # What is stored, and what the server knows about it
@@ -39,7 +39,7 @@
 //! A recovered device needs two things to open as the account it recovers: the master key, which
 //! the escrow above carries, and the account's **user identity key**. The IK is drawn at random,
 //! not derived from the master key — rotating the master key must not rotate the identity — and
-//! the server pins it on the first directory publish (`S-C42`), so a recovered device cannot mint
+//! the server pins it on the first directory publish, so a recovered device cannot mint
 //! its own. `capsule_core`'s `Workspace::sealed_identity` seals it under the master key, and this
 //! port holds that blob in a second slot beside the escrow ([`EscrowStore::store_identity`],
 //! [`EscrowStore::fetch_identity`]).

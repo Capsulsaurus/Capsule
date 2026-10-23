@@ -1,4 +1,4 @@
-//! The request body-size limit, and the two ways a body can be too large (slice `S-C33`).
+//! The request body-size limit, and the two ways a body can be too large.
 //!
 //! The gap this closes: Kynos 0.1.0 renders `#[schema(min_length / max_length)]` into the
 //! emitted document but does not enforce it, so the auth surface removed those constraints

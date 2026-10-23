@@ -1,4 +1,4 @@
-//! Album membership (`S-C51`): the one fact the key-free server holds about who may read and
+//! Album membership: the one fact the key-free server holds about who may read and
 //! write a shared album, and the port it is held behind.
 //!
 //! # What the server knows, and where it learned it

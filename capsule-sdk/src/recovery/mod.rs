@@ -1,9 +1,9 @@
-//! Recovery-secret verification cadence and the guided re-wrap flow (slice `S-D12`;
+//! Recovery-secret verification cadence and the guided re-wrap flow (
 //! SSoT: [Backup — Recovery Verification Cadence] and [§ On Repeated Failure: Guided
 //! Re-Wrap]).
 //!
 //! This module owns the **client half** of the master-key recovery story that the
-//! server escrow surface (slice `S-C12`, `PUT`/`GET /v1/auth/escrow`) and the core
+//! server escrow surface (`PUT`/`GET /v1/auth/escrow`) and the core
 //! crypto ([`capsule_core::backup`]) make possible. It has two cohesive halves:
 //!
 //! - **[`cadence`]** — the pure, network-free scheduler and prompt state machine
@@ -497,7 +497,7 @@ impl RecoveryClient {
     }
 
     /// Store or replace the caller's escrow blob (`PUT /v1/auth/escrow`). Single active
-    /// escrow: the server overwrites any prior blob in the same transaction (S-C12).
+    /// escrow: the server overwrites any prior blob in the same transaction.
     ///
     /// The canonical CBOR goes on the wire verbatim. The answer comes back as
     /// [`EscrowStored`]: `stored_at` for the stale-cache rule, `replaced` to tell a first

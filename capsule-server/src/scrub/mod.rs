@@ -1,4 +1,4 @@
-//! The server-side integrity scrub (`S-C14`) — read-only, classifying, never repairing.
+//! The server-side integrity scrub — read-only, classifying, never repairing.
 //!
 //! # Why it may not fix anything
 //!
@@ -125,7 +125,7 @@ pub enum Finding {
         /// The `error.*` code naming what failed.
         code: String,
     },
-    /// An asset's provenance blob is not a manifest this server can read (`S-C45`).
+    /// An asset's provenance blob is not a manifest this server can read.
     ///
     /// Reported rather than treated as agreement. The provenance blob is deliberately
     /// server-visible signed CBOR — it carries no plaintext secrets by construction — so a blob
@@ -137,7 +137,7 @@ pub enum Finding {
         /// The address the row points at.
         address: ContentAddress,
     },
-    /// An asset's provenance chain does not walk back to a `create` (`S-C52`).
+    /// An asset's provenance chain does not walk back to a `create`.
     ///
     /// Check 4. The manifest at `broken_at` names a `prior_provenance_hash` the server does not
     /// hold, or the chain reaches a manifest that is not a `create` and has no predecessor at
@@ -151,7 +151,7 @@ pub enum Finding {
         /// The predecessor it named, or `None` when a non-`create` named none at all.
         expected_prior: Option<String>,
     },
-    /// A fact Postgres mirrors out of the signed manifest disagrees with the manifest (`S-C45`).
+    /// A fact Postgres mirrors out of the signed manifest disagrees with the manifest.
     ///
     /// Check 5. Both sides' values, because a report saying "they disagree" tells an operator to
     /// go looking rather than telling them what to look at — and the scrub deliberately does not
@@ -362,7 +362,7 @@ async fn rows_resolve_to_blobs(
             return Ok(());
         }
         for row in &rows {
-            // A superseded manifest is a reference like any other (`S-C52`), so a missing one is
+            // A superseded manifest is a reference like any other, so a missing one is
             // a dangling reference and not an absence to shrug at: it is the server's own
             // evidence about a write it accepted.
             for address in &row.superseded {
@@ -430,7 +430,7 @@ async fn rows_resolve_to_blobs(
 }
 
 /// Check 5: the facts the index mirrors out of the signed manifest still agree with it
-/// (`S-C45`).
+///.
 ///
 /// # The decision this slice needed, and the answer
 ///
@@ -500,7 +500,7 @@ async fn mirrored_facts_agree(
     }
 }
 
-/// Check 4: the asset's chain walks back from its head to a `create` (`S-C52`).
+/// Check 4: the asset's chain walks back from its head to a `create`.
 ///
 /// # Why this is possible now and was not before
 ///

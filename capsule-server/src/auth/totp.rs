@@ -1,4 +1,4 @@
-//! The second factor (slice `S-C55`) — enrolling a TOTP authenticator, and demanding one at
+//! The second factor — enrolling a TOTP authenticator, and demanding one at
 //! sign-in.
 //!
 //! # The defect this slice fixes, stated plainly

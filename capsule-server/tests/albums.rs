@@ -1,4 +1,4 @@
-//! `POST /v1/albums` — album provisioning (slice `S-C25`), end to end.
+//! `POST /v1/albums` — album provisioning, end to end.
 //!
 //! The slice exists because `capsule push` had nowhere to land: a container album's id is
 //! derived from the account master key, the client already knows it, and the server had never

@@ -1,4 +1,4 @@
-//! The published device directory (`S-C9`) — the port and its two adapters.
+//! The published device directory — the port and its two adapters.
 //!
 //! [`InMemoryDeviceDirectory`] is the deterministic double and [`PostgresDeviceDirectory`] the
 //! durable store (#446); both pass the one suite in [`conformance`].
@@ -28,7 +28,7 @@
 //! trusted to perform, and every adapter is obliged to make it atomic. That is the same lesson
 //! `S-C37` learned about sequence numbers, applied before it could be got wrong here.
 //!
-//! # The identity anchor (`S-C42`)
+//! # The identity anchor
 //!
 //! Invariant 23 reads in full: *"A published `DeviceDirectory` has `directory_version` strictly
 //! greater than the version currently stored for that user, **and the master signature covers
@@ -115,7 +115,7 @@ pub enum PublishOutcome {
         /// The accepted version, which equals the submitted one.
         directory_version: u64,
     },
-    /// Refused: the submitted identity key is not this account's anchor (`S-C42`).
+    /// Refused: the submitted identity key is not this account's anchor.
     ///
     /// Carries nothing about the stored anchor. The anchor is public — it is the key every one
     /// of this account's directories verifies under, and anyone who has fetched one could
@@ -144,7 +144,7 @@ pub trait DeviceDirectoryStore: std::fmt::Debug + Send + Sync {
     /// check and the account would end up anchored to a key its stored document does not verify
     /// under.
     ///
-    /// The anchor is established by the first publish and immutable after it (`S-C42`). The
+    /// The anchor is established by the first publish and immutable after it. The
     /// caller has already verified the document's signature under `record.identity_key`; what
     /// this decides is whether that key is *this account's*.
     fn publish(&self, record: PublishedDirectory) -> StoreFuture<'_, PublishOutcome>;
@@ -186,7 +186,7 @@ impl DeviceDirectoryStore for InMemoryDeviceDirectory {
         Box::pin(async move {
             let mut published = lock(&self.published);
             if let Some(stored) = published.get(&record.user_id) {
-                // The anchor first, and inside the lock (`S-C42`). Checked before the version
+                // The anchor first, and inside the lock. Checked before the version
                 // so that a document signed under the wrong key is refused for *that* reason
                 // rather than for being stale — an attacker who guessed a high version would
                 // otherwise be told which of the two checks they failed.
@@ -297,7 +297,7 @@ pub fn project_version(
         return Err(MalformedDirectory::WrongAccount);
     }
 
-    // Invariant 23's second clause (`S-C42`). Refused here, before the store is touched, so a
+    // Invariant 23's second clause. Refused here, before the store is touched, so a
     // document that verifies under nothing never reaches the table — which is the state that
     // would brick `S-C23`'s revoke-all for this account.
     let key = capsule_core::crypto::keys::HybridVerifyingKey::from_bytes(identity_key)

@@ -1,4 +1,4 @@
-//! The document says what the server sends (`S-C38`).
+//! The document says what the server sends.
 
 use super::*;
 

@@ -1,4 +1,4 @@
-//! `GET /v1/upload/sessions` — what this account has half-uploaded (slice `S-C57`).
+//! `GET /v1/upload/sessions` — what this account has half-uploaded.
 //!
 //! The resumption listing. A client that lost its local record of an in-flight upload — a
 //! reinstall, a second device, a crash before the session id was persisted — has no other way to

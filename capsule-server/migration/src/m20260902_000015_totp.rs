@@ -1,4 +1,4 @@
-//! Second-factor enrolments (`S-C55`): one TOTP secret per account, and its replay ledger.
+//! Second-factor enrolments: one TOTP secret per account, and its replay ledger.
 
 use sea_orm_migration::prelude::*;
 

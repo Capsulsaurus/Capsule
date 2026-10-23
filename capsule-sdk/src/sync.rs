@@ -1,11 +1,11 @@
-//! The key-free **sync consumer** (slice `S-D2`; SSoT: [Download & Sync]).
+//! The key-free **sync consumer** (SSoT: [Download & Sync]).
 //!
 //! [`SyncConsumer`] drives `GET /v1/sync` through the **generated REST client** — the same
-//! paged `(cursor, page_size)` feed the server serves (slice `S-C2`) — authorizing through the
+//! paged `(cursor, page_size)` feed the server serves — authorizing through the
 //! `S-D7` session and retrying once on a `401`. The opaque, server-MAC'd cursor is round-tripped
 //! verbatim: the client stores `next_cursor` and hands it back untouched.
 //!
-//! **There was a second transport here and there is not any more** (`S-D28`). The feed rode
+//! **There was a second transport here and there is not any more**. The feed rode
 //! `capsule.sync.v1.SyncService` over tonic, which meant the SDK described one wire contract in
 //! a `.proto` and every other in an OpenAPI document. Nothing below the transport moved:
 //! [`SyncState`] and its two rules were never about gRPC.
@@ -332,7 +332,7 @@ impl SyncState {
     /// [`SyncState::high_water_marks`]: a client persists those two after every
     /// [`apply_page`](SyncState::apply_page) and restores here on the next run so
     /// the anti-rewind high-water mark survives process restarts (the CLI's
-    /// `capsule sync`, slice `S-D5`). `max_known_protocol` is intentionally *not*
+    /// `capsule sync`). `max_known_protocol` is intentionally *not*
     /// persisted — it is the running build's own ceiling, so a client that
     /// upgraded raises it here rather than restoring a stale one.
     #[must_use]
@@ -461,7 +461,7 @@ enum SyncAuth {
     Static,
 }
 
-/// The sync consumer, over the **generated REST client** (`S-D28`).
+/// The sync consumer, over the **generated REST client**.
 ///
 /// It used to drive `capsule.sync.v1.SyncService` over tonic. The feed is `GET /v1/sync` now and
 /// is a generated operation like every other, which removes the SDK's second transport and, with
@@ -556,7 +556,7 @@ impl SyncConsumer {
 
     /// Pull one page of **one album** after `cursor`.
     ///
-    /// The album arm of the same operation (`S-C51`, `S-E5`): an account reads it as the album's
+    /// The album arm of the same operation: an account reads it as the album's
     /// owner or a member of its current roster, and a federated peer reads it under a capability
     /// whose audience is that album. Same retry and same refresh-once behaviour as
     /// [`Self::pull`]; the only difference is the parameter, because the *server* is where the
@@ -680,7 +680,7 @@ fn map_error(error: rest::Error<rest::SyncFeedError>) -> SyncError {
                 // The 400 includes the protocol gate's malformed-handshake answer (issue #404).
                 // There is no 426 to map: the feed is a read, and a read is admitted at any
                 // grammatical protocol date — the window rides the response headers instead.
-                // The 429 is a federated peer's events budget (`S-E5`): a capability puller
+                // The 429 is a federated peer's events budget: a capability puller
                 // over its hour. Rejected rather than retried, because the window is an hour
                 // and the interactive retry class would give up long before it turned.
                 // The 409 is a cursor from before the library's sync epoch moved (#697); the

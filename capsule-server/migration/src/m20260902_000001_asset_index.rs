@@ -1,4 +1,4 @@
-//! The asset index (`S-C37`): the rows, the blobs they hold, the manifests they have moved
+//! The asset index: the rows, the blobs they hold, the manifests they have moved
 //! past, the per-owner sequence, and the applied-manifest ledger.
 
 use sea_orm_migration::prelude::*;
@@ -60,7 +60,7 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(Assets::FirstSeq).big_integer().null())
                     // Invariant 17's stored chain head: SHA-256 over the signed manifest, and
                     // deliberately not the provenance blob's content address — the two are
-                    // equal today and are not the same identifier (`S-C31`).
+                    // equal today and are not the same identifier.
                     .col(ColumnDef::new(Assets::ChainHead).binary().null())
                     .col(
                         ColumnDef::new(Assets::AmkVersion)
@@ -152,7 +152,7 @@ impl MigrationTrait for Migration {
             )
             .await?;
 
-        // The manifests a chain has moved past (`S-C52`). These count as references, so the
+        // The manifests a chain has moved past. These count as references, so the
         // collector does not reclaim the server's own rebuttal evidence. `Position` keeps the
         // order the port contracts — oldest first — rather than leaving it to the backend.
         manager

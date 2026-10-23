@@ -1,4 +1,4 @@
-//! The **workspace verbs** of the `capsule_sdk` uniffi namespace (slice `S-P1`) — enroll,
+//! The **workspace verbs** of the `capsule_sdk` uniffi namespace — enroll,
 //! create an album, seal + import an asset, verify, sync-apply, mint an escrow, publish a
 //! directory — over `capsule-core`'s [`Workspace`].
 //!
@@ -162,7 +162,7 @@ impl HardwareSigner for ForeignHardwareSigner {
 /// boundary — the ECDH analogue of [`FfiHardwareSigner`], and this namespace's declaration of
 /// `capsule-core`'s `HardwareKeyAgreement` contract.
 ///
-/// It backs the hardware-bound classical half of the device **encryption** key (slice `S-F5`):
+/// It backs the hardware-bound classical half of the device **encryption** key:
 /// the element holds a static P-256 private key and performs the ECDH, so the scalar never
 /// leaves hardware, while Rust drives the software-sealed ML-KEM-768 half and the hybrid
 /// combiner. Failures reuse [`FfiHardwareSignerError`], exactly as core's trait reuses its
@@ -225,7 +225,7 @@ fn parse_ml_seed(bytes: &[u8]) -> Result<[u8; 32], FfiError> {
     })
 }
 
-/// Smoke the **hardware-bound P-256 device encryption key** (slice `S-F5`) across the FFI seam:
+/// Smoke the **hardware-bound P-256 device encryption key** across the FFI seam:
 /// enroll a key-agreement key in `hardware` under `key_alias`, publish the hybrid public key,
 /// encapsulate a fresh shared secret to it **in software** (the sender side), then
 /// **decapsulate through the element's ECDH**. Returns `true` iff the two secrets match —
@@ -281,7 +281,7 @@ impl From<FfiDeviceTier> for DeviceTier {
     }
 }
 
-/// A foreign client's self-reported build identity (`S-D15`): its product id and own semver.
+/// A foreign client's self-reported build identity: its product id and own semver.
 /// The git commit + dirty flag come from the core this app links, together composing the
 /// `client_id/semver+commit` `client_version` every manifest carries — so a defect in a shipped
 /// app build is traceable across the assets it produced.
@@ -943,7 +943,7 @@ impl FfiWorkspace {
     }
 
     /// **Open** the existing library at `root` under `passphrase`, restoring its album keys and
-    /// authorities, every managed asset, and the `add_id` counter from disk (`S-A10`). This is
+    /// authorities, every managed asset, and the `add_id` counter from disk. This is
     /// what makes an app relaunch resume rather than re-enroll.
     #[uniffi::constructor]
     pub fn open(

@@ -1,4 +1,4 @@
-//! Share links, end to end (slice `S-C4`).
+//! Share links, end to end.
 //!
 //! The case that carries the slice is `a_link_cannot_be_walked_into_a_blob_it_does_not_name`.
 //! design/share-links.md asks the serve path to apply the boundary-crossing privacy strip, and

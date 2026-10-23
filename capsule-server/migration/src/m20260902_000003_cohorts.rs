@@ -1,4 +1,4 @@
-//! The durable device-cohort map (`S-C13`).
+//! The durable device-cohort map.
 //!
 //! Advisory storage, structurally: nothing here is read by an authorization path, and the port
 //! offers no lookup that could tempt one. The map outlives sessions deliberately — a cohort

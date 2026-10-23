@@ -1,4 +1,4 @@
-//! Verify-before-destroy: the client half of storage verification (slice `S-D4`; SSoT:
+//! Verify-before-destroy: the client half of storage verification (SSoT:
 //! [Storage Verification — Verify Before Destroy]).
 //!
 //! Before any post-write local cleanup of irreplaceable bytes — releasing a device-owned
@@ -26,7 +26,7 @@
 //! the verdict is a point-in-time fact, so a verdict older than the window is re-fetched before
 //! release. The result is a [`capsule_library::library::ReleaseDecision`]; a non-`Release` outcome
 //! never destroys — the caller retains the local copy, retries with backoff, and surfaces
-//! "not yet confirmed on server". Streaming import (`S-B3`) drives this per asset in its
+//! "not yet confirmed on server". Streaming import drives this per asset in its
 //! import→upload→verify→release window.
 //!
 //! [Storage Verification — Verify Before Destroy]: https://docs/design/transfer/durability/#verify-before-destroy

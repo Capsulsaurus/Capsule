@@ -5,7 +5,7 @@
 //! proven against facts a fixture asserted rather than facts the server holds. This is the
 //! production one.
 //!
-//! # Invariant 6, from the album store (`S-C25`)
+//! # Invariant 6, from the album store
 //!
 //! An album is writable by the account it was provisioned to, pinned to the protocol the server
 //! spoke when it was created — and, since `S-C51`, by a **writer** on its current roster
@@ -15,7 +15,7 @@
 //! a write that should have been allowed is refused, never the reverse, and the refusal says
 //! nothing about which of the four it was.
 //!
-//! # Invariant 7, from the published device directory (`S-C20`)
+//! # Invariant 7, from the published device directory
 //!
 //! The floor was account-creation time, with a comment saying "until the directory table lands"
 //! that had outlived the table landing. It is now the device's own `added_at` from the account's
@@ -59,7 +59,7 @@ impl ProvisionedAuthority {
     /// Assembles the authority over the stores that hold its facts.
     ///
     /// The clock is here because an upgrade ceremony's window is evaluated on the **server's**
-    /// clock and nowhere else (`S-C24`) — the deadline is a duration precisely so that a member's
+    /// clock and nowhere else — the deadline is a duration precisely so that a member's
     /// clock cannot move it.
     pub fn new(
         albums: Arc<dyn AlbumStore>,
@@ -132,7 +132,7 @@ impl WriteAuthority for ProvisionedAuthority {
             let role = if record.owner_id.as_str() == caller.as_str() {
                 WriteRole::Owner
             } else {
-                // Somebody else's album: the roster decides (`S-C51`).
+                // Somebody else's album: the roster decides.
                 match self.member_role(album, caller).await? {
                     Some(role) => role,
                     None => return Ok(AlbumWriteAccess::Denied),

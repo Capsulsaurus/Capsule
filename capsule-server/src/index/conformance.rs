@@ -81,7 +81,7 @@ pub(crate) fn pending(case: &str, n: u32) -> PendingAsset {
 /// A finalized blob of `role`, addressed from `seed`.
 ///
 /// A provenance blob carries a `manifest_sha256`, because that is what a real finalization
-/// computes over the bytes it committed and it is what the chain head is set from (`S-C31`).
+/// computes over the bytes it committed and it is what the chain head is set from.
 /// Taken from the address here only because the double's addresses *are* SHA-256 digests; the
 /// port is what refuses to make that assumption.
 ///
@@ -1510,7 +1510,7 @@ pub async fn an_op_on_an_asset_that_is_not_the_callers_is_not_found(index: &dyn 
     let _ = asset;
 }
 
-/// A lifecycle write **retains** the manifest it supersedes (`S-C52`).
+/// A lifecycle write **retains** the manifest it supersedes.
 ///
 /// The provenance role moves; the manifest it moved off does not become an orphan. Two
 /// documented capabilities rest on that — the scrub's chain walk, and the takedown rebuttal,
@@ -1596,7 +1596,7 @@ pub async fn a_lifecycle_write_retains_the_manifest_it_supersedes(index: &dyn As
 }
 
 /// A `replace` re-points the **original**, which is the role `record_blob` refuses to move
-/// (`S-C43`).
+///.
 ///
 /// The refusal is not softened by this: an *upload* that swapped the original would swap bytes
 /// under a signature that still verifies against the old ones, and `BlobOutcome::Conflict` is
@@ -2172,7 +2172,7 @@ pub async fn the_row_walk_orders_by_the_identifiers_own_bytes(index: &dyn AssetI
     );
 }
 
-/// An album page is the owner's sequence filtered to one album, with its own head (`S-C51`).
+/// An album page is the owner's sequence filtered to one album, with its own head.
 ///
 /// Positions are the owner's numbers, so a member's per-album anti-rewind mark is the same value
 /// the owner's feed carries; gaps are the other albums' entries. The head is the album's last

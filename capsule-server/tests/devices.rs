@@ -1,4 +1,4 @@
-//! The session ledger (slices `S-C13`, `S-N3`), end to end.
+//! The session ledger, end to end.
 //!
 //! Two cases carry the slices. `a_reinstall_groups_with_the_device_it_replaced` is the whole
 //! point of cohorts: reinstalling re-enrolls with a **new** `device_id` by design, so one

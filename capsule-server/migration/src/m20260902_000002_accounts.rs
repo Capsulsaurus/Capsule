@@ -1,4 +1,4 @@
-//! The account cluster (`S-C53`, `S-C54`): one table behind four ports.
+//! The account cluster: one table behind four ports.
 //!
 //! `AccountRegistry`, `AccountDirectory`, `AccountProfiles` and `PasswordChange` are four ports
 //! because they answer four questions with four disclosure contracts — not because they are
