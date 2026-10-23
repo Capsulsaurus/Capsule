@@ -45,6 +45,7 @@ pub mod import_run;
 pub mod migrate;
 pub mod oidc;
 pub mod peer;
+pub mod peering_state;
 pub mod reannounce;
 pub mod remote;
 pub mod repair;
@@ -2172,6 +2173,31 @@ fn peer_run_error(command: &str, error: &peer::PeerError) -> eyre::Report {
     }
 }
 
+/// The directory floor `workspace`'s device persists in the CLI database, with any floor an
+/// earlier build kept in a file under `state` adopted into it. An unreadable store, or one that
+/// has lost the floor while `state` survives, refuses the run rather than starting the floor over.
+async fn peer_floor(
+    workspace: &Workspace,
+    state: &peer::PeerState,
+    command: &str,
+) -> Result<peering_state::DbDirectoryVersions> {
+    let db = db::init_sqlite()
+        .await
+        .map_err(|e| eyre!("Failed to open local database: {e}"))?;
+    let versions = peering_state::DbDirectoryVersions::open(db, workspace.device_id())
+        .await
+        .map_err(|error| eyre!("{command} failed: the directory floor: {error}"))?;
+    versions
+        .adopt_legacy_file(&state.legacy_floor_path())
+        .await
+        .map_err(|error| eyre!("{command} failed: the directory floor: {error}"))?;
+    versions
+        .refuse_lost_floor(state.root())
+        .await
+        .map_err(|error| eyre!("{command} failed: the directory floor: {error}"))?;
+    Ok(versions)
+}
+
 /// `capsule peer delegate`: seal each asset for the other device and say where it went.
 async fn peer_delegate(
     workspace: &Workspace,
@@ -2182,11 +2208,13 @@ async fn peer_delegate(
     let store = session_store()?;
     let state = peer::PeerState::for_device(workspace.device_id())
         .map_err(|error| peer_run_error("Hand-off", &error))?;
+    let versions = peer_floor(workspace, &state, "Hand-off").await?;
     let summary = peer::delegate(
         &remote,
         &store,
         workspace,
         &state,
+        &versions,
         &peer::SystemBootClock::default(),
         options,
     )
@@ -2232,7 +2260,8 @@ async fn peer_accept(
     let store = session_store()?;
     let state = peer::PeerState::for_device(workspace.device_id())
         .map_err(|error| peer_run_error("Accept", &error))?;
-    let summary = peer::accept(&remote, &store, workspace, &state, options)
+    let versions = peer_floor(workspace, &state, "Accept").await?;
+    let summary = peer::accept(&remote, &store, workspace, &state, &versions, options)
         .await
         .map_err(|error| peer_run_error("Accept", &error))?;
     if json {
@@ -2294,11 +2323,13 @@ async fn peer_status(workspace: &Workspace, acks: &[PathBuf], json: bool) -> Res
     let store = session_store()?;
     let state = peer::PeerState::for_device(workspace.device_id())
         .map_err(|error| peer_run_error("Status", &error))?;
+    let versions = peer_floor(workspace, &state, "Status").await?;
     let summary = peer::status(
         &remote,
         &store,
         workspace,
         &state,
+        &versions,
         &peer::SystemBootClock::default(),
         acks,
     )

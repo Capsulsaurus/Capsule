@@ -52,7 +52,7 @@ fn encode_id(bytes: &[u8]) -> String {
 }
 
 /// Recover the feed's opaque id bytes from their stored base64 form.
-fn decode_id(value: &str) -> Result<Vec<u8>, SyncStoreError> {
+pub(crate) fn decode_id(value: &str) -> Result<Vec<u8>, SyncStoreError> {
     base64::engine::general_purpose::STANDARD
         .decode(value)
         .map_err(|source| SyncStoreError::CorruptId {
@@ -123,6 +123,10 @@ pub async fn reset_for_resync<C: ConnectionTrait + TransactionTrait>(
 
 /// Land a validated page: upsert every asset and advance the stored cursor, all in
 /// one transaction. Returns the number of entries written.
+///
+/// A `Deleted` entry marks the asset tombstoned here and nothing more: a delete moves it to
+/// trash, which a later `trash-restore` reverses, so it is not a peering tombstone
+/// ([`crate::peering_state::record_purged`]).
 pub async fn persist_page<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     page: &SyncPage,

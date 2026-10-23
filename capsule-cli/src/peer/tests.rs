@@ -1,4 +1,5 @@
-//! The CLI's peer state: the inbox, the directory floor, the ledger file and the boot clock.
+//! The CLI's peer state: the inbox, the ledger file and the boot clock. The directory floor is
+//! `peering_state`'s.
 //! The flows over a real server are E2E case 15.
 
 use super::*;
@@ -63,17 +64,6 @@ fn the_inbox_refuses_anything_but_a_content_address_as_a_name() {
         assert!(inbox.persist(name, b"x").is_err(), "{name:?}");
         assert!(inbox.load(name).is_err(), "{name:?}");
     }
-}
-
-#[test]
-fn the_directory_floor_only_rises_and_survives_a_reopen() {
-    let (_dir, state) = state();
-    let versions = state.directory_versions();
-    assert_eq!(versions.highest().expect("reads"), 0);
-    versions.record(7).expect("records");
-    versions.record(3).expect("a lower version is not an error");
-    assert_eq!(versions.highest().expect("reads"), 7);
-    assert_eq!(state.directory_versions().highest().expect("reads"), 7);
 }
 
 #[test]
