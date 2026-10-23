@@ -589,6 +589,82 @@ fn finished_transfers_beyond_the_bound_are_dropped_oldest_first() {
     assert_eq!(b.transfers()[0].blob, "f3");
 }
 
+fn created_blob(blob: &str) -> TransferEvent {
+    TransferEvent::SessionCreated {
+        blob: blob.into(),
+        session_id: "s".into(),
+        size: KIB,
+        resume_offset: 0,
+    }
+}
+
+#[test]
+fn an_unfinished_transfer_silent_for_the_stale_interval_ages_out() {
+    let mut b = TransferBoard::default();
+    b.apply(at(0, created_blob("quiet")));
+    b.apply(at(1, created_blob("busy")));
+    b.tick(STALE_AFTER_MS - 1);
+    assert_eq!(b.transfers().len(), 2, "not yet silent long enough");
+    // An event keeps one alive; the other crosses the interval on a tick alone.
+    b.apply(at(STALE_AFTER_MS - 1, created_blob("busy")));
+    b.tick(STALE_AFTER_MS);
+    assert_eq!(b.transfers().len(), 1);
+    // The survivor is whichever was silent less long, and is only dropped once it is silent too.
+    b.tick(2 * STALE_AFTER_MS);
+    assert!(b.transfers().is_empty());
+}
+
+#[test]
+fn a_finalizing_transfer_with_no_receipt_ages_out() {
+    let mut b = board(vec![
+        at(0, created(KIB, 0, "s1")),
+        at(
+            2,
+            TransferEvent::Finalize {
+                blob: "b10b".into(),
+                session_id: "s1".into(),
+                size: KIB,
+            },
+        ),
+    ]);
+    assert_eq!(only(&b).phase, Phase::Finalizing);
+    b.tick(2 + STALE_AFTER_MS);
+    assert!(b.transfers().is_empty());
+}
+
+#[test]
+fn an_event_after_ageing_out_starts_a_fresh_transfer() {
+    let mut b = board(vec![at(0, created(KIB, 0, "s1"))]);
+    b.tick(STALE_AFTER_MS);
+    b.apply(at(STALE_AFTER_MS + 1, sent(0, 1)));
+    assert_eq!(b.transfers().len(), 1);
+    assert_eq!(only(&b).started_ms, STALE_AFTER_MS + 1);
+}
+
+/// Replays far more never-finished transfers than the board may hold, all inside one stale
+/// interval so only the cap can bound them, then spreads more over a long stream so only age can.
+#[test]
+fn many_never_finished_transfers_keep_the_board_bounded() {
+    let mut b = TransferBoard::default();
+    for i in 0..(TRANSFERS_KEPT * 4) {
+        b.apply(at(i as u64, created_blob(&format!("c{i}"))));
+        assert!(b.transfers().len() <= TRANSFERS_KEPT);
+    }
+    assert_eq!(b.transfers().len(), TRANSFERS_KEPT);
+    // The ones silent longest were the ones dropped.
+    assert_eq!(b.transfers()[0].blob, format!("c{}", TRANSFERS_KEPT * 3));
+
+    let mut b = TransferBoard::default();
+    let spacing = STALE_AFTER_MS / 8;
+    let mut peak = 0;
+    for i in 0..2_000_u64 {
+        b.apply(at(i * spacing, created_blob(&format!("a{i}"))));
+        peak = peak.max(b.transfers().len());
+    }
+    assert!(peak <= 8, "age alone keeps {peak} entries");
+    assert!(b.active() <= 8);
+}
+
 #[test]
 fn scars_are_bounded() {
     let mut events = vec![at(0, created(KIB, 0, "s1"))];

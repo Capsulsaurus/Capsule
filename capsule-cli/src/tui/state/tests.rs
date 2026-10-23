@@ -119,3 +119,22 @@ fn transfer_actions_fold_into_the_board_without_effects() {
     assert_eq!(state.transfers().now_ms(), 90);
     assert_eq!(state.screen(), Screen::Home);
 }
+
+#[test]
+fn an_answer_reaches_the_screen_on_top_only_while_it_asks() {
+    let mut state = ready();
+    state.update(Action::Open(Screen::Auth));
+    assert!(
+        state.update(Action::Answer(Answer::Yes)).is_empty(),
+        "nothing asked"
+    );
+    state.update(Action::Auth(AuthAction::SignOut));
+    assert!(state.is_confirming());
+    assert!(state.update(Action::Answer(Answer::No)).is_empty());
+    assert!(!state.is_confirming());
+    state.update(Action::Auth(AuthAction::SignOut));
+    assert_eq!(
+        state.update(Action::Answer(Answer::Yes)),
+        vec![Effect::Auth(AuthEffect::Logout)]
+    );
+}

@@ -563,7 +563,7 @@ mod tests {
             assert!(matches!(
                 cli.command,
                 Some(Commands::Auth {
-                    command: AuthCommands::Status
+                    command: AuthCommands::Status { json: false }
                 })
             ));
         }

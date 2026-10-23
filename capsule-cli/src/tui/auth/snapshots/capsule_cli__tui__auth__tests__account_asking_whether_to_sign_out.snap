@@ -1,0 +1,18 @@
+---
+source: capsule-cli/src/tui/auth/tests.rs
+expression: draw(&state)
+---
+Capsule · Account · Signed out
+┌Account───────────────────────────────────────────────────────────────────────┐
+│Not signed in.                                                                │
+│                                                                              │
+│Sign out and forget this device's session? y to sign out, n to cancel.        │
+│                                                                              │
+│Identity provider: `capsule auth login --oidc` (add `--device` to approve on  │
+│another device). New account: `capsule auth register`. Scriptable: `capsule   │
+│auth status --json`.                                                          │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+y Yes, go ahead  n No, cancel

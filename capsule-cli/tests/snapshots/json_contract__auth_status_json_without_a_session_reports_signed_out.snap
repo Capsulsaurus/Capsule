@@ -1,0 +1,12 @@
+---
+source: capsule-cli/tests/json_contract.rs
+expression: "run(&scratch, &[\"auth\", \"status\", \"--json\"])"
+---
+status: 0
+--- stdout ---
+{
+  "signed_in": false,
+  "access_token_fresh": false,
+  "token_expires_at": null
+}
+--- stderr ---

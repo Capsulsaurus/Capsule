@@ -1,0 +1,10 @@
+---
+source: capsule-cli/tests/json_contract.rs
+expression: "run(&scratch, &[\"share\", \"revoke\", \"not-an-id\", \"--json\"])"
+---
+status: 1
+--- stdout ---
+
+--- stderr ---
+Error: 
+   0: Share link not revoked: not-an-id is not a share link's opaque id: expected the 32 lowercase hex characters after /s/ in its URL.

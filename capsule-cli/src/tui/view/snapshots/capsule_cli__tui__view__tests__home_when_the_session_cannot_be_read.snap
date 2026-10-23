@@ -7,10 +7,10 @@ Capsule · Home · Session unavailable
 │The session could not be read.                                                │
 │could not read the session: malformed session file                            │
 │                                                                              │
+│a Account   s Sync   d Restore originals   l Share links   t Watch transfers  │
+│                                                                              │
 │Every flow is also a `capsule <command>` subcommand; `capsule --help` lists   │
 │them.                                                                         │
 │                                                                              │
-│                                                                              │
-│                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
-q Quit  ? Show the key bindings  r Reload the session status  t Watch transfers
+r Reload the session status  q Quit  ? Show the key bindings

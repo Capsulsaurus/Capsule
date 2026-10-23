@@ -21,9 +21,17 @@
 //! - **Throughput** over the last [`THROUGHPUT_WINDOW_MS`] of stream time.
 //! - **Custody.** Verdicts and receipts; a receipt for an uploaded blob marks it verified.
 //!
-//! Memory is bounded for a long sync: finished transfers beyond [`FINISHED_KEPT`] are dropped
-//! oldest first, scars per transfer beyond [`SCARS_KEPT`], and throughput samples older than the
-//! window.
+//! The board stays bounded over a long sync, whether or not transfers ever finish:
+//!
+//! - finished transfers beyond [`FINISHED_KEPT`] are dropped oldest first;
+//! - an unfinished transfer (a failed upload, a deferred blob with no receipt, a failed custody
+//!   check, a receipt lost to lag) that has had no event for [`STALE_AFTER_MS`] of stream time is
+//!   dropped; a later event for its blob starts a fresh entry;
+//! - at most [`TRANSFERS_KEPT`] transfers are held in all: past that, the one silent longest goes;
+//! - scars per transfer beyond [`SCARS_KEPT`], and throughput samples older than the window.
+//!
+//! Age is measured on the stream's own stamps and ticks, never a wall clock, so a replay ages
+//! entries exactly as the live run did.
 
 pub mod view;
 
@@ -46,6 +54,13 @@ pub const THROUGHPUT_WINDOW_MS: u64 = 2_000;
 
 /// Finished transfers (verified, merged, rejected) kept for display; older ones are dropped.
 pub const FINISHED_KEPT: usize = 32;
+
+/// Stream time an unfinished transfer may go without an event before it is dropped: nothing
+/// still moving is silent that long, so what is left never got a terminal event.
+pub const STALE_AFTER_MS: u64 = 300_000;
+
+/// Transfers held in all, finished or not; the one silent longest is dropped past this.
+pub const TRANSFERS_KEPT: usize = 256;
 
 /// Scars kept per transfer; older ones are dropped.
 pub const SCARS_KEPT: usize = 64;
@@ -549,6 +564,7 @@ impl TransferBoard {
         for transfer in &mut self.transfers {
             transfer.prune(now);
         }
+        self.drop_stale();
     }
 
     /// The subscriber fell behind and `count` events never arrived.
@@ -736,6 +752,7 @@ impl TransferBoard {
             }
         }
         self.drop_old_finished();
+        self.cap_total();
     }
 
     /// The live upload of `blob`, or a new one (the stream may have lagged past its create).
@@ -770,6 +787,35 @@ impl TransferBoard {
         let transfer = &mut self.transfers[index];
         transfer.last_ms = at_ms;
         transfer
+    }
+
+    /// Drop unfinished transfers silent for [`STALE_AFTER_MS`] of stream time.
+    fn drop_stale(&mut self) {
+        let now = self.now_ms;
+        let before = self.transfers.len();
+        self.transfers
+            .retain(|t| t.phase.is_finished() || now.saturating_sub(t.last_ms) < STALE_AFTER_MS);
+        let dropped = before - self.transfers.len();
+        if dropped > 0 {
+            tracing::debug!(target: "capsule_cli::tui", dropped, now, "transfer view: aged out stale transfers");
+        }
+    }
+
+    /// Hold at most [`TRANSFERS_KEPT`] transfers: drop the one silent longest until it fits.
+    fn cap_total(&mut self) {
+        while self.transfers.len() > TRANSFERS_KEPT {
+            let Some(oldest) = self
+                .transfers
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, t)| t.last_ms)
+                .map(|(i, _)| i)
+            else {
+                return;
+            };
+            let gone = self.transfers.remove(oldest);
+            tracing::debug!(target: "capsule_cli::tui", blob = %gone.blob, "transfer view: over the cap, dropped");
+        }
     }
 
     fn drop_old_finished(&mut self) {

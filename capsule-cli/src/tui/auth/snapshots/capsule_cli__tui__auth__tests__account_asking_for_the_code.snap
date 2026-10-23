@@ -1,0 +1,18 @@
+---
+source: capsule-cli/src/tui/auth/tests.rs
+expression: draw(&state)
+---
+Capsule · Account · Signed out
+┌Account───────────────────────────────────────────────────────────────────────┐
+│Not signed in.                                                                │
+│                                                                              │
+│› Authenticator code  ▏                                                       │
+│                                                                              │
+│This account has two-factor authentication switched on. Enter the code your   │
+│authenticator app shows.                                                      │
+│                                                                              │
+│Identity provider: `capsule auth login --oidc` (add `--device` to approve on  │
+│another device). New account: `capsule auth register`. Scriptable: `capsule   │
+│auth status --json`.                                                          │
+└──────────────────────────────────────────────────────────────────────────────┘
+Enter Submit  Tab Next field  Esc Stop editing

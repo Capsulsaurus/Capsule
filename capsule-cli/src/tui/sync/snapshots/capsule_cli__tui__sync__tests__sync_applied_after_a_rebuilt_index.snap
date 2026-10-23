@@ -1,0 +1,18 @@
+---
+source: capsule-cli/src/tui/sync/tests.rs
+expression: draw(&state)
+---
+Capsule · Sync · Signed in
+┌Sync──────────────────────────────────────────────────────────────────────────┐
+│Bring the albums and assets the server lists into this device's local store.  │
+│                                                                              │
+│Sync complete: applied 7 change(s) across 2 album(s) in 1 page(s).            │
+│The server rebuilt this library's index; resynced from the start.             │
+│Run `capsule sync reannounce --library PATH` to give it back what your library│
+│holds.                                                                        │
+│                                                                              │
+│Scriptable: `capsule sync --json` (add `--force` to start over).              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+s Sync now  f Sync from the start  q Quit  ? Show the key bindings  Esc Back to
