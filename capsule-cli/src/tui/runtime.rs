@@ -20,7 +20,7 @@ use tokio::sync::mpsc;
 use tokio::time::MissedTickBehavior;
 
 use super::keymap::action_for_event;
-use super::library::PreviewCanvas;
+use super::library::{LibraryAction, LibraryEffect, PreviewCanvas};
 use super::ports::{Ports, perform};
 use super::state::{Action, AppState, Effect, Screen, canonical_library};
 use super::transfer::{FRAME_INTERVAL, Feed};
@@ -47,7 +47,7 @@ where
     spawn_effects(&ports, &tx, effects);
     let mut canvas = PreviewCanvas::new(ports.image_picker());
     draw(terminal, &state, &mut canvas)?;
-    spawn_effects(&ports, &tx, canvas.take_requests());
+    request_encodes(&ports, &tx, &mut state, &mut canvas);
     let mut feed = Feed::new(&ports.transfer_events());
     let mut frames = tokio::time::interval(FRAME_INTERVAL);
     frames.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -82,7 +82,7 @@ where
         if redraw {
             draw(terminal, &state, &mut canvas)?;
             // A preview the frame could not draw yet is encoded off the loop, like any effect.
-            spawn_effects(&ports, &tx, canvas.take_requests());
+            request_encodes(&ports, &tx, &mut state, &mut canvas);
         }
     }
     Ok(state)
@@ -98,6 +98,26 @@ where
         .draw(|frame| render_with(frame, state, canvas))
         .wrap_err("drawing a frame")?;
     Ok(())
+}
+
+/// Run the encodes the last frame asked for, noting each in `state` first so only the latest
+/// ask's answer is kept.
+fn request_encodes<P: Ports>(
+    ports: &Arc<P>,
+    tx: &mpsc::UnboundedSender<Action>,
+    state: &mut AppState,
+    canvas: &mut PreviewCanvas,
+) {
+    let effects = canvas.take_requests();
+    for effect in &effects {
+        if let Effect::Library(LibraryEffect::Encode(request)) = effect {
+            state.update(Action::Library(LibraryAction::EncodeRequested {
+                generation: request.generation,
+                size: request.size,
+            }));
+        }
+    }
+    spawn_effects(ports, tx, effects);
 }
 
 /// Start each effect on its own task; its outcome comes back on `tx` as an action.

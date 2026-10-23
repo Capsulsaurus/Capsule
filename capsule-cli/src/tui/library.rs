@@ -233,6 +233,14 @@ pub enum LibraryAction {
         /// The pixels, or why there are none.
         result: Result<PreviewImage, String>,
     },
+    /// The canvas asked for an encode of `generation` at `size`. Only the latest ask is
+    /// accepted back: an answer for any other pair (a pane since resized) is dropped.
+    EncodeRequested {
+        /// The decoded preview to encode.
+        generation: u64,
+        /// The pane to fit it to.
+        size: Size,
+    },
     /// [`LibraryEffect::Encode`] finished.
     PreviewEncoded {
         /// The decoded preview it encodes.
@@ -408,6 +416,8 @@ pub struct LibraryScreen {
     generation: u64,
     /// The latest terminal encoding: of which decoded preview, for what pane size.
     encoded: Option<(u64, Size, Result<EncodedPreview, String>)>,
+    /// The latest encode asked for; an answer is kept only if it is for exactly this pair.
+    requested: Option<(u64, Size)>,
 }
 
 impl Default for LibraryScreen {
@@ -428,6 +438,7 @@ impl Default for LibraryScreen {
             preview_in_flight: false,
             generation: 0,
             encoded: None,
+            requested: None,
         }
     }
 }
@@ -577,6 +588,7 @@ impl LibraryScreen {
                 self.group = None;
                 self.preview = None;
                 self.encoded = None;
+                self.requested = None;
                 self.want_preview()
             }
             LibraryAction::PreviewLoaded { asset_id, result } => {
@@ -596,13 +608,21 @@ impl LibraryScreen {
                 }
                 self.want_preview()
             }
+            LibraryAction::EncodeRequested { generation, size } => {
+                self.requested = Some((generation, size));
+                Vec::new()
+            }
             LibraryAction::PreviewEncoded {
                 generation,
                 size,
                 result,
             } => {
-                if generation == self.generation {
+                // Answers can land out of order: only the latest ask is kept. A stale one is
+                // dropped, and the frame still wants (and has already asked for) the current pair.
+                if generation == self.generation && self.requested == Some((generation, size)) {
                     self.encoded = Some((generation, size, result));
+                } else {
+                    tracing::debug!(target: "capsule_cli::tui", generation, ?size, requested = ?self.requested, "stale preview encode dropped");
                 }
                 Vec::new()
             }

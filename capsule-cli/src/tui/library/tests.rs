@@ -710,6 +710,10 @@ fn a_canvas_with_a_protocol_draws_the_image_instead_of_text() {
     };
     assert_eq!(request.image, image(64, 64));
     let (generation, size) = (request.generation, request.size);
+    library_action(
+        &mut state,
+        LibraryAction::EncodeRequested { generation, size },
+    );
     let result = encode_preview(&Picker::halfblocks(), request);
     assert!(result.is_ok(), "{result:?}");
     library_action(
@@ -775,6 +779,13 @@ fn a_failed_encode_falls_back_to_the_text_pane() {
     let (mut state, mut canvas, request) = awaiting_encode();
     library_action(
         &mut state,
+        LibraryAction::EncodeRequested {
+            generation: request.generation,
+            size: request.size,
+        },
+    );
+    library_action(
+        &mut state,
         LibraryEffect::Encode(request).failed("the task panicked; see the TUI log".to_owned()),
     );
     let frame = draw_with(&state, &mut canvas);
@@ -798,6 +809,10 @@ fn an_encoding_of_a_preview_since_replaced_is_dropped() {
         },
     );
     let (generation, size) = (request.generation, request.size);
+    library_action(
+        &mut state,
+        LibraryAction::EncodeRequested { generation, size },
+    );
     let result = encode_preview(&Picker::halfblocks(), request);
     library_action(
         &mut state,
@@ -815,6 +830,107 @@ fn an_encoding_of_a_preview_since_replaced_is_dropped() {
         matches!(&requests[..], [Effect::Library(LibraryEffect::Encode(r))] if r.image == image(32, 32)),
         "{requests:?}"
     );
+}
+
+/// An encode of the current preview at `size`, asked for and noted in `state`.
+fn ask_encode(state: &mut AppState, size: Size) -> EncodeRequest {
+    let request = EncodeRequest {
+        generation: state.library().generation,
+        image: image(64, 64),
+        size,
+    };
+    library_action(
+        state,
+        LibraryAction::EncodeRequested {
+            generation: request.generation,
+            size,
+        },
+    );
+    request
+}
+
+#[test]
+fn an_older_size_encode_finishing_last_does_not_replace_the_newer() {
+    let mut state = browsing();
+    library_action(
+        &mut state,
+        LibraryAction::PreviewLoaded {
+            asset_id: asset_id(1),
+            result: Ok(image(64, 64)),
+        },
+    );
+    let (a, b) = (Size::new(20, 10), Size::new(30, 15));
+    let for_a = ask_encode(&mut state, a);
+    let for_b = ask_encode(&mut state, b);
+    let generation = for_a.generation;
+    let answer = |request: EncodeRequest| LibraryAction::PreviewEncoded {
+        generation,
+        size: request.size,
+        result: encode_preview(&Picker::halfblocks(), request),
+    };
+    // B lands first, then the older A.
+    library_action(&mut state, answer(for_b));
+    library_action(&mut state, answer(for_a));
+    let held = state.library().encoded.as_ref().expect("an encoding held");
+    assert_eq!((held.0, held.1), (generation, b));
+}
+
+#[test]
+fn an_older_size_encode_alone_is_dropped_and_the_current_size_is_asked_for() {
+    let (mut state, mut canvas, request) = awaiting_encode();
+    let asked = request.size;
+    // The pane is resized: the frame asks for the new size; the old answer lands after.
+    let resized = Size::new(asked.width + 7, asked.height + 3);
+    let again = ask_encode(&mut state, resized);
+    let generation = request.generation;
+    library_action(
+        &mut state,
+        LibraryAction::PreviewEncoded {
+            generation,
+            size: asked,
+            result: encode_preview(&Picker::halfblocks(), request),
+        },
+    );
+    assert_eq!(state.library().encoded, None);
+    // Still waiting on the current size, which is a request the canvas has made once.
+    assert_eq!(again.size, resized);
+    assert!(canvas.take_requests().is_empty());
+}
+
+#[test]
+fn an_encode_for_an_asset_since_left_is_dropped() {
+    let mut state = browsing();
+    library_action(
+        &mut state,
+        LibraryAction::PreviewLoaded {
+            asset_id: asset_id(1),
+            result: Ok(image(64, 64)),
+        },
+    );
+    let size = Size::new(20, 10);
+    let for_x = ask_encode(&mut state, size);
+    // The selection moves to Y, whose decode lands before X's encode does.
+    let effects = state.update(Action::Library(LibraryAction::SelectNext));
+    let [Effect::Library(LibraryEffect::Preview(y))] = &effects[..] else {
+        panic!("a preview request for Y: {effects:?}");
+    };
+    library_action(
+        &mut state,
+        LibraryAction::PreviewLoaded {
+            asset_id: y.asset_id,
+            result: Ok(image(32, 32)),
+        },
+    );
+    assert_ne!(state.library().generation, for_x.generation);
+    library_action(
+        &mut state,
+        LibraryAction::PreviewEncoded {
+            generation: for_x.generation,
+            size,
+            result: encode_preview(&Picker::halfblocks(), for_x),
+        },
+    );
+    assert_eq!(state.library().encoded, None);
 }
 
 // ── Through the keys and the ports ────────────────────────────────────────
