@@ -103,7 +103,7 @@ pub enum Finding {
     },
     /// An asset's chain head names a provenance blob the store does not hold.
     ///
-    /// The weaker half of the envelope-chain check — see the module docs and `S-C45`.
+    /// The weaker half of the envelope-chain check — see the module docs.
     ChainHeadUnresolvable {
         /// The asset.
         asset: AssetId,
@@ -392,8 +392,8 @@ async fn rows_resolve_to_blobs(
                 }
                 // The carve-out: a missing original on an asset still awaiting one is expected
                 // staged-upload state, not corruption. Note this port cannot actually produce
-                // that combination — see `S-C40` — so the arm is here because the *contract*
-                // has it and a future `S-C40` must not have to remember to add it.
+                // that combination today, so the arm is here because the *contract* has it
+                // and a future change to staged uploads must not have to remember to add it.
                 if blob.role == BlobRole::Original && !row.original_held() {
                     continue;
                 }
@@ -461,8 +461,7 @@ async fn rows_resolve_to_blobs(
 /// server cannot: it holds **one** manifest per asset, not a sequence. A lifecycle write
 /// re-points the provenance role, which leaves the superseded manifest unreferenced and
 /// therefore collectable — so the chain the doc assumes is in the blob store is not. That is a
-/// finding about the *design*, not about a store, and it is filed as `S-C52` rather than
-/// approximated here.
+/// finding about the *design*, not about a store, so it is not approximated here.
 async fn mirrored_facts_agree(
     context: &ScrubContext,
     report: &mut ScrubReport,
@@ -505,11 +504,11 @@ async fn mirrored_facts_agree(
 /// # Why this is possible now and was not before
 ///
 /// It asks the scrub to follow `prior_provenance_hash` from the head to the beginning, which
-/// needs the server to *hold* every manifest in the chain. Until `S-C52` it held one: a lifecycle
-/// write re-pointed the provenance role and left the manifest it superseded referenced by
-/// nothing, so the collector reclaimed it on its ordinary schedule. The chain the doc assumed was
-/// in the blob store was not there to walk, and `S-C45` could only report the weaker
-/// `chain_head_unresolvable`.
+/// needs the server to *hold* every manifest in the chain. A server that held only one would
+/// have a lifecycle write re-point the provenance role and leave the manifest it superseded
+/// referenced by nothing, so the collector would reclaim it on its ordinary schedule; the chain
+/// would not be there to walk, and the scrub could only report the weaker
+/// `chain_head_unresolvable`. The index retains the superseded manifests, so the walk works.
 ///
 /// # What it reports and what it does not
 ///

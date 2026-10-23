@@ -8,7 +8,7 @@
 //!
 //! The signature covers the canonical encoding of the receipt's core, so anything that
 //! re-serialises on the way out risks handing a client bytes that no longer verify — the same
-//! discipline as `S-C30`'s manifest and `S-C9`'s directory. What the log holds is what the wire
+//! discipline as the manifest and the device directory. What the log holds is what the wire
 //! carries.
 //!
 //! # `error.upload.receipt_not_available` is a state, not a failure

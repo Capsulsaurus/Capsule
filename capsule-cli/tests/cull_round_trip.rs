@@ -4,7 +4,7 @@
 //! Every step below spawns the real `capsule` binary (`CARGO_BIN_EXE_capsule`, the path Cargo
 //! hands integration tests of the crate that declares the bin). Nothing is shared between steps
 //! but the library directory on disk, so a flag written by one process is only visible to the
-//! next because `S-A10` made album keys, authorities, and per-asset state durable and
+//! next because album keys, authorities, and per-asset state are durable and
 //! `Workspace::open` restores them. An in-process second `Workspace::open` could not distinguish
 //! that from state surviving in a `HashMap`; a process boundary can, which is why this is a
 //! subprocess test rather than a unit test — and why it needs no test dependency to be one.

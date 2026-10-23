@@ -18,7 +18,7 @@
 //! - [`upload`] — the resumable upload state machine, whose protocol is too stateful for
 //!   request/response codegen;
 //! - [`sync`] — the cursor and anti-rewind state machine **over** the generated `GET /v1/sync`
-//!   operation (`S-D28` retired the gRPC feed; the wire here is generated like every other);
+//!   operation (there is no gRPC feed; the wire here is generated like every other);
 //! - [`directory`], [`upgrade`], and [`verify`]'s receipt fetch — the four `application/cbor`
 //!   operations `spargen` 0.5 cannot lower, narrowed out in `build.rs`.
 
@@ -88,5 +88,5 @@ pub mod ffi;
 #[cfg(feature = "ffi")]
 uniffi::setup_scaffolding!();
 
-// `AuthenticatedClient` (revived over the generated `rest::Client`, composed with the S-D7
+// `AuthenticatedClient` (revived over the generated `rest::Client`, composed with the SDK
 // session store) now lives in [`client`]; the parked comment block it replaced is gone.

@@ -9,7 +9,7 @@
 //! depend on whether it can decode them: a HEIC would arrive as "not a still image" instead of
 //! "a still image with no codec here", which is the difference between a reportable,
 //! backfillable gap and an apparent non-image. Capsule's reference library is HEIC end to end,
-//! so that distinction is the whole point of slice `S-B13`.
+//! so that distinction is the whole point of this module.
 //!
 //! Two smaller reasons ride along, both about the brand table rather than a feature: the crate
 //! reads the generic HEIF brand `mif1` as **AVIF**, and it does not recognise `heix` or `msf1`

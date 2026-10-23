@@ -37,7 +37,7 @@
 //! learn which offers were in force. A stale offer is decidable from the ledger alone; an
 //! identity mismatch from the copy, which carries the key.
 //!
-//! # `S-C28` audit
+//! # The status audit
 //!
 //! | Salvo status | Verdict |
 //! | --- | --- |
@@ -45,7 +45,7 @@
 //! | publish `400 error.directory.malformed` | kept, and now also covers a document signed for another account and one past the size ceiling |
 //! | publish `415 error.directory.unsupported_media_type` | **new, and it replaces a phantom.** Kynos's own `Binary` rejection declares `400`, `415` *and* a `422` a raw-bytes body cannot produce, and carries no `error.*` code; [`DirectoryBody`] delegates the enforcement and replaces only the rejection — see [`crate::body`] |
 //! | publish `409 error.directory.version_conflict` | kept — invariant 23's first clause, and the one status the whole surface exists for |
-//! | publish `403 error.directory.identity_mismatch` | **new with `S-C42`** — invariant 23's *second* clause, which nothing enforced on either side |
+//! | publish `403 error.directory.identity_mismatch` | **enforced here** — invariant 23's *second* clause, which nothing enforced on either side |
 //! | fetch `200` (`application/cbor`, verbatim) | kept |
 //! | fetch `404` | kept, and now carries `error.directory.not_published`; the Salvo body had no code |
 //! | `401` | kept, and now the framework's |

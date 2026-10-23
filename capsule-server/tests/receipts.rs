@@ -570,8 +570,8 @@ async fn an_asset_with_nothing_finalized_has_an_empty_chain() {
 #[tokio::test]
 async fn another_accounts_chain_is_404_and_not_403() {
     // One answer for "no such asset" and "not yours". A stranger must not be able to tell a
-    // real asset id from a guessed one by reading the status line — the same rule `S-C39`
-    // settled for blob reads.
+    // real asset id from a guessed one by reading the status line — the same rule
+    // blob reads follow.
     let fixture = Fixture::working();
     let bearer = token(&fixture).await;
     let (first, second, whole) = blob();

@@ -13,7 +13,7 @@ impl MigrationTrait for Migration {
         // `nextval` is non-transactional, so two concurrent finalizations get 5 and 6 and a
         // reader who sees 6 commit first can page past 5 forever. A counter row updated inside
         // the allocating transaction makes allocation order equal commit order, which is the
-        // whole of `S-C21`'s fix.
+        // whole of the fix.
         manager
             .create_table(
                 Table::create()

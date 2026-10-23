@@ -193,7 +193,7 @@ fn an_implausibly_large_document_is_refused_without_decoding_it() {
 fn a_document_that_does_not_verify_under_the_submitted_key_is_refused() {
     // Invariant 23's second clause. Before this, an authenticated caller could
     // publish a document that verifies under no key at all, and the server would serve it to
-    // every peer that asked — and, worse, `S-C23`'s revoke-all anchors on that document, so a
+    // every peer that asked — and, worse, revoke-all anchors on that document, so a
     // stolen session token could permanently disable the account's global sign-out.
     let (uuid, user) = account();
     let mine = ik();
@@ -229,7 +229,7 @@ fn an_unreadable_identity_key_is_its_own_refusal() {
 async fn the_first_publish_anchors_the_account_and_later_keys_are_refused() {
     // Trust-on-first-publish. The anchor is immutable, so a caller holding a valid session but
     // not the account's identity key cannot replace the directory — which is the property
-    // `S-C23`'s revoke-all rests on.
+    // revoke-all rests on.
     let (uuid, user) = account();
     let store = InMemoryDeviceDirectory::new();
     let anchored = ik();

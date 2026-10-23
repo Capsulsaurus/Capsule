@@ -16,7 +16,7 @@
 //! and this verdict gates deletion. A client that sends an empty list has a bug, and the worst
 //! possible way to tell it so is to answer "yes, safe to delete".
 //!
-//! # `S-C28` audit
+//! # The status audit
 //!
 //! | Salvo status | Verdict |
 //! | --- | --- |

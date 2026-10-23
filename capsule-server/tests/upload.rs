@@ -467,7 +467,7 @@ async fn a_full_upload_finalizes_and_the_bytes_become_a_blob() {
 
 #[tokio::test]
 async fn a_provenance_blob_is_stored_exactly_as_it_arrived() {
-    // `S-C30`: the signed manifest rides as a provenance blob and the server stores the signed
+    // The signed manifest rides as a provenance blob and the server stores the signed
     // bytes verbatim. Nothing on this path re-serializes anything into manifest bytes, and this
     // is the case that says so.
     let fixture = Fixture::working();

@@ -96,7 +96,7 @@ impl From<crate::net::negotiation::SendError> for AlbumError {
 
 #[derive(Clone)]
 enum AlbumAuth {
-    /// Drive requests through the `S-D7` session (pre-flight refresh, single-flight, one
+    /// Drive requests through the SDK session (pre-flight refresh, single-flight, one
     /// `401` refresh-and-replay).
     Session(crate::auth::Session),
     /// A fixed bearer over a plain client (tests).
@@ -115,7 +115,7 @@ pub struct AlbumTransport {
 }
 
 impl AlbumTransport {
-    /// Build a transport that authorizes through an authenticated `S-D7`
+    /// Build a transport that authorizes through an authenticated
     /// [`Session`](crate::auth::Session) — the sanctioned production path. `base_url` is the
     /// album endpoint root (`{origin}/v1/albums`).
     pub fn with_session(session: crate::auth::Session, base_url: impl Into<String>) -> Self {

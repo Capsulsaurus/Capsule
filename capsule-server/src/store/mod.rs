@@ -67,7 +67,7 @@
 //!
 //! MFA attempt counters and rate-limit counters also rode the Salvo grab-bag. They are
 //! **counters, not records** — a different contract with a different failure mode (they must
-//! survive a lost increment badly, not a lost record) — and `S-C29` assigns them no home.
+//! survive a lost increment badly, not a lost record) — and no state port is their home.
 //! They are deliberately absent here rather than folded into [`AuthStateStore`], where they
 //! would rebuild the grab-bag one field at a time.
 

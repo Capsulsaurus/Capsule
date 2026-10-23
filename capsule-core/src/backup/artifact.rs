@@ -1604,7 +1604,7 @@ mod tests {
 
     #[test]
     fn custody_receipts_ride_the_artifact_and_restore_verbatim() {
-        // S-D4: the custody-receipt log is evidence, so it is included in the backup artifact
+        // The custody-receipt log is evidence, so it is included in the backup artifact
         // verbatim and comes back byte-identical on restore.
         let f = Fix::new();
         let mut with_receipts = f.asset(1, b"has receipts");

@@ -2,7 +2,7 @@
 //!
 //! # Why the doubles live here and not in `src/`
 //!
-//! `S-C29` put its in-memory [`AuthStateStore`] adapter in `src/`, because a shared conformance
+//! The in-memory [`AuthStateStore`] adapter lives in `src/`, because a shared conformance
 //! suite has to be runnable against an adapter written in another crate. Nothing here has that
 //! constraint, and one of these types is a **credential directory that accepts whatever password
 //! it was told to accept**. That belongs in a test binary and nowhere a server could link it.
@@ -1196,7 +1196,7 @@ impl TotpStore for InMemoryTotp {
 // Session store double
 // ===========================================================================================
 
-/// `S-C29`'s in-memory session store, with a switch that makes it unreachable.
+/// The in-memory session store, with a switch that makes it unreachable.
 ///
 /// Delegation rather than reimplementation: when the switch is off this *is* the adapter the
 /// shared conformance suite passes, so a test asserting session state is asserting against the
@@ -1221,7 +1221,7 @@ impl SwitchableSessions {
 
     /// Make every subsequent operation fail, or stop.
     ///
-    /// Since `S-C48` this includes `read_session`, which the bearer scheme calls, so a guarded
+    /// This includes `read_session`, which the bearer scheme calls, so a guarded
     /// operation under this switch is refused **at the door** and its handler is never entered.
     /// That is the truthful simulation of a total store outage; it is not the way to reach a
     /// handler's own store-unavailable answer — see
@@ -1236,8 +1236,8 @@ impl SwitchableSessions {
     /// still reach one: the bearer scheme's read succeeds, the request enters the handler, and
     /// the write the handler makes is the thing that fails. It is not a contrivance — a read
     /// served from a replica while the primary is unwritable is exactly this — and without it
-    /// `S-C48` would have made several declared `500`s unreachable, which is the `S-C28` defect
-    /// wearing a new hat.
+    /// the ledger check on the bearer scheme would make several declared `500`s unreachable,
+    /// which is the declared-but-unreachable-status defect wearing a new hat.
     pub(crate) fn set_unavailable_after_authentication(&self, unavailable: bool) {
         self.unavailable_after_authentication
             .store(unavailable, Ordering::SeqCst);
@@ -1853,7 +1853,7 @@ impl CohortStore for SwitchableCohorts {
 /// An escrow store that can be made to fail on demand.
 ///
 /// Delegating to the real in-memory one. The switch exists because the `500` on both escrow
-/// operations is otherwise unreachable, and a declared status nothing can reach is the `S-C28`
+/// operations is otherwise unreachable, and a declared status nothing can reach is the
 /// defect this rebuild exists to make impossible.
 #[derive(Debug, Default)]
 pub(crate) struct SwitchableEscrow {
@@ -1932,7 +1932,7 @@ impl EscrowStore for SwitchableEscrow {
 ///
 /// Delegating to the real in-memory one, so a case that walks the ceremony is walking the
 /// adapter the conformance suite covers. The switch exists because the `500` on both revoke-all
-/// operations is otherwise unreachable, and a declared status nothing can reach is the `S-C28`
+/// operations is otherwise unreachable, and a declared status nothing can reach is the
 /// defect this rebuild exists to make impossible.
 #[derive(Debug)]
 pub(crate) struct SwitchableChallenges {
@@ -2066,7 +2066,7 @@ impl AuthStateStore for SwitchableSessions {
 // Upload-session store double
 // ===========================================================================================
 
-/// `S-C29`'s in-memory upload store, with the same switch [`SwitchableSessions`] carries.
+/// The in-memory upload store, with the same switch [`SwitchableSessions`] carries.
 ///
 /// Delegation, not reimplementation: with the switch off this *is* the adapter the shared
 /// conformance suite passes, so an assertion about a session's status or its accepted chunks is
@@ -2319,7 +2319,7 @@ impl UploadSessionStore for SwitchableUploads {
 // Blob store double
 // ===========================================================================================
 
-/// `S-C35`'s in-memory blob store, with one seam: it can **swallow** an append.
+/// The in-memory blob store, with one seam: it can **swallow** an append.
 ///
 /// The seam simulates the one failure the upload protocol's validation section calls out and
 /// that no in-process test could otherwise reach — a crash between a durable append and the
@@ -4189,8 +4189,8 @@ impl Fixture {
     /// names has no directory row — which is exactly the point: the credential is valid, and
     /// the session it asks about is somebody else's.
     ///
-    /// **It opens a session record too**, and that is not incidental. `S-C48` put the ledger on
-    /// the bearer scheme's path, so a token naming a session nothing holds is now refused at the
+    /// **It opens a session record too**, and that is not incidental. The ledger is on the
+    /// bearer scheme's path, so a token naming a session nothing holds is now refused at the
     /// door with a `401` — which would silently turn every cross-account isolation case into a
     /// test of the authenticator rather than of the handler it was written for. A second
     /// account has to be as real as the first for "another account cannot see this" to be the
@@ -4616,7 +4616,7 @@ pub(crate) fn replace_request(
 
 /// A signed device directory holding one device, whose DSK is `dsk`.
 ///
-/// The empty directory `signed_directory_by` produces is enough for `S-C42`'s anchor check and
+/// The empty directory `signed_directory_by` produces is enough for the identity-anchor check and
 /// not enough for an upgrade proposal, which is verified against the *proposing device's* DSK.
 pub(crate) fn signed_directory_with_device(
     ik: &HybridSigningKey,

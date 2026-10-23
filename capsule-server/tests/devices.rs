@@ -228,7 +228,7 @@ async fn revoking_a_session_ends_it_and_leaves_the_others() {
     assert_eq!(body["sessions"].as_array().expect("sessions").len(), 1);
 
     // The revoked session's refresh token is dead — that is the half a revoke is immediate
-    // about, and the half `S-C48` does not cover.
+    // about, and the half the access-token ledger check does not cover.
     fixture
         .client
         .post("/v1/auth/refresh")

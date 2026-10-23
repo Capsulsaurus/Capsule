@@ -13,4 +13,4 @@
 # module-layer answer to "what has been designed and not built?"
 
 capsule-core::media::video	The video half of the media module: first-frame still extraction and the H.264 baseline preview transcode. The still half now exists (`capsule-core::media` on rawshift-image 0.1.1); this does not, because `rawshift-video` is unpublished and the transcode toolchain touches nothing the still path does. Contract: design/thumbnails.md § Video Previews. Tracked by #438.
-capsule-library::import::camera	The PTP/IP tethered-camera source adapter (S-B9). Post-v1; the contract exists so the adapter seam is fixed before anything implements it.
+capsule-library::import::camera	The PTP/IP tethered-camera source adapter. Post-v1; the contract exists so the adapter seam is fixed before anything implements it.

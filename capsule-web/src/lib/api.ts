@@ -1,5 +1,5 @@
 /**
- * Typed client for the Capsule auth REST API (slice `S-C62`).
+ * Typed client for the Capsule auth REST API.
  *
  * Every function here corresponds to an operation in `capsule-server/openapi.json`, and the file
  * is hand-written rather than generated because the browser holds no Rust and `capsule-sdk`'s
@@ -134,7 +134,7 @@ export interface LoginRequest {
 
 /**
  * The half-finished sign-in the server answers with `202` when the account has a confirmed
- * second factor (`S-C55`).
+ * second factor.
  *
  * `mfaRequired` is set **here**, from the status, and is not a field the server sends: the
  * server distinguishes the two outcomes by status because that is what a status is for, and
@@ -175,7 +175,7 @@ export async function login(
 }
 
 /**
- * An address and a password, and nothing else (`S-C53`).
+ * An address and a password, and nothing else.
  *
  * The `username` and `name` this used to carry are gone: each was a fact the server stored about
  * a person, and a display name belongs to the profile surface. Sending them now is a `422` — the
@@ -262,7 +262,7 @@ export async function totpDisable(totpCode: string): Promise<void> {
 // ── Profile endpoints ───────────────────────────────────────────────────────
 
 /**
- * The whole of what the server stores about a person (`S-C54`).
+ * The whole of what the server stores about a person.
  *
  * `username`, `name`, `profile_image_url`, `needs_onboarding` and `is_admin` are gone — the
  * server never had the last two, and the first three were fields it stored about a person for no
@@ -338,7 +338,7 @@ export interface Device {
     current: boolean;
 }
 
-/** One physical device, grouping its re-enrollments (`S-C13`). */
+/** One physical device, grouping its re-enrollments. */
 export interface Cohort {
     cohort_hash: string;
     first_seen: string;
@@ -363,7 +363,7 @@ export async function revokeDevice(sessionId: string): Promise<void> {
 }
 // ── Recovery ────────────────────────────────────────────────────────────────
 //
-// There is no password reset, and there will not be one (`S-C54`). On an end-to-end-encrypted
+// There is no password reset, and there will not be one. On an end-to-end-encrypted
 // account a server-issued reset is not a recovery: the server cannot re-wrap a master key it has
 // never seen, so a "reset" would return an account whose library is unreadable. The recovery
 // story is the escrow blob at `GET`/`PUT /v1/auth/escrow`, unwrapped client-side with the user's

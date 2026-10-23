@@ -16,7 +16,7 @@
 //! perfectly for another. Under a single global `feed_seq` that was close to harmless — a
 //! foreign cursor was just some position in a shared ordering.
 //!
-//! It is **not** harmless here. `S-C37` mints sequence numbers **per owner**, so position 500
+//! It is **not** harmless here. The index mints sequence numbers **per owner**, so position 500
 //! means a different point in every library, and an unbound cursor would let a client skip
 //! past its own unseen entries by presenting someone else's. Binding is therefore a
 //! correctness requirement of the new sequence design and not merely compliance with the

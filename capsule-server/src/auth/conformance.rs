@@ -22,7 +22,7 @@
 //!
 //! **The timing-equalized miss.** [`AccountDirectory`]'s contract is that no caller can tell an
 //! unknown account from a wrong password, and half of that is a *response time*. A timing
-//! assertion is flaky by nature and would be the `S-C35` mistake in a new place — a suite
+//! assertion is flaky by nature and would be a suite
 //! claiming to prove a property under conditions it cannot create. What is asserted instead is
 //! the consequence a suite *can* see: both answers are the same value, and neither path is
 //! distinguishable through the port. The work itself is asserted where it is decidable, in

@@ -1,5 +1,5 @@
 //! Proposing an **album upgrade** — the client half of the ceremony's one server-side step
-//! (over the `S-D28` wire).
+//! (over the server's album-upgrade wire).
 //!
 //! [Versioning — Album Upgrade Ceremony] is a client ceremony carried on MLS application
 //! messages the server cannot read. Four of its steps are the server's, and the first is the

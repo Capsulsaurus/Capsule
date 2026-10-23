@@ -15,8 +15,8 @@
 //! `owner_sequences` is a **counter row**, never a Postgres `SEQUENCE` or a `bigserial`.
 //! `nextval` is deliberately non-transactional: it hands 5 and 6 to two concurrent
 //! finalizations and does not roll back, so a reader who sees 6 commit first can page past 5
-//! forever. `index/mod.rs` names that as the whole of `S-C21`, and a counter row updated by the
-//! allocating transaction makes allocation order equal commit order.
+//! forever. `index/mod.rs` names that as the whole of the single-sequence design, and a counter
+//! row updated by the allocating transaction makes allocation order equal commit order.
 //!
 //! # Why the mutations are written in Rust rather than in SQL
 //!

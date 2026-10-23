@@ -11,7 +11,7 @@
 //! immutability, atomic finalization, and enumeration cost — is the thing that would be
 //! abstracted away.
 //!
-//! It follows the shape `S-C29` fixed for the two state ports (see [`crate::store`]): typed
+//! It follows the shape of the two state ports (see [`crate::store`]): typed
 //! operations with no arbitrary serializable payload, properties that belong to the store rather
 //! than to each call, boxed futures so every port stays dyn-compatible, and **one shared
 //! conformance suite in `src/`** that every adapter must pass.
@@ -22,8 +22,9 @@
 //! sizing case that is *not* lookup: a lookup is a `stat` at a known address and costs the same
 //! flat or sharded. The cost lands on the three full-store walks — the integrity scrub's
 //! blob→row pass, the refcount GC's orphan sweep, and the index rebuild
-//! (`S-C1`'s recovery counterpart) — each a complete `readdir` + `stat`, each an integrity or
-//! recovery path that must stay affordable exactly when a deployment is already in trouble.
+//! (the recovery counterpart of upload finalization) — each a complete `readdir` + `stat`, each
+//! an integrity or recovery path that must stay affordable exactly when a deployment is
+//! already in trouble.
 //!
 //! So [`BlobStore::enumerate`] is on the port. A caller that walked the tree itself would fork
 //! the layout, and the first fork is the one that stops finding blobs after the shard changes.

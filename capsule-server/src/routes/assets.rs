@@ -6,7 +6,7 @@
 //! photo", over the asset's whole life — every blob of the original bundle, and every later
 //! manifest that amended it.
 //!
-//! Which is what makes it the operation a *dispute* is settled from. `S-C52` decided the server
+//! Which is what makes it the operation a *dispute* is settled from. The server
 //! keeps the provenance chain rather than collapsing it; this is where the keeping becomes
 //! visible. A client comparing its local chain against this list can tell a server that lost a
 //! blob from one that never had it, because a receipt is a signature over what the server said
@@ -26,9 +26,9 @@
 //! possible — and it is exactly wrong for the case that makes it possible: a guest depositing
 //! into somebody's inbox through a drop link gives the asset up, and letting them read
 //! its later chain would tell them when the owner amended, culled or restored it. The authority
-//! is the same one `S-C39` settled for blob reads: an account reads its own assets.
+//! is the same one blob reads use: an account reads its own assets.
 //!
-//! # `S-C28` audit
+//! # The status audit
 //!
 //! | Status | Verdict |
 //! | --- | --- |

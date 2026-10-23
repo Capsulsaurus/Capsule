@@ -3,7 +3,7 @@ import Foundation
 
 /// A software **P-256 ECDH** ``FfiHardwareKeyAgreement`` — the no-secure-element reference the real
 /// Secure Enclave replaces, and the always-runnable path for the hardware-bound device **encryption**
-/// key's classical half (slice S-F5; a CI VM has no Secure Enclave). It mirrors
+/// key's classical half (a CI VM has no Secure Enclave). It mirrors
 /// ``SecureEnclaveKeyAgreement``'s wire contract exactly — a 65-byte x9.63 (uncompressed SEC1)
 /// public key, and ECDH that returns the **raw 32-byte shared secret** (the point's x-coordinate,
 /// before any KDF) — so it plugs into `p256HardwareDekRoundTrip` end to end. The private key lives

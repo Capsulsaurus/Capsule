@@ -1,5 +1,5 @@
-//! Publishing and fetching the **signed device directory** (over the `S-C9`
-//! server surface).
+//! Publishing and fetching the **signed device directory** (over the server's
+//! directory surface).
 //!
 //! The directory is the user-IK-signed list of enrolled device signing keys that
 //! [`verify_asset`] resolves a manifest's `created_by_device` against. Until a device's entry

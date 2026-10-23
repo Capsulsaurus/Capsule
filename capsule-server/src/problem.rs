@@ -71,7 +71,7 @@
 //! # The other half
 //!
 //! Attaching the member is only half the i18n contract; a generated client also has to know the
-//! member is there. That is `S-C38`, and it is why [`crate::openapi`](fn@crate::openapi) describes `code` on every
+//! member is there. That is why [`crate::openapi`](fn@crate::openapi) describes `code` on every
 //! problem response — the two are one change, and this module is the half that makes the
 //! document's claim true for the framework's own responses.
 

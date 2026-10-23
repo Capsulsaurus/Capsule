@@ -21,7 +21,7 @@
 //! The email address changes in neither, and that is a decision rather than an omission; see
 //! [`crate::auth::profile`].
 //!
-//! # `S-C28` audit
+//! # The status audit
 //!
 //! | Status | Verdict |
 //! | --- | --- |

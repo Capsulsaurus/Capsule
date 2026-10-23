@@ -768,7 +768,7 @@ async fn record_against_asset(
         draft,
         signer: attestation.signer(),
     };
-    // `S-C43`: a replace is applied by the member that can carry the whole change, and the rest
+    // A replace is applied by the member that can carry the whole change, and the rest
     // of its bundle deliberately touches the index not at all.
     let envelope: super::envelope::ManifestEnvelope =
         serde_json::from_str(&record.manifest_envelope).map_err(|error| {

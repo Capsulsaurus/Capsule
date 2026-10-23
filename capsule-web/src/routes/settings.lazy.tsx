@@ -82,7 +82,7 @@ function Settings() {
         try {
             // Its own operation, not a profile edit: it ends every *other* session of the
             // account and re-opens this one, so it is a credential rotation rather than a field
-            // change (`S-C54`).
+            // change.
             await changePassword(currentPassword, newPassword);
             setSuccess(intl.formatMessage({ id: 'settings.password_updated' }));
             setCurrentPassword('');
@@ -150,7 +150,7 @@ function Settings() {
                             {/* Read-only. Changing a login address needs proof the caller
                                 controls the new one, and this deployment has no way to obtain
                                 it — so the server has no field for it rather than a field it
-                                refuses (`S-C54`). */}
+                                refuses. */}
                             <Input
                                 id="email"
                                 type="email"

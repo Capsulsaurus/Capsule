@@ -1,4 +1,4 @@
-//! `capsule library migrate` (issue `#456`, over slice `S-D24`) across a real process
+//! `capsule library migrate` (issue `#456`) across a real process
 //! boundary, by spawning the `capsule` binary the way `show_and_repair.rs` does: the verb's
 //! whole point is what a library *reopened from disk* holds afterwards.
 //!

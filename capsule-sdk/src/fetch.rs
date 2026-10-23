@@ -1295,7 +1295,7 @@ async fn fetch_representation<S: BlobSource>(
 // ─── Production HTTP source ──────────────────────────────────────────────────
 
 /// The production ranged blob source: `reqwest` `GET /blob/{hash}` with a `Range`
-/// header, authorized through the `S-D7` session. rustls only.
+/// header, authorized through the SDK session. rustls only.
 ///
 /// The mid-stream-drop resume path ([`RangeOutcome::Partial`]) is exercised by the
 /// module's mocks; this impl reads each `Range` window whole (a clean drop surfaces

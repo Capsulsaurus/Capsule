@@ -6,10 +6,11 @@
 //! authenticated here. If any of these grew an `Auth` extractor, these cases would stop
 //! compiling their way to a `200` and start returning `401`.
 //!
-//! The case that carries `S-C18` is `a_peer_refuses_a_token_the_published_list_revokes`: it
-//! drives the *verifying* half of design/federation.md's revocation rule over the list this
-//! server actually published, rather than over a hand-built record. The two halves only work
-//! together, and a published list nobody consumes proves nothing about revocation.
+//! The case that consumes the revocation list is
+//! `a_peer_refuses_a_token_the_published_list_revokes`: it drives the *verifying*
+//! half of design/federation.md's revocation rule over the list this server actually published,
+//! rather than over a hand-built record. The two halves only work together,
+//! and a published list nobody consumes proves nothing about revocation.
 
 mod support;
 

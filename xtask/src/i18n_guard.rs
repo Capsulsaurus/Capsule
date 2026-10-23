@@ -1,9 +1,9 @@
 //! `xtask i18n-guard`: a per-platform regression gate that fails when a NEW
 //! user-facing string literal is introduced outside the i18n catalog.
 //!
-//! Slice S-I1 migrated every user-facing literal in the web (JSX), SwiftUI, and
-//! Compose surfaces onto keys in the canonical `locales/` catalog. This gate keeps
-//! the migration from regressing: it scans those three surfaces for hardcoded
+//! Every user-facing literal in the web (JSX), SwiftUI, and Compose surfaces lives
+//! as a key in the canonical `locales/` catalog. This gate keeps
+//! that from regressing: it scans those three surfaces for hardcoded
 //! literals and fails if it finds one that is not a known catalog key (and is not
 //! on the documented allowlist).
 //!
@@ -20,9 +20,9 @@
 //!   `Text("…")`, `.navigationTitle("…")`, `Label("…", …)`, `Button("…", …)`,
 //!   `Section("…")`, `.accessibilityLabel("…")`, `Toggle("…", …)`, `.alert("…", …)`.
 //!   A migrated call passes a catalog KEY (`Text("app.settings.title")`); a literal
-//!   (`Text("Settings")`) is not a key, so it fails. Slice `S-I4` added two more Swift
-//!   detectors: *interpolated* literals in those same positions (`Text("Delete \(n)")`),
-//!   which `S-I1` had to skip because they had no catalog mechanism yet, and the key
+//!   (`Text("Settings")`) is not a key, so it fails. Two more Swift
+//!   detectors cover *interpolated* literals in those same positions (`Text("Delete \(n)")`),
+//!   which a plain-literal scan cannot see, and the key
 //!   argument of `String(localized:)`, the mechanism for strings outside a
 //!   `LocalizedStringKey` position.
 //! - **Compose** (`capsule-android/src/**/*.kt`): the string argument of `Text("…")`
@@ -474,11 +474,10 @@ fn brace_body(content: &str, open: usize) -> Option<&str> {
 
 /// Detect *interpolated* literals in the same watched positions — `Text("Delete \(n)")`.
 ///
-/// Slice `S-I1` had to skip these: with no way to pass ICU arguments from a catalog key,
-/// an interpolated string had nowhere to go, so [`swift_literal_findings`]'s `[^"\\]*`
-/// deliberately walks past a `\(`. Slice `S-I4` gave them a mechanism
-/// (`String(localized:defaultValue:)` against an ICU catalog message), so the blind spot
-/// closes. Every hit is a violation without consulting the catalog: a key can never
+/// [`swift_literal_findings`]'s `[^"\\]*` deliberately walks past a `\(`, so plain-literal
+/// scanning cannot see these. An interpolated string has a catalog mechanism
+/// (`String(localized:defaultValue:)` against an ICU catalog message), so this detector
+/// closes that blind spot. Every hit is a violation without consulting the catalog: a key can never
 /// contain an interpolation, and a migrated call site passes `String(...)`, not a literal.
 fn swift_interpolation_findings(content: &str) -> Vec<Finding> {
     static RE: OnceLock<Regex> = OnceLock::new();
@@ -778,7 +777,7 @@ mod tests {
 
     #[test]
     fn swift_flags_an_interpolated_literal_in_a_watched_position() {
-        // The `S-I1` blind spot, closed by `S-I4`.
+        // The plain-literal blind spot, closed by the interpolation detector.
         let src = r#"Text("Delete \(count) Items")
             .confirmationDialog("Delete \(count) Items?", isPresented: $flag) {}
         "#;

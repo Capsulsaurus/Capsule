@@ -16,7 +16,7 @@
 //! *that* is where the session is opened. A client which cannot tell `200` from `202` gets a
 //! body with no `access_token` in it and fails loudly, which is the failure mode to want.
 //!
-//! # `S-C28` audit
+//! # The status audit
 //!
 //! | Status | Verdict |
 //! | --- | --- |

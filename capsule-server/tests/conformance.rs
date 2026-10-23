@@ -4,8 +4,8 @@
 //! These two assertions are opposites and both are needed. Together they are the executable
 //! form of the failure this rebuild exists to remove: the Salvo surface had **thirteen response
 //! variants that rendered a status the published schema never declared** —
-//! login could answer `423` and `429`, and the Salvo document (then committed as
-//! `capsule-sdk/openapi.json`, deleted in `S-C59`) mentioned neither, so the
+//! login could answer `423` and `429`, and the Salvo document (once committed as
+//! `capsule-sdk/openapi.json`, since deleted) mentioned neither, so the
 //! generated client had no case to map them to. That gap was invisible because it lived between
 //! two hand-written impls, one rendering and one registering, with nothing comparing them.
 //!
@@ -109,11 +109,11 @@ async fn version_reports_the_server_identity() {
 
 /// Everything the description promises has actually been produced by a test.
 ///
-/// This is the assertion that would have caught `S-C28` at the moment it was introduced, and it
-/// is the reason the auth port deleted a status rather than documenting it: the Salvo login can
-/// answer `429`, the counter port that backs rate limiting does not exist (`S-C29` excluded
-/// counters; `S-C32` owns them), and a `429` declared here would fail this test on the first
-/// run. A gap the suite reports beats a promise the server cannot keep.
+/// This is the assertion that catches a status rendered but never declared the moment it is
+/// introduced, and it is the reason the auth port deleted a status rather than documenting it:
+/// the Salvo login can answer `429`, the counter port that backs rate limiting does not exist
+/// (the session store carries no counters), and a `429` declared here would fail this test on
+/// the first run. A gap the suite reports beats a promise the server cannot keep.
 ///
 /// It walks **every** operation in one client, because the recorder is per-client and a status
 /// produced against a second server would not count. So the whole surface — eighteen responses
@@ -365,8 +365,8 @@ async fn every_declared_response_is_exercised() {
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
 
-    // 423: the account is locked. Reachable, therefore documented — the half of `S-C28` that
-    // was closed by declaring rather than deleting.
+    // 423: the account is locked. Reachable, therefore documented — the case that
+    // is closed by declaring rather than deleting.
     fixture.accounts.lock(EMAIL);
     client
         .post("/v1/auth/login")
@@ -481,10 +481,9 @@ async fn every_declared_response_is_exercised() {
     // order is load-bearing: a `409` on `DELETE` needs a session mid-finalization, and a `200`
     // on `POST` needs one already open for the same bytes.
     //
-    // A fresh sign-in, because the walk just logged the previous one out. Before `S-C48` the
-    // rest of this walk rode `rotated.access_token` straight past its own logout — the token
-    // outlived the session it named, which is exactly the defect that slice closed. That it now
-    // has to sign in again is the fix showing up in the test that would have hidden it.
+    // A fresh sign-in, because the walk just logged the previous one out. A token
+    // does not outlive the session it names, so the rest of this walk cannot ride
+    // `rotated.access_token` past its own logout and has to sign in again.
     let signed_in: TokenResponse = client
         .post("/v1/auth/login")
         .header("accept", "application/json")
@@ -1130,7 +1129,7 @@ async fn every_declared_response_is_exercised() {
     // 400 is the `Path` extractor's, and it took a probe to establish that anything reaches it:
     // a `String` path parameter accepts every segment that *is* a string, so the only way in is
     // a segment that is not one. `%FF` is not valid UTF-8, so the request is refused before the
-    // route runs. Reachable, therefore declared — the `S-C28` question asked of the framework's
+    // route runs. Reachable, therefore declared — the same question asked of the framework's
     // own rejection rather than only of the handler's.
     client
         .get("/v1/blob/%FF")
@@ -2486,7 +2485,7 @@ async fn every_declared_response_is_exercised() {
     //
     // A fresh sign-in first: `bearer`'s own session was closed by the logout block above, and
     // re-authentication is the one operation here that needs a *live session record* rather
-    // than a merely valid token — it moves a field on one. That the two differ is `S-C48`.
+    // than a merely valid token — it moves a field on one. The bearer scheme distinguishes the two.
     let enrolling: capsule_server::routes::auth::TokenResponse = client
         .post("/v1/auth/login")
         .header("accept", "application/json")
@@ -2582,7 +2581,7 @@ async fn every_declared_response_is_exercised() {
         .send()
         .await
         .assert_status(StatusCode::FORBIDDEN);
-    // The 500 comes from the *enrollment* store, not the session store. Since `S-C48` the
+    // The 500 comes from the *enrollment* store, not the session store. The
     // freshness gate reads `authenticated_at` off the credential the bearer scheme already
     // verified, so this operation no longer touches the session store at all — and a walk that
     // kept reaching for it would be exercising a path the handler does not have.
@@ -2837,7 +2836,7 @@ async fn every_declared_response_is_exercised() {
         .assert_status(StatusCode::BAD_REQUEST);
 
     // A second sign-in, so there is a session this walk is not riding. It is opened *before*
-    // the failure cases because since `S-C48` the `DELETE`'s own 500 needs a target that really
+    // the failure cases because the `DELETE`'s own 500 needs a target that really
     // exists: the handler reads the session, finds it, and then fails on the close. A target
     // that does not exist answers 404 and never reaches the store operation the 500 is about.
     let extra: capsule_server::routes::auth::TokenResponse = client
@@ -5463,9 +5462,9 @@ async fn upgrade_block(
     account_ik: &capsule_core::crypto::keys::HybridSigningKey,
 ) {
     let path = format!("/v1/albums/{album}/upgrade");
-    // The account's *own* anchor, not a fresh key: `S-C42` pins a directory to the first identity
-    // key that published one, so a second key here would be refused as an impostor — which is
-    // the check working, in the middle of a walk about something else.
+    // The account's *own* anchor, not a fresh key: the server pins a directory to the
+    // first identity key that published one, so a second key here would be refused as an
+    // impostor — which is the check working, in the middle of a walk about something else.
     let dsk = support::identity_key();
     let intent = uuid::Uuid::parse_str("019a0000-0000-7000-8000-0000000000c0").expect("a uuid");
     let signed =

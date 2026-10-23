@@ -656,7 +656,7 @@ fn png_alpha_is_flattened_to_opaque() {
 }
 
 /// A recognised format with no codec refuses **before** any decoder runs, and says which half
-/// of the codec is missing. This is the S-B13 contract at the seam.
+/// of the codec is missing. This is the unsupported-format contract at the seam.
 #[test]
 fn a_format_with_no_codec_refuses_with_a_typed_error() {
     let cases: &[(Vec<u8>, &str, StillFormat)] = &[

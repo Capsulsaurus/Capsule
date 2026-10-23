@@ -2,8 +2,8 @@
 //!
 //! One endpoint for every lifecycle write that does **not** move blob bytes: `delete`,
 //! `trash-restore`, `metadata-update`, and a derivative over blobs the server already holds. A
-//! write that moves bytes is an upload by definition, so `create` rides `S-C1` and `replace`
-//! is `S-C43`'s.
+//! write that moves bytes is an upload by definition, so `create` and `replace`
+//! ride the upload surface.
 //!
 //! The endpoint is deliberately singular. A new action is a manifest-schema change under a new
 //! `protocol_version`, never a new endpoint — which is what keeps the invariant battery in one
@@ -98,14 +98,14 @@
 //! longer the head, so checking the chain first would answer `409` to a client whose only fault
 //! was not hearing the first answer.
 //!
-//! # `S-C28` audit
+//! # The status audit
 //!
 //! | Salvo status | Verdict |
 //! | --- | --- |
 //! | `200` | kept, and now **static**. The retired handler picked its status at run time with `StatusCode::from_u16(result.status)`, which is why salvo-oapi could describe no responses at all and spargen refused the operation outright — and the value was unconditionally `200` every time |
 //! | `400` (envelope, action, amk) | kept, each with its own `error.*` code |
 //! | `403 error.upload.album_access_denied` | kept, and it now also answers an asset that is not the caller's — one value, because the asset id is client-chosen |
-//! | `403 error.moderation.account_suspended` | **added.** A suspension removes the ability to write and a lifecycle op is a write; `POST /v1/upload` refused one from the start and this surface did not, which stopped being merely inconsistent when `S-C51` widened it from the owner to every writer member |
+//! | `403 error.moderation.account_suspended` | **added.** A suspension removes the ability to write and a lifecycle op is a write; `POST /v1/upload` refused one from the start and this surface did not, which stopped being merely inconsistent once lifecycle writes were open to every writer member and not only the owner |
 //! | `409 error.upload.stale_revival` | kept — invariant 17, the status this surface exists to be able to give |
 //! | `401` | kept, and now the framework's |
 //! | `500` | kept |
@@ -480,15 +480,15 @@ pub async fn apply_op(
     //
     // The authorization doc says a rejection "writes nothing". Read literally that would forbid
     // this, so it is worth being explicit about the reading taken: a blob nothing references is
-    // not state any client can observe — it is unreachable by content address (`S-C10` answers
-    // `404` for an unreferenced hash) and it is precisely what refcount GC exists to collect.
+    // not state any client can observe — it is unreachable by content address (an unreferenced
+    // hash answers `404`) and it is precisely what refcount GC exists to collect.
     // What "writes nothing" protects is the asset's *observable* state: no row changes, no
     // provenance record is appended, no sequence number is minted.
     //
     // The alternative order is worse in a way that is not recoverable: applying first would
     // point an asset — and therefore the feed — at bytes the store might never receive, which
-    // is the dangling reference `S-C10` has to answer `410` for. Storing is idempotent, so a
-    // replay that reaches here writes nothing new either.
+    // is a dangling reference that content-address reads would have to answer `410` for.
+    // Storing is idempotent, so a replay that reaches here writes nothing new either.
     store(&upload, &provenance, &manifest).await?;
     if let (Some(address), Some(bytes)) = (&metadata_address, &metadata) {
         store(&upload, address, bytes).await?;

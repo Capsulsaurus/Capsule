@@ -85,8 +85,8 @@ pub const DEFAULT_DRIFT_DAYS: i64 = 30;
 /// The per-blob ceiling a deployment defaults to, in bytes.
 ///
 /// 4 GiB, the Salvo deployment's `max_file_size`. It bounds one blob; the total in-flight
-/// bytes are bounded by the discard window instead, which is `S-C1`'s pressure-eviction half
-/// and is not this type's business.
+/// bytes are bounded by the discard window instead, which is the pressure-eviction half
+/// of the upload lifecycle and is not this type's business.
 pub const DEFAULT_MAX_FILE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 
 /// How long one chunk's body may take to arrive once the server starts reading it: two minutes.

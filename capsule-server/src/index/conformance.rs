@@ -5,15 +5,14 @@
 //! written elsewhere. Everything is generic over `&dyn AssetIndex`, so a Postgres-backed smoke
 //! test is one [`run_all`] call and costs nothing in a binary that never makes one.
 //!
-//! # What this suite can prove about `S-C21`, and what it cannot
+//! # What this suite can prove about single-sequence allocation, and what it cannot
 //!
 //! The port's central claim is that a sequence number is allocated inside the same critical
 //! section that makes its row readable, so a reader can never page past a number that is still
 //! uncommitted. **A single-process suite cannot exhibit that race**, because the window it
 //! would have to observe exists only between two concurrent transactions. Saying otherwise
-//! would repeat the `S-C35` mistake in a new place: a conformance suite proves the operations
-//! that exist behave consistently, never that a property holds under conditions it cannot
-//! create.
+//! would claim more than a conformance suite can: it proves the operations that exist behave
+//! consistently, never that a property holds under conditions it cannot create.
 //!
 //! So the suite asserts the property's **observable consequences** — every minted number is
 //! reachable through the feed, numbers are strictly increasing per owner, and paging over any
@@ -486,7 +485,8 @@ pub async fn paging_is_ordered_bounded_and_resumable(index: &dyn AssetIndex) {
 
 /// Every number the index mints is reachable through the feed.
 ///
-/// The observable half of `S-C21` — see the module docs on what this can and cannot prove.
+/// The observable half of the single-sequence claim — see the module docs on what this can and
+/// cannot prove.
 pub async fn every_minted_number_is_reachable(index: &dyn AssetIndex) {
     let owner = OwnerId::new("reach-owner");
     let mut minted = Vec::new();
@@ -1972,7 +1972,7 @@ pub async fn a_restore_clears_the_retention_floor(index: &dyn AssetIndex) {
 /// Run every case against `index`, in order.
 /// A serving hold is placed, reported on every reference, and lifted.
 ///
-/// `S-C17`. Three separate claims, and the third is the one a takedown's reversibility rests
+/// Three separate claims, and the third is the one a takedown's reversibility rests
 /// on: a lifted hold leaves the row exactly as it was, because the hold never touched the
 /// state, the blobs or the feed position in the first place.
 pub async fn a_serving_hold_is_placed_reported_and_lifted(index: &dyn AssetIndex) {

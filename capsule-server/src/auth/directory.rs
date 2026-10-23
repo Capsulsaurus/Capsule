@@ -35,7 +35,7 @@
 //! `CounterKey::LoginAttempts`: the per-account ceiling is this lockout, reserved atomically
 //! with the account row, and a second counter keyed on the account would need the route to
 //! learn *which* account a refused password belonged to — the one thing this port withholds. Rate limiting *is* a counter, it has no port anywhere
-//! in this crate, and slice `S-C32` owns it; see `routes::auth` for what that costs the ported
+//! in this crate yet; see `routes::auth` for what that costs the ported
 //! surface today.
 
 use std::fmt;
@@ -95,7 +95,7 @@ pub enum DirectoryError {
 /// Who exists, and whether a presented password is theirs.
 ///
 /// One operation. A directory that also listed accounts, created them or changed passwords
-/// would be the grab-bag `S-C29` deleted, rebuilt one method at a time; registration and
+/// would be the grab-bag state trait rebuilt one method at a time; registration and
 /// password change are their own surfaces and will bring their own contracts.
 pub trait AccountDirectory: fmt::Debug + Send + Sync {
     /// Decide whether `password` authenticates the account named by `email`.

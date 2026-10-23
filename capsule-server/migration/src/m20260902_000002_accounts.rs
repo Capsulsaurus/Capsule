@@ -35,7 +35,7 @@ impl MigrationTrait for Migration {
                     // and never read above the adapter.
                     .col(ColumnDef::new(Accounts::Credential).text().not_null())
                     // The lockout the directory port makes the adapter's own state: a column on
-                    // the account row, not a windowed counter. Rate limiting is `S-C32` and has
+                    // the account row, not a windowed counter. Rate limiting is a separate concern and has
                     // no port in this crate.
                     .col(
                         ColumnDef::new(Accounts::Failures)

@@ -850,8 +850,8 @@ fn android_name(key: &str) -> String {
 /// [`IcuPlural::parse`], so what is left is always a complete resource.
 ///
 /// The rules come from [`capsule_i18n::plural`], which is also what the Rust runtime
-/// selects with. They used to be a second table in this file; `S-I7` gave the runtime
-/// plural evaluation and the two immediately had to agree, so there is one table. A
+/// selects with. They used to be a second table in this file; the runtime now
+/// evaluates plurals too and the two must agree, so there is one table. A
 /// language with no row there fails the generator rather than guessing a rule set.
 fn android_plural_arms<'a>(
     locale: &str,

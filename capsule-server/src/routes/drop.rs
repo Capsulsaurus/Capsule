@@ -18,7 +18,7 @@
 //! session's uploader, a drop chunk is whoever holds the link, and that one difference is the
 //! only thing this module reimplements.
 //!
-//! # `S-C28` audit
+//! # The status audit
 //!
 //! | Status | Verdict |
 //! | --- | --- |
@@ -320,7 +320,7 @@ pub enum LinkRejection {
 /// A separate enum from [`DropRejection`] rather than a shared one, because the chunk path
 /// cannot produce a quota refusal, a cap exhaustion or a too-large file — those are decided once
 /// when the session opens. Sharing would make this operation declare three statuses it can never
-/// return, which is the `S-C28` defect running the other way.
+/// return, which is the over-declared-status defect running the other way.
 #[derive(Debug, thiserror::Error, ApiError)]
 pub enum DropChunkRejection {
     /// The chunk's own headers or body are unusable.
@@ -547,7 +547,7 @@ pub enum DropRejection {
 /// One variant, because one thing can go wrong: the caller is authenticated, the account is
 /// theirs, and there is nothing to look up. A shared enum across the three inbox operations
 /// would make this operation *declare* a `404` and a `400` it cannot produce, which is exactly
-/// the `S-C28` defect in reverse.
+/// the over-declared-status defect in reverse.
 #[derive(Debug, thiserror::Error, ApiError)]
 pub enum InboxReadRejection {
     /// The store could not answer.

@@ -24,7 +24,7 @@
 //! a window in which neither does and the account has no recovery path at all.
 //!
 //! So [`EscrowStore::store`] is a replace, not an insert plus a delete, and every adapter owes
-//! atomicity across it. This is the same lesson as `S-C37`'s sequence mint and `S-C42`'s anchor,
+//! atomicity across it. This is the same lesson as the sequence mint and the directory anchor,
 //! in the place where getting it wrong loses a library rather than an entry.
 //!
 //! # It is not versioned, and that is deliberate

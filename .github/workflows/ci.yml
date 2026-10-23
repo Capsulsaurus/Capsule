@@ -246,7 +246,7 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.rust == 'true' }}
     runs-on: ubuntu-latest
-    # Blocking as of `S-C59`. It was non-blocking because the Salvo auth crate's integration
+    # Blocking. It was non-blocking because the Salvo auth crate's integration
     # tests needed testcontainers (Docker), which is slower and flakier; that crate is now
     # review material. Every case this job runs uses a deterministic in-memory adapter, and
     # Kynos's `TestClient` drives a built service in-process; the container-gated cases skip
@@ -519,8 +519,8 @@ jobs:
         working-directory: capsule-web
         run: bun install --frozen-lockfile
       # `check-web` is not pure bun: `test-web` and `build-web` depend on
-      # `build-wasm` / `share-kat` / `drop-kat`, which are cargo (slices S-E1 and
-      # S-D3 added them; this job's step list predates that and was never updated).
+      # `build-wasm` / `share-kat` / `drop-kat`, which are cargo (this job's
+      # step list predates them and was never updated).
       # Without an explicit install here, each of those tasks triggers rustup's
       # toolchain-file auto-install itself, and they clobber each other's
       # `~/.rustup/downloads/*.partial`.
@@ -674,7 +674,7 @@ jobs:
   # Single aggregated status check. Mark THIS ("CI / required") as the required
   # check in branch protection — path-filtered jobs report "skipped", which this
   # treats as a pass. Every job in `needs` is verified below: the loop covers the
-  # eleven gates (`rust-test` included — it became blocking with `S-C59`, see the
+  # eleven gates (`rust-test` included — see the
   # note on that job — `rust-containers`, blocking from the start, #514, `rust-oidc`, #640, and
   # `rust-advisories`, unfiltered, #507), and `changes` is checked ahead of it under a stricter rule,
   # because "skipped" is only trustworthy when the filter that skipped it ran.

@@ -20,14 +20,14 @@
 //! name itself. That is what makes `If-Range` honest: a resumed fetch cannot splice bytes from
 //! a different representation, because a different representation has a different address.
 //!
-//! # `S-C28` audit
+//! # The status audit
 //!
 //! | Salvo status | Verdict |
 //! | --- | --- |
 //! | `200`/`206`/`416` | kept, and now derived — `Delivery` declares all three from its own type |
 //! | `404` | kept. Bodyless there, an RFC 9457 problem here: every `404` this route renders is byte-identical, so it discriminates nothing and gains the `error.*` code the i18n contract requires |
 //! | `410` | kept |
-//! | `409 error.blob.pending_upload` | **restored by `S-C40`**, and rendered from the caller's own in-flight upload rather than from a reference the index does not have — see [`crate::serve`] |
+//! | `409 error.blob.pending_upload` | **rendered from the caller's own in-flight upload**, not from a reference the index does not have — see [`crate::serve`] |
 //! | `401` | kept, and now the framework's, with the `WWW-Authenticate` challenge |
 //! | `500` | kept, with `error.blob.unavailable` |
 //!

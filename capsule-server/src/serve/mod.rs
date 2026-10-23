@@ -29,11 +29,11 @@
 //! could not render it at first, because the index learns a blob's address at **finalization**:
 //! a reference that exists always has its bytes, and bytes that are missing have no reference —
 //! "served" and "unknown", never "still coming". It was deleted rather than declared and left
-//! dark, which is the `S-C28` rule applied to a status this surface wanted.
+//! dark, which is the rule that a status is declared only when the server can produce it.
 //!
-//! **The declaration turned out to be somewhere it already was.** The obvious fix — and the one
-//! `S-C40` was filed predicting — was to record a *declared* original in the asset index at
-//! reservation. That is the Salvo schema, and it is worse than it looks:
+//! **The declaration turned out to be somewhere it already was.** The obvious fix was to record
+//! a *declared* original in the asset index at reservation. That is the Salvo schema, and it
+//! is worse than it looks:
 //!
 //! - an abandoned session would leave a reference promising an original forever, turning the
 //!   transient `409` into a permanent one — the precise failure the `409`/`410` split exists to
@@ -67,11 +67,11 @@
 //! # What is disclosed, stated plainly
 //!
 //! **An account fetches the blobs of its own assets and of the albums it is currently a member
-//! of, and nothing else.** Until `S-C39` any authenticated account could fetch any live address
-//! it could name, defended as a capability model — a content address is the hash of ciphertext,
-//! so producing one without holding the bytes is producing a preimage. The defence is not wrong
-//! and it is not the contract, and it stacks badly besides: an address that leaks once is a
-//! permanent capability, because the address never changes.
+//! of, and nothing else.** An earlier contract let any authenticated account fetch any live
+//! address it could name, defended as a capability model — a content address is the hash of
+//! ciphertext, so producing one without holding the bytes is producing a preimage. The defence
+//! is not wrong and it is not the contract, and it stacks badly besides: an address that leaks
+//! once is a permanent capability, because the address never changes.
 //!
 //! The decision is [`ReadAuthority`]'s, asked **first**, and asked of **every** reference the
 //! index holds to the address (#462): the same ciphertext can be held by unrelated owners, and
@@ -101,11 +101,11 @@
 //!
 //! # What is missing, and owned elsewhere
 //!
-//! - **Moderation takedown** landed with `S-C17`: an asset under a
+//! - **Moderation takedown** is served: an asset under a
 //!   [`ServingHold`](crate::index::ServingHold) is refused `410` before any byte is touched.
 //!   The bytes stay exactly where they are — a takedown is a serving constraint and not a
 //!   destruction — so this answer can only come from the index, never from the store.
-//! - **GC state** landed with `S-C11`: a blob the collector has marked is refused `410` while
+//! - **GC state** is served: a blob the collector has marked is refused `410` while
 //!   its bytes are still on disk, because those bytes are on their way out and a client that
 //!   fetched them would be caching something about to vanish. Checked *before* the store is
 //!   touched, so a marked blob's bytes are never read.
@@ -366,10 +366,10 @@ pub async fn resolve(
 
     // No bytes behind a live reference, and this stays `Gone` unconditionally. A reference is
     // written at finalization, *after* the bytes commit, so a reference without bytes means the
-    // bytes were removed — never that they have not arrived. That is why `S-C40`'s transient
-    // answer is decided in the no-reference arm above and not here: putting it here would
-    // require the index to hold references to bytes that do not exist yet, which is the shape
-    // the integrity scrub reports as corruption.
+    // bytes were removed — never that they have not arrived. That is why the transient
+    // "still arriving" answer is decided in the no-reference arm above and not here: putting it
+    // here would require the index to hold references to bytes that do not exist yet, which is
+    // the shape the integrity scrub reports as corruption.
     tracing::warn!(
         asset = %reference.asset_id,
         role = reference.role.as_str(),

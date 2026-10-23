@@ -498,8 +498,8 @@ pub fn seal_drop_wasm(
 /// Every value the production seal draws from the CSPRNG is supplied explicitly (`k`,
 /// `nonce_prefix`, `eseed`, `blob_nonce`, all lowercase hex) so the browser seal is byte-for-byte
 /// reproducible and can be proven identical to `capsule_core::drop::seal_drop_derand` — the Rust
-/// adopter then consumes those exact bytes (S-D3 KAT). Web app code uses [`seal_drop_wasm`], never
-/// this. Throws `malformed` on a bad-length hex field, `seal_failed` on a malformed Drop Key.
+/// adopter then consumes those exact bytes (the cross-language KAT). Web app code uses
+/// [`seal_drop_wasm`], never this. Throws `malformed` on a bad-length hex field, `seal_failed` on a malformed Drop Key.
 #[wasm_bindgen(js_name = sealDropDerand)]
 pub fn seal_drop_derand_wasm(
     plaintext: &[u8],
@@ -834,7 +834,7 @@ mod tests {
     }
 
     /// The browser decodes the same bytes the import pipeline encoded, to the same pixels the
-    /// core `decode_capped` produces — the `S-B14` cross-surface criterion, at the one boundary
+    /// core `decode_capped` produces — the cross-surface criterion, at the one boundary
     /// where a second implementation could have crept in.
     #[test]
     fn decode_lqip_matches_the_core_decoder_for_a_real_payload() {

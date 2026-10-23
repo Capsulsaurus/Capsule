@@ -4,7 +4,7 @@
 //! relays opaque payloads through that channel, and A closes it. [`crate::enrollment`] owns the
 //! freshness gate and the reason the relay is untrusted; this module is the wire shape.
 //!
-//! # `S-C28` audit
+//! # The status audit
 //!
 //! | Status | Verdict |
 //! | --- | --- |
@@ -229,11 +229,11 @@ pub async fn issue_enrollment_code(
     let user = UserId::new(credential.user.as_str());
     let now = enrollment.clock().now();
 
-    // Read from the credential, not from the store. `S-C48` put the ledger on the bearer
-    // scheme's path, so by the time a handler runs the session has already been confirmed live
-    // and its `authenticated_at` handed over. This used to be a second `read_session` with its
-    // own `500`; that answer became unreachable the moment the scheme started refusing an
-    // unreadable ledger itself, and a status nothing can produce is the `S-C28` defect.
+    // Read from the credential, not from the store. The ledger sits on the bearer scheme's
+    // path, so by the time a handler runs the session has already been confirmed live and its
+    // `authenticated_at` handed over. A second `read_session` here would carry its own `500`
+    // that is unreachable, since the scheme refuses an unreadable ledger itself, and a status
+    // nothing can produce is an over-declaration.
     //
     // The "session the store no longer holds" case the old comment covered is not lost — it is
     // now a `401` from the scheme, which is a better answer than the `403` this gate gave it.

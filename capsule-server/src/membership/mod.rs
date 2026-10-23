@@ -27,8 +27,9 @@
 //! **uploader** (`routes/upload.rs`: `owner_id` is the namespace, `upload_user_id` is billed).
 //! Removing that member from a later roster changes neither fact. The asset stays in the
 //! owner's album, and its bytes stay against the removed member's quota until the owner or a
-//! current writer member deletes the asset and the refcount collector (`gc/mod.rs`, `QuotaStore::release_attribution`,
-//! `S-C44`) releases the attribution once the last reference to the bytes is gone.
+//! current writer member deletes the asset and the refcount collector (`gc/mod.rs`,
+//! `QuotaStore::release_attribution`) releases the attribution once the last reference to the
+//! bytes is gone.
 //!
 //! That is the decision design/quota.md records under "Departed album members" (issue #473),
 //! not a gap: removal is a key rotation, not a data event, so it re-attributes nothing, and

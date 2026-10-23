@@ -1,5 +1,5 @@
-//! The **hardware-bound P-256 variant** of the Device Encryption Key (DEK) — slice `S-F5` in the
-//! repo-root `SLICES.md`; design: <https://docs/design/cryptography/keys/#device-keys>.
+//! The **hardware-bound P-256 variant** of the Device Encryption Key (DEK); design:
+//! <https://docs/design/cryptography/keys/#device-keys>.
 //!
 //! The software DEK is **X-Wing** (X25519 + ML-KEM-768; see [`super::kem`]). Shipping secure
 //! elements expose **ECDH-P256**, not X25519, so — mirroring the P-256 hybrid **signing** key

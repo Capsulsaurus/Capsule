@@ -221,7 +221,7 @@ async fn the_cap_covers_an_operation_that_takes_no_body() {
 
 /// Every operation the server serves declares the `413` the limit can produce.
 ///
-/// The half of `S-C28` that cannot be caught by producing responses: a status the server can
+/// The half of conformance that cannot be caught by producing responses: a status the server can
 /// send and the document does not declare is a status a generated client has no case for. Here
 /// the declaration comes from the interceptor's own type, so this asserts the wiring rather than
 /// a hand-maintained list.

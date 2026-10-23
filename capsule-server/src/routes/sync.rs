@@ -10,7 +10,7 @@
 //! | --- | --- |
 //! | `OK` with a page | `200` — [`SyncPageResponse`], always with a `next_cursor` |
 //! | `INVALID_ARGUMENT` (`error.sync.cursor_invalid`) | kept as `400`, and it now also fires for a cursor issued to another owner, which the retired MAC could not detect |
-//! | `UNAUTHENTICATED` (`error.sync.unauthenticated`) | **the framework's `401` now.** `Auth<AccessToken>` declares it and fills the `WWW-Authenticate` challenge. The catalog key survives, unused, because giving a framework rejection an `error.*` code is `S-C36` and is the same fix for every surface |
+//! | `UNAUTHENTICATED` (`error.sync.unauthenticated`) | **the framework's `401` now.** `Auth<AccessToken>` declares it and fills the `WWW-Authenticate` challenge. The catalog key survives, unused, because giving a framework rejection an `error.*` code is one fix for every surface, made centrally in [`crate::problem`] |
 //! | `INTERNAL` | `500`, and now *coded* — `error.sync.unavailable`, a key this slice added because the retired feed had none and a client could not tell a broken server from a broken cursor |
 //! | page size out of range | **not a rejection.** Clamped; see [`crate::sync::clamp_page_size`] |
 //! | *(new, #697)* a cursor from before the owner's sync epoch moved | `409` (`error.sync.cursor_stale`) |

@@ -12,7 +12,7 @@ updates:
     schedule:
       interval: "weekly"
   # The workspace root: `Cargo.toml` and `Cargo.lock` live here and cover every member. This
-  # pointed at `/capsule-api` until the Salvo tree moved to `legacy-review/` in `S-C59`, so it
+  # pointed at `/capsule-api` until the Salvo tree moved to `legacy-review/`, so it
   # had been watching a directory that no longer exists — and therefore watching nothing.
   - package-ecosystem: "cargo"
     directory: "/"

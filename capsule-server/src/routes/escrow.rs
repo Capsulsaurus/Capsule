@@ -33,7 +33,7 @@
 //! recovery path in one authenticated request, which is exactly the capability a stolen session
 //! token should not have; rotation replaces, and account deletion takes the escrow with it.
 //!
-//! # `S-C28` audit
+//! # The status audit
 //!
 //! | Status | Verdict |
 //! | --- | --- |

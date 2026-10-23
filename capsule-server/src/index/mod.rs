@@ -12,7 +12,7 @@
 //! behind a port whose whole contract is "this disappears on schedule", which is how the Salvo
 //! grab-bag started.
 //!
-//! # One sequence, not two — which is `S-C21`'s fix rather than its patch
+//! # One sequence, not two — a fix rather than a patch
 //!
 //! The retired feed had **two** ordering keys: a per-album `sync_seq` the client checked for
 //! rewinds, and a global `bigserial feed_seq` the cursor paged over. The race lived in the
@@ -41,7 +41,7 @@
 //!
 //! [`crate::upload::visibility`] owns the definition and this port consumes it. Note what the
 //! definition became: the upload protocol says an asset becomes visible "once its **manifest
-//! and metadata blob** are finalized", and since `S-C30` the manifest is a blob of its own — so
+//! and metadata blob** are finalized", and the manifest is a blob of its own — so
 //! the gate is two finalized sessions, and a per-role `did this one flip visibility` function
 //! cannot express it. See [`crate::upload::visibility::bundle_is_publishable`].
 //!
@@ -49,7 +49,7 @@
 //!
 //! - **It never touches bytes.** It holds content *addresses*; the provenance blob's bytes are
 //!   read through [`crate::blob::BlobStore`] by whoever serves them. That is what keeps
-//!   `S-C30`'s verbatim rule enforceable: there is no path from the index to a byte, so the
+//!   the verbatim-manifest rule enforceable: there is no path from the index to a byte, so the
 //!   index cannot re-serialize a manifest even by accident.
 //! - **It never decides what a change means to a reader.** [`ChangeKind`] is computed per page
 //!   against the reader's own cursor, because "created" and "updated" are facts about the
@@ -224,7 +224,7 @@ pub struct AssetRow {
     /// write simply dropped the manifest it superseded:
     ///
     /// - the integrity scrub's *envelope chain ⇄ index agreement* check has something to walk
-    ///   (`S-C45` found it had nothing);
+    ///   (without the superseded manifests it has nothing);
     /// - and the takedown rebuttal is **evidentiary**. A server accused of losing an asset
     ///   answers with the user's own signed `delete` manifest and its elapsed `retention_until`.
     ///   A superseded manifest that has been collected is a rebuttal that is gone precisely when
@@ -299,8 +299,9 @@ pub enum Reservation {
     ///
     /// Deliberately carries **nothing**. A caller that hits this is by definition not the party
     /// the existing row belongs to, so handing back the row would answer a guessed asset id
-    /// with another account's album — the same disclosure argument that blocks `S-C22`'s
-    /// `409 duplicate_blob`, in the one place where the guess costs the attacker nothing.
+    /// with another account's album — the same disclosure argument that governs the
+    /// `409 duplicate_blob`'s `existing_asset`, in the one place where the guess costs the
+    /// attacker nothing.
     Conflict,
 }
 
@@ -486,7 +487,7 @@ pub struct BlobReference {
 ///
 /// The closed set is the authorization doc's: everything a `POST /albums/{id}/ops` may carry.
 /// `create` and `replace` are absent because they move bytes and are therefore uploads —
-/// `create` is `S-C1`'s and `replace` is `S-C43`'s.
+/// `create` and `replace` ride the upload surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum OpAction {
     /// Soft-delete: the asset is tombstoned and recoverable until its retention window closes.
@@ -726,7 +727,7 @@ pub trait AssetIndex: std::fmt::Debug + Send + Sync {
     /// Both scopes are load-bearing and for different reasons:
     ///
     /// - **Owner** is the disclosure boundary. The blob store could say whether *anyone* holds
-    ///   a ciphertext, and answering `S-C22`'s `existing_asset` from that would tell one account
+    ///   a ciphertext, and answering the `existing_asset` member from that would tell one account
     ///   what another holds — which content addressing makes a real cross-tenant leak.
     /// - **Album** is the merge contract. A `409 duplicate_blob` is the *client's merge
     ///   trigger*: it means "you already have these bytes here, reconcile the two assets
@@ -1027,12 +1028,12 @@ pub(crate) fn create_epoch(row: &AssetRow, blob: &BlobRecord) -> Option<u64> {
 /// verifies against the old ones; a lifecycle op is the *authorized* form of the same change,
 /// and it arrives with a manifest chaining onto the one it supersedes.
 ///
-/// Shared by every adapter for the reason [`entry_for`] is: the `S-C52` retention rule below —
+/// Shared by every adapter for the reason [`entry_for`] is: the retention rule below —
 /// a superseded *manifest* is kept referenced rather than dropped — is exactly the kind of thing
 /// two implementations drift on, and the drift reclaims the server's own rebuttal evidence.
 pub(crate) fn set_singular(row: &mut AssetRow, role: BlobRole, address: &ContentAddress) {
-    // `S-C52`: only the provenance role. The other singular roles are ciphertext, and the old
-    // bytes of a replaced original are exactly what the collector is for.
+    // Retention rule: only the provenance role. The other singular roles are ciphertext, and
+    // the old bytes of a replaced original are exactly what the collector is for.
     if role == BlobRole::Provenance
         && let Some(previous) = row.address_for(BlobRole::Provenance).cloned()
         && &previous != address

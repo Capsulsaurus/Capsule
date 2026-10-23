@@ -125,7 +125,7 @@ pub struct StaticToken(pub String);
 
 #[derive(Clone)]
 enum VerifyAuth {
-    /// Drive requests through the `S-D7` session (pre-flight refresh, single-flight, one `401`
+    /// Drive requests through the SDK session (pre-flight refresh, single-flight, one `401`
     /// refresh-and-replay).
     Session(crate::auth::Session),
     /// A fixed bearer over a plain client (tests).
@@ -144,7 +144,7 @@ pub struct VerifyTransport {
 }
 
 impl VerifyTransport {
-    /// Build a transport that authorizes through an authenticated `S-D7` session — the
+    /// Build a transport that authorizes through an authenticated SDK session — the
     /// sanctioned production path. `base_url` is the API root (`POST {base}/storage/verify`,
     /// `GET {base}/upload/{id}/receipt`, `GET {base}/assets/{id}/receipts`); the attestation-key
     /// record is resolved against its origin instead (see

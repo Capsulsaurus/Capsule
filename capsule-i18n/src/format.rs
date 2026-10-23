@@ -31,7 +31,7 @@
 //! and any other `{name, kind, …}` block are **refused**: a `debug_assert!` fires where a
 //! developer will see it, and the release build copies the construct through verbatim
 //! rather than gaining a new crash on a catalog it could previously render badly. Emitting
-//! ICU source to a user is the exact failure Android shipped before slice `S-I6`; the
+//! ICU source to a user is the exact failure Android once shipped; the
 //! refusal exists so the next construct this runtime cannot express is a test failure
 //! instead.
 //!

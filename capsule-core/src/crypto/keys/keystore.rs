@@ -5,11 +5,11 @@
 //! keys are sealed under the master key (the design's "master key wraps device identity private
 //! keys"). SSoT: [Cryptography — Keys].
 //!
-//! ## The DEK's classical half (`S-F5` → `S-F8`)
+//! ## The DEK's classical half
 //!
 //! The design binds the **classical half** of each device key to a per-platform secure element.
 //! For the Device Encryption Key that means ECDH-P256 inside a Secure Enclave / StrongBox / TPM,
-//! composed with a software ML-KEM-768 half — the [`P256HybridDek`] the `S-F5` slice landed.
+//! composed with a software ML-KEM-768 half — the [`P256HybridDek`].
 //! [`DeviceDek`] is the seam that puts it in a *real* account rather than only in the FFI smoke:
 //! an account is created either [software-DEK](Account::create) (the fallback for hosts with no
 //! element — explicitly retained by the design's "the software composition is what integrates
@@ -54,7 +54,7 @@ pub enum DeviceDek {
     /// no-TPM tail the design excludes from hardware binding by name.
     Software(DekKeypair),
     /// **Hardware-bound.** P-256 ECDH inside the secure element + a software-sealed ML-KEM-768
-    /// half (`S-F5`'s [`P256HybridDek`]). The private P-256 scalar never leaves hardware, so this
+    /// half ([`P256HybridDek`]). The private P-256 scalar never leaves hardware, so this
     /// variant cannot be reconstructed from the account file alone.
     Hardware(P256HybridDek),
 }
@@ -123,8 +123,8 @@ impl std::fmt::Debug for DeviceDek {
 /// authentication error deep in a data-plane path.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DekBinding {
-    /// Both halves in software (X-Wing). The default, and what every pre-`S-F8` account file
-    /// means by omitting the field.
+    /// Both halves in software (X-Wing). The default, and what every account file
+    /// that omits the field means.
     #[default]
     Software,
     /// The classical half is a hardware P-256 key under `key_alias`.
@@ -179,9 +179,9 @@ pub struct AccountFile {
     /// never here — it is non-exportable by contract.
     #[serde(with = "serde_bytes")]
     pub sealed_dek: Vec<u8>,
-    /// Where the DEK's classical half lives. Absent in pre-`S-F8` account files, which
-    /// are software-DEK by construction — hence the `default`, which is what keeps every existing
-    /// library on disk openable.
+    /// Where the DEK's classical half lives. Absent in account files that predate
+    /// hardware DEKs, which are software-DEK by construction — hence the `default`, which is
+    /// what keeps every existing library on disk openable.
     #[serde(default)]
     pub dek_binding: DekBinding,
 }
@@ -195,7 +195,7 @@ impl Account {
     }
 
     /// Create a brand-new account whose **DEK's classical half is generated inside `element`**
-    /// under `key_alias` and never leaves it (`S-F5` composition, `S-F8` wiring). The ML-KEM-768
+    /// under `key_alias` and never leaves it. The ML-KEM-768
     /// half is drawn fresh here and sealed under the master key like any software seed.
     ///
     /// Fails only if the element refuses enrollment (unavailable, biometric cancelled, bad key) —
@@ -596,12 +596,12 @@ mod tests {
         assert_eq!(with_element.device.dek.public_bytes(), published);
     }
 
-    /// **Migration.** A pre-`S-F8` account file has no `dek_binding` field at all. It must still
-    /// open, as software — proved by decoding a struct that literally lacks the field, which is
-    /// what those bytes on disk are.
+    /// **Migration.** An account file from before hardware DEKs has no `dek_binding` field at
+    /// all. It must still open, as software — proved by decoding a struct that literally lacks
+    /// the field, which is what those bytes on disk are.
     #[test]
     fn a_pre_s_f8_account_file_without_a_binding_field_opens_as_software() {
-        /// The exact pre-`S-F8` `AccountFile` shape.
+        /// The exact `AccountFile` shape from before hardware DEKs.
         #[derive(Serialize)]
         struct LegacyAccountFile {
             user_id: Uuid,

@@ -27,10 +27,9 @@
 //!
 //! # `last_active_at` moves, and it is stale by up to a minute on purpose
 //!
-//! `AuthStateStore::touch_session` had no caller on any request path until `S-C48` put the
-//! session ledger on the bearer scheme's path, so this field used to be the sign-in time
-//! forever. It is now written forward by any authenticated request, which makes it mean what
-//! the listing says it means.
+//! `AuthStateStore::touch_session` is called from the bearer scheme's
+//! path, so any authenticated request writes this field forward rather than leaving it at the
+//! sign-in time. That makes it mean what the listing says it means.
 //!
 //! It is **coalesced** at
 //! [`TOUCH_INTERVAL`](crate::auth::scheme::TOUCH_INTERVAL) — one write per minute per session
@@ -74,8 +73,8 @@ pub struct SessionView {
     pub authenticated_at: String,
     /// When it was last seen, RFC 3339.
     ///
-    /// Equal to `created_at` until `S-C48` puts the session ledger on the request path. A
-    /// client must not label this "last used" before then.
+    /// Moved forward by any authenticated request on the session, so it is current to within
+    /// the touch interval.
     pub last_active_at: String,
     /// The `User-Agent` the opening ceremony carried, if any.
     #[serde(skip_serializing_if = "Option::is_none")]

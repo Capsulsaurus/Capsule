@@ -1,4 +1,4 @@
-//! Host-verifiable smoke for the S-D9 FFI surface and the `S-P1` workspace verbs.
+//! Host-verifiable smoke for the FFI surface and its workspace verbs.
 //!
 //! The native (Swift + Kotlin) harnesses drive the same flows against a dev server
 //! *through the generated bindings* — that is the platform CI's half and needs native
@@ -8,20 +8,20 @@
 //! one the upload, push, album, and directory client tests drive), so the surface is
 //! proven wired end to end without a native toolchain.
 //!
-//! `S-D9` (the networked half): login → upload → status, plus the `duplicate_blob`
+//! The networked half: login → upload → status, plus the `duplicate_blob`
 //! merge and the typed-error paths.
 //!
-//! `S-P1` (the workspace half): the whole critical-path loop —
+//! The workspace half: the whole critical-path loop —
 //! **enroll → album → seal+import → upload → sync-apply** — driven through
 //! [`FfiWorkspace`] and [`FfiSession`], plus escrow put/get and device-directory
 //! publish. Every verb reaches `capsule-core` for its crypto; what is under test here
 //! is the wiring, the shapes, and the verdicts.
 //!
-//! `sync_pull` itself rides the generated `GET /v1/sync` operation (`S-D28` retired the gRPC
+//! `sync_pull` itself rides the generated `GET /v1/sync` operation (there is no gRPC
 //! feed) and is exercised over a socket in `capsule-server/tests/sdk_client.rs` against the
 //! real router; its Rust-side shape is compiled here (the surface builds) but not behaviorally
 //! driven — the sync-apply test below feeds `apply_sync_entry` the exact three byte strings a
-//! feed entry carries, which is the half `S-P1` owns.
+//! feed entry carries, which is the half the workspace verbs own.
 
 use std::sync::Arc;
 
@@ -443,7 +443,7 @@ async fn flow_server() -> MockServer {
     .await
 }
 
-/// **The `S-P1` Done-when.** One flow, through the FFI types only:
+/// **The workspace half's end-to-end flow.** One flow, through the FFI types only:
 ///
 /// 1. **enroll** — `FfiWorkspace::create` mints the account, device key, signed device
 ///    directory, and durable album keystore at a fresh root;

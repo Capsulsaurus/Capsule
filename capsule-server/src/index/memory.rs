@@ -351,7 +351,7 @@ impl AssetIndex for InMemoryAssetIndex {
                 chain_head: None,
                 amk_version: 0,
                 // A newly reserved asset is under no moderation hold. A hold is placed by an
-                // admin action and never by a write path, which is what keeps `S-C17` from
+                // admin action and never by a write path, which is what keeps a hold from
                 // becoming something an upload can accidentally set.
                 hold: None,
                 retention_until: None,

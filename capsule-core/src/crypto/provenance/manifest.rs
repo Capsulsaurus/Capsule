@@ -181,7 +181,7 @@ pub struct ManifestCore {
     /// **Wire-absent when there is none**, never present-`null`. This is inside the signed core,
     /// so a present-`null` would change [`signing_bytes`](Self::signing_bytes) and silently break
     /// re-verification of every manifest written before the field existed — the same trap
-    /// `S-A11` carries for `dek_public`, and the reason
+    /// `dek_public` avoids, and the reason
     /// `an_absent_lineage_is_wire_absent_and_does_not_move_the_signature` exists.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upgraded_from: Option<crate::crypto::upgrade::UpgradeLineage>,
@@ -280,9 +280,9 @@ impl AssetManifest {
     ///
     /// The first two are mirrored by the server envelope; the wrapped-key rule is the
     /// signature-visible presence rule for an adopted web-upload drop, enforced here at
-    /// `verify_asset`. The `metadata_blob_hash` presence-by-action rule closes the deferral
-    /// noted at S-A1 ("field enforcement lands together"): now that the `Workspace` populates
-    /// the field per the [sealing order], `verify_asset` can require its presence exactly on the
+    /// `verify_asset`. The `metadata_blob_hash` presence-by-action rule is enforced
+    /// because the `Workspace` populates the field per the [sealing order], so `verify_asset`
+    /// can require its presence exactly on the
     /// metadata-bearing actions and its absence on the other four. The server mirrors the
     /// *value* half key-free at [invariant 25]
     /// ([`check_metadata_blob_envelope`](crate::validation::check_metadata_blob_envelope)).
@@ -553,8 +553,8 @@ mod tests {
         assert!(!c.sign(&dev(), &wt()).unwrap().structural_ok());
     }
 
-    /// The `metadata_blob_hash` presence-by-action rule (the S-A1 deferral, now enforced with
-    /// S-A3): present exactly on `create | replace | metadata-update`, absent on the other four.
+    /// The `metadata_blob_hash` presence-by-action rule: present exactly on
+    /// `create | replace | metadata-update`, absent on the other four.
     #[test]
     fn structural_rule_metadata_blob_hash_present_iff_action_binds() {
         for action in [
@@ -685,7 +685,7 @@ mod tests {
     }
     /// An absent lineage is **wire-absent**, and adding the field moved no signature.
     ///
-    /// The `S-A11` discipline, applied to `upgraded_from`. A present-`null` inside a
+    /// The `dek_public` discipline, applied to `upgraded_from`. A present-`null` inside a
     /// signed core changes `signing_bytes` and silently breaks re-verification of every manifest
     /// written before the field existed — a failure that shows up as "the signature is wrong"
     /// long after the commit that caused it.

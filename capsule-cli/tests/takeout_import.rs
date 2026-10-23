@@ -38,7 +38,7 @@
 //! - `without_the_provider_flag_the_exporter_metadata_is_not_applied` — the flag is what turns
 //!   the adapter on: the same tree imported as a plain directory keeps the bytes and loses the
 //!   exporter's record, which is what makes `--provider` observable rather than cosmetic.
-//! - `the_guides_metadata_sampling_step_is_executable_with_show` — slice `S-B18`: the guide's
+//! - `the_guides_metadata_sampling_step_is_executable_with_show` — the guide's
 //!   sampling step, run as written, over the hash a user computed on the source file.
 //!
 //! [Google Photos migration guide]: ../../capsule-docs/src/content/docs/guides/google-photos-migration.md
@@ -621,7 +621,7 @@ fn a_provider_import_announces_its_adapter_and_a_plain_one_does_not() {
     );
 }
 
-/// Slice `S-B18`: the migration guide's metadata-sampling step, executed as written. The user
+/// The migration guide's metadata-sampling step, executed as written. The user
 /// holds the source file's SHA-256 from the guide's spot-hash step; `capsule show` takes a
 /// prefix of it and prints the exporter-authoritative values the import folded into the
 /// signed sidecar — the caption, the favourite as five stars, the album as a user tag — and

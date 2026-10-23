@@ -1,5 +1,4 @@
-//! Share links — link generation and capability validation (slice `S-A5` in the repo-root
-//! `SLICES.md`; SSoT: [Share Links]).
+//! Share links — link generation and capability validation (SSoT: [Share Links]).
 //!
 //! A share link grants **view-only** access to an asset or album to a recipient with no
 //! Capsule account: `https://server.tld/s/{opaque-id}#{secret}`. The fragment secret

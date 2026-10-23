@@ -15,7 +15,7 @@
 //! refused: the caller believes the list is filtered and acts on it. Here an unknown value is a
 //! `400` naming what was expected.
 //!
-//! # `S-C28` audit
+//! # The status audit
 //!
 //! | Status | Verdict |
 //! | --- | --- |

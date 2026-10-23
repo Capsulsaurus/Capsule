@@ -14,8 +14,8 @@
 //! under material the server does not hold — the fragment secret never leaves the client — so
 //! there is nothing here to read, let alone redact. design/metadata.md is the one that is
 //! consistent with the architecture: *"Stripping happens at the moment of export"* — in the
-//! issuing client, which is what `S-C50` settled. No strip is implemented anywhere yet: the
-//! core module that claimed to be one had no callers and is gone, and no slice owns writing
+//! issuing client. No strip is implemented anywhere yet: the
+//! core module that claimed to be one had no callers and is gone, and nothing owns writing
 //! the real one.
 //!
 //! So the strip is the **issuing client's**, and what this server enforces is the property that
@@ -23,8 +23,8 @@
 //! album's ordinary blobs. A client that seals a stripped metadata blob and points the link at
 //! it gets a stripped share; a link cannot be walked sideways into the unstripped one, because
 //! the serve path has no path from an opaque id to an album's contents. That is checkable, and
-//! [`ShareRecord::serves`] is where it is checked. The contradiction is recorded as `S-C50`
-//! rather than resolved by writing a strip that cannot run.
+//! [`ShareRecord::serves`] is where it is checked. The contradiction is left
+//! standing rather than resolved by writing a strip that cannot run.
 //!
 //! # Refusals are one answer
 //!
@@ -44,9 +44,9 @@
 //!
 //! # Rate limiting is absent, and its absence is declared honestly
 //!
-//! The contract's two limiters — per source IP and per `{opaque-id}` — need the counter port
-//! `S-C32` owns. The `429` is therefore **not declared** rather than declared and unreachable
-//!. What still holds without it is the structural defense the contract calls
+//! The contract's two limiters — per source IP and per `{opaque-id}` — need a counter port
+//! this crate does not have. The `429` is therefore **not declared** rather than declared and
+//! unreachable. What still holds without it is the structural defense the contract calls
 //! *independent of rate limiting*: 128 bits of opaque id, so enumeration is not a matter of
 //! throttling.
 //!

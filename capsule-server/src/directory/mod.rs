@@ -6,14 +6,14 @@
 //! A user publishes a master-signed
 //! [`DeviceDirectory`](capsule_core::crypto::keys::DeviceDirectory) as opaque canonical CBOR; any
 //! authenticated caller fetches it to pin and to verify manifests against. Nothing downstream
-//! of this works without it: a sync consumer cannot check who signed a manifest, and `S-C23`'s
+//! of this works without it: a sync consumer cannot check who signed a manifest, and
 //! revoke-all has no identity to anchor against.
 //!
 //! # Verbatim bytes, one projected field
 //!
 //! The server stores exactly the bytes the client signed and serves exactly those bytes back.
 //! It decodes the document to read **one** field — `directory_version` — and never
-//! re-serializes it. This is the same discipline as the upload envelope and `S-C30`'s
+//! re-serializes it. This is the same discipline as the upload envelope and the
 //! provenance blob: a re-encoded signed structure is a structure whose signature no longer
 //! verifies, and the failure looks like the *client's* bug.
 //!
@@ -26,7 +26,7 @@
 //! racing through that window can leave the *lower* version stored. So the comparison is an
 //! operation on the port ([`DeviceDirectoryStore::publish`]) rather than a check a caller is
 //! trusted to perform, and every adapter is obliged to make it atomic. That is the same lesson
-//! `S-C37` learned about sequence numbers, applied before it could be got wrong here.
+//! as minting sequence numbers, applied before it could be got wrong here.
 //!
 //! # The identity anchor
 //!
@@ -44,15 +44,15 @@
 //!
 //! The alternative the slice weighed was recording an IK at **registration**, which is
 //! stronger: it removes the first-publish window in which a stolen session token could pin an
-//! attacker's key. It is not available — registration is `S-N1` and is not ported, so there is
+//! attacker's key. It is not available — registration is not ported, so there is
 //! no account record to put an IK in and no registration contract to change. Trust-on-first-use
 //! needs no new account surface, is self-consistent with the monotonic guard, and can be
 //! *tightened* later by having registration pre-seed the anchor, with no change to this port's
 //! contract: the anchor is already "the key this account's directories verify under", and where
 //! it came from is the registration path's business. Choosing the weaker anchor now therefore
-//! forecloses nothing, while leaving the clause unenforced forecloses `S-C23`.
+//! forecloses nothing, while leaving the clause unenforced forecloses revoke-all.
 //!
-//! **Why leaving it unenforced was not an option.** `S-C23` anchors revoke-all by accepting a
+//! **Why leaving it unenforced was not an option.** Revoke-all is anchored by accepting a
 //! candidate IK only if it verifies the account's stored directory. An authenticated caller who
 //! published a document that verifies under no key would permanently disable that account's
 //! global sign-out — the recovery path a user reaches for after a device is stolen, and the
@@ -299,7 +299,7 @@ pub fn project_version(
 
     // Invariant 23's second clause. Refused here, before the store is touched, so a
     // document that verifies under nothing never reaches the table — which is the state that
-    // would brick `S-C23`'s revoke-all for this account.
+    // would brick revoke-all for this account.
     let key = capsule_core::crypto::keys::HybridVerifyingKey::from_bytes(identity_key)
         .map_err(|error| MalformedDirectory::UnreadableIdentityKey(error.to_string()))?;
     if !directory.verify(&key) {

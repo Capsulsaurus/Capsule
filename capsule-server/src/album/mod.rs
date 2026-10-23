@@ -18,7 +18,7 @@
 //! # The pin is the server's, and it is fixed at provisioning
 //!
 //! [`AlbumRecord::protocol_version`] is set from the protocol the *server* speaks when the album
-//! is created, never from anything the request carries. That is `S-C19` in one line: invariant 6
+//! is created, never from anything the request carries. Invariant 6
 //! compares a write against the album's own pin, and an album whose pin came from a request
 //! would be comparing a request against itself. Moving a pin forward is an album upgrade
 //!, which is a ceremony rather than a field.
@@ -28,7 +28,7 @@
 //! Provisioning accepts an id and nothing else. `albums.name` and `albums.description` are
 //! plaintext columns from before the key-free model and the server is not entitled to album
 //! titles; a body carrying one is refused rather than silently ignored, so a client is told the
-//! server will not hold it. `S-C26` retires the columns themselves.
+//! server will not hold it. The columns are slated for removal.
 //!
 //! # Adapters
 //!
@@ -76,7 +76,7 @@ pub struct UpgradeQuiescence {
     /// The intent exactly as the proposing admin device signed it.
     ///
     /// The signature is verified **before** this is written, against the account's published
-    /// device directory (`S-C42`'s anchor), so a recorded quiescence is one an admin really asked
+    /// device directory (the trust anchor), so a recorded quiescence is one an admin really asked
     /// for. It is not re-verified on every read: a directory that later revokes the proposing
     /// device does not retroactively un-propose an upgrade, exactly as a revoked device's earlier
     /// manifests stay verifiable.

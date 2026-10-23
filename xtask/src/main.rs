@@ -11,7 +11,7 @@
 //!   committed files are up to date instead of writing them.
 //! - `i18n-guard` scans the web/SwiftUI/Compose surfaces for hardcoded user-facing
 //!   string literals and fails on any that is not a catalog key or allowlisted (the
-//!   S-I1 regression gate; see [`i18n_guard`]).
+//!   i18n regression gate; see [`i18n_guard`]).
 //! - `translate-readme [--check | --extract]` regenerates the translated
 //!   `README.<lang>.md` files from the repo-root `README.md` (see
 //!   [`translate_readme`]). `--check` is the CI drift gate; `--extract` scaffolds a

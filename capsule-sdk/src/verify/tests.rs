@@ -1,9 +1,9 @@
-//! Tests for the S-D4 verify-before-destroy client.
+//! Tests for the verify-before-destroy client.
 //!
-//! The gate is driven against an in-process mock HTTP server that replays the real wire of
-//! `POST /storage/verify` and `GET /upload/{id}/receipt` (the same shape the S-C3 / S-C15
-//! handlers produce). Custody receipts are signed with a real `capsule-core` hybrid attestation
-//! key so the client verifies the true signature under the pinned key — no crypto is faked.
+//! The gate is driven against an in-process mock HTTP server that replays the real wire of `POST
+//! /storage/verify` and `GET /upload/{id}/receipt` (the same shape the server's upload and receipt
+//! handlers produce). Custody receipts are signed with a real `capsule-core` hybrid attestation key
+//! so the client verifies the true signature under the pinned key — no crypto is faked.
 //!
 //! The receipt route serves raw `application/cbor` (the signed bytes, verbatim); the
 //! asset-receipts chain serves JSON with each receipt base64-embedded. The mocks serve each in

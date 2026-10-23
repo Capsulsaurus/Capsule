@@ -10,13 +10,13 @@
 //!   and the album's *pinned* protocol version is what the request is compared against. The
 //!   Salvo gate compared the request's `protocol_version` against **itself**
 //!   (`album_pin: &request.protocol_version`), so the first write to an album self-certified
-//!   its own pin; `S-C19` exists to fix exactly that. Taking the pin from this port instead
+//!   its own pin. Taking the pin from this port instead
 //!   makes the self-check unrepresentable — there is no value in scope to compare a request
 //!   with except the album's own.
 //! - **Invariant 7** — the `created_by_device` on the envelope must be a device in the
 //!   uploader's published directory, and its `added_at` must precede the manifest's
-//!   timestamp. The Salvo gate used the *account*-creation time as the floor and
-//!   `S-C20` owns replacing it with the directory row. The port asks for the row.
+//!   timestamp. The Salvo gate used the *account*-creation time as the floor;
+//!   the port asks for the directory row instead.
 //!
 //! # No adapter here, deliberately
 //!

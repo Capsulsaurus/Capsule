@@ -11,7 +11,7 @@
 //! knows nothing about sentinels, and a number that is not a limit is a number some client will
 //! eventually put in a progress bar.
 //!
-//! # `S-C28` audit
+//! # The status audit
 //!
 //! | Salvo status | Verdict |
 //! | --- | --- |

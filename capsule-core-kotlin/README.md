@@ -25,7 +25,7 @@ cd capsule-core-kotlin
 ./gradlew test             # JVM software smoke (JNA loads the host libcapsule_sdk)
 ```
 
-Or let Gradle stage the bindings for you (S-F3): `./gradlew test -Pcapsule.wireFfi` runs
+Or let Gradle stage the bindings for you: `./gradlew test -Pcapsule.wireFfi` runs
 the `stageUniffiBindings` task (equivalent to `./stage-bindings.sh`) automatically. The flag
 is off by default so the lint-only lane (ktlint/detekt) needs no Rust toolchain; the repo's
 `mise run test-kotlin` / `build-kotlin` pass it for you.

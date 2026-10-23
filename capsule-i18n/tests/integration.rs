@@ -38,7 +38,7 @@ fn unknown_locale_falls_back_to_source() {
 
 #[test]
 fn negotiation_uses_the_supported_set() {
-    // A supported language negotiates to its catalog (S-I2 rolled out the official set)…
+    // A supported language negotiates to its catalog (the official set is supported)…
     assert_eq!(
         negotiate("es-MX, es;q=0.9", supported_locales(), "en"),
         "es"

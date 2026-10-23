@@ -325,7 +325,7 @@ pub async fn publish_album_roster(
         return Err(RosterRejection::attester());
     }
 
-    // The attester, against the owner's published directory (`S-C42`'s anchor), exactly as the
+    // The attester, against the owner's published directory (the trust anchor), exactly as the
     // upgrade ceremony verifies its proposer. Without this any holder of the owner's token could
     // rewrite who may read the album by PUTting a struct.
     let published = directories

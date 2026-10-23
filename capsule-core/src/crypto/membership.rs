@@ -12,7 +12,7 @@
 //!
 //! The [`SignedAlbumRoster`] is the album owner's **statement** of the roster, signed by one of
 //! the owner account's devices. The server verifies it against the owner's published
-//! [`DeviceDirectory`] — the same trust anchor `S-C42` established and the same check
+//! [`DeviceDirectory`] — the same trust anchor, and the same check
 //! [`SignedUpgradeIntent::verify`](crate::crypto::upgrade::SignedUpgradeIntent::verify) runs
 //! for the upgrade ceremony — and then holds it as a *transport control*: who may fetch which
 //! bytes. It is **not** a confidentiality control. A former member who kept the AMK for an

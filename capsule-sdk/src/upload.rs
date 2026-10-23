@@ -1,8 +1,7 @@
 //! Upload client module for Capsule SDK.
 //!
-//! The hand-written, chunked, resumable, adaptive upload client (slice `S-D1` in
-//! the repo-root `SLICES.md`). The protocol is too stateful for codegen — the
-//! spargen-generated REST client covers the plain request/response
+//! The hand-written, chunked, resumable, adaptive upload client. The protocol is too
+//! stateful for codegen — the spargen-generated REST client covers the plain request/response
 //! surfaces instead — so this module owns the wire directly:
 //!
 //! - `create`/`PATCH`/`HEAD`/`DELETE`/`list` with `application/octet-stream`
@@ -19,7 +18,7 @@
 //!   switches on the stable `error.*` code (from `capsule_i18n::error_codes`),
 //!   never on the bare status.
 //!
-//! Tokens stay SDK-owned: an upload composes with the `S-D7` session — build the
+//! Tokens stay SDK-owned: an upload composes with the SDK session — build the
 //! transport with [`UploadTransport::with_session`] and every request runs through
 //! [`crate::auth::Session::execute`] (pre-flight refresh, single-flight, one `401`
 //! replay), so callers never juggle raw access tokens. [`StaticToken`] +
@@ -102,7 +101,7 @@ pub struct AdaptiveChunkSizeStrategy {
     /// Recent chunk records for windowed throughput (bytes, duration, timestamp)
     /// Using VecDeque for efficient sliding window
     recent_chunks: VecDeque<(u64, Duration, std::time::Instant)>,
-    /// Pinned to the tier floor under `adverse` (S-D10 chunk-size floor coupling):
+    /// Pinned to the tier floor under `adverse` (the connection class's chunk-size floor):
     /// while set, the size stays at `min_size` and adaptive scaling is suppressed,
     /// so each request is small enough to usually complete between mid-transfer
     /// resets (networking doc, "Bounded transfer windows under `adverse`").
@@ -272,7 +271,7 @@ impl AdaptiveChunkSizeStrategy {
 // ─── Transport seam ─────────────────────────────────────────────────────────
 
 /// A fixed bearer token, for tests and callers that already hold a live token.
-/// Production clients compose with the `S-D7` session via
+/// Production clients compose with the SDK session via
 /// [`UploadTransport::with_session`] instead.
 #[derive(Debug, Clone)]
 pub struct StaticToken(pub String);
@@ -302,7 +301,7 @@ pub struct UploadTransport {
 }
 
 impl UploadTransport {
-    /// Build a transport that authorizes through an authenticated `S-D7`
+    /// Build a transport that authorizes through an authenticated
     /// [`crate::auth::Session`] — the sanctioned production path: the session
     /// injects (and auto-refreshes) the bearer token, so the upload client never
     /// sees raw token material.
@@ -629,7 +628,7 @@ pub enum UploadError {
     #[error("malformed server response: {0}")]
     MalformedResponse(String),
     /// The session's auth layer failed (not authenticated, refresh rejected,
-    /// session expired). Carries the typed `S-D7` error so callers can trigger
+    /// session expired). Carries the typed session error so callers can trigger
     /// interactive re-authentication.
     #[error("authentication error: {0}")]
     Auth(#[from] crate::auth::AuthError),
@@ -717,7 +716,7 @@ fn chunk_checksum(chunk: &[u8]) -> String {
 /// message (`"This content is already stored as asset {id}"`).
 ///
 /// The current server exposes the reference only in the English detail, not as a
-/// structured field/header (see the module's S-D1 deviation note); this parses it
+/// structured field/header; this parses it
 /// out while falling back to the whole message so nothing is lost.
 fn duplicate_asset_ref(message: &str) -> String {
     message
@@ -880,7 +879,7 @@ impl UploadClient {
         &self.events
     }
 
-    /// Set the detected connection class (S-D10 chunk-size floor coupling). On an
+    /// Set the detected connection class (the chunk-size floor follows it). On an
     /// [`ConnectionClass::Adverse`] link the adaptive strategy pins to the tier
     /// chunk floor for every transfer this client drives.
     #[must_use]

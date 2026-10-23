@@ -147,7 +147,7 @@ impl CohortGroup {
                 .sessions
                 .iter()
                 .map(|d| SupportBundleEntry {
-                    // The S-C13 listing surfaces only the session id; the hardware
+                    // The listing surfaces only the session id; the hardware
                     device_id: d.device_id.clone(),
                     session_id: d.id.clone(),
                     first_seen: d.created_at,
@@ -436,8 +436,8 @@ mod tests {
     }
 
     /// The authentication doc's support-bundle contract: each session line carries the
-    /// `(device_id, session_id)` **pair**. Before S-N3 the listing exposed only the session
-    /// id, so `device_id` was hard-coded `None` here and the pair could never be reported.
+    /// `(device_id, session_id)` **pair**. A listing that exposed only the session
+    /// id would leave `device_id` hard-coded `None` here, and the pair could never be reported.
     #[test]
     fn support_bundle_carries_the_device_id_session_id_pair() {
         let listing = SessionListing {

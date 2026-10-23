@@ -18,7 +18,7 @@
 //! | create `400` "Bad request" (untyped) | **deleted.** Never constructed with a code; the 400 a malformed body actually produces is the `Json` extractor's, which Kynos declares |
 //! | create `401` | kept, and now the framework's — `Auth<AccessToken>` declares it and fills the `WWW-Authenticate` challenge |
 //! | create `403` | kept — album access, device authorization, a declared owner that is not the album's |
-//! | create `409 duplicate_blob` | **restored, with `S-C22`'s structured `existing_asset`.** It was deleted while this crate had no asset index, because it must name the existing asset and answering from blob presence alone would tell one account what another holds. `S-C37` answers it honestly and owner-scoped, and a `create` for a different asset adopts the blob before it is refused (#672) |
+//! | create `409 duplicate_blob` | **carries a structured `existing_asset`.** It must name the existing asset, and answering from blob presence alone would tell one account what another holds, so the answer comes from the asset index, owner-scoped, and a `create` for a different asset adopts the blob before it is refused (#672) |
 //! | create `413` | kept — the declared size past the deployment ceiling |
 //! | create `426` | kept — the manifest envelope's `protocol_version` pin, refused by the envelope gate. The *header* handshake is no longer this surface's: [`crate::negotiation::ProtocolGate`] answers it before the handler runs, and the accepted window rides `X-Capsule-Protocol-Min`/`-Max` on every response |
 //! | create `500` | **now `503`** — a collaborator that could not answer, with `error.upload.unavailable` and a retry instant (transfer/upload.md, Hostile Clients) |
@@ -41,7 +41,7 @@
 //! | delete `409` | kept — finalization is not interruptible, and a terminal session has nothing left to cancel |
 //! | delete `400` / `401` / `403` / `404` / `426` / `500` | kept, with `HEAD`'s two changes: a foreign session is the `404`, and the `500` is a `503` |
 //! | list sessions (`GET /upload/sessions`) | served by [`super::sessions`] |
-//! | receipt (`GET /upload/{id}/receipt`) | out of scope: `S-C15` owns custody receipts |
+//! | receipt (`GET /upload/{id}/receipt`) | out of scope: custody receipts have their own surface |
 //!
 //! Every status above is produced by a test in `tests/upload.rs`, because
 //! `assert_declared_responses_covered` fails on any the document promises and none produced.
@@ -78,7 +78,7 @@
 //!
 //! # What this port does not have
 //!
-//! **Quota and the custody receipt**, owned by `S-C6` and `S-C15`; see [`crate::upload`].
+//! **Quota and the custody receipt** are owned by [`crate::upload`], not by this surface.
 
 use capsule_core::crypto::hash::hash_bytes;
 use capsule_i18n::error_codes;
@@ -211,8 +211,8 @@ pub struct CreateUploadRequest {
     pub owner_id: Option<String>,
     /// The album-upgrade intent this write belongs to, when it belongs to one.
     ///
-    /// Carried onto the session verbatim and read by nobody in this port; the ceremony that
-    /// gives it meaning is `S-C24`.
+    /// Carried onto the session verbatim and read by nobody in this port; the album-upgrade
+    /// ceremony gives it meaning.
     pub intent_id: Option<String>,
 }
 
@@ -422,7 +422,7 @@ pub enum CreateRejection {
 
     /// The owner already holds these bytes, in the asset named.
     ///
-    /// The structured `existing_asset` is `S-C22`'s deliverable: the English detail is a
+    /// The structured `existing_asset` exists because the English detail is a
     /// sentence, and a typed client needs the id to switch on. Owner-scoped by construction —
     /// the lookup behind it takes an owner — because answering across owners would tell one
     /// account that another holds a particular ciphertext, which content addressing makes a
@@ -694,7 +694,7 @@ pub enum SessionRejection {
 /// second enum rather than another variant on the shared one because a Kynos rejection type
 /// declares its statuses for *every* operation that returns it: a `409` on the shared enum
 /// would put a `409` on `HEAD`, which cannot produce one, and a promise nothing keeps is the
-/// exact `S-C28` defect this rebuild removes.
+/// exact over-declared-status defect this rebuild removes.
 #[derive(Debug, thiserror::Error, ApiError)]
 pub enum CancelRejection {
     /// Unknown, expired, discarded, or another account's — deliberately one answer.
@@ -1242,7 +1242,7 @@ pub async fn create_upload(
         blob_role: request.blob_role.into(),
         intent_id: request.intent_id.clone(),
         // The projection, stored so finalization re-runs the battery over what creation
-        // validated. It is never re-encoded into manifest bytes — see `S-C30`.
+        // validated. It is never re-encoded into manifest bytes: the manifest is stored verbatim.
         manifest_envelope: serde_json::to_string(&request.manifest_envelope).map_err(|error| {
             tracing::error!(%error, "the validated envelope could not be stored");
             CreateRejection::unavailable(upload.clock())

@@ -1,8 +1,8 @@
 //! Every rejection carries an `error.*` code, including the ones Capsule does not write
 //!, and the document says so.
 //!
-//! These two slices are one change. `S-C36` is the interceptor that fills in the member on a
-//! framework-rendered problem; `S-C38` is the document describing it. Either alone leaves the
+//! Two halves make one contract. The interceptor fills in the member on a framework-rendered
+//! problem; the OpenAPI document describes it. Either alone leaves the
 //! i18n contract half-built: a code nothing declares is one a generated client cannot reach, and
 //! a declaration nothing honours is a lie.
 //!
@@ -27,7 +27,7 @@ fn code_of(body: &serde_json::Value) -> &str {
 async fn the_frameworks_own_rejections_carry_a_code() {
     // Every one of these is rendered by a type Capsule does not own and cannot add a field to:
     // Kynos's `AuthRejection`, its body-size interceptor, and its `Path` and `Json` extractors.
-    // Before `S-C36` each reached a user as untranslatable English.
+    // Without a code each would reach a user as untranslatable English.
     let fixture = Fixture::working();
     let bearer = fixture.bearer().await;
     let pair = fixture.login().await;

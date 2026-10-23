@@ -20,8 +20,8 @@
 //! So this type is serialized in exactly one direction and for exactly one purpose: onto the
 //! session record, so finalization can re-run the battery against what creation validated. It
 //! is never re-encoded into CBOR, never handed to a client as a manifest, and never hashed
-//! into an attestation. That re-serialization is the defect `S-C30` and `S-C31` exist to kill,
-//! and this port does not carry it: nothing in this crate produces manifest bytes.
+//! into an attestation. That re-serialization is the defect the verbatim-manifest rule exists
+//! to kill, and this port does not carry it: nothing in this crate produces manifest bytes.
 //!
 //! # What the gate cannot answer alone
 //!
@@ -423,7 +423,7 @@ pub fn check_replace(
     // decides them where the comparison and the write are one operation. `check_create` leaves
     // both `None` and is *correct* to — a create has no predecessor and no prior epoch, so the
     // two predicates are vacuous rather than skipped. The moment `replace` is accepted that
-    // stops being true, which is the trap `S-C43` warned about: leaving them `None` here would
+    // stops being true, which is the trap: leaving them `None` here would
     // compare a real `prior_provenance_hash` against nothing and refuse every replace.
     let device_added_at = as_rfc3339(context.device_added_at);
     let server_clock = as_rfc3339(context.server_clock);
@@ -451,7 +451,7 @@ pub fn check_finalize(
     // 18 are handed the manifest's own claims, and the index decides them. Without the
     // pass-through this would refuse every replace at finalization — the two `None`s being
     // correct for a create and wrong the moment a second action rides this surface, which is the
-    // trap `S-C43` named and the shape it takes when only half of it is fixed.
+    // trap, and the shape it takes when only half of it is fixed.
     let device_added_at = as_rfc3339(context.device_added_at);
     let server_clock = as_rfc3339(context.server_clock);
     let mut ctx = envelope_context(context, &device_added_at, &server_clock);
@@ -468,9 +468,9 @@ pub fn check_finalize(
 /// # Which invariants this decides, and which it deliberately does not
 ///
 /// It decides 1, 2, 6, 7, 8, the 15 family, and **16** — the last by refusing every action that
-/// moves blob bytes, because those are uploads by definition (`create` is `S-C1`'s surface and
-/// `replace` is `S-C43`'s). It also refuses the derivative pair (`derivative_role`,
-/// `derivative_format`), which only a derivative upload may carry.
+/// moves blob bytes, because those are uploads by definition (`create` rides the upload
+/// route and `replace` the lifecycle-op route). It also refuses the derivative pair
+/// (`derivative_role`, `derivative_format`), which only a derivative upload may carry.
 ///
 /// It does **not** decide **17** or **18**, and the way it does not is worth stating plainly:
 /// the shared battery is handed the manifest's *own* claims as the stored values, so both

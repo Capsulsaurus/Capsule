@@ -5,7 +5,7 @@
 //! the base URL, swaps base URL/credentials without callers rebuilding anything, and
 //! `Deref`s to the typed client so every generated operation is called directly. What the
 //! parked sketch could not express, this composition does: instead of a static bearer string,
-//! the client is wired to S-D7's [`Session`] through spargen's async
+//! the client is wired to the SDK's [`Session`] through spargen's async
 //! token-provider seam, so **every** typed call transparently gets a valid access token, with
 //! the session's proactive pre-flight refresh and single-flight coalescing — callers never
 //! touch a raw token. The refresh/expiry/single-flight logic is reused wholesale from
@@ -64,7 +64,7 @@ pub enum ClientError {
     },
 }
 
-/// A typed REST client that authenticates itself from an S-D7 [`Session`].
+/// A typed REST client that authenticates itself from an SDK [`Session`].
 ///
 /// Cheap to build; holds one [`rest::Client`] whose bearer credential is
 /// an async provider backed by the session. Because the provider is consulted per request,

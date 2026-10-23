@@ -1,5 +1,4 @@
-//! Web-upload guest drops — **contract skeleton** (slice `S-A6` in the repo-root
-//! `SLICES.md`; SSoT: [Web Upload]).
+//! Web-upload guest drops — **contract skeleton** (SSoT: [Web Upload]).
 //!
 //! A guest with an upload link seals each asset under a fresh random key `K`,
 //! encapsulates `K` to the link's Drop Key, and uploads the sealed bytes to the
@@ -328,7 +327,7 @@ pub fn seal_drop(
 /// **Exposed for known-answer testing only** — the public path is [`seal_drop`], which draws all
 /// four values from the CSPRNG. Feeding fixed `k`, `nonce_prefix`, `eseed`, and `blob_nonce`
 /// makes the sealed bytes reproducible so the browser (WASM) seal can be proven byte-identical to
-/// this Rust implementation across the language boundary (the S-D3 cross-language KAT), and so the
+/// this Rust implementation across the language boundary (the cross-language KAT), and so the
 /// fixture that a Rust adopter consumes is a pure function of its inputs. **Never** reuse a
 /// `(k, nonce_prefix)` pair for two distinct plaintexts (STREAM nonce reuse) outside a KAT.
 ///
@@ -590,7 +589,7 @@ mod tests {
     }
 
     /// `seal_drop_derand` is a pure function of its inputs (byte-reproducible), and its output is
-    /// adoptable exactly like a CSPRNG-sealed drop — the property the S-D3 cross-language KAT and
+    /// adoptable exactly like a CSPRNG-sealed drop — the property the cross-language KAT and
     /// its Rust adopter rely on (the browser reproduces these same bytes; the Rust side adopts
     /// them). Also asserts the derandomized seal agrees with the CSPRNG path's *shape*.
     #[test]

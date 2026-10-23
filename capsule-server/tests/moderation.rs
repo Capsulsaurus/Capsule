@@ -174,8 +174,8 @@ async fn a_reinstatement_restores_writing_and_keeps_the_history() {
 
 #[tokio::test]
 async fn a_takedown_appears_in_the_owners_record_naming_the_asset() {
-    // `S-C17` refuses the bytes; this is the half it owed — the user finds out which asset and
-    // when, rather than discovering that a photo silently stopped loading.
+    // A takedown refuses the bytes; this is the half it owes — the user finds out which asset
+    // and when, rather than discovering that a photo silently stopped loading.
     let fixture = Fixture::working();
     let bearer = fixture.bearer().await;
     fixture

@@ -550,7 +550,7 @@ pub async fn purge_expired(
             continue;
         }
         // A moderation hold does **not** stop the purge, and that is a decision rather than an
-        // omission — see `S-C47`. The retention floor is *signed by the user's own delete
+        // omission. The retention floor is *signed by the user's own delete
         // manifest*, so honoring it is honoring a deletion the user asked for; a server that
         // kept the bytes anyway would be retaining data against an explicit request, which is
         // the promise this whole path exists to keep. The competing reading — that a legal hold

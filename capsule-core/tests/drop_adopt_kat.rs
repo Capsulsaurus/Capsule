@@ -11,7 +11,7 @@
 //!   `wrapped_file_key` and STREAM-decrypts the unchanged drop ciphertext back to the plaintext.
 //!
 //! This is E2E case 13's browser→library path at the level the repo runs locally; a live-browser
-//! run is still owed (as for S-E1/S-D6). The fixed inputs below mirror `xtask/src/drop_kat.rs`.
+//! run is still owed. The fixed inputs below mirror `xtask/src/drop_kat.rs`.
 
 use capsule_core::crypto::authority::ReferenceAuthority;
 use capsule_core::crypto::encryption::{decrypt_asset_vec, seal_file_key, unseal_file_key};

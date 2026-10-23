@@ -17,7 +17,7 @@
 //!   contract is explicit that the URL leaks nothing about what it points to, and a response
 //!   that named an album would leak it after one fetch.
 //!
-//! # `S-C28` audit
+//! # The status audit
 //!
 //! | Status | Verdict |
 //! | --- | --- |

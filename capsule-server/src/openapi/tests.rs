@@ -10,8 +10,8 @@ fn document() -> Document {
 /// Every problem response in the document is a *Capsule* problem, and every Capsule problem
 /// requires `code`.
 ///
-/// Over the document rather than per handler, for the same reason `S-C34` gates the document: a
-/// per-handler assertion passes on the operations somebody remembered.
+/// Over the document rather than per handler, for the same reason the document is gated as a
+/// whole: a per-handler assertion passes on the operations somebody remembered.
 #[test]
 fn every_problem_response_declares_the_code_a_client_localizes() {
     let document = document();
@@ -131,8 +131,8 @@ fn the_structured_members_a_client_merges_on_are_described() {
         }
     }
 
-    // The one `S-C22` names by hand, spelled out because it is the member the SDK's merge path
-    // switches on and the whole reason that slice noticed this gap.
+    // The `existing_asset` member, named by hand because it is the member the SDK's merge path
+    // switches on.
     assert_eq!(
         schemas["DuplicateBlobProblem"]["properties"]["existing_asset"]["type"],
         "string"

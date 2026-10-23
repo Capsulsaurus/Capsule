@@ -237,7 +237,7 @@ function SecuritySettings() {
                 </CardContent>
             </Card>
 
-            {/* No passkeys card. Passkeys are not in v1 (`S-C56`): the six operations
+            {/* No passkeys card. Passkeys are not in v1: the six operations
                 behind this screen were in no OpenAPI document and could never authenticate —
                 the ceremony was started with an empty allow-list, so `webauthn-rs` answered
                 `CredentialNotFound` to every assertion. A screen for a feature that cannot

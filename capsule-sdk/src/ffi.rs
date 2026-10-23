@@ -13,7 +13,7 @@
 //! [`fetch_blob_to_path`](crate::ffi::FfiSession::fetch_blob_to_path),
 //! [`sync_pull`](crate::ffi::FfiSession::sync_pull),
 //! [`logout`](crate::ffi::FfiSession::logout)) rides that handle. **Tokens never cross the FFI
-//! boundary raw**: the S-D7 session store injects and auto-refreshes the bearer
+//! boundary raw**: the SDK session store injects and auto-refreshes the bearer
 //! behind the handle, so foreign code never sees access/refresh token material.
 //!
 //! [`FfiCapsuleClient`]: crate::ffi::FfiCapsuleClient
@@ -869,7 +869,7 @@ impl FfiCapsuleClient {
 
 // ─── Session (authenticated handle) ──────────────────────────────────────────
 
-/// An authenticated session handle. Owns the S-D7 token store internally (auto
+/// An authenticated session handle. Owns the SDK token store internally (auto
 /// pre-flight refresh, single-flight, `401`-retry-once); **no token ever crosses
 /// the FFI boundary**. Every flow rides this handle.
 #[derive(uniffi::Object)]

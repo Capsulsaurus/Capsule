@@ -1,4 +1,4 @@
-//! Contract-driven tests for the S-X2 membership layer. Every deferred-from-S-X1 Validation
+//! Contract-driven tests for the membership layer. Every membership Validation
 //! bullet from [MLS](https://docs/design/cryptography/mls/#validation) has a test here:
 //! four-ceremony round-trip, Welcome correctness (full + capped), history-policy consistency,
 //! epoch-ceiling-from-chain, idempotent commit replay, MLS↔identity LeafNode binding, and
@@ -90,7 +90,7 @@ fn add_and_join(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// S-X1 surface — preserved so the backend/authority layer keeps its guarantees
+// Backend/authority surface — single-member guarantees
 // ═══════════════════════════════════════════════════════════════════════════
 
 fn directory_for(user: Uuid, device_id: Uuid, device: &HybridSigningKey) -> DeviceDirectory {
@@ -273,7 +273,7 @@ fn parity_with_reference_authority_over_equivalent_history() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// S-X2 — membership ceremonies + key delivery + history policy
+// Membership ceremonies + key delivery + history policy
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// **Protocol round-trip** across all four ceremony kinds (add user, add device, self-update
@@ -875,7 +875,7 @@ fn export_import_state_round_trips_and_can_continue() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// S-X3 — album upgrade ceremony (tombstone-plus-fork) + MLS resilience
+// Album upgrade ceremony (tombstone-plus-fork) + MLS resilience
 //
 // Every Validation bullet from versioning.md § Validation (upgrade-ceremony bullets) and
 // mls-resilience.md § Validation gets a test here, driven through real OpenMLS state with the

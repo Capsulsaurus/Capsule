@@ -738,8 +738,8 @@ async fn a_members_op_is_checked_against_the_members_own_directory() {
 }
 
 /// **A suspended account may not write, and a lifecycle op is a write.** `POST /v1/upload`
-/// refused a suspended uploader from the start; this surface did not, which stopped being merely
-/// inconsistent once `S-C51` widened it from the owner to every writer member. Both principals
+/// refuses a suspended uploader, and this surface must too: it is open to every writer member,
+/// not only the owner, so an unchecked suspension is not merely inconsistent. Both principals
 /// are asserted, because the refusal has to be about *standing* and not about ownership.
 #[tokio::test]
 async fn a_suspended_account_may_not_apply_a_lifecycle_op() {
@@ -885,8 +885,8 @@ async fn a_member_continues_the_owners_chain_under_their_own_authorship() {
 }
 
 /// **A write may not be attributed to another account.** Invariant 7's account half, and the
-/// refusal the write widening made necessary: before `S-C51` only the album owner could reach
-/// this surface and the field could only plausibly be their own.
+/// refusal that opening the surface to every writer member makes necessary: were only the album
+/// owner able to reach it, the field could only plausibly be their own.
 #[tokio::test]
 async fn an_op_attributed_to_another_account_is_refused() {
     use capsule_server::membership::MemberRole;

@@ -15,7 +15,7 @@
 //! # Session first, capability second
 //!
 //! The authenticator asks the session module first, exactly as `Auth<AccessToken>` would — the
-//! ledger check of `S-C48` included — and only on *unauthenticated* tries the capability codec,
+//! session-ledger check included — and only on *unauthenticated* tries the capability codec,
 //! and only when the deployment federates at all (`FEDERATION_ENABLED`, #509): off, the
 //! capability arm does not exist and a non-session bearer is the plain `401` it would be on any
 //! other operation.

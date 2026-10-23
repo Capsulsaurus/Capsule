@@ -2,7 +2,7 @@
 //! (SSoT: [Authentication — Device Cohorts]).
 //!
 //! This module owns the **client half** of the cohort story whose server half
-//! (advisory storage + the `{devices, cohorts}` listing) landed in slice `S-C13`,
+//! (advisory storage + the `{devices, cohorts}` listing) lives in the server,
 //! and whose pure hash lives in [`capsule_core::cohort`]. Three cohesive pieces:
 //!
 //! - **[`PrimaryIdentifierReader`]** — the per-platform seam. Each platform reads

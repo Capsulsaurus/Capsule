@@ -13,8 +13,8 @@
 //! - **[`RecoveryClient`]** — the networked side: the cached copy of the escrow blob
 //!   ([`EscrowCache`]), the stale-cache-aware [`verify`](RecoveryClient::verify), and the
 //!   [`guided_rewrap`](RecoveryClient::guided_rewrap) that mints a fresh secret, re-wraps
-//!   the **same** master key, and replaces the server escrow through S-C12. It also stores and
-//!   fetches the **sealed identity** beside the escrow
+//!   the **same** master key, and replaces the server escrow through the server's
+//!   escrow endpoint. It also stores and fetches the **sealed identity** beside the escrow
 //!   ([`store_sealed_identity`](RecoveryClient::store_sealed_identity),
 //!   [`fetch_sealed_identity`](RecoveryClient::fetch_sealed_identity),
 //!   `/v1/auth/escrow/identity`, #544): the user identity key sealed under the master key,
@@ -1099,7 +1099,7 @@ mod tests {
     use crate::auth::{AuthClient, PersistedSession};
 
     /// Fast Argon2id params so the escrow crypto does not dominate the smoke tests
-    /// (same posture as the S-C12 server integration test).
+    /// (same posture as the server's escrow integration test).
     fn fast_params() -> Argon2Params {
         Argon2Params {
             mem_kib: 64,

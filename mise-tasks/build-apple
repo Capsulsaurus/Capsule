@@ -6,7 +6,7 @@ for t in aarch64-apple-darwin x86_64-apple-darwin aarch64-apple-ios aarch64-appl
     # The `capsule_sdk` namespace on its own — the library the capsule-core-swift harness links.
     echo ":: building capsule-sdk (ffi) for $t"
     cargo build -p capsule-sdk --features ffi --target "$t"
-    # The app umbrella staticlib (S-F3): the capsule_core_ffi + capsule_sdk namespaces —
+    # The app umbrella staticlib: the capsule_core_ffi + capsule_sdk namespaces —
     # the artifact the iOS xcframework actually packages (see capsule-core-ffi/src/lib.rs).
     echo ":: building capsule-core-ffi (app umbrella) for $t"
     cargo build -p capsule-core-ffi --target "$t"

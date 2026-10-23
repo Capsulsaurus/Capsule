@@ -8,8 +8,8 @@
 //! contributes generated scaffolding of its own (ADR-0005).
 //!
 //! This crate is also the **app umbrella staticlib**: it links
-//! `capsule-sdk`'s uniffi surface (the `capsule_sdk` namespace — the S-D9 user-flow
-//! primitives and the S-P1 workspace verbs) so the iOS app consumes ONE Rust library
+//! `capsule-sdk`'s uniffi surface (the `capsule_sdk` namespace — the user-flow
+//! primitives and the workspace verbs) so the iOS app consumes ONE Rust library
 //! carrying both namespaces. Two separate Rust staticlibs cannot share a binary (each
 //! bundles its own std), so any namespace the app needs must ride in this one.
 //!

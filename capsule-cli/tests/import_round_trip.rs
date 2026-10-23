@@ -5,7 +5,7 @@
 //! hands integration tests of the crate that declares the bin). `capsule library init`,
 //! `capsule import`, `capsule cull` and `capsule library rebuild` each get their own process,
 //! and the only thing they share is the library directory on disk. That is the whole point:
-//! `S-A10`'s criterion is that state survives a *new process*, and an in-process second
+//! the criterion is that state survives a *new process*, and an in-process second
 //! `Workspace::open` cannot tell durable state apart from state that merely survived in a
 //! `HashMap`. A process boundary can — which is why this is a subprocess test, and why (like
 //! `cull_round_trip.rs`, whose pattern it follows) it needs no test dependency to be one.
@@ -442,7 +442,7 @@ fn an_import_is_reconstructed_by_a_later_process_from_disk_alone() {
     );
 }
 
-/// **`S-D21`.** `capsule library rebuild` reconstructs the index of a *signed* library — the
+/// `capsule library rebuild` reconstructs the index of a *signed* library — the
 /// case that was rebuilding zero rows — and it does so in a process that starts from nothing but
 /// the sidecars and chains on disk.
 #[test]

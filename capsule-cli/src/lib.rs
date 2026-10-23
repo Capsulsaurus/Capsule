@@ -1,7 +1,7 @@
 //! The Capsule CLI as a library: the command implementations and the dispatch the
 //! thin `capsule` binary calls.
 //!
-//! The networked commands (`auth login/logout`, `sync`, `list` — slice `S-D5`)
+//! The networked commands (`auth login/logout`, `sync`, `list`)
 //! live in [`remote`] and are driven entirely over `capsule-sdk`; [`session`] and
 //! [`syncstore`] are their durable state. Splitting the logic into a library lets
 //! the real-server round-trip drive these command functions directly rather than
@@ -2260,7 +2260,7 @@ mod client_build_wiring_tests {
 
     use super::as_capsule_cli;
 
-    /// S-D15: a workspace built the way the CLI builds one (`as_capsule_cli`, the same wrapper the
+    /// A workspace built the way the CLI builds one (`as_capsule_cli`, the same wrapper the
     /// `import`/`demo` paths use) stamps every manifest it authors with
     /// `capsule-cli/{semver}+{commit}` — proving the CLI reports itself, not the bare
     /// `capsule-core` default. Uses a fast Argon2 cost so the test never pays the production KDF.

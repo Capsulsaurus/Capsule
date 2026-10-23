@@ -21,7 +21,7 @@
 //!   provide, because a hostile server can always hand back one of its own older, validly-MAC'd
 //!   cursors;
 //! - and a forged cursor is refused with the stable `error.*` code the client localizes, which
-//!   is the whole `S-C36`/`S-C38` contract observed from the far end of a wire.
+//!   is the whole error-code contract observed from the far end of a wire.
 //!
 //! It replaces `capsule-api/sync/src/tests/sdk_client.rs`, which proved the same properties
 //! against the gRPC feed and the crate that served it. Both are gone.
@@ -776,7 +776,7 @@ async fn the_sdk_stores_and_lists_album_key_escrows_over_a_socket() {
     );
 }
 
-/// **`S-D17`'s Done-when, against the server that decides.** A token the client still believes
+/// **Refresh-and-replay, against the server that decides.** A token the client still believes
 /// in and the server has stopped honouring is refreshed once and the call replayed once.
 ///
 /// The unit tests cover the layer against a mock; this covers the one thing a mock cannot rule
@@ -1608,7 +1608,7 @@ async fn the_sdk_fetches_a_custody_receipt_and_verifies_it_under_the_attestation
 }
 
 /// The SDK's device-directory publish, over a socket, against the server that anchors and
-/// verifies it (`S-P1` over `S-C9`/`S-C42`).
+/// verifies it.
 ///
 /// A mock cannot prove this: the server requires the user identity verifying key beside the
 /// document (`X-Capsule-Identity-Key`), anchors it on first publish, and verifies the document

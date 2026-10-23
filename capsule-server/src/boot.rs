@@ -21,7 +21,7 @@
 //! `DATABASE_URL`, opens the pool, and refuses to continue against a database whose schema is not
 //! the one this binary was built for — naming the command that fixes it, never the URL.
 //! `valkey` then connects to `VALKEY_URL` and proves it answers `PING`; a server that cannot be
-//! reached is [`BootError::Valkey`] — the refusal `store/mod.rs` has said since `S-C29` a
+//! reached is [`BootError::Valkey`] — the refusal `store/mod.rs` has always said a
 //! required service earns: *"Valkey is required; the server refuses to boot without
 //! `VALKEY_URL`"*. Every durable port is then on one of the two (#402, #403, #446): Postgres for
 //! every record a restart must not lose, Valkey for the volatile state.

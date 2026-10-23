@@ -12,7 +12,7 @@ import Foundation
 /// (CryptoKit hashes with SHA-256 internally). That is exactly what `P256HybridSigningKey` consumes
 /// on the Rust side — the element's public key normalizes from SEC1, and the DER signature verifies
 /// verbatim via `p256::ecdsa` — so this plugs into the P-256
-/// `FfiWorkspace.createWithP256HardwareSigner` path end to end (slice S-F2). The Ed25519
+/// `FfiWorkspace.createWithP256HardwareSigner` path end to end. The Ed25519
 /// ``SoftwareSigner`` drives the separate `createWithHardwareSigner` path.
 ///
 /// A production app persists `dataRepresentation` of each key (the encrypted SE blob) in the

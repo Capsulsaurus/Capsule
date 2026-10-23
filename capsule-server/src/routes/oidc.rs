@@ -48,7 +48,7 @@
 //!
 //! A confirmed TOTP enrollment answers the same `202` here that it does on the password path.
 //! Bypassing it would let an account that enrolled a factor be signed into without one through a
-//! second door — the `S-C55` defect on a new route.
+//! second door.
 
 use std::fmt;
 

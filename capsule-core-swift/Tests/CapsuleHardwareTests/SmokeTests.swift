@@ -8,7 +8,7 @@ import Testing
 /// namespace — the Apple analogue of the Rust Linux software smoke. Run `./stage-bindings.sh` first.
 @Suite("capsule-core Swift FFI smoke")
 struct SmokeTests {
-    /// This harness's self-reported build identity (S-D15), stamped into the manifests the
+    /// This harness's self-reported build identity, stamped into the manifests the
     /// workspace authors.
     private let client = FfiClientBuild(clientId: "capsule-core-swift", semver: "0.0.0")
 
@@ -116,7 +116,7 @@ struct SmokeTests {
     }
 
     /// The software **P-256** element composed through `P256HybridSigningKey` into a real
-    /// workspace — the always-runnable half of the S-F2 smoke (a CI VM has no Secure Enclave). It
+    /// workspace — the always-runnable half of the hardware-signer smoke (a CI VM has no Secure Enclave). It
     /// mirrors ``SecureEnclaveSigner``'s wire contract (65-byte x9.63 public key, DER ECDSA
     /// signature), so a green run here proves the whole P-256 FFI composition independent of
     /// hardware. Import + verify exercises sign/verify of a manifest through the composed key.
@@ -164,7 +164,7 @@ struct SmokeTests {
     }
 
     /// The software **P-256 ECDH** element composed through the hybrid DEK — the always-runnable half
-    /// of the S-F5 smoke (a CI VM has no Secure Enclave). It mirrors ``SecureEnclaveKeyAgreement``'s
+    /// of the hardware-DEK smoke (a CI VM has no Secure Enclave). It mirrors ``SecureEnclaveKeyAgreement``'s
     /// wire contract (65-byte x9.63 public key, raw 32-byte ECDH secret), so a green run here proves
     /// the whole P-256 hybrid-DEK composition independent of hardware: a secret encapsulated to the
     /// published hybrid public key is recovered by decapsulating through the element's ECDH.

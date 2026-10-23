@@ -312,7 +312,7 @@ async fn the_directory_surface_requires_a_credential() {
 /// The account is anchored to the first identity key it publishes under.
 ///
 /// This is invariant 23's second clause reaching the wire. Before it, an authenticated caller
-/// could publish a document that verifies under no key, and `S-C23`'s revoke-all — which
+/// could publish a document that verifies under no key, and the revoke-all — which
 /// accepts a candidate IK only if it verifies the account's stored directory — would have been
 /// permanently disabled for that account by a stolen session token. A stolen token cannot
 /// revoke everything; it must not be able to make sure nobody can.

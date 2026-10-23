@@ -6,12 +6,12 @@
 //!
 //! # The status audit
 //!
-//! `S-C28` found thirteen response variants across the Salvo surface that render a status the
-//! Salvo document never declared (it was committed as `capsule-sdk/openapi.json`, deleted with
-//! the tree it described in `S-C59`) — `LoginResponses::undocumented()` returns
-//! `[423, 429]`. Kynos makes that class of defect unrepresentable, because the status *is* the
-//! return type and there is only one declaration. So each status was audited as its operation
-//! was ported, and the verdict lives in the type:
+//! The Salvo surface had thirteen response variants that render a status its document never
+//! declared (that document was committed as `capsule-sdk/openapi.json` and has since been
+//! deleted) — `LoginResponses::undocumented()` returned `[423, 429]`. Kynos makes that class of
+//! defect unrepresentable, because the status *is* the return type and there is only one
+//! declaration. So each status was audited as its operation was ported, and the verdict lives
+//! in the type:
 //!
 //! | Salvo | Verdict here |
 //! | --- | --- |
@@ -22,7 +22,7 @@
 //! | login `400` "Bad request" | **deleted as unreachable.** `LoginResponses::BadRequest` was never constructed; the 400 a malformed body actually produces comes from the `Json` extractor, and Kynos declares it |
 //! | login `401` | kept — [`LoginRejection::InvalidCredentials`], now carrying `error.auth.invalid_credentials` |
 //! | login `423` | **kept and now documented.** Reachable: lockout is account state the directory owns, not a counter, so it ports. Carries the new `error.auth.account_locked` |
-//! | login `429` | **deleted as unreachable.** Rate limiting is a *counter*, `S-C29` deliberately gave counters no port, and `S-C32` owns them. Nothing in this crate can produce a 429, so declaring one would fail `assert_declared_responses_covered`. See "What this port does not have" |
+//! | login `429` | **deleted as unreachable.** Rate limiting is a *counter*, and counters are deliberately not a session-store port. Nothing in this crate can produce a 429, so declaring one would fail `assert_declared_responses_covered`. See "What this port does not have" |
 //! | login `500` | kept — [`LoginRejection::Unavailable`], JSON rather than the old debug-leaking `text/plain` |
 //! | refresh `200` / `401` / `500` | all kept |
 //! | logout `200` | **changed to `204`.** The Salvo success body was `{"error":"Logout successful"}` — a success rendered in the error envelope |
@@ -37,11 +37,11 @@
 //! # What this port does not have
 //!
 //! **Rate limiting.** The Salvo login is limited to ten attempts per IP per minute, and the port
-//! has none, because the counter port that would back it does not exist — `S-C29` excluded
-//! counters on the grounds that a lost record and a lost increment are different contracts, and
-//! `S-C32` owns the replacement. Inventing one here would be doing that slice's work behind its
-//! back. This is a real gap against Salvo parity and is reported as one, not papered over with
-//! a 429 the server cannot send.
+//! has none, because the counter port that would back it does not exist here — the session
+//! store excludes counters on the grounds that a lost record and a lost increment are different
+//! contracts, and the counter port is where the replacement belongs. Inventing one here would
+//! be building that port behind its back. This is a real gap against Salvo parity and is
+//! reported as one, not papered over with a 429 the server cannot send.
 //!
 //! **`user_agent` and `ip_address` on the session record.** Both are always `None`, exactly as
 //! in Salvo, which never filled them either. They are read by the devices listing, which is not
@@ -452,8 +452,8 @@ impl LogoutRejection {
 /// # What it does not do
 ///
 /// **It does not publish a device directory**, and the account is therefore unable to upload
-/// until its client publishes one. That is not an omission here: `S-C20` removed the
-/// account-creation fallback for invariant 7's floor precisely so that "was this device in the
+/// until its client publishes one. That is not an omission here: there is deliberately no
+/// account-creation fallback for invariant 7's floor, precisely so that "was this device in the
 /// directory" has an honest answer for a brand-new account, and the honest answer is *no*. A
 /// client's first action after registering is `POST /v1/auth/devices/directory`.
 ///
@@ -466,7 +466,7 @@ impl LogoutRejection {
 /// Kynos's `Created` requires a `Location` — a `201` that does not say *where* tells a client
 /// something exists and not how to reach it, which is a defect the type refuses to let you
 /// commit. This server exposes no URL for an account: `GET /v1/auth/profile` is among the
-/// operations `S-C53` records as unported. Inventing a location to satisfy a status would be
+/// operations not ported to this server. Inventing a location to satisfy a status would be
 /// inventing a surface, so the status moved instead. What a caller actually needs — the token
 /// pair — is in the body either way.
 #[kynos::post("/v1/auth/register", operation_id = "register_user", tag = AuthTag)]
@@ -888,10 +888,10 @@ pub struct ReauthenticateResponse {
 
 /// Prove a credential again on the current session, without opening a new one.
 ///
-/// **The only way to satisfy the freshness gate `S-C7` enforces**, and it exists because
-/// without it the gate is unusable: `authenticated_at` is deliberately *not* reset by a refresh,
-/// so a user signed in an hour ago would otherwise have to sign out entirely to add a device —
-/// and the session they abandoned would linger in their own devices listing.
+/// **The only way to satisfy the freshness gate sensitive operations enforce**, and it exists
+/// because without it the gate is unusable: `authenticated_at` is deliberately *not* reset by a
+/// refresh, so a user signed in an hour ago would otherwise have to sign out entirely to add a
+/// device — and the session they abandoned would linger in their own devices listing.
 ///
 /// It does not mint tokens and does not rotate the session. The caller keeps the credential
 /// they already hold; what changes is one timestamp on the record behind it.
@@ -988,8 +988,8 @@ pub struct RevokeAllResponse {
     ///
     /// Counted from the records the store actually removed, never from a separately maintained
     /// index. The Salvo implementation read a per-user set that `revoke_session` did not clean
-    /// up, so this number inflated by one for every prior refresh; `S-C29` made the record and
-    /// its listing entry one fact, so there is nothing left to disagree.
+    /// up, so this number inflated by one for every prior refresh; here the record and
+    /// its listing entry are one fact, so there is nothing left to disagree.
     pub revoked: u64,
 }
 

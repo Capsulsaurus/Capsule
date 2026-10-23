@@ -254,7 +254,7 @@ pub struct GeneratedDerivative {
 
 /// The outcome of one asset's still-derivative generation.
 ///
-/// `deferred` is the per-`(tier, format)` gap S-B13 asks for: a pair with no encoder in this
+/// `deferred` is the per-`(tier, format)` gap the design requires: a pair with no encoder in this
 /// build is *recorded*, not collapsed into the asset-level status. The asset is still
 /// `DerivativeStatus::Decoded` — the decode succeeded and a renderable derivative exists —
 /// which is why the two live in different places.

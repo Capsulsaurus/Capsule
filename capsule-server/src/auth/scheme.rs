@@ -25,8 +25,9 @@
 //! token is not an unauthenticated caller — it is a valid credential that is insufficient for
 //! this operation, which is precisely RFC 9110's distinction and precisely what
 //! [`AuthRejection::Forbidden`] means. It also makes the 403 that `Auth<S>` declares *reachable*:
-//! a status the document promises and nothing can produce is the other half of the `S-C28`
-//! defect, and `assert_declared_responses_covered` fails on it.
+//! a status the document promises and nothing can produce is the opposite of a schema omission
+//! (a returned status the document does not declare), and `assert_declared_responses_covered`
+//! fails on it.
 //!
 //! # The ledger is on the request path
 //!
@@ -63,8 +64,8 @@
 //!    with `error.auth.unavailable` — so the client learns the truth one hop later and backs
 //!    off instead of prompting for a password.
 //!
-//! Recorded on `S-C48` and pointed at the same upstream seam `S-C36` and `S-C38` want: a
-//! framework rejection that can carry a Capsule status and a Capsule `error.*` code.
+//! This wants an upstream Kynos seam: a framework rejection that can carry a Capsule status and
+//! a Capsule `error.*` code.
 //!
 //! ## The touch is coalesced, and the coalescing window is a staleness window
 //!
@@ -111,11 +112,11 @@ pub const TOUCH_INTERVAL: SignedDuration = SignedDuration::from_secs(60);
 ///
 /// **Never the token itself.** A handler that could reach the raw credential could log it.
 ///
-/// The two timestamps are here rather than re-read because `S-C48` already read the record to
-/// decide whether to admit the request at all. A handler that read it again would pay a second
-/// round trip for an answer it was already given, and — worse — could get a *different* answer,
-/// because a concurrent close or re-authentication can land between the two reads. One read,
-/// one truth, carried forward.
+/// The two timestamps are here rather than re-read because the ledger check already read the
+/// record to decide whether to admit the request at all. A handler that read it again would pay
+/// a second round trip for an answer it was already given, and — worse — could get a
+/// *different* answer, because a concurrent close or re-authentication can land between the two
+/// reads. One read, one truth, carried forward.
 ///
 /// Field names match [`VerifiedToken`](super::tokens::VerifiedToken)'s deliberately: this replaced it as the scheme's
 /// credential type, and every `credential.user` in every handler kept meaning what it meant.
@@ -176,7 +177,7 @@ impl<C: Sync> Authenticator<AccessToken, C> for AuthContext {
             }
         };
 
-        // `S-C48`: the signature says the token was minted here; the ledger says the session it
+        // The signature says the token was minted here; the ledger says the session it
         // names is still open. Without this second question a revoked session survives for the
         // access token's whole TTL.
         let record = match self.sessions().read_session(&verified.session).await {
@@ -193,7 +194,7 @@ impl<C: Sync> Authenticator<AccessToken, C> for AuthContext {
 
             // Fail closed. An authenticator that stops consulting the ledger when the ledger is
             // unreachable is an authenticator an attacker turns off. The status is `401` because
-            // it is the only refusal this trait can render — see the module docs, and `S-C48`.
+            // it is the only refusal this trait can render — see the module docs.
             Err(error) => {
                 tracing::error!(
                     %error,

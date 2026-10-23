@@ -163,7 +163,7 @@ async fn a_first_sync_returns_the_whole_library_in_sequence_order() {
     );
 }
 
-/// `S-C30`: the manifest a client verifies is the manifest a client uploaded.
+/// The manifest a client verifies is the manifest a client uploaded.
 ///
 /// The defect this replaces was not "the bytes were slightly different" — the retired feed
 /// re-serialized the server's envelope *projection*, which carries neither `device_sig` nor
@@ -446,7 +446,7 @@ async fn a_forged_cursor_is_refused_with_its_code() {
 /// A validly-MAC'd cursor issued to another owner does not authenticate here.
 ///
 /// The retired MAC covered only the position, so this cursor would have been accepted. It
-/// matters now because `S-C37` mints sequence numbers per owner: position 500 is a different
+/// matters because sequence numbers are minted per owner: position 500 is a different
 /// point in every library, so a foreign cursor is a way to skip your own unseen entries.
 #[tokio::test]
 async fn another_owners_cursor_is_refused_even_under_the_right_key() {

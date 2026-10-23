@@ -4,7 +4,7 @@ import Foundation
 
 /// The sidecar record of the **mock lane** — a Swift-native, `Sendable` value.
 /// The Rust `AssetSidecarRecord` it once mirrored (the unsigned CBOR shape) was
-/// retired with the unsigned-sidecar migration (`S-D24`); the signed `SidecarV1`
+/// retired with the unsigned-sidecar migration; the signed `SidecarV1`
 /// is authored only by the Rust core.
 ///
 /// The sidecar is the portable, self-describing record of an asset that lives

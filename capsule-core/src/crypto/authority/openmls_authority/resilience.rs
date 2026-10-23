@@ -3,7 +3,7 @@
 //!
 //! SSoT: [MLS Resilience](https://docs/design/mls-resilience/).
 //!
-//! OpenMLS resolves ordinary concurrency (one commit wins, the other re-proposes — the S-X2
+//! OpenMLS resolves ordinary concurrency (one commit wins, the other re-proposes — via the
 //! `stage`/`merge`/`discard` primitives). This module owns the recovery contracts the base protocol
 //! does *not* resolve on its own: a **lost commit**, **state divergence**, and a **whole-group
 //! re-key** after a suspected compromise.
@@ -16,8 +16,8 @@
 //! - *Quarantine, not silent acceptance.* Divergence is surfaced (an explicit
 //!   [`ReconcileOutcome`]), never silently merged.
 //!
-//! **In-process transport.** S-X3 makes no server changes: the server's authoritative chain is
-//! supplied to [`reconcile_with_server`](OpenMlsAuthority::reconcile_with_server) as a
+//! **In-process transport.** This module makes no server changes: the server's authoritative
+//! chain is supplied to [`reconcile_with_server`](OpenMlsAuthority::reconcile_with_server) as a
 //! [`ServerChainView`] — the classification (behind / ahead / forked) that the real delivery
 //! service would compute by comparing commit hashes against its persisted chain.
 
@@ -65,8 +65,8 @@ pub enum ReconcileOutcome {
 
 /// The server's authoritative commit chain **as seen relative to this member** — the classification
 /// the real delivery service computes by comparing the member's head against its persisted chain.
-/// This is the mock boundary: S-X3 makes no server changes, so the caller supplies the comparison
-/// result rather than this module querying a live server.
+/// This is the mock boundary: this module makes no server changes, so the caller supplies the
+/// comparison result rather than this module querying a live server.
 pub enum ServerChainView {
     /// The member's head equals the server head.
     UpToDate,
@@ -262,7 +262,7 @@ impl OpenMlsAuthority {
 
     /// The full group re-keying ceremony (mls-resilience.md § Group re-keying ceremony): mint a
     /// fresh epoch (new AMK + write-tier key) for the whole group as one `intent_id`-keyed
-    /// operation, and prepare the fresh epoch's broadcast. S-X2's rotation is the primitive; this is
+    /// operation, and prepare the fresh epoch's broadcast. Epoch rotation is the primitive; this is
     /// the doc-specified orchestration. Assets are **not** re-encrypted (content-addressed; prior
     /// AMKs are retained for reading history) — the ceremony re-attests the fresh epoch's write-tier
     /// and re-broadcasts the fresh AMK, which is what makes pre-compromise keys useless post-rekey.

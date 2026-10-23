@@ -1,16 +1,15 @@
-//! Slices `S-B18` (`capsule show`) and `S-B17` (`capsule repair capture-time`) across a real
-//! process boundary, by spawning the `capsule` binary the way `import_round_trip.rs` and
-//! `takeout_import.rs` do — and for the same reason: `show` proves what a library *reopened
-//! from disk* says about an asset, and a repair that only looked right inside the process
-//! that wrote it would prove nothing.
+//! `capsule show` and `capsule repair capture-time` across a real process boundary, by
+//! spawning the `capsule` binary the way `import_round_trip.rs` and `takeout_import.rs` do — and
+//! for the same reason: `show` proves what a library *reopened from disk* says about an asset,
+//! and a repair that only looked right inside the process that wrote it would prove nothing.
 //!
 //! **The fixture image** is a synthesized JPEG carrying a real EXIF APP1 segment with
 //! `DateTimeOriginal` **and** `OffsetTimeOriginal`, so its capture time resolves to a fixed
-//! UTC instant — the case the importer writes as the capture timestamp since `S-B16`, and
+//! UTC instant — the case the importer writes as the capture timestamp since the parser fix, and
 //! therefore the case the repair can recover. The Argon2id seeding is the fast-cost trick
 //! `import_round_trip.rs` explains; nothing here weakens what the spawned processes run.
 //!
-//! **The pre-`S-B16` library** the repair exists for is reproduced by importing under the
+//! **The pre-fix library** the repair exists for is reproduced by importing under the
 //! fixed parser and then stamping one asset's as-imported capture time with the import clock
 //! through the very API the repair uses (`Workspace::correct_imported_capture_timestamp`).
 //! That reproduces the half the
@@ -28,8 +27,8 @@
 //!   a hash prefix from `shasum` and the asset id both resolve, and the page carries the
 //!   EXIF-derived values.
 //! - `show_refuses_a_malformed_or_unknown_selector` — non-zero exit with a localized reason.
-//! - `repair_is_a_no_op_on_a_library_imported_after_the_parser_fix` — the `S-B17`
-//!   "no-op post-`S-B16`" criterion.
+//! - `repair_is_a_no_op_on_a_library_imported_after_the_parser_fix` — the
+//!   "no-op after the parser fix" criterion.
 //! - `repair_reports_by_default_and_corrects_under_apply` — detects the reproduced bug,
 //!   writes nothing without `--apply`, corrects with it, keeps the bundle in its original
 //!   month directory, survives `capsule library rebuild`, and finds nothing on a second run.
@@ -411,7 +410,7 @@ impl Fixture {
     }
 }
 
-/// **The "no-op after `S-B16`" half of the criterion.** Every asset here was imported by the
+/// **The "no-op after the parser fix" half of the criterion.** Every asset here was imported by the
 /// fixed parser, so each sidecar already carries its EXIF instant, and the pass reports nothing.
 #[test]
 fn repair_is_a_no_op_on_a_library_imported_after_the_parser_fix() {
@@ -428,7 +427,7 @@ fn repair_is_a_no_op_on_a_library_imported_after_the_parser_fix() {
 }
 
 /// **The repair itself**, across process boundaries: one of two assets is stamped with the
-/// import clock (the pre-`S-B16` shape); a dry run reports it and writes nothing; `--apply`
+/// import clock (the pre-fix shape); a dry run reports it and writes nothing; `--apply`
 /// corrects it as a signed record without moving the bundle; `capsule show` and a
 /// `capsule library rebuild` both read the corrected instant; a second `--apply` finds nothing.
 #[test]

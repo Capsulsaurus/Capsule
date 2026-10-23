@@ -15,7 +15,7 @@
 //! worth saying why it is the right one and not merely the available one: an interceptor
 //! declares the responses it can produce as an associated type, so mounting it **contributes
 //! `413` to every operation it covers**. Configuring the limit and documenting that the limit
-//! exists are one action, which is the exact failure `S-C28` catalogued — thirteen Salvo
+//! exists are one action, which is the exact failure of the retired Salvo surface —
 //! response variants rendering statuses the published schema never declared — made
 //! unrepresentable. A hand-written `tower::Layer` doing the same job would have declared
 //! nothing.
@@ -38,8 +38,8 @@
 //!
 //! So the cap sits at twice the largest legitimate body: high enough that every refusal a client
 //! can act on still comes from the route that understands it, and low enough that no body a
-//! handler is ever handed can be used to exhaust memory. When `S-C1` lands the chunk route, the
-//! protocol bound is enforced there and this stays what it is — the floor below which nothing
+//! handler is ever handed can be used to exhaust memory. The chunk route enforces the
+//! protocol bound itself and this stays what it is — the floor below which nothing
 //! reaches a handler at all.
 //!
 //! The backstop is now the cap only where nothing smaller is legitimate: the chunk routes and
@@ -49,7 +49,7 @@
 //! # What it is not
 //!
 //! It is not a per-field length check. Whether the `#[schema]` constraints are re-declared once
-//! Kynos enforces them, or stay a handler concern, is the other half of `S-C33` and is not
+//! Kynos enforces them, or stay a handler concern, is not
 //! decided here: nothing in this module makes the document promise a check the server skips,
 //! which is the property that mattered.
 
@@ -189,7 +189,7 @@ mod tests {
     /// The upload protocol's own maximum chunk size.
     ///
     /// Restated here only as the subject of the assertion below; the bound itself is owned by
-    /// the transfer upload design doc and enforced by `S-C1`'s route.
+    /// the transfer upload design doc and enforced by the chunk route.
     const PROTOCOL_MAX_CHUNK_BYTES: u64 = 16 * 1024 * 1024;
 
     /// The cap is a backstop, not the protocol's rule.

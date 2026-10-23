@@ -1,7 +1,6 @@
-//! [`ReadAuthority`] — who may fetch a blob, and the `403` the contract asks for (
-//! `S-C51`).
+//! [`ReadAuthority`] — who may fetch a blob, and the `403` the contract asks for.
 //!
-//! # The hole `S-C39` closed
+//! # The hole this closes
 //!
 //! Before it, `GET /v1/blob/{hash}` authorized on "a valid access token" and nothing else, on
 //! both the Salvo surface and its Kynos port. **Any authenticated account could fetch any live
@@ -79,12 +78,12 @@
 //! so it costs none either. A peer's backup holder still costs its lookup, because the peer path
 //! asks the roster before it checks the role.
 //!
-//! **The takedown `410` was deliberately left alone** by `S-C39`, and the reasoning still holds
-//! with members in the picture: design/moderation.md states the per-surface rule as *"takedown
-//! of known content → `410`"*, and changing a landed, tested contract on an inference is not
-//! this module's to do. What `S-C51` adds is that a *former* member is answered `403` before any
-//! `410` is reached, so the authority-first ordering `S-C39` established keeps every policy
-//! refusal illegible to anyone who is not currently entitled to the bytes.
+//! **The takedown `410` was deliberately left alone** by this authority check, and the
+//! reasoning still holds with members in the picture: design/moderation.md states the
+//! per-surface rule as *"takedown of known content → `410`"*, and changing a landed, tested
+//! contract on an inference is not this module's to do. A *former* member is answered `403`
+//! before any `410` is reached, so the authority-first ordering keeps every policy refusal
+//! illegible to anyone who is not currently entitled to the bytes.
 //!
 //! [Download & Sync]: ../../../capsule-docs/src/content/docs/design/transfer/download.md
 

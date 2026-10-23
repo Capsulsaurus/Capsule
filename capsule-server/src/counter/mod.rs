@@ -2,12 +2,13 @@
 //!
 //! # Why this is a port of its own and not a field on another
 //!
-//! `S-C29` gave homes to three of `SessionStorage`'s four responsibilities — session records,
-//! the per-user index, and the ceremony records — and deliberately left this one out. Counters
+//! The state ports give homes to three of the old `SessionStorage`'s four responsibilities —
+//! session records, the per-user index, and the ceremony records — and deliberately leave this
+//! one out. Counters
 //! are not records, and the difference is not stylistic: **a lost record is a ceremony the user
 //! retries; a lost increment is one more password guess than the policy allows.** Folding them
 //! into [`AuthStateStore`](crate::store::AuthStateStore) would have rebuilt the grab-bag one
-//! field at a time, which is the thing `S-C29` exists to delete.
+//! field at a time, which is the thing the split state ports exist to avoid.
 //!
 //! # Increment and decide are one operation, always
 //!

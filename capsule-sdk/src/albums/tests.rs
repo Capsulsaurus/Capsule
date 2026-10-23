@@ -1,4 +1,4 @@
-//! Tests for the S-C25 album-provisioning client.
+//! Tests for the album-provisioning client.
 //!
 //! Driven against the shared in-process mock server ([`crate::testmock`]), which replays the
 //! real `POST /v1/albums` wire — including the `ApiError` JSON with its stable `error.*` code,

@@ -41,14 +41,14 @@
 //!   because it is hard. Its contract is *"rate-limited per user and coalesced, so a client
 //!   cannot turn it into an I/O-amplification attack"*, and the per-user counter that would
 //!   enforce that has no port. Shipping the re-hash without the limiter would ship
-//!   the amplification, so the two halves land together — see `S-C41`.
-//! - **Moderation holds** landed with `S-C17`: an asset under a
+//!   the amplification, so the two halves must land together.
+//! - **Moderation holds** are reported: an asset under a
 //!   [`ServingHold`](crate::index::ServingHold) reports every blob `stored` and **not**
 //!   `retrievable`. The bytes are present and staying present; the server simply will not hand
 //!   them over. Reporting `retrievable` would tell a client it may release its only local copy
 //!   of something it can never fetch back, which is the exact decision this surface exists to
 //!   inform.
-//! - **GC state** landed with `S-C11`: a blob the collector has marked is `stored` and **not**
+//! - **GC state** is reported: a blob the collector has marked is `stored` and **not**
 //!   `retrievable`, which is the combination that matters most here. Its bytes are on disk
 //!   right now and on their way out, so a client that read `stored` alone and released its copy
 //!   would be releasing it into a window that closes. A **quarantined** blob already reports
@@ -494,7 +494,7 @@ mod tests {
     /// This crate can construct, sign and verify a custody receipt from **core's own type**
     /// while linking `capsule-core` with `default-features = false`.
     ///
-    /// The guard, not a feature. Nothing here uses receipts yet — `S-C15` will — and the point
+    /// The guard, not a feature. Nothing here uses receipts yet, and the point
     /// is that the day it does, it must not have to define its own copy. A signed structure
     /// defined at both ends is one added field away from a signature that stops verifying, and
     /// the failure would present as the server withholding receipts, which is exactly the

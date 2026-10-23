@@ -1,4 +1,4 @@
-//! Tests for the S-D1 upload client.
+//! Tests for the upload client.
 //!
 //! Two layers:
 //! - **Adaptive strategy (unit).** The normative chunk-size algorithm: warm-up,
@@ -6,7 +6,7 @@
 //!   protocol-bounds guarantees.
 //! - **Protocol conformance + recovery matrix (smoke).** The client drives an
 //!   in-process mock HTTP server that replays the real wire (statuses, headers,
-//!   `ApiError` JSON, `error.*` codes taken straight from the S-C1 handlers). One
+//!   `ApiError` JSON, `error.*` codes taken straight from the server's upload handlers). One
 //!   test per recovery-matrix code, plus the happy-path round-trip, resume, and
 //!   the `426` abort-with-upgrade against the real handshake shape.
 //!
@@ -361,7 +361,7 @@ async fn create_existing_session_resumes_from_advertised_offset() {
     assert_eq!(*patch_offsets.lock().unwrap(), vec![CHUNK_SIZE_256KB]);
 }
 
-/// The production composition: an upload driven through the `S-D7` session, whose
+/// The production composition: an upload driven through the SDK session, whose
 /// token store injects the bearer (the upload client never sees the token).
 #[tokio::test]
 async fn session_composed_upload_injects_the_session_bearer() {

@@ -346,7 +346,7 @@ async fn a_blob_awaiting_collection_is_stored_but_not_retrievable() {
 
 /// A held asset is stored and **not** retrievable, which is the honest pair.
 ///
-/// `S-C17`. This is the decision the whole surface exists to inform: a client asks before it
+/// This is the decision the whole surface exists to inform: a client asks before it
 /// releases its only local copy. A taken-down asset's bytes are present and staying present —
 /// so `stored` is true and lying about it would be caught — but the server will not hand them
 /// over, so `retrievable` must be false. Reporting durable here would tell a client it may drop
@@ -624,7 +624,7 @@ async fn the_deep_budget_throttles_the_deep_half_and_keeps_the_structural_one() 
 #[tokio::test]
 async fn a_blob_the_asset_does_not_hold_is_never_re_hashed() {
     // The store is deliberately not asked about it even on a deep scan: answering would be a
-    // cross-account existence oracle, which is the property `S-C3` built this surface around.
+    // cross-account existence oracle, which is the property this surface is built around.
     let fixture = Fixture::working();
     let bearer = bearer(&fixture).await;
     let (asset, provenance, _) = publish(&fixture, "unassociated-deep").await;

@@ -1,5 +1,5 @@
-//! P-256 hybrid-DSK variant — the hardware-backed device signing key (slice `S-A4` in the
-//! repo-root `SLICES.md`; design: <https://docs/design/cryptography/keys/#device-keys>).
+//! P-256 hybrid-DSK variant — the hardware-backed device signing key (design:
+//! <https://docs/design/cryptography/keys/#device-keys>).
 //!
 //! Shipping secure elements (Secure Enclave, StrongBox, TPM 2.0) expose **ECDSA-P256**,
 //! not Ed25519, so the hardware-backed device-key composition pairs a *hardware P-256

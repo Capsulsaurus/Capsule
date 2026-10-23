@@ -8,7 +8,7 @@
 //! # Invariant 6, from the album store
 //!
 //! An album is writable by the account it was provisioned to, pinned to the protocol the server
-//! spoke when it was created — and, since `S-C51`, by a **writer** on its current roster
+//! spoke when it was created — and by a **writer** on its current roster
 //! ([`crate::membership`]). Either way the write is filed under the *owner's* namespace, which is
 //! the one every member's devices read. A reader, a former member, a stranger and an
 //! unprovisioned id are all [`AlbumWriteAccess::Denied`], one answer, which is the safe direction:
@@ -143,7 +143,7 @@ impl WriteAuthority for ProvisionedAuthority {
             Ok(AlbumWriteAccess::Writable {
                 owner_id: record.owner_id,
                 role,
-                // `S-C24`: an expired ceremony is reported as none, because the deadline
+                // An expired ceremony is reported as none, because the deadline
                 // passing *is* the abort. Nothing has to run to clear it, which is what stops
                 // a proposer who vanished from freezing an album forever.
                 quiescing_under: record

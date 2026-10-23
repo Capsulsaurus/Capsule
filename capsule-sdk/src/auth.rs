@@ -1,9 +1,9 @@
 //! SDK-owned authentication: the session/token store and the auto-refresh engine.
 //!
-//! This is the "SDK owns the complete user flow" foundation (slice `S-D7` in the
-//! repo-root `SLICES.md`): native apps call [`AuthClient::login`], then hand every
-//! request through [`Session::execute`], then [`Session::logout`] — they never
-//! juggle raw access tokens. The store keeps the access + refresh token pair and:
+//! This is the "SDK owns the complete user flow" foundation: native apps call
+//! [`AuthClient::login`], then hand every request through [`Session::execute`], then
+//! [`Session::logout`] — they never juggle raw access tokens. The store keeps the access + refresh
+//! token pair and:
 //!
 //! - runs a quick **asynchronous pre-flight expiry check** before each request and
 //!   refreshes proactively when the access token is within the refresh skew of
@@ -17,14 +17,15 @@
 //! It is hand-rolled over `reqwest` (rustls only) against the server's own
 //! `/v1/auth/{register,login,refresh,logout}`. It does not
 //! route through the generated client, but the reason is no longer that spargen is
-//! parked — spargen ships and `S-D8` generates the typed surface today. What lives here
+//! parked — spargen ships and generates the typed surface today. What lives here
 //! is token *orchestration*: the pre-flight refresh, the `401`-retry-once replay, and
 //! the session store they mutate. That is deliberately outside generated code, which
-//! owns parsing and serialization and nothing else. Auth requests are [`crate::net::RetryClass::Interactive`]; the full backoff
-//! ladder lands with `S-D10`, but the `401`-retry-once and pre-flight refresh here
-//! are the parts the session store owns.
+//! owns parsing and serialization and nothing else. Auth requests are
+//! [`crate::net::RetryClass::Interactive`]; the full backoff ladder lives in [`crate::net`], but
+//! the `401`-retry-once and pre-flight
+//! refresh here are the parts the session store owns.
 //!
-//! The OIDC legs (slice `S-N2`: [`AuthClient::begin_oidc_login`] and
+//! The OIDC legs ([`AuthClient::begin_oidc_login`] and
 //! [`AuthClient::complete_oidc_login`]) are **not** hand-rolled: neither is token
 //! orchestration, so the exemption above does not cover them, and they call the generated
 //! [`rest::Client`] — every body and every response parsed by generated code, with only the
@@ -376,7 +377,7 @@ struct LoginRequestBody<'a> {
 
 /// The registration body: an address and a password, and nothing else.
 ///
-/// It carried a username, a display name and the advisory cohort hash until `S-C53`. The server
+/// It carries no username, display name or advisory cohort hash: the server
 /// takes none of them and its body is **strict**, so a field kept for old times' sake would be a
 /// `422` rather than a value quietly ignored.
 #[derive(Serialize)]
@@ -664,7 +665,7 @@ pub struct AuthClient {
     refresh_skew_secs: i64,
     /// The advisory device-cohort hash to ride every session-creation request
     ///. `None` ⇒ nothing is sent — the server behaves identically
-    /// (S-C13's advisory-only invariant). Computed by the platform app from its
+    /// (the cohort hash is advisory only). Computed by the platform app from its
     /// primary identifier via [`crate::cohort`] and set with
     /// [`with_cohort_hash`](AuthClient::with_cohort_hash).
     cohort_hash: Option<Arc<str>>,
@@ -1048,9 +1049,9 @@ impl AuthClient {
     /// A `200` is a session and a `202` is a challenge, on every route that opens a session.
     ///
     /// Read from the **status**, which is where the server puts the distinction; a body flag
-    /// would be a second place for the two to disagree. Before `S-C63` the `202` fell through to
-    /// `read_tokens` and surfaced as `MalformedResponse`, which told a user with a second factor
-    /// that their server was broken.
+    /// would be a second place for the two to disagree. Treating the `202` as a token response
+    /// would send it through `read_tokens` and surface as `MalformedResponse`, which would tell a
+    /// user with a second factor that their server was broken.
     async fn read_login_outcome(
         &self,
         endpoint: Endpoint,
@@ -2758,7 +2759,8 @@ mod tests {
     }
 
     /// Absent stays legal: with no cohort configured, the field is **omitted entirely**
-    /// (no `null`), so the server behaves identically to a valid one (S-C13 invariant).
+    /// (no `null`), so the server behaves identically to a valid one (the cohort hash is
+    /// advisory only).
     #[tokio::test]
     async fn absent_cohort_is_omitted_from_the_body() {
         let captured = Arc::new(std::sync::Mutex::new(None));

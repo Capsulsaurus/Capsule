@@ -102,7 +102,7 @@ pub struct CustodyReceiptCore {
     /// every suite that content-addresses with SHA-256 and they are not the same identifier: an
     /// address is whatever digest the suite selects, while a chain position is fixed at SHA-256
     /// because `prior_provenance_hash` is. Deriving one from the other is correct by
-    /// coincidence, which is the trap `S-C31` names.
+    /// coincidence, which is a trap.
     ///
     /// **Present on one receipt per manifest, and that is the whole design.** The provenance
     /// blob *is* the signed manifest, so its receipt names the manifest twice — once as the

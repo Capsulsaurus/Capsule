@@ -686,8 +686,7 @@ mod tests {
     // ── LQIP placeholder rendering ──────────────────────────────────────────
 
     /// The native surface decodes the same bytes the import pipeline encoded, to the same
-    /// pixels `capsule_core::lqip` produces — the `S-B14` cross-surface criterion at the FFI
-    /// boundary.
+    /// pixels `capsule_core::lqip` produces — the cross-surface criterion at the FFI boundary.
     #[test]
     fn render_lqip_matches_the_core_decoder() {
         use capsule_core::lqip::{Gamut, LQIP_FORMAT_V1, Lqip};
