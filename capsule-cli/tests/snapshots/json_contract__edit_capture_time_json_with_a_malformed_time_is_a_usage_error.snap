@@ -1,0 +1,11 @@
+---
+source: capsule-cli/tests/json_contract.rs
+expression: "run(&scratch,\n&[\"edit\", \"capture-time\", \"yesterday\", \"--asset\",\n\"0192f1a0-0000-7000-8000-000000000001\", \"--library\", \"lib\", \"--json\",],)"
+---
+status: 2
+--- stdout ---
+
+--- stderr ---
+error: invalid value 'yesterday' for '<TIME>': failed to parse year in date: failed to parse four digit integer as year: invalid digit, expected 0-9 but got y
+
+For more information, try '--help'.

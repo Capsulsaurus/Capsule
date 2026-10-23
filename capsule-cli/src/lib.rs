@@ -22,8 +22,9 @@ use capsule_library::library::{Library, LibraryError, init_library, open_library
 use capsule_library::lifecycle::{DerivativeStatus, Workspace, unmigrated_sidecars};
 use capsule_sdk::cache_budget::DesktopConnectionClass;
 use cli::{
-    AuthCommands, CacheCommands, Cli, Commands, ImportProviderArg, LibraryCommands, PeerCommands,
-    RepairCommands, ShareCommands, SyncCommands,
+    AuthCommands, CacheCommands, Cli, Commands, EditCommands, EditLibraryArgs, ImportProviderArg,
+    LabelArgs, LabelCommands, LibraryCommands, PeerCommands, RegionCommands, RepairCommands,
+    ShareCommands, SyncCommands,
 };
 use colored::*;
 use dialoguer::{Confirm, Input, Password};
@@ -39,6 +40,7 @@ pub mod cli;
 pub mod cull;
 pub mod db;
 pub mod demo;
+pub mod edit;
 pub mod i18n;
 pub mod import_report;
 pub mod import_run;
@@ -652,6 +654,111 @@ async fn dispatch(command: Commands) -> Result<()> {
                         return Err(eyre!("Repair failed: {}", repair::describe_error(&error)));
                     }
                 }
+            }
+        },
+
+        // ── Label, Region, Edit ───────────────────────────────────────────
+        Commands::Label { command } => {
+            let (args, add) = match command {
+                LabelCommands::Add(args) => (args, true),
+                LabelCommands::Remove(args) => (args, false),
+            };
+            let LabelArgs {
+                label,
+                target,
+                region,
+                library,
+            } = args;
+            edit_library(&library, |ws| {
+                let target = match (target.asset, target.stack, target.album, region) {
+                    (Some(asset), _, _, Some(region_id)) => edit::LabelTarget::Region {
+                        asset_id: show::resolve(ws, &asset)?,
+                        region_id,
+                    },
+                    (Some(asset), _, _, None) => {
+                        edit::LabelTarget::Asset(show::resolve(ws, &asset)?)
+                    }
+                    (None, Some(stack), _, _) => edit::LabelTarget::Stack(stack),
+                    (None, None, Some(album), _) => edit::LabelTarget::Album(album),
+                    (None, None, None, _) => {
+                        unreachable!("clap requires one of --asset, --stack and --album")
+                    }
+                };
+                Ok(if add {
+                    edit::Edit::AddLabel { target, label }
+                } else {
+                    edit::Edit::RemoveLabel { target, label }
+                })
+            })?;
+        }
+        Commands::Region { command } => match command {
+            RegionCommands::Add {
+                asset,
+                circle,
+                rect,
+                label,
+                library,
+            } => {
+                let shape = circle
+                    .or(rect)
+                    .ok_or_else(|| eyre!("give --circle or --rect"))?;
+                edit_library(&library, |ws| {
+                    Ok(edit::Edit::AddRegion {
+                        asset_id: show::resolve(ws, &asset)?,
+                        shape,
+                        labels: label,
+                    })
+                })?;
+            }
+            RegionCommands::Delete {
+                region,
+                asset,
+                library,
+            } => {
+                edit_library(&library, |ws| {
+                    Ok(edit::Edit::DeleteRegion {
+                        asset_id: show::resolve(ws, &asset)?,
+                        region_id: region,
+                    })
+                })?;
+            }
+        },
+        Commands::Edit { command } => match command {
+            EditCommands::CaptureTime {
+                time,
+                asset,
+                library,
+            } => {
+                edit_library(&library, |ws| {
+                    Ok(edit::Edit::SetCaptureTime {
+                        asset_id: show::resolve(ws, &asset)?,
+                        capture: time,
+                    })
+                })?;
+            }
+            EditCommands::Location {
+                asset,
+                lat,
+                lon,
+                datum,
+                clear,
+                library,
+            } => {
+                edit_library(&library, |ws| {
+                    let asset_id = show::resolve(ws, &asset)?;
+                    Ok(match (clear, lat, lon) {
+                        (true, _, _) => edit::Edit::ClearLocation { asset_id },
+                        (false, Some(lat), Some(lon)) => edit::Edit::SetLocation {
+                            asset_id,
+                            lat,
+                            lon,
+                            datum,
+                        },
+                        (false, _, _) => {
+                            unreachable!("clap requires --lat and --lon unless --clear")
+                        }
+                    })
+                })?;
             }
         },
 
@@ -1592,6 +1699,23 @@ fn open_workspace_quiet(library: &Path, passphrase_stdin: bool) -> Result<Worksp
         "Library passphrase".to_string(),
     )?;
     open_workspace_with(library, &passphrase)
+}
+
+/// Open the library `args` names, build an edit against it with `build` (which resolves the
+/// asset selector), write it, and print what it did: one JSON document with `--json`, else one
+/// line.
+fn edit_library(
+    args: &EditLibraryArgs,
+    build: impl FnOnce(&Workspace) -> std::result::Result<edit::Edit, edit::EditError>,
+) -> Result<()> {
+    let mut ws = open_workspace(&args.library, args.passphrase_stdin)?;
+    let report = build(&ws).and_then(|edit| edit::apply(&mut ws, &edit));
+    match report {
+        Ok(report) if args.json => println!("{}", serde_json::to_string_pretty(&report)?),
+        Ok(report) => println!("{}", edit::summary(&report).green()),
+        Err(error) => return Err(eyre!("Edit failed: {}", edit::describe_error(&error))),
+    }
+    Ok(())
 }
 
 /// [`open_workspace_quiet`] with the passphrase already in hand: the TUI's forms collect it

@@ -10,7 +10,8 @@
 //!
 //! The `--json` subcommands today are `import`, `push`, `restore`, `verify`, `cache budget`,
 //! `cache sweep`, `sync`, `sync reannounce`, `share create`, `share revoke`, `auth login`,
-//! `auth logout` and `auth status`; each has its offline cases here, and every `--json`
+//! `auth logout`, `auth status`, `label add`, `label remove`, `region add`, `region delete`,
+//! `edit capture-time` and `edit location`; each has its offline cases here, and every `--json`
 //! subcommand that lands joins this file the same way.
 //! What needs a live server (a push or restore that reaches its assets) is the end-to-end
 //! suites' to cover.
@@ -60,6 +61,22 @@
 //!   any request: non-zero exit, empty stdout, the reason on stderr.
 //! - `share_revoke_json_with_a_malformed_id_prints_nothing_on_stdout` — a local refusal before
 //!   any request, as for create.
+//! - `label_add_json_reports_the_assets_labels` — exit 0, one JSON document: the asset and its
+//!   labels after the add, the new one trimmed by the label rule.
+//! - `label_remove_json_of_a_label_not_carried_changes_nothing` — exit 0, `changed: false`.
+//! - `label_add_json_on_an_unknown_album_prints_nothing_on_stdout` — the workspace's refusal:
+//!   non-zero exit, empty stdout, the reason on stderr.
+//! - `label_add_json_without_a_target_is_a_usage_error` — the parser's exit status 2.
+//! - `region_add_json_reports_the_new_region_and_its_labels` — exit 0, one JSON document with
+//!   the region id (redacted) and its labels.
+//! - `region_add_json_past_the_edge_prints_nothing_on_stdout` — a rectangle past the image
+//!   edge is refused and nothing is written.
+//! - `region_delete_json_of_an_unknown_region_prints_nothing_on_stdout` — the workspace's
+//!   refusal names the region.
+//! - `edit_location_json_reports_the_fix_beside_the_imported_none` — exit 0: the manual fix
+//!   and the as-imported location, `null` for an original with none.
+//! - `edit_capture_time_json_with_a_malformed_time_is_a_usage_error` — the parser's exit
+//!   status 2.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -592,4 +609,230 @@ fn share_create_json_over_an_empty_scope_prints_nothing_on_stdout() {
 fn share_revoke_json_with_a_malformed_id_prints_nothing_on_stdout() {
     let scratch = Scratch::new();
     insta::assert_snapshot!(run(&scratch, &["share", "revoke", "not-an-id", "--json"]));
+}
+
+/// The one asset `library(scratch, 1)` imported. Opening the workspace here holds its lock
+/// only until the id is read.
+fn only_asset(scratch: &Scratch) -> String {
+    let ws = Workspace::open(&scratch.library(), PASSPHRASE.as_bytes(), FAST_KDF)
+        .expect("open the library");
+    let ids = ws.asset_ids();
+    assert_eq!(ids.len(), 1, "one asset imported");
+    ids[0].to_string()
+}
+
+/// `run`, with `asset` and the `region_id` the report names replaced by fixed markers, so a
+/// snapshot does not carry ids minted at run time.
+fn run_redacted(scratch: &Scratch, args: &[&str], asset: &str) -> String {
+    let out = run(scratch, args).replace(asset, "[ASSET]");
+    let region = out
+        .split("\"region_id\": \"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .map(str::to_owned);
+    match region {
+        Some(region) => out.replace(&region, "[REGION]"),
+        None => out,
+    }
+}
+
+#[test]
+fn label_add_json_reports_the_assets_labels() {
+    let scratch = Scratch::new();
+    library(&scratch, 1);
+    let asset = only_asset(&scratch);
+    let library = scratch.library();
+    let first = run(
+        &scratch,
+        &[
+            "label",
+            "add",
+            "beach",
+            "--asset",
+            &asset,
+            "--library",
+            path(&library),
+            "--passphrase-stdin",
+        ],
+    );
+    assert!(first.starts_with("status: 0"), "{first}");
+    insta::assert_snapshot!(run_redacted(
+        &scratch,
+        &[
+            "label",
+            "add",
+            " Sunset ",
+            "--asset",
+            &asset,
+            "--library",
+            path(&library),
+            "--passphrase-stdin",
+            "--json",
+        ],
+        &asset,
+    ));
+}
+
+#[test]
+fn label_remove_json_of_a_label_not_carried_changes_nothing() {
+    let scratch = Scratch::new();
+    library(&scratch, 1);
+    let asset = only_asset(&scratch);
+    insta::assert_snapshot!(run_redacted(
+        &scratch,
+        &[
+            "label",
+            "remove",
+            "beach",
+            "--asset",
+            &asset,
+            "--library",
+            path(&scratch.library()),
+            "--passphrase-stdin",
+            "--json",
+        ],
+        &asset,
+    ));
+}
+
+#[test]
+fn label_add_json_on_an_unknown_album_prints_nothing_on_stdout() {
+    let scratch = Scratch::new();
+    library(&scratch, 0);
+    insta::assert_snapshot!(run(
+        &scratch,
+        &[
+            "label",
+            "add",
+            "trip",
+            "--album",
+            "0192f1a0-0000-7000-8000-000000000009",
+            "--library",
+            path(&scratch.library()),
+            "--passphrase-stdin",
+            "--json",
+        ],
+    ));
+}
+
+#[test]
+fn label_add_json_without_a_target_is_a_usage_error() {
+    let scratch = Scratch::new();
+    insta::assert_snapshot!(run(
+        &scratch,
+        &["label", "add", "trip", "--library", "lib", "--json"],
+    ));
+}
+
+#[test]
+fn region_add_json_reports_the_new_region_and_its_labels() {
+    let scratch = Scratch::new();
+    library(&scratch, 1);
+    let asset = only_asset(&scratch);
+    insta::assert_snapshot!(run_redacted(
+        &scratch,
+        &[
+            "region",
+            "add",
+            "--asset",
+            &asset,
+            "--rect",
+            "0.1,0.2,0.3,0.4",
+            "--label",
+            "Ada",
+            "--library",
+            path(&scratch.library()),
+            "--passphrase-stdin",
+            "--json",
+        ],
+        &asset,
+    ));
+}
+
+#[test]
+fn region_add_json_past_the_edge_prints_nothing_on_stdout() {
+    let scratch = Scratch::new();
+    library(&scratch, 1);
+    let asset = only_asset(&scratch);
+    insta::assert_snapshot!(run_redacted(
+        &scratch,
+        &[
+            "region",
+            "add",
+            "--asset",
+            &asset,
+            "--rect",
+            "0.9,0.2,0.3,0.4",
+            "--library",
+            path(&scratch.library()),
+            "--passphrase-stdin",
+            "--json",
+        ],
+        &asset,
+    ));
+}
+
+#[test]
+fn region_delete_json_of_an_unknown_region_prints_nothing_on_stdout() {
+    let scratch = Scratch::new();
+    library(&scratch, 1);
+    let asset = only_asset(&scratch);
+    insta::assert_snapshot!(run_redacted(
+        &scratch,
+        &[
+            "region",
+            "delete",
+            "0192f1a0-0000-7000-8000-00000000000e",
+            "--asset",
+            &asset,
+            "--library",
+            path(&scratch.library()),
+            "--passphrase-stdin",
+            "--json",
+        ],
+        &asset,
+    ));
+}
+
+#[test]
+fn edit_location_json_reports_the_fix_beside_the_imported_none() {
+    let scratch = Scratch::new();
+    library(&scratch, 1);
+    let asset = only_asset(&scratch);
+    insta::assert_snapshot!(run_redacted(
+        &scratch,
+        &[
+            "edit",
+            "location",
+            "--asset",
+            &asset,
+            "--lat",
+            "-33.8568",
+            "--lon",
+            "151.2153",
+            "--library",
+            path(&scratch.library()),
+            "--passphrase-stdin",
+            "--json",
+        ],
+        &asset,
+    ));
+}
+
+#[test]
+fn edit_capture_time_json_with_a_malformed_time_is_a_usage_error() {
+    let scratch = Scratch::new();
+    insta::assert_snapshot!(run(
+        &scratch,
+        &[
+            "edit",
+            "capture-time",
+            "yesterday",
+            "--asset",
+            "0192f1a0-0000-7000-8000-000000000001",
+            "--library",
+            "lib",
+            "--json",
+        ],
+    ));
 }
