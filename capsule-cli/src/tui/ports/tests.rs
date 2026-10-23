@@ -526,6 +526,55 @@ async fn local_preview_decodes_an_original_through_the_media_module() {
     );
 }
 
+fn encode_request(rgba_len: usize) -> EncodeRequest {
+    EncodeRequest {
+        generation: 7,
+        image: PreviewImage {
+            width: 8,
+            height: 8,
+            rgba: vec![9; rgba_len].into(),
+        },
+        size: ratatui::layout::Size::new(10, 5),
+    }
+}
+
+#[tokio::test]
+async fn local_encode_runs_off_the_loop_and_reports_its_failures() {
+    let scratch = Scratch::new();
+    let text = LocalPorts::new(Some(scratch.session_path()));
+    assert_eq!(
+        text.encode_preview(encode_request(8 * 8 * 4))
+            .await
+            .map(|_| ()),
+        Err(NO_IMAGE_PROTOCOL.to_owned())
+    );
+    let ports = text.with_picker(Some(Picker::halfblocks()));
+    assert!(
+        ports
+            .encode_preview(encode_request(8 * 8 * 4))
+            .await
+            .is_ok()
+    );
+    assert_eq!(
+        ports.encode_preview(encode_request(3)).await.map(|_| ()),
+        Err("the decoded preview has the wrong length".to_owned())
+    );
+    // Through `perform`, the answer names the preview and pane it was for.
+    let action = perform(
+        &ports,
+        Effect::Library(LibraryEffect::Encode(encode_request(3))),
+    )
+    .await;
+    assert!(
+        matches!(
+            action,
+            Action::Library(LibraryAction::PreviewEncoded { generation: 7, size, result: Err(_) })
+                if size == ratatui::layout::Size::new(10, 5)
+        ),
+        "{action:?}"
+    );
+}
+
 #[tokio::test]
 async fn local_import_reports_a_library_that_does_not_open() {
     let scratch = Scratch::new();

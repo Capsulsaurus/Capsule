@@ -17,8 +17,8 @@ use super::auth::{AuthAction, AuthEffect, LoginResult};
 use super::form::Secret;
 use super::import::{ImportAction, ImportEffect, ImportRequest};
 use super::library::{
-    Catalogue, LibraryAction, LibraryEffect, NO_IMAGE_PROTOCOL, OpenRequest, PREVIEW_EDGE,
-    PreviewImage, PreviewRequest,
+    Catalogue, EncodeRequest, EncodedPreview, LibraryAction, LibraryEffect, NO_IMAGE_PROTOCOL,
+    OpenRequest, PREVIEW_EDGE, PreviewImage, PreviewRequest,
 };
 use super::push::{PushAction, PushEffect, PushProgress, PushRequest, is_custody_step};
 use super::restore::{RestoreAction, RestoreEffect, RestoreRequest};
@@ -162,6 +162,17 @@ pub trait Ports: Send + Sync + 'static {
         async { Err(NOT_OFFERED.to_owned()) }
     }
 
+    /// Encode a decoded preview in the terminal's graphics protocol, fitted to the pane the
+    /// request names. Runs off the UI loop; `Err` (including a panicking encoder) draws the
+    /// pane as text.
+    fn encode_preview(
+        &self,
+        request: EncodeRequest,
+    ) -> impl Future<Output = Result<EncodedPreview, String>> + Send {
+        let _ = request;
+        async { Err(NO_IMAGE_PROTOCOL.to_owned()) }
+    }
+
     /// The terminal's image protocol picker, queried once at start-up; `None` (the default)
     /// draws previews as text.
     fn image_picker(&self) -> Option<Picker> {
@@ -212,6 +223,14 @@ pub async fn perform<P: Ports>(ports: &P, effect: Effect) -> Action {
             Action::Library(LibraryAction::PreviewLoaded {
                 asset_id,
                 result: ports.preview(request).await,
+            })
+        }
+        Effect::Library(LibraryEffect::Encode(request)) => {
+            let (generation, size) = (request.generation, request.size);
+            Action::Library(LibraryAction::PreviewEncoded {
+                generation,
+                size,
+                result: ports.encode_preview(request).await,
             })
         }
     };
@@ -639,6 +658,17 @@ impl Ports for LocalPorts {
         })
         .await
         .map_err(|e| format!("the preview decode did not finish: {e}"))?
+    }
+
+    async fn encode_preview(&self, request: EncodeRequest) -> Result<EncodedPreview, String> {
+        let Some(picker) = self.picker.clone() else {
+            return Err(NO_IMAGE_PROTOCOL.to_owned());
+        };
+        // Resizing and Sixel quantization take long enough on a large pane to stall input:
+        // off the async workers, behind the encode's own unwind guard.
+        tokio::task::spawn_blocking(move || super::library::encode_preview(&picker, request))
+            .await
+            .map_err(|e| format!("the preview encode did not finish: {e}"))?
     }
 
     fn image_picker(&self) -> Option<Picker> {

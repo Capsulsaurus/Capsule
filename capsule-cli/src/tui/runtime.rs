@@ -47,6 +47,7 @@ where
     spawn_effects(&ports, &tx, effects);
     let mut canvas = PreviewCanvas::new(ports.image_picker());
     draw(terminal, &state, &mut canvas)?;
+    spawn_effects(&ports, &tx, canvas.take_requests());
     let mut feed = Feed::new(&ports.transfer_events());
     let mut frames = tokio::time::interval(FRAME_INTERVAL);
     frames.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -80,6 +81,8 @@ where
         }
         if redraw {
             draw(terminal, &state, &mut canvas)?;
+            // A preview the frame could not draw yet is encoded off the loop, like any effect.
+            spawn_effects(&ports, &tx, canvas.take_requests());
         }
     }
     Ok(state)

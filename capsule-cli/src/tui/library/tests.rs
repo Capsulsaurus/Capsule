@@ -691,37 +691,129 @@ fn a_canvas_with_a_protocol_draws_the_image_instead_of_text() {
     );
     let mut canvas = PreviewCanvas::new(Some(Picker::halfblocks()));
     assert!(canvas.draws_images());
+    assert!(format!("{canvas:?}").contains("Halfblocks"));
+
+    // The frame does not encode: it says the preview is coming and asks for the encode once.
+    let frame = draw_with(&state, &mut canvas);
+    assert!(frame.contains("Preparing the preview"), "{frame}");
+    let mut requests = canvas.take_requests();
+    assert_eq!(requests.len(), 1);
+    draw_with(&state, &mut canvas);
+    assert!(
+        canvas.take_requests().is_empty(),
+        "asked again while running"
+    );
+
+    // The encode's answer reaches the state and the next frame draws it.
+    let Some(Effect::Library(LibraryEffect::Encode(request))) = requests.pop() else {
+        panic!("an encode request");
+    };
+    assert_eq!(request.image, image(64, 64));
+    let (generation, size) = (request.generation, request.size);
+    let result = encode_preview(&Picker::halfblocks(), request);
+    assert!(result.is_ok(), "{result:?}");
+    library_action(
+        &mut state,
+        LibraryAction::PreviewEncoded {
+            generation,
+            size,
+            result,
+        },
+    );
     let frame = draw_with(&state, &mut canvas);
     assert!(!frame.contains("No preview"), "{frame}");
+    assert!(!frame.contains("Preparing"), "{frame}");
     assert!(frame.contains('▀') || frame.contains('▄'), "{frame}");
-    // The encoding is kept for the next frame of the same asset and area.
-    let encoded = canvas.encoded.as_ref().map(|(id, area, _)| (*id, *area));
-    draw_with(&state, &mut canvas);
-    assert_eq!(
-        canvas.encoded.as_ref().map(|(id, area, _)| (*id, *area)),
-        encoded
-    );
-    assert!(format!("{canvas:?}").contains("Halfblocks"));
+    assert!(canvas.take_requests().is_empty(), "the encoding is reused");
 }
 
 #[test]
-fn a_preview_of_the_wrong_length_is_text() {
+fn a_preview_of_the_wrong_length_does_not_encode() {
+    let request = EncodeRequest {
+        generation: 1,
+        image: PreviewImage {
+            width: 8,
+            height: 8,
+            rgba: vec![0; 3].into(),
+        },
+        size: Size::new(10, 10),
+    };
+    assert_eq!(
+        encode_preview(&Picker::halfblocks(), request).map(|_| ()),
+        Err("the decoded preview has the wrong length".to_owned())
+    );
+}
+
+#[test]
+fn a_panicking_encoder_costs_the_preview_only() {
+    let reason = encode_guarded(|| panic!("a hostile quantizer")).expect_err("no encoding");
+    assert_eq!(reason, "the terminal image encoder panicked");
+    let reason = encode_guarded(|| Err("no room".to_owned())).expect_err("no encoding");
+    assert_eq!(reason, "no room");
+}
+
+/// `browsing()` with the first preview decoded, and a canvas that has asked for its encode.
+fn awaiting_encode() -> (AppState, PreviewCanvas, EncodeRequest) {
     let mut state = browsing();
     library_action(
         &mut state,
         LibraryAction::PreviewLoaded {
             asset_id: asset_id(1),
-            result: Ok(PreviewImage {
-                width: 8,
-                height: 8,
-                rgba: vec![0; 3].into(),
-            }),
+            result: Ok(image(64, 64)),
         },
     );
-    let frame = draw_with(&state, &mut PreviewCanvas::new(Some(Picker::halfblocks())));
+    let mut canvas = PreviewCanvas::new(Some(Picker::halfblocks()));
+    draw_with(&state, &mut canvas);
+    let Some(Effect::Library(LibraryEffect::Encode(request))) = canvas.take_requests().pop() else {
+        panic!("an encode request");
+    };
+    (state, canvas, request)
+}
+
+#[test]
+fn a_failed_encode_falls_back_to_the_text_pane() {
+    let (mut state, mut canvas, request) = awaiting_encode();
+    library_action(
+        &mut state,
+        LibraryEffect::Encode(request).failed("the task panicked; see the TUI log".to_owned()),
+    );
+    let frame = draw_with(&state, &mut canvas);
     assert!(
-        frame.contains("No preview: the decoded preview has the wrong length."),
+        frame.contains("No preview: the task panicked; see the TUI log."),
         "{frame}"
+    );
+    // A failure is not retried frame after frame.
+    assert!(canvas.take_requests().is_empty());
+}
+
+#[test]
+fn an_encoding_of_a_preview_since_replaced_is_dropped() {
+    let (mut state, mut canvas, request) = awaiting_encode();
+    // A new decode of the same asset replaces the image before the encode answers.
+    library_action(
+        &mut state,
+        LibraryAction::PreviewLoaded {
+            asset_id: asset_id(1),
+            result: Ok(image(32, 32)),
+        },
+    );
+    let (generation, size) = (request.generation, request.size);
+    let result = encode_preview(&Picker::halfblocks(), request);
+    library_action(
+        &mut state,
+        LibraryAction::PreviewEncoded {
+            generation,
+            size,
+            result,
+        },
+    );
+    assert_eq!(state.library().encoded, None);
+    let frame = draw_with(&state, &mut canvas);
+    assert!(frame.contains("Preparing the preview"), "{frame}");
+    let requests = canvas.take_requests();
+    assert!(
+        matches!(&requests[..], [Effect::Library(LibraryEffect::Encode(r))] if r.image == image(32, 32)),
+        "{requests:?}"
     );
 }
 
@@ -791,4 +883,80 @@ async fn home_leads_to_the_browser_and_the_keys_drive_it() {
     assert_eq!(d.state().library().group(), None);
     d.press(key(KeyCode::Esc));
     assert_eq!(d.state().screen(), Screen::Home);
+}
+
+/// A terminal that draws images, whose encoder panics on every preview.
+#[derive(Default)]
+struct PanickingEncoder {
+    encodes: Arc<AtomicUsize>,
+}
+
+impl Ports for PanickingEncoder {
+    async fn session_summary(&self) -> Result<SessionSummary, String> {
+        Ok(SessionSummary::SignedOut)
+    }
+
+    async fn open_library(&self, _: OpenRequest) -> Result<Catalogue, String> {
+        Ok(catalogue())
+    }
+
+    async fn preview(&self, _: PreviewRequest) -> Result<PreviewImage, String> {
+        Ok(image(16, 16))
+    }
+
+    async fn encode_preview(&self, _: EncodeRequest) -> Result<EncodedPreview, String> {
+        self.encodes.fetch_add(1, Ordering::SeqCst);
+        panic!("the encoder blew up")
+    }
+
+    fn image_picker(&self) -> Option<Picker> {
+        Some(Picker::halfblocks())
+    }
+}
+
+/// The real loop asks for the encode after the frame, off the loop; the encoder panics on its
+/// task, the pane falls back to text, and the loop keeps going.
+#[tokio::test(start_paused = true)]
+async fn a_panicking_encoder_behind_the_port_leaves_the_text_pane() {
+    use std::time::Duration;
+
+    use futures::StreamExt as _;
+
+    let ports = PanickingEncoder::default();
+    let encodes = Arc::clone(&ports.encodes);
+    let mut keys: Vec<std::io::Result<crossterm::event::Event>> = Vec::new();
+    for code in [KeyCode::Char('b'), KeyCode::Char('o')] {
+        keys.push(Ok(crossterm::event::Event::Key(key(code))));
+    }
+    for c in "/photos/lib".chars() {
+        keys.push(Ok(crossterm::event::Event::Key(key(KeyCode::Char(c)))));
+    }
+    keys.push(Ok(crossterm::event::Event::Key(key(KeyCode::Tab))));
+    for c in "pw".chars() {
+        keys.push(Ok(crossterm::event::Event::Key(key(KeyCode::Char(c)))));
+    }
+    keys.push(Ok(crossterm::event::Event::Key(key(KeyCode::Enter))));
+    // A quiet second for every effect to answer, then a resize (a redraw, no action), then the
+    // input ends.
+    let events = futures::stream::iter(keys).chain(futures::stream::once(async {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        Ok(crossterm::event::Event::Resize(100, 26))
+    }));
+    let mut terminal = Terminal::new(TestBackend::new(100, 26)).expect("test terminal");
+    let state = crate::tui::runtime::event_loop(&mut terminal, Box::pin(events), Arc::new(ports))
+        .await
+        .expect("the loop survives");
+
+    assert_eq!(
+        encodes.load(Ordering::SeqCst),
+        1,
+        "asked once, not per frame"
+    );
+    assert!(
+        matches!(&state.library().encoded, Some((_, _, Err(reason))) if reason.contains("panicked")),
+        "{:?}",
+        state.library().encoded
+    );
+    let frame = frame_text(terminal.backend().buffer());
+    assert!(frame.contains("No preview: the task panicked"), "{frame}");
 }
