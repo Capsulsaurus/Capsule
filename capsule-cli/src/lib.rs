@@ -239,8 +239,9 @@ async fn dispatch(command: Commands) -> Result<()> {
             AuthCommands::Login {
                 email,
                 password_stdin,
+                json,
                 ..
-            } => auth_login(email, password_stdin).await?,
+            } => auth_login(email, password_stdin, json).await?,
             AuthCommands::Escrow {
                 library,
                 passphrase_stdin,
@@ -251,8 +252,14 @@ async fn dispatch(command: Commands) -> Result<()> {
                 recovery_secret_stdin,
                 passphrase_stdin,
             } => auth_recover(&library, recovery_secret_stdin, passphrase_stdin).await?,
-            AuthCommands::Logout => auth_logout().await?,
-            AuthCommands::Status => {
+            AuthCommands::Logout { json } => auth_logout(json).await?,
+            AuthCommands::Status { json: true } => {
+                // A machine reader gets a failure as a non-zero exit, not a line on stdout.
+                let auth_status = status::AuthStatus::check(&session_store()?)
+                    .map_err(|e| eyre!("Error checking auth status: {e}"))?;
+                println!("{}", serde_json::to_string_pretty(&auth_status)?);
+            }
+            AuthCommands::Status { json: false } => {
                 println!("{}", "Checking authentication status...".blue());
                 let store = session_store()?;
                 match status::AuthStatus::check(&store) {
@@ -652,6 +659,7 @@ async fn dispatch(command: Commands) -> Result<()> {
                 passphrase_stdin,
                 protect,
                 link_passphrase_stdin,
+                json,
             } => {
                 let scope = match (album, asset) {
                     (_, Some(asset)) => capsule_core::sharing::ShareScope::Asset(asset),
@@ -660,17 +668,18 @@ async fn dispatch(command: Commands) -> Result<()> {
                         unreachable!("clap requires --album unless --asset is present")
                     }
                 };
-                share_create(
-                    &library,
+                share_create(ShareCreateRun {
+                    library: &library,
                     scope,
                     expires_at,
                     passphrase_stdin,
                     protect,
                     link_passphrase_stdin,
-                )
+                    json,
+                })
                 .await?;
             }
-            ShareCommands::Revoke { opaque_id } => share_revoke(&opaque_id).await?,
+            ShareCommands::Revoke { opaque_id, json } => share_revoke(&opaque_id, json).await?,
         },
 
         // ── Demo ──────────────────────────────────────────────────────────
@@ -698,7 +707,17 @@ async fn dispatch(command: Commands) -> Result<()> {
             dry_run,
             library,
             passphrase_stdin,
-        } => sync(dry_run, force, library.as_deref(), passphrase_stdin).await?,
+            json,
+        } => {
+            sync(SyncRun {
+                dry_run,
+                from_start: force,
+                library: library.as_deref(),
+                passphrase_stdin,
+                json,
+            })
+            .await?;
+        }
 
         // ── Status ────────────────────────────────────────────────────────
         Commands::Status => {
@@ -907,7 +926,10 @@ const PASSWORD_PROMPT: &str = "Password";
 
 /// `capsule auth login`: read credentials from flags or prompts, authenticate over the SDK,
 /// and persist the session.
-async fn auth_login(email: Option<String>, password_stdin: bool) -> Result<()> {
+///
+/// With `json`, stdout carries exactly one document, [`LoginReport`]; the progress lines and the
+/// second-factor notice go to stderr, beside the prompts.
+async fn auth_login(email: Option<String>, password_stdin: bool, json: bool) -> Result<()> {
     let remote = remote::RemoteConfig::from_env();
     let store = session_store()?;
 
@@ -917,16 +939,72 @@ async fn auth_login(email: Option<String>, password_stdin: bool) -> Result<()> {
         PASSWORD_PROMPT.to_owned(),
     )?;
 
-    println!("{}", "Logging in to Capsule…".green());
+    progress(json, "Logging in to Capsule…".green());
     let step = match remote::auth_login(&remote, &store, &email, &password).await {
         Ok(step) => step,
         Err(error) => return Err(login_failed(&describe_remote_error(&error))),
     };
 
-    finish_second_factor(&remote, &store, step).await?;
+    let second_factor = finish_second_factor(&remote, &store, step, json).await?;
 
-    println!("{}", format!("Logged in as {email}.").green());
+    if json {
+        let report = LoginReport {
+            signed_in: true,
+            email,
+            second_factor,
+        };
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!("{}", format!("Logged in as {email}.").green());
+    }
     Ok(())
+}
+
+/// What `capsule auth login --json` prints once the session is stored.
+#[derive(Debug, serde::Serialize)]
+struct LoginReport {
+    /// Always true: a sign-in that did not finish exits non-zero and prints no document.
+    signed_in: bool,
+    /// The account the session belongs to.
+    email: String,
+    /// Whether the sign-in asked for an authenticator code.
+    second_factor: bool,
+}
+
+/// What `capsule auth logout --json` prints.
+#[derive(Debug, serde::Serialize)]
+struct LogoutReport {
+    /// Whether a session was stored and is now gone; false when there was nothing to sign out.
+    signed_out: bool,
+}
+
+/// What `capsule share revoke --json` prints.
+#[derive(Debug, serde::Serialize)]
+struct RevokeReport {
+    /// The opaque id of the link that no longer opens.
+    opaque_id: String,
+    /// Always true: a refused revoke exits non-zero and prints no document.
+    revoked: bool,
+}
+
+/// What `capsule sync --json` prints: the drain, and the re-announce a `--library` run made
+/// after the server had rebuilt the library's index.
+#[derive(Debug, serde::Serialize)]
+struct SyncReport {
+    #[serde(flatten)]
+    sync: remote::SyncSummary,
+    /// The re-announce report, when the drain met a rebuilt index and `--library` was given.
+    reannounce: Option<reannounce::ReannounceSummary>,
+}
+
+/// A progress line for a person: on stdout normally, on stderr under `--json`, which owns
+/// stdout for its one document.
+fn progress(json: bool, line: impl std::fmt::Display) {
+    if json {
+        eprintln!("{line}");
+    } else {
+        println!("{line}");
+    }
 }
 
 /// Finish a sign-in that answered a second-factor challenge, by asking for the code.
@@ -936,22 +1014,26 @@ async fn auth_login(email: Option<String>, password_stdin: bool) -> Result<()> {
 /// a failure, which is what the SDK's `LoginOutcome::into_session` is for and what this is
 /// deliberately not. Shared by the password and the identity-provider sign-ins, which honour the
 /// same factor.
+///
+/// Returns whether a code was asked for. With `json` the notice goes to stderr.
 async fn finish_second_factor(
     remote: &remote::RemoteConfig,
     store: &session::SessionStore,
     step: remote::LoginStep,
-) -> Result<()> {
-    if let remote::LoginStep::SecondFactorRequired { mfa_token } = step {
-        println!(
-            "{}",
-            "This account has two-factor authentication switched on.".yellow()
-        );
-        let code = flag_or_prompt(None, "Authenticator code".to_owned())?;
-        if let Err(error) = remote::auth_verify_totp(remote, store, &mfa_token, code.trim()).await {
-            return Err(login_failed(&describe_remote_error(&error)));
-        }
+    json: bool,
+) -> Result<bool> {
+    let remote::LoginStep::SecondFactorRequired { mfa_token } = step else {
+        return Ok(false);
+    };
+    progress(
+        json,
+        "This account has two-factor authentication switched on.".yellow(),
+    );
+    let code = flag_or_prompt(None, "Authenticator code".to_owned())?;
+    if let Err(error) = remote::auth_verify_totp(remote, store, &mfa_token, code.trim()).await {
+        return Err(login_failed(&describe_remote_error(&error)));
     }
-    Ok(())
+    Ok(true)
 }
 
 /// The line a browser sign-in prints while it waits, in whole minutes rounded up.
@@ -1007,7 +1089,7 @@ async fn auth_login_oidc(no_browser: bool) -> Result<()> {
         .await
         .map_err(|error| login_failed(&describe_oidc_error(&error)))?;
 
-    finish_second_factor(&remote, &store, step).await?;
+    finish_second_factor(&remote, &store, step, false).await?;
     println!("{}", OIDC_SUCCESS.green());
     Ok(())
 }
@@ -1046,7 +1128,7 @@ async fn auth_login_oidc_device() -> Result<()> {
         .await
         .map_err(|error| login_failed(&describe_oidc_error(&error)))?;
 
-    finish_second_factor(&remote, &store, step).await?;
+    finish_second_factor(&remote, &store, step, false).await?;
     println!("{}", OIDC_SUCCESS.green());
     Ok(())
 }
@@ -1278,12 +1360,21 @@ async fn auth_recover(
 }
 
 /// `capsule auth logout`: revoke the session over the SDK and clear local state.
-async fn auth_logout() -> Result<()> {
+///
+/// With `json`, stdout carries exactly one document, [`LogoutReport`].
+async fn auth_logout(json: bool) -> Result<()> {
     let remote = remote::RemoteConfig::from_env();
     let store = session_store()?;
 
-    println!("{}", "Logging out from Capsule…".yellow());
+    progress(json, "Logging out from Capsule…".yellow());
     match remote::auth_logout(&remote, &store).await {
+        Ok(signed_out) if json => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&LogoutReport { signed_out })?
+            );
+            Ok(())
+        }
         Ok(true) => {
             println!("{}", "Logged out.".green());
             Ok(())
@@ -1296,32 +1387,49 @@ async fn auth_logout() -> Result<()> {
     }
 }
 
+/// The flags of one `capsule sync` run.
+#[derive(Debug, Clone, Copy)]
+struct SyncRun<'a> {
+    /// Persist nothing.
+    dry_run: bool,
+    /// Discard the saved cursor (`--force`).
+    from_start: bool,
+    /// The library to re-announce from after a rebuilt index.
+    library: Option<&'a Path>,
+    /// Read that library's passphrase from stdin.
+    passphrase_stdin: bool,
+    /// Print one JSON document on stdout.
+    json: bool,
+}
+
 /// `capsule sync`: drain the feed over the SDK into the local store.
 ///
 /// When the server answers with a stale cursor, the drain starts over from zero (#697), and
 /// what the library holds that the server lost is re-announced (#781): by this run when
 /// `library` names the library, and otherwise by the `capsule sync reannounce` it names.
-async fn sync(
-    dry_run: bool,
-    from_start: bool,
-    library: Option<&Path>,
-    passphrase_stdin: bool,
-) -> Result<()> {
+async fn sync(run: SyncRun<'_>) -> Result<()> {
+    let SyncRun {
+        dry_run,
+        from_start,
+        library,
+        passphrase_stdin,
+        json,
+    } = run;
     let remote = remote::RemoteConfig::from_env();
     let store = session_store()?;
     let db = db::init_sqlite()
         .await
         .map_err(|e| eyre!("Failed to open local database: {e}"))?;
 
-    println!(
-        "{}",
-        format!("Syncing from {}…", remote.sync_endpoint).green()
+    progress(
+        json,
+        format!("Syncing from {}…", remote.sync_endpoint).green(),
     );
     if dry_run {
-        println!("{}", "Dry run: no changes will be persisted.".yellow());
+        progress(json, "Dry run: no changes will be persisted.".yellow());
     }
 
-    match remote::sync(
+    let outcome = remote::sync(
         &remote,
         &store,
         &db,
@@ -1329,8 +1437,30 @@ async fn sync(
         dry_run,
         from_start,
     )
-    .await
-    {
+    .await;
+    if json {
+        // One document on stdout, or a non-zero exit with nothing on it.
+        let sync = outcome.map_err(|error| sync_run_error(&error))?;
+        let reannounce = match library {
+            Some(library) if sync.resynced => {
+                let ws = open_workspace(library, passphrase_stdin)?;
+                Some(
+                    remote::reannounce(&remote, &store, &ws, dry_run)
+                        .await
+                        .map_err(|error| {
+                            eyre!("Re-announce failed: {}", describe_remote_error(&error))
+                        })?,
+                )
+            }
+            _ => None,
+        };
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&SyncReport { sync, reannounce })?
+        );
+        return Ok(());
+    }
+    match outcome {
         Ok(summary) => {
             if summary.applied == 0 {
                 println!("{}", "Already up to date.".cyan());
@@ -1363,9 +1493,17 @@ async fn sync(
             );
             Ok(())
         }
-        Err(remote::RemoteError::NotAuthenticated) => Err(eyre!(NOT_AUTHENTICATED)),
-        Err(error) => Err(eyre!("Sync failed: {}", describe_remote_error(&error))),
+        Err(error) => Err(sync_run_error(&error)),
     }
+}
+
+/// A sync that could not run — no session, an unreadable feed — as the error the command exits
+/// with.
+fn sync_run_error(error: &remote::RemoteError) -> eyre::Report {
+    if matches!(error, remote::RemoteError::NotAuthenticated) {
+        return eyre!(NOT_AUTHENTICATED);
+    }
+    eyre!("Sync failed: {}", describe_remote_error(error))
 }
 
 /// Open a Capsule library as a signed workspace.
@@ -1828,15 +1966,38 @@ async fn verify_workspace(
     }
 }
 
-/// `capsule share create`: issue a view-only link over `scope` and print its URL.
-async fn share_create(
-    library: &Path,
+/// The flags of one `capsule share create` run.
+#[derive(Debug)]
+struct ShareCreateRun<'a> {
+    /// The library whose keys open the covered assets.
+    library: &'a Path,
+    /// What the link grants.
     scope: capsule_core::sharing::ShareScope,
+    /// `--expires-at` as typed.
     expires_at: Option<String>,
+    /// Read the library passphrase from stdin.
     passphrase_stdin: bool,
+    /// Protect the link with a passphrase.
     protect: bool,
+    /// Read that link passphrase from stdin.
     link_passphrase_stdin: bool,
-) -> Result<()> {
+    /// Print one JSON document on stdout.
+    json: bool,
+}
+
+/// `capsule share create`: issue a view-only link over `scope` and print its URL.
+///
+/// With `json`, stdout carries exactly one document, the [`share::IssuedShare`].
+async fn share_create(run: ShareCreateRun<'_>) -> Result<()> {
+    let ShareCreateRun {
+        library,
+        scope,
+        expires_at,
+        passphrase_stdin,
+        protect,
+        link_passphrase_stdin,
+        json,
+    } = run;
     let remote = remote::RemoteConfig::from_env();
     let store = session_store()?;
     let mut ws = open_workspace(library, passphrase_stdin)?;
@@ -1865,11 +2026,15 @@ async fn share_create(
         passphrase,
     };
 
-    println!(
-        "{}",
-        format!("Issuing a share link on {}…", remote.sync_endpoint).green()
+    progress(
+        json,
+        format!("Issuing a share link on {}…", remote.sync_endpoint).green(),
     );
     match share::create(&remote, &store, &mut ws, &request, jiff::Timestamp::now()).await {
+        Ok(issued) if json => {
+            println!("{}", serde_json::to_string_pretty(&issued)?);
+            Ok(())
+        }
         Ok(issued) => {
             share::render_issued(&issued);
             Ok(())
@@ -1882,10 +2047,20 @@ async fn share_create(
 }
 
 /// `capsule share revoke`: stop the link `opaque_id` from opening.
-async fn share_revoke(opaque_id: &str) -> Result<()> {
+///
+/// With `json`, stdout carries exactly one document, [`RevokeReport`].
+async fn share_revoke(opaque_id: &str, json: bool) -> Result<()> {
     let remote = remote::RemoteConfig::from_env();
     let store = session_store()?;
     match share::revoke(&remote, &store, opaque_id).await {
+        Ok(opaque_id) if json => {
+            let report = RevokeReport {
+                opaque_id,
+                revoked: true,
+            };
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            Ok(())
+        }
         Ok(id) => {
             println!(
                 "{}",

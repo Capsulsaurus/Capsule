@@ -9,7 +9,8 @@
 //! part of the contract.
 //!
 //! The `--json` subcommands today are `import`, `push`, `restore`, `verify`, `cache budget`,
-//! `cache sweep` and `sync reannounce`; each has its offline cases here, and every `--json`
+//! `cache sweep`, `sync`, `sync reannounce`, `share create`, `share revoke`, `auth login`,
+//! `auth logout` and `auth status`; each has its offline cases here, and every `--json`
 //! subcommand that lands joins this file the same way.
 //! What needs a live server (a push or restore that reaches its assets) is the end-to-end
 //! suites' to cover.
@@ -45,6 +46,17 @@
 //! - `cache_sweep_json_on_an_empty_library_evicts_nothing` — exit 0, one JSON document: the plan
 //!   and an empty eviction list.
 //! - `cache_sweep_json_without_a_library_is_a_usage_error` — the parser's exit status 2.
+//! - `sync_json_without_a_session_prints_nothing_on_stdout` — a run-level failure: non-zero
+//!   exit, empty stdout, the progress lines and the reason on stderr.
+//! - `auth_status_json_without_a_session_reports_signed_out` — exit 0, one JSON document saying
+//!   no session is stored.
+//! - `auth_logout_json_without_a_session_reports_nothing_signed_out` — exit 0, one JSON document
+//!   saying there was no session to sign out.
+//! - `auth_login_json_with_oidc_is_a_usage_error` — the parser's exit status 2.
+//! - `share_create_json_over_an_empty_scope_prints_nothing_on_stdout` — a local refusal before
+//!   any request: non-zero exit, empty stdout, the reason on stderr.
+//! - `share_revoke_json_with_a_malformed_id_prints_nothing_on_stdout` — a local refusal before
+//!   any request, as for create.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -499,4 +511,53 @@ fn cache_sweep_json_on_an_empty_library_evicts_nothing() {
 fn cache_sweep_json_without_a_library_is_a_usage_error() {
     let scratch = Scratch::new();
     insta::assert_snapshot!(run(&scratch, &["cache", "sweep", "--json"]));
+}
+
+#[test]
+fn sync_json_without_a_session_prints_nothing_on_stdout() {
+    let scratch = Scratch::new();
+    insta::assert_snapshot!(run(&scratch, &["sync", "--json"]));
+}
+
+#[test]
+fn auth_status_json_without_a_session_reports_signed_out() {
+    let scratch = Scratch::new();
+    insta::assert_snapshot!(run(&scratch, &["auth", "status", "--json"]));
+}
+
+#[test]
+fn auth_logout_json_without_a_session_reports_nothing_signed_out() {
+    let scratch = Scratch::new();
+    insta::assert_snapshot!(run(&scratch, &["auth", "logout", "--json"]));
+}
+
+#[test]
+fn auth_login_json_with_oidc_is_a_usage_error() {
+    let scratch = Scratch::new();
+    insta::assert_snapshot!(run(&scratch, &["auth", "login", "--oidc", "--json"]));
+}
+
+#[test]
+fn share_create_json_over_an_empty_scope_prints_nothing_on_stdout() {
+    let scratch = Scratch::new();
+    library(&scratch, 0);
+    insta::assert_snapshot!(run(
+        &scratch,
+        &[
+            "share",
+            "create",
+            "--library",
+            path(&scratch.library()),
+            "--album",
+            "0192f1a0-0000-7000-8000-000000000000",
+            "--passphrase-stdin",
+            "--json",
+        ],
+    ));
+}
+
+#[test]
+fn share_revoke_json_with_a_malformed_id_prints_nothing_on_stdout() {
+    let scratch = Scratch::new();
+    insta::assert_snapshot!(run(&scratch, &["share", "revoke", "not-an-id", "--json"]));
 }

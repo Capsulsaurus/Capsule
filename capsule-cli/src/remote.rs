@@ -910,7 +910,7 @@ async fn ensure_identity_anchors_account(
 }
 
 /// The outcome of a `capsule sync` run.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct SyncSummary {
     /// Total feed entries applied across all pages.
     pub applied: usize,

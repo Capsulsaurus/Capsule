@@ -1,0 +1,11 @@
+---
+source: capsule-cli/tests/json_contract.rs
+expression: "run(&scratch, &[\"auth\", \"logout\", \"--json\"])"
+---
+status: 0
+--- stdout ---
+{
+  "signed_out": false
+}
+--- stderr ---
+Logging out from Capsule…
