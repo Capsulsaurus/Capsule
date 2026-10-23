@@ -405,7 +405,7 @@ fn a_permanently_refused_held_hand_off_is_quarantined_and_reported_once() {
             view["code"],
             error
                 .error_code()
-                .map_or(serde_json::Value::Null, |code| code.into())
+                .map_or(serde_json::Value::Null, serde_json::Value::from)
         );
         assert_eq!(view["message"], error.to_string());
         assert_eq!(
