@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use capsule_cli::peer::{self, ACK_SUFFIX, AcceptOptions, BootClock, DelegateOptions, PeerState};
+use capsule_cli::peering_state::DbDirectoryVersions;
 use capsule_cli::remote::{self, PushOptions, RemoteConfig};
 use capsule_cli::session::SessionStore;
 use capsule_core::crypto::keys::MasterKey;
@@ -35,6 +36,7 @@ use capsule_sdk::peering::{DelegationState, RequeueReason};
 use capsule_sdk::push::{bundle_blobs, create_request};
 use capsule_sdk::recovery::RecoveryClient;
 use capsule_sdk::upload::{UploadError, UploadOutcome};
+use migration::{Migrator, MigratorTrait as _};
 use tempfile::TempDir;
 use uuid::Uuid;
 
@@ -53,25 +55,41 @@ impl BootClock for Clock {
     }
 }
 
-/// One device's CLI state: its session store and its peer state.
+/// One device's CLI state: its session store, its peer state and the directory floor its CLI
+/// database persists.
 struct Cli {
     _home: TempDir,
     store: SessionStore,
     state: PeerState,
+    versions: DbDirectoryVersions,
 }
 
 impl Cli {
-    async fn signed_in(session: &Session) -> Self {
+    async fn signed_in(session: &Session, device: Uuid) -> Self {
         let home = tempfile::tempdir().expect("a temp CLI home");
         let store = SessionStore::new(home.path().join("session.json"));
         store
             .save(&session.export().await.expect("a live session exports"))
             .expect("the session persists");
         let state = PeerState::new(home.path().join("peer"));
+        let url = format!(
+            "sqlite://{}?mode=rwc",
+            home.path().join("cli.sqlite").display()
+        );
+        let db = sea_orm::Database::connect(&url)
+            .await
+            .expect("the CLI database opens");
+        Migrator::up(&db, None)
+            .await
+            .expect("the CLI database migrates");
+        let versions = DbDirectoryVersions::open(db, device)
+            .await
+            .expect("the directory floor opens");
         Self {
             _home: home,
             store,
             state,
+            versions,
         }
     }
 }
@@ -155,8 +173,8 @@ async fn e2e_case_15_a_delegate_uploads_a_sealed_bundle_and_the_origin_releases_
         "the hand-off carries derivatives, so B verifies their signed manifests too"
     );
     let (_b_root, b, session_b) = second_device(&server, &a).await;
-    let cli_a = Cli::signed_in(&a.login_again(&server).await).await;
-    let cli_b = Cli::signed_in(&session_b).await;
+    let cli_a = Cli::signed_in(&a.login_again(&server).await, a.workspace.device_id()).await;
+    let cli_b = Cli::signed_in(&session_b, b.device_id()).await;
     let clock = Clock(AtomicU64::new(1_000));
     let out = tempfile::tempdir().expect("the courier's directory");
 
@@ -167,6 +185,7 @@ async fn e2e_case_15_a_delegate_uploads_a_sealed_bundle_and_the_origin_releases_
         &cli_a.store,
         &a.workspace,
         &cli_a.state,
+        &cli_a.versions,
         &clock,
         &options,
     )
@@ -176,12 +195,18 @@ async fn e2e_case_15_a_delegate_uploads_a_sealed_bundle_and_the_origin_releases_
     assert_eq!(handed.handed_off.len(), 1);
     let file = hand_off_file(out.path(), asset);
     assert!(file.exists());
+    use capsule_sdk::peering::DirectoryVersions as _;
+    assert!(
+        cli_a.versions.highest().expect("the floor reads") >= 1,
+        "the run admitted the account's directory into the persisted floor"
+    );
 
     let before = peer::status(
         &remote,
         &cli_a.store,
         &a.workspace,
         &cli_a.state,
+        &cli_a.versions,
         &clock,
         &[],
     )
@@ -205,6 +230,7 @@ async fn e2e_case_15_a_delegate_uploads_a_sealed_bundle_and_the_origin_releases_
         &cli_b.store,
         &b,
         &cli_b.state,
+        &cli_b.versions,
         &AcceptOptions {
             from: vec![file.clone()],
             policy: UploadPolicy::Full,
@@ -246,6 +272,7 @@ async fn e2e_case_15_a_delegate_uploads_a_sealed_bundle_and_the_origin_releases_
         &cli_a.store,
         &a.workspace,
         &cli_a.state,
+        &cli_a.versions,
         &clock,
         &[ack],
     )
@@ -266,7 +293,7 @@ async fn e2e_case_15_a_delegate_that_dies_mid_upload_is_re_queued_and_the_origin
     let mut a = Device::register(&server, "delegation-requeue").await;
     let asset = a.import_file("stranded.jpg", &synthetic_jpeg());
     let (_b_root, b, _session_b) = second_device(&server, &a).await;
-    let cli_a = Cli::signed_in(&a.login_again(&server).await).await;
+    let cli_a = Cli::signed_in(&a.login_again(&server).await, a.workspace.device_id()).await;
     let clock = Clock(AtomicU64::new(0));
     let out = tempfile::tempdir().expect("the courier's directory");
 
@@ -277,6 +304,7 @@ async fn e2e_case_15_a_delegate_that_dies_mid_upload_is_re_queued_and_the_origin
         &cli_a.store,
         &a.workspace,
         &cli_a.state,
+        &cli_a.versions,
         &clock,
         &options,
     )
@@ -290,6 +318,7 @@ async fn e2e_case_15_a_delegate_that_dies_mid_upload_is_re_queued_and_the_origin
         &cli_a.store,
         &a.workspace,
         &cli_a.state,
+        &cli_a.versions,
         &clock,
         &[],
     )
@@ -320,6 +349,7 @@ async fn e2e_case_15_a_delegate_that_dies_mid_upload_is_re_queued_and_the_origin
         &cli_a.store,
         &a.workspace,
         &cli_a.state,
+        &cli_a.versions,
         &clock,
         &[],
     )

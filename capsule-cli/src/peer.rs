@@ -21,11 +21,11 @@
 //! The hand-off rides a file here: the courier is opaque and the hand-off self-verifying, so
 //! the channel carries no trust ([`capsule_sdk::peering::delegation`]). The account's directory
 //! is the one the server publishes, verified under the library's user identity key and held to
-//! an anti-rollback floor this device persists.
+//! the anti-rollback floor this device persists in the CLI database
+//! ([`crate::peering_state::DbDirectoryVersions`]).
 //!
-//! State lives under the CLI data directory, per device: the origin ledger (`origin.json`), the
-//! delegate inbox (`inbox/`), and the directory floor (`directory_version`). A delegate copy is
-//! never a library asset.
+//! State lives under the CLI data directory, per device: the origin ledger (`origin.json`) and
+//! the delegate inbox (`inbox/`). A delegate copy is never a library asset.
 //!
 //! [Peering § Delegation]: https://docs/design/peering/#delegation
 
@@ -56,6 +56,7 @@ use thiserror::Error;
 use tracing::instrument;
 use uuid::Uuid;
 
+use crate::peering_state::DbDirectoryVersions;
 use crate::remote::{self, RemoteConfig, RemoteError};
 use crate::session::SessionStore;
 
@@ -118,7 +119,7 @@ pub(crate) fn write_durably(path: &Path, bytes: &[u8]) -> io::Result<()> {
     fs::File::open(dir)?.sync_all()
 }
 
-/// One device's peer state: the origin ledger, the delegate inbox and the directory floor.
+/// One device's peer state: the origin ledger and the delegate inbox.
 #[derive(Debug, Clone)]
 pub struct PeerState {
     root: PathBuf,
@@ -181,12 +182,17 @@ impl PeerState {
         }
     }
 
-    /// The persisted directory anti-rollback floor.
+    /// The directory every piece of this device's peer state lives under.
     #[must_use]
-    pub fn directory_versions(&self) -> FileDirectoryVersions {
-        FileDirectoryVersions {
-            path: self.root.join("directory_version"),
-        }
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    /// Where an earlier build kept the directory floor, which
+    /// [`DbDirectoryVersions::adopt_legacy_file`] moves into the CLI database.
+    #[must_use]
+    pub fn legacy_floor_path(&self) -> PathBuf {
+        self.root.join("directory_version")
     }
 }
 
@@ -341,33 +347,6 @@ impl DelegateInbox for FileInbox {
     }
 }
 
-/// A [`DirectoryVersions`] over one file holding the highest version verified.
-#[derive(Debug, Clone)]
-pub struct FileDirectoryVersions {
-    path: PathBuf,
-}
-
-impl DirectoryVersions for FileDirectoryVersions {
-    fn highest(&self) -> Result<u64, PeeringError> {
-        match fs::read_to_string(&self.path) {
-            Ok(text) => text
-                .trim()
-                .parse()
-                .map_err(|_| PeeringError::Codec("the directory floor does not parse".into())),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(0),
-            Err(error) => Err(PeeringError::Io(error.to_string())),
-        }
-    }
-
-    fn record(&self, version: u64) -> Result<(), PeeringError> {
-        if version <= self.highest()? {
-            return Ok(());
-        }
-        write_durably(&self.path, version.to_string().as_bytes())
-            .map_err(|error| PeeringError::Io(error.to_string()))
-    }
-}
-
 /// The monotonic clock a hand-off's deadline is set on, and the identity of the boot it counts
 /// from: a deadline set under another boot cannot be measured and is re-queued.
 pub trait BootClock {
@@ -420,12 +399,13 @@ impl BootClock for SystemBootClock {
 // ─── The account's directory ─────────────────────────────────────────────────
 
 /// The account's directory as the server publishes it, verified under the library's user
-/// identity key, then admitted against this device's floor so a stale one is refused.
+/// identity key, then admitted against this device's floor so a stale one is refused, and the
+/// floor raised to it durably before anything is verified under it.
 async fn pinned_trust(
     remote: &RemoteConfig,
     workspace: &Workspace,
     session: Session,
-    versions: &dyn DirectoryVersions,
+    versions: &DbDirectoryVersions,
 ) -> Result<PinnedTrust, PeerError> {
     let user_ik = workspace.user_ik_public();
     let directory = DirectoryClient::new(session, &remote.auth_endpoint)
@@ -433,15 +413,7 @@ async fn pinned_trust(
         .await
         .map_err(RemoteError::from)?;
     let trust = PinnedTrust { user_ik, directory };
-    let floor = versions.highest()?;
-    if trust.directory_version() < floor {
-        return Err(PeeringError::DirectoryRollback {
-            pinned: trust.directory_version(),
-            highest: floor,
-        }
-        .into());
-    }
-    versions.record(trust.directory_version())?;
+    versions.admit(trust.directory_version()).await?;
     tracing::debug!(
         directory_version = trust.directory_version(),
         devices = trust.directory.core.devices.len(),
@@ -593,11 +565,21 @@ pub async fn delegate(
     store: &SessionStore,
     workspace: &Workspace,
     state: &PeerState,
+    versions: &DbDirectoryVersions,
     clock: &dyn BootClock,
     options: &DelegateOptions,
 ) -> Result<DelegateSummary, PeerError> {
     let session = remote::resume_session(remote, store).await?;
-    let outcome = delegate_with(remote, workspace, session.clone(), state, clock, options).await;
+    let outcome = delegate_with(
+        remote,
+        workspace,
+        session.clone(),
+        state,
+        versions,
+        clock,
+        options,
+    )
+    .await;
     remote::checkpoint(store, &session).await;
     outcome
 }
@@ -607,10 +589,11 @@ async fn delegate_with(
     workspace: &Workspace,
     session: Session,
     state: &PeerState,
+    versions: &DbDirectoryVersions,
     clock: &dyn BootClock,
     options: &DelegateOptions,
 ) -> Result<DelegateSummary, PeerError> {
-    let trust = pinned_trust(remote, workspace, session, &state.directory_versions()).await?;
+    let trust = pinned_trust(remote, workspace, session, versions).await?;
     let mut ledger = state.load_ledger()?;
     let mut summary = DelegateSummary {
         delegate: options.to,
@@ -769,10 +752,11 @@ pub async fn accept(
     store: &SessionStore,
     workspace: &Workspace,
     state: &PeerState,
+    versions: &DbDirectoryVersions,
     options: &AcceptOptions,
 ) -> Result<AcceptSummary, PeerError> {
     let session = remote::resume_session(remote, store).await?;
-    let outcome = accept_with(remote, workspace, session.clone(), state, options).await;
+    let outcome = accept_with(remote, workspace, session.clone(), state, versions, options).await;
     remote::checkpoint(store, &session).await;
     outcome
 }
@@ -782,10 +766,10 @@ async fn accept_with(
     workspace: &Workspace,
     session: Session,
     state: &PeerState,
+    versions: &DbDirectoryVersions,
     options: &AcceptOptions,
 ) -> Result<AcceptSummary, PeerError> {
-    let versions = state.directory_versions();
-    let trust = pinned_trust(remote, workspace, session.clone(), &versions).await?;
+    let trust = pinned_trust(remote, workspace, session.clone(), versions).await?;
     let inbox = state.inbox();
     let device = workspace.device_id();
     let mut summary = AcceptSummary {
@@ -802,7 +786,7 @@ async fn accept_with(
                 accept_hand_off(
                     &bytes,
                     &trust,
-                    &versions,
+                    versions,
                     device,
                     &remote.protocol_version,
                     &inbox,
@@ -849,7 +833,7 @@ async fn accept_with(
                 &inbox,
                 &address,
                 &trust,
-                &versions,
+                versions,
                 device,
                 remote,
                 &upload,
@@ -1044,11 +1028,21 @@ pub async fn status(
     store: &SessionStore,
     workspace: &Workspace,
     state: &PeerState,
+    versions: &DbDirectoryVersions,
     clock: &dyn BootClock,
     acks: &[PathBuf],
 ) -> Result<StatusSummary, PeerError> {
     let session = remote::resume_session(remote, store).await?;
-    let outcome = status_with(remote, workspace, session.clone(), state, clock, acks).await;
+    let outcome = status_with(
+        remote,
+        workspace,
+        session.clone(),
+        state,
+        versions,
+        clock,
+        acks,
+    )
+    .await;
     remote::checkpoint(store, &session).await;
     outcome
 }
@@ -1058,16 +1052,11 @@ async fn status_with(
     workspace: &Workspace,
     session: Session,
     state: &PeerState,
+    versions: &DbDirectoryVersions,
     clock: &dyn BootClock,
     acks: &[PathBuf],
 ) -> Result<StatusSummary, PeerError> {
-    let trust = pinned_trust(
-        remote,
-        workspace,
-        session.clone(),
-        &state.directory_versions(),
-    )
-    .await?;
+    let trust = pinned_trust(remote, workspace, session.clone(), versions).await?;
     let mut ledger = state.load_ledger()?;
     let mut refused_acks = Vec::new();
     for file in acks {

@@ -98,9 +98,12 @@ which device to update. Artifact formats are versioned by
    [hint](/design/notifications/#vocabulary) that carries no authority.
 3. **Ingest** through the backup restore path, **all-or-nothing per asset**: an asset applies
    only with its manifest, metadata and every blob its scope requires. A manifest behind the
-   local chain head is quarantined as "peer sent stale state". **A tombstoned or purged asset
-   is never resurrected**: the device keeps its tombstones past purge, and ingest refuses any
-   asset it has a tombstone for.
+   local chain head is quarantined as "peer sent stale state". **A purged asset is never
+   resurrected**: the device keeps a tombstone for every asset it has purged, and ingest
+   refuses any asset it has a tombstone for. A deleted asset in
+   [trash](/design/organization/#recycling) is not a tombstone, since a `trash-restore`
+   still recovers it; its delete manifest is the local chain head, so a peer's older copy is
+   quarantined as stale.
 4. **Reconcile.** Assets a device learned by peering are not uploaded again if the server
    holds them; [dedup and merge](/design/transfer/upload/#deduplication-and-merge) resolve
    them. An asset no device has uploaded is uploaded by whichever device holds it first, under
