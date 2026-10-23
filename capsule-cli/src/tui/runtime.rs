@@ -44,15 +44,13 @@ where
         let action = tokio::select! {
             // Input first: a key press is never queued behind an effect's outcome.
             biased;
-            event = events.next() => match event {
-                Some(event) => {
-                    let event = event.wrap_err("reading terminal input")?;
-                    action_for_event(&state, &event)
-                }
-                None => {
+            event = events.next() => {
+                let Some(event) = event else {
                     tracing::info!(target: "capsule_cli::tui", "input closed; leaving the TUI");
                     break;
-                }
+                };
+                let event = event.wrap_err("reading terminal input")?;
+                action_for_event(&state, &event)
             },
             // `tx` lives as long as the loop, so the channel never closes under it.
             Some(action) = rx.recv() => Some(action),
