@@ -41,6 +41,7 @@ pub mod db;
 pub mod demo;
 pub mod i18n;
 pub mod import_report;
+pub mod import_run;
 pub mod migrate;
 pub mod oidc;
 pub mod peer;

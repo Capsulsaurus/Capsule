@@ -1,0 +1,24 @@
+---
+source: capsule-cli/src/tui/import/tests.rs
+expression: draw(&state)
+---
+Capsule · Import · Signed in
+┌Import──────────────────────────────────────────────────────────────────────────────────┐
+│Pick what to import, then import it into a library. Nothing leaves this device until you│
+│push.                                                                                   │
+│                                                                                        │
+│Sources are: Google Takeout export  (k: read as Files and folders)                      │
+│› /downloads/takeout-001                                                                │
+│  /downloads/takeout-002                                                                │
+│                                                                                        │
+│› Library             /photos/lib▏                                                      │
+│  Library passphrase                                                                    │
+│                                                                                        │
+│Scriptable: `capsule import PATH… --library PATH [--provider takeout] --json`.          │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+└────────────────────────────────────────────────────────────────────────────────────────┘
+Enter Submit  Tab Next field  Esc Stop editing

@@ -7,6 +7,8 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use super::auth::AuthAction;
 use super::form::FormKey;
+use super::import::ImportAction;
+use super::push::PushAction;
 use super::restore::RestoreAction;
 use super::share::ShareAction;
 use super::state::{Action, Answer, AppState, Screen};
@@ -103,6 +105,8 @@ pub const BINDINGS: &[Binding] = &[
         Screen::Restore,
     ),
     open(KeyCode::Char('l'), "l", "Share links", Screen::Share),
+    open(KeyCode::Char('i'), "i", "Import", Screen::Import),
+    open(KeyCode::Char('p'), "p", "Push", Screen::Push),
     // ── Account ──────────────────────────────────────────────────────────
     on(
         Screen::Auth,
@@ -155,6 +159,71 @@ pub const BINDINGS: &[Binding] = &[
         "x",
         "Revoke a link",
         Action::Share(ShareAction::BeginRevoke),
+    ),
+    // ── Import ───────────────────────────────────────────────────────────
+    on(
+        Screen::Import,
+        KeyCode::Char('a'),
+        "a",
+        "Add a source",
+        Action::Import(ImportAction::AddSource),
+    ),
+    on(
+        Screen::Import,
+        KeyCode::Char('x'),
+        "x",
+        "Remove a source",
+        Action::Import(ImportAction::RemoveSource),
+    ),
+    on(
+        Screen::Import,
+        KeyCode::Char('k'),
+        "k",
+        "Switch kind",
+        Action::Import(ImportAction::SwitchKind),
+    ),
+    on(
+        Screen::Import,
+        KeyCode::Char('e'),
+        "e",
+        "Run the import",
+        Action::Import(ImportAction::Edit),
+    ),
+    on(
+        Screen::Import,
+        KeyCode::Char('p'),
+        "p",
+        "Push",
+        Action::Open(Screen::Push),
+    ),
+    unlisted(
+        Screen::Import,
+        KeyCode::Down,
+        "Down",
+        "Select the next source",
+        Action::Import(ImportAction::SelectNext),
+    ),
+    unlisted(
+        Screen::Import,
+        KeyCode::Up,
+        "Up",
+        "Select the previous source",
+        Action::Import(ImportAction::SelectPrevious),
+    ),
+    // ── Push ─────────────────────────────────────────────────────────────
+    on(
+        Screen::Push,
+        KeyCode::Char('e'),
+        "e",
+        "Fill in and run a push",
+        Action::Push(PushAction::Edit),
+    ),
+    on(
+        Screen::Push,
+        KeyCode::Char('r'),
+        "r",
+        "Retry the assets not in custody",
+        Action::Push(PushAction::Retry),
     ),
     // ── While a form is being edited ─────────────────────────────────────
     editing(KeyCode::Enter, "Enter", "Submit", FormKey::Submit, true),
@@ -222,6 +291,25 @@ const fn on(
         description,
         action,
         in_footer: true,
+    }
+}
+
+/// An unmodified key on one screen, listed on the help screen but kept out of the footer.
+const fn unlisted(
+    screen: Screen,
+    code: KeyCode,
+    label: &'static str,
+    description: &'static str,
+    action: Action,
+) -> Binding {
+    Binding {
+        code,
+        modifiers: KeyModifiers::NONE,
+        scope: Scope::On(screen),
+        label,
+        description,
+        action,
+        in_footer: false,
     }
 }
 

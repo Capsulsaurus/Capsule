@@ -190,6 +190,13 @@ impl Form {
         }
     }
 
+    /// Focus field `index`; past the end, focus stays where it is.
+    pub fn focus_on(&mut self, index: usize) {
+        if index < self.fields.len() {
+            self.focus = index;
+        }
+    }
+
     /// Empty every secret field, so a submitted passphrase does not outlive its submission.
     pub fn clear_secrets(&mut self) {
         for field in self.fields.iter_mut().filter(|f| f.secret) {

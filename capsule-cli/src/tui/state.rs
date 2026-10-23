@@ -22,6 +22,8 @@
 
 use super::auth::{AuthAction, AuthEffect, AuthScreen};
 use super::form::FormKey;
+use super::import::{ImportAction, ImportEffect, ImportScreen};
+use super::push::{PushAction, PushEffect, PushScreen};
 use super::restore::{RestoreAction, RestoreEffect, RestoreScreen};
 use super::share::{ShareAction, ShareEffect, ShareScreen};
 use super::sync::{SyncAction, SyncEffect, SyncScreen};
@@ -41,6 +43,10 @@ pub enum Screen {
     Restore,
     /// Issue and revoke share links ([`super::share`]).
     Share,
+    /// Pick sources and import them into a library ([`super::import`]).
+    Import,
+    /// Push a library and watch each asset reach custody ([`super::push`]).
+    Push,
 }
 
 /// The answer to a confirmation a screen asked for before an act it cannot take back.
@@ -106,6 +112,10 @@ pub enum Action {
     Restore(RestoreAction),
     /// The share-links screen.
     Share(ShareAction),
+    /// The import screen.
+    Import(ImportAction),
+    /// The push screen.
+    Push(PushAction),
 }
 
 /// Work the reducer asks the runtime to perform through the ports.
@@ -121,6 +131,10 @@ pub enum Effect {
     Restore(RestoreEffect),
     /// The share-links screen's work.
     Share(ShareEffect),
+    /// The import screen's work.
+    Import(ImportEffect),
+    /// The push screen's work.
+    Push(PushEffect),
 }
 
 impl Effect {
@@ -135,6 +149,8 @@ impl Effect {
             Self::Sync(effect) => Action::Sync(effect.failed(reason)),
             Self::Restore(effect) => Action::Restore(effect.failed(reason)),
             Self::Share(effect) => Action::Share(effect.failed(reason)),
+            Self::Import(effect) => Action::Import(effect.failed(reason)),
+            Self::Push(effect) => Action::Push(effect.failed(reason)),
         }
     }
 }
@@ -150,6 +166,8 @@ pub struct AppState {
     sync: SyncScreen,
     restore: RestoreScreen,
     share: ShareScreen,
+    import: ImportScreen,
+    push: PushScreen,
 }
 
 impl AppState {
@@ -164,6 +182,8 @@ impl AppState {
             sync: SyncScreen::default(),
             restore: RestoreScreen::default(),
             share: ShareScreen::default(),
+            import: ImportScreen::default(),
+            push: PushScreen::default(),
         };
         tracing::debug!(target: "capsule_cli::tui", "TUI state initialised");
         (state, vec![Effect::LoadSession])
@@ -217,6 +237,18 @@ impl AppState {
         &self.share
     }
 
+    /// The import screen's state.
+    #[must_use]
+    pub fn import(&self) -> &ImportScreen {
+        &self.import
+    }
+
+    /// The push screen's state.
+    #[must_use]
+    pub fn push(&self) -> &PushScreen {
+        &self.push
+    }
+
     /// Whether the screen on top is taking text: keys then go into its form as
     /// [`Action::Form`], and only the editing bindings and the Ctrl bindings apply.
     #[must_use]
@@ -226,6 +258,8 @@ impl AppState {
             Screen::Auth => self.auth.is_editing(),
             Screen::Restore => self.restore.is_editing(),
             Screen::Share => self.share.is_editing(),
+            Screen::Import => self.import.is_editing(),
+            Screen::Push => self.push.is_editing(),
         }
     }
 
@@ -234,7 +268,14 @@ impl AppState {
     #[must_use]
     pub fn is_confirming(&self) -> bool {
         match self.screen() {
-            Screen::Home | Screen::Help | Screen::Sync | Screen::Restore => false,
+            // Import and Push never ask first: an import copies its sources and a push only adds
+            // to the server, so neither can take anything away.
+            Screen::Home
+            | Screen::Help
+            | Screen::Sync
+            | Screen::Restore
+            | Screen::Import
+            | Screen::Push => false,
             Screen::Auth => self.auth.is_confirming(),
             Screen::Share => self.share.is_confirming(),
         }
@@ -283,9 +324,16 @@ impl AppState {
                 Screen::Auth => self.auth.on_form_key(key),
                 Screen::Restore => self.restore.on_form_key(key),
                 Screen::Share => self.share.on_form_key(key),
+                Screen::Import => self.import.on_form_key(key),
+                Screen::Push => self.push.on_form_key(key),
             },
             Action::Answer(answer) => match self.screen() {
-                Screen::Home | Screen::Help | Screen::Sync | Screen::Restore => Vec::new(),
+                Screen::Home
+                | Screen::Help
+                | Screen::Sync
+                | Screen::Restore
+                | Screen::Import
+                | Screen::Push => Vec::new(),
                 Screen::Auth => self.auth.on_answer(answer),
                 Screen::Share => self.share.on_answer(answer),
             },
@@ -295,6 +343,16 @@ impl AppState {
             Action::Sync(action) => self.sync.update(action),
             Action::Restore(action) => self.restore.update(action),
             Action::Share(action) => self.share.update(action),
+            Action::Import(action) => {
+                let imported = matches!(action, ImportAction::Finished(Ok(_)));
+                let effects = self.import.update(action);
+                // The library just imported into is the one to push next.
+                if imported {
+                    self.push.offer_library(self.import.library());
+                }
+                effects
+            }
+            Action::Push(action) => self.push.update(action),
         };
         if !effects.is_empty() {
             tracing::debug!(target: "capsule_cli::tui", ?effects, "action requested effects");

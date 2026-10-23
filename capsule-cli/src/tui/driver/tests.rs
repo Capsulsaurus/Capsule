@@ -227,6 +227,226 @@ async fn a_port_a_double_left_out_shows_as_a_failure() {
     );
 }
 
+const FIRST: &str = "0192f1a0-0000-7000-8000-000000000001";
+const SECOND: &str = "0192f1a0-0000-7000-8000-000000000002";
+
+/// A library of two assets whose second fails its first push and lands on the retry. The
+/// progress each run tells is scripted in the order the driver asks for it — the watch goes out
+/// before its run, so a run's steps arrive before its summary and its close after — and every
+/// request is recorded.
+struct Library {
+    imports: std::sync::Mutex<Vec<crate::tui::import::ImportRequest>>,
+    pushes: std::sync::Mutex<Vec<crate::tui::push::PushRequest>>,
+    progress: std::sync::Mutex<std::collections::VecDeque<Vec<crate::tui::push::PushProgress>>>,
+}
+
+impl Library {
+    fn new() -> Self {
+        use crate::tui::push::PushProgress;
+        let first = vec![
+            pushed(FIRST, None),
+            pushed(SECOND, Some("connection reset")),
+        ];
+        let retry = vec![pushed(SECOND, None)];
+        let progress = [
+            told(&first),
+            vec![PushProgress::Closed { run: Some(1) }],
+            told(&retry),
+            vec![PushProgress::Closed { run: Some(2) }],
+        ];
+        Self {
+            imports: std::sync::Mutex::default(),
+            pushes: std::sync::Mutex::default(),
+            progress: std::sync::Mutex::new(progress.into()),
+        }
+    }
+}
+
+/// What a run tells for `outcomes`: each asset's start, one of its two blobs finalized, and its
+/// outcome.
+fn told(outcomes: &[crate::remote::AssetPushOutcome]) -> Vec<crate::tui::push::PushProgress> {
+    use capsule_sdk::events::TransferEvent;
+
+    use crate::tui::push::PushProgress;
+    let mut told = Vec::new();
+    for outcome in outcomes {
+        let id = &outcome.asset_id;
+        told.push(PushProgress::Started {
+            asset_id: id.clone(),
+            blobs: vec![format!("{id}-0"), format!("{id}-1")],
+        });
+        told.push(PushProgress::Transfer(TransferEvent::Finalize {
+            blob: format!("{id}-0"),
+            session_id: "s".to_owned(),
+            size: 10,
+        }));
+        told.push(PushProgress::Finished(outcome.clone()));
+    }
+    told
+}
+
+fn pushed(asset: &str, failure: Option<&str>) -> crate::remote::AssetPushOutcome {
+    use crate::remote::{AssetPushFailure, AssetPushOutcome, AssetPushStatus};
+    AssetPushOutcome {
+        asset_id: asset.to_owned(),
+        status: if failure.is_some() {
+            AssetPushStatus::Failed
+        } else {
+            AssetPushStatus::Verified
+        },
+        uploaded: 2,
+        merged: 0,
+        already_held: 0,
+        deferred: 0,
+        bytes: 20,
+        receipts: if failure.is_some() { 0 } else { 2 },
+        resealed: false,
+        error: failure.map(|message| AssetPushFailure {
+            kind: "upload",
+            code: None,
+            message: message.to_owned(),
+        }),
+    }
+}
+
+impl Ports for Library {
+    async fn session_summary(&self) -> Result<SessionSummary, String> {
+        Ok(SessionSummary::SignedIn {
+            access_token_fresh: true,
+        })
+    }
+
+    async fn import(
+        &self,
+        request: crate::tui::import::ImportRequest,
+    ) -> Result<crate::import_report::ImportReport, String> {
+        let imported = request.sources.len();
+        self.imports.lock().unwrap().push(request);
+        Ok(crate::import_report::ImportReport {
+            imported,
+            ..crate::import_report::ImportReport::default()
+        })
+    }
+
+    async fn push(
+        &self,
+        request: crate::tui::push::PushRequest,
+    ) -> Result<crate::remote::PushSummary, String> {
+        let retry = request.assets.is_some();
+        self.pushes.lock().unwrap().push(request);
+        let outcomes = if retry {
+            vec![pushed(SECOND, None)]
+        } else {
+            vec![
+                pushed(FIRST, None),
+                pushed(SECOND, Some("connection reset")),
+            ]
+        };
+        let failed = outcomes
+            .iter()
+            .filter(|o| o.status == crate::remote::AssetPushStatus::Failed)
+            .count();
+        Ok(crate::remote::PushSummary {
+            assets: outcomes.len(),
+            verified_assets: outcomes.len() - failed,
+            failed_assets: failed,
+            outcomes,
+            ..crate::remote::PushSummary::default()
+        })
+    }
+
+    async fn push_progress(&self) -> Vec<crate::tui::push::PushProgress> {
+        self.progress
+            .lock()
+            .unwrap()
+            .pop_front()
+            .unwrap_or_else(|| vec![crate::tui::push::PushProgress::Closed { run: None }])
+    }
+}
+
+/// Pick a source, import it, go on to push the library it landed in, see the asset that did
+/// not reach custody, and retry just that one — key by key, the passphrase typed each time and
+/// never drawn.
+#[tokio::test]
+async fn import_then_push_then_retry_the_failure_key_by_key() {
+    let mut d = Driver::new(Library::new(), 100, 30);
+    d.settle().await;
+
+    // Import: pick a source, fill in the library, run.
+    d.type_keys("i");
+    assert_eq!(d.state().screen(), Screen::Import);
+    d.type_keys("a");
+    d.type_keys("/photos/2024");
+    d.press(key(KeyCode::Enter));
+    assert!(d.frame().contains("› /photos/2024"), "{}", d.frame());
+    d.type_keys("e/lib");
+    d.press(key(KeyCode::Tab));
+    d.type_keys("secret");
+    let before = d.frame();
+    d.press(key(KeyCode::Enter));
+    assert_ne!(
+        d.frame(),
+        before,
+        "the press is visible before the import answers"
+    );
+    assert!(d.frame().contains("Importing…"), "{}", d.frame());
+    d.settle().await;
+    assert!(d.frame().contains("Done: 1 imported"), "{}", d.frame());
+    let imports = d.ports.imports.lock().unwrap().clone();
+    assert_eq!(imports.len(), 1);
+    assert_eq!(
+        imports[0].sources,
+        vec![std::path::PathBuf::from("/photos/2024")]
+    );
+    assert_eq!(imports[0].passphrase.expose(), "secret");
+
+    // On to the push screen, which already names the library.
+    d.type_keys("p");
+    assert_eq!(d.state().screen(), Screen::Push);
+    assert!(d.frame().contains("/lib"), "{}", d.frame());
+    d.type_keys("e");
+    d.press(key(KeyCode::Tab));
+    d.type_keys("secret");
+    d.press(key(KeyCode::Enter));
+    assert!(d.frame().contains("Pushing…"), "{}", d.frame());
+    assert!(!d.frame().contains("secret"), "{}", d.frame());
+    d.settle().await;
+    assert!(!d.state().push().is_watching(), "the run's stream closed");
+    assert_eq!(
+        d.ports.progress.lock().unwrap().len(),
+        2,
+        "the run's steps and its close were each watched for"
+    );
+    let frame = d.frame();
+    assert!(
+        frame.contains("1 of 2 assets in custody, 1 failed."),
+        "{frame}"
+    );
+    assert!(
+        frame.contains(&format!("{SECOND}: connection reset")),
+        "{frame}"
+    );
+
+    // Retry: only the failed asset is pushed again, and it lands.
+    d.type_keys("r");
+    assert!(d.state().is_editing());
+    d.type_keys("secret");
+    d.press(key(KeyCode::Enter));
+    d.settle().await;
+    let pushes = d.ports.pushes.lock().unwrap().clone();
+    assert_eq!(pushes.len(), 2);
+    assert_eq!(pushes[0].assets, None);
+    assert_eq!(pushes[1].assets, Some(vec![SECOND.parse().unwrap()]));
+    let frame = d.frame();
+    assert!(
+        frame.contains("2 of 2 assets in custody, 0 failed."),
+        "{frame}"
+    );
+    assert!(!frame.contains("connection reset"), "{frame}");
+    assert!(d.ports.progress.lock().unwrap().is_empty());
+    assert!(!d.state().push().is_watching());
+}
+
 #[test]
 fn frame_text_trims_each_row() {
     let buffer = Buffer::with_lines(["ab  ", "    "]);

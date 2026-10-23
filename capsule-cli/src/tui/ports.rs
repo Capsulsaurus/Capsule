@@ -7,14 +7,21 @@
 
 use std::future::Future;
 use std::path::PathBuf;
+use std::sync::Arc;
+
+use capsule_sdk::events::{TransferEvent, TransferEvents};
+use tokio::sync::{Mutex, broadcast, mpsc};
 
 use super::auth::{AuthAction, AuthEffect, LoginResult};
 use super::form::Secret;
+use super::import::{ImportAction, ImportEffect, ImportRequest};
+use super::push::{PushAction, PushEffect, PushProgress, PushRequest, is_custody_step};
 use super::restore::{RestoreAction, RestoreEffect, RestoreRequest};
 use super::share::{CreateLinkRequest, IssuedLink, ShareAction, ShareEffect};
 use super::state::{Action, Effect, SessionSummary};
 use super::sync::{SyncAction, SyncEffect};
-use crate::remote::{self, RemoteConfig, SyncSummary};
+use crate::import_report::ImportReport;
+use crate::remote::{self, PushSummary, RemoteConfig, SyncSummary};
 use crate::restore::RestoreSummary;
 use crate::session::SessionStore;
 use crate::status::AuthStatus;
@@ -93,6 +100,34 @@ pub trait Ports: Send + Sync + 'static {
         let _ = opaque_id;
         async { Err(NOT_OFFERED.to_owned()) }
     }
+
+    /// Import the picked sources into a library, copying them, as `capsule import` does. A run
+    /// that reached its files answers `Ok`, failed files included.
+    fn import(
+        &self,
+        request: ImportRequest,
+    ) -> impl Future<Output = Result<ImportReport, String>> + Send {
+        let _ = request;
+        async { Err(NOT_OFFERED.to_owned()) }
+    }
+
+    /// Push a library, or the assets `request` names, as `capsule push [--asset ID…]` does,
+    /// telling the run's progress to [`push_progress`](Self::push_progress) as it goes and
+    /// closing it with [`PushProgress::Closed`] for `request.run` on every way out. A run that
+    /// reached its assets answers `Ok`, failed assets included.
+    fn push(
+        &self,
+        request: PushRequest,
+    ) -> impl Future<Output = Result<PushSummary, String>> + Send {
+        let _ = request;
+        async { Err(NOT_OFFERED.to_owned()) }
+    }
+
+    /// The next batch of push progress, waiting for at least one item. The default tells no
+    /// progress: it answers at once that there is none to come.
+    fn push_progress(&self) -> impl Future<Output = Vec<PushProgress>> + Send {
+        async { vec![PushProgress::Closed { run: None }] }
+    }
 }
 
 /// Perform `effect` through `ports` and return the action that reports its outcome.
@@ -121,6 +156,15 @@ pub async fn perform<P: Ports>(ports: &P, effect: Effect) -> Action {
         Effect::Share(ShareEffect::Revoke { opaque_id }) => {
             Action::Share(ShareAction::Revoked(ports.revoke_link(opaque_id).await))
         }
+        Effect::Import(ImportEffect::Run(request)) => {
+            Action::Import(ImportAction::Finished(ports.import(request).await))
+        }
+        Effect::Push(PushEffect::Run(request)) => {
+            Action::Push(PushAction::Finished(ports.push(request).await))
+        }
+        Effect::Push(PushEffect::Watch) => {
+            Action::Push(PushAction::Progress(ports.push_progress().await))
+        }
     };
     tracing::debug!(target: "capsule_cli::tui", ?effect, ?action, "effect finished");
     action
@@ -130,6 +174,7 @@ pub async fn perform<P: Ports>(ports: &P, effect: Effect) -> Action {
 /// CLI's own commands use, through the same functions those commands call.
 #[derive(Debug, Clone)]
 pub struct LocalPorts {
+    push_progress: Arc<ProgressChannel>,
     session_path: Option<PathBuf>,
     remote: RemoteConfig,
 }
@@ -141,6 +186,7 @@ impl LocalPorts {
     #[must_use]
     pub fn new(session_path: Option<PathBuf>) -> Self {
         Self {
+            push_progress: Arc::new(ProgressChannel::new()),
             session_path,
             remote: RemoteConfig::from_env(),
         }
@@ -154,6 +200,98 @@ impl LocalPorts {
 
     fn store(&self) -> Result<SessionStore, String> {
         self.session_path().map(SessionStore::new)
+    }
+}
+
+/// The most progress items one [`Ports::push_progress`] answer carries, so a burst is folded in
+/// a few actions without one answer growing without bound.
+pub const PROGRESS_BATCH: usize = 256;
+
+/// Where a push run tells its progress and the push screen's watch reads it: one channel for
+/// every run, read by one watch at a time.
+#[derive(Debug)]
+pub struct ProgressChannel {
+    tx: mpsc::UnboundedSender<PushProgress>,
+    rx: Mutex<mpsc::UnboundedReceiver<PushProgress>>,
+}
+
+impl ProgressChannel {
+    /// An empty channel.
+    #[must_use]
+    pub fn new() -> Self {
+        let (tx, rx) = mpsc::unbounded_channel();
+        Self {
+            tx,
+            rx: Mutex::new(rx),
+        }
+    }
+
+    /// A sender for a run to tell its progress through.
+    #[must_use]
+    pub fn sender(&self) -> mpsc::UnboundedSender<PushProgress> {
+        self.tx.clone()
+    }
+
+    /// Wait for the next item, then take whatever else is already queued, up to
+    /// [`PROGRESS_BATCH`] in all.
+    pub async fn next_batch(&self) -> Vec<PushProgress> {
+        let mut rx = self.rx.lock().await;
+        // The channel holds its own sender, so it never closes under the watch.
+        let Some(first) = rx.recv().await else {
+            return vec![PushProgress::Closed { run: None }];
+        };
+        let mut batch = vec![first];
+        while batch.len() < PROGRESS_BATCH {
+            match rx.try_recv() {
+                Ok(item) => batch.push(item),
+                Err(_) => break,
+            }
+        }
+        batch
+    }
+}
+
+impl Default for ProgressChannel {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Tells [`PushProgress::Closed`] for a run when dropped, so the watch hears the run is over on
+/// every way out of it: an answer, an error, or a panic unwinding through the port.
+struct CloseOnDrop {
+    tx: mpsc::UnboundedSender<PushProgress>,
+    run: u64,
+}
+
+impl Drop for CloseOnDrop {
+    fn drop(&mut self) {
+        let _ = self.tx.send(PushProgress::Closed {
+            run: Some(self.run),
+        });
+    }
+}
+
+/// Relay the custody steps of a run's transfer events ([`is_custody_step`]) to `tx` until the
+/// run drops its last event handle; a subscriber that fell behind tells how many it missed.
+pub async fn forward_custody_events(
+    mut events: broadcast::Receiver<TransferEvent>,
+    tx: mpsc::UnboundedSender<PushProgress>,
+) {
+    use tokio::sync::broadcast::error::RecvError;
+    loop {
+        let progress = match events.recv().await {
+            Ok(event) if is_custody_step(&event) => PushProgress::Transfer(event),
+            Ok(_) => continue,
+            Err(RecvError::Lagged(missed)) => {
+                tracing::warn!(target: "capsule_cli::tui", missed, "push progress fell behind the transfer events");
+                PushProgress::Lagged(missed)
+            }
+            Err(RecvError::Closed) => return,
+        };
+        if tx.send(progress).is_err() {
+            return;
+        }
     }
 }
 
@@ -305,6 +443,69 @@ impl Ports for LocalPorts {
                 .map_err(|error| crate::share::describe_error(&error))
         })
         .await
+    }
+
+    async fn import(&self, request: ImportRequest) -> Result<ImportReport, String> {
+        // Unlocking the library and sealing each file are CPU work: off the async workers.
+        off_loop(move || async move {
+            let mut workspace =
+                crate::open_workspace_with(&request.library, request.passphrase.expose())
+                    .map_err(|e| e.to_string())?;
+            crate::import_run::import_sources(
+                &mut workspace,
+                request.kind.provider(),
+                &request.sources,
+            )
+            .map_err(|e| e.to_string())
+        })
+        .await
+    }
+
+    async fn push(&self, request: PushRequest) -> Result<PushSummary, String> {
+        let tx = self.push_progress.sender();
+        // Closed for this run however the port leaves, before the session store is even read.
+        let closed = CloseOnDrop {
+            tx: tx.clone(),
+            run: request.run,
+        };
+        let (remote, store) = (self.remote.clone(), self.store()?);
+        off_loop(move || async move {
+            let _closed = closed;
+            let mut workspace =
+                crate::open_workspace_with(&request.library, request.passphrase.expose())
+                    .map_err(|e| e.to_string())?;
+            let events = TransferEvents::default_channel();
+            let forwarder = events
+                .subscribe()
+                .map(|subscriber| tokio::spawn(forward_custody_events(subscriber, tx.clone())));
+            let mut observe = |progress: remote::AssetProgress| {
+                let _ = tx.send(progress.into());
+            };
+            let run = remote::PushRun {
+                assets: request.assets,
+                events,
+                observer: Some(&mut observe),
+            };
+            let pushed = remote::push_run(
+                &remote,
+                &store,
+                &mut workspace,
+                crate::push_options(false, false, false),
+                run,
+            )
+            .await;
+            // The run dropped its event handles, so the relay drains what is left and ends;
+            // only then is the run's stream closed.
+            if let Some(forwarder) = forwarder {
+                let _ = forwarder.await;
+            }
+            pushed.map_err(|error| remote_reason(&error))
+        })
+        .await
+    }
+
+    async fn push_progress(&self) -> Vec<PushProgress> {
+        self.push_progress.next_batch().await
     }
 }
 

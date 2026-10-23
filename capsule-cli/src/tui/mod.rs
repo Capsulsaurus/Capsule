@@ -21,6 +21,10 @@
 //! The feature screens, one module each: [`auth`] (sign in and out), [`sync`], [`restore`] and
 //! [`share`] (issue and revoke share links).
 //!
+//! [`import`] picks sources and imports them; [`push`] pushes a library and shows each asset's
+//! custody (uploaded, durable, receipted) as the run's event stream tells it, with the assets
+//! that did not make it retryable.
+//!
 //! The CLI and TUI are English-only (ADR-0011): strings are inline English, not catalog keys.
 //! Every flow the TUI offers stays reachable as a non-interactive `capsule` subcommand with
 //! `--json`.
@@ -29,9 +33,11 @@ pub mod auth;
 pub mod driver;
 pub mod form;
 pub mod hook;
+pub mod import;
 pub mod keymap;
 pub mod log;
 pub mod ports;
+pub mod push;
 pub mod restore;
 pub mod runtime;
 pub mod share;

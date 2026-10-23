@@ -1,0 +1,34 @@
+---
+source: capsule-cli/src/tui/push/tests.rs
+expression: draw(&state)
+---
+Capsule · Push · Signed in
+┌Push────────────────────────────────────────────────────────────────────────────────────┐
+│Push a library to the server. An asset counts once the server holds every blob durably  │
+│and a signed receipt for each is stored in the library.                                 │
+│                                                                                        │
+│  Library             /photos/lib                                                       │
+│  Library passphrase                                                                    │
+│                                                                                        │
+│Pushing… each asset is uploaded, checked durable and receipted.                         │
+│5 transfer events were missed; each row catches up when its asset finishes.             │
+│1 of 3 assets in custody, 1 failed.                                                     │
+│Asset                                 Uploaded  Durable  Receipts  State                │
+│0192f1a0-0000-7000-8000-00000000000c       1/4        –         0  sending              │
+│0192f1a0-0000-7000-8000-00000000000b       1/2        –         0  failed               │
+│0192f1a0-0000-7000-8000-00000000000a       3/3      yes         3  verified             │
+│                                                                                        │
+│Did not reach custody (r retries every asset not in custody):                           │
+│0192f1a0-0000-7000-8000-00000000000b: connection reset                                  │
+│                                                                                        │
+│Scriptable: `capsule push --library PATH --json`; `--asset ID` pushes one asset again.  │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+└────────────────────────────────────────────────────────────────────────────────────────┘
+e Fill in and run a push  r Retry the assets not in custody  q Quit  ? Show the key bindin
