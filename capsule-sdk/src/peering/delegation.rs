@@ -38,7 +38,10 @@
 //! [`DelegateInbox`] and only then returns the [`HandOffAck`]. [`upload_hand_off`] drives the
 //! requests in ladder order under the delegate's own [`StagedScheduler`] (its own battery and
 //! metering policy), and [`settle`] deletes the delegate's copy once custody of every blob it
-//! sent is confirmed. A delegate copy is never a library asset.
+//! sent is confirmed. A delegate copy is never a library asset. A held hand-off that can never
+//! succeed — its origin revoked after acceptance, its bytes no longer verifying, or a server
+//! refusal the delegate cannot act on — is discarded by [`dispose_failure`]; a transient failure
+//! keeps it for the next run ([`DelegationError::is_permanent`]).
 //!
 //! # Transport
 //!
@@ -140,6 +143,60 @@ pub enum DelegationError {
     /// An acknowledgement names another hand-off or another delegate than the one recorded.
     #[error("the acknowledgement does not match the recorded hand-off")]
     AckMismatch,
+}
+
+/// The server's `error.*` codes that refuse a hand-off's requests for good. The delegate sends
+/// the origin's signed requests verbatim and can change none of them, so no later run of the
+/// same hand-off can succeed:
+///
+/// - `error.upload.envelope_rejected`: finalization re-validated the manifest and refused it —
+///   a create sealed under an album epoch the album has moved past (invariant 18), a signer
+///   revoked or not the account's, a signature that does not verify, or a role conflict.
+/// - `error.upload.envelope_mismatch`: a request contradicts its own manifest envelope.
+/// - `error.upload.stale_revival`: the asset's chain has moved past the one the manifest
+///   extends — a conflicting provenance only the origin can rebase.
+pub const PERMANENT_UPLOAD_REFUSALS: [&str; 3] = [
+    capsule_i18n::error_codes::UPLOAD_ENVELOPE_REJECTED,
+    capsule_i18n::error_codes::UPLOAD_ENVELOPE_MISMATCH,
+    capsule_i18n::error_codes::UPLOAD_STALE_REVIVAL,
+];
+
+impl DelegationError {
+    /// The stable `error.*` code the server supplied, when there was one.
+    #[must_use]
+    pub fn error_code(&self) -> Option<&str> {
+        match self {
+            Self::Upload(UploadError::Rejected { code, .. }) => code.as_deref(),
+            Self::Upload(UploadError::UpgradeRequired { .. }) => {
+                Some(capsule_i18n::error_codes::PROTOCOL_VERSION_UNSUPPORTED)
+            }
+            _ => None,
+        }
+    }
+
+    /// Whether a hand-off the delegate holds, failing with this error, can never succeed, so
+    /// [`dispose_failure`] discards the delegate's copy.
+    ///
+    /// Permanent: the origin is no longer an unrevoked device of the pinned directory (revoked
+    /// or removed after the hand-off was accepted); the held bytes no longer verify (malformed,
+    /// addressed to another device, tampered with); or the server refused the requests with one
+    /// of [`PERMANENT_UPLOAD_REFUSALS`]. Everything else is transient and keeps the copy for
+    /// the next run: this device's directory or trust state, a container or protocol newer
+    /// than this build (an update reads it), the inbox, the network, an outage, quota, rate
+    /// limits, and any other refusal.
+    #[must_use]
+    pub fn is_permanent(&self) -> bool {
+        match self {
+            Self::Peering(PeeringError::UnknownDevice(_) | PeeringError::RevokedDevice(_))
+            | Self::Malformed(_)
+            | Self::WrongDelegate { .. }
+            | Self::Tampered(_) => true,
+            Self::Upload(UploadError::Rejected {
+                code: Some(code), ..
+            }) => PERMANENT_UPLOAD_REFUSALS.contains(&code.as_str()),
+            _ => false,
+        }
+    }
 }
 
 /// The ladder tier a blob role belongs to (transfer upload doc, §Upload Tiering).
@@ -1115,6 +1172,42 @@ pub async fn settle<C: ReleaseClock>(
             Ok(Settled::Kept(reason))
         }
     }
+}
+
+/// What [`dispose_failure`] did with a held hand-off a run could not deliver.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeldFailure {
+    /// The failure is transient: the copy stays for the next run.
+    Kept,
+    /// The failure is permanent ([`DelegationError::is_permanent`]): the copy is deleted.
+    Discarded,
+}
+
+/// Decide the fate of the hand-off held under `address` after `error`: a permanent refusal
+/// deletes the delegate's copy, so it neither stays in the inbox forever nor fails every later
+/// run; a transient one keeps it.
+///
+/// Discarding loses nothing: the origin keeps its original pinned until its own custody check
+/// passes, and re-queues the upload itself when its deadline expires.
+///
+/// # Errors
+///
+/// [`DelegationError::Inbox`] when a permanently refused copy could not be deleted.
+#[instrument(skip_all, fields(hand_off = %address, permanent = error.is_permanent()))]
+pub fn dispose_failure(
+    inbox: &dyn DelegateInbox,
+    address: &str,
+    error: &DelegationError,
+) -> Result<HeldFailure, DelegationError> {
+    if !error.is_permanent() {
+        tracing::info!(%error, "delegation: transient failure; the copy is kept");
+        return Ok(HeldFailure::Kept);
+    }
+    inbox
+        .remove(address)
+        .map_err(|io| DelegationError::Inbox(format!("discard the copy: {io}")))?;
+    tracing::warn!(%error, "delegation: permanently refused; the copy is discarded");
+    Ok(HeldFailure::Discarded)
 }
 
 #[cfg(test)]

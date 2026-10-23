@@ -53,9 +53,10 @@ pub use channel::{
 };
 pub use delegation::{
     DelegateInbox, DelegatedUpload, Delegation, DelegationError, DelegationState,
-    DeleteDisposition, HandOff, HandOffAck, MemoryInbox, OriginLedger, ReleaseOutcome,
-    RequeueReason, SealedHandOff, Settled, VerifiedHandOff, accept_hand_off, seal, settle,
-    upload_hand_off, verify_hand_off,
+    DeleteDisposition, HandOff, HandOffAck, HeldFailure, MemoryInbox, OriginLedger,
+    PERMANENT_UPLOAD_REFUSALS, ReleaseOutcome, RequeueReason, SealedHandOff, Settled,
+    VerifiedHandOff, accept_hand_off, dispose_failure, seal, settle, upload_hand_off,
+    verify_hand_off,
 };
 pub use delta::{
     OFFER_PAGE_CAP, Offer, OfferPage, decode_offer_page, missing_from, offer_bucket,

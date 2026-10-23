@@ -1083,3 +1083,194 @@ async fn the_delegate_follows_its_own_metering_policy_and_keeps_what_it_deferred
     );
     assert_eq!(inbox.addresses().expect("reads").len(), 1);
 }
+
+// ─── A held hand-off that can never succeed ───────────────────────────────────
+
+/// A server that takes every create and refuses each blob's finalization with `code` at
+/// `status`.
+async fn refusing_server(status: u16, reason: &'static str, code: &'static str) -> MockServer {
+    let sessions: std::sync::Arc<Mutex<HashMap<String, u64>>> = std::sync::Arc::default();
+    MockServer::start(move |req: &MockRequest| {
+        if req.method == "POST" {
+            let body: serde_json::Value = serde_json::from_slice(&req.body).expect("a create");
+            let hash = body["hash"].as_str().expect("a hash").to_owned();
+            let id = format!("sess-{}", &hash[..16]);
+            sessions
+                .lock()
+                .expect("lock")
+                .insert(id.clone(), body["size"].as_u64().expect("a size"));
+            return MockResponse::new(201, "Created")
+                .header("X-Capsule-Offset", "0")
+                .json_body(format!(
+                    r#"{{"id":{id:?},"upload_url":"/upload/{id}","suggested_chunk_size":262144}}"#
+                ));
+        }
+        let id = req.path.rsplit('/').next().expect("an id").to_owned();
+        let size = sessions.lock().expect("lock")[&id];
+        let offset: u64 = req
+            .header("X-Capsule-Offset")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+        let next = offset + req.body.len() as u64;
+        if next == size {
+            return MockResponse::api_error(status, reason, code, "refused");
+        }
+        MockResponse::new(204, "No Content").header("X-Capsule-Offset", next.to_string())
+    })
+    .await
+}
+
+/// Upload the accepted hand-off through `server` and dispose of the failure.
+async fn upload_and_dispose(
+    fixture: &Fixture,
+    inbox: &MemoryInbox,
+    hand_off: &VerifiedHandOff,
+    server: &MockServer,
+) -> (DelegationError, HeldFailure) {
+    let scheduler = StagedScheduler::new(
+        capsule_library::import::UploadPolicy::Full,
+        ConnectionClass::Unmetered,
+    );
+    let error = upload_hand_off(
+        &server.client(&fixture.bundle.protocol_version),
+        &scheduler,
+        hand_off,
+    )
+    .await
+    .expect_err("the server refuses the upload");
+    let disposed = dispose_failure(inbox, &hand_off.address, &error).expect("disposes");
+    (error, disposed)
+}
+
+#[test]
+fn only_a_refusal_no_retry_can_change_is_permanent() {
+    let rejected = |status: u16, code: &str| {
+        DelegationError::Upload(UploadError::Rejected {
+            status,
+            code: Some(code.to_owned()),
+            message: "refused".into(),
+        })
+    };
+    let device = Uuid::from_u128(7);
+    for permanent in [
+        DelegationError::Peering(PeeringError::RevokedDevice(device)),
+        DelegationError::Peering(PeeringError::UnknownDevice(device)),
+        DelegationError::Malformed("short".into()),
+        DelegationError::WrongDelegate { addressed: device },
+        DelegationError::Tampered("a member".into()),
+        rejected(400, capsule_i18n::error_codes::UPLOAD_ENVELOPE_REJECTED),
+        rejected(400, capsule_i18n::error_codes::UPLOAD_ENVELOPE_MISMATCH),
+        rejected(409, capsule_i18n::error_codes::UPLOAD_STALE_REVIVAL),
+    ] {
+        assert!(permanent.is_permanent(), "{permanent:?}");
+    }
+    for transient in [
+        DelegationError::Peering(PeeringError::DirectoryRollback {
+            pinned: 4,
+            highest: 5,
+        }),
+        DelegationError::Peering(PeeringError::ForeignIdentity),
+        DelegationError::Peering(PeeringError::Io("disk".into())),
+        DelegationError::UnsupportedFormat { found: 9 },
+        DelegationError::ProtocolUnsupported {
+            bundle: "2099-01-01".into(),
+            ours: "2026-01-01".into(),
+        },
+        DelegationError::Inbox("disk".into()),
+        DelegationError::Upload(UploadError::Transport("reset".into())),
+        DelegationError::Upload(UploadError::RetriesExhausted("stuck".into())),
+        rejected(403, capsule_i18n::error_codes::QUOTA_EXCEEDED),
+        rejected(503, capsule_i18n::error_codes::UPLOAD_UNAVAILABLE),
+        DelegationError::Upload(UploadError::Rejected {
+            status: 400,
+            code: None,
+            message: "no code".into(),
+        }),
+    ] {
+        assert!(!transient.is_permanent(), "{transient:?}");
+    }
+}
+
+#[test]
+fn a_held_hand_off_whose_origin_was_revoked_after_acceptance_is_discarded() {
+    let fixture = Fixture::new();
+    let inbox = MemoryInbox::default();
+    let hand_off = accepted(&fixture, &inbox);
+    // The account revokes the origin after the delegate took the hand-off.
+    let mut revoked_origin = fixture.origin_entry();
+    revoked_origin.revoked_at = Some("2026-10-02T00:00:00Z".to_owned());
+    let revoked =
+        fixture.trust_of(fixture.directory(6, vec![revoked_origin, fixture.delegate_entry(false)]));
+    let held = inbox.load(&hand_off.address).expect("reads").expect("held");
+    let error = verify_hand_off(
+        &held,
+        &revoked,
+        &MemoryDirectoryVersions::default(),
+        fixture.delegate,
+        &fixture.bundle.protocol_version,
+    )
+    .expect_err("a revoked origin's hand-off no longer verifies");
+    assert_eq!(
+        dispose_failure(&inbox, &hand_off.address, &error).expect("disposes"),
+        HeldFailure::Discarded
+    );
+    assert!(inbox.addresses().expect("reads").is_empty());
+}
+
+#[test]
+fn a_held_hand_off_this_device_cannot_judge_now_is_kept() {
+    let fixture = Fixture::new();
+    let inbox = MemoryInbox::default();
+    let hand_off = accepted(&fixture, &inbox);
+    let held = inbox.load(&hand_off.address).expect("reads").expect("held");
+    // A stale directory is this device's problem, not the hand-off's.
+    let error = verify_hand_off(
+        &held,
+        &fixture.trust(),
+        &MemoryDirectoryVersions::starting_at(6),
+        fixture.delegate,
+        &fixture.bundle.protocol_version,
+    )
+    .expect_err("a rolled-back directory is refused");
+    assert_eq!(
+        dispose_failure(&inbox, &hand_off.address, &error).expect("disposes"),
+        HeldFailure::Kept
+    );
+    assert_eq!(inbox.addresses().expect("reads"), vec![hand_off.address]);
+}
+
+#[tokio::test]
+async fn a_hand_off_the_server_refuses_for_good_is_discarded() {
+    let fixture = Fixture::new();
+    let inbox = MemoryInbox::default();
+    let hand_off = accepted(&fixture, &inbox);
+    // The answer a stale-epoch create, a revoked signer or a conflicting role meets.
+    let server = refusing_server(
+        400,
+        "Bad Request",
+        capsule_i18n::error_codes::UPLOAD_ENVELOPE_REJECTED,
+    )
+    .await;
+    let (error, disposed) = upload_and_dispose(&fixture, &inbox, &hand_off, &server).await;
+    assert_eq!(
+        error.error_code(),
+        Some(capsule_i18n::error_codes::UPLOAD_ENVELOPE_REJECTED)
+    );
+    assert_eq!(disposed, HeldFailure::Discarded);
+    assert!(inbox.addresses().expect("reads").is_empty());
+}
+
+#[tokio::test]
+async fn a_hand_off_the_server_refuses_for_now_is_kept() {
+    let fixture = Fixture::new();
+    let inbox = MemoryInbox::default();
+    let hand_off = accepted(&fixture, &inbox);
+    let server = refusing_server(403, "Forbidden", capsule_i18n::error_codes::QUOTA_EXCEEDED).await;
+    let (error, disposed) = upload_and_dispose(&fixture, &inbox, &hand_off, &server).await;
+    assert_eq!(
+        error.error_code(),
+        Some(capsule_i18n::error_codes::QUOTA_EXCEEDED)
+    );
+    assert_eq!(disposed, HeldFailure::Kept);
+    assert_eq!(inbox.addresses().expect("reads"), vec![hand_off.address]);
+}

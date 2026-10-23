@@ -147,6 +147,7 @@ Edge cases:
 | Partial hand-off | Per asset, all or nothing: a delegate never uploads an incomplete bundle. |
 | Delegate tampers with bytes | Hashes and the manifest signature fail at the server and at the origin's verify. |
 | Delegate on an older protocol | It must speak the bundle's `protocol_version`; otherwise it refuses the hand-off and the origin keeps the upload. |
+| Held hand-off permanently refused | The delegate discards its copy when the hand-off can never succeed: its origin is revoked or gone from the directory after acceptance, its held bytes no longer verify, or the server refuses it with `error.upload.envelope_rejected` (a stale album epoch, a revoked signer, a role conflict), `envelope_mismatch` or `stale_revival` (a conflicting provenance). The delegate cannot change a request the origin signed, so no retry can succeed. Any other failure (network, outage, quota, rate limit, this device's own directory state, a newer format) keeps the copy for the next run. Discarding loses nothing: the origin keeps the original pinned and re-queues the upload at its deadline. |
 | Delegate compromised | It learns what the server learns (ciphertext, sizes, timing), plus the origin's hand-off schedule. It cannot read or forge assets. |
 
 The delegate follows the same battery, metering and scheduling policy as its own uploads
