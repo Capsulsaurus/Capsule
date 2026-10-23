@@ -1088,6 +1088,102 @@ async fn a_ledgered_purge_drops_the_tombstones_references_and_keeps_the_row() {
     assert!(!report.has_faults(), "{report:?}");
 }
 
+/// Ledger a `trash-restore` of `asset` an hour past the fixture's retention floor and hand it
+/// to the index, as the ops route does: the entry first, at the instant the index is given as
+/// the op's `at`. The index refuses it, so no entry carrying a position follows.
+async fn late_restore(server: &Server, owner: &OwnerId, asset: &AssetId) {
+    let row = server
+        .index
+        .read(asset)
+        .await
+        .expect("read")
+        .expect("a row");
+    let prior = row.chain_head.expect("a published row has a head");
+    let bytes = op_record(asset, prior, Action::TrashRestore);
+    let address = server.store(&bytes).await;
+    let manifest_hash = hash_bytes(&bytes);
+    let late = retention() + jiff::SignedDuration::from_hours(1);
+    crate::ledger::AnchoredLedger::new(server.ledger.clone(), server.index.clone())
+        .append(
+            owner,
+            LedgerEvent::Lifecycle {
+                asset_id: asset.as_str().to_owned(),
+                action: OpAction::TrashRestore.as_str().to_owned(),
+                manifest_hash: Some(manifest_hash),
+                sync_seq: None,
+            },
+            late,
+            &server.signer,
+        )
+        .await
+        .expect("an append lands");
+    let outcome = server
+        .index
+        .apply_op(crate::index::LifecycleOp {
+            asset_id: asset.clone(),
+            owner_id: owner.clone(),
+            album_id: row.album_id.clone(),
+            action: OpAction::TrashRestore,
+            manifest_hash,
+            prior_provenance_hash: Some(prior),
+            amk_version: 0,
+            provenance: address,
+            metadata: None,
+            original: None,
+            retention_until: None,
+            at: late,
+        })
+        .await
+        .expect("the index answers");
+    assert!(
+        matches!(outcome, crate::index::OpOutcome::RetentionElapsed { .. }),
+        "{outcome:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_restore_the_index_refused_for_an_elapsed_window_is_not_replayed() {
+    // #871: the ledger holds the restore's entry and no position for it. It chains onto the
+    // delete, so a replay that re-ran invariant 17 alone would revive the tombstone — and,
+    // after a confirmed purge, revive it with its references gone.
+    for purge in [false, true] {
+        let server = Server::new();
+        let alice = owner("alice");
+        let id = server.publish(&alice, "late", false).await;
+        server.delete(&alice, &id, false, None).await;
+        if purge {
+            let purge_seq = server.append(&alice, purge_entry(&id)).await;
+            assert!(matches!(
+                server
+                    .index
+                    .purge(&id, retention())
+                    .await
+                    .expect("the index purges"),
+                crate::index::PurgeOutcome::Purged(_)
+            ));
+            server.append(&alice, purged_entry(&id, purge_seq)).await;
+        }
+        late_restore(&server, &alice, &id).await;
+        let original = rows(&server.index).await;
+        assert_eq!(original[0].state, AssetState::Tombstoned);
+
+        let empty = Arc::new(InMemoryAssetIndex::new());
+        let report = rebuild(&server.rebuild_into(empty.clone()), Mode::Apply)
+            .await
+            .expect("a pass");
+        assert_eq!(
+            rows(&empty).await,
+            original,
+            "the rebuilt row is the tombstone the index kept (purged: {purge})"
+        );
+        assert!(
+            report.owners[0].unprovable.is_empty(),
+            "a refused op is not an unprovable write: {report:?}"
+        );
+        assert!(!report.has_faults(), "{report:?}");
+    }
+}
+
 /// A retention purge entry for `asset`, as the purge worker writes it before the index call.
 fn purge_entry(asset: &AssetId) -> LedgerEvent {
     LedgerEvent::Lifecycle {

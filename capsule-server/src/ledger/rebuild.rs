@@ -726,7 +726,9 @@ fn repoint(facts: &mut Accumulated, role: BlobRole, address: &ContentAddress) {
 /// position was refused by the index, or the process stopped before the second entry: the
 /// replay re-runs invariant 17 (the manifest must chain onto the head the replay has reached),
 /// applies it when it passes, and cannot prove its number. Invariant 18 is album-wide and is not
-/// re-run; an op it refused and that still chains is replayed, and the epoch moves for it.
+/// re-run; an op it refused and that still chains is replayed, and the epoch moves for it. The
+/// retention window is re-run ([`crate::index::restore_window_closed`]): a restore recorded at or
+/// past its tombstone's floor was refused, and is not replayed.
 async fn apply_lifecycle(
     replay: &Replay<'_>,
     asset: &AssetId,
@@ -804,6 +806,21 @@ async fn apply_lifecycle(
     } else {
         if parsed.core.prior_provenance_hash != head_hash {
             tracing::debug!(%asset, action = %op.action, "an unrecorded op does not chain; the index refused it");
+            return Ok(());
+        }
+        // The retention window, re-run as the index ran it: the ops route ledgers the entry at
+        // the instant it hands the index as the op's `at`, so an unrecorded restore at or past
+        // the floor the replay has reached is one the index refused. Replaying it would revive
+        // a tombstone — after a confirmed purge, one whose references are gone.
+        if op.action == OpAction::TrashRestore.as_str()
+            && let Ok(at) = op.recorded_at.parse::<Timestamp>()
+            && let Some(retention_until) = crate::index::restore_window_closed(
+                facts.state.unwrap_or(AssetState::Visible),
+                facts.retention_until.flatten(),
+                at,
+            )
+        {
+            tracing::debug!(%asset, %retention_until, %at, "an unrecorded restore came after the retention window; the index refused it");
             return Ok(());
         }
         facts.unresolved = true;
