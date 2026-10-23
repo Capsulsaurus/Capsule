@@ -74,7 +74,10 @@ authenticates the device key's **classical half**; the **hybrid** proof that the
 the shared User IK (per the
 [signature scheme](/design/cryptography/primitives/#signature-scheme)) is bound to the TLS
 exporter and verified before any payload byte. Both devices must already be enrolled
-([Device Enrollment](/design/device-enrollment/)).
+([Device Enrollment](/design/device-enrollment/)). The proof also covers the sender's role,
+dialer or listener, so the two hellos of one session sign different messages and a hello
+reflected back at its sender never verifies. A hello naming the receiving device's own id is
+refused outright: a device never peers with itself.
 
 Every payload byte travels inside that verified TLS session; there is no plaintext path. Each
 frame's length is checked against a fixed ceiling before it is read, every read and write is

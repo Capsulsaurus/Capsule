@@ -352,12 +352,59 @@ impl PeerHello {
     }
 }
 
-/// Build this device's hello: sign the channel-binding `exporter` with the device `signer`.
+/// Which end of the channel a hello was sent from. The role is part of what the hybrid proof
+/// signs, so a hello one end sent never verifies as the other end's: a listener cannot reflect a
+/// dialer's own hello back at it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HandshakeRole {
+    /// The device that dialed ([`connect`]).
+    Dialer,
+    /// The device that accepted ([`accept`]).
+    Listener,
+}
+
+impl HandshakeRole {
+    /// The role at the other end of the channel.
+    #[must_use]
+    pub fn peer(self) -> Self {
+        match self {
+            Self::Dialer => Self::Listener,
+            Self::Listener => Self::Dialer,
+        }
+    }
+
+    fn tag(self) -> &'static [u8] {
+        match self {
+            Self::Dialer => b"dialer",
+            Self::Listener => b"listener",
+        }
+    }
+}
+
+/// The domain prefix of the message a hello's proof signs.
+const HELLO_PROOF_CONTEXT: &[u8] = b"capsule-peering-hello-v1/";
+
+/// The exact bytes a hello sent by `role` signs: a domain prefix, the sender's role, a
+/// separator, and the channel-binding `exporter`. Binding the role means the two hellos of one
+/// session sign different messages even though both ends derive the same exporter.
+pub(crate) fn hello_proof_message(role: HandshakeRole, exporter: &[u8; EXPORTER_LEN]) -> Vec<u8> {
+    let tag = role.tag();
+    let mut message = Vec::with_capacity(HELLO_PROOF_CONTEXT.len() + tag.len() + 1 + EXPORTER_LEN);
+    message.extend_from_slice(HELLO_PROOF_CONTEXT);
+    message.extend_from_slice(tag);
+    message.push(0);
+    message.extend_from_slice(exporter);
+    message
+}
+
+/// Build this device's hello as `role`: sign the role-bound channel-binding `exporter` with the
+/// device `signer`.
 fn build_hello(
     local: &LocalPeer<'_>,
+    role: HandshakeRole,
     exporter: &[u8; EXPORTER_LEN],
 ) -> Result<PeerHello, PeeringError> {
-    let proof = local.signer.sign(exporter)?;
+    let proof = local.signer.sign(&hello_proof_message(role, exporter))?;
     Ok(PeerHello {
         device_id: local.device_id,
         peering_protocol: PEERING_PROTOCOL.to_string(),
@@ -376,14 +423,20 @@ fn build_hello(
 ///    a directory signed by a foreign IK is rejected outright.
 /// 3. **Anti-rollback.** The pinned directory must not be older than the highest this device has
 ///    verified, and the peer must not present a version older than the one we pin.
-/// 4. **Enrolled + not revoked.** The claimed `device_id` must be present and un-revoked.
-/// 5. **Hybrid proof.** The peer's published device key must verify the hybrid signature over the
-///    exact exporter material *we* derived — binding the hybrid identity to this TLS session.
+/// 4. **Not ourselves.** A hello claiming `local_device`, our own id, is refused with
+///    [`PeeringError::SelfPeer`]: a device never peers with itself.
+/// 5. **Enrolled + not revoked.** The claimed `device_id` must be present and un-revoked.
+/// 6. **Hybrid proof.** The peer's published device key must verify the hybrid signature over the
+///    exact exporter material *we* derived, bound to `from`: the role the peer holds on this
+///    channel, the opposite of ours. That binds the hybrid identity to
+///    this TLS session and to its far end, so a hello reflected back at its sender fails.
 ///
 /// Returns the verified device id and the negotiated protocol version.
 pub fn verify_hello(
     hello: &PeerHello,
+    from: HandshakeRole,
     exporter: &[u8; EXPORTER_LEN],
+    local_device: Uuid,
     trust: &PinnedTrust,
     versions: &dyn DirectoryVersions,
 ) -> Result<(Uuid, String), PeeringError> {
@@ -402,8 +455,18 @@ pub fn verify_hello(
             ours,
         });
     }
+    if hello.device_id == local_device {
+        tracing::warn!(
+            device = %hello.device_id,
+            "peer hello claims this device's own id; refusing"
+        );
+        return Err(PeeringError::SelfPeer(local_device));
+    }
     let entry = admit_device(trust, hello.device_id)?;
-    if !entry.dsk_public.verify(exporter, &hello.proof) {
+    if !entry
+        .dsk_public
+        .verify(&hello_proof_message(from, exporter), &hello.proof)
+    {
         return Err(PeeringError::HybridCheckFailed);
     }
     tracing::debug!(
@@ -628,15 +691,23 @@ fn derive_exporters(
     Ok((binding, secret))
 }
 
-/// Verify the peer's hello and assemble the [`VerifiedPeer`].
+/// Verify the hello the peer sent while we hold `role`, and assemble the [`VerifiedPeer`].
 fn finish(
     peer_bytes: &[u8],
+    role: HandshakeRole,
     exporter: [u8; EXPORTER_LEN],
     artifact_secret: ArtifactSecret,
     local: &LocalPeer<'_>,
 ) -> Result<VerifiedPeer, PeeringError> {
     let peer_hello = decode(peer_bytes)?;
-    let (device_id, protocol) = verify_hello(&peer_hello, &exporter, local.trust, local.versions)?;
+    let (device_id, protocol) = verify_hello(
+        &peer_hello,
+        role.peer(),
+        &exporter,
+        local.device_id,
+        local.trust,
+        local.versions,
+    )?;
     Ok(VerifiedPeer {
         device_id,
         protocol,
@@ -684,10 +755,16 @@ pub async fn accept(
         };
 
         let peer_bytes = read_frame(&mut tls).await?;
-        let our_hello = build_hello(&local, &exporter)?;
+        let our_hello = build_hello(&local, HandshakeRole::Listener, &exporter)?;
         write_frame(&mut tls, &encode(&our_hello)?).await?;
 
-        let peer = finish(&peer_bytes, exporter, secret, &local)?;
+        let peer = finish(
+            &peer_bytes,
+            HandshakeRole::Listener,
+            exporter,
+            secret,
+            &local,
+        )?;
         Ok(PeerChannel::new(TlsStream::Server(tls), peer))
     })
     .await
@@ -711,11 +788,11 @@ pub async fn connect(tcp: TcpStream, local: LocalPeer<'_>) -> Result<PeerChannel
             derive_exporters(|label| conn.export_keying_material([0u8; EXPORTER_LEN], label, None))?
         };
 
-        let our_hello = build_hello(&local, &exporter)?;
+        let our_hello = build_hello(&local, HandshakeRole::Dialer, &exporter)?;
         write_frame(&mut tls, &encode(&our_hello)?).await?;
         let peer_bytes = read_frame(&mut tls).await?;
 
-        let peer = finish(&peer_bytes, exporter, secret, &local)?;
+        let peer = finish(&peer_bytes, HandshakeRole::Dialer, exporter, secret, &local)?;
         Ok(PeerChannel::new(TlsStream::Client(tls), peer))
     })
     .await

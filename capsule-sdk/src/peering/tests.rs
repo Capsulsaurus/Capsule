@@ -28,8 +28,9 @@ use tokio::net::{TcpListener, TcpStream};
 use uuid::Uuid;
 
 use super::channel::{
-    ArtifactSecret, LocalPeer, PEERING_PROTOCOL, PEERING_PROTOCOL_MIN, PeerChannel, PeerHello,
-    PinnedTrust, UpdateDevice, VerifiedPeer, VersionWindow, accept, connect, verify_hello,
+    ArtifactSecret, HandshakeRole, LocalPeer, PEERING_PROTOCOL, PEERING_PROTOCOL_MIN, PeerChannel,
+    PeerHello, PinnedTrust, UpdateDevice, VerifiedPeer, VersionWindow, accept, connect,
+    hello_proof_message, verify_hello,
 };
 use super::delta::{
     MIN_OFFER_BUCKET, OFFER_PAGE_CAP, Offer, decode_offer_page, missing_from, offer_bucket,
@@ -636,7 +637,7 @@ fn hybrid_check_rejection_matrix() {
     // Valid hello from device B.
     let good = build_hello(fx.id_b, &fx.dev_b, &exporter, 1);
     assert_eq!(
-        verify_hello(&good, &exporter, &trust, &versions).unwrap(),
+        verify_as_a(&good, &exporter, &trust, &versions).unwrap(),
         (fx.id_b, PEERING_PROTOCOL.to_string())
     );
 
@@ -645,7 +646,7 @@ fn hybrid_check_rejection_matrix() {
     old.peering_protocol = "1999-01-01".into();
     old.peering_protocol_min = None;
     assert!(matches!(
-        verify_hello(&old, &exporter, &trust, &versions),
+        verify_as_a(&old, &exporter, &trust, &versions),
         Err(PeeringError::VersionDisjoint {
             update: UpdateDevice::Peer,
             ..
@@ -656,14 +657,14 @@ fn hybrid_check_rejection_matrix() {
     let mut garbled = good.clone();
     garbled.peering_protocol = "tomorrow".into();
     assert!(matches!(
-        verify_hello(&garbled, &exporter, &trust, &versions),
+        verify_as_a(&garbled, &exporter, &trust, &versions),
         Err(PeeringError::Codec(_))
     ));
 
     // A device id absent from the pinned directory → unknown.
     let stranger = build_hello(Uuid::from_u128(0xDEAD), &fx.dev_b, &exporter, 1);
     assert!(matches!(
-        verify_hello(&stranger, &exporter, &trust, &versions),
+        verify_as_a(&stranger, &exporter, &trust, &versions),
         Err(PeeringError::UnknownDevice(_))
     ));
 
@@ -671,22 +672,104 @@ fn hybrid_check_rejection_matrix() {
     let imposter_key = HybridSigningKey::from_seed_bytes(&[7; 32], &[8; 32]);
     let imposter = build_hello(fx.id_b, &imposter_key, &exporter, 1);
     assert!(matches!(
-        verify_hello(&imposter, &exporter, &trust, &versions),
+        verify_as_a(&imposter, &exporter, &trust, &versions),
         Err(PeeringError::HybridCheckFailed)
     ));
 
     // A proof over *different* exporter material (a MITM's session) → hybrid fail.
     let other_session = build_hello(fx.id_b, &fx.dev_b, &[0x11u8; 32], 1);
     assert!(matches!(
-        verify_hello(&other_session, &exporter, &trust, &versions),
+        verify_as_a(&other_session, &exporter, &trust, &versions),
         Err(PeeringError::HybridCheckFailed)
     ));
 
     // Revoked device → rejected even with a valid proof.
     assert!(matches!(
-        verify_hello(&good, &exporter, &fx.trust(true), &versions),
+        verify_as_a(&good, &exporter, &fx.trust(true), &versions),
         Err(PeeringError::RevokedDevice(_))
     ));
+}
+
+/// A listener that reflects the dialer's own hello back at it gets no channel: the hello names
+/// the dialer itself, so it is refused before any key is looked up.
+#[test]
+fn a_reflected_own_hello_is_refused() {
+    let fx = Fx::new();
+    let exporter = [0x42u8; 32];
+    let trust = fx.trust(false);
+    let versions = MemoryDirectoryVersions::default();
+
+    // Device A dials and sends its hello; the listener echoes it back unchanged.
+    let own = build_hello_as(HandshakeRole::Dialer, fx.id_a, &fx.dev_a, &exporter, 1);
+    let reflected = verify_hello(
+        &own,
+        HandshakeRole::Listener,
+        &exporter,
+        fx.id_a,
+        &trust,
+        &versions,
+    );
+    assert!(
+        matches!(reflected, Err(PeeringError::SelfPeer(id)) if id == fx.id_a),
+        "{reflected:?}"
+    );
+    assert_eq!(PeeringError::SelfPeer(fx.id_a).kind(), "self_peer");
+
+    // A hello naming our own id is refused even with a proof that would otherwise verify.
+    let as_listener = build_hello_as(HandshakeRole::Listener, fx.id_a, &fx.dev_a, &exporter, 1);
+    assert!(matches!(
+        verify_hello(
+            &as_listener,
+            HandshakeRole::Listener,
+            &exporter,
+            fx.id_a,
+            &trust,
+            &versions,
+        ),
+        Err(PeeringError::SelfPeer(_))
+    ));
+}
+
+/// The proof is bound to the sender's role: a hello signed as one end never verifies as the
+/// other end's, even from the real device over the same session.
+#[test]
+fn a_hello_with_a_swapped_role_is_refused() {
+    let fx = Fx::new();
+    let exporter = [0x42u8; 32];
+    let trust = fx.trust(false);
+    let versions = MemoryDirectoryVersions::default();
+
+    let as_dialer = build_hello_as(HandshakeRole::Dialer, fx.id_b, &fx.dev_b, &exporter, 1);
+    let as_listener = build_hello_as(HandshakeRole::Listener, fx.id_b, &fx.dev_b, &exporter, 1);
+    let verify = |hello: &PeerHello, from: HandshakeRole| {
+        verify_hello(hello, from, &exporter, fx.id_a, &trust, &versions)
+    };
+
+    assert_eq!(
+        verify(&as_dialer, HandshakeRole::Dialer).unwrap().0,
+        fx.id_b
+    );
+    assert_eq!(
+        verify(&as_listener, HandshakeRole::Listener).unwrap().0,
+        fx.id_b
+    );
+    assert!(matches!(
+        verify(&as_dialer, HandshakeRole::Listener),
+        Err(PeeringError::HybridCheckFailed)
+    ));
+    assert!(matches!(
+        verify(&as_listener, HandshakeRole::Dialer),
+        Err(PeeringError::HybridCheckFailed)
+    ));
+    // The bare exporter, the pre-binding message, no longer verifies under either role.
+    let mut unbound = as_dialer.clone();
+    unbound.proof = fx.dev_b.sign(&exporter);
+    assert!(matches!(
+        verify(&unbound, HandshakeRole::Dialer),
+        Err(PeeringError::HybridCheckFailed)
+    ));
+    assert_eq!(HandshakeRole::Dialer.peer(), HandshakeRole::Listener);
+    assert_eq!(HandshakeRole::Listener.peer(), HandshakeRole::Dialer);
 }
 
 /// Directory anti-rollback: once version 2 (which revokes B) has verified, a stale pinned
@@ -699,7 +782,7 @@ fn rolled_back_directory_cannot_readmit_a_revoked_device() {
     let hello = build_hello(fx.id_b, &fx.dev_b, &exporter, 2);
 
     assert!(matches!(
-        verify_hello(&hello, &exporter, &fx.trust_at(2, true), &versions),
+        verify_as_a(&hello, &exporter, &fx.trust_at(2, true), &versions),
         Err(PeeringError::RevokedDevice(_))
     ));
     assert_eq!(
@@ -710,7 +793,7 @@ fn rolled_back_directory_cannot_readmit_a_revoked_device() {
 
     let stale = build_hello(fx.id_b, &fx.dev_b, &exporter, 1);
     assert!(matches!(
-        verify_hello(&stale, &exporter, &fx.trust_at(1, false), &versions),
+        verify_as_a(&stale, &exporter, &fx.trust_at(1, false), &versions),
         Err(PeeringError::DirectoryRollback {
             pinned: 1,
             highest: 2
@@ -742,7 +825,7 @@ fn peer_hello_round_trips_through_json_framing() {
     let trust = fx.trust(false);
     let versions = MemoryDirectoryVersions::default();
     assert_eq!(
-        verify_hello(&back, &[0x42u8; 32], &trust, &versions)
+        verify_as_a(&back, &[0x42u8; 32], &trust, &versions)
             .unwrap()
             .0,
         fx.id_b
@@ -761,8 +844,26 @@ fn peer_hello_round_trips_through_json_framing() {
     assert_eq!(legacy.directory_version, 0);
 }
 
-/// Test helper mirroring the private `build_hello`: sign the exporter material with a device key.
+/// Test helper mirroring the private `build_hello` for a dialer: sign the dialer-bound exporter
+/// material with a device key.
 fn build_hello(
+    device_id: Uuid,
+    signer: &HybridSigningKey,
+    exporter: &[u8; 32],
+    directory_version: u64,
+) -> PeerHello {
+    build_hello_as(
+        HandshakeRole::Dialer,
+        device_id,
+        signer,
+        exporter,
+        directory_version,
+    )
+}
+
+/// [`build_hello`] for the sender holding `role`.
+fn build_hello_as(
+    role: HandshakeRole,
     device_id: Uuid,
     signer: &HybridSigningKey,
     exporter: &[u8; 32],
@@ -773,8 +874,25 @@ fn build_hello(
         peering_protocol: PEERING_PROTOCOL.to_string(),
         peering_protocol_min: Some(PEERING_PROTOCOL_MIN.to_string()),
         directory_version,
-        proof: signer.sign(exporter),
+        proof: signer.sign(&hello_proof_message(role, exporter)),
     }
+}
+
+/// Verify `hello` as device A (`Fx::id_a`) listening, so the hello comes from a dialer.
+fn verify_as_a(
+    hello: &PeerHello,
+    exporter: &[u8; 32],
+    trust: &PinnedTrust,
+    versions: &MemoryDirectoryVersions,
+) -> Result<(Uuid, String), PeeringError> {
+    verify_hello(
+        hello,
+        HandshakeRole::Dialer,
+        exporter,
+        Uuid::from_u128(0x0A),
+        trust,
+        versions,
+    )
 }
 
 // ── Version window (unit) ─────────────────────────────────────────────────────

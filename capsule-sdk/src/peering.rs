@@ -48,9 +48,9 @@ use std::net::IpAddr;
 use capsule_core::backup::BackupError;
 use capsule_core::crypto::CryptoError;
 pub use channel::{
-    ArtifactSecret, LocalPeer, Message, Offered, Offering, PEERING_PROTOCOL, PEERING_PROTOCOL_MIN,
-    PeerChannel, PeerClient, PeerHello, PinnedTrust, RangeFailure, ServeReport, ServedRange,
-    UpdateDevice, VerifiedPeer, VersionWindow, accept, connect, serve,
+    ArtifactSecret, HandshakeRole, LocalPeer, Message, Offered, Offering, PEERING_PROTOCOL,
+    PEERING_PROTOCOL_MIN, PeerChannel, PeerClient, PeerHello, PinnedTrust, RangeFailure,
+    ServeReport, ServedRange, UpdateDevice, VerifiedPeer, VersionWindow, accept, connect, serve,
 };
 pub use delegation::{
     DelegateInbox, DelegatedUpload, Delegation, DelegationError, DelegationState,
@@ -139,6 +139,10 @@ pub enum PeeringError {
     /// The peer's directory entry carries a `revoked_at`: a removed device cannot peer.
     #[error("peer device {0} has been revoked from the device directory")]
     RevokedDevice(Uuid),
+    /// The peer's hello claims this device's own `device_id`: a hello reflected back at its
+    /// sender, or a device dialing itself. A device never peers with itself.
+    #[error("peer hello claims this device's own id {0}")]
+    SelfPeer(Uuid),
     /// The application-layer hybrid signature over the channel-binding did not verify under the
     /// peer's published device key — the peer does not hold the private key it claims.
     #[error("peer hybrid identity proof failed to verify")]
@@ -197,6 +201,7 @@ impl PeeringError {
             Self::OutOfScope(_) => "out_of_scope",
             Self::UnknownDevice(_) => "unknown_device",
             Self::RevokedDevice(_) => "revoked_device",
+            Self::SelfPeer(_) => "self_peer",
             Self::HybridCheckFailed => "hybrid_check_failed",
             Self::Discovery(_) => "discovery",
             Self::Codec(_) => "codec",
