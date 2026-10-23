@@ -335,6 +335,121 @@ async fn a_listener_binds_an_ephemeral_port_and_reports_it() {
     ));
 }
 
+/// A stand-in handshake: it completes when the peer sends one byte, and stalls until then.
+async fn byte_handshake(
+    mut tcp: TcpStream,
+    source: SocketAddr,
+) -> (SocketAddr, Result<u8, PeeringError>) {
+    use tokio::io::AsyncReadExt as _;
+    let byte = tcp
+        .read_u8()
+        .await
+        .map_err(|error| PeeringError::Io(error.to_string()));
+    (source, byte)
+}
+
+/// A peer that connects and then stalls its handshake holds only its own slot: a second peer's
+/// handshake completes while the first is still pending, long before the listen deadline.
+#[tokio::test]
+async fn a_stalled_handshake_does_not_hold_the_listener() {
+    use tokio::io::AsyncWriteExt as _;
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("binds");
+    let address = listener.local_addr().expect("bound");
+    let started = tokio::time::Instant::now();
+    let deadline = started + Duration::from_secs(30);
+    let mut pending = FuturesUnordered::new();
+    let mut refused = Vec::new();
+
+    let _stalled = TcpStream::connect(address).await.expect("connects");
+    let mut prompt = TcpStream::connect(address).await.expect("connects");
+    let prompt_source = prompt.local_addr().expect("bound");
+    prompt.write_u8(7).await.expect("writes");
+
+    let admitted = next_session(
+        &listener,
+        "the listener",
+        deadline,
+        &byte_handshake,
+        &mut pending,
+        &mut refused,
+    )
+    .await;
+    assert!(
+        matches!(admitted, Admitted::Session(source, 7) if source == prompt_source),
+        "{admitted:?}"
+    );
+    assert_eq!(pending.len(), 1, "the stalled handshake is still pending");
+    assert!(refused.is_empty());
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "admitted without waiting out the stalled peer"
+    );
+}
+
+/// The listen deadline bounds a handshake as well as the wait for a connection: a peer that
+/// connects and never completes its handshake ends the wait at the deadline.
+#[tokio::test]
+async fn the_listen_deadline_bounds_a_stalled_handshake() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("binds");
+    let address = listener.local_addr().expect("bound");
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(300);
+    let mut pending = FuturesUnordered::new();
+    let mut refused = Vec::new();
+
+    let _stalled = TcpStream::connect(address).await.expect("connects");
+    let admitted = tokio::time::timeout(
+        Duration::from_secs(10),
+        next_session(
+            &listener,
+            "the listener",
+            deadline,
+            &byte_handshake,
+            &mut pending,
+            &mut refused,
+        ),
+    )
+    .await
+    .expect("the deadline ends the wait");
+    assert!(matches!(admitted, Admitted::TimedOut), "{admitted:?}");
+    assert!(tokio::time::Instant::now() >= deadline);
+    assert_eq!(pending.len(), 1, "the handshake was started, then cut off");
+}
+
+/// A handshake that fails is recorded under its source and the listener keeps going.
+#[tokio::test]
+async fn a_failed_handshake_is_recorded_and_the_next_one_admitted() {
+    use tokio::io::AsyncWriteExt as _;
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("binds");
+    let address = listener.local_addr().expect("bound");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let mut pending = FuturesUnordered::new();
+    let mut refused = Vec::new();
+
+    // Closes without a byte: its handshake fails.
+    drop(TcpStream::connect(address).await.expect("connects"));
+    let later = async {
+        // Only once the failed handshake has had time to end.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let mut good = TcpStream::connect(address).await.expect("connects");
+        good.write_u8(9).await.expect("writes");
+        good
+    };
+    let (admitted, _good) = tokio::join!(
+        next_session(
+            &listener,
+            "the listener",
+            deadline,
+            &byte_handshake,
+            &mut pending,
+            &mut refused,
+        ),
+        later
+    );
+    assert!(matches!(admitted, Admitted::Session(_, 9)), "{admitted:?}");
+    assert_eq!(refused.len(), 1, "{refused:?}");
+    assert_eq!(refused[0].kind, "peering_io");
+}
+
 // ─── The `--json` failure contract ────────────────────────────────────────────
 
 fn rejected(status: u16, code: &str) -> DelegationError {
@@ -372,6 +487,7 @@ fn every_delegation_error() -> Vec<DelegationError> {
         PeeringError::OutOfScope(capsule_sdk::fetch::FetchScope::MetadataOnly),
         PeeringError::UnknownDevice(device),
         PeeringError::RevokedDevice(device),
+        PeeringError::SelfPeer(device),
         PeeringError::HybridCheckFailed,
         PeeringError::Discovery("mdns".into()),
         PeeringError::Codec("hello".into()),
