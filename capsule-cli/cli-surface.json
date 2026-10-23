@@ -692,6 +692,33 @@
               ]
             },
             {
+              "help": "Also take hand-offs over the LAN peering channel: listen on ADDR (e.g. `0.0.0.0:7420`) for the other device's `capsule peer delegate --peer`, verify it over mutual TLS as a device of this account, pull each hand-off it sealed for this device, and acknowledge each over the same channel once it is persisted. Only local-network peers are admitted. The address bound is printed on stderr",
+              "id": "listen",
+              "long": "listen",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": true,
+              "value_names": [
+                "ADDR"
+              ]
+            },
+            {
+              "default_values": [
+                "300"
+              ],
+              "help": "Seconds `--listen` waits for a peer to complete a hand-off session",
+              "id": "listen_timeout",
+              "long": "listen-timeout",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": true,
+              "value_names": [
+                "SECONDS"
+              ]
+            },
+            {
               "help": "Open the tier sessions in ladder order, gating the above-index tiers on the connection class, as `capsule push --staged` does",
               "id": "staged",
               "long": "staged",
@@ -710,7 +737,7 @@
               "takes_value": false
             },
             {
-              "help": "Print the run as one JSON document on stdout: each hand-off taken with its acknowledgement, each refused, and what became of each held hand-off (removed, kept, failed and kept, or permanently refused and quarantined), each failure with a stable `kind`, the server's `code` when it gave one, and the detail",
+              "help": "Print the run as one JSON document on stdout: each hand-off taken with its acknowledgement (and, over the channel, the peer it came from and whether the peer took the acknowledgement), each refused, and what became of each held hand-off (removed, kept, failed and kept, or permanently refused and quarantined), each failure with a stable `kind`, the server's `code` when it gave one, and the detail",
               "id": "json",
               "long": "json",
               "positional": false,
@@ -722,7 +749,7 @@
           "name": "accept"
         },
         {
-          "about": "Seal assets' uploads for another device of this account to upload later. Each asset is written to a hand-off file the other device takes with `capsule peer accept`; this device keeps every original until its own check finds the server holds it",
+          "about": "Seal assets' uploads for another device of this account to upload later. Each asset is written to a hand-off file the other device takes with `capsule peer accept`, or with `--peer` handed over the LAN peering channel to `capsule peer accept --listen`; this device keeps every original until its own check finds the server holds it",
           "args": [
             {
               "help": "Path to the Capsule library holding the assets",
@@ -737,12 +764,12 @@
               ]
             },
             {
-              "help": "The device to hand the uploads to: its id in this account's device directory",
+              "help": "The device to hand the uploads to: its id in this account's device directory. Required with `--out`; with `--peer`, the device the channel verifies must be this one",
               "id": "to",
               "long": "to",
               "positional": false,
               "repeatable": false,
-              "required": true,
+              "required": false,
               "takes_value": true,
               "value_names": [
                 "DEVICE_ID"
@@ -766,10 +793,22 @@
               "long": "out",
               "positional": false,
               "repeatable": false,
-              "required": true,
+              "required": false,
               "takes_value": true,
               "value_names": [
                 "DIR"
+              ]
+            },
+            {
+              "help": "Hand the uploads over the LAN peering channel instead of files: dial the other device's `capsule peer accept --listen` at HOST:PORT, verify it over mutual TLS as a device of this account, and serve it each hand-off to pull and acknowledge over the same channel. Only a local-network address is dialed",
+              "id": "peer",
+              "long": "peer",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": true,
+              "value_names": [
+                "HOST:PORT"
               ]
             },
             {
@@ -797,7 +836,7 @@
               "takes_value": false
             },
             {
-              "help": "Print the run as one JSON document on stdout: each asset handed off, with its file and content address, and each that was not, with a stable `kind`, the server's `code` when it gave one, and the detail",
+              "help": "Print the run as one JSON document on stdout: the delegate, each asset handed off, with its file or whether the delegate acknowledged it over the channel, and its content address, and each that was not, with a stable `kind`, the server's `code` when it gave one, and the detail",
               "id": "json",
               "long": "json",
               "positional": false,

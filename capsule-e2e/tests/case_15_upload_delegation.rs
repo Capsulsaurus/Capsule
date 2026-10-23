@@ -424,6 +424,83 @@ async fn e2e_case_15_peer_delegate_refuses_a_peer_off_the_local_network() {
     );
 }
 
+/// The device at `--peer` verifies as a device of the account, but not the `--to` device the
+/// user named: nothing is sealed or sent, every asset is reported under `peer_mismatch`, and
+/// the listener, whose session ends with no listing, keeps waiting until its timeout.
+#[tokio::test]
+async fn e2e_case_15_peer_delegate_refuses_a_peer_that_is_not_the_named_device() {
+    let server = Server::boot().await;
+    let remote = remote_for(&server);
+    let mut a = Device::register(&server, "delegation-mismatch").await;
+    let asset = a.import_file("named.jpg", &synthetic_jpeg());
+    let (_b_root, b, session_b) = second_device(&server, &a).await;
+    let cli_a = Cli::signed_in(&a.login_again(&server).await, a.workspace.device_id()).await;
+    let cli_b = Cli::signed_in(&session_b, b.device_id()).await;
+
+    let listener = PeerListener::bind(
+        "127.0.0.1:0".parse().expect("an address"),
+        Duration::from_secs(3),
+    )
+    .await
+    .expect("B listens on loopback");
+    let address = listener.local_addr().expect("bound").to_string();
+    let accept_options = AcceptOptions {
+        from: Vec::new(),
+        policy: UploadPolicy::Full,
+        connection: ConnectionClass::Unmetered,
+        listen: Some(listener),
+    };
+    let someone_else = Uuid::now_v7();
+    let delegate_options = DelegateOptions::over_peer(address, Some(someone_else), vec![asset]);
+    let clock = Clock(AtomicU64::new(0));
+    let (accepted, handed) = tokio::join!(
+        peer::accept(
+            &remote,
+            &cli_b.store,
+            &b,
+            &cli_b.state,
+            &cli_b.versions,
+            &accept_options,
+        ),
+        peer::delegate(
+            &remote,
+            &cli_a.store,
+            &a.workspace,
+            &cli_a.state,
+            &cli_a.versions,
+            &clock,
+            &delegate_options,
+        )
+    );
+    let handed = handed.expect("the run reports per asset");
+    assert_eq!(
+        handed.delegate,
+        Some(b.device_id()),
+        "the channel verified B"
+    );
+    assert!(handed.handed_off.is_empty());
+    assert_eq!(handed.failed.len(), 1);
+    assert_eq!(handed.failed[0].kind, "peer_mismatch");
+    assert!(
+        cli_a
+            .state
+            .load_ledger()
+            .expect("reads")
+            .get(&asset)
+            .is_none()
+    );
+
+    let accepted = accepted.expect("the accept runs");
+    assert!(accepted.accepted.is_empty());
+    let kinds: Vec<&str> = accepted.refused.iter().map(|f| f.kind).collect();
+    assert!(
+        kinds.contains(&"peering_timeout"),
+        "no session completed before the listen timeout: {kinds:?}"
+    );
+    use capsule_sdk::peering::DelegateInbox as _;
+    assert!(cli_b.state.inbox().addresses().expect("reads").is_empty());
+}
+
 #[tokio::test]
 async fn e2e_case_15_a_delegate_that_dies_mid_upload_is_re_queued_and_the_origin_uploads_itself() {
     let server = Server::boot().await;

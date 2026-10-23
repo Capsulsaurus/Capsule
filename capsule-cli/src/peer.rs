@@ -26,10 +26,9 @@
 //! admits only the local network; the origin hands off only to the device the handshake
 //! verified (which must be `--to` when given) and authorizes each of its requests against the
 //! directory the server publishes at that moment, and the delegate takes only hand-offs that
-//! peer sealed itself. The account's directory
-//! is the one the server publishes, verified under the library's user identity key and held to
-//! the anti-rollback floor this device persists in the CLI database
-//! ([`crate::peering_state::DbDirectoryVersions`]).
+//! peer sealed itself. The account's directory is the one the server publishes, verified under
+//! the library's user identity key and held to the anti-rollback floor this device persists in
+//! the CLI database ([`crate::peering_state::DbDirectoryVersions`]).
 //!
 //! State lives under the CLI data directory, per device: the origin ledger (`origin.json`) and
 //! the delegate inbox (`inbox/`). A delegate copy is never a library asset.
@@ -868,14 +867,13 @@ async fn delegate_over_peer(
     let mut acknowledged: BTreeSet<Uuid> = BTreeSet::new();
     let mut redials = 0;
     let ended: Option<(&'static str, String)> = loop {
+        // Served even when empty (nothing sealed, or everything acknowledged before a sever),
+        // so the delegate's session ends cleanly instead of waiting out its timeout.
         let pending: Vec<SealedHandOff> = sealed
             .iter()
             .filter(|hand_off| !acknowledged.contains(&hand_off.asset_id))
             .cloned()
             .collect();
-        if pending.is_empty() {
-            break None;
-        }
         let served = offer_hand_offs(
             &mut channel,
             &pending,
