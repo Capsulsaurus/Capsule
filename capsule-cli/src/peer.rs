@@ -447,7 +447,7 @@ async fn pinned_trust(
 // ─── peer delegate ───────────────────────────────────────────────────────────
 
 /// The bound on resolving and connecting to a `--peer`.
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// How many times `peer delegate --peer` dials again after the channel is severed mid-session.
 /// Each new session resumes the delegate's partial pulls.
