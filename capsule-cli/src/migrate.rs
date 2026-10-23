@@ -11,7 +11,7 @@
 //! open exactly as every other verb does — so a legacy record with no usable `album_id` lands
 //! where an import would have put it.
 
-use capsule_core::lifecycle::{
+use capsule_library::lifecycle::{
     LifecycleError, MigrationSkip, UnmigratedSidecar, UnsignedMigrationOptions,
     UnsignedMigrationReport, Workspace,
 };
@@ -180,7 +180,7 @@ pub fn render(report: &UnsignedMigrationReport, remaining: usize) -> String {
 mod tests {
     use std::path::PathBuf;
 
-    use capsule_core::lifecycle::UnmigratedShape;
+    use capsule_library::lifecycle::UnmigratedShape;
     use uuid::Uuid;
 
     use super::*;

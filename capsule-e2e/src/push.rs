@@ -20,7 +20,7 @@ use std::collections::HashSet;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use capsule_core::crypto::provenance::ManifestCore;
-use capsule_core::lifecycle::UploadBundle;
+use capsule_library::lifecycle::UploadBundle;
 use capsule_sdk::net::ConnectionClass;
 pub use capsule_sdk::push::ensure_album;
 use capsule_sdk::push::{AssetPushReport, bundle_blobs, push_bundle};
@@ -116,7 +116,7 @@ pub async fn push_asset(device: &Device, server: &Server, asset_id: &Uuid) -> Pu
         .expect("the library builds an upload bundle for its own asset");
     let client = device.upload_client(server);
     let scheduler = StagedScheduler::new(
-        capsule_core::import::UploadPolicy::Full,
+        capsule_library::import::UploadPolicy::Full,
         ConnectionClass::Unmetered,
     );
     let report = push_bundle(&client, &scheduler, &bundle, &HashSet::new(), false)

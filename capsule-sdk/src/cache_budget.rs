@@ -12,14 +12,14 @@
 //!   (the retention byte budget plus whether bulk transfers defer) out.
 //! - [`CacheBudget`] — the **orchestration** that samples the port, re-plans when the class
 //!   changes mid-session, and hands the planned budget to the eviction sweep
-//!   ([`capsule_core::library::cache_sweep`]). The sweep is passed in as a closure so this module
+//!   ([`capsule_library::library::cache_sweep`]). The sweep is passed in as a closure so this module
 //!   names no storage type; the sweep alone decides what is evictable, so pinned representations
 //!   and device-owned originals survive every re-plan.
 
 use std::sync::Mutex;
 
-use capsule_core::import::UploadPolicy;
-use capsule_core::library::EvictionReport;
+use capsule_library::import::UploadPolicy;
+use capsule_library::library::EvictionReport;
 use tracing::{debug, info, instrument};
 
 use crate::net::{ConnectionClass, PathSignals};
@@ -227,7 +227,7 @@ impl<S: ConnectionClassSource> CacheBudget<S> {
     }
 
     /// Re-plan if the class changed, then run `sweep` (normally
-    /// `|budget| capsule_core::library::cache_sweep(&db, budget)`) under the planned budget.
+    /// `|budget| capsule_library::library::cache_sweep(&db, budget)`) under the planned budget.
     ///
     /// # Errors
     ///

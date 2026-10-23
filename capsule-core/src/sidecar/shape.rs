@@ -6,16 +6,14 @@
 //! so a probe that looks at nothing but those two keys classifies a file exactly, and it
 //! builds no model of either shape — which is what keeps it from being a second reader after
 //! the unsigned one is deleted. The only consumer of a legacy record's *contents* is the
-//! migration verb ([`Workspace::migrate_unsigned_sidecars`]), which owns its own private
+//! migration verb (`capsule-library`'s `Workspace::migrate_unsigned_sidecars`), which owns its own private
 //! decoder.
-//!
-//! [`Workspace::migrate_unsigned_sidecars`]: crate::lifecycle::Workspace::migrate_unsigned_sidecars
 
 use ciborium::value::Value;
 
 /// Which on-disk sidecar shape a `{uuid}.cbor` file has.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SidecarShape {
+pub enum SidecarShape {
     /// A signed `SidecarV1`-family record: integer key `0` is present and carries `schema`.
     /// Says nothing about whether the schema is one this build reads.
     Signed {
@@ -34,7 +32,7 @@ pub(crate) enum SidecarShape {
 /// Decodes the outer CBOR value once and inspects only the map's keys; every value except
 /// the one at integer key `0` is left unexamined. Never fails: undecodable bytes are
 /// [`SidecarShape::Unknown`], and so is a `0` key whose value is not a `u16`.
-pub(crate) fn probe(bytes: &[u8]) -> SidecarShape {
+pub fn probe(bytes: &[u8]) -> SidecarShape {
     let Ok(Value::Map(entries)) = ciborium::de::from_reader::<Value, _>(bytes) else {
         return SidecarShape::Unknown;
     };

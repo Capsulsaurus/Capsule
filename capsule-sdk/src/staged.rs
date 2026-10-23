@@ -4,7 +4,7 @@
 //! Uploads used to be all-or-nothing; staged uploads add the upload-direction
 //! ladder for low-data situations. The policy is **client-side session ordering
 //! only** — the server has zero mode branches (the canonical [`UploadPolicy`] /
-//! [`UploadTier`] contract lives in `capsule_core::import::upload`). This module is
+//! [`UploadTier`] contract lives in `capsule_library::import::upload`). This module is
 //! that ordering's network half:
 //!
 //! - **Ladder ordering + gating.** [`StagedScheduler::plan_sessions`] returns the
@@ -29,16 +29,16 @@
 //!   ([`crate::sync`], [`crate::fetch`]); this scheduler is what makes T2 land last.
 //!
 //! Verify-before-destroy is untouched: a staged asset pins its local original until
-//! T2 is durable, by the same [`ReleaseGate`](capsule_core::library::ReleaseGate)
+//! T2 is durable, by the same [`ReleaseGate`](capsule_library::library::ReleaseGate)
 //! that always governed release. Staged and streaming import are mutually exclusive
-//! per import — enforced in `capsule_core::import` (planner confirmation + the
+//! per import — enforced in `capsule_library::import` (planner confirmation + the
 //! streaming executor), so it can never reach this scheduler.
 //!
 //! [Download & Sync — Upload Tiering (Staged Uploads)]: https://docs/design/transfer/upload/#upload-tiering-staged-uploads
 
 use std::collections::HashSet;
 
-use capsule_core::import::{UploadPolicy, UploadTier};
+use capsule_library::import::{UploadPolicy, UploadTier};
 use tracing::instrument;
 
 use crate::net::ConnectionClass;

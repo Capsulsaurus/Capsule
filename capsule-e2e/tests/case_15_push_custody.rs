@@ -19,12 +19,12 @@ use std::path::{Path, PathBuf};
 use capsule_cli::remote::{self, AssetPushStatus, PushOptions, RemoteConfig, RemoteError};
 use capsule_cli::session::SessionStore;
 use capsule_core::crypto::keys::{HybridSigningKey, HybridVerifyingKey};
-use capsule_core::library::{
+use capsule_e2e::fixtures::{large_synthetic_jpeg, synthetic_jpeg};
+use capsule_e2e::{Device, PROTOCOL_VERSION, Server};
+use capsule_library::library::{
     KeyPinError, attestation_key_pins_path, load_pinned_attestation_keys, load_receipts,
     pin_attestation_keys,
 };
-use capsule_e2e::fixtures::{large_synthetic_jpeg, synthetic_jpeg};
-use capsule_e2e::{Device, PROTOCOL_VERSION, Server};
 use capsule_sdk::push::bundle_blobs;
 
 /// Every file under `dir` whose name is `name`.

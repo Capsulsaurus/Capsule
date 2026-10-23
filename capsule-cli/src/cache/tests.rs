@@ -1,6 +1,6 @@
-use capsule_core::db::{CachedRepresentationRow, DatabaseDriver};
-use capsule_core::import::UploadTier;
-use capsule_core::library::cache_sweep;
+use capsule_library::db::{CachedRepresentationRow, DatabaseDriver};
+use capsule_library::import::UploadTier;
+use capsule_library::library::cache_sweep;
 use capsule_sdk::cache_budget::InMemoryConnectionClass;
 use capsule_sdk::staged::StagedScheduler;
 

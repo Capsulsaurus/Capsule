@@ -1,0 +1,91 @@
+[package]
+name = "capsule-library"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# All of a client's local state over the stateless `capsule-core`: the SQLite index, the on-disk
+# library and its lock, the `Workspace`, import scanning and execution, sidecar / album-store /
+# backup file I/O, file-path EXIF reading and the desktop TPM signers (Module Map — Stateless
+# Core). A plain rlib: the apps reach it through `capsule-sdk`'s `capsule_sdk` namespace, and it
+# exports no uniffi namespace of its own (ADR-0005).
+
+[features]
+# Pass-throughs to `capsule-core`'s opt-in codec features, so a consumer that links the library
+# picks the codec set in one place. Both are opt-in and never in `default` (issues #437, #588);
+# see `capsule-core`'s manifest for the build-host requirements each carries.
+media-linked-codecs = ["capsule-core/media-linked-codecs"]
+media-avif-decode = ["capsule-core/media-avif-decode"]
+# `test-support` exposes `Workspace::export_backup_with_params`, which lets a caller choose the
+# backup artifact's Argon2id wrap cost, and turns on `capsule-core`'s matching entry points.
+# **Never in `default`, and never in a shipping manifest**: a weak cost produces a
+# brute-forceable backup and nothing downstream re-checks it. A downstream test crate enables it
+# on a **dev**-dependency, which resolver 3 keeps out of every build that is not building tests.
+test-support = ["capsule-core/test-support"]
+# `tpm` builds the desktop (Linux/Windows) TPM 2.0 reference `HardwareSigner` (see
+# `signers::tpm`). Off by default and never built in CI: tss-esapi links the system `libtss2` and
+# exercising it needs a real TPM or a software TPM (swtpm). Compile on a TPM-capable host with
+# `--features tpm`.
+tpm = ["dep:tss-esapi"]
+
+[dependencies]
+capsule-core = { path = "../capsule-core" }
+
+aead = { version = "0.5", features = ["stream", "alloc"] }
+aes-gcm = { version = "0.10", features = ["aes"] }
+ciborium = "0.2"
+hex = { workspace = true }
+jiff = { workspace = true }
+p256 = { version = "0.13", default-features = false, features = ["ecdsa", "ecdh", "arithmetic"] }
+# Bundled SQLite (C) — the on-device library index.
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { workspace = true }
+serde_bytes = "0.11"
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+# The client-local embedding index: `sqlite-vec`'s `vec0` virtual tables over `library.sqlite`.
+# It registers as a SQLite auto-extension. See `db::vector`.
+sqlite-vec = "0.1.9"
+thiserror = { workspace = true }
+# Sole logging facade (the `log` crate is forbidden in new code; see the Dependencies doc).
+tracing = { workspace = true }
+uuid = { workspace = true, features = ["v4", "v7", "serde"] }
+walkdir = "2"
+
+# ── TPM (optional; `tpm` feature) — desktop reference HardwareSigner ─────────
+# RustCrypto-adjacent bindings to the TPM 2.0 Enhanced System API (links system `libtss2`).
+# Optional + off by default so neither the default nor the mobile FFI build pulls in the TPM
+# stack. See `signers::tpm`.
+tss-esapi = { version = "7", optional = true }
+
+# ── Free-space probe (`library::space`) ────────────────────────────────────
+# The streaming-import free-space probe (`library::available_bytes`, slice S-B3) is a thin
+# `statvfs` / `GetDiskFreeSpaceEx` wrapper. rustix gives the pure-Rust POSIX `statvfs(2)` on Unix
+# (no libc link, aligned with the rustls/no-openssl ethos); windows-sys exposes the Win32
+# `GetDiskFreeSpaceExW`. See the Dependencies design doc.
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1", features = ["fs"] }
+
+# `Win32_System_TpmBaseServices` adds the TBS (TPM Base Services) surface —
+# `Tbsi_Context_Create` / `Tbsip_Submit_Command` / `Tbsi_Is_Tpm_Present` — the Windows path of
+# the desktop TPM 2.0 `HardwareSigner` (`signers::tbs`, slice S-F4). TBS is the raw TPM command
+# channel the tss-esapi reference (`signers::tpm`) wraps on Linux; on Windows the adapter
+# marshals the TPM 2.0 commands itself and submits them through `tbs.dll` (raw-dylib — no import
+# library, so the crate cross-`check`s for `x86_64-pc-windows-msvc` off-Windows).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.60", features = [
+    "Win32_Storage_FileSystem",
+    "Win32_Foundation",
+    "Win32_System_TpmBaseServices",
+] }
+
+[dev-dependencies]
+# The same `capsule-core` with `test-support` on: the lifecycle backup tests export at an explicit
+# fast Argon2id cost. A dev-dependency, so no shipping build carries the feature.
+capsule-core = { path = "../capsule-core", features = ["test-support"] }
+proptest = { workspace = true }
+# The encoders the fixtures need and the shipping graph does not (see `capsule-core`'s manifest
+# for why `jpeg-encode` stays out of every release binary).
+rawshift-image = { version = "0.1.1", default-features = false, features = ["jpeg", "png"] }
+tempfile = "3"

@@ -9,10 +9,10 @@
 
 use std::path::Path;
 
-use capsule_core::import::{
+use capsule_library::import::{
     ImportActionPlan, ImportDecision, ImportExecutionSummary, ImportOutcome, PlanCounts,
 };
-use capsule_core::lifecycle::DerivativeStatus;
+use capsule_library::lifecycle::DerivativeStatus;
 use serde::Serialize;
 
 /// Where one source file ended up.

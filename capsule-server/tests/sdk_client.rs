@@ -1082,7 +1082,7 @@ async fn a_pushed_asset_reaches_the_feed_and_the_entry_decodes_and_verifies() {
     use std::collections::HashSet;
 
     use capsule_core::crypto::primitives::Argon2Params;
-    use capsule_core::lifecycle::{RemoteEntry, SyncApplyOutcome, Workspace};
+    use capsule_library::lifecycle::{RemoteEntry, SyncApplyOutcome, Workspace};
     use capsule_sdk::albums::{AlbumClient, AlbumTransport};
     use capsule_sdk::net::ConnectionClass;
     use capsule_sdk::push::{bundle_blobs, ensure_album, push_bundle};
@@ -1172,7 +1172,7 @@ async fn a_pushed_asset_reaches_the_feed_and_the_entry_decodes_and_verifies() {
         PROTOCOL_VERSION,
     ));
     let scheduler = StagedScheduler::new(
-        capsule_core::import::UploadPolicy::Full,
+        capsule_library::import::UploadPolicy::Full,
         ConnectionClass::Unmetered,
     );
     let report = push_bundle(&uploads, &scheduler, &bundle, &HashSet::new(), false)
@@ -1226,7 +1226,7 @@ async fn a_pushed_asset_reaches_the_feed_and_the_entry_decodes_and_verifies() {
         replan
             .blobs
             .iter()
-            .all(|blob| blob.tier != capsule_core::import::UploadTier::Preview),
+            .all(|blob| blob.tier != capsule_library::import::UploadTier::Preview),
         "a re-push reads the manifest as held from the feed and opens no session for it"
     );
 
@@ -1476,7 +1476,7 @@ async fn e2e_case_4_a_peer_pulls_a_shared_album_through_the_sdk_over_a_socket() 
 async fn the_sdk_fetches_a_custody_receipt_and_verifies_it_under_the_attestation_key() {
     use capsule_core::crypto::hash::hash_bytes;
     use capsule_core::crypto::keys::HybridSigningKey;
-    use capsule_core::library::{BlobRole, ReceiptExpectations, verify_receipt};
+    use capsule_library::library::{BlobRole, ReceiptExpectations, verify_receipt};
     use capsule_sdk::verify::{StorageVerifyClient, VerifyError, VerifyTransport};
 
     let fixture = Fixture::working();

@@ -44,10 +44,10 @@ use std::process::{Command, Output, Stdio};
 use capsule_core::crypto::hash;
 use capsule_core::crypto::primitives::Argon2Params;
 use capsule_core::crypto::provenance::{Action, ProvenanceRecord};
-use capsule_core::db::AssetRow;
-use capsule_core::library::open_library;
-use capsule_core::lifecycle::Workspace;
 use capsule_core::sidecar::{SIDECAR_SCHEMA_V1, SidecarV1};
+use capsule_library::db::AssetRow;
+use capsule_library::library::open_library;
+use capsule_library::lifecycle::Workspace;
 use jiff::Timestamp;
 use uuid::Uuid;
 

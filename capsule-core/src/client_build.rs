@@ -22,7 +22,7 @@
 //! discipline plus a parser for audit tooling and the grammar round-trip test.
 //!
 //! In-repo clients inject only their `client_id` + own `semver` (via
-//! [`Workspace::with_client_id`](crate::lifecycle::Workspace::with_client_id) or the FFI
+//! `Workspace::with_client_id` or the FFI
 //! constructor); the build-embedded commit and dirty flag are appended here so every client on
 //! this tree reports the same commit.
 //!

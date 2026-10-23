@@ -3,7 +3,7 @@ pub(crate) mod detection_method;
 pub(crate) mod gps_datum;
 pub(crate) mod import_mode;
 pub(crate) mod member_role;
-pub(crate) mod model_identity;
+pub mod model_identity;
 pub(crate) mod stack_type;
 
 pub use capture_tz_source::CaptureTzSource;

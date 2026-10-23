@@ -4,7 +4,7 @@ description: The metadata sync feed — cursors, anti-rewind, stale-revival dete
 status: draft
 ---
 
-The sync feed tells a client **what changed**; the [transfer protocol](/design/transfer/) moves the bytes. A client never polls assets individually: it holds one opaque cursor and reads everything after it. Server: `capsule-server::sync`; client: `capsule-sdk::sync`, applied by `capsule-core::lifecycle::sync_apply`.
+The sync feed tells a client **what changed**; the [transfer protocol](/design/transfer/) moves the bytes. A client never polls assets individually: it holds one opaque cursor and reads everything after it. Server: `capsule-server::sync`; client: `capsule-sdk::sync`, applied by `capsule-library::lifecycle::sync_apply`.
 
 ## Discovering What Changed
 

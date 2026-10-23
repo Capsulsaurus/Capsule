@@ -19,8 +19,8 @@
 //! on server-side membership (#405).
 
 use capsule_core::crypto::keys::{DeviceDirectory, SAFETY_CODE_DIGITS};
-use capsule_core::lifecycle::{EnrollmentPayload, Workspace, enrollment_safety_code};
 use capsule_e2e::{Device, FAST_KDF, PASSPHRASE, PASSWORD, PROTOCOL_VERSION, Server};
+use capsule_library::lifecycle::{EnrollmentPayload, Workspace, enrollment_safety_code};
 use capsule_sdk::rest;
 use capsule_sdk::rest::types::{ReauthenticateRequest, RedeemRequest, RelayRequest};
 use tempfile::TempDir;

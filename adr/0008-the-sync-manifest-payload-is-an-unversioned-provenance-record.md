@@ -26,7 +26,7 @@ nothing negotiated with the sending server, because **no released peer** speaks 
 shape: every server and client that speaks this feed is built from this tree. Bytes that
 are not a record are quarantined as `MalformedManifest`, never guessed at. The decode and
 its rationale are in
-[`capsule-core/src/lifecycle/sync_apply.rs`](../capsule-core/src/lifecycle/sync_apply.rs),
+[`capsule-library/src/lifecycle/sync_apply.rs`](../capsule-library/src/lifecycle/sync_apply.rs),
 module docs section "Why the payload carries no version".
 
 ## Consequences

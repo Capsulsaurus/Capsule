@@ -6,7 +6,7 @@ status: draft
 
 All ML runs **client-side**; the server never holds plaintext. The stable contract is [AI Output Containment](#ai-output-containment), the [model inventory](#models-and-algorithms) and [Embedding Provenance](#embedding-provenance); feature lists and model picks are defaults that will move with field testing.
 
-Three categories: [Semantic Indexing](#semantic-indexing) (one global embedding per asset), [Dense Tagging](#dense-tagging) (local embeddings for objects, faces, scenes) and [Quality Assessment](#quality-assessment) (per-asset scores). Orchestration is `capsule-core::ml`, platform runners (CoreML, NNAPI, ONNX Runtime) are in `capsule-sdk`, and the vector index is `capsule-core::db`.
+Three categories: [Semantic Indexing](#semantic-indexing) (one global embedding per asset), [Dense Tagging](#dense-tagging) (local embeddings for objects, faces, scenes) and [Quality Assessment](#quality-assessment) (per-asset scores). Orchestration is `capsule-core::ml`, platform runners (CoreML, NNAPI, ONNX Runtime) are in `capsule-sdk`, and the vector index is the `capsule-core::ml::VectorIndex` port, whose SQLite adapter is `capsule-library::db`.
 
 ## AI Output Containment
 

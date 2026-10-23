@@ -3,7 +3,7 @@
 //! [`SoftwareSigner`] is the software peer of the per-platform hardware backends (Secure
 //! Enclave / StrongBox / TPM): it implements the same [`HardwareSigner`] contract, so the
 //! [`HardwareBackedSigner`](super::HardwareBackedSigner) /
-//! [`create_with_hardware_signer`](crate::lifecycle::Workspace::create_with_hardware_signer)
+//! `create_with_hardware_signer`
 //! path runs unchanged on a device with **no** secure element. The classical Ed25519 key lives
 //! in ordinary process memory, derived deterministically (HKDF-SHA512, per `key_alias`) from a
 //! 32-byte seed the caller is responsible for sealing under the master key — exactly as the
@@ -17,7 +17,7 @@
 //!
 //! For a device that never touches the hardware seam, the simpler path is the fully-software
 //! [`HybridSigningKey`](super::HybridSigningKey) via
-//! [`Workspace::create`](crate::lifecycle::Workspace::create) (both halves in software);
+//! `Workspace::create` (both halves in software);
 //! `SoftwareSigner` exists to drive the hardware-signer seam uniformly across all backends.
 
 use ed25519_dalek::{Signer as _, SigningKey};

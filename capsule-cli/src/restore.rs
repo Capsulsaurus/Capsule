@@ -36,7 +36,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use capsule_core::crypto::hash::Hash32;
 use capsule_core::crypto::provenance::ProvenanceRecord;
-use capsule_core::lifecycle::{
+use capsule_library::lifecycle::{
     LifecycleError, QuarantineReason, RemoteHead, RemoteOriginal, SyncApplyOutcome, Workspace,
 };
 use capsule_sdk::fetch::{BlobSource, FetchError, RangeOutcome, RangedFetcher};

@@ -27,7 +27,7 @@ pub(crate) fn is_raw(ext: &str) -> bool {
 pub(crate) fn is_primary(ext: &str) -> bool {
     PRIMARY_EXTS.contains(&ext.to_lowercase().as_str())
 }
-pub(crate) fn is_video(ext: &str) -> bool {
+pub fn is_video(ext: &str) -> bool {
     VIDEO_EXTS.contains(&ext.to_lowercase().as_str())
 }
 pub(crate) fn is_xmp(ext: &str) -> bool {

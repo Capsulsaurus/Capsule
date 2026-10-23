@@ -88,7 +88,7 @@ impl DefaultAlbumContext {
     /// This context with rule 3 bound to `derived` **if it is not already set**.
     ///
     /// The library is the only authority on the derived de facto album, so a caller that
-    /// assembled the context without one (an [`ImportConfig`](super::ImportConfig) built
+    /// assembled the context without one (an `ImportConfig` (`capsule-library`'s import planner) built
     /// before a workspace was opened) completes it here. An already-bound context is
     /// returned unchanged, so binding twice cannot change the answer.
     #[must_use]

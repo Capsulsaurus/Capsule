@@ -28,7 +28,6 @@ use thiserror::Error;
 use crate::crypto::primitives::DeviceTier;
 use crate::crypto::pwkdf::{self, WrappedSecret};
 use crate::crypto::{CryptoError, kdf, rng};
-use crate::library::KeyPinError;
 
 /// The backup artifact format version.
 ///
@@ -88,23 +87,6 @@ pub enum BackupError {
     /// Underlying cryptographic failure.
     #[error(transparent)]
     Crypto(#[from] CryptoError),
-}
-
-impl From<KeyPinError> for BackupError {
-    fn from(error: KeyPinError) -> Self {
-        match error {
-            KeyPinError::HistoriesDiverge {
-                origin,
-                only_carried,
-                only_local,
-            } => Self::AttestationKeyPinsDiverge {
-                origin,
-                only_carried,
-                only_local,
-            },
-            other => Self::AttestationKeyPins(other.to_string()),
-        }
-    }
 }
 
 // ── Master-key escrow ───────────────────────────────────────────────────────

@@ -8,7 +8,7 @@
 use std::sync::Mutex;
 
 use capsule_core::crypto::hash::Hash32;
-use capsule_core::library::{
+use capsule_library::library::{
     BlobRole, BlobVerdict, ReleaseDecision, ReleaseGate, RetainReason, StorageVerdict,
     StorageVerifier, VerifierError,
 };

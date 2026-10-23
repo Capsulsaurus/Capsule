@@ -30,7 +30,7 @@
 //! underneath it.
 //!
 //! [`verify_asset`]: capsule_core::crypto::verify_asset::verify_asset
-//! [`Workspace`]: capsule_core::lifecycle::Workspace
+//! [`Workspace`]: capsule_library::lifecycle::Workspace
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -43,11 +43,11 @@ use capsule_core::crypto::keys::{
 use capsule_core::crypto::primitives::DeviceTier;
 use capsule_core::crypto::provenance::ProvenanceRecord;
 use capsule_core::crypto::verify_asset::VerifyOutcome;
-use capsule_core::lifecycle::{
+use capsule_core::sidecar::SidecarV1;
+use capsule_library::lifecycle::{
     QuarantineReason, RemoteAssetFacts, RemoteEntry, RemoteHead, RemoteOriginal, SyncApplyOutcome,
     UploadBundle, Workspace, hash_ciphertext_from,
 };
-use capsule_core::sidecar::SidecarV1;
 use uuid::Uuid;
 
 use super::{FfiError, FfiUploadRequest};
@@ -816,8 +816,8 @@ fn discard_staged(staged: &Path) {
 /// The ladder tier's stable lowercase name (`index` / `preview` / `original`) — the same three
 /// rungs the transfer download tier ladder names, so an app's progress UI can key on one vocabulary
 /// in both directions.
-pub(super) fn tier_name(tier: capsule_core::import::UploadTier) -> String {
-    use capsule_core::import::UploadTier;
+pub(super) fn tier_name(tier: capsule_library::import::UploadTier) -> String {
+    use capsule_library::import::UploadTier;
     match tier {
         UploadTier::Index => "index",
         UploadTier::Preview => "preview",

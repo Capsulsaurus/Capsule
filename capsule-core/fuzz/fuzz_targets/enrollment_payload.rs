@@ -2,7 +2,7 @@
 //! that decodes is the one canonical spelling of its value.
 #![no_main]
 
-use capsule_core::lifecycle::EnrollmentPayload;
+use capsule_core::enrollment::EnrollmentPayload;
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {

@@ -12,7 +12,7 @@
 //!   doubles, and a case that passed against them would prove the doubles.
 //! - **The client** is `capsule-sdk` as shipped: every request leaves through the SDK's one
 //!   HTTP client and therefore carries the protocol handshake the server gates on.
-//! - **The library** is a real [`capsule_core::lifecycle::Workspace`] on a temp root, with a
+//! - **The library** is a real [`capsule_library::lifecycle::Workspace`] on a temp root, with a
 //!   fast Argon2id parameter set for the *library* passphrase only (the wrap records its own
 //!   parameters, so nothing under test reads a weaker setting than it would in the field).
 //!
@@ -42,7 +42,7 @@ use std::path::PathBuf;
 use capsule_core::crypto::keys::{DeviceDirectory, DeviceEntry, HybridSigningKey};
 use capsule_core::crypto::primitives::Argon2Params;
 use capsule_core::crypto::provenance::ProvenanceRecord;
-use capsule_core::lifecycle::Workspace;
+use capsule_library::lifecycle::Workspace;
 use capsule_sdk::albums::{AlbumClient, AlbumTransport};
 use capsule_sdk::auth::{AuthClient, Session};
 use capsule_sdk::client::AuthenticatedClient;

@@ -276,12 +276,12 @@ done
 description = "Mutation-test the CRDT, transfer and provenance code (needs cargo-mutants)"
 run = """
 cargo mutants --test-tool nextest --timeout-multiplier 3 \
-  --package capsule-core --package capsule-sdk \
+  --package capsule-core --package capsule-library --package capsule-sdk \
   --file 'capsule-core/src/metadata/crdt/**' \
   --file 'capsule-core/src/crypto/provenance/**' \
-  --file capsule-core/src/lifecycle/provenance.rs \
-  --file capsule-core/src/library/storage_verify.rs \
-  --file capsule-core/src/library/receipts.rs \
+  --file capsule-library/src/lifecycle/provenance.rs \
+  --file capsule-library/src/library/storage_verify.rs \
+  --file capsule-library/src/library/receipts.rs \
   --file capsule-sdk/src/upload.rs \
   {{arg(name='extra', var=true, default='')}}
 """
@@ -307,7 +307,9 @@ run = [
 
 # Boundary gate for the retired architecture (Salvo, GraphQL/gRPC, Progenitor, the legacy
 # media stack). It rejects implicit workspace packages, retired dependencies, buildable
-# manifests under `legacy-review/`, and stale component references.
+# manifests under `legacy-review/`, and stale component references — and it holds the stateless
+# core: `capsule-core` names no `std::fs`, `std::env`, `rusqlite` or `sea_orm`, and depends on no
+# stateful crate (Module Map — Stateless Core).
 #
 # **In `check-rust` since `S-C59`.** It was adopted as a report first, deliberately: the Salvo
 # server and the in-repo media stack were live and stayed that way until the Kynos rebuild reached
@@ -317,7 +319,7 @@ run = [
 # worklist: 63 violations at adoption, 0 now. It is a gate rather than a report from here, so the
 # boundary cannot quietly move back.
 [tasks.architecture-check]
-description = "Verify active-workspace and retired-component boundaries"
+description = "Verify active-workspace, retired-component and stateless-core boundaries"
 run = "cargo run -q -p xtask -- architecture-check"
 
 # Compile the canonical locales/ catalogs into each platform's native i18n format

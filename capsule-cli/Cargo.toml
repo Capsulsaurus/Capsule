@@ -29,6 +29,11 @@ capsule-cli-migration = { path = "./migration" }
 # only for desktop hosts, so it takes the native-code encoders the mobile FFI deliberately does
 # not. Building it needs cmake, a C++17 compiler, libclang and — on x86_64 — nasm.
 capsule-core = { path = "../capsule-core", features = ["media-linked-codecs"] }
+# The local library: the SQLite index, the on-disk library, the `Workspace` and import execution
+# (Module Map — Stateless Core). Its codec pass-throughs are named too, not only core's, so the
+# library's own feature-gated derivative tests run in a workspace build exactly as they did when
+# the pipeline lived in `capsule-core`.
+capsule-library = { path = "../capsule-library", features = ["media-linked-codecs"] }
 # The CLI is a client: every network flow (auth login/refresh/logout, the sync
 # feed) rides `capsule-sdk`, the sanctioned network path — the CLI never
 # hand-rolls a request (S-D5). The CLI is English-only; `capsule-i18n` only renders
@@ -85,6 +90,7 @@ walkdir = "2.5.0"
 # skipped. Cargo unifies this with the unconditional dependency above.
 [target.'cfg(not(windows))'.dependencies]
 capsule-core = { path = "../capsule-core", features = ["media-avif-decode"] }
+capsule-library = { path = "../capsule-library", features = ["media-avif-decode"] }
 
 [dev-dependencies]
 # `tests/oidc_dex.rs` plays the person at the browser against dex (S-N2): it follows the

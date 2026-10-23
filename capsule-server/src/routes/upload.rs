@@ -949,7 +949,7 @@ pub async fn create_upload(
     // other field that contradicts what the request itself establishes.
     //
     // `replace` has no client builder in this tree yet (no `Action::Replace` is constructed
-    // anywhere under `capsule-core/src/lifecycle/`), so whether a replace re-mints its
+    // anywhere under `capsule-library/src/lifecycle/`), so whether a replace re-mints its
     // attribution or inherits it is still open — #475. It is held to the same rule as `create`
     // here because it authors new ciphertext under a fresh file key, which is what makes an
     // author an author on this surface.

@@ -124,13 +124,12 @@ impl ProvenanceRecord {
 
     /// Whether the manifest's `prior_provenance_hash` mirrors the record's, as required.
     ///
-    /// Crate-visible rather than private because the chain walker is no longer the only
-    /// checker: [`apply_remote_entry`](crate::lifecycle::Workspace::apply_remote_entry) decodes
-    /// a record straight off the wire and must run the same check before it trusts either copy.
-    /// provenance.md's *Chained, Append-Only Structure* is explicit that the two copies are
-    /// "a checked invariant, not trusted redundancy", and a checker that lived in one place
-    /// would leave the wire path unchecked.
-    pub(crate) fn mirrors_manifest(&self) -> bool {
+    /// Public because the chain walker is not the only checker: `capsule-library`'s
+    /// `Workspace::apply_remote_entry` decodes a record straight off the wire and must run the
+    /// same check before it trusts either copy. provenance.md's *Chained, Append-Only Structure*
+    /// is explicit that the two copies are "a checked invariant, not trusted redundancy", and a
+    /// checker that lived in one place would leave the wire path unchecked.
+    pub fn mirrors_manifest(&self) -> bool {
         self.manifest.core.prior_provenance_hash == self.prior_provenance_hash
     }
 }

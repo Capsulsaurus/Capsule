@@ -1,7 +1,7 @@
 //! `capsule cull` — the standalone culling command (slice `S-D16`).
 //!
 //! The photographer's review pass, exposed over the landed culling engine (`S-D13`, in
-//! `capsule_core::lifecycle`) and `S-A10`'s durable open plumbing. One invocation runs the
+//! `capsule_library::lifecycle`) and `S-A10`'s durable open plumbing. One invocation runs the
 //! design's loop in order:
 //!
 //! 1. **Flag** — write the trinary `cull` LWW register for the named assets
@@ -21,8 +21,8 @@
 //!
 //! SSoT: [Organization — Culling](https://docs/design/organization/#culling).
 
-use capsule_core::lifecycle::Workspace;
 use capsule_core::sidecar::CullFlag;
+use capsule_library::lifecycle::Workspace;
 use colored::Colorize as _;
 use thiserror::Error;
 use uuid::Uuid;

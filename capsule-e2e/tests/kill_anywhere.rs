@@ -53,7 +53,6 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use capsule_core::lifecycle::Workspace;
 use capsule_e2e::fixtures::synthetic_jpeg_sized;
 use capsule_e2e::killpoints::{self, KillPlan, KillPoint, Phase, Victim};
 use capsule_e2e::processes::{Binaries, Cli, CliOutput, ServerProcess};
@@ -61,6 +60,7 @@ use capsule_e2e::{
     ATTESTATION_KEY_SEED, Device, FAST_KDF, JWT_ED25519_DER, PASSPHRASE, PASSWORD, auth_base_of,
     feed_at,
 };
+use capsule_library::lifecycle::Workspace;
 use capsule_sdk::auth::AuthClient;
 use capsule_sdk::sync::ChangeKind;
 use capsule_server::boot;

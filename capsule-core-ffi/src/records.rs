@@ -4,7 +4,7 @@
 //! mirror types (rather than annotating `capsule-core` directly) keep
 //! `capsule-core` free of FFI concerns and make the boundary contract explicit.
 
-use capsule_core::db::{AlbumRow, AssetRow, AssetStackRow, StackMemberRow};
+use capsule_library::db::{AlbumRow, AssetRow, AssetStackRow, StackMemberRow};
 
 /// A row in the `assets` table — one imported media file.
 ///

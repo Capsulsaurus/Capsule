@@ -31,8 +31,8 @@
 use std::collections::HashSet;
 
 use capsule_core::crypto::hash::Hash32;
-use capsule_core::lifecycle::Workspace;
 use capsule_core::sharing::{OPAQUE_ID_LEN, ShareLinkIssuer as _, ShareScope, SharingError};
+use capsule_library::lifecycle::Workspace;
 use capsule_sdk::share::{ShareClient, ShareError, share_url};
 use colored::Colorize as _;
 use thiserror::Error;

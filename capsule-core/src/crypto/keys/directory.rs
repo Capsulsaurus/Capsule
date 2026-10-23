@@ -15,7 +15,7 @@
 //!
 //! ## Wire presence is signature-visible here
 //!
-//! [`DirectoryCore::signing_bytes`] is the canonical CBOR of the *whole* core, so every field of
+//! `DirectoryCore::signing_bytes` is the canonical CBOR of the *whole* core, so every field of
 //! every [`DeviceEntry`] is inside the IK-signed bytes and field **presence** is part of the
 //! signature — exactly as it is for an [asset manifest](crate::crypto::provenance::AssetManifest).
 //! [`DeviceEntry::dek_public`] is therefore an **absent-key** optional

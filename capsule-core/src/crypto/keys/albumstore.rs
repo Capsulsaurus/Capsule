@@ -4,7 +4,7 @@
 //! Album keys used to be **session-scoped** — minted per `Workspace` and dropped on close — so a
 //! reopened library could neither decrypt nor write its own prior assets. This module is the
 //! durable half of the [key chain](https://docs/design/cryptography/keys/#key-chain) the
-//! [keystore](super::keystore) already provides for device identity keys: `AccountFile` persists
+//! keystore (`Account`) already provides for device identity keys: `AccountFile` persists
 //! the master key (passphrase-wrapped) and the device private keys (master-sealed);
 //! [`AlbumStore`] persists everything below the master key that an album needs.
 //!
@@ -25,8 +25,8 @@
 //!   different plaintexts and leak the keystream.
 //! - **Canonical CBOR, sorted by album id** (and each album's AMK rows by epoch), so the
 //!   plaintext is byte-stable for a given logical state.
-//! - Written **temp-then-rename** ([`tmp_path`]), so a crash mid-write never leaves a
-//!   half-written keystore where the previous good one was.
+//! - Written **temp-then-rename** by `capsule-library`'s `AlbumStoreFile::save`, so a crash
+//!   mid-write never leaves a half-written keystore where the previous good one was.
 //! - The AMK rows reuse the backup artifact's row shape `(album_id, epoch, amk)`, so
 //!   keystore ↔ backup-ledger conversion is a `map`, not a translation table.
 //!
@@ -43,8 +43,6 @@
 //! attests nothing and no peer trusts. The ledger re-verifies on every load, like any other.
 
 use std::collections::BTreeSet;
-use std::fs;
-use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
@@ -56,14 +54,13 @@ use super::master::MasterKey;
 use crate::cbor;
 use crate::crypto::CryptoError;
 use crate::crypto::authority::{AlbumAuthority, Authority, ReferenceAuthority, SignedEpochLedger};
-use crate::utils::paths::tmp_path;
 
 /// The album store's on-disk format version. Bumped only on a breaking layout change; a store
 /// declaring a higher version is refused rather than misread.
 pub(crate) const ALBUM_STORE_VERSION: u16 = 1;
 
 /// The store's filename beneath `{root}/.library/`.
-pub(crate) const ALBUM_STORE_FILE: &str = "albums.cbor";
+pub const ALBUM_STORE_FILE: &str = "albums.cbor";
 
 /// The domain separator an album's server-side key escrow carries ahead of its canonical CBOR,
 /// inside the master-key seal. It keeps an escrowed album from ever opening as any other blob the
@@ -441,11 +438,6 @@ impl AlbumStore {
         }
     }
 
-    /// `{root}/.library/albums.cbor`.
-    pub fn path(root: &Path) -> PathBuf {
-        root.join(".library").join(ALBUM_STORE_FILE)
-    }
-
     /// The persisted albums, sorted by id.
     pub fn albums(&self) -> &[PersistedAlbum] {
         &self.albums
@@ -518,23 +510,13 @@ impl AlbumStore {
         }
     }
 
-    /// Load and unseal the store at `{root}/.library/albums.cbor`.
+    /// Unseal a store from the bytes its file holds.
     ///
-    /// `Ok(None)` means the file does not exist — a **pre-`S-A10` library**, whose album keys
-    /// were session-scoped and were therefore never persisted at all. Such a library opens with
-    /// zero albums; its assets are recoverable only through a backup artifact (see
-    /// [`Workspace::import_backup`](crate::lifecycle::Workspace::import_backup)). This is not a
-    /// regression — those assets were already undecryptable across a restart before this module
-    /// existed — but it is a real, permanent limitation of libraries created before it.
-    #[tracing::instrument(skip_all, fields(root = %root.display()))]
-    pub fn load(root: &Path, master: &MasterKey) -> Result<Option<Self>> {
-        let path = Self::path(root);
-        if !path.exists() {
-            tracing::debug!(path = %path.display(), "album store: absent");
-            return Ok(None);
-        }
-        let sealed = fs::read(&path).map_err(|e| AlbumStoreError::Io(e.to_string()))?;
-        let plaintext = master.open(&sealed)?;
+    /// Refuses bytes the master key did not seal and a store declaring a newer format version.
+    /// Reading those bytes from `{root}/.library/albums.cbor` is `capsule-library`'s business.
+    #[tracing::instrument(skip_all, fields(sealed_bytes = sealed.len()))]
+    pub fn open_sealed(sealed: &[u8], master: &MasterKey) -> Result<Self> {
+        let plaintext = master.open(sealed)?;
         let store: Self =
             cbor::from_slice(&plaintext).map_err(|e| AlbumStoreError::Cbor(e.to_string()))?;
         if store.version > ALBUM_STORE_VERSION {
@@ -556,13 +538,14 @@ impl AlbumStore {
                 "album store: album restored"
             );
         }
-        Ok(Some(store))
+        Ok(store)
     }
 
-    /// Seal and durably replace the store. Temp-then-rename, so a crash mid-write leaves the
-    /// previous good keystore intact rather than a truncated one.
-    #[tracing::instrument(skip_all, fields(root = %root.display(), albums = self.albums.len()))]
-    pub fn save(&self, root: &Path, master: &MasterKey) -> Result<()> {
+    /// Seal the store for persistence: canonical CBOR, albums sorted by id and normalized, at the
+    /// current format version, under the master key. Writing the bytes durably is
+    /// `capsule-library`'s business.
+    #[tracing::instrument(skip_all, fields(albums = self.albums.len()))]
+    pub fn seal(&self, master: &MasterKey) -> Result<Vec<u8>> {
         let mut canonical = self.clone();
         canonical.version = ALBUM_STORE_VERSION;
         canonical
@@ -574,28 +557,17 @@ impl AlbumStore {
         let plaintext =
             cbor::to_canonical_vec(&canonical).map_err(|e| AlbumStoreError::Cbor(e.to_string()))?;
         let sealed = master.seal(&plaintext);
-
-        let path = Self::path(root);
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|e| AlbumStoreError::Io(e.to_string()))?;
-        }
-        let tmp = tmp_path(&path);
-        fs::write(&tmp, &sealed).map_err(|e| AlbumStoreError::Io(e.to_string()))?;
-        fs::rename(&tmp, &path).map_err(|e| AlbumStoreError::Io(e.to_string()))?;
-        tracing::info!(
-            path = %path.display(),
+        tracing::debug!(
             sealed_bytes = sealed.len(),
             epochs = canonical.albums.iter().map(|a| a.amks.len()).sum::<usize>(),
-            "album store: persisted"
+            "album store: sealed"
         );
-        Ok(())
+        Ok(sealed)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use tempfile::TempDir;
-
     use super::*;
     use crate::crypto::keys::AmkVersion;
 
@@ -641,19 +613,17 @@ mod tests {
 
     #[test]
     fn album_store_round_trips_under_master_key() {
-        let dir = TempDir::new().unwrap();
         let master = MasterKey::generate();
         let (store, writable, recovered) = fixture();
-        store.save(dir.path(), &master).unwrap();
+        let sealed = store.seal(&master).unwrap();
 
-        // The sealed file is not the plaintext.
-        let on_disk = fs::read(AlbumStore::path(dir.path())).unwrap();
+        // The sealed bytes are not the plaintext.
         assert!(
-            !on_disk.windows(32).any(|w| w == [7u8; 32]),
+            !sealed.windows(32).any(|w| w == [7u8; 32]),
             "a raw AMK must never appear in the sealed file"
         );
 
-        let back = AlbumStore::load(dir.path(), &master).unwrap().unwrap();
+        let back = AlbumStore::open_sealed(&sealed, &master).unwrap();
         assert_eq!(back.version, ALBUM_STORE_VERSION);
         assert_eq!(back.albums().len(), 2);
 
@@ -697,22 +667,18 @@ mod tests {
 
     #[test]
     fn album_store_rejects_wrong_master_key() {
-        let dir = TempDir::new().unwrap();
         let master = MasterKey::generate();
-        fixture().0.save(dir.path(), &master).unwrap();
+        let mut bytes = fixture().0.seal(&master).unwrap();
 
-        let err = AlbumStore::load(dir.path(), &MasterKey::generate()).unwrap_err();
+        let err = AlbumStore::open_sealed(&bytes, &MasterKey::generate()).unwrap_err();
         assert!(
             matches!(err, AlbumStoreError::Crypto(CryptoError::Auth(_))),
             "wrong master key must authenticate-fail, got {err:?}"
         );
 
         // Tampering with a sealed byte is equally rejected (AES-GCM tag).
-        let path = AlbumStore::path(dir.path());
-        let mut bytes = fs::read(&path).unwrap();
         *bytes.last_mut().unwrap() ^= 0x01;
-        fs::write(&path, &bytes).unwrap();
-        assert!(AlbumStore::load(dir.path(), &master).is_err());
+        assert!(AlbumStore::open_sealed(&bytes, &master).is_err());
     }
 
     /// The sealed bytes differ every write (fresh nonce — the whole reason this does not reuse
@@ -751,26 +717,13 @@ mod tests {
             "insertion order must not change the canonical plaintext"
         );
 
-        // And the sealed file *is* fresh-nonced: two saves of identical state differ.
-        let dir = TempDir::new().unwrap();
+        // And the sealed bytes *are* fresh-nonced: two seals of identical state differ.
         let master = MasterKey::generate();
-        ordered.save(dir.path(), &master).unwrap();
-        let first = fs::read(AlbumStore::path(dir.path())).unwrap();
-        ordered.save(dir.path(), &master).unwrap();
-        let second = fs::read(AlbumStore::path(dir.path())).unwrap();
+        let first = ordered.seal(&master).unwrap();
+        let second = ordered.seal(&master).unwrap();
         assert_ne!(
             first, second,
             "the store is rewritten on every album mutation, so the nonce MUST be fresh per seal"
-        );
-    }
-
-    #[test]
-    fn album_store_load_returns_none_for_a_library_that_never_had_one() {
-        let dir = TempDir::new().unwrap();
-        assert!(
-            AlbumStore::load(dir.path(), &MasterKey::generate())
-                .unwrap()
-                .is_none()
         );
     }
 
@@ -890,7 +843,6 @@ mod tests {
     #[cfg(not(feature = "mls"))]
     #[test]
     fn mls_authority_state_on_a_non_mls_build_is_a_typed_error() {
-        let dir = TempDir::new().unwrap();
         let master = MasterKey::generate();
         let album_id = Uuid::from_u128(0xC0FFEE);
 
@@ -901,10 +853,10 @@ mod tests {
             vec![(album_id, 1, [3; 32])],
             Some(PersistedAuthority::OpenMls(ByteBuf::from(vec![1, 2, 3, 4]))),
         ));
-        store.save(dir.path(), &master).unwrap();
+        let sealed = store.seal(&master).unwrap();
 
         // The store still loads — the album is present, only its authority is unusable here.
-        let back = AlbumStore::load(dir.path(), &master).unwrap().unwrap();
+        let back = AlbumStore::open_sealed(&sealed, &master).unwrap();
         let album = back.get(&album_id).unwrap();
         match album
             .authority
@@ -922,17 +874,14 @@ mod tests {
 
     #[test]
     fn a_store_from_a_newer_format_version_is_refused_not_misread() {
-        let dir = TempDir::new().unwrap();
         let master = MasterKey::generate();
         let mut store = AlbumStore::new();
         store.version = ALBUM_STORE_VERSION + 1;
-        // `save` normalizes the version, so write the sealed bytes by hand.
+        // `seal` normalizes the version, so seal the bytes by hand.
         let plaintext = cbor::to_canonical_vec(&store).unwrap();
-        fs::create_dir_all(dir.path().join(".library")).unwrap();
-        fs::write(AlbumStore::path(dir.path()), master.seal(&plaintext)).unwrap();
 
         assert!(matches!(
-            AlbumStore::load(dir.path(), &master).unwrap_err(),
+            AlbumStore::open_sealed(&master.seal(&plaintext), &master).unwrap_err(),
             AlbumStoreError::UnsupportedVersion(v) if v == ALBUM_STORE_VERSION + 1
         ));
     }

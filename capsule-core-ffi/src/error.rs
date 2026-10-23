@@ -28,9 +28,9 @@ pub enum CatalogError {
     ViewLocked,
 }
 
-impl From<capsule_core::library::GatedQueryError> for CatalogError {
-    fn from(e: capsule_core::library::GatedQueryError) -> Self {
-        use capsule_core::library::{GateError, GatedQueryError};
+impl From<capsule_library::library::GatedQueryError> for CatalogError {
+    fn from(e: capsule_library::library::GatedQueryError) -> Self {
+        use capsule_library::library::{GateError, GatedQueryError};
         match e {
             // Every gate refusal is a refusal: `GateError::Auth` cannot actually reach a
             // *query* (the gated read is a pure state check that never challenges the

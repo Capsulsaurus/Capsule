@@ -1,5 +1,5 @@
-use capsule_core::db::{CachedRepresentationRow, DatabaseDriver};
-use capsule_core::library::cache_sweep;
+use capsule_library::db::{CachedRepresentationRow, DatabaseDriver};
+use capsule_library::library::cache_sweep;
 
 use super::*;
 
@@ -121,7 +121,7 @@ fn upload_policy_stages_exactly_when_bulk_defers() {
 /// on a usable path.
 #[test]
 fn a_plans_scheduler_opens_bulk_tiers_exactly_when_bulk_is_not_deferred() {
-    use capsule_core::import::UploadTier;
+    use capsule_library::import::UploadTier;
 
     use crate::staged::StagedScheduler;
 

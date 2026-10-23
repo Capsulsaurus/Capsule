@@ -15,9 +15,9 @@
 use capsule_cli::remote::{self, PushOptions, RemoteConfig};
 use capsule_cli::session::SessionStore;
 use capsule_cli::verify::{AssetVerifyStatus, VerifyOptions};
-use capsule_core::library::load_attestations;
 use capsule_e2e::fixtures::synthetic_jpeg;
 use capsule_e2e::{Device, PROTOCOL_VERSION, Server};
+use capsule_library::library::load_attestations;
 use capsule_sdk::verify::{StorageVerifyClient, VerifyTransport};
 
 #[tokio::test]

@@ -7,12 +7,12 @@
 //! plane's pure predicates:
 //!
 //! 1. **Durability.** [`StorageVerifyClient::verify`] calls `POST /storage/verify` and maps the
-//!    response into [`capsule_core::library::StorageVerdict`]; the gate applies
-//!    [`capsule_core::library::release_is_safe`], which re-checks every declared blob rather
+//!    response into [`capsule_library::library::StorageVerdict`]; the gate applies
+//!    [`capsule_library::library::release_is_safe`], which re-checks every declared blob rather
 //!    than trusting the server's aggregate.
 //! 2. **Accountability.** [`StorageVerifyClient::fetch_receipt`] fetches the write's
 //!    [`CustodyReceipt`] and
-//!    [`capsule_core::library::verify_receipt`] checks the hybrid signature under the pinned
+//!    [`capsule_library::library::verify_receipt`] checks the hybrid signature under the pinned
 //!    attestation key plus a field match against what the client sent. A server that withholds
 //!    receipts never becomes the sole holder of an only-copy.
 //! 3. **Crypto validity.** `verify_asset` (the caller's offline check) must have accepted the
@@ -24,7 +24,7 @@
 //!
 //! [`ReleaseCoordinator`] composes the three and enforces the **60-second re-verify window**:
 //! the verdict is a point-in-time fact, so a verdict older than the window is re-fetched before
-//! release. The result is a [`capsule_core::library::ReleaseDecision`]; a non-`Release` outcome
+//! release. The result is a [`capsule_library::library::ReleaseDecision`]; a non-`Release` outcome
 //! never destroys — the caller retains the local copy, retries with backoff, and surfaces
 //! "not yet confirmed on server". Streaming import (`S-B3`) drives this per asset in its
 //! import→upload→verify→release window.
@@ -41,11 +41,11 @@ use capsule_core::crypto::storage_attestation::{
     ATTESTATION_NONCE_LEN, AttestationNonce, AttestationRejection, DeclaredAsset,
     StorageAttestation, verify_storage_attestation,
 };
-use capsule_core::library::{
+use capsule_library::library::{
     BlobRole, BlobVerdict, CustodyReceipt, ReceiptExpectations, ReleaseDecision, RetainReason,
     StorageVerdict, StorageVerifier, VerifierError, release_is_safe, verify_receipt,
 };
-use capsule_core::lifecycle::UploadBundle;
+use capsule_library::lifecycle::UploadBundle;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, instrument, warn};
 use uuid::Uuid;
@@ -471,7 +471,7 @@ impl StorageVerifyClient {
 
     /// `GET /upload/{id}/receipt`: the session-window custody-receipt fetch (pairs with lost-ACK
     /// recovery). Returns the decoded, signed receipt — verify it with
-    /// [`capsule_core::library::verify_receipt`] before trusting it.
+    /// [`capsule_library::library::verify_receipt`] before trusting it.
     ///
     /// The server serves the receipt as `application/cbor`: the body **is** the signed canonical
     /// encoding, so it is decoded from the bytes as they arrived and never round-trips through
@@ -513,7 +513,7 @@ impl StorageVerifyClient {
     /// Fetch the server's published attestation-key history from
     /// `GET {origin}/.well-known/capsule/attestation-keys`. This only fetches: the caller checks
     /// the result against the history it pinned for the server before trusting it
-    /// (`capsule_core::library::pin_attestation_keys` — TOFU on first contact, append-only
+    /// (`capsule_library::library::pin_attestation_keys` — TOFU on first contact, append-only
     /// after). Every published key is returned so a receipt's `server_key_id` resolves against the whole
     /// history — a pre-rotation receipt still verifies.
     ///
@@ -754,7 +754,7 @@ impl<C: ReleaseClock> ReleaseCoordinator<C> {
     }
 
     /// The verified custody receipt for a write, for the caller to persist beside the provenance
-    /// chain (`capsule_core::library::append_receipt`) — evidence, not a cache. Returns the
+    /// chain (`capsule_library::library::append_receipt`) — evidence, not a cache. Returns the
     /// receipt only when it verifies under a pinned attestation key with matching fields.
     #[instrument(skip_all, fields(%upload_id))]
     pub async fn fetch_verified_receipt(
@@ -795,7 +795,7 @@ impl<C: ReleaseClock> ReleaseCoordinator<C> {
     /// Fetch the server-side facts the release gate needs for each of `releases`, and hand
     /// them back as a [`CustodyVerifier`] — the production
     /// [`StorageVerifier`] the offline data plane's gate
-    /// ([`Workspace::release_move_source`](capsule_core::lifecycle::Workspace::release_move_source))
+    /// ([`Workspace::release_move_source`](capsule_library::lifecycle::Workspace::release_move_source))
     /// consults synchronously.
     ///
     /// Per asset: a verdict fresh within the re-verify window over its declared blobs, then —
@@ -892,7 +892,7 @@ pub struct HeldRelease {
 impl HeldRelease {
     /// The blobs a release of `bundle`'s original waits on: the original ciphertext and, when
     /// the head binds one, the sealed metadata blob — in the order
-    /// [`Workspace::release_move_source`](capsule_core::lifecycle::Workspace::release_move_source)
+    /// [`Workspace::release_move_source`](capsule_library::lifecycle::Workspace::release_move_source)
     /// declares them.
     #[must_use]
     pub fn for_original(bundle: &UploadBundle) -> Self {

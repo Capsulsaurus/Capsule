@@ -5,13 +5,13 @@
 //!
 //! - the `registry` — the **canonical model inventory** (one v1-committed row per task) and the
 //!   **embedding-provenance invariant** (every embedding carries `(model_id, model_version)`;
-//!   the [vector index](crate::db::EmbeddingInsert) refuses inserts from **unknown** models, while a
+//!   the [vector index](crate::ml::EmbeddingInsert) refuses inserts from **unknown** models, while a
 //!   *superseded-but-known* version is admitted as a stale-flagged row and excluded from
 //!   queries until regenerated). It owns the version-bump [swap
 //!   primitive](Registry::bump_version);
 //! - the `regen` loop — the background per-asset **regeneration orchestration** that consumes
 //!   the staleness a swap creates: it walks
-//!   [`stale_embedding_assets`](crate::db::DatabaseDriver::stale_embedding_assets) and re-embeds
+//!   [`stale_embedding_assets`](crate::ml::VectorIndex::stale_embedding_assets) and re-embeds
 //!   each asset at the new canonical version through an injected [`Embedder`]
 //!   seam, resumably and per-asset (never a global truncate). The production implementor is
 //!   [`RunnerEmbedder`], which rebuilds the derived index by re-reading
@@ -29,7 +29,7 @@
 //!   ([platform-partition fallback](orchestrator::resolve_partition)), and write zero-shot
 //!   [AI tags](orchestrator::auto_tag) into `tags_ai` as a signed metadata update through the
 //!   [`AiTagSink`] seam — implemented by
-//!   [`Workspace`](crate::lifecycle::Workspace), named as a trait so `ml` does not import
+//!   `Workspace`, named as a trait so `ml` does not import
 //!   `lifecycle` (which imports `ml`); plus the device-bound batching/thermal policy.
 //!
 //! Real per-platform inference is deferred behind the [`Embedder`] /
@@ -38,15 +38,20 @@
 //! with `ReferenceAuthority` standing in; the deterministic
 //! [`DeterministicEmbedder`] and
 //! [`FixtureRunner`] drive every path with no model weights. The local
-//! vector index lives in the crate-private `db::vector`. No model weights are committed to this repository.
+//! vector index is the [`VectorIndex`] port; its SQLite adapter is `capsule-library`'s catalog. No model weights are committed to this repository.
 //!
 //! [AI/ML Integrations]: https://docs/design/ai/
 
+mod index;
 mod orchestrator;
 mod regen;
 mod registry;
 mod runner;
 
+pub use index::{
+    EmbeddingInsert, EmbeddingProvenance, EmbeddingRecord, KnnHit, VectorIndex, VectorIndexError,
+    VectorTableSpec,
+};
 pub use orchestrator::{
     AiTagSink, AssetSource, BatchMode, CANONICAL_PARTITION, KnownAnswer, MICRO_BATCH_SIZES,
     OrchestratorError, StoreError, auto_tag, choose_batch_mode, embed_and_store, micro_batch_size,

@@ -13,12 +13,12 @@ use std::path::PathBuf;
 
 use capsule_core::crypto::keys::{HybridVerifyingKey, MasterKey};
 use capsule_core::crypto::primitives::{Argon2Params, DeviceTier};
-use capsule_core::import::UploadPolicy;
-use capsule_core::library::{
+use capsule_library::import::UploadPolicy;
+use capsule_library::library::{
     KeyPinError, ReleaseDecision, RetainReason, StorageVerdict, StorageVerifier,
     pin_attestation_keys,
 };
-use capsule_core::lifecycle::{LifecycleError, ResealRefusal, Workspace};
+use capsule_library::lifecycle::{LifecycleError, ResealRefusal, Workspace};
 use capsule_sdk::albums::{AlbumClient, AlbumTransport};
 use capsule_sdk::auth::{AuthClient, AuthError, LoginOutcome, Session};
 use capsule_sdk::client::AuthenticatedClient;
@@ -1148,7 +1148,7 @@ enum AssetError {
     Push(#[from] PushError),
     /// A verified receipt could not be written to the library.
     #[error("the custody receipt could not be stored in the library: {0}")]
-    ReceiptStore(#[from] capsule_core::library::ReceiptStoreError),
+    ReceiptStore(#[from] capsule_library::library::ReceiptStoreError),
     /// The server refused the asset's create and the library could not re-seal it at the
     /// album's current epoch (issue #822). When this device holds no newer epoch than the one
     /// the asset is sealed under, nothing says the epoch was why the server refused it (a
@@ -1578,7 +1578,7 @@ fn server_origin(endpoint: &str) -> Result<String, RemoteError> {
 /// Fetch the server's published attestation-key history and check it against the history this
 /// library pinned for the server's origin: pinned on first contact, re-pinned when only
 /// extended, refused when a pinned key was dropped or replaced
-/// ([`capsule_core::library::pin_attestation_keys`]). The returned pinned history is what every
+/// ([`capsule_library::library::pin_attestation_keys`]). The returned pinned history is what every
 /// receipt and signed attestation of the run is verified under.
 async fn pinned_attestation_keys(
     remote: &RemoteConfig,
@@ -1735,7 +1735,7 @@ impl AssetPusher<'_> {
             .asset(&asset_id)
             .map(|asset| asset.capture_utc);
         for receipt in &custody.receipts {
-            capsule_core::library::append_receipt(self.workspace.root(), capture_utc, receipt)?;
+            capsule_library::library::append_receipt(self.workspace.root(), capture_utc, receipt)?;
             outcome.receipts += 1;
         }
         tracing::info!(
@@ -1749,7 +1749,7 @@ impl AssetPusher<'_> {
     /// Drive one bundle's ladder against server truth.
     async fn push_bundle(
         &self,
-        bundle: &capsule_core::lifecycle::UploadBundle,
+        bundle: &capsule_library::lifecycle::UploadBundle,
     ) -> Result<push::AssetPushReport, PushError> {
         push::push_bundle(
             &self.upload,
@@ -2570,7 +2570,7 @@ mod tests {
         .unwrap();
         let album = ws.default_album_id();
         ws.ensure_album(album, "Imports").unwrap();
-        let opts = capsule_core::lifecycle::SignedImportOptions {
+        let opts = capsule_library::lifecycle::SignedImportOptions {
             move_source: true,
             defer_source_release: true,
             stack: None,
@@ -2600,17 +2600,17 @@ mod tests {
             &self,
             asset_id: Uuid,
             blob_hashes: &[capsule_core::crypto::hash::Hash32],
-        ) -> Result<capsule_core::library::StorageVerdict, capsule_core::library::VerifierError>
+        ) -> Result<capsule_library::library::StorageVerdict, capsule_library::library::VerifierError>
         {
             let durable = self.0.contains(&asset_id);
-            Ok(capsule_core::library::StorageVerdict {
+            Ok(capsule_library::library::StorageVerdict {
                 asset_id,
                 durable,
                 blobs: blob_hashes
                     .iter()
-                    .map(|hash| capsule_core::library::BlobVerdict {
+                    .map(|hash| capsule_library::library::BlobVerdict {
                         hash: *hash,
-                        role: capsule_core::library::BlobRole::Original,
+                        role: capsule_library::library::BlobRole::Original,
                         stored: durable,
                         indexed: durable,
                         retrievable: durable,
@@ -2624,7 +2624,7 @@ mod tests {
             &self,
             asset_id: Uuid,
             _blob_hashes: &[capsule_core::crypto::hash::Hash32],
-        ) -> Result<bool, capsule_core::library::VerifierError> {
+        ) -> Result<bool, capsule_library::library::VerifierError> {
             Ok(self.0.contains(&asset_id))
         }
     }
@@ -2691,8 +2691,8 @@ mod tests {
         assert_eq!(
             roles,
             vec![
-                capsule_core::library::BlobRole::Original,
-                capsule_core::library::BlobRole::Metadata
+                capsule_library::library::BlobRole::Original,
+                capsule_library::library::BlobRole::Metadata
             ]
         );
     }
@@ -2935,7 +2935,7 @@ mod tests {
         let other_album = Uuid::now_v7();
         ws.ensure_album(full_album, "Full").unwrap();
         ws.ensure_album(other_album, "Other").unwrap();
-        let opts = capsule_core::lifecycle::SignedImportOptions {
+        let opts = capsule_library::lifecycle::SignedImportOptions {
             move_source: false,
             defer_source_release: false,
             stack: None,

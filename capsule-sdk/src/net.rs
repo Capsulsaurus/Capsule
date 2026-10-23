@@ -17,7 +17,7 @@
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
-use capsule_core::import::UploadTier;
+use capsule_library::import::UploadTier;
 use tracing::instrument;
 
 pub mod negotiation;

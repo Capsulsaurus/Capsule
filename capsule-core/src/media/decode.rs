@@ -313,9 +313,9 @@ pub fn decode_guarded(
 
 /// Run any fallible step of the still pipeline behind the same unwind boundary.
 ///
-/// `pub(crate)` rather than `pub`: `lifecycle` is the only caller and no client of this crate has
-/// pixels of its own to run through it, so exporting it would widen the frozen surface for
-/// nothing.
+/// Public because its one caller, the derivative pipeline in `capsule-library`'s `lifecycle`, is
+/// in another crate; the `catch_unwind` itself stays here, the one module the stateless core
+/// sanctions it in.
 ///
 /// Not just for `decode` — that is not the only third-party code the import path runs over pixels:
 /// the placeholder goes through `chromahash` (also pre-1.0) and the derivative through
@@ -325,7 +325,7 @@ pub fn decode_guarded(
 ///
 /// `AssertUnwindSafe` is sound for the callers here: each closure borrows shared slices and
 /// stateless values, so a caught unwind cannot leave a Capsule-owned invariant torn.
-pub(crate) fn guarded<T>(
+pub fn guarded<T>(
     stage: &'static str,
     step: impl FnOnce() -> Result<T, MediaError>,
 ) -> Result<T, MediaError> {

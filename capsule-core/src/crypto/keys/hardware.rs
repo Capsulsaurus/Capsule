@@ -167,16 +167,18 @@ impl Signer for HardwareBackedSigner {
 }
 
 /// An in-memory stand-in for a secure element. Test-only; a real element keeps the Ed25519 key
-/// in hardware. Shared with the lifecycle tests, so it lives outside the `tests` module.
-#[cfg(test)]
-pub(crate) struct MockHardwareSigner {
+/// in hardware. Shared with the lifecycle tests, so it lives outside the `tests` module and is
+/// exported under `test-support` for `capsule-library`'s.
+#[cfg(any(test, feature = "test-support"))]
+pub struct MockHardwareSigner {
     ed: ed25519_dalek::SigningKey,
     exportable: bool,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl MockHardwareSigner {
-    pub(crate) fn new(ed_seed: [u8; 32], exportable: bool) -> Self {
+    /// A mock element over `scalar`/`seed`; `exportable` makes it fail the non-exportability assertion.
+    pub fn new(ed_seed: [u8; 32], exportable: bool) -> Self {
         Self {
             ed: ed25519_dalek::SigningKey::from_bytes(&ed_seed),
             exportable,
@@ -184,7 +186,7 @@ impl MockHardwareSigner {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl HardwareSigner for MockHardwareSigner {
     fn enroll(&self, alias: String) -> Result<Vec<u8>, HardwareSignerError> {
         self.classical_public_key(alias)

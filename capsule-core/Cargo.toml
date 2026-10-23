@@ -11,13 +11,15 @@ publish.workspace = true
 # (ADR-0005).
 
 [features]
-# `native` (default) is the on-device library/import/lifecycle surface: it links SQLite,
-# the filesystem, and the media stack. Turning it OFF (`--no-default-features`) leaves only
-# the WASM sealing surface (`cbor` + `crypto` + `drop`), which targets
-# `wasm32-unknown-unknown` for the guest web-upload client (see `drop::seal_drop`). Build:
+# `native` (default) is the surface the on-device library (`capsule-library`) builds on: the
+# sidecar, CRDT, import, ML and notification logic, OpenMLS and the media stack. It holds no
+# local state — that is `capsule-library`'s (Module Map — Stateless Core). Turning it OFF
+# (`--no-default-features`) leaves only the WASM sealing surface (`cbor` + `crypto` + `drop`),
+# which targets `wasm32-unknown-unknown` for the guest web-upload client (see
+# `drop::seal_drop`). Build:
 #   cargo build -p capsule-core --target wasm32-unknown-unknown --no-default-features
 default = ["native"]
-native = ["dep:rusqlite", "dep:sqlite-vec", "mls", "media"]
+native = ["mls", "media"]
 # `media` links the still-image decode/encode stack (`capsule_core::media`, slices `S-B1`/`S-B13`)
 # over `rawshift-image`. Implied by `native`, so the CLI, the tests and the mobile FFI all carry
 # decoders; **excluded** from the `wasm32-unknown-unknown` sealing build (`--no-default-features`),
@@ -83,9 +85,9 @@ mls = [
     "dep:openmls_memory_storage",
 ]
 # `test-support` exposes the entry points that let a caller choose the backup artifact's Argon2id
-# wrap cost (`backup::export_with_params`, `backup::export_with_salt_and_params`,
-# `Workspace::export_backup_with_params`). **Never in `default`, and never in a shipping
-# manifest.** A weak cost there produces a brute-forceable backup and nothing downstream
+# wrap cost (`backup::export_with_params`, `backup::export_with_salt_and_params`; the Workspace
+# verb over them is `capsule-library`'s `test-support`). **Never in `default`, and never in a
+# shipping manifest.** A weak cost there produces a brute-forceable backup and nothing downstream
 # re-checks it — `pwkdf::derive_wrap_key` accepts anything `argon2::Params::new` validates — so
 # the ability to ask for one is a compile-time capability a reviewer can see in a manifest diff,
 # not a documented convention. `capsule-core`'s own tests reach the same items through
@@ -93,11 +95,6 @@ mls = [
 # keeps out of every build that is not building tests. Enables no dependency and changes no
 # production code path.
 test-support = []
-# `tpm` builds the desktop (Linux/Windows) TPM 2.0 reference `HardwareSigner` (see
-# `crypto::keys::tpm`). Off by default and never built in CI: tss-esapi links the system
-# `libtss2` and exercising it needs a real TPM or a software TPM (swtpm). Compile on a
-# TPM-capable host with `--features tpm`.
-tpm = ["dep:tss-esapi"]
 # `inference` gates the real per-platform model runners behind the `ml::ModelRunner` seam
 # (`ml/runner.rs`, `ml/orchestrator.rs`). It is **empty today and enables nothing** — that is
 # deliberate rather than an oversight. Four doc comments already describe the runners as riding a
@@ -181,20 +178,12 @@ rawshift-image = { version = "0.1.1", default-features = false, features = [
 # `avif-native` already resolves, so the graph gains no crate. See `media::decode`.
 dav1d = { version = "0.11.1", optional = true }
 mp4parse = { version = "0.17.0", optional = true }
-# Bundled SQLite (C) — the on-device library index. Optional + gated by `native` because it
-# cannot target `wasm32-unknown-unknown`; the WASM sealing build drops it.
-rusqlite = { version = "0.32", features = ["bundled"], optional = true }
-# The client-local embedding index: `sqlite-vec`'s `vec0` virtual tables over `library.sqlite`.
-# Optional + gated by `native` alongside `rusqlite` (it registers as a SQLite auto-extension and
-# cannot target `wasm32-unknown-unknown`); the WASM sealing build drops it. See `db::vector`.
-sqlite-vec = { version = "0.1.9", optional = true }
 serde = { workspace = true }
 serde_bytes = "0.11"     # CBOR byte-string (de)serialization for keys/signatures
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tzf-rs = "0.4"
 uuid = { workspace = true, features = ["v4", "v7", "serde"] }
-walkdir = "2"
 sha2 = { workspace = true }
 hex = { workspace = true }
 
@@ -239,7 +228,7 @@ tracing = { workspace = true }
 # From 0.9 the X-Wing suite sits behind `draft-ietf-mls-pq-ciphersuites`. It is enabled on the
 # four leaf crates, not on `openmls`: openmls's own feature names `openmls_sqlite_storage?/…`, and
 # Cargo's resolver then pulls that optional crate's rusqlite 0.37 into the `links = "sqlite3"`
-# check, where it conflicts with this crate's rusqlite 0.32. openmls's feature only adds the PQ
+# check, where it conflicts with `capsule-library`'s rusqlite 0.32. openmls's feature only adds the PQ
 # suites to its *default* leaf capabilities, which `openmls_authority::pinned_capabilities` sets
 # explicitly instead.
 openmls = { version = "0.9.1", default-features = false, features = [
@@ -253,38 +242,10 @@ openmls_basic_credential = { version = "0.6", features = ["draft-ietf-mls-pq-cip
 # Same version the libcrux provider already pulls transitively; host-only alongside the rest of `mls`.
 openmls_memory_storage = { version = "0.6.0", features = ["draft-ietf-mls-pq-ciphersuites"], optional = true }
 
-# ── TPM (optional; `tpm` feature) — desktop reference HardwareSigner ─────────
-# RustCrypto-adjacent bindings to the TPM 2.0 Enhanced System API (links system
-# `libtss2`). Optional + off by default so neither the default nor the mobile FFI
-# build pulls in the TPM stack. See `crypto::keys::tpm`.
-tss-esapi = { version = "7", optional = true }
-
 # NFC for user labels (`sidecar::normalize_label`; Organization — Labels): one normalizer for
 # asset, region, stack and album labels, so a label typed on two platforms is one label. Pure
 # Rust, no dependencies of its own beyond `tinyvec`, already in the lock file transitively.
 unicode-normalization = "0.1.25"
-
-# ── Free-space probe (native `library::space`) ─────────────────────────────
-# The streaming-import free-space probe (`library::available_bytes`, slice S-B3) is a thin
-# `statvfs` / `GetDiskFreeSpaceEx` wrapper. rustix gives the pure-Rust POSIX `statvfs(2)`
-# on Unix (no libc link, aligned with the rustls/no-openssl ethos); windows-sys exposes the
-# Win32 `GetDiskFreeSpaceExW`. Both are host-only — the `library` module is behind `native`,
-# so the wasm32 sealing build (target below) links neither. See the Dependencies design doc.
-[target.'cfg(unix)'.dependencies]
-rustix = { version = "1", features = ["fs"] }
-
-# `Win32_System_TpmBaseServices` adds the TBS (TPM Base Services) surface —
-# `Tbsi_Context_Create` / `Tbsip_Submit_Command` / `Tbsi_Is_Tpm_Present` — the Windows path of
-# the desktop TPM 2.0 `HardwareSigner` (`crypto::keys::tbs`, slice S-F4). TBS is the raw TPM
-# command channel the tss-esapi reference (`crypto::keys::tpm`) wraps on Linux; on Windows the
-# adapter marshals the TPM 2.0 commands itself and submits them through `tbs.dll` (raw-dylib —
-# no import library, so the crate cross-`check`s for `x86_64-pc-windows-msvc` off-Windows).
-[target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.60", features = [
-    "Win32_Storage_FileSystem",
-    "Win32_Foundation",
-    "Win32_System_TpmBaseServices",
-] }
 
 # On wasm32 the OS CSPRNG has no default backend. `crypto::rng` uses getrandom 0.3 directly
 # (Web Crypto via the `wasm_js` feature + `--cfg getrandom_backend="wasm_js"`, set for this
@@ -313,7 +274,3 @@ rawshift-image = { version = "0.1.1", default-features = false, features = [
     "jpeg",
     "png",
 ] }
-tempfile = "3"
-# Integration tests (e.g. the S-D14 placement audit) build UUIDs to exercise the `library::paths`
-# surface; `uuid` is a normal dependency, so the test crate needs its own dev-dependency on it.
-uuid = { workspace = true }

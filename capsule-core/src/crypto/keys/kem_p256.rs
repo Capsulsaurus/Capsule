@@ -278,15 +278,16 @@ pub(crate) fn encapsulate_to_p256_public_derand(
 /// `P256.KeyAgreement` emits), and ECDHs against a peer's ephemeral public key. Test-only; a real
 /// element keeps the scalar in hardware. Shared with the `verify_asset`/FFI tests, so it lives
 /// outside the `tests` module (mirroring `MockP256Element`).
-#[cfg(test)]
-pub(crate) struct MockP256KeyAgreement {
+#[cfg(any(test, feature = "test-support"))]
+pub struct MockP256KeyAgreement {
     sk: p256::SecretKey,
     exportable: bool,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl MockP256KeyAgreement {
-    pub(crate) fn new(scalar: [u8; 32], exportable: bool) -> Self {
+    /// A mock element over `scalar`/`seed`; `exportable` makes it fail the non-exportability assertion.
+    pub fn new(scalar: [u8; 32], exportable: bool) -> Self {
         Self {
             sk: p256::SecretKey::from_slice(&scalar).expect("valid P-256 scalar"),
             exportable,
@@ -294,7 +295,7 @@ impl MockP256KeyAgreement {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl HardwareKeyAgreement for MockP256KeyAgreement {
     fn enroll(&self, alias: String) -> Result<Vec<u8>, HardwareSignerError> {
         self.public_key(alias)

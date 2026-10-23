@@ -26,7 +26,7 @@ use std::process::{Command, Output, Stdio};
 
 use capsule_core::crypto::hash;
 use capsule_core::crypto::primitives::Argon2Params;
-use capsule_core::lifecycle::Workspace;
+use capsule_library::lifecycle::Workspace;
 use serde_json::{Value, json};
 use uuid::Uuid;
 

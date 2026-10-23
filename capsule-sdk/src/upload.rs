@@ -640,7 +640,7 @@ pub enum UploadError {
 /// The client asks for exactly the window it is about to send — again after a re-align, a
 /// re-send or a resume — so a source never has to hold the blob. A byte slice is one; an
 /// original, whose ciphertext is re-derived from its plaintext per window, is the other that
-/// matters (`capsule_core::lifecycle::OriginalCiphertext`).
+/// matters (`capsule_library::lifecycle::OriginalCiphertext`).
 pub trait UploadSource: Sync {
     /// The bytes `[offset, offset + len)`. Fewer than `len` bytes is a source error: the
     /// declared size is the blob's, and a short read means the source changed under the upload.

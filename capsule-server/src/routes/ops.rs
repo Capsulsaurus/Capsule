@@ -40,7 +40,7 @@
 //! So on a shared album, a writer member's delete of the owner's asset is authored by the
 //! **member**, and the asset's creator remains recoverable from the `create` record at the head
 //! of the append-only chain. The client half of that is
-//! `capsule_core::lifecycle::provenance::sign_lifecycle`, which re-mints both fields per write.
+//! `capsule_library::lifecycle::provenance::sign_lifecycle`, which re-mints both fields per write.
 //!
 //! What this surface checks, in the order it decides:
 //!

@@ -370,7 +370,7 @@ fn link_wrap_key(
 
 /// Encapsulate `material` around a fresh link secret, optionally adding the Argon2id
 /// passphrase layer. Pure crypto — the caller supplies the CSPRNG-drawn secrets and the
-/// resolved material, so it is unit-testable without a [`Workspace`](crate::lifecycle::Workspace).
+/// resolved material, so it is unit-testable without a `Workspace`.
 ///
 /// The issuer-side primitive [`open_scope`] reverses. Public so the cross-language KAT generator
 /// (`cargo xtask share-kat`) can seal fixtures byte-identically to the native issuer, then have

@@ -2,7 +2,7 @@
 //!
 //! These types are **shared vocabulary, not ML behaviour**. Two very different layers need them:
 //!
-//! - the [vector index](crate::db::vector) names its `vec0` tables after a [`TaskKind`], sizes
+//! - the [vector index](crate::ml::VectorIndex) names its `vec0` tables after a [`TaskKind`], sizes
 //!   their columns with an [`EmbeddingDim`], ranks them by a [`DistanceMetric`], and partitions
 //!   them by a [`ModelVersion`] — all before any model has run;
 //! - the [model registry](crate::ml::Registry) uses the same names to *describe* the models it
@@ -127,8 +127,8 @@ pub enum DistanceMetric {
 }
 
 /// Refusals from the embedding-provenance invariant — produced by the
-/// [gate](crate::db::EmbeddingProvenance) the vector index calls on every insert, and
-/// carried outward by [`VectorIndexError`](crate::db::VectorIndexError).
+/// [gate](crate::ml::EmbeddingProvenance) the vector index calls on every insert, and
+/// carried outward by [`VectorIndexError`](crate::ml::VectorIndexError).
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum RegistryError {
     /// The `model_id` is not a known inventory model for the task (an unknown model). A stale but
