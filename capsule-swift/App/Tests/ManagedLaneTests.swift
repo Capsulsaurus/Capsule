@@ -41,6 +41,60 @@ struct ManagedLaneTests {
         #expect(try await timeline.asset(for: .managed(uuid: imported)) != nil)
     }
 
+    /// The timeline screen updates only through `changes()`, so this is the
+    /// path that has to carry an import. It holds only while the importer and
+    /// the timeline share one `ManagedProvider`: with two, the importer's
+    /// refresh reaches an observer nobody subscribed, no reload names the
+    /// import, and the time limit fails the test.
+    @Test(
+        "an import reaches a timeline already subscribed to the composed change stream",
+        .timeLimit(.minutes(1))
+    )
+    func importReachesSubscribedTimeline() async throws {
+        let root = Self.temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let mock = MockEnvironment(scenario: .emptyLibrary)
+        let lane = AppEnvironment.makeManagedLane(root: root.appending(path: "Library", directoryHint: .isDirectory))
+        let timeline = AppEnvironment.composeTimeline(
+            library: PortBackedAssetProvider(library: mock.library, organize: mock.organize),
+            managed: lane.provider
+        )
+        let picked = try Self.pickedFile(in: root)
+        let changes = timeline.changes()
+
+        // The composite subscribes on a task of its own and the provider
+        // registers its observer on its actor, so a refresh sent now could land
+        // before anyone listens. Refresh until one reload proves the stream is
+        // live, and finish refreshing before importing, so every later reload
+        // was published after the import.
+        let provider = lane.provider
+        let probe = Task {
+            while !Task.isCancelled {
+                await provider.refresh()
+                await Task.yield()
+            }
+        }
+        var imported: AssetID?
+        var reachedTimeline = false
+        for await change in changes {
+            guard let importedID = imported else {
+                probe.cancel()
+                await probe.value
+                await lane.importer.importPicked([picked])
+                let uuid = try #require(lane.importer.lastResult?.importedAssetIDs.first)
+                imported = .managed(uuid: uuid)
+                continue
+            }
+            let ids = (0 ..< change.snapshot.count).map { change.snapshot.asset(at: $0).id }
+            if ids.contains(importedID) {
+                reachedTimeline = true
+                break
+            }
+        }
+        probe.cancel()
+        #expect(reachedTimeline)
+    }
+
     @Test("an import is merged into a populated library, newest first")
     func importedAssetMergesWithLibrary() async throws {
         let root = Self.temporaryRoot()
