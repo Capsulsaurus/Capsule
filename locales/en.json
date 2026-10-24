@@ -3595,6 +3595,38 @@
     "message": "Sponsored",
     "context": "Account type: an account someone else on this server vouches for. Recovery runs through the sponsor."
   },
+  "app.settings.advanced.empty.description": {
+    "message": "This build has no developer options.",
+    "context": "Empty-state description on the Advanced settings screen, shown in a build not running against simulated data."
+  },
+  "app.settings.advanced.empty.title": {
+    "message": "Nothing to Adjust",
+    "context": "Empty-state title on the Advanced settings screen."
+  },
+  "app.settings.advanced.scenario.active": {
+    "message": "Running Now",
+    "context": "Row label on the Advanced settings screen; the value is the name of the simulated-data scenario this launch is running."
+  },
+  "app.settings.advanced.scenario.clear": {
+    "message": "Use Launch Default",
+    "context": "Button on the Advanced settings screen that forgets the scenario chosen for the next launch."
+  },
+  "app.settings.advanced.scenario.footer": {
+    "message": "The scenario is chosen when the app starts. A -mock-scenario launch argument takes precedence over the choice made here.",
+    "context": "Footer under the mock-scenario switcher on the Advanced settings screen. Keep '-mock-scenario' untranslated: it is a command-line argument."
+  },
+  "app.settings.advanced.scenario.header": {
+    "message": "Mock Scenario",
+    "context": "Section header on the Advanced settings screen for switching between simulated-data scenarios."
+  },
+  "app.settings.advanced.scenario.next_launch": {
+    "message": "Takes effect the next time Capsule launches.",
+    "context": "Notice shown on the Advanced settings screen after choosing a different simulated-data scenario."
+  },
+  "app.settings.advanced.scenario.picker": {
+    "message": "Next Launch",
+    "context": "Picker label on the Advanced settings screen; picks the simulated-data scenario for the next launch."
+  },
   "app.settings.ai.download": {
     "message": "Download",
     "context": "Button that fetches a model."
