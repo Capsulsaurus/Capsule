@@ -443,6 +443,13 @@ fn relay(
     tx.send(progress).is_ok()
 }
 
+/// The library browser's snapshot of `workspace`, with the origin ledger's line beside each
+/// asset handed to another device and not yet held by the server.
+fn snapshot(workspace: &capsule_library::lifecycle::Workspace) -> Catalogue {
+    super::library::catalogue::collect(workspace)
+        .with_delegations(crate::peer::delegation_lines_for(workspace.device_id()))
+}
+
 /// The English reason for a networked failure, as the CLI's own lines word it.
 fn remote_reason(error: &remote::RemoteError) -> String {
     if matches!(error, remote::RemoteError::NotAuthenticated) {
@@ -640,6 +647,7 @@ impl Ports for LocalPorts {
                 assets: request.assets,
                 events,
                 observer: Some(&mut observe),
+                delegated: crate::peer::delegated_for_push(workspace.device_id()),
             };
             let pushed = remote::push_run(
                 &remote,
@@ -671,7 +679,7 @@ impl Ports for LocalPorts {
             let workspace =
                 crate::open_workspace_with(&request.library, request.passphrase.expose())
                     .map_err(|e| e.to_string())?;
-            Ok(super::library::catalogue::collect(&workspace))
+            Ok(snapshot(&workspace))
         })
         .await
     }
@@ -726,7 +734,7 @@ impl Ports for LocalPorts {
                 .map_err(|error| crate::edit::describe_error(&error))?;
             Ok(Edited {
                 summary: crate::edit::summary(&report),
-                catalogue: super::library::catalogue::collect(&workspace),
+                catalogue: snapshot(&workspace),
                 library,
             })
         })

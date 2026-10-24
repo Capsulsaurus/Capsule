@@ -30,8 +30,17 @@
 //! the library's user identity key and held to the anti-rollback floor this device persists in
 //! the CLI database ([`crate::peering_state::DbDirectoryVersions`]).
 //!
-//! State lives under the CLI data directory, per device: the origin ledger (`origin.json`) and
-//! the delegate inbox (`inbox/`). A delegate copy is never a library asset.
+//! A delegated asset the origin deletes after the hand-off keeps its delete on the origin until
+//! the create's custody exists: `peer status` routes the library's signed delete through
+//! [`OriginLedger::hold_delete`], and sends the deletes [`OriginLedger::release`] hands back
+//! once its own custody check passes, so the server never sees a delete for an asset it has not
+//! indexed. `capsule push` skips an asset whose hand-off is still open and inside its deadline
+//! ([`open_delegations`]); the library browser shows each one with its ledger line
+//! ([`delegation_lines`]).
+//!
+//! State lives under the CLI data directory, per device: the origin ledger (`origin.json`), the
+//! released deletes not yet applied by the server (`deletes.json`) and the delegate inbox
+//! (`inbox/`). A delegate copy is never a library asset.
 //!
 //! [Peering § Delegation]: https://docs/design/peering/#delegation
 
@@ -53,11 +62,11 @@ use capsule_sdk::directory::DirectoryClient;
 use capsule_sdk::net::ConnectionClass;
 use capsule_sdk::peering::delegation::DEFAULT_HAND_OFF_DEADLINE_MS;
 use capsule_sdk::peering::{
-    DelegateInbox, DelegationError, DelegationState, DirectoryVersions, HandOff, HandOffAck,
-    HandshakeLimiter, HeldFailure, LocalPeer, OriginLedger, PeerChannel, PeerClient, PeeringError,
-    PinnedTrust, Quarantine, ReleaseOutcome, RequeueReason, SealedHandOff, Settled, TrustSource,
-    accept_hand_off, dispose_failure, is_lan, offer_hand_offs, seal, settle, take_hand_offs,
-    upload_hand_off, verify_hand_off,
+    DelegateInbox, DelegationError, DelegationState, DeleteDisposition, DirectoryVersions, HandOff,
+    HandOffAck, HandshakeLimiter, HeldFailure, LocalPeer, OriginLedger, PeerChannel, PeerClient,
+    PeeringError, PinnedTrust, Quarantine, ReleaseOutcome, RequeueReason, SealedHandOff, Settled,
+    TrustSource, accept_hand_off, dispose_failure, is_lan, offer_hand_offs, seal, settle,
+    take_hand_offs, upload_hand_off, verify_hand_off,
 };
 use capsule_sdk::staged::StagedScheduler;
 use capsule_sdk::upload::{UploadClient, UploadTransport};
@@ -197,6 +206,36 @@ impl PeerState {
         let bytes = serde_json::to_vec_pretty(ledger)
             .map_err(|error| PeerError::State(format!("the origin ledger: {error}")))?;
         write_durably(&self.ledger_path(), &bytes).map_err(state_error("write the origin ledger"))
+    }
+
+    fn outbox_path(&self) -> PathBuf {
+        self.root.join("deletes.json")
+    }
+
+    /// The deletes the origin ledger released and the server has not applied yet, in the order
+    /// they are sent; empty when none was written yet.
+    ///
+    /// # Errors
+    ///
+    /// [`PeerError::State`] when it cannot be read or does not parse.
+    pub fn load_outbox(&self) -> Result<Vec<PendingDelete>, PeerError> {
+        match fs::read(self.outbox_path()) {
+            Ok(bytes) => serde_json::from_slice(&bytes)
+                .map_err(|error| PeerError::State(format!("the delete outbox: {error}"))),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
+            Err(error) => Err(state_error("read the delete outbox")(error)),
+        }
+    }
+
+    /// Persist the delete outbox durably.
+    ///
+    /// # Errors
+    ///
+    /// [`PeerError::State`] when it cannot be written.
+    pub fn save_outbox(&self, outbox: &[PendingDelete]) -> Result<(), PeerError> {
+        let bytes = serde_json::to_vec_pretty(outbox)
+            .map_err(|error| PeerError::State(format!("the delete outbox: {error}")))?;
+        write_durably(&self.outbox_path(), &bytes).map_err(state_error("write the delete outbox"))
     }
 
     /// The delegate inbox.
@@ -1681,6 +1720,201 @@ pub struct StatusSummary {
     pub refused_acks: Vec<PeerFailure>,
     /// Every hand-off this device quarantined: kept, not retried, until `peer discard`.
     pub quarantined: Vec<QuarantinedView>,
+    /// Every delete made after a hand-off: held until the create's custody, sent, superseded,
+    /// or failed and kept for the next run.
+    pub deletes: Vec<DeleteView>,
+}
+
+// ─── Delegated assets: push, the library browser, and deletes after hand-off ─
+
+/// The name a delegate is shown under in a delegation's status line.
+#[must_use]
+pub fn delegate_name(delegate: Uuid) -> String {
+    format!("device {delegate}")
+}
+
+/// The assets `ledger` holds an open delegation for (handed off or acknowledged) that is still
+/// inside its deadline on the boot clock `epoch` names at `now_ms`: the ones `capsule push`
+/// leaves to their delegate.
+///
+/// A deadline that passed, or one set under another boot, is not open here even before
+/// `peer status` re-queues it, so a push never waits on a hand-off the ledger would take back.
+/// A revoked delegate is only known once `peer status` checks the account's directory; until
+/// then its asset is skipped, and the next `peer status` re-queues it.
+#[must_use]
+pub fn open_delegations(ledger: &OriginLedger, epoch: &str, now_ms: u64) -> BTreeSet<Uuid> {
+    ledger
+        .delegations()
+        .filter(|d| {
+            matches!(
+                d.state,
+                DelegationState::HandedOff | DelegationState::Acknowledged
+            ) && d.clock_epoch == epoch
+                && now_ms < d.deadline_ms
+        })
+        .map(|d| d.asset_id)
+        .collect()
+}
+
+/// [`open_delegations`] of this device's persisted ledger, at `clock`'s now.
+///
+/// # Errors
+///
+/// [`PeerError::State`] when the ledger cannot be read.
+pub fn delegated_assets(
+    state: &PeerState,
+    clock: &dyn BootClock,
+) -> Result<BTreeSet<Uuid>, PeerError> {
+    let ledger = state.load_ledger()?;
+    let open = open_delegations(&ledger, &clock.epoch(), clock.now_ms());
+    tracing::debug!(open = open.len(), "peer: open delegations read for a push");
+    Ok(open)
+}
+
+/// The assets `capsule push` (and the TUI's push screen) leaves to their delegate for `device`:
+/// [`delegated_assets`] of its persisted ledger at the system boot clock. A ledger that cannot
+/// be read skips nothing, which is logged: the push then uploads those assets as well, and
+/// deduplication makes that safe, only not cheap.
+#[must_use]
+pub fn delegated_for_push(device: Uuid) -> BTreeSet<Uuid> {
+    PeerState::for_device(device)
+        .and_then(|state| delegated_assets(&state, &SystemBootClock::default()))
+        .unwrap_or_else(|error| {
+            tracing::warn!(%error, "push: the origin ledger could not be read; skipping no delegated asset");
+            BTreeSet::new()
+        })
+}
+
+/// [`delegation_lines`] of `device`'s persisted ledger, for the library browser. A ledger that
+/// cannot be read shows no line, which is logged: the browser still opens.
+#[must_use]
+pub fn delegation_lines_for(device: Uuid) -> BTreeMap<Uuid, String> {
+    PeerState::for_device(device)
+        .and_then(|state| state.load_ledger())
+        .map(|ledger| delegation_lines(&ledger))
+        .unwrap_or_else(|error| {
+            tracing::warn!(%error, "library: the origin ledger could not be read; no delegation is shown");
+            BTreeMap::new()
+        })
+}
+
+/// The line the library browser shows beside each delegated asset whose custody is not
+/// confirmed yet, by asset: "handed to {device}, awaiting server" while the hand-off is open,
+/// the re-queued line once the origin took it back. A released delegation has none.
+#[must_use]
+pub fn delegation_lines(ledger: &OriginLedger) -> BTreeMap<Uuid, String> {
+    ledger
+        .delegations()
+        .filter(|d| d.state != DelegationState::Released)
+        .map(|d| (d.asset_id, d.status_line(&delegate_name(d.delegate))))
+        .collect()
+}
+
+/// A delete the origin ledger released once the create's custody was confirmed, kept until the
+/// server applies it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+pub struct PendingDelete {
+    /// The asset it deletes.
+    pub asset_id: Uuid,
+    /// The lifecycle op, as [`remote::delete_op`] encoded it.
+    pub op: Vec<u8>,
+}
+
+/// What happened to one delete made after a hand-off, as `capsule peer status` reports it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DeleteView {
+    /// The asset.
+    pub asset_id: Uuid,
+    /// `held` (the create has no confirmed custody yet), `sent` (the server applied it),
+    /// `superseded` (the asset was restored since, so the delete was dropped unsent) or
+    /// `failed` (kept, and sent again by the next run).
+    pub outcome: &'static str,
+    /// The server's stable `error.*` code, for a failed one that carried it.
+    pub code: Option<String>,
+    /// The English detail, for a failed one.
+    pub message: Option<String>,
+}
+
+/// Route every delete the library made after a hand-off through the ledger: for each
+/// delegation whose custody is not confirmed and whose library chain head is a `delete`, hold
+/// that signed delete ([`OriginLedger::hold_delete`]) unless it is held already. Returns the
+/// assets whose delete was newly held.
+///
+/// # Errors
+///
+/// [`PeerError::State`] when a delete record does not encode, which is a corrupt library.
+pub fn hold_deletes(
+    ledger: &mut OriginLedger,
+    workspace: &Workspace,
+) -> Result<Vec<Uuid>, PeerError> {
+    let mut candidates = Vec::new();
+    for delegation in ledger
+        .delegations()
+        .filter(|d| d.state != DelegationState::Released)
+    {
+        let op = remote::delete_op(workspace, &delegation.asset_id)
+            .map_err(|error| PeerError::State(format!("a delete record: {error}")))?;
+        if let Some(op) = op.filter(|op| !delegation.held_deletes.contains(op)) {
+            candidates.push((delegation.asset_id, op));
+        }
+    }
+    let mut held = Vec::new();
+    for (asset_id, op) in candidates {
+        match ledger.hold_delete(asset_id, op) {
+            DeleteDisposition::Held => held.push(asset_id),
+            // Only a released delegation sends now, and those were not routed here.
+            DeleteDisposition::SendNow(_) => {}
+        }
+    }
+    Ok(held)
+}
+
+/// Send every delete in `outbox`, in order, under `session`, and keep the ones the server did
+/// not apply. A delete whose asset the library no longer holds in trash was undone by a restore
+/// after it was held, so it is dropped unsent rather than deleting what the user brought back.
+async fn send_deletes(
+    remote: &RemoteConfig,
+    session: &Session,
+    workspace: &Workspace,
+    outbox: Vec<PendingDelete>,
+) -> (Vec<PendingDelete>, Vec<DeleteView>) {
+    let mut kept = Vec::new();
+    let mut views = Vec::new();
+    for pending in outbox {
+        let asset_id = pending.asset_id;
+        if !workspace.is_trashed(&asset_id) {
+            tracing::warn!(%asset_id, "peer status: a held delete was undone by a restore; dropped unsent");
+            views.push(DeleteView {
+                asset_id,
+                outcome: "superseded",
+                code: None,
+                message: None,
+            });
+            continue;
+        }
+        match remote::send_op(remote, session.clone(), &pending.op).await {
+            Ok(applied) => {
+                tracing::info!(%asset_id, sync_seq = applied.sync_seq, replayed = applied.replayed, "peer status: held delete sent after custody");
+                views.push(DeleteView {
+                    asset_id,
+                    outcome: "sent",
+                    code: None,
+                    message: None,
+                });
+            }
+            Err(failure) => {
+                tracing::warn!(%asset_id, code = ?failure.code, error = %failure.message, "peer status: held delete not applied; kept for the next run");
+                views.push(DeleteView {
+                    asset_id,
+                    outcome: "failed",
+                    code: failure.code,
+                    message: Some(failure.message),
+                });
+                kept.push(pending);
+            }
+        }
+    }
+    (kept, views)
 }
 
 /// `capsule peer status`: take `acks`, re-queue what is due, and release what the server holds
@@ -1746,12 +1980,20 @@ async fn status_with(
         }
     }
     ledger.due(&trust, &clock.epoch(), clock.now_ms());
+    // A delete made since the hand-off waits in the ledger for the create's custody.
+    let newly_held = hold_deletes(&mut ledger, workspace)?;
+    if !newly_held.is_empty() {
+        tracing::info!(
+            held = newly_held.len(),
+            "peer status: deletes held until custody"
+        );
+    }
     state.save_ledger(&ledger)?;
 
     // The origin's own custody check of its own hashes, with its own session: nothing the
     // delegate relays is consulted.
     let verify = StorageVerifyClient::new(VerifyTransport::with_session(
-        session,
+        session.clone(),
         format!("{}/v1", remote.sync_endpoint.trim_end_matches('/')),
     ));
     let keys = remote::pinned_attestation_keys(remote, workspace, &verify).await?;
@@ -1769,19 +2011,37 @@ async fn status_with(
     let verifier = coordinator.resolve_custody(&releases).await;
 
     let mut kept = std::collections::BTreeMap::new();
+    let mut outbox = state.load_outbox()?;
     for asset_id in pending {
         let read_back = reads_back(workspace, &asset_id);
         let accepted = verify_asset_accepts(workspace, &asset_id);
         match ledger.release(asset_id, &verifier, accepted, read_back)? {
             ReleaseOutcome::Released { deletes } => {
                 tracing::info!(%asset_id, held_deletes = deletes.len(), "peer status: released");
+                outbox.extend(deletes.into_iter().map(|op| PendingDelete { asset_id, op }));
             }
             ReleaseOutcome::Retained(reason) => {
                 kept.insert(asset_id, kept_because(&reason));
             }
         }
     }
+    // The released deletes are in the outbox before the ledger forgets them, so a run that
+    // stops here sends them next time; a delete sent twice is a replay the server answers alike.
+    state.save_outbox(&outbox)?;
     state.save_ledger(&ledger)?;
+    let (unsent, mut deletes) = send_deletes(remote, &session, workspace, outbox).await;
+    state.save_outbox(&unsent)?;
+    deletes.extend(
+        ledger
+            .delegations()
+            .filter(|d| d.state != DelegationState::Released && !d.held_deletes.is_empty())
+            .map(|d| DeleteView {
+                asset_id: d.asset_id,
+                outcome: "held",
+                code: None,
+                message: None,
+            }),
+    );
 
     let delegations = ledger
         .delegations()
@@ -1789,7 +2049,7 @@ async fn status_with(
             asset_id: d.asset_id,
             delegate: d.delegate,
             state: d.state,
-            status: d.status_line(&format!("device {}", d.delegate)),
+            status: d.status_line(&delegate_name(d.delegate)),
             requeued_because: d.requeued_because,
             kept_because: kept.get(&d.asset_id).copied(),
         })
@@ -1798,6 +2058,7 @@ async fn status_with(
         delegations,
         refused_acks,
         quarantined: quarantined(&state.inbox())?,
+        deletes,
     })
 }
 

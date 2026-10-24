@@ -8,7 +8,7 @@
 //! The per-asset rows come from [`crate::show::rows`], so the detail pane and `capsule show`
 //! word every field the same way.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 
 use capsule_core::crypto::provenance::Action as ProvenanceAction;
@@ -35,6 +35,9 @@ pub struct Catalogue {
     albums: Vec<AlbumEntry>,
     /// Every stack an asset is a member of, newest first by its primary's capture.
     stacks: Vec<StackEntry>,
+    /// The origin ledger's line for each asset handed to another device whose custody is not
+    /// confirmed yet ([`crate::peer::delegation_lines`]); a released one has none.
+    delegations: BTreeMap<Uuid, String>,
     /// The lookups by id, boxed so a catalogue in flight as an action stays small.
     index: Box<Index>,
 }
@@ -226,6 +229,7 @@ impl std::fmt::Debug for Catalogue {
             .field("assets", &self.assets.len())
             .field("albums", &self.albums.len())
             .field("stacks", &self.stacks.len())
+            .field("delegations", &self.delegations.len())
             .finish_non_exhaustive()
     }
 }
@@ -262,6 +266,7 @@ impl Catalogue {
             assets,
             albums,
             stacks,
+            delegations: BTreeMap::new(),
             index: Box::new(Index {
                 asset_at,
                 album_at,
@@ -270,6 +275,20 @@ impl Catalogue {
                 album_assets,
             }),
         }
+    }
+
+    /// This catalogue with `lines` as each delegated asset's status line, replacing any it had.
+    #[must_use]
+    pub fn with_delegations(mut self, lines: BTreeMap<Uuid, String>) -> Self {
+        self.delegations = lines;
+        self
+    }
+
+    /// The status line for `asset_id` while it is handed to another device and its custody is
+    /// not confirmed; `None` for an asset never delegated, or one the server holds.
+    #[must_use]
+    pub fn delegation(&self, asset_id: Uuid) -> Option<&str> {
+        self.delegations.get(&asset_id).map(String::as_str)
     }
 
     /// Every asset, newest capture first, trashed and hidden ones included.

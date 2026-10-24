@@ -930,6 +930,9 @@ fn row_item(catalogue: &Catalogue, row: Row) -> ListItem<'static> {
             if asset.in_trash {
                 text.push_str("  in trash");
             }
+            if let Some(line) = catalogue.delegation(asset_id) {
+                let _ = write!(text, "  {line}");
+            }
             text
         }
         Row::Album(album_id) => {
@@ -977,6 +980,9 @@ fn asset_lines(catalogue: &Catalogue, asset: &AssetEntry) -> Vec<Line<'static>> 
     let row = |label: &str, value: String| Line::from(format!("{label:<17}{value}"));
     for (label, value) in &asset.rows {
         lines.push(row(label, value.clone()));
+    }
+    if let Some(line) = catalogue.delegation(asset.asset_id) {
+        lines.push(row("Upload:", line.to_owned()));
     }
     let album = catalogue.album(asset.album_id);
     lines.push(row(
