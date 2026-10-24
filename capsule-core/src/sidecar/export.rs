@@ -9,8 +9,12 @@
 //!   included) and the add-ids of every OR-set, which are re-issued under the nil device. An
 //!   OR-set keeps only its live elements, so no tombstone carries a device id either.
 //! - **Session id**: `session_id` becomes the nil UUID.
+//! - **Edit history**: the `superseded` log of every last-writer-wins register (prior
+//!   captions, ratings, capture times, cull and hidden flags, stack memberships, locations and
+//!   region versions) is emptied; only each register's current value leaves. A caption the
+//!   user rewrote to remove a name must not reach the recipient in its old form.
 //! - **GPS**: the as-imported `gps` and every value in the user's `gps_user` register,
-//!   superseded ones included, is rounded to 2 decimal places (≈1 km).
+//!   superseded ones included when the history is kept, is rounded to 2 decimal places (≈1 km).
 //! - **Personal contact tags and image regions**: a face is matched to a person only as a
 //!   labelled region, so `regions` is removed whole, and that one strip covers both rows.
 //!
@@ -42,6 +46,9 @@ pub struct ExportPrivacy {
     pub retain_device_ids: bool,
     /// Keep the import session id.
     pub retain_session_id: bool,
+    /// Keep the superseded log of every last-writer-wins register: the values an edit
+    /// displaced.
+    pub retain_superseded: bool,
 }
 
 impl ExportPrivacy {
@@ -53,6 +60,7 @@ impl ExportPrivacy {
         retain_camera_serial: true,
         retain_device_ids: true,
         retain_session_id: true,
+        retain_superseded: true,
     };
 }
 
@@ -103,6 +111,28 @@ fn anonymize_or_set<T: Ord + Clone>(set: &mut OrSet<T>) -> bool {
     let changed = out != *set;
     *set = out;
     changed
+}
+
+/// Empty the superseded log of `register`; the number of entries removed.
+fn clear_history<T: Clone + PartialEq>(register: &mut Lww<T>) -> usize {
+    let removed = register.superseded.len();
+    register.superseded.clear();
+    removed
+}
+
+/// Empty the superseded log of every register `out` carries; the number of entries removed.
+fn clear_every_history(out: &mut SidecarV1) -> usize {
+    let mut removed = clear_history(&mut out.capture_timestamp_user);
+    removed += clear_history(&mut out.caption);
+    removed += clear_history(&mut out.rating);
+    removed += clear_history(&mut out.stack_membership);
+    removed += clear_history(&mut out.cull);
+    removed += clear_history(&mut out.hidden);
+    removed += clear_history(&mut out.gps_user);
+    for register in out.regions.values_mut() {
+        removed += clear_history(register);
+    }
+    removed
 }
 
 /// Strip every device id `out` carries; `true` when one was present.
@@ -168,6 +198,13 @@ pub fn sidecar_for_export(sidecar: &SidecarV1, privacy: ExportPrivacy) -> Sideca
         );
         out.regions.clear();
         stripped = true;
+    }
+    if !privacy.retain_superseded {
+        let removed = clear_every_history(&mut out);
+        if removed > 0 {
+            tracing::debug!(removed, "export: superseded register values stripped");
+            stripped = true;
+        }
     }
     if !privacy.retain_full_gps {
         let rounded = round_every_fix(&mut out);

@@ -163,7 +163,14 @@ fn every_fix(s: &SidecarV1) -> Vec<Gps> {
 #[test]
 fn both_the_imported_and_the_user_location_are_rounded_by_default() {
     let library = sidecar_with_two_locations();
-    let exported = sidecar_for_export(&library, ExportPrivacy::default());
+    // Keep the history, so the superseded user edit is there to be rounded too.
+    let exported = sidecar_for_export(
+        &library,
+        ExportPrivacy {
+            retain_superseded: true,
+            ..ExportPrivacy::default()
+        },
+    );
 
     let fixes = every_fix(&exported);
     assert_eq!(fixes.len(), 3, "the as-imported fix and both user edits");
@@ -202,6 +209,7 @@ fn full_gps_precision_is_kept_only_on_a_per_export_opt_in() {
         &library,
         ExportPrivacy {
             retain_full_gps: true,
+            retain_superseded: true,
             ..ExportPrivacy::default()
         },
     );
@@ -241,6 +249,8 @@ const DEVICE: Uuid = Uuid::from_u128(0xD1);
 const OTHER_DEVICE: Uuid = Uuid::from_u128(0xD2);
 const SESSION: Uuid = Uuid::from_u128(0x5E);
 const SERIAL: &str = "SN-0042-SECRET";
+/// A caption the user later rewrote, so it survives only in the superseded log.
+const REWRITTEN_CAPTION: &str = "Bob at the beach";
 
 /// A sidecar carrying a value for every row of the privacy table, written from two devices: a
 /// camera serial, the device and session ids, a full-precision location, a named face, user and
@@ -278,7 +288,7 @@ fn sidecar_with_every_stripped_field() -> SidecarV1 {
         },
     );
     s.caption
-        .set("first".into(), "2026-06-01T10:00:00Z", DEVICE);
+        .set(REWRITTEN_CAPTION.into(), "2026-06-01T10:00:00Z", DEVICE);
     s.caption
         .set("second".into(), "2026-06-02T10:00:00Z", OTHER_DEVICE);
     s.rating.set(4, "2026-06-01T10:00:00Z", DEVICE);
@@ -326,8 +336,14 @@ fn the_strict_copy_carries_no_row_of_the_privacy_table() {
     assert_eq!(exported.device_id, Uuid::nil());
     assert_eq!(exported.session_id, Uuid::nil());
     assert!(exported.regions.is_empty());
+    assert!(
+        !contains(&bytes, REWRITTEN_CAPTION),
+        "a caption the user rewrote does not leave"
+    );
+    assert!(exported.caption.superseded.is_empty());
+    assert!(exported.gps_user.superseded.is_empty());
     let fixes = every_fix(&exported);
-    assert_eq!(fixes.len(), 3);
+    assert_eq!(fixes.len(), 2, "the as-imported fix and the live user edit");
     assert!(
         fixes
             .iter()
@@ -397,7 +413,14 @@ fn each_identifier_is_kept_only_on_its_own_opt_in() {
         },
     );
     assert_eq!(device.device_id, DEVICE);
-    assert_eq!(device.caption, library.caption, "register stamps are kept");
+    assert_eq!(
+        device.caption.current, library.caption.current,
+        "register stamps are kept"
+    );
+    assert!(
+        device.caption.superseded.is_empty(),
+        "the history still leaves"
+    );
     assert_eq!(device.tags_user, library.tags_user, "add-ids are kept");
     assert_eq!(device.session_id, Uuid::nil());
     assert!(
@@ -406,6 +429,27 @@ fn each_identifier_is_kept_only_on_its_own_opt_in() {
             .as_ref()
             .is_some_and(|c| c.serial.is_empty())
     );
+
+    let history = sidecar_for_export(
+        &library,
+        ExportPrivacy {
+            retain_superseded: true,
+            ..ExportPrivacy::default()
+        },
+    );
+    let kept: Vec<_> = history
+        .caption
+        .superseded
+        .iter()
+        .map(|stamped| stamped.value.as_str())
+        .collect();
+    assert_eq!(kept, [REWRITTEN_CAPTION], "the opted-in history is kept");
+    assert!(
+        history.caption.superseded.iter().all(|s| s.by.is_nil()),
+        "its stamps still lose their device"
+    );
+    assert_eq!(history.device_id, Uuid::nil());
+    assert_eq!(history.session_id, Uuid::nil());
 
     let session = sidecar_for_export(
         &library,

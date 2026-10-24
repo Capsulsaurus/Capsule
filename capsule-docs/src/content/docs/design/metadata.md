@@ -158,7 +158,8 @@ When an asset crosses a trust boundary — a [share link](/design/share-links/) 
 | Camera serial number (the `serial` of `camera_id`; the model stays) | Emptied | Full value |
 | Device identifier (`device_id`, every register stamp's device, every OR-set `add_id` device) | Nil UUID; OR-set elements re-issued under it, tombstones dropped | Full value |
 | Session ID | Nil UUID | Full value |
-| GPS coordinates (`gps` and every `gps_user` value, superseded ones included) | Rounded to 2 decimal places (≈1 km) | Full precision |
+| Edit history (the `superseded` log of every LWW register: prior captions, ratings, capture times, flags, locations, region versions) | Emptied; only each register's current value leaves | Retained |
+| GPS coordinates (`gps` and every `gps_user` value, superseded ones included when the history is retained) | Rounded to 2 decimal places (≈1 km) | Full precision |
 | Personal contact tags (faces matched to a known person) | Stripped with `regions`, the only field that names a face | Retained |
 | Image regions and their labels (`regions`) | Stripped | Retained |
 
