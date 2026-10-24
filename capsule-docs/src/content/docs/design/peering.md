@@ -69,11 +69,23 @@ The live mDNS responder ships behind the `Discovery` seam, tested in process.
 
 ## Establishing the Channel
 
-HTTP over **mutually authenticated TLS 1.3** with no CA. TLS authenticates the device key's
-**classical half**; the **hybrid** proof that the key chains to the shared User IK (per the
+A framed request/response exchange over **mutually authenticated TLS 1.3** with no CA. TLS
+authenticates the device key's **classical half**; the **hybrid** proof that the key chains to
+the shared User IK (per the
 [signature scheme](/design/cryptography/primitives/#signature-scheme)) is bound to the TLS
 exporter and verified before any payload byte. Both devices must already be enrolled
-([Device Enrollment](/design/device-enrollment/)).
+([Device Enrollment](/design/device-enrollment/)). The proof also covers the sender's role,
+dialer or listener, so the two hellos of one session sign different messages and a hello
+reflected back at its sender never verifies. A hello naming the receiving device's own id is
+refused outright: a device never peers with itself.
+
+Every payload byte travels inside that verified TLS session; there is no plaintext path. Each
+frame's length is checked against a fixed ceiling before it is read, every read and write is
+bounded in time, a ranged pull must sustain a minimum transfer rate, and every decision is made against the identity the handshake verified, never
+against a device id a frame claims. The serving device lists what it offers, then authorizes
+**each request** against the directory it pins at that moment, so a peer revoked mid-session is
+refused at its next request. Peering is LAN-only: a device dials and admits only loopback,
+private and link-local addresses.
 
 The secret that seals a sync artifact is a 256-bit value from the channel's TLS exporter under
 a peering label: fresh per session, never stored, never a user passphrase.
@@ -93,8 +105,9 @@ which device to update. Artifact formats are versioned by
    [sync cursor](/design/sync/#discovering-what-changed); the delta is the complement, honouring
    the receiver's [synchronization scope](/design/sync/#synchronization-scope). Offers are padded
    to a size bucket and capped per request.
-2. **Pull.** The device that is behind pulls the artifact with ranged `GET`, so a severed
-   transfer resumes without re-fetching. A peer may send an advisory
+2. **Pull.** The device that is behind pulls the artifact with ranged requests over the
+   channel and verifies it against its content address, so a severed transfer resumes on the
+   next channel without re-fetching. A peer may send an advisory
    [hint](/design/notifications/#vocabulary) that carries no authority.
 3. **Ingest** through the backup restore path, **all-or-nothing per asset**: an asset applies
    only with its manifest, metadata and every blob its scope requires. A manifest behind the
@@ -125,9 +138,11 @@ origin: seal + sign bundle ──hand-off──▶ delegate: persist, upload ─
 1. **Seal.** The origin builds the full upload bundle (encrypted original, derivatives, metadata
    blob, signed manifest) exactly as it would upload it, and records its own content hashes.
 2. **Hand-off.** The delegate pulls the bundle over the channel, verifies every hash against the
-   manifest, fsyncs it, and only then acknowledges. The acknowledgement is not custody: the origin
-   keeps the original pinned. The bundle is self-verifying, so the same hand-off may also travel
-   by any other courier (the CLI writes it to a file); its integrity never rests on the channel.
+   manifest, fsyncs it, and only then acknowledges over the same channel. The acknowledgement is
+   not custody: the origin keeps the original pinned. Over the channel a peer serves only bundles
+   it sealed itself, and the origin takes an acknowledgement only from the device it sealed the
+   bundle for. The bundle is self-verifying, so the same hand-off may also travel by any other
+   courier (the CLI writes it to a file); its integrity never rests on the channel.
 3. **Upload.** The delegate uploads the bundle through the normal
    [transfer protocol](/design/transfer/upload/) under its own session. The server accepts a
    manifest signed by one device of the account and uploaded by another; quota is charged to

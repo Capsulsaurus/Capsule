@@ -8,11 +8,13 @@
 //! - [`PeerSession`] re-checks the peer's revocation on **every request**, not only at the
 //!   handshake, and remembers what the peer delivered and when, so everything delivered after
 //!   its revocation took effect can be quarantined.
+//! - [`TrustSource`] is where the serving side reads the trust each request is checked against;
+//!   [`SharedTrust`] is the in-process adapter a refreshing owner replaces.
 
 use std::collections::{HashMap, VecDeque};
 use std::net::IpAddr;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, PoisonError, RwLock};
 use std::time::{Duration, Instant};
 
 use jiff::Timestamp;
@@ -138,6 +140,53 @@ impl HandshakeLimiter {
     #[cfg(test)]
     pub(crate) fn tracked(&self) -> usize {
         self.attempts.lock().map_or(0, |attempts| attempts.len())
+    }
+}
+
+/// Where the serving side of a channel reads the trust it authorizes **each request** against:
+/// the account's directory as this device pins it **now**, so a peer revoked mid-session is
+/// refused at its next request. An implementation that cannot produce current trust returns an
+/// error, and the request is refused (fail closed) rather than served under trust that may be
+/// stale.
+pub trait TrustSource: Send + Sync {
+    /// The trust pinned now.
+    fn current(
+        &self,
+    ) -> impl std::future::Future<Output = Result<PinnedTrust, PeeringError>> + Send;
+}
+
+/// Trust that never changes for the life of the session.
+impl TrustSource for PinnedTrust {
+    async fn current(&self) -> Result<PinnedTrust, PeeringError> {
+        Ok(self.clone())
+    }
+}
+
+/// Trust held in memory that its owner replaces as the directory refreshes: a session reading it
+/// sees each replacement at its next request.
+#[derive(Debug)]
+pub struct SharedTrust(RwLock<PinnedTrust>);
+
+impl SharedTrust {
+    /// Start from `trust`.
+    #[must_use]
+    pub fn new(trust: PinnedTrust) -> Self {
+        Self(RwLock::new(trust))
+    }
+
+    /// Replace the trust every later request is authorized against.
+    pub fn replace(&self, trust: PinnedTrust) {
+        *self.0.write().unwrap_or_else(PoisonError::into_inner) = trust;
+    }
+}
+
+impl TrustSource for SharedTrust {
+    async fn current(&self) -> Result<PinnedTrust, PeeringError> {
+        Ok(self
+            .0
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone())
     }
 }
 

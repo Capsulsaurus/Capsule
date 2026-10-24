@@ -5,36 +5,46 @@
 //! network legs:
 //!
 //! - **`peer delegate`** (the origin): seals each named asset's upload bundle for another device
-//!   of the account, writes the hand-off to a file, and records it in the origin ledger with a
-//!   monotonic deadline. The original stays pinned.
+//!   of the account, writes the hand-off to a file or (`--peer`) serves it over the LAN peering
+//!   channel, and records it in the origin ledger with a monotonic deadline. The original stays
+//!   pinned.
 //! - **`peer accept`** (the delegate): verifies a hand-off against the account's published
-//!   directory, persists it in the delegate inbox (synced) and only then writes its
-//!   acknowledgement beside it; then uploads every hand-off in the inbox under its own session
-//!   and policy, and deletes each copy once the server holds it. A hand-off that can never
-//!   succeed is quarantined, its bytes kept, and is not retried.
+//!   directory, persists it in the delegate inbox (synced) and only then acknowledges it — in a
+//!   file beside it, or (`--listen`) over the channel it was pulled on; then uploads every
+//!   hand-off in the inbox under its own session and policy, and deletes each copy once the
+//!   server holds it. A hand-off that can never succeed is quarantined, its bytes kept, and is
+//!   not retried.
 //! - **`peer status`** (the origin): takes the delegate's acknowledgements, re-queues what is
 //!   overdue or whose delegate was revoked, and releases what the server holds by the origin's
 //!   own custody check of its own hashes and a read-back of its own copy, and lists every
 //!   hand-off this device quarantined.
 //! - **`peer discard`** (the delegate): deletes one quarantined hand-off, on the user's word.
 //!
-//! The hand-off rides a file here: the courier is opaque and the hand-off self-verifying, so
-//! the channel carries no trust ([`capsule_sdk::peering::delegation`]). The account's directory
-//! is the one the server publishes, verified under the library's user identity key and held to
-//! the anti-rollback floor this device persists in the CLI database
-//! ([`crate::peering_state::DbDirectoryVersions`]).
+//! The hand-off rides a file or the peering channel: the courier is opaque and the hand-off
+//! self-verifying, so neither carries trust for its contents
+//! ([`capsule_sdk::peering::delegation`]). Over the channel, `--peer` dials and `--listen`
+//! admits only the local network; the origin hands off only to the device the handshake
+//! verified (which must be `--to` when given) and authorizes each of its requests against the
+//! directory the server publishes at that moment, and the delegate takes only hand-offs that
+//! peer sealed itself. The account's directory is the one the server publishes, verified under
+//! the library's user identity key and held to the anti-rollback floor this device persists in
+//! the CLI database ([`crate::peering_state::DbDirectoryVersions`]).
 //!
 //! State lives under the CLI data directory, per device: the origin ledger (`origin.json`) and
 //! the delegate inbox (`inbox/`). A delegate copy is never a library asset.
 //!
 //! [Peering § Delegation]: https://docs/design/peering/#delegation
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::future::Future;
 use std::io::{self, Write as _};
+use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use capsule_core::crypto::hash::hash_bytes;
+use capsule_core::crypto::keys::HybridVerifyingKey;
 use capsule_library::import::UploadPolicy;
 use capsule_library::library::RetainReason;
 use capsule_library::lifecycle::Workspace;
@@ -44,15 +54,19 @@ use capsule_sdk::net::ConnectionClass;
 use capsule_sdk::peering::delegation::DEFAULT_HAND_OFF_DEADLINE_MS;
 use capsule_sdk::peering::{
     DelegateInbox, DelegationError, DelegationState, DirectoryVersions, HandOff, HandOffAck,
-    HeldFailure, OriginLedger, PeeringError, PinnedTrust, Quarantine, ReleaseOutcome,
-    RequeueReason, Settled, accept_hand_off, dispose_failure, seal, settle, upload_hand_off,
-    verify_hand_off,
+    HandshakeLimiter, HeldFailure, LocalPeer, OriginLedger, PeerChannel, PeerClient, PeeringError,
+    PinnedTrust, Quarantine, ReleaseOutcome, RequeueReason, SealedHandOff, Settled, TrustSource,
+    accept_hand_off, dispose_failure, is_lan, offer_hand_offs, seal, settle, take_hand_offs,
+    upload_hand_off, verify_hand_off,
 };
 use capsule_sdk::staged::StagedScheduler;
 use capsule_sdk::upload::{UploadClient, UploadTransport};
 use capsule_sdk::verify::{HeldRelease, ReleaseCoordinator, StorageVerifyClient, VerifyTransport};
+use futures::StreamExt as _;
+use futures::stream::FuturesUnordered;
 use serde::Serialize;
 use thiserror::Error;
+use tokio::net::{TcpListener, TcpStream};
 use tracing::instrument;
 use uuid::Uuid;
 
@@ -82,6 +96,17 @@ pub enum PeerError {
     /// `peer discard` named a hand-off this device does not hold in quarantine.
     #[error("no quarantined hand-off {0} on this device")]
     NotQuarantined(String),
+    /// A hand-off written to files names no delegate (`--to`).
+    #[error("a hand-off written to files must name the device it is for")]
+    NoDelegate,
+    /// The `--listen` address could not be bound.
+    #[error("listen on {address}: {error}")]
+    Listen {
+        /// The address asked for.
+        address: String,
+        /// Why it could not be bound.
+        error: String,
+    },
 }
 
 impl From<PeeringError> for PeerError {
@@ -424,15 +449,37 @@ async fn pinned_trust(
 
 // ─── peer delegate ───────────────────────────────────────────────────────────
 
+/// The bound on resolving and connecting to a `--peer`.
+pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How many times `peer delegate --peer` dials again after the channel is severed mid-session.
+/// Each new session resumes the delegate's partial pulls.
+pub const MAX_REDIALS: u32 = 3;
+
+/// How long `peer accept --listen` waits, by default, for a peer to connect and verify. A
+/// verified session is not cut by it.
+pub const DEFAULT_LISTEN_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// Where `capsule peer delegate` sends its hand-offs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HandOffRoute {
+    /// Write each hand-off to a file in this directory, for any courier to carry.
+    Files(PathBuf),
+    /// Serve them over the LAN peering channel to the device listening at this `HOST:PORT`
+    /// (`capsule peer accept --listen`), which pulls and acknowledges them over it.
+    Peer(String),
+}
+
 /// What `capsule peer delegate` hands off.
 #[derive(Debug, Clone)]
 pub struct DelegateOptions {
-    /// The device to hand the assets to.
-    pub to: Uuid,
+    /// The device to hand the assets to. Required for files; over the channel the delegate is
+    /// the device the handshake verifies, which must be this one when it is given.
+    pub to: Option<Uuid>,
     /// The assets.
     pub assets: Vec<Uuid>,
-    /// The directory the hand-off files are written to.
-    pub out: PathBuf,
+    /// Where the hand-offs go.
+    pub route: HandOffRoute,
     /// How long to wait for the server to hold them before re-queuing, in milliseconds.
     pub deadline_ms: u64,
 }
@@ -442,9 +489,21 @@ impl DelegateOptions {
     #[must_use]
     pub fn new(to: Uuid, assets: Vec<Uuid>, out: PathBuf) -> Self {
         Self {
+            to: Some(to),
+            assets,
+            route: HandOffRoute::Files(out),
+            deadline_ms: DEFAULT_HAND_OFF_DEADLINE_MS,
+        }
+    }
+
+    /// Hand `assets` over the peering channel to the device listening at `peer` (`HOST:PORT`),
+    /// which must be `to` when given, with the default deadline.
+    #[must_use]
+    pub fn over_peer(peer: impl Into<String>, to: Option<Uuid>, assets: Vec<Uuid>) -> Self {
+        Self {
             to,
             assets,
-            out,
+            route: HandOffRoute::Peer(peer.into()),
             deadline_ms: DEFAULT_HAND_OFF_DEADLINE_MS,
         }
     }
@@ -455,12 +514,16 @@ impl DelegateOptions {
 pub struct HandedOff {
     /// The asset.
     pub asset_id: Uuid,
-    /// The hand-off file.
-    pub file: String,
+    /// The hand-off file, when it was written to one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
     /// Its content address.
     pub hand_off: String,
     /// Its size in bytes.
     pub bytes: u64,
+    /// Whether the delegate acknowledged it over the peering channel. Always `false` for a file,
+    /// whose acknowledgement comes back through `capsule peer status --ack`.
+    pub acknowledged: bool,
 }
 
 /// One asset, hand-off file or acknowledgement that failed, and why, in the shape `--json`
@@ -471,13 +534,19 @@ pub struct PeerFailure {
     pub subject: String,
     /// A stable name for why: one per [`DelegationError`] and [`PeeringError`] variant
     /// ([`delegation_kind`]), or `bundle` (the library could not build the asset's upload
-    /// bundle), `read` (the file could not be read) or `ack_malformed` (it is not an
-    /// acknowledgement).
+    /// bundle), `read` (the file could not be read), `ack_malformed` (it is not an
+    /// acknowledgement), `peer_mismatch` (the device at `--peer` is not the `--to` device) or
+    /// `not_acknowledged` (the peering session ended without the delegate's acknowledgement),
+    /// or `refusals_elided` (`--listen` refused more distinct sources than it itemizes).
     pub kind: &'static str,
     /// The server's stable `error.*` code, when it supplied one.
     pub code: Option<String>,
     /// The English detail.
     pub message: String,
+    /// How many times this happened, when more than once: `--listen` reports the connections
+    /// it refused once per source address and kind, with their count. Absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub occurrences: Option<u32>,
 }
 
 impl PeerFailure {
@@ -487,6 +556,7 @@ impl PeerFailure {
             kind,
             code: None,
             message: message.into(),
+            occurrences: None,
         }
     }
 
@@ -496,57 +566,35 @@ impl PeerFailure {
             kind: delegation_kind(error),
             code: error.error_code().map(str::to_owned),
             message: error.to_string(),
+            occurrences: None,
         }
     }
 }
 
-/// The stable name `--json` reports a [`DelegationError`] under. A refused device or directory
-/// is named by its [`PeeringError`] ([`peering_kind`]); every other variant has its own name.
+/// The stable name `--json` reports a [`DelegationError`] under ([`DelegationError::kind`]). A
+/// refused device or directory is named by its [`PeeringError`] ([`peering_kind`]); every other
+/// variant has its own name.
 #[must_use]
 pub fn delegation_kind(error: &DelegationError) -> &'static str {
-    match error {
-        DelegationError::Peering(error) => peering_kind(error),
-        DelegationError::SelfDelegation => "self_delegation",
-        DelegationError::Malformed(_) => "malformed",
-        DelegationError::UnsupportedFormat { .. } => "unsupported_format",
-        DelegationError::WrongDelegate { .. } => "wrong_delegate",
-        DelegationError::ProtocolUnsupported { .. } => "protocol_unsupported",
-        DelegationError::Tampered(_) => "tampered",
-        DelegationError::Inbox(_) => "inbox",
-        DelegationError::Upload(_) => "upload",
-        DelegationError::UnknownDelegation(_) => "unknown_delegation",
-        DelegationError::AckMismatch => "ack_mismatch",
-    }
+    error.kind()
 }
 
-/// The stable name `--json` reports a [`PeeringError`] under.
+/// The stable name `--json` reports a [`PeeringError`] under ([`PeeringError::kind`]): the same
+/// name a peering channel carries a refusal under.
 #[must_use]
 pub fn peering_kind(error: &PeeringError) -> &'static str {
-    match error {
-        PeeringError::Tls(_) => "peering_tls",
-        PeeringError::Io(_) => "peering_io",
-        PeeringError::VersionDisjoint { .. } => "version_disjoint",
-        PeeringError::ForeignIdentity => "foreign_identity",
-        PeeringError::DirectoryRollback { .. } => "directory_rollback",
-        PeeringError::PeerDirectoryStale { .. } => "peer_directory_stale",
-        PeeringError::RateLimited(_) => "rate_limited",
-        PeeringError::OutOfScope(_) => "out_of_scope",
-        PeeringError::UnknownDevice(_) => "unknown_device",
-        PeeringError::RevokedDevice(_) => "revoked_device",
-        PeeringError::HybridCheckFailed => "hybrid_check_failed",
-        PeeringError::Discovery(_) => "discovery",
-        PeeringError::Codec(_) => "codec",
-        PeeringError::Crypto(_) => "crypto",
-        PeeringError::Backup(_) => "backup",
-        PeeringError::Transfer(_) => "transfer",
-    }
+    error.kind()
 }
 
 /// The `capsule peer delegate` run, as `--json` prints it.
 #[derive(Debug, Clone, Serialize)]
 pub struct DelegateSummary {
-    /// The delegate.
-    pub delegate: Uuid,
+    /// The delegate: the `--to` device for files, the device the channel verified for `--peer`
+    /// (`null` when no channel was established).
+    pub delegate: Option<Uuid>,
+    /// The `--peer` address dialed, for a hand-off over the peering channel.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub peer: Option<String>,
     /// What was handed off.
     pub handed_off: Vec<HandedOff>,
     /// What was not.
@@ -559,7 +607,7 @@ pub struct DelegateSummary {
 ///
 /// [`PeerError`] for a run that could not start: no session, a directory that does not verify or
 /// does not admit the delegate, or peer state that cannot be written.
-#[instrument(skip_all, fields(to = %options.to, assets = options.assets.len()))]
+#[instrument(skip_all, fields(to = ?options.to, route = ?options.route, assets = options.assets.len()))]
 pub async fn delegate(
     remote: &RemoteConfig,
     store: &SessionStore,
@@ -593,43 +641,33 @@ async fn delegate_with(
     clock: &dyn BootClock,
     options: &DelegateOptions,
 ) -> Result<DelegateSummary, PeerError> {
-    let trust = pinned_trust(remote, workspace, session, versions).await?;
-    let mut ledger = state.load_ledger()?;
-    let mut summary = DelegateSummary {
-        delegate: options.to,
-        handed_off: Vec::new(),
-        failed: Vec::new(),
+    let trust = pinned_trust(remote, workspace, session.clone(), versions).await?;
+    let summary = match &options.route {
+        HandOffRoute::Files(out) => {
+            let to = options.to.ok_or(PeerError::NoDelegate)?;
+            delegate_to_files(workspace, state, clock, options, to, out, &trust)?
+        }
+        HandOffRoute::Peer(peer) => {
+            let published = PublishedTrust {
+                directory: DirectoryClient::new(session, &remote.auth_endpoint),
+                user_id: workspace.user_id(),
+                user_ik: workspace.user_ik_public(),
+                versions,
+            };
+            let local = LocalPeer {
+                device_id: workspace.device_id(),
+                signer: workspace.device_signer(),
+                trust: &trust,
+                versions,
+            };
+            let sessions = OverPeer {
+                peer,
+                local,
+                published: &published,
+            };
+            delegate_over_peer(workspace, state, versions, clock, options, &sessions).await?
+        }
     };
-    for asset_id in &options.assets {
-        let sealed = match workspace
-            .upload_bundle(asset_id)
-            .map_err(|error| PeerFailure::new(asset_id.to_string(), "bundle", error.to_string()))
-            .and_then(|bundle| {
-                seal(&bundle, options.to, &trust)
-                    .map_err(|error| PeerFailure::delegation(asset_id.to_string(), &error))
-            }) {
-            Ok(sealed) => sealed,
-            Err(failure) => {
-                // A delegate the directory does not admit fails every asset alike; it is still
-                // reported per asset so the run's report names what was not handed off.
-                tracing::warn!(%asset_id, kind = failure.kind, error = %failure.message, "peer delegate: not handed off");
-                summary.failed.push(failure);
-                continue;
-            }
-        };
-        let file = options
-            .out
-            .join(format!("{}.{HAND_OFF_SUFFIX}", asset_id.simple()));
-        write_durably(&file, &sealed.bytes).map_err(state_error("write the hand-off"))?;
-        ledger.hand_off(&sealed, &clock.epoch(), clock.now_ms(), options.deadline_ms);
-        state.save_ledger(&ledger)?;
-        summary.handed_off.push(HandedOff {
-            asset_id: *asset_id,
-            file: file.display().to_string(),
-            hand_off: sealed.address,
-            bytes: sealed.bytes.len() as u64,
-        });
-    }
     tracing::info!(
         handed_off = summary.handed_off.len(),
         failed = summary.failed.len(),
@@ -638,10 +676,326 @@ async fn delegate_with(
     Ok(summary)
 }
 
+/// Seal each asset for `delegate`, reporting each that cannot be sealed in `failed`.
+fn seal_each(
+    workspace: &Workspace,
+    delegate: Uuid,
+    trust: &PinnedTrust,
+    assets: &[Uuid],
+    failed: &mut Vec<PeerFailure>,
+) -> Vec<SealedHandOff> {
+    let mut sealed = Vec::new();
+    for asset_id in assets {
+        let outcome = workspace
+            .upload_bundle(asset_id)
+            .map_err(|error| PeerFailure::new(asset_id.to_string(), "bundle", error.to_string()))
+            .and_then(|bundle| {
+                seal(&bundle, delegate, trust)
+                    .map_err(|error| PeerFailure::delegation(asset_id.to_string(), &error))
+            });
+        match outcome {
+            Ok(hand_off) => sealed.push(hand_off),
+            Err(failure) => {
+                // A delegate the directory does not admit fails every asset alike; it is still
+                // reported per asset so the run's report names what was not handed off.
+                tracing::warn!(%asset_id, kind = failure.kind, error = %failure.message, "peer delegate: not handed off");
+                failed.push(failure);
+            }
+        }
+    }
+    sealed
+}
+
+fn delegate_to_files(
+    workspace: &Workspace,
+    state: &PeerState,
+    clock: &dyn BootClock,
+    options: &DelegateOptions,
+    to: Uuid,
+    out: &Path,
+    trust: &PinnedTrust,
+) -> Result<DelegateSummary, PeerError> {
+    let mut ledger = state.load_ledger()?;
+    let mut summary = DelegateSummary {
+        delegate: Some(to),
+        peer: None,
+        handed_off: Vec::new(),
+        failed: Vec::new(),
+    };
+    for sealed in seal_each(workspace, to, trust, &options.assets, &mut summary.failed) {
+        let file = out.join(format!("{}.{HAND_OFF_SUFFIX}", sealed.asset_id.simple()));
+        write_durably(&file, &sealed.bytes).map_err(state_error("write the hand-off"))?;
+        ledger.hand_off(&sealed, &clock.epoch(), clock.now_ms(), options.deadline_ms);
+        state.save_ledger(&ledger)?;
+        summary.handed_off.push(HandedOff {
+            asset_id: sealed.asset_id,
+            file: Some(file.display().to_string()),
+            hand_off: sealed.address,
+            bytes: sealed.bytes.len() as u64,
+            acknowledged: false,
+        });
+    }
+    Ok(summary)
+}
+
+/// The account's directory as the server publishes it **now**, verified under the library's
+/// user identity key and admitted against this device's floor: what the origin authorizes each
+/// request of a peering session against, so a delegate revoked mid-session is refused at its
+/// next request. A directory that cannot be fetched refuses the request (fail closed).
+struct PublishedTrust<'a> {
+    directory: DirectoryClient,
+    user_id: Uuid,
+    user_ik: HybridVerifyingKey,
+    versions: &'a DbDirectoryVersions,
+}
+
+impl TrustSource for PublishedTrust<'_> {
+    async fn current(&self) -> Result<PinnedTrust, PeeringError> {
+        let directory = self
+            .directory
+            .fetch(self.user_id, &self.user_ik)
+            .await
+            .map_err(|error| PeeringError::Directory(error.to_string()))?;
+        let trust = PinnedTrust {
+            user_ik: self.user_ik.clone(),
+            directory,
+        };
+        self.versions.admit(trust.directory_version()).await?;
+        Ok(trust)
+    }
+}
+
+/// How `peer delegate --peer` opens its sessions: the address to dial, what this device proves
+/// itself with, and the trust each request is authorized against.
+struct OverPeer<'a> {
+    peer: &'a str,
+    local: LocalPeer<'a>,
+    published: &'a PublishedTrust<'a>,
+}
+
+/// Resolve `peer` (`HOST:PORT`) to a local-network address, connect within
+/// [`CONNECT_TIMEOUT`], and complete the peering handshake.
+///
+/// # Errors
+///
+/// [`PeeringError::NotLan`] when `peer` resolves to no local-network address (nothing is
+/// sent), a timeout or I/O failure, or the handshake's refusal.
+pub async fn dial(peer: &str, local: LocalPeer<'_>) -> Result<PeerChannel, PeeringError> {
+    let resolved: Vec<SocketAddr> =
+        tokio::time::timeout(CONNECT_TIMEOUT, tokio::net::lookup_host(peer))
+            .await
+            .map_err(|_| PeeringError::Timeout("resolving the peer"))?
+            .map_err(|error| PeeringError::Io(format!("resolve {peer}: {error}")))?
+            .collect();
+    let address = match resolved.iter().find(|address| is_lan(address.ip())) {
+        Some(address) => *address,
+        None => {
+            return Err(resolved.first().map_or_else(
+                || PeeringError::Io(format!("{peer} resolves to no address")),
+                |address| PeeringError::NotLan(address.ip()),
+            ));
+        }
+    };
+    let tcp = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(address))
+        .await
+        .map_err(|_| PeeringError::Timeout("connecting to the peer"))?
+        .map_err(|error| PeeringError::Io(format!("connect to {address}: {error}")))?;
+    tracing::debug!(%address, "peer delegate: connected; handshaking");
+    capsule_sdk::peering::connect(tcp, local).await
+}
+
+/// Whether a session ended because the channel itself failed, so dialing again may finish it.
+fn severed(error: &DelegationError) -> bool {
+    matches!(
+        error,
+        DelegationError::Peering(PeeringError::Io(_) | PeeringError::Timeout(_))
+    )
+}
+
+/// `peer delegate --peer`: dial the delegate, seal each asset for the device the handshake
+/// verified, record each in the ledger before a byte of it leaves, then serve the session,
+/// dialing again (up to [`MAX_REDIALS`] times) when the channel is severed. An asset the
+/// delegate did not acknowledge is reported failed; the ledger keeps it pinned and re-queues it
+/// at its deadline.
+async fn delegate_over_peer(
+    workspace: &Workspace,
+    state: &PeerState,
+    versions: &DbDirectoryVersions,
+    clock: &dyn BootClock,
+    options: &DelegateOptions,
+    sessions: &OverPeer<'_>,
+) -> Result<DelegateSummary, PeerError> {
+    let mut summary = DelegateSummary {
+        delegate: None,
+        peer: Some(sessions.peer.to_owned()),
+        handed_off: Vec::new(),
+        failed: Vec::new(),
+    };
+    let fail_all = |summary: &mut DelegateSummary, kind: &'static str, message: &str| {
+        for asset_id in &options.assets {
+            summary
+                .failed
+                .push(PeerFailure::new(asset_id.to_string(), kind, message));
+        }
+    };
+    let mut channel = match dial(sessions.peer, sessions.local).await {
+        Ok(channel) => channel,
+        Err(error) => {
+            tracing::warn!(peer = sessions.peer, %error, "peer delegate: no verified channel");
+            fail_all(&mut summary, error.kind(), &error.to_string());
+            return Ok(summary);
+        }
+    };
+    let delegate = channel.peer().device_id;
+    summary.delegate = Some(delegate);
+    if let Some(to) = options.to
+        && to != delegate
+    {
+        let message = format!("the device at {} is {delegate}, not {to}", sessions.peer);
+        tracing::warn!(%message, "peer delegate: refusing to hand off");
+        fail_all(&mut summary, "peer_mismatch", &message);
+        return Ok(summary);
+    }
+
+    let sealed = seal_each(
+        workspace,
+        delegate,
+        sessions.local.trust,
+        &options.assets,
+        &mut summary.failed,
+    );
+    let mut ledger = state.load_ledger()?;
+    for hand_off in &sealed {
+        ledger.hand_off(
+            hand_off,
+            &clock.epoch(),
+            clock.now_ms(),
+            options.deadline_ms,
+        );
+    }
+    state.save_ledger(&ledger)?;
+
+    let mut acknowledged: BTreeSet<Uuid> = BTreeSet::new();
+    let mut redials = 0;
+    let ended: Option<(&'static str, String)> = loop {
+        // Served even when empty (nothing sealed, or everything acknowledged before a sever),
+        // so the delegate's session ends cleanly instead of waiting out its timeout. A clone
+        // shares the sealed bytes; only the small per-blob records are copied.
+        let pending: Vec<SealedHandOff> = sealed
+            .iter()
+            .filter(|hand_off| !acknowledged.contains(&hand_off.asset_id))
+            .cloned()
+            .collect();
+        let served = offer_hand_offs(
+            &mut channel,
+            &pending,
+            sessions.published,
+            versions,
+            |ack| {
+                ledger.acknowledge(ack)?;
+                state
+                    .save_ledger(&ledger)
+                    .map_err(|error| DelegationError::Inbox(error.to_string()))?;
+                acknowledged.insert(ack.asset_id);
+                Ok(())
+            },
+        )
+        .await;
+        match served {
+            Ok(_) => break None,
+            Err(error) if severed(&error) && redials < MAX_REDIALS => {
+                redials += 1;
+                tracing::warn!(%error, redials, "peer delegate: the channel was severed; dialing again");
+                match dial(sessions.peer, sessions.local).await {
+                    Ok(next) if next.peer().device_id == delegate => channel = next,
+                    Ok(next) => {
+                        break Some((
+                            "peer_mismatch",
+                            format!(
+                                "the device at {} is now {}, not {delegate}",
+                                sessions.peer,
+                                next.peer().device_id
+                            ),
+                        ));
+                    }
+                    Err(error) => break Some((error.kind(), error.to_string())),
+                }
+            }
+            Err(error) => break Some((error.kind(), error.to_string())),
+        }
+    };
+
+    for hand_off in sealed {
+        if acknowledged.contains(&hand_off.asset_id) {
+            summary.handed_off.push(HandedOff {
+                asset_id: hand_off.asset_id,
+                file: None,
+                hand_off: hand_off.address,
+                bytes: hand_off.bytes.len() as u64,
+                acknowledged: true,
+            });
+        } else {
+            let (kind, why) = ended.clone().unwrap_or((
+                "not_acknowledged",
+                "the delegate ended the session without acknowledging it".to_owned(),
+            ));
+            summary.failed.push(PeerFailure::new(
+                hand_off.asset_id.to_string(),
+                kind,
+                format!(
+                    "{why}; this device keeps the original pinned and takes the upload back at \
+                     its deadline unless the server holds it by then"
+                ),
+            ));
+        }
+    }
+    Ok(summary)
+}
+
 // ─── peer accept ─────────────────────────────────────────────────────────────
 
+/// A bound socket `capsule peer accept --listen` takes hand-offs on over the LAN peering channel,
+/// and how long it waits for a peer to complete a session on it.
+#[derive(Debug)]
+pub struct PeerListener {
+    listener: TcpListener,
+    timeout: Duration,
+}
+
+impl PeerListener {
+    /// Bind `address`. Binding any address is allowed; a connection from off the local network
+    /// is refused before its handshake.
+    ///
+    /// # Errors
+    ///
+    /// [`PeerError::Listen`] when the address cannot be bound.
+    pub async fn bind(address: SocketAddr, timeout: Duration) -> Result<Self, PeerError> {
+        let listener = TcpListener::bind(address)
+            .await
+            .map_err(|error| PeerError::Listen {
+                address: address.to_string(),
+                error: error.to_string(),
+            })?;
+        Ok(Self { listener, timeout })
+    }
+
+    /// The address actually bound (port `0` resolved).
+    ///
+    /// # Errors
+    ///
+    /// [`PeerError::Listen`] when the socket cannot say.
+    pub fn local_addr(&self) -> Result<SocketAddr, PeerError> {
+        self.listener
+            .local_addr()
+            .map_err(|error| PeerError::Listen {
+                address: "the listener".into(),
+                error: error.to_string(),
+            })
+    }
+}
+
 /// What `capsule peer accept` takes and how it uploads.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct AcceptOptions {
     /// Hand-off files to take before uploading what the inbox holds.
     pub from: Vec<PathBuf>,
@@ -649,17 +1003,30 @@ pub struct AcceptOptions {
     pub policy: UploadPolicy,
     /// This device's connection class now.
     pub connection: ConnectionClass,
+    /// Also take hand-offs a peer offers over the LAN peering channel on this listener, before
+    /// uploading.
+    pub listen: Option<PeerListener>,
 }
 
 /// One hand-off taken.
 #[derive(Debug, Clone, Serialize)]
 pub struct Accepted {
-    /// The file it came from.
-    pub file: String,
-    /// The acknowledgement, also written beside the file.
+    /// The file it came from, when it came from one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    /// The device it was pulled from over the peering channel (the device the handshake
+    /// verified, and the hand-off's origin), when it came over the channel.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub peer: Option<Uuid>,
+    /// The acknowledgement: written beside a file, sent over the channel to a peer.
     pub ack: HandOffAck,
-    /// Where the acknowledgement was written.
-    pub ack_file: String,
+    /// Where the acknowledgement was written, for a file.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ack_file: Option<String>,
+    /// For a hand-off over the channel, whether the origin took the acknowledgement. Either
+    /// way this device holds the hand-off and uploads it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub acknowledged: Option<bool>,
 }
 
 /// What became of one hand-off in the inbox.
@@ -800,9 +1167,11 @@ async fn accept_with(
                     .map_err(|error| PeerError::State(error.to_string()))?;
                 write_durably(&ack_file, &bytes).map_err(state_error("write the ack"))?;
                 summary.accepted.push(Accepted {
-                    file: file.display().to_string(),
+                    file: Some(file.display().to_string()),
+                    peer: None,
                     ack,
-                    ack_file: ack_file.display().to_string(),
+                    ack_file: Some(ack_file.display().to_string()),
+                    acknowledged: None,
                 });
             }
             Err(failure) => {
@@ -810,6 +1179,23 @@ async fn accept_with(
                 summary.refused.push(failure);
             }
         }
+    }
+
+    if let Some(listener) = &options.listen {
+        let local = LocalPeer {
+            device_id: device,
+            signer: workspace.device_signer(),
+            trust: &trust,
+            versions,
+        };
+        listen(
+            listener,
+            local,
+            &remote.protocol_version,
+            &inbox,
+            &mut summary,
+        )
+        .await;
     }
 
     let upload = UploadClient::new(UploadTransport::with_session(
@@ -850,6 +1236,288 @@ async fn accept_with(
         "peer accept: done"
     );
     Ok(summary)
+}
+
+/// `peer accept --listen`: take hand-offs over the LAN peering channel until a session completes
+/// or the listener's timeout passes.
+///
+/// A connection from off the local network is dropped before its handshake; a handshake that
+/// fails (rate-limited, revoked, foreign, timed out, …) is reported and the listener keeps
+/// waiting. Handshakes run concurrently ([`Admission`]), so one that stalls never holds the
+/// listener, and the listen timeout bounds the wait for a connection and every handshake. A
+/// verified session is not cut by it: it runs to its end, each of its frames bounded by the
+/// channel's I/O timeout and each ranged pull by the channel's minimum pull rate, so a slow but
+/// live pull is never thrown away and a trickling one is. Each verified session pulls every
+/// hand-off the peer offers, verifies it was sealed by that peer for this device, persists it durably and acknowledges it over the same channel. A
+/// session the channel severs keeps its partial pulls, and the listener waits for the origin to
+/// dial again, resuming them; a session that ends cleanly ends the listening.
+async fn listen(
+    listener: &PeerListener,
+    local: LocalPeer<'_>,
+    max_protocol: &str,
+    inbox: &FileInbox,
+    summary: &mut AcceptSummary,
+) {
+    let subject = listener
+        .local_addr()
+        .map_or_else(|_| "the listener".to_owned(), |address| address.to_string());
+    tracing::info!(listening = %subject, timeout = ?listener.timeout, "peer accept: listening for a peer");
+    let limiter = HandshakeLimiter::default();
+    let limiter = &limiter;
+    let deadline = tokio::time::Instant::now() + listener.timeout;
+    let handshake = |tcp: TcpStream, source: SocketAddr| async move {
+        let client = match capsule_sdk::peering::accept(tcp, local, limiter).await {
+            Ok(channel) => PeerClient::open(channel).await,
+            Err(error) => Err(error),
+        };
+        (source, client)
+    };
+    let mut admission = Admission::new();
+    let mut partials: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+    // A pull the channel lost waits here for a later session to finish it.
+    let mut interrupted: BTreeMap<String, PeerFailure> = BTreeMap::new();
+    let mut sessions = 0_u32;
+    loop {
+        let client = match admission
+            .next_session(&listener.listener, &subject, deadline, &handshake)
+            .await
+        {
+            Admitted::Session(source, client) => {
+                tracing::info!(%source, peer = %client.peer().device_id, "peer accept: verified session");
+                client
+            }
+            Admitted::Failed => break,
+            Admitted::TimedOut => {
+                if sessions == 0 {
+                    summary.refused.push(PeerFailure::new(
+                        &subject,
+                        "peering_timeout",
+                        "no peer connected and verified before the listen timeout",
+                    ));
+                }
+                break;
+            }
+        };
+        sessions += 1;
+        let peer = client.peer().device_id;
+        // Not bounded by the listen deadline: a verified session runs to its end, each of its
+        // frames bounded by the channel's I/O timeout and each range by its minimum pull rate.
+        let taken = take_hand_offs(
+            &client,
+            local.trust,
+            local.versions,
+            local.device_id,
+            max_protocol,
+            inbox,
+            &mut partials,
+        )
+        .await;
+        for item in taken.taken {
+            match (item.ack, item.error) {
+                (Some(ack), error) => {
+                    interrupted.remove(&item.address);
+                    if let Some(error) = &error {
+                        tracing::warn!(hand_off = %item.address, %error, "peer accept: held, but the origin did not take the acknowledgement");
+                    }
+                    summary.accepted.push(Accepted {
+                        file: None,
+                        peer: Some(peer),
+                        ack,
+                        ack_file: None,
+                        acknowledged: Some(error.is_none()),
+                    });
+                }
+                (None, Some(error)) => {
+                    let failure = PeerFailure::delegation(&item.address, &error);
+                    if matches!(failure.kind, "peering_io" | "peering_timeout") {
+                        interrupted.insert(item.address, failure);
+                    } else {
+                        tracing::warn!(hand_off = %item.address, kind = failure.kind, "peer accept: refused");
+                        summary.refused.push(failure);
+                    }
+                }
+                (None, None) => {}
+            }
+        }
+        if !taken.severed {
+            break;
+        }
+        tracing::info!(
+            partial = partials.len(),
+            "peer accept: the session was severed; waiting for the origin to dial again"
+        );
+    }
+    summary.refused.extend(admission.into_refusals());
+    summary.refused.extend(interrupted.into_values());
+}
+
+/// The most handshakes `peer accept --listen` runs at once. While this many are in flight the
+/// listener stops accepting, so the kernel's backlog holds further connections until one ends.
+const MAX_PENDING_HANDSHAKES: usize = 16;
+
+/// The most handshakes one source address has in flight at once. A further connection from it
+/// is refused before its handshake, so no one host can take more than its share of
+/// [`MAX_PENDING_HANDSHAKES`] and starve another.
+const MAX_HANDSHAKES_PER_SOURCE: usize = 2;
+
+/// The most distinct (source, kind) refusals `--listen` itemizes; the rest are counted in one
+/// `refusals_elided` entry, so a connection flood bounds both memory and the `--json` report.
+const MAX_ITEMIZED_REFUSALS: usize = 64;
+
+/// The connections `--listen` refused, one entry per source address and kind with its count.
+#[derive(Debug, Default)]
+struct Refusals {
+    entries: Vec<PeerFailure>,
+    index: BTreeMap<(String, &'static str), usize>,
+    elided: u32,
+}
+
+impl Refusals {
+    /// Record one refusal of `subject` for `kind`.
+    fn record(&mut self, subject: String, kind: &'static str, message: String) {
+        if let Some(entry) = self
+            .index
+            .get(&(subject.clone(), kind))
+            .and_then(|&at| self.entries.get_mut(at))
+        {
+            entry.occurrences = Some(entry.occurrences.unwrap_or(1).saturating_add(1));
+            return;
+        }
+        if self.entries.len() >= MAX_ITEMIZED_REFUSALS {
+            self.elided = self.elided.saturating_add(1);
+            return;
+        }
+        self.index
+            .insert((subject.clone(), kind), self.entries.len());
+        self.entries.push(PeerFailure::new(subject, kind, message));
+    }
+
+    /// The refusals as `--json` reports them, in the order each was first seen.
+    fn into_failures(self) -> Vec<PeerFailure> {
+        let mut failures = self.entries;
+        if self.elided > 0 {
+            failures.push(PeerFailure {
+                occurrences: Some(self.elided),
+                ..PeerFailure::new(
+                    "other sources",
+                    "refusals_elided",
+                    format!(
+                        "{} more refused connections from other sources were not itemized",
+                        self.elided
+                    ),
+                )
+            });
+        }
+        failures
+    }
+}
+
+/// The handshakes `peer accept --listen` has in flight, how many each source holds, and the
+/// connections it refused.
+struct Admission<Fut> {
+    pending: FuturesUnordered<Fut>,
+    per_source: BTreeMap<IpAddr, usize>,
+    refusals: Refusals,
+}
+
+impl<Fut> Admission<Fut> {
+    fn new() -> Self {
+        Self {
+            pending: FuturesUnordered::new(),
+            per_source: BTreeMap::new(),
+            refusals: Refusals::default(),
+        }
+    }
+
+    /// The refusals recorded, as `--json` reports them.
+    fn into_refusals(self) -> Vec<PeerFailure> {
+        self.refusals.into_failures()
+    }
+
+    fn refuse(&mut self, source: IpAddr, error: &PeeringError) {
+        self.refusals
+            .record(source.to_string(), error.kind(), error.to_string());
+    }
+
+    fn release(&mut self, source: IpAddr) {
+        if let Some(held) = self.per_source.get_mut(&source) {
+            *held = held.saturating_sub(1);
+            if *held == 0 {
+                self.per_source.remove(&source);
+            }
+        }
+    }
+
+    /// Accept connections on `listener` and run their handshakes concurrently, up to
+    /// [`MAX_PENDING_HANDSHAKES`] at once and [`MAX_HANDSHAKES_PER_SOURCE`] per source address,
+    /// until one completes or `deadline` passes. A connection from off the local network, or
+    /// from a source already at its share, is refused before its handshake; a handshake that
+    /// fails is recorded while the others go on. So a peer that stalls its handshakes holds
+    /// only its own slots and never the listener. Handshakes still in flight stay pending for
+    /// the next call; every one of them is bounded by `deadline`, which ends the wait.
+    async fn next_session<T, F>(
+        &mut self,
+        listener: &TcpListener,
+        subject: &str,
+        deadline: tokio::time::Instant,
+        handshake: &F,
+    ) -> Admitted<T>
+    where
+        F: Fn(TcpStream, SocketAddr) -> Fut,
+        Fut: Future<Output = (SocketAddr, Result<T, PeeringError>)>,
+    {
+        loop {
+            tokio::select! {
+                biased;
+                () = tokio::time::sleep_until(deadline) => return Admitted::TimedOut,
+                Some((source, result)) = self.pending.next(), if !self.pending.is_empty() => {
+                    self.release(source.ip());
+                    match result {
+                        Ok(session) => return Admitted::Session(source, session),
+                        Err(error) => {
+                            tracing::warn!(%source, %error, "peer accept: no verified session");
+                            self.refuse(source.ip(), &error);
+                        }
+                    }
+                }
+                accepted = listener.accept(), if self.pending.len() < MAX_PENDING_HANDSHAKES => {
+                    let (tcp, source) = match accepted {
+                        Ok(connection) => connection,
+                        Err(error) => {
+                            self.refusals.record(subject.to_owned(), "peering_io", error.to_string());
+                            return Admitted::Failed;
+                        }
+                    };
+                    let ip = source.ip();
+                    if !is_lan(ip) {
+                        tracing::warn!(%source, "peer accept: refusing a connection from off the local network");
+                        self.refuse(ip, &PeeringError::NotLan(ip));
+                        continue;
+                    }
+                    let held = self.per_source.entry(ip).or_insert(0);
+                    if *held >= MAX_HANDSHAKES_PER_SOURCE {
+                        tracing::warn!(%source, held = *held, "peer accept: refusing a connection from a source at its handshake share");
+                        self.refuse(ip, &PeeringError::RateLimited(ip));
+                        continue;
+                    }
+                    *held += 1;
+                    tracing::debug!(%source, pending = self.pending.len(), "peer accept: handshake started");
+                    self.pending.push(handshake(tcp, source));
+                }
+            }
+        }
+    }
+}
+
+/// What [`Admission::next_session`] got.
+#[derive(Debug)]
+enum Admitted<T> {
+    /// A handshake from this source completed.
+    Session(SocketAddr, T),
+    /// The listen deadline passed first.
+    TimedOut,
+    /// The listener itself failed; the failure is recorded.
+    Failed,
 }
 
 /// Upload one hand-off the inbox holds and settle it. Re-verified first: the inbox is local

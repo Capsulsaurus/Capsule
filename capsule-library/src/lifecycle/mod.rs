@@ -548,6 +548,15 @@ impl Workspace {
         self.account.device.device_id
     }
 
+    /// This device's hybrid **device signer** — the key published for
+    /// [`device_id`](Self::device_id) in the device directory: the account's software device key,
+    /// or the hardware-backed signer the workspace was created with. A peering handshake signs its
+    /// channel binding with it to prove this device's identity to a peer. The private key never
+    /// leaves the signer; this lends the signing capability, not the key.
+    pub fn device_signer(&self) -> &dyn Signer {
+        self.device_signer.as_ref()
+    }
+
     /// This workspace's **signed device directory** — the user-IK-signed list of enrolled
     /// device signing keys `verify_asset` resolves a manifest's `created_by_device` against.
     ///

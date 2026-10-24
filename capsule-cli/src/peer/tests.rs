@@ -196,6 +196,346 @@ fn the_peer_commands_parse_with_json() {
     );
 }
 
+#[test]
+fn the_peering_channel_legs_parse_and_name_exactly_one_destination() {
+    let to = Uuid::from_u128(1).to_string();
+    let asset = Uuid::from_u128(2).to_string();
+    let delegate = |extra: &[&str]| {
+        let mut args = vec![
+            "capsule",
+            "peer",
+            "delegate",
+            "--library",
+            "lib",
+            "--asset",
+            &asset,
+            "--json",
+        ];
+        args.extend_from_slice(extra);
+        crate::cli::try_parse_from(false, &args).is_ok()
+    };
+    // Over the channel, `--to` is optional: the handshake names the delegate.
+    assert!(delegate(&["--peer", "192.168.1.20:7420"]));
+    assert!(delegate(&["--peer", "laptop.local:7420", "--to", &to]));
+    // Files still need both the directory and the device.
+    assert!(delegate(&["--out", "o", "--to", &to]));
+    assert!(
+        !delegate(&["--out", "o"]),
+        "a file hand-off names its device"
+    );
+    assert!(!delegate(&[]), "a hand-off goes somewhere");
+    assert!(
+        !delegate(&["--peer", "192.168.1.20:7420", "--out", "o", "--to", &to]),
+        "one destination, not two"
+    );
+
+    let accept = |extra: &[&str]| {
+        let mut args = vec!["capsule", "peer", "accept", "--library", "lib", "--json"];
+        args.extend_from_slice(extra);
+        crate::cli::try_parse_from(false, &args).is_ok()
+    };
+    assert!(accept(&["--listen", "0.0.0.0:7420"]));
+    assert!(accept(&["--listen", "[::]:7420", "--listen-timeout", "30"]));
+    assert!(accept(&["--listen", "0.0.0.0:7420", "--from", "f"]));
+    assert!(!accept(&["--listen", "not-an-address"]));
+    assert!(!accept(&[
+        "--listen",
+        "0.0.0.0:7420",
+        "--listen-timeout",
+        "0"
+    ]));
+    assert!(
+        !accept(&["--listen-timeout", "30"]),
+        "a timeout without a listener is a mistake"
+    );
+}
+
+#[test]
+fn a_hand_off_over_the_channel_reports_no_file_and_whether_it_was_acknowledged() {
+    let over_channel = serde_json::to_value(DelegateSummary {
+        delegate: Some(Uuid::from_u128(1)),
+        peer: Some("192.168.1.20:7420".into()),
+        handed_off: vec![HandedOff {
+            asset_id: Uuid::from_u128(2),
+            file: None,
+            hand_off: "ab".repeat(32),
+            bytes: 10,
+            acknowledged: true,
+        }],
+        failed: vec![PeerFailure::new(
+            Uuid::from_u128(3).to_string(),
+            "not_acknowledged",
+            "the delegate ended the session",
+        )],
+    })
+    .expect("serializes");
+    assert_eq!(over_channel["peer"], "192.168.1.20:7420");
+    assert!(over_channel["handed_off"][0].get("file").is_none());
+    assert_eq!(over_channel["handed_off"][0]["acknowledged"], true);
+    assert_eq!(over_channel["failed"][0]["kind"], "not_acknowledged");
+
+    // A file hand-off keeps its shape: the file, the delegate, and no peer.
+    let to_file = serde_json::to_value(DelegateSummary {
+        delegate: Some(Uuid::from_u128(1)),
+        peer: None,
+        handed_off: vec![HandedOff {
+            asset_id: Uuid::from_u128(2),
+            file: Some("out/x.capsule-handoff".into()),
+            hand_off: "ab".repeat(32),
+            bytes: 10,
+            acknowledged: false,
+        }],
+        failed: Vec::new(),
+    })
+    .expect("serializes");
+    assert!(to_file.get("peer").is_none());
+    assert_eq!(to_file["delegate"], Uuid::from_u128(1).to_string());
+    assert_eq!(to_file["handed_off"][0]["file"], "out/x.capsule-handoff");
+
+    // No channel was established: the delegate is unknown.
+    let unreached = serde_json::to_value(DelegateSummary {
+        delegate: None,
+        peer: Some("192.0.2.1:7420".into()),
+        handed_off: Vec::new(),
+        failed: Vec::new(),
+    })
+    .expect("serializes");
+    assert!(unreached["delegate"].is_null());
+
+    let taken = serde_json::to_value(Accepted {
+        file: None,
+        peer: Some(Uuid::from_u128(4)),
+        ack: HandOffAck {
+            asset_id: Uuid::from_u128(2),
+            hand_off: "ab".repeat(32),
+            delegate_device: Uuid::from_u128(1),
+        },
+        ack_file: None,
+        acknowledged: Some(false),
+    })
+    .expect("serializes");
+    assert_eq!(taken["peer"], Uuid::from_u128(4).to_string());
+    assert_eq!(taken["acknowledged"], false);
+    assert!(taken.get("file").is_none() && taken.get("ack_file").is_none());
+}
+
+#[tokio::test]
+async fn a_listener_binds_an_ephemeral_port_and_reports_it() {
+    let listener = PeerListener::bind(
+        "127.0.0.1:0".parse().expect("an address"),
+        DEFAULT_LISTEN_TIMEOUT,
+    )
+    .await
+    .expect("binds");
+    assert_ne!(listener.local_addr().expect("bound").port(), 0);
+    let taken = listener.local_addr().expect("bound");
+    assert!(matches!(
+        PeerListener::bind(taken, DEFAULT_LISTEN_TIMEOUT).await,
+        Err(PeerError::Listen { .. })
+    ));
+}
+
+/// A stand-in handshake: it completes when the peer sends one byte, and stalls until then.
+async fn byte_handshake(
+    mut tcp: TcpStream,
+    source: SocketAddr,
+) -> (SocketAddr, Result<u8, PeeringError>) {
+    use tokio::io::AsyncReadExt as _;
+    let byte = tcp
+        .read_u8()
+        .await
+        .map_err(|error| PeeringError::Io(error.to_string()));
+    (source, byte)
+}
+
+/// A peer that connects and then stalls its handshake holds only its own slot: a second peer's
+/// handshake completes while the first is still pending, long before the listen deadline.
+#[tokio::test]
+async fn a_stalled_handshake_does_not_hold_the_listener() {
+    use tokio::io::AsyncWriteExt as _;
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("binds");
+    let address = listener.local_addr().expect("bound");
+    let started = tokio::time::Instant::now();
+    let deadline = started + Duration::from_secs(30);
+    let mut admission = Admission::new();
+
+    let _stalled = TcpStream::connect(address).await.expect("connects");
+    let mut prompt = TcpStream::connect(address).await.expect("connects");
+    let prompt_source = prompt.local_addr().expect("bound");
+    prompt.write_u8(7).await.expect("writes");
+
+    let admitted = admission
+        .next_session(&listener, "the listener", deadline, &byte_handshake)
+        .await;
+    assert!(
+        matches!(admitted, Admitted::Session(source, 7) if source == prompt_source),
+        "{admitted:?}"
+    );
+    assert_eq!(
+        admission.pending.len(),
+        1,
+        "the stalled handshake is still pending"
+    );
+    assert_eq!(
+        admission.per_source.get(&prompt_source.ip()),
+        Some(&1),
+        "the completed handshake gave its slot back"
+    );
+    assert!(admission.into_refusals().is_empty());
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "admitted without waiting out the stalled peer"
+    );
+}
+
+/// The listen deadline bounds a handshake as well as the wait for a connection: a peer that
+/// connects and never completes its handshake ends the wait at the deadline.
+#[tokio::test]
+async fn the_listen_deadline_bounds_a_stalled_handshake() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("binds");
+    let address = listener.local_addr().expect("bound");
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(300);
+    let mut admission = Admission::new();
+
+    let _stalled = TcpStream::connect(address).await.expect("connects");
+    let admitted = tokio::time::timeout(
+        Duration::from_secs(10),
+        admission.next_session(&listener, "the listener", deadline, &byte_handshake),
+    )
+    .await
+    .expect("the deadline ends the wait");
+    assert!(matches!(admitted, Admitted::TimedOut), "{admitted:?}");
+    assert!(tokio::time::Instant::now() >= deadline);
+    assert_eq!(
+        admission.pending.len(),
+        1,
+        "the handshake was started, then cut off"
+    );
+}
+
+/// One source holds at most its share of the handshake slots: a third connection from a source
+/// with two stalled handshakes is refused before its handshake, while another source is still
+/// admitted.
+#[tokio::test]
+async fn one_source_cannot_take_more_than_its_share_of_handshakes() {
+    use tokio::io::AsyncWriteExt as _;
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("binds");
+    let address = listener.local_addr().expect("bound");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let mut admission = Admission::new();
+
+    let flooder = IpAddr::from([127, 0, 0, 1]);
+    let mut stalled = Vec::new();
+    for _ in 0..=MAX_HANDSHAKES_PER_SOURCE + 2 {
+        stalled.push(TcpStream::connect(address).await.expect("connects"));
+    }
+    let later = async {
+        // Only once the flood has been accepted.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let socket = tokio::net::TcpSocket::new_v4().expect("a socket");
+        socket
+            .bind("127.0.0.2:0".parse().expect("an address"))
+            .expect("binds a second loopback source");
+        let mut other = socket.connect(address).await.expect("connects");
+        other.write_u8(5).await.expect("writes");
+        other
+    };
+    let (admitted, _other) = tokio::join!(
+        admission.next_session(&listener, "the listener", deadline, &byte_handshake),
+        later
+    );
+    assert!(
+        matches!(admitted, Admitted::Session(source, 5) if source.ip() == IpAddr::from([127, 0, 0, 2])),
+        "{admitted:?}"
+    );
+    assert_eq!(admission.pending.len(), MAX_HANDSHAKES_PER_SOURCE);
+    assert_eq!(
+        admission.per_source.get(&flooder),
+        Some(&MAX_HANDSHAKES_PER_SOURCE)
+    );
+    let refusals = admission.into_refusals();
+    assert_eq!(
+        refusals.len(),
+        1,
+        "one entry per source and kind: {refusals:?}"
+    );
+    assert_eq!(refusals[0].subject, flooder.to_string());
+    assert_eq!(refusals[0].kind, "rate_limited");
+    assert_eq!(refusals[0].occurrences, Some(3));
+}
+
+/// Refusals are reported once per source and kind with their count, and past
+/// `MAX_ITEMIZED_REFUSALS` distinct entries the rest are counted in one entry, so a flood of
+/// connections bounds both memory and the `--json` report.
+#[test]
+fn refusals_are_counted_per_source_and_bounded() {
+    let mut refusals = Refusals::default();
+    for _ in 0..1000 {
+        refusals.record("10.0.0.1".into(), "rate_limited", "over budget".into());
+    }
+    refusals.record("10.0.0.1".into(), "hybrid_check_failed", "bad proof".into());
+    for n in 0..MAX_ITEMIZED_REFUSALS * 4 {
+        refusals.record(format!("fd00::{n:x}"), "unknown_device", "stranger".into());
+    }
+    let failures = refusals.into_failures();
+    assert_eq!(failures.len(), MAX_ITEMIZED_REFUSALS + 1);
+    assert_eq!(failures[0].subject, "10.0.0.1");
+    assert_eq!(failures[0].occurrences, Some(1000));
+    assert_eq!(failures[1].kind, "hybrid_check_failed");
+    assert_eq!(
+        failures[1].occurrences, None,
+        "a single refusal has no count"
+    );
+    let elided = failures.last().expect("the overflow entry");
+    assert_eq!(elided.kind, "refusals_elided");
+    let itemized_strangers = MAX_ITEMIZED_REFUSALS - 2;
+    assert_eq!(
+        elided.occurrences,
+        Some(u32::try_from(MAX_ITEMIZED_REFUSALS * 4 - itemized_strangers).expect("fits"))
+    );
+
+    let single = serde_json::to_value(&failures[1]).expect("serializes");
+    assert!(
+        single.get("occurrences").is_none(),
+        "absent when it happened once"
+    );
+    let counted = serde_json::to_value(&failures[0]).expect("serializes");
+    assert_eq!(counted["occurrences"], 1000);
+}
+
+/// A handshake that fails is recorded under its source and the listener keeps going.
+#[tokio::test]
+async fn a_failed_handshake_is_recorded_and_the_next_one_admitted() {
+    use tokio::io::AsyncWriteExt as _;
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("binds");
+    let address = listener.local_addr().expect("bound");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let mut admission = Admission::new();
+
+    // Closes without a byte: its handshake fails.
+    drop(TcpStream::connect(address).await.expect("connects"));
+    let later = async {
+        // Only once the failed handshake has had time to end.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let mut good = TcpStream::connect(address).await.expect("connects");
+        good.write_u8(9).await.expect("writes");
+        good
+    };
+    let (admitted, _good) = tokio::join!(
+        admission.next_session(&listener, "the listener", deadline, &byte_handshake),
+        later
+    );
+    assert!(matches!(admitted, Admitted::Session(_, 9)), "{admitted:?}");
+    assert!(
+        admission.per_source.is_empty(),
+        "both slots were given back"
+    );
+    let refused = admission.into_refusals();
+    assert_eq!(refused.len(), 1, "{refused:?}");
+    assert_eq!(refused[0].kind, "peering_io");
+    assert_eq!(refused[0].subject, "127.0.0.1");
+}
+
 // ─── The `--json` failure contract ────────────────────────────────────────────
 
 fn rejected(status: u16, code: &str) -> DelegationError {
@@ -233,12 +573,20 @@ fn every_delegation_error() -> Vec<DelegationError> {
         PeeringError::OutOfScope(capsule_sdk::fetch::FetchScope::MetadataOnly),
         PeeringError::UnknownDevice(device),
         PeeringError::RevokedDevice(device),
+        PeeringError::SelfPeer(device),
         PeeringError::HybridCheckFailed,
         PeeringError::Discovery("mdns".into()),
         PeeringError::Codec("hello".into()),
         PeeringError::Crypto(capsule_core::crypto::CryptoError::Auth("sig")),
         PeeringError::Backup(capsule_core::backup::BackupError::Format("tar".into())),
         PeeringError::Transfer("budget".into()),
+        PeeringError::Timeout("reading a frame"),
+        PeeringError::PeerRefused {
+            kind: "revoked_device".into(),
+            message: "revoked".into(),
+        },
+        PeeringError::NotLan(std::net::IpAddr::from([8, 8, 8, 8])),
+        PeeringError::Directory("unreachable".into()),
     ];
     let mut errors: Vec<DelegationError> =
         peering.into_iter().map(DelegationError::Peering).collect();
@@ -256,6 +604,10 @@ fn every_delegation_error() -> Vec<DelegationError> {
         rejected(400, capsule_i18n::error_codes::UPLOAD_ENVELOPE_REJECTED),
         DelegationError::UnknownDelegation(device),
         DelegationError::AckMismatch,
+        DelegationError::WrongOrigin {
+            origin: device,
+            peer: Uuid::nil(),
+        },
     ]);
     errors
 }
@@ -265,7 +617,14 @@ fn every_delegation_and_peering_error_has_a_distinct_stable_kind() {
     let errors = every_delegation_error();
     let mut kinds: Vec<&str> = errors.iter().map(delegation_kind).collect();
     // The names the CLI gives failures that are not a `DelegationError`.
-    kinds.extend(["bundle", "read", "ack_malformed", "copy_missing"]);
+    kinds.extend([
+        "bundle",
+        "read",
+        "ack_malformed",
+        "copy_missing",
+        "peer_mismatch",
+        "not_acknowledged",
+    ]);
     let total = kinds.len();
     kinds.sort_unstable();
     kinds.dedup();
