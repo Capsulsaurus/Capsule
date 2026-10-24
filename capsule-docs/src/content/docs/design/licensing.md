@@ -68,10 +68,20 @@ path by merging a dependency bump.
 
 The planned `capsule-core::media::video` transcoder seam
 ([Thumbnails — Video Previews](/design/thumbnails/#video-previews)) is the likeliest route for
-copyleft, so its constraints are fixed now: prefer the platform framework (AVFoundation,
-MediaCodec); ffmpeg only as an LGPL-2.1 base build (never `--enable-gpl`, `libx264`, `libx265`),
-never statically linked, never in an app-store target. Adding ffmpeg requires editing this doc and
-`deny.toml` first.
+copyleft, so its toolchain is decided before any of it is written:
+
+- **Video decode and transcode come from `rawshift-video`**, reached through
+  `capsule-core::media` like stills. Capsule links no demuxer, video decoder or encoder of its
+  own. Rawshift's own policy keeps software H.264 and HEVC out on patent grounds, so encode goes
+  through platform hardware codecs (VAAPI is the first upstream names) behind its `VideoEncoder`
+  seam.
+- **ffmpeg is excluded from every build.** Its only permitted arm is an LGPL-2.1 base build
+  without `libx264` or `libx265`, dynamically linked. Rule 2 already rules that out for the
+  phone apps, which come first, and a desktop-only exception would duplicate what Rawshift
+  is building. `deny.toml`'s `[bans]` refuses the ffmpeg, x264 and x265 binding crates by name,
+  so a binding under a permissive crate licence is refused as well.
+
+Lifting either rule requires editing this doc and `deny.toml` first.
 
 ## Enforcement
 
