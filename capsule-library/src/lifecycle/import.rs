@@ -26,7 +26,6 @@ use capsule_core::sidecar::normalize_label;
 use capsule_core::sidecar::sidecar_v1::{
     Gps, GpsSource, SIDECAR_SCHEMA_V1, SidecarV1, StackMembership, StackRole,
 };
-use ciborium::value::Value;
 use jiff::Timestamp;
 use uuid::Uuid;
 
@@ -70,12 +69,6 @@ pub(super) fn with_write_fault<T>(point: WriteFault, skip: u32, body: impl FnOnc
     let out = body();
     WRITE_FAULT.with(|slot| slot.set(None));
     out
-}
-
-/// Run `body` with the first sidecar rename failing after the `.tmp` write.
-#[cfg(test)]
-pub(super) fn with_sidecar_rename_fault<T>(body: impl FnOnce() -> T) -> T {
-    with_write_fault(WriteFault::SidecarRename, 0, body)
 }
 
 /// Whether the armed fault fires at `point` now; counts down the renames it lets through.
@@ -443,25 +436,15 @@ fn is_same_file(a: &Path, b: &Path) -> bool {
 }
 
 /// One signed create, as [`Workspace::commit_signed_create`] takes it: everything a caller
-/// decides *before* the sealing order starts. A fresh import fills the defaults; the
-/// unsigned-sidecar migration is the one caller that pins an id, a bucket, an import
-/// time, and a fold.
+/// decides *before* the sealing order starts.
 pub(super) struct CreateRequest<'a> {
-    /// The asset id. An import mints `Uuid::now_v7()`; the migration keeps the legacy id.
+    /// The asset id. An import mints `Uuid::now_v7()`.
     pub asset_id: Uuid,
     /// The owning album; must be held with write capability.
     pub album_id: Uuid,
     /// The plaintext to admit. When this already *is* the asset's own media path, the bytes are
     /// left where they are rather than rewritten over themselves.
     pub src: &'a Path,
-    /// The sidecar's `import_timestamp`; `None` stamps now.
-    pub import_timestamp: Option<String>,
-    /// The `media/{YYYY}/{YYYY-MM}` bucket the asset's files live in, as UTC seconds. `None`
-    /// derives it from the resolved capture time (a fresh import); the migration pins the
-    /// bucket the files already sit in, so nothing moves.
-    pub media_bucket: Option<i64>,
-    /// `_unknown` entries the signed sidecar carries from birth — empty for an import.
-    pub extra_unknown: BTreeMap<String, Value>,
     /// Move-mode release, stack placement, and exporter enrichment.
     pub opts: &'a SignedImportOptions,
 }
@@ -513,12 +496,11 @@ impl Workspace {
     ///
     /// Every file is staged to `{name}.tmp` and renamed into place (the single-file atomic
     /// write of the maintenance doc), so a crash mid-write leaves the previous file intact
-    /// rather than a torn one — for the migration, the previous sidecar is the legacy record
-    /// itself. All three are staged before any is renamed, and the renames run sidecar, then
-    /// sealed metadata blob, then provenance chain: the chain is what anchors an asset
-    /// ([`find_unanchored`](super::migrate_unsigned::find_unanchored)), so it lands last, and a
-    /// crash before it leaves a chainless signed sidecar the migration resumes from rather than
-    /// a torn chain that counts as anchored and hides the asset. A stale `.tmp` is the startup
+    /// rather than a torn one. All three are staged before any is renamed, and the renames run
+    /// sidecar, then sealed metadata blob, then provenance chain: the chain is what anchors an
+    /// asset ([`find_unanchored`](super::unanchored::find_unanchored)), so it lands last, and a
+    /// crash before it leaves a chainless signed sidecar that `open` reports rather than a torn
+    /// chain that counts as anchored and hides the asset. A stale `.tmp` is the startup
     /// scrub's to remove. The per-asset *bundle* (sidecar, chain, blob renamed as one unit)
     /// remains separate work.
     pub(super) fn write_signed_artifacts(&self, asset: &AssetState) -> Result<()> {
@@ -679,18 +661,13 @@ impl Workspace {
             asset_id: Uuid::now_v7(),
             album_id,
             src,
-            import_timestamp: None,
-            media_bucket: None,
-            extra_unknown: BTreeMap::new(),
             opts,
         })
     }
 
-    /// The signed create commit every import — and the unsigned-sidecar migration — goes
-    /// through: EXIF scan, encrypt, derivatives, author + sign the sidecar, seal it, build +
-    /// sign the create manifest, self-verify, write, index. The [`CreateRequest`] carries the
-    /// few things a caller decides beforehand; the sealing order and the self-checks are the
-    /// same for every caller, which is the point of there being one of these.
+    /// The signed create commit every import goes through: EXIF scan, encrypt, derivatives,
+    /// author + sign the sidecar, seal it, build + sign the create manifest, self-verify,
+    /// write, index. The [`CreateRequest`] carries the few things a caller decides beforehand.
     #[tracing::instrument(
         skip_all,
         fields(asset_id = %req.asset_id, album_id = %req.album_id, src = %req.src.display())
@@ -805,14 +782,12 @@ impl Workspace {
         let album = self.album(&album_id)?;
         let epoch = album.current_epoch;
         let amk = Amk::from_bytes(album.amks[&epoch]);
-        // The media bucket every file of this asset resolves to. A fresh import buckets by the
-        // resolved capture time; the migration pins the bucket the files already sit in, and
-        // the sidecar's `capture_timestamp` below still carries the resolved truth.
-        let bucket = req.media_bucket.unwrap_or(capture_utc);
+        // The media bucket every file of this asset resolves to: the resolved capture time.
+        let bucket = capture_utc;
         let media_path = media_file_path(&self.root, bucket, asset_id, &ext);
-        // Bytes already at their own media path (the migration) are signed where they lie:
-        // nothing is copied, and the Move-mode release below must not delete what is now the
-        // asset. Anything else is copied to `{media}.tmp` in the same pass that encrypts it.
+        // Bytes already at their own media path are signed where they lie: nothing is copied,
+        // and the Move-mode release below must not delete what is now the asset. Anything else
+        // is copied to `{media}.tmp` in the same pass that encrypts it.
         let in_place = is_same_file(src, &media_path);
         let (staged, copy) = if in_place {
             (StagedOriginal(None), None)
@@ -922,7 +897,7 @@ impl Workspace {
             capture_timestamp: capture_rfc3339(capture_utc),
             // An import records what the file says; a user correction is a later write.
             capture_timestamp_user: Lww::new(),
-            import_timestamp: req.import_timestamp.clone().unwrap_or_else(now_rfc3339),
+            import_timestamp: now_rfc3339(),
             content_type,
             dimensions,
             lqip,
@@ -948,7 +923,7 @@ impl Workspace {
             gps,
             gps_user: Lww::new(),
             provenance_chain_hash: None,
-            unknown: req.extra_unknown.clone(),
+            unknown: BTreeMap::new(),
             signature: None,
         };
         sidecar.sign(&self.account.user_ik);

@@ -57,7 +57,7 @@ Findings are **classified, never adjudicated**: the report names the check and b
 | Index inconsistency | Rebuilt from sidecars and chains. Safe but not lossless (index-only state such as importer-formed stack placement is lost), so rebuild is never a schema-upgrade path. |
 | Sidecar without original | Expected under metadata-only [sync scope](/design/sync/#synchronization-scope); otherwise re-fetch the original. |
 | Original without sidecar | Never deleted: quarantined, surfaced, minimal sidecar re-derived. |
-| Unsigned legacy sidecar | Not indexed; listed as unmigrated. `Workspace::migrate_unsigned_sidecars` quarantines the legacy bytes first, then admits a signed create carrying the legacy record in `_unknown`. A missing or mismatching original is refused. |
+| Sidecar without provenance chain | Not restored on open; listed as unanchored and left untouched. A write renames its chain into place last, so an interrupted one leaves this rather than a torn chain. |
 | Malformed sidecar | Bytes quarantined verbatim with reason; never silently skipped; current sidecar re-fetched first. |
 | Invalid sidecar signature | Quarantined, never overwritten; persistent failure shown as "provenance broken". |
 | Corrupt original | Re-fetched and derivatives regenerated if the server holds it; if this is the only copy, surfaced loudly. |

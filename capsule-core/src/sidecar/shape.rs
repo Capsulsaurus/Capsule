@@ -1,13 +1,11 @@
-//! Tell the two sidecar shapes apart **without reading either**.
+//! Tell a signed sidecar from anything else **without reading it**.
 //!
 //! The signed [`SidecarV1`](crate::sidecar::SidecarV1) carries its schema version at CBOR
-//! integer key `0` and has no text key `version`; the retired unsigned pre-signed-path shape
-//! carried a text key `version` and no integer key at all. The two are disjoint on the wire,
-//! so a probe that looks at nothing but those two keys classifies a file exactly, and it
-//! builds no model of either shape — which is what keeps it from being a second reader after
-//! the unsigned one is deleted. The only consumer of a legacy record's *contents* is the
-//! migration verb (`capsule-library`'s `Workspace::migrate_unsigned_sidecars`), which owns its own private
-//! decoder.
+//! integer key `0`. A probe that looks at nothing but that key classifies a file, and it
+//! builds no model of the shape — which is what keeps it from being a second reader beside
+//! the signed one. Every other byte string, including the retired unsigned pre-signed-path
+//! record (text keys only, no key `0`), is [`SidecarShape::Unknown`]: no reader of that
+//! record's contents remains anywhere.
 
 use ciborium::value::Value;
 
@@ -20,14 +18,12 @@ pub enum SidecarShape {
         /// The value at integer key `0`.
         schema: u16,
     },
-    /// The retired unsigned pre-signed-path shape: a text `version` key and no key `0`.
-    /// Readable only by the migration verb's private decoder.
-    LegacyUnsigned,
-    /// Neither: not CBOR, not a map, or a map carrying neither discriminating key.
+    /// Not a signed sidecar: not CBOR, not a map, a map without integer key `0` (the
+    /// retired unsigned pre-signed-path record among them), or a key `0` that is not a `u16`.
     Unknown,
 }
 
-/// Classify sidecar bytes by their discriminating keys alone.
+/// Classify sidecar bytes by their discriminating key alone.
 ///
 /// Decodes the outer CBOR value once and inspects only the map's keys; every value except
 /// the one at integer key `0` is left unexamined. Never fails: undecodable bytes are
@@ -36,26 +32,15 @@ pub fn probe(bytes: &[u8]) -> SidecarShape {
     let Ok(Value::Map(entries)) = ciborium::de::from_reader::<Value, _>(bytes) else {
         return SidecarShape::Unknown;
     };
-    let mut has_version_key = false;
-    for (key, value) in &entries {
-        match key {
-            Value::Integer(i) if i128::from(*i) == 0 => {
-                return match value {
-                    Value::Integer(v) => u16::try_from(i128::from(*v))
-                        .map_or(SidecarShape::Unknown, |schema| SidecarShape::Signed {
-                            schema,
-                        }),
-                    _ => SidecarShape::Unknown,
-                };
-            }
-            Value::Text(t) if t == "version" => has_version_key = true,
-            _ => {}
-        }
-    }
-    if has_version_key {
-        SidecarShape::LegacyUnsigned
-    } else {
-        SidecarShape::Unknown
+    let schema_key = entries
+        .iter()
+        .find(|(key, _)| matches!(key, Value::Integer(i) if i128::from(*i) == 0));
+    match schema_key {
+        Some((_, Value::Integer(v))) => u16::try_from(i128::from(*v))
+            .map_or(SidecarShape::Unknown, |schema| SidecarShape::Signed {
+                schema,
+            }),
+        _ => SidecarShape::Unknown,
     }
 }
 
