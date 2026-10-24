@@ -11,6 +11,9 @@
 //! sanctioned exception.
 //!
 //! [Module Map — Stateless Core]: https://docs/design/module-map/#stateless-core
+//! [`IdSource`]: crate::ambient::IdSource
+//! [`Clock`]: crate::ambient::Clock
+//! [`Rng`]: crate::ambient::Rng
 
 use jiff::Timestamp;
 use uuid::Uuid;
