@@ -47,3 +47,64 @@ fn the_debug_rendering_never_carries_the_token() {
         "{rendered}"
     );
 }
+
+/// A refresh refusal as the generated client hands it over.
+fn refused(
+    status: reqwest::StatusCode,
+    wrap: fn(Box<rest::types::CodedProblem>) -> rest::RefreshCapabilityError,
+    code: &str,
+) -> rest::Error<rest::RefreshCapabilityError> {
+    let problem: rest::types::CodedProblem = serde_json::from_value(serde_json::json!({
+        "type": "about:blank",
+        "status": status.as_u16(),
+        "detail": "refused",
+        "code": code,
+    }))
+    .expect("a coded problem");
+    rest::Error::Api(rest::ResponseValue::new(
+        status,
+        reqwest::header::HeaderMap::new(),
+        wrap(Box::new(problem)),
+    ))
+}
+
+#[test]
+fn every_refresh_refusal_keeps_the_servers_code() {
+    // #529: the `409` a peer acts on — the member it was granted for has left the roster, so the
+    // next move is to ask the owner — reached the caller with its code dropped.
+    let cases: [(
+        reqwest::StatusCode,
+        fn(Box<rest::types::CodedProblem>) -> rest::RefreshCapabilityError,
+        &str,
+    ); 4] = [
+        (
+            reqwest::StatusCode::CONFLICT,
+            rest::RefreshCapabilityError::Status409,
+            "error.federation.member_not_on_roster",
+        ),
+        (
+            reqwest::StatusCode::NOT_FOUND,
+            rest::RefreshCapabilityError::Status404,
+            "error.federation.not_configured",
+        ),
+        (
+            reqwest::StatusCode::FORBIDDEN,
+            rest::RefreshCapabilityError::Status403,
+            "error.federation.capability_revoked",
+        ),
+        (
+            reqwest::StatusCode::TOO_MANY_REQUESTS,
+            rest::RefreshCapabilityError::Status429,
+            "error.federation.rate_budget_exceeded",
+        ),
+    ];
+    for (status, wrap, code) in cases {
+        match refresh_refusal(refused(status, wrap, code)) {
+            FederationError::Refused { code: got, detail } => {
+                assert_eq!(got, code, "{status}");
+                assert_eq!(detail, "refused", "{status}");
+            }
+            other => panic!("{status} mapped to {other:?}"),
+        }
+    }
+}

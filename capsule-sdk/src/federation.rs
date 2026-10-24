@@ -292,7 +292,8 @@ impl FederationPull {
     /// # Errors
     ///
     /// [`FederationError::Refused`] when the issuer will not continue the grant — a revoked
-    /// predecessor, a blocked peer, a spent budget — or [`FederationError::Transport`].
+    /// predecessor, a blocked peer, a spent budget, a member no longer on the roster
+    /// (`error.federation.member_not_on_roster`) — or [`FederationError::Transport`].
     #[instrument(skip(self))]
     pub async fn refresh(&self) -> Result<String, FederationError> {
         let client = read(&self.held).client.clone();
@@ -324,19 +325,25 @@ impl FederationPull {
 }
 
 /// Map a capability refresh refusal that is not an upgrade refusal.
+///
+/// Exhaustive over the generated enum on purpose, as [`describe`] is: every refusal the contract
+/// declares carries a coded problem, and a status matched by a catch-all is a code dropped on the
+/// floor — the `409 error.federation.member_not_on_roster` a peer acts on by asking the owner for
+/// a fresh grant was, until #529. A status the contract adds later is a compile error here.
 fn refresh_refusal(error: rest::Error<rest::RefreshCapabilityError>) -> FederationError {
     match error {
         rest::Error::Api(response) => match response.into_inner() {
-            rest::RefreshCapabilityError::Status403(problem)
+            rest::RefreshCapabilityError::Status400(problem)
+            | rest::RefreshCapabilityError::Status401(problem)
+            | rest::RefreshCapabilityError::Status403(problem)
+            | rest::RefreshCapabilityError::Status404(problem)
+            | rest::RefreshCapabilityError::Status409(problem)
+            | rest::RefreshCapabilityError::Status413(problem)
+            | rest::RefreshCapabilityError::Status426(problem)
             | rest::RefreshCapabilityError::Status429(problem)
-            | rest::RefreshCapabilityError::Status400(problem)
             | rest::RefreshCapabilityError::Status500(problem) => FederationError::Refused {
                 code: problem.code.clone(),
                 detail: problem.detail.clone().unwrap_or_default(),
-            },
-            other => FederationError::Refused {
-                code: String::new(),
-                detail: other.to_string(),
             },
         },
         other => FederationError::Transport(other.to_string()),
