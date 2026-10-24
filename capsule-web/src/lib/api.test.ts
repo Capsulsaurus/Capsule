@@ -16,6 +16,7 @@ import {
     login,
     PROTOCOL_VERSION,
     profileLabel,
+    profileSubtitle,
     refreshAccessToken,
     register,
     verifyTotpLogin,
@@ -170,20 +171,24 @@ describe('the protocol handshake', () => {
 describe('profileLabel', () => {
     const base = { user_id: 'acct-1', created_at: '2026-01-01T00:00:00Z' };
 
-    test('prefers the display name', () => {
+    test('prefers the address', () => {
         expect(
             profileLabel({ ...base, display_name: 'Ada', email: 'a@x.test' }),
-        ).toBe('Ada');
-    });
-
-    test('falls back to the address without a display name', () => {
-        expect(profileLabel({ ...base, email: 'a@x.test' })).toBe('a@x.test');
-        expect(
-            profileLabel({ ...base, display_name: null, email: 'a@x.test' }),
         ).toBe('a@x.test');
+        expect(profileLabel({ ...base, email: 'a@x.test' })).toBe('a@x.test');
     });
 
-    test('falls back to the account id without an address', () => {
+    test('falls back to the display name without an address', () => {
+        expect(profileLabel({ ...base, display_name: 'Ada' })).toBe('Ada');
+        expect(
+            profileLabel({ ...base, display_name: 'Ada', email: null }),
+        ).toBe('Ada');
+        expect(profileLabel({ ...base, display_name: 'Ada', email: '' })).toBe(
+            'Ada',
+        );
+    });
+
+    test('falls back to the account id without an address or name', () => {
         expect(profileLabel(base)).toBe('acct-1');
         expect(profileLabel({ ...base, display_name: null, email: null })).toBe(
             'acct-1',
@@ -191,5 +196,38 @@ describe('profileLabel', () => {
         expect(profileLabel({ ...base, display_name: '', email: '' })).toBe(
             'acct-1',
         );
+    });
+});
+
+describe('profileSubtitle', () => {
+    const base = { user_id: 'acct-1', created_at: '2026-01-01T00:00:00Z' };
+
+    test('shows the display name under an address label', () => {
+        expect(
+            profileSubtitle({
+                ...base,
+                display_name: 'Ada',
+                email: 'a@x.test',
+            }),
+        ).toBe('Ada');
+    });
+
+    test('is absent when the display name is the label', () => {
+        expect(profileSubtitle({ ...base, display_name: 'Ada' })).toBeNull();
+        expect(
+            profileSubtitle({
+                ...base,
+                display_name: 'a@x.test',
+                email: 'a@x.test',
+            }),
+        ).toBeNull();
+    });
+
+    test('is absent without a display name', () => {
+        expect(profileSubtitle({ ...base, email: 'a@x.test' })).toBeNull();
+        expect(
+            profileSubtitle({ ...base, display_name: '', email: 'a@x.test' }),
+        ).toBeNull();
+        expect(profileSubtitle(base)).toBeNull();
     });
 });

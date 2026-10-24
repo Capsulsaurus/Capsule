@@ -280,13 +280,23 @@ export interface UserProfile {
 }
 
 /**
- * What to call the person a profile belongs to: the name they chose to be shown as, else the
- * address they sign in with, else the account id, which every profile carries.
+ * What to call the person a profile belongs to: the address they sign in with, else the name they
+ * chose to be shown as, else the account id, which every profile carries.
  *
  * An empty string counts as absent at each step, so a blank value never renders as a blank label.
  */
 export function profileLabel(profile: UserProfile): string {
-    return profile.display_name || profile.email || profile.user_id;
+    return profile.email || profile.display_name || profile.user_id;
+}
+
+/**
+ * The line shown under {@link profileLabel}: the chosen display name when the label is something
+ * else (the address), so a person who set a name still sees it. `null` when it would repeat the
+ * label or there is no name.
+ */
+export function profileSubtitle(profile: UserProfile): string | null {
+    const name = profile.display_name || null;
+    return name && name !== profileLabel(profile) ? name : null;
 }
 
 export async function getProfile(): Promise<UserProfile> {
