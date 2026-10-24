@@ -37,6 +37,8 @@ aes-gcm = { version = "0.10", features = ["aes"] }
 ciborium = "0.2"
 hex = { workspace = true }
 jiff = { workspace = true }
+# The in-house PTP/IP initiator behind the camera import source adapter (`import::camera`).
+ptpip-rs = { path = "../ptpip-rs" }
 p256 = { version = "0.13", default-features = false, features = ["ecdsa", "ecdh", "arithmetic"] }
 # Bundled SQLite (C) — the on-device library index.
 rusqlite = { version = "0.32", features = ["bundled"] }

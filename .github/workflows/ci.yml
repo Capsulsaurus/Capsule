@@ -58,6 +58,7 @@ jobs:
               - 'capsule-sdk/**'
               - 'capsule-core-ffi/**'
               - 'capsule-wasm/**'
+              - 'ptpip-rs/**'
               - 'xtask/**'
               # `check-rust` reads the catalogs directly: `i18n-check` and
               # `i18n-guard` are `cargo run -p xtask -- i18n …` over `locales/`,
