@@ -2022,7 +2022,10 @@ async fn push_workspace(
                     )
                     .cyan()
                 );
-            } else if summary.is_no_op() && summary.failed_assets == 0 {
+            } else if summary.is_no_op()
+                && summary.failed_assets == 0
+                && summary.delegated_assets == 0
+            {
                 println!(
                     "{}",
                     "Everything in this library is already on the server.".cyan()
