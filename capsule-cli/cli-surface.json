@@ -1357,7 +1357,7 @@
               ]
             },
             {
-              "help": "A circle: centre and radius, each a fraction of the image",
+              "help": "A circle: centre, a fraction of width and height, and radius, a fraction of the shorter side (min(width, height))",
               "id": "circle",
               "long": "circle",
               "positional": false,

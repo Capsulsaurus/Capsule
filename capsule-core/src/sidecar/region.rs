@@ -45,7 +45,9 @@ pub type Regions = BTreeMap<Uuid, Lww<Option<Region>>>;
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum RegionShape {
-    /// A circle centred at `(cx, cy)` with radius `r` (fractions of width / height).
+    /// A circle centred at `(cx, cy)` (fractions of width / height) with radius `r`, a fraction
+    /// of the image's shorter side, `min(width, height)`, so it is round on any aspect ratio
+    /// and `r = 0.5` centred is the inscribed circle.
     Circle {
         /// Centre, horizontal.
         cx: f32,
@@ -76,14 +78,16 @@ pub enum RegionError {
     /// A radius, width or height is zero.
     #[error("region has no area")]
     Empty,
-    /// A rectangle extends past the right or bottom edge.
+    /// A rectangle extends past the right or bottom edge, or a circle past an edge.
     #[error("region extends past the image edge")]
     PastEdge,
 }
 
 impl RegionShape {
     /// Check the normalized-coordinate contract: every value finite and in `[0, 1]`, a positive
-    /// extent, and a rectangle wholly inside the image.
+    /// extent, and the shape wholly inside the image. A circle spans exactly `r` of the shorter
+    /// axis, and the shape does not record which axis that is, so it must fit `r` from its
+    /// centre on both: on the longer axis it spans less.
     ///
     /// # Errors
     ///
@@ -97,6 +101,9 @@ impl RegionShape {
                 }
                 if r <= 0.0 {
                     return Err(RegionError::Empty);
+                }
+                if cx < r || cy < r || cx + r > 1.0 || cy + r > 1.0 {
+                    return Err(RegionError::PastEdge);
                 }
             }
             Self::Rect { x, y, w, h } => {

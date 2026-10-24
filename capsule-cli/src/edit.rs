@@ -507,8 +507,8 @@ fn fractions<const N: usize>(text: &str, form: &str) -> Result<[f32; N], String>
     Ok(out)
 }
 
-/// Parse `CX,CY,R` into a circle, each a fraction of the image. The range itself is the
-/// workspace's to check.
+/// Parse `CX,CY,R` into a circle: the centre a fraction of width and height, the radius a
+/// fraction of the shorter side. The range itself is the workspace's to check.
 ///
 /// # Errors
 ///

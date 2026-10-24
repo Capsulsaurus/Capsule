@@ -11,9 +11,9 @@
 //! terminal draws, so a region's outline lands on exactly the cells it covers, whatever image
 //! protocol the terminal speaks. The draft is kept in hundredths of the image, so arrow keys
 //! move it in exact steps and the shape written is the one drawn. Coordinates are normalized
-//! to `[0, 1]` over the display orientation; a circle's radius is a fraction of the width
-//! across and of the height down, as the sidecar records it, so on a non-square image it is
-//! drawn as the ellipse it covers.
+//! to `[0, 1]` over the display orientation; a circle's radius is a fraction of the image's
+//! shorter side, `min(width, height)`, as the sidecar records it, so a circle is drawn round on
+//! any aspect ratio.
 //!
 //! The scriptable twins are `capsule label add|remove`, `capsule region add|delete` and
 //! `capsule edit`, each with `--json`.
@@ -146,7 +146,7 @@ impl LabelEffect {
 /// A region being drawn, in hundredths of the image so every step is exact.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Draft {
-    /// A circle: centre and radius (a fraction of width across, of height down).
+    /// A circle: centre (of width across, of height down) and radius (of the shorter side).
     Circle {
         /// Centre, horizontal.
         cx: i16,
@@ -184,16 +184,21 @@ impl Draft {
         h: 32,
     };
 
-    /// Move by `(dx, dy)` hundredths, keeping a circle's centre and a whole rectangle inside
-    /// the image.
+    /// Move by `(dx, dy)` hundredths, keeping the whole shape inside the image. A circle keeps
+    /// `r` from each edge on both axes, since either may be the shorter side (see
+    /// [`RegionShape::validate`]).
     #[must_use]
     pub fn moved(self, dx: i16, dy: i16) -> Self {
         match self {
-            Self::Circle { cx, cy, r } => Self::Circle {
-                cx: (cx + dx).clamp(0, 100),
-                cy: (cy + dy).clamp(0, 100),
-                r,
-            },
+            Self::Circle { cx, cy, r } => {
+                // `resized` keeps `r` at most 50; the bound only keeps `clamp` well-formed.
+                let edge = r.min(50);
+                Self::Circle {
+                    cx: (cx + dx).clamp(edge, 100 - edge),
+                    cy: (cy + dy).clamp(edge, 100 - edge),
+                    r,
+                }
+            }
             Self::Rect { x, y, w, h } => Self::Rect {
                 x: (x + dx).clamp(0, 100 - w),
                 y: (y + dy).clamp(0, 100 - h),
@@ -204,16 +209,18 @@ impl Draft {
     }
 
     /// Resize by `(dw, dh)` hundredths, never below [`MIN_EXTENT`] and never past the image:
-    /// a circle's radius changes by the larger step.
+    /// a circle's radius changes by the larger step, and grows only until it meets the nearest
+    /// edge, on either axis.
     #[must_use]
     pub fn resized(self, dw: i16, dh: i16) -> Self {
         match self {
             Self::Circle { cx, cy, r } => {
                 let step = if dw.abs() >= dh.abs() { dw } else { dh };
+                let room = cx.min(100 - cx).min(cy).min(100 - cy).max(MIN_EXTENT);
                 Self::Circle {
                     cx,
                     cy,
-                    r: (r + step).clamp(MIN_EXTENT, 100),
+                    r: (r + step).clamp(MIN_EXTENT, room),
                 }
             }
             Self::Rect { x, y, w, h } => Self::Rect {
@@ -230,11 +237,16 @@ impl Draft {
     pub fn shape(self) -> RegionShape {
         let unit = |v: i16| f32::from(v) / 100.0;
         match self {
-            Self::Circle { cx, cy, r } => RegionShape::Circle {
-                cx: unit(cx),
-                cy: unit(cy),
-                r: unit(r),
-            },
+            Self::Circle { cx, cy, r } => {
+                let (cx, cy) = (unit(cx), unit(cy));
+                // As for a rectangle: a centre and radius summing to 100 hundredths can round
+                // past 1.0 in f32, and the workspace refuses a circle past the edge.
+                let mut r = unit(r);
+                while cx < r || cy < r || cx + r > 1.0 || cy + r > 1.0 {
+                    r = f32::from_bits(r.to_bits() - 1);
+                }
+                RegionShape::Circle { cx, cy, r }
+            }
             Self::Rect { x, y, w, h } => {
                 let (x, y) = (unit(x), unit(y));
                 // Two fractions summing to 100 hundredths can round past 1.0 in f32; the
@@ -818,12 +830,14 @@ impl Highlight {
 }
 
 /// Whether the point `(u, v)`, in fractions of the image's width and height, is inside
-/// `shape`. A circle's radius is a fraction of width horizontally and of height vertically, as
-/// [`RegionShape::Circle`] records it, so on a non-square image it covers an ellipse.
-fn inside(shape: RegionShape, u: f32, v: f32) -> bool {
+/// `shape`, on an image `width`×`height` (any unit). A circle's radius is a fraction of the
+/// shorter side, as [`RegionShape::Circle`] records it, so it covers a round disc on any aspect
+/// ratio.
+fn inside(shape: RegionShape, u: f32, v: f32, width: f32, height: f32) -> bool {
     match shape {
         RegionShape::Circle { cx, cy, r } => {
-            let (dx, dy) = ((u - cx) / r, (v - cy) / r);
+            let radius = r * width.min(height);
+            let (dx, dy) = ((u - cx) * width / radius, (v - cy) * height / radius);
             dx * dx + dy * dy <= 1.0
         }
         RegionShape::Rect { x, y, w, h } => u >= x && u <= x + w && v >= y && v <= y + h,
@@ -868,7 +882,7 @@ pub fn compose(
             && py >= 0
             && px < fit_w.cast_signed()
             && py < fit_h.cast_signed()
-            && inside(shape, u, v)
+            && inside(shape, u, v, fw, fh)
     };
     let pixel = |gx: usize, gy: usize| -> Option<Color> {
         if gx < left || gy < top || gx >= left + fit_w || gy >= top + fit_h {

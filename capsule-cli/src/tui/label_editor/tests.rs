@@ -493,11 +493,37 @@ fn a_draft_stays_inside_the_image_however_far_it_is_pushed() {
     assert_eq!(
         circle,
         Draft::Circle {
-            cx: 0,
-            cy: 100,
+            cx: MIN_EXTENT,
+            cy: 100 - MIN_EXTENT,
             r: MIN_EXTENT
-        }
+        },
+        "pushed into the corner, a circle keeps its radius from both edges"
     );
+    for _ in 0..100 {
+        circle = circle.moved(STEP, -STEP).resized(STEP, 0);
+    }
+    assert_eq!(
+        circle,
+        Draft::Circle {
+            cx: 50,
+            cy: 50,
+            r: 50
+        },
+        "it grows only until it meets the nearest edge"
+    );
+}
+
+#[test]
+fn every_circle_a_draft_can_reach_passes_the_workspace_check() {
+    for cx in MIN_EXTENT..=(100 - MIN_EXTENT) {
+        for cy in MIN_EXTENT..=(100 - MIN_EXTENT) {
+            let room = cx.min(100 - cx).min(cy).min(100 - cy);
+            for r in MIN_EXTENT..=room {
+                let shape = Draft::Circle { cx, cy, r }.shape();
+                assert_eq!(shape.validate(), Ok(()), "cx {cx} cy {cy} r {r}: {shape:?}");
+            }
+        }
+    }
 }
 
 #[test]
@@ -653,10 +679,44 @@ fn compose_fits_the_image_and_samples_its_pixels() {
     assert!(compose(Some(&image), 0, 4, &[]).is_empty());
 }
 
+/// Whether `(u, v)` lies on the circle's outline on a `w`×`h` image: just inside it, scaled
+/// toward the centre, and just outside it, scaled away.
+fn on_circle(circle: RegionShape, u: f32, v: f32, w: f32, h: f32) -> bool {
+    let RegionShape::Circle { cx, cy, .. } = circle else {
+        unreachable!("a circle")
+    };
+    let at = |k: f32| (cx + (u - cx) * k, cy + (v - cy) * k);
+    let (iu, iv) = at(0.999);
+    let (ou, ov) = at(1.001);
+    inside(circle, iu, iv, w, h) && !inside(circle, ou, ov, w, h)
+}
+
 #[test]
-fn a_circles_radius_scales_with_width_across_and_height_down() {
-    // A 20×10 pixel grid; radius 0.5 is half the width across and half the height down, as
-    // the sidecar records it, so the outline reaches all four edges.
+fn a_circles_radius_is_a_fraction_of_the_shorter_side() {
+    let (cx, cy, r) = (0.5, 0.5, 0.25);
+    let circle = RegionShape::Circle { cx, cy, r };
+    // 2:1, landscape: the radius is `r` of the height down, and `r × h / w` of the width across.
+    let (w, h) = (2.0, 1.0);
+    assert!(on_circle(circle, cx + r * h / w, cy, w, h));
+    assert!(on_circle(circle, cx, cy + r, w, h));
+    assert!(
+        !inside(circle, cx + r, cy, w, h),
+        "r is a fraction of the shorter side, not of the width across"
+    );
+    // 1:2, portrait: the radius is `r` of the width across, and `r × w / h` of the height down.
+    let (w, h) = (1.0, 2.0);
+    assert!(on_circle(circle, cx + r, cy, w, h));
+    assert!(on_circle(circle, cx, cy + r * w / h, w, h));
+    assert!(
+        !inside(circle, cx, cy + r, w, h),
+        "r is a fraction of the shorter side, not of the height down"
+    );
+}
+
+#[test]
+fn a_circle_is_drawn_round_on_a_wide_pane() {
+    // A 20×10 pixel grid: radius 0.5 is the inscribed circle, five pixels each way, so the
+    // outline spans columns 5 to 14 and never reaches the sides.
     let lines = compose(
         None,
         20,
@@ -676,11 +736,12 @@ fn a_circles_radius_scales_with_width_across_and_height_down() {
         })
     };
     assert!(drawn(10));
+    assert!(drawn(5));
+    assert!(drawn(14));
     assert!(
-        drawn(0),
-        "r is a fraction of the width across, not of the shorter side"
+        !drawn(4) && !drawn(15),
+        "r is a fraction of the shorter side, not of the width across"
     );
-    assert!(drawn(19));
 }
 
 fn draw(state: &AppState) -> String {

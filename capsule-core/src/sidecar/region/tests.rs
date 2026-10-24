@@ -84,6 +84,22 @@ fn shape_validation_enforces_the_normalized_contract() {
 }
 
 #[test]
+fn a_circles_radius_is_a_fraction_of_the_shorter_side() {
+    let circle = |cx: f32, cy: f32, r: f32| RegionShape::Circle { cx, cy, r }.validate();
+    // `r` spans exactly `r` of `min(width, height)`, so `r = 0.5` centred is the inscribed
+    // circle on any aspect ratio, and a circle touching the edges is inside the image.
+    assert_eq!(circle(0.5, 0.5, 0.5), Ok(()));
+    assert_eq!(circle(0.25, 0.75, 0.25), Ok(()));
+    // Which axis is shorter is not recorded, so the circle must fit `r` from its centre on
+    // both: on the shorter one it spans exactly that, on the longer one less.
+    assert_eq!(circle(0.5, 0.5, 0.51), Err(RegionError::PastEdge));
+    assert_eq!(circle(0.1, 0.5, 0.2), Err(RegionError::PastEdge));
+    assert_eq!(circle(0.5, 0.9, 0.2), Err(RegionError::PastEdge));
+    assert_eq!(circle(0.9, 0.5, 0.2), Err(RegionError::PastEdge));
+    assert_eq!(circle(0.5, 0.1, 0.2), Err(RegionError::PastEdge));
+}
+
+#[test]
 fn concurrent_label_adds_on_one_region_both_survive() {
     let a = register(
         Some(labelled(rect(), &[("Alice", add(DEV_A, 0))])),

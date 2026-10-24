@@ -488,7 +488,8 @@ pub(crate) enum RegionCommands {
         /// The asset: its id, or a prefix of at least 8 hex characters of its content hash
         #[arg(long, value_name = "ASSET")]
         asset: String,
-        /// A circle: centre and radius, each a fraction of the image
+        /// A circle: centre, a fraction of width and height, and radius, a fraction of the
+        /// shorter side (min(width, height))
         #[arg(
             long,
             value_name = "CX,CY,R",

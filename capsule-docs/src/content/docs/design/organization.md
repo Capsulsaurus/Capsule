@@ -145,8 +145,10 @@ number of devices converge deterministically, and every change is a signed `meta
   label only by an explicit promote ([Tag Provenance](/design/metadata/#tag-provenance-and-namespacing)).
 - **A region** is a circle `{cx, cy, r}` or rectangle `{x, y, w, h}` in coordinates normalized
   to `[0, 1]` over the original's **display orientation** (after EXIF orientation), so a region
-  survives every derivative size. Each region has a UUIDv7 and its own labels OR-set; deleting
-  a region is a stamped `None` in its LWW register.
+  survives every derivative size. A circle's centre is a fraction of width and height, and its
+  radius `r` is a fraction of the shorter side, `min(width, height)`, so a circle is round on
+  any aspect ratio; a circle or rectangle lies wholly inside the image. Each region has a UUIDv7
+  and its own labels OR-set; deleting a region is a stamped `None` in its LWW register.
 - **Stack and album records.** `StackDocV1` (keyed by `stack_id`) and `AlbumDocV1` (keyed by
   `album_id`) are signed, versioned documents sealed under the album's current AMK, following
   the same rules as the sidecar: version first, unknown keys preserved under the signature,
