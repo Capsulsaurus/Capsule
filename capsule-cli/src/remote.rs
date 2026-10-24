@@ -9,6 +9,7 @@
 //! binary's command arms call and the E2E round-trip drives directly.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::fmt::Write as _;
 use std::path::PathBuf;
 
 use capsule_core::crypto::keys::{HybridVerifyingKey, MasterKey};
@@ -1964,10 +1965,11 @@ pub fn custody_line(summary: &PushSummary) -> String {
         summary.verified_assets, summary.assets, summary.receipts
     );
     if summary.delegated_assets > 0 {
-        line.push_str(&format!(
+        let _ = write!(
+            line,
             " Skipped {} handed to another device; `capsule peer status` follows them.",
             summary.delegated_assets
-        ));
+        );
     }
     line
 }

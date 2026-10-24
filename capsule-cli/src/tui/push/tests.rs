@@ -282,6 +282,30 @@ fn the_summary_is_the_truth_and_progress_after_it_is_dropped() {
     assert_eq!(screen.row(B).map(|r| r.receipts), Some(0));
 }
 
+/// An asset the run skipped because another device holds its open hand-off is shown handed
+/// off, and a retry does not push it: its delegate does.
+#[test]
+fn a_delegated_asset_is_shown_handed_off_and_not_retried() {
+    let mut screen = running();
+    let mut handed = outcome(B, None);
+    handed.status = AssetPushStatus::Delegated;
+    handed.uploaded = 0;
+    handed.already_held = 0;
+    handed.receipts = 0;
+    screen.update(PushAction::Progress(vec![
+        PushProgress::Finished(handed),
+        started(C, 1),
+        PushProgress::Finished(outcome(C, Some(("upload", "connection reset")))),
+    ]));
+    assert_eq!(screen.row(B).map(|r| &r.custody), Some(&Custody::Delegated));
+    let retryable: Vec<&str> = screen
+        .retryable()
+        .iter()
+        .map(|r| r.asset_id.as_str())
+        .collect();
+    assert_eq!(retryable, vec![C]);
+}
+
 #[test]
 fn a_run_that_stopped_leaves_its_unfinished_assets_not_reached_and_retryable() {
     let mut screen = running();

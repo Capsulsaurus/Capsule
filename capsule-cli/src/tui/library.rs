@@ -920,6 +920,11 @@ fn row_item(catalogue: &Catalogue, row: Row) -> ListItem<'static> {
             };
             // The id is in the detail pane; the row keeps to what fits beside it.
             let mut text = format!("{}  {}", when(asset), asset.ext);
+            // The ledger's line itself is in the detail pane; the row only marks the asset, first
+            // so a narrow list still shows it.
+            if catalogue.delegation(asset_id).is_some() {
+                text.push_str("  delegated");
+            }
             if let Some((stack_id, StackRole::Primary)) = asset.stack {
                 let count = catalogue.stack(stack_id).map_or(1, |s| s.members.len());
                 let _ = write!(text, "  stack of {count}");
@@ -929,9 +934,6 @@ fn row_item(catalogue: &Catalogue, row: Row) -> ListItem<'static> {
             }
             if asset.in_trash {
                 text.push_str("  in trash");
-            }
-            if let Some(line) = catalogue.delegation(asset_id) {
-                let _ = write!(text, "  {line}");
             }
             text
         }

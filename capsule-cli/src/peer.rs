@@ -1791,22 +1791,35 @@ pub fn delegated_for_push(device: Uuid) -> BTreeSet<Uuid> {
 pub fn delegation_lines_for(device: Uuid) -> BTreeMap<Uuid, String> {
     PeerState::for_device(device)
         .and_then(|state| state.load_ledger())
-        .map(|ledger| delegation_lines(&ledger))
-        .unwrap_or_else(|error| {
-            tracing::warn!(%error, "library: the origin ledger could not be read; no delegation is shown");
-            BTreeMap::new()
-        })
+        .map_or_else(
+            |error| {
+                tracing::warn!(%error, "library: the origin ledger could not be read; no delegation is shown");
+                BTreeMap::new()
+            },
+            |ledger| delegation_lines(&ledger, short_delegate_name),
+        )
+}
+
+/// The name a delegate is shown under where space is short, as the library browser shows every
+/// device: its id's last eight hex digits.
+#[must_use]
+pub fn short_delegate_name(delegate: Uuid) -> String {
+    format!("device {}", crate::utils::ids::short_id(delegate))
 }
 
 /// The line the library browser shows beside each delegated asset whose custody is not
-/// confirmed yet, by asset: "handed to {device}, awaiting server" while the hand-off is open,
-/// the re-queued line once the origin took it back. A released delegation has none.
+/// confirmed yet, by asset, each delegate named by `name`: "handed to {device}, awaiting
+/// server" while the hand-off is open, the re-queued line once the origin took it back. A
+/// released delegation has none.
 #[must_use]
-pub fn delegation_lines(ledger: &OriginLedger) -> BTreeMap<Uuid, String> {
+pub fn delegation_lines(
+    ledger: &OriginLedger,
+    name: impl Fn(Uuid) -> String,
+) -> BTreeMap<Uuid, String> {
     ledger
         .delegations()
         .filter(|d| d.state != DelegationState::Released)
-        .map(|d| (d.asset_id, d.status_line(&delegate_name(d.delegate))))
+        .map(|d| (d.asset_id, d.status_line(&name(d.delegate))))
         .collect()
 }
 

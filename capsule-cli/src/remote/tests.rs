@@ -934,6 +934,152 @@ async fn a_scoped_push_considers_only_the_named_assets_and_reports_each_as_it_go
     assert_eq!(second, &summary.outcomes[1]);
 }
 
+/// An asset handed to another device and still inside its deadline is skipped: reported
+/// `delegated`, counted apart from failures, and nothing of it reaches the album or upload
+/// surfaces. Every other asset is pushed as before, and a dry run reports it the same way.
+#[tokio::test]
+async fn a_delegated_asset_is_skipped_and_reported_while_the_rest_is_pushed() {
+    for dry_run in [false, true] {
+        let EscrowRun {
+            _scratch,
+            mut ws,
+            other_album,
+            held_back,
+            other,
+            mock,
+            remote,
+            session,
+            ..
+        } = escrow_run().await;
+
+        let summary = push_with(
+            &remote,
+            &mut ws,
+            session,
+            PushOptions {
+                dry_run,
+                ..PushOptions::default()
+            },
+            PushRun {
+                delegated: BTreeSet::from([other]),
+                ..PushRun::default()
+            },
+        )
+        .await
+        .expect("the run reaches its assets");
+
+        let status_of = |asset_id: Uuid| {
+            summary
+                .outcomes
+                .iter()
+                .find(|o| o.asset_id == asset_id.to_string())
+                .map(|o| o.status)
+        };
+        assert_eq!(status_of(other), Some(AssetPushStatus::Delegated));
+        assert_ne!(status_of(held_back), Some(AssetPushStatus::Delegated));
+        assert_eq!(summary.delegated_assets, 1, "{summary:#?}");
+        assert_eq!(summary.assets, 2);
+        assert!(
+            summary.failures().all(|o| o.asset_id != other.to_string()),
+            "a delegated asset is not a failure"
+        );
+        let json = serde_json::to_value(&summary).expect("serializes");
+        assert_eq!(json["delegated_assets"], 1);
+        assert!(
+            json["outcomes"]
+                .as_array()
+                .expect("outcomes")
+                .iter()
+                .any(|o| o["status"] == "delegated" && o["asset_id"] == other.to_string().as_str()),
+            "{json:#}"
+        );
+        assert!(
+            !mock.seen.lock().unwrap().iter().any(|line| {
+                (line.contains(&other_album.to_string()) || line.contains(&other.to_string()))
+                    && !line.contains("/escrow/")
+            }),
+            "nothing of the delegated asset was sent (dry run: {dry_run})"
+        );
+    }
+}
+
+#[test]
+fn the_custody_line_counts_the_assets_left_to_their_delegate() {
+    let mut summary = PushSummary {
+        assets: 3,
+        verified_assets: 2,
+        receipts: 4,
+        ..PushSummary::default()
+    };
+    assert_eq!(
+        custody_line(&summary),
+        "Custody verified for 2 of 3 assets; 4 receipts stored in the library."
+    );
+    summary.delegated_assets = 1;
+    assert_eq!(
+        custody_line(&summary),
+        "Custody verified for 2 of 3 assets; 4 receipts stored in the library. Skipped 1 \
+         handed to another device; `capsule peer status` follows them."
+    );
+}
+
+/// A deleted asset's lifecycle op carries the delete record's canonical CBOR, an envelope that
+/// projects that record (action `delete`, its signed retention floor, the album the path names,
+/// no derivative), and the sealed metadata blob exactly when the record binds one. An asset
+/// whose head is not a delete, or one the library does not hold, has none.
+#[tokio::test]
+async fn a_delete_op_carries_the_signed_delete_record_and_its_projection() {
+    use base64::Engine as _;
+    let EscrowRun {
+        _scratch,
+        mut ws,
+        other,
+        ..
+    } = escrow_run().await;
+    assert_eq!(delete_op(&ws, &other).expect("encodes"), None);
+    assert_eq!(delete_op(&ws, &Uuid::now_v7()).expect("encodes"), None);
+
+    ws.soft_delete(&other, 30).expect("deletes");
+    let op = delete_op(&ws, &other)
+        .expect("encodes")
+        .expect("the head is a delete");
+    let request: capsule_sdk::rest::types::OpRequest =
+        serde_json::from_slice(&op).expect("the held op is the request body");
+    let asset = ws.asset(&other).expect("held");
+    let head = asset.chain.records().last().expect("a head");
+    let core = &head.manifest.core;
+    let base64 = base64::engine::general_purpose::STANDARD;
+    assert_eq!(
+        base64.decode(&request.manifest_cbor).expect("base64"),
+        capsule_core::cbor::to_canonical_vec(head).expect("encodes")
+    );
+    let envelope = &request.manifest_envelope;
+    assert_eq!(envelope.action, "delete");
+    assert_eq!(envelope.album_id, Some(core.album_id.to_string()));
+    assert_eq!(envelope.file_id, other.to_string());
+    assert_eq!(envelope.retention_until, core.retention_until);
+    assert!(
+        envelope.retention_until.is_some(),
+        "the signed floor rides along"
+    );
+    assert_eq!(
+        envelope.prior_provenance_hash,
+        core.prior_provenance_hash.map(|h| h.to_hex())
+    );
+    assert_eq!(envelope.ciphertext_hash, core.ciphertext_hash.to_hex());
+    assert_eq!(envelope.derivative_role, None);
+    assert_eq!(
+        envelope.metadata_blob_hash,
+        core.metadata_blob_hash.map(|h| h.to_hex())
+    );
+    assert_eq!(
+        request
+            .metadata_blob
+            .map(|blob| base64.decode(blob).expect("base64")),
+        core.metadata_blob_hash.map(|_| asset.metadata_blob.clone())
+    );
+}
+
 /// A library of two albums against the escrow mock, which refuses one album's escrow as
 /// full: one asset in each album, and a resumed session against the mock.
 struct EscrowRun {
