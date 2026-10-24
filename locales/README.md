@@ -81,6 +81,19 @@ localized high-level message. See the design doc for the full contract.
 4. Open a pull request. See [CONTRIBUTING.md](../CONTRIBUTING.md) for the commit
    and review flow.
 
+## Report a translation problem or request a language
+
+- **A wrong, awkward, or missing translation:** open a
+  [Translation Error](https://github.com/Capsulsaurus/Capsule/issues/new?template=translation-error.md)
+  issue. Include the locale, the catalog key if you can find it in `en.json`,
+  and your proposed fix in at least one language you speak natively, keeping
+  every placeholder from the English message. Maintainers apply it and backfill
+  the other languages.
+- **A language Capsule does not ship yet:** open a
+  [Language Request](https://github.com/Capsulsaurus/Capsule/issues/new?template=language-request.md)
+  issue with its BCP-47 tag, script direction, and fallback, or follow
+  [Add a language](#add-a-language) above to contribute the catalog directly.
+
 A future translation-management hub (Weblate or Crowdin) will let non-technical
 contributors translate through a web UI backed by these same files; until then,
 the JSON-via-pull-request flow above is the supported path.

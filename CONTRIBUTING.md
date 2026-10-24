@@ -103,6 +103,14 @@ compiles them into every platform's native format.
    there is no drift.
 3. Open a PR following the workflow above.
 
+Not ready to open a PR? Use an issue template instead:
+
+* [Translation Error](https://github.com/Capsulsaurus/Capsule/issues/new?template=translation-error.md)
+  — a wrong, awkward, or missing translation. Include your proposed fix in at least one language
+  you speak natively; maintainers backfill the rest.
+* [Language Request](https://github.com/Capsulsaurus/Capsule/issues/new?template=language-request.md)
+  — a language Capsule does not ship yet.
+
 See [`locales/README.md`](locales/README.md) for the catalog format and the
 [i18n design doc](capsule-docs/src/content/docs/design/i18n.md) for the overall design. A hosted
 translation UI (Weblate/Crowdin) backed by these same files is planned.
