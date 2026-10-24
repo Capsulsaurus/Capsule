@@ -1,4 +1,5 @@
 use super::*;
+use crate::ambient::testing::TestIds;
 
 fn dev(n: u128) -> Uuid {
     Uuid::from_u128(n)
@@ -37,7 +38,7 @@ fn member(
 #[test]
 fn assertion_signs_and_verifies_and_tamper_is_caught() {
     let ik = HybridSigningKey::generate();
-    let gid = mint_group_id();
+    let gid = mint_group_id(TestIds::new(113).ids());
     let mut a = AlbumGroupAssertion::new(gid, "Trip", "2026-07-10T10:00:00Z", dev(1), vec![]);
     assert!(
         !a.verify(&ik.verifying_key()),
@@ -58,7 +59,7 @@ fn assertion_signs_and_verifies_and_tamper_is_caught() {
 /// the same name.
 #[test]
 fn rename_converges_by_lww_regardless_of_order() {
-    let gid = mint_group_id();
+    let gid = mint_group_id(TestIds::new(114).ids());
     // Alice's assertion, renamed later-in-time than Bob's → Alice's name must win.
     let mut alice =
         AlbumGroupAssertion::new(gid, "Alice-name", "2026-07-10T12:00:00Z", dev(1), vec![]);
@@ -80,8 +81,8 @@ fn rename_converges_by_lww_regardless_of_order() {
 
 #[test]
 fn merge_unions_hints_and_refuses_a_different_group() {
-    let gid = mint_group_id();
-    let other_gid = mint_group_id();
+    let gid = mint_group_id(TestIds::new(115).ids());
+    let other_gid = mint_group_id(TestIds::new(116).ids());
     let mut a = AlbumGroupAssertion::new(
         gid,
         "G",
@@ -115,7 +116,7 @@ fn merge_unions_hints_and_refuses_a_different_group() {
 /// server stores carries them only inside the AEAD ciphertext.
 #[test]
 fn signing_bytes_commit_to_group_facts() {
-    let gid = mint_group_id();
+    let gid = mint_group_id(TestIds::new(117).ids());
     let a = AlbumGroupAssertion::new(gid, "Secret-Trip", "2026-07-10T10:00:00Z", dev(1), vec![]);
     let bytes = a.signing_bytes();
     assert!(
@@ -128,7 +129,7 @@ fn signing_bytes_commit_to_group_facts() {
 
 #[test]
 fn invite_seeds_a_joiner_assertion_with_siblings() {
-    let gid = mint_group_id();
+    let gid = mint_group_id(TestIds::new(118).ids());
     let creator_album = dev(0xC);
     let invite = AlbumGroupInvite {
         group_id: gid,
@@ -153,7 +154,7 @@ fn invite_seeds_a_joiner_assertion_with_siblings() {
 /// capture-time-ordered view; the group name is the LWW convergence across them.
 #[test]
 fn composition_merges_and_orders_by_capture_time() {
-    let gid = mint_group_id();
+    let gid = mint_group_id(TestIds::new(119).ids());
     let alice = member(
         dev(1),
         "alice.tld",
@@ -213,8 +214,8 @@ fn composition_merges_and_orders_by_capture_time() {
 /// stranger's album (not a member), cannot be pulled into the view.
 #[test]
 fn injection_is_refused_by_the_inclusion_rule() {
-    let gid = mint_group_id();
-    let other_gid = mint_group_id();
+    let gid = mint_group_id(TestIds::new(120).ids());
+    let other_gid = mint_group_id(TestIds::new(121).ids());
 
     let real = member(
         dev(1),
@@ -275,7 +276,7 @@ fn injection_is_refused_by_the_inclusion_rule() {
 /// (from the local index) flagged degraded, the aggregate is `partial`, and nothing is removed.
 #[test]
 fn partial_view_degrades_visibly_without_removal() {
-    let gid = mint_group_id();
+    let gid = mint_group_id(TestIds::new(122).ids());
     let reachable = member(
         dev(1),
         "alice.tld",
@@ -330,7 +331,7 @@ fn partial_view_degrades_visibly_without_removal() {
 /// aggregate, independently of the others (which are unaffected).
 #[test]
 fn moderation_drops_a_single_origin() {
-    let gid = mint_group_id();
+    let gid = mint_group_id(TestIds::new(123).ids());
     let alice = member(
         dev(1),
         "alice.tld",
@@ -360,7 +361,7 @@ fn moderation_drops_a_single_origin() {
 
 #[test]
 fn cover_override_is_honored_only_when_it_names_an_included_asset() {
-    let gid = mint_group_id();
+    let gid = mint_group_id(TestIds::new(124).ids());
     let alice = member(
         dev(1),
         "alice.tld",
@@ -384,7 +385,7 @@ fn cover_override_is_honored_only_when_it_names_an_included_asset() {
 
 #[test]
 fn empty_aggregate_is_well_formed() {
-    let gid = mint_group_id();
+    let gid = mint_group_id(TestIds::new(125).ids());
     let view = render_aggregate(gid, &[], None);
     assert!(view.entries.is_empty());
     assert!(view.origins.is_empty());

@@ -1,6 +1,7 @@
 use serde::Serialize;
 
 use super::*;
+use crate::ambient::testing::TestIds;
 use crate::crypto::keys::kem_p256::{
     DEK_P256_PUBLIC_LEN, MockP256KeyAgreement, encapsulate_to_p256_public,
 };
@@ -17,7 +18,7 @@ fn fast() -> Argon2Params {
 
 #[test]
 fn account_create_save_unlock_round_trip() {
-    let acct = Account::create();
+    let acct = Account::create(TestIds::new(101).ids());
     let ik_vk = acct.user_ik.verifying_key();
     let dsk_vk = acct.device.dsk.verifying_key();
     let default_album = acct.master.derive_default_album_id();
@@ -39,11 +40,12 @@ fn account_create_save_unlock_round_trip() {
 /// and it persists and unlocks like any other.
 #[test]
 fn from_parts_keeps_the_account_and_mints_a_new_device() {
-    let original = Account::create();
+    let original = Account::create(TestIds::new(102).ids());
     let sealed = original.sealed_identity();
     let user_ik = Account::open_sealed_identity(&original.master, &sealed).unwrap();
 
     let recovered = Account::from_parts(
+        TestIds::new(103).ids(),
         original.user_id,
         MasterKey::from_bytes(*original.master.as_bytes()),
         user_ik,
@@ -76,7 +78,7 @@ fn from_parts_keeps_the_account_and_mints_a_new_device() {
 /// A sealed identity opens only under the master key that sealed it.
 #[test]
 fn a_sealed_identity_refuses_a_foreign_master_key() {
-    let acct = Account::create();
+    let acct = Account::create(TestIds::new(104).ids());
     let sealed = acct.sealed_identity();
     assert!(matches!(
         Account::open_sealed_identity(&MasterKey::generate(), &sealed),
@@ -88,7 +90,7 @@ fn a_sealed_identity_refuses_a_foreign_master_key() {
 /// account file's sealed DSK — from being accepted as the user IK.
 #[test]
 fn a_sealed_device_key_is_not_accepted_as_an_identity() {
-    let acct = Account::create();
+    let acct = Account::create(TestIds::new(105).ids());
     let file = acct.to_file_with(b"pw", fast()).unwrap();
     for not_an_identity in [&file.sealed_dsk, &file.sealed_ik] {
         assert!(matches!(
@@ -100,7 +102,7 @@ fn a_sealed_device_key_is_not_accepted_as_an_identity() {
 
 #[test]
 fn wrong_passphrase_fails_to_unlock() {
-    let acct = Account::create();
+    let acct = Account::create(TestIds::new(106).ids());
     let file = acct.to_file_with(b"right", fast()).unwrap();
     assert!(file.unlock(b"wrong").is_err());
 }
@@ -114,7 +116,12 @@ fn wrong_passphrase_fails_to_unlock() {
 #[test]
 fn hardware_bound_account_round_trips_lock_and_unlock_through_the_element() {
     let element = Arc::new(MockP256KeyAgreement::new([0x5F; 32], false));
-    let acct = Account::create_with_hardware_dek(element.clone(), "device-dek".into()).unwrap();
+    let acct = Account::create_with_hardware_dek(
+        TestIds::new(107).ids(),
+        element.clone(),
+        "device-dek".into(),
+    )
+    .unwrap();
     assert!(acct.device.dek.is_hardware_bound());
     let published = acct.device.dek.public_bytes();
     assert_eq!(
@@ -150,10 +157,11 @@ fn hardware_bound_account_round_trips_lock_and_unlock_through_the_element() {
 #[test]
 fn hardware_bound_account_refuses_to_unlock_without_the_element() {
     let element = Arc::new(MockP256KeyAgreement::new([0x11; 32], false));
-    let file = Account::create_with_hardware_dek(element, "device-dek".into())
-        .unwrap()
-        .to_file_with(b"pw", fast())
-        .unwrap();
+    let file =
+        Account::create_with_hardware_dek(TestIds::new(108).ids(), element, "device-dek".into())
+            .unwrap()
+            .to_file_with(b"pw", fast())
+            .unwrap();
 
     assert!(
         matches!(file.unlock(b"pw"), Err(CryptoError::Key(_))),
@@ -167,7 +175,9 @@ fn hardware_bound_account_refuses_to_unlock_without_the_element() {
 #[test]
 fn a_foreign_element_cannot_impersonate_the_enrolled_one() {
     let real = Arc::new(MockP256KeyAgreement::new([0x22; 32], false));
-    let acct = Account::create_with_hardware_dek(real, "device-dek".into()).unwrap();
+    let acct =
+        Account::create_with_hardware_dek(TestIds::new(109).ids(), real, "device-dek".into())
+            .unwrap();
     let published = acct.device.dek.public_bytes();
     let (ct, sent) = encapsulate_to_p256_public(&published).unwrap();
     let file = acct.to_file_with(b"pw", fast()).unwrap();
@@ -187,7 +197,7 @@ fn a_foreign_element_cannot_impersonate_the_enrolled_one() {
 /// caller).
 #[test]
 fn software_dek_accounts_are_unaffected_by_the_hardware_seam() {
-    let acct = Account::create();
+    let acct = Account::create(TestIds::new(110).ids());
     assert!(!acct.device.dek.is_hardware_bound());
     let published = acct.device.dek.public_bytes();
     let file = acct.to_file_with(b"pw", fast()).unwrap();
@@ -224,7 +234,7 @@ fn a_pre_s_f8_account_file_without_a_binding_field_opens_as_software() {
         sealed_dek: Vec<u8>,
     }
 
-    let acct = Account::create();
+    let acct = Account::create(TestIds::new(111).ids());
     let published = acct.device.dek.public_bytes();
     let file = acct.to_file_with(b"pw", fast()).unwrap();
     let legacy = LegacyAccountFile {
@@ -247,7 +257,7 @@ fn a_pre_s_f8_account_file_without_a_binding_field_opens_as_software() {
 
 #[test]
 fn account_file_serializes_canonically() {
-    let acct = Account::create();
+    let acct = Account::create(TestIds::new(112).ids());
     let file = acct.to_file_with(b"pw", fast()).unwrap();
     let bytes = crate::cbor::to_canonical_vec(&file).unwrap();
     let back: AccountFile = crate::cbor::from_slice(&bytes).unwrap();

@@ -2,12 +2,13 @@
 //! canonical CBOR, sidecar and CRDT logic, validation, media, LQIP, sharing and drop crypto, and
 //! ML orchestration.
 //!
-//! It holds no connection, file handle or database, and reads no environment or filesystem:
-//! storage reaches it through ports such as `ml::VectorIndex`, which callers implement. Local
-//! state — the SQLite index, the on-disk library, the `Workspace`, import execution, backup I/O
-//! and the hardware signers — lives in `capsule-library`. The exceptions are the OS CSPRNG
-//! behind `crypto::rng` and `catch_unwind` in `media::decode`; `cargo xtask architecture-check`
-//! enforces the rest. See
+//! It holds no connection, file handle or database, and reads no environment, clock or
+//! filesystem: storage reaches it through ports such as `ml::VectorIndex`, and time and
+//! identifier randomness through [`ambient::Clock`] and [`ambient::Rng`], all of which callers
+//! implement. Local state — the SQLite index, the on-disk library, the `Workspace`, import
+//! execution, backup I/O and the hardware signers — lives in `capsule-library`. The exceptions
+//! are the OS CSPRNG behind `crypto::rng` and `catch_unwind` in `media::decode`;
+//! `cargo xtask architecture-check` enforces the rest. See
 //! [Module Map — Stateless Core](https://docs/design/module-map/#stateless-core).
 
 // ── WASM sealing surface (always compiled) ──────────────────────────────────
@@ -19,6 +20,10 @@
 pub mod cbor;
 pub mod crypto;
 pub mod drop;
+
+/// The `Clock` and `Rng` a caller injects, and the `IdSource` that mints UUIDv7s from them.
+/// Always compiled: pure over its two traits, no native deps.
+pub mod ambient;
 
 /// Share-link generation, encapsulation crypto, and the recipient-side [`sharing::open_scope`]
 /// path. Always compiled: it depends only on `cbor` + `crypto`, both of which

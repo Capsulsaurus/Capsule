@@ -29,6 +29,7 @@ use uuid::Uuid;
 
 use super::super::AlbumAuthority;
 use super::{OpenMlsAuthority, OpenMlsAuthorityError, Result, WriteTierIngest};
+use crate::ambient::IdSource;
 use crate::crypto::hash::{self, Hash32};
 use crate::crypto::keys::HybridSigningKey;
 
@@ -267,8 +268,8 @@ impl OpenMlsAuthority {
     /// AMKs are retained for reading history) — the ceremony re-attests the fresh epoch's write-tier
     /// and re-broadcasts the fresh AMK, which is what makes pre-compromise keys useless post-rekey.
     #[tracing::instrument(skip_all, fields(album_id = %self.album_id, ?reason))]
-    pub fn rekey_group(&mut self, reason: RekeyReason) -> Result<RekeyOutcome> {
-        let (intent_id, commit) = self.begin_rekey(reason)?;
+    pub fn rekey_group(&mut self, ids: IdSource<'_>, reason: RekeyReason) -> Result<RekeyOutcome> {
+        let (intent_id, commit) = self.begin_rekey(ids, reason)?;
         let key_delivery = self.finish_rekey()?;
         tracing::info!(album_id = %self.album_id, %intent_id, epoch = self.ceiling, "group re-keyed");
         Ok(RekeyOutcome {
@@ -284,9 +285,13 @@ impl OpenMlsAuthority {
     /// other members. The single commit is the atomic cutover — until a member applies it, the album
     /// stays on the prior epoch, so a partial run never leaves two live write-tier keys.
     #[tracing::instrument(skip_all, fields(album_id = %self.album_id, ?reason))]
-    pub fn begin_rekey(&mut self, reason: RekeyReason) -> Result<(Uuid, MlsMessageOut)> {
+    pub fn begin_rekey(
+        &mut self,
+        ids: IdSource<'_>,
+        reason: RekeyReason,
+    ) -> Result<(Uuid, MlsMessageOut)> {
         self.ensure_not_tombstoned()?;
-        let intent_id = Uuid::now_v7();
+        let intent_id = ids.uuid_v7();
         let minted = HybridSigningKey::generate();
         self.set_write_tier_aad(&minted)?;
         let commit = self

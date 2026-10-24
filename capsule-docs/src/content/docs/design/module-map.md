@@ -55,9 +55,11 @@ a stateful crate (`rusqlite`, `sea-orm`, `sqlite-vec`, `sqlx`, `walkdir`), and n
 `capsule-core/src` names `std::fs`, `std::env`, `rusqlite` or `sea_orm`, or calls a `Path` filesystem method
 (`.exists()`, `.is_file()`, `.is_dir()`, `.try_exists()`, `.read_dir()`, `.canonicalize()`,
 `.read_link()`, `.symlink_metadata()`). The scan is textual, so `.metadata()` on a `Path` is a
-known blind spot (the RAW decoders have an unrelated `metadata()`); review catches it. Routing core's remaining
-clock reads, the UUIDv7 identifiers it mints, through `Clock` and `Rng` is tracked in
-[#846](https://github.com/Capsulsaurus/Capsule/issues/846).
+known blind spot (the RAW decoders have an unrelated `metadata()`); review catches it. Outside
+test code (`tests.rs` files and `tests/` directories) it also rejects `Uuid::now_v7`,
+`Uuid::new_v4`, `SystemTime::now`, `Timestamp::now` and `Instant::now`: every UUIDv7 core mints
+comes from an `IdSource` in `capsule_core::ambient`, over the caller's `Clock` and `Rng`, and
+`capsule-library::ambient` supplies the system clock and OS random source.
 
 GraphQL and gRPC are retired
 ([ADR-0001](https://github.com/Capsulsaurus/Capsule/blob/master/adr/0001-the-public-server-surface-is-kynos-rest-only.md));
