@@ -94,6 +94,8 @@ public struct SafetyCheck: Sendable {
 /// cancelling. This port owns only what the *screen* has to draw and cannot
 /// derive for itself: a client that invented the text fallback or the safety
 /// code locally would be verifying its own arithmetic rather than the channel.
+///
+/// *Device Enrollment — Status note* puts the native add UI post-v1.
 public protocol CrossDeviceCeremonyPort: Sendable {
     /// Both presentations of an issued code.
     func invite(for code: EnrollmentCode) async throws -> CrossDeviceInvite
