@@ -81,6 +81,7 @@ pub use upgrade::{
 use uuid::Uuid;
 
 use super::AlbumAuthority;
+use crate::ambient::IdSource;
 use crate::crypto::keys::{AmkVersion, DeviceDirectory, HybridSigningKey, HybridVerifyingKey};
 
 /// The MLS ciphersuite Capsule pins every album group to: X-Wing (ML-KEM-768 + X25519) KEM,
@@ -426,10 +427,11 @@ impl OpenMlsAuthority {
     /// Create a fresh **single-member (self) album group** with a freshly-generated device
     /// identity and the default [`HistoryPolicy::Full`]. This is the single-member entry point,
     /// kept for the offline/parity surface; multi-member ceremonies use
-    /// [`create_album`](Self::create_album) with an explicit [`MlsDeviceIdentity`].
+    /// [`create_album`](Self::create_album) with an explicit [`MlsDeviceIdentity`]. The identity's
+    /// user and device ids are UUIDv7s minted from `ids`.
     #[tracing::instrument(skip_all, fields(album_id = %album_id, ciphersuite = PINNED_CIPHERSUITE_ID))]
-    pub fn create_self_group(album_id: Uuid) -> Result<Self> {
-        let identity = MlsDeviceIdentity::generate(Uuid::now_v7(), Uuid::now_v7())?;
+    pub fn create_self_group(ids: IdSource<'_>, album_id: Uuid) -> Result<Self> {
+        let identity = MlsDeviceIdentity::generate(ids.uuid_v7(), ids.uuid_v7())?;
         Self::create_album(identity, album_id, HistoryPolicy::Full)
     }
 

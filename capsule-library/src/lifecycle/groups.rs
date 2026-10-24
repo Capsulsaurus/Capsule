@@ -36,7 +36,7 @@ impl Workspace {
         home_server: &str,
     ) -> Result<AlbumGroupInvite> {
         self.album(&album_id)?; // must be an album this workspace holds keys for.
-        let group_id = mint_group_id();
+        let group_id = mint_group_id(crate::ambient::system_ids());
         let mut assertion = AlbumGroupAssertion::new(
             group_id,
             group_name,

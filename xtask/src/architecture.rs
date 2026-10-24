@@ -661,7 +661,8 @@ const STATEFUL_DEPENDENCIES: &[&str] = &["rusqlite", "sea-orm", "sqlite-vec", "s
 /// - the **manifest**: no [`STATEFUL_DEPENDENCIES`] entry is a normal dependency of
 ///   `capsule-core` (dev-dependencies are the tests' business);
 /// - the **sources**: no file under `capsule-core/src` names `std::fs`, `std::env`, `rusqlite`
-///   or `sea_orm` (see [`stateless_core_violations`]).
+///   or `sea_orm`, and no non-test file calls a clock or mints an identifier itself (see
+///   [`stateless_core_violations`]).
 ///
 /// The design's two sanctioned exceptions — the OS CSPRNG behind `crypto::rng` and
 /// `catch_unwind` in `media::decode` — touch none of these, so no file is exempt. A missing
@@ -742,7 +743,9 @@ const PATH_FS_METHODS: &[&str] = &[
 /// Every stateful reach in one `capsule-core` source file, one violation line each.
 ///
 /// A reach is a path through `std::fs`, `std::env`, `rusqlite` or `sea_orm`, written out
-/// (`std::fs::read`) or grouped (`use std::{env, fs}`). Comment lines are skipped, so a doc
+/// (`std::fs::read`) or grouped (`use std::{env, fs}`). Outside test code, an ambient read is
+/// one too: a call through one of [`AMBIENT_READS`], which a caller injects through
+/// `capsule_core::ambient` instead. Comment lines are skipped, so a doc
 /// comment explaining why a module stays `std::fs`-free is not a reach. `env!` and
 /// `option_env!` read the build environment at compile time, not the process's, and do not
 /// match. `Path` filesystem methods (`.exists()`, `.is_file()`, `.read_dir()` and the rest of
@@ -766,7 +769,19 @@ fn stateless_core_violations(relative: &str, source: &str) -> Vec<String> {
         .collect();
 
     let mut found = Vec::new();
+    let is_test = is_test_source(relative);
     for (index, line) in code.iter().enumerate() {
+        if !is_test {
+            for (path, what) in AMBIENT_READS {
+                if contains_path(line, path) {
+                    found.push(format!(
+                        "{relative}:{}: calls `{path}`; the stateless core reads no {what} \
+                         (take a `capsule_core::ambient` source from the caller)",
+                        index + 1
+                    ));
+                }
+            }
+        }
         for (path, what) in FORBIDDEN {
             if contains_path(line, path) {
                 found.push(format!(
@@ -817,6 +832,31 @@ fn stateless_core_violations(relative: &str, source: &str) -> Vec<String> {
         }
     }
     found
+}
+
+/// Clock reads and identifier draws the stateless core takes from its caller, each with what it
+/// reads. Matched as whole paths, so `jiff::Timestamp::now` and `Uuid::now_v7` both match while
+/// `Timestamp::nowhere` does not.
+const AMBIENT_READS: &[(&str, &str)] = &[
+    ("Uuid::now_v7", "clock or randomness"),
+    ("Uuid::new_v4", "randomness"),
+    ("SystemTime::now", "clock"),
+    ("Timestamp::now", "clock"),
+    ("Instant::now", "clock"),
+];
+
+/// Whether `relative` is test code under the repository's layout: a sibling `tests.rs` unit-test
+/// file, or anything under a `tests/` directory. Inline `mod tests { … }` blocks are forbidden
+/// elsewhere, so the file is the unit.
+fn is_test_source(relative: &str) -> bool {
+    let mut components = relative.split(['/', '\\']).peekable();
+    while let Some(component) = components.next() {
+        let last = components.peek().is_none();
+        if (last && component == "tests.rs") || (!last && component == "tests") {
+            return true;
+        }
+    }
+    false
 }
 
 /// Whether `line` names `path` as a whole path segment: not as the tail of a longer identifier

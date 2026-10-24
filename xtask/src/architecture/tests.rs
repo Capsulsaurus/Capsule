@@ -76,6 +76,65 @@ fn comments_and_longer_identifiers_are_not_reaches() {
 }
 
 #[test]
+fn a_clock_read_or_identifier_draw_is_reported_with_its_line() {
+    let source = "fn a() {}\nlet id = Uuid::now_v7();\nlet r = uuid::Uuid::new_v4();\n\
+                  let t = std::time::SystemTime::now();\nlet z = jiff::Timestamp::now();\n\
+                  let i = Instant::now();\n";
+    let found = core_violations(source);
+    assert_eq!(found.len(), 5, "{found:?}");
+    for (line, path) in [
+        (2, "Uuid::now_v7"),
+        (3, "Uuid::new_v4"),
+        (4, "SystemTime::now"),
+        (5, "Timestamp::now"),
+        (6, "Instant::now"),
+    ] {
+        assert!(
+            found
+                .iter()
+                .any(|v| v.starts_with(&format!("capsule-core/src/x.rs:{line}:"))
+                    && v.contains(&format!("`{path}`"))),
+            "{path} on line {line}: {found:?}"
+        );
+    }
+}
+
+#[test]
+fn an_injected_source_comment_or_longer_name_is_not_an_ambient_read() {
+    let source = "// falls back to `Timestamp::now()` no more\n\
+                  fn f(ids: IdSource<'_>) -> Uuid { ids.uuid_v7() }\n\
+                  fn g(c: &dyn Clock) -> Timestamp { c.now() }\nlet x = Timestamp::nowhere;\n";
+    assert_eq!(core_violations(source), Vec::<String>::new());
+}
+
+#[test]
+fn test_code_may_read_the_clock_but_not_the_filesystem() {
+    let source = "let id = Uuid::now_v7();\nlet t = Timestamp::now();\n";
+    for path in [
+        "capsule-core/src/federation/tests.rs",
+        "capsule-core/src/crypto/keys/keystore/tests.rs",
+        "capsule-core/src/tests/fixtures.rs",
+    ] {
+        assert_eq!(
+            stateless_core_violations(path, source),
+            Vec::<String>::new(),
+            "{path}"
+        );
+    }
+    assert_eq!(
+        stateless_core_violations("capsule-core/src/x/tests.rs", "std::fs::read(\"x\");\n").len(),
+        1
+    );
+    for path in [
+        "capsule-core/src/tests_util.rs",
+        "capsule-core/src/contests.rs",
+        "capsule-core/src/tests.rs/x.rs",
+    ] {
+        assert_eq!(stateless_core_violations(path, source).len(), 2, "{path}");
+    }
+}
+
+#[test]
 fn architecture_text_excludes_lockfiles() {
     assert!(is_architecture_text(Path::new("docs/design.md")));
     assert!(is_architecture_text(Path::new("src/lib.rs")));
