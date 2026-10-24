@@ -40,8 +40,9 @@ Current text:
 ## Proposed Fix (required)
 
 <!--
-Write the corrected message in the locale above. Keep every placeholder from the
-English source (`{name}`, `{count, plural, ...}`) exactly as it is written there;
+Write the corrected message in a language you speak natively: the locale above
+if you speak it natively, otherwise your own language, written as
+`locale: message`. Keep every placeholder from the English source (`{name}`, `{count, plural, ...}`) exactly as it is written there;
 translate only the words around it.
 -->
 
