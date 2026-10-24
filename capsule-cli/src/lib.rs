@@ -2558,15 +2558,23 @@ async fn peer_status(workspace: &Workspace, acks: &[PathBuf], json: bool) -> Res
                     delete.asset_id
                 )
                 .yellow(),
-                "sent" => format!("{}: delete sent", delete.asset_id).green(),
-                "superseded" => format!(
-                    "{}: held delete dropped: the asset was restored since",
-                    delete.asset_id
-                )
-                .yellow(),
-                _ => format!(
-                    "{}: delete not applied, kept for the next run: {}",
+                "sent" => format!(
+                    "{}: {} sent",
                     delete.asset_id,
+                    delete.action.as_deref().unwrap_or("delete")
+                )
+                .green(),
+                "refused" => format!(
+                    "{}: {} refused by the server, not retried; the library keeps it: {}",
+                    delete.asset_id,
+                    delete.action.as_deref().unwrap_or("delete"),
+                    delete.message.as_deref().unwrap_or("no detail")
+                )
+                .red(),
+                _ => format!(
+                    "{}: {} not applied, kept for the next run: {}",
+                    delete.asset_id,
+                    delete.action.as_deref().unwrap_or("delete"),
                     delete.message.as_deref().unwrap_or("no detail")
                 )
                 .red(),

@@ -1050,43 +1050,89 @@ fn unreachable_server() -> (RemoteConfig, Session) {
     (remote, session)
 }
 
-/// A held delete whose asset was restored since is dropped unsent, before any request: the
-/// server is never told to delete what the user brought back.
-#[tokio::test]
-async fn a_held_delete_undone_by_a_restore_is_dropped_unsent() {
+/// A ledger entry whose hand-off sealed the provenance record hashing to `sealed`.
+fn sealed_delegation(
+    asset_id: Uuid,
+    sealed: capsule_core::crypto::hash::Hash32,
+) -> serde_json::Value {
+    let mut entry = delegation(asset_id, "handed_off", "boot", 10_000, &[]);
+    entry["own"] = serde_json::json!([capsule_sdk::peering::delegation::OwnBlob {
+        role: capsule_sdk::upload::BlobRole::Provenance,
+        hash: sealed,
+        size: 0,
+    }]);
+    entry
+}
+
+/// The envelope of a held op.
+fn envelope_of(op: &[u8]) -> capsule_sdk::rest::types::ManifestEnvelope {
+    serde_json::from_slice::<capsule_sdk::rest::types::OpRequest>(op)
+        .expect("an op")
+        .manifest_envelope
+}
+
+/// A delete made after an edit, and a second delete made after a restore of the first, are
+/// held with every record between the sealed head and them, in chain order, so each op chains
+/// onto the one the server holds before it (invariant 17); an edit alone holds nothing.
+#[test]
+fn a_delete_after_an_edit_or_a_restore_is_held_with_every_record_since_the_hand_off() {
     let scratch = Scratch::new();
-    let (mut ws, deleted, _) = two_assets(&scratch);
-    ws.soft_delete(&deleted, 30).expect("deletes");
-    let op = remote::delete_op(&ws, &deleted)
-        .expect("encodes")
-        .expect("a delete");
-    ws.restore(&deleted).expect("restores");
-    // Unroutable: a request would fail, so a `superseded` outcome proves none was made.
-    let (remote, session) = unreachable_server();
-    let (kept, views) = send_deletes(
-        &remote,
-        &session,
-        &ws,
-        vec![PendingDelete {
-            asset_id: deleted,
-            op,
-        }],
-    )
-    .await;
-    assert!(kept.is_empty());
+    let (mut ws, asset, _) = two_assets(&scratch);
+    let sealed = ws.asset(&asset).expect("held").chain.records()[0].record_hash();
+    let mut ledger = ledger_of(vec![sealed_delegation(asset, sealed)]);
+
+    ws.set_caption(&asset, "an edit after the hand-off")
+        .expect("edits");
+    assert!(
+        hold_deletes(&mut ledger, &ws).expect("routes").is_empty(),
+        "an edit without a delete is not routed here"
+    );
+
+    ws.soft_delete(&asset, 30).expect("deletes");
+    assert_eq!(hold_deletes(&mut ledger, &ws).expect("routes"), vec![asset]);
+    let held = ledger.get(&asset).expect("held").held_deletes.clone();
+    let actions: Vec<Option<String>> = held.iter().map(|op| op_action(op)).collect();
     assert_eq!(
-        views,
-        vec![DeleteView {
-            asset_id: deleted,
-            outcome: "superseded",
-            code: None,
-            message: None,
-        }]
+        actions,
+        vec![
+            Some("metadata-update".to_owned()),
+            Some("delete".to_owned())
+        ]
+    );
+    let first =
+        serde_json::from_slice::<capsule_sdk::rest::types::OpRequest>(&held[0]).expect("an op");
+    assert!(
+        first.metadata_blob.is_some(),
+        "the edit carries the blob it binds"
+    );
+
+    ws.restore(&asset).expect("restores");
+    ws.soft_delete(&asset, 30).expect("deletes again");
+    assert_eq!(hold_deletes(&mut ledger, &ws).expect("routes"), vec![asset]);
+    let held = &ledger.get(&asset).expect("held").held_deletes;
+    let actions: Vec<Option<String>> = held.iter().map(|op| op_action(op)).collect();
+    assert_eq!(
+        actions,
+        ["metadata-update", "delete", "trash-restore", "delete"]
+            .map(|a| Some(a.to_owned()))
+            .to_vec()
+    );
+    let records = ws.asset(&asset).expect("held").chain.records();
+    for (op, prior) in held.iter().zip(records) {
+        assert_eq!(
+            envelope_of(op).prior_provenance_hash,
+            Some(prior.record_hash().to_hex()),
+            "each op chains onto the record before it, the first onto the sealed head"
+        );
+    }
+    assert!(
+        hold_deletes(&mut ledger, &ws).expect("routes").is_empty(),
+        "nothing already held is held twice"
     );
 }
 
-/// A delete the server could not be reached for is kept, in order, for the next run, and
-/// reported failed with its detail.
+/// A held op the server could not be reached for is kept, with every later op of its asset,
+/// which is not sent this run: each op chains onto the one before it.
 #[tokio::test]
 async fn a_delete_the_server_did_not_apply_is_kept_for_the_next_run() {
     let scratch = Scratch::new();
@@ -1106,9 +1152,72 @@ async fn a_delete_the_server_did_not_apply_is_kept_for_the_next_run() {
             op: b"not an op".to_vec(),
         },
     ];
-    let (kept, views) = send_deletes(&remote, &session, &ws, pending.clone()).await;
+    let (kept, views) = send_deletes(&remote, &session, pending.clone()).await;
     assert_eq!(kept, pending, "both are kept, in order");
     let outcomes: Vec<&str> = views.iter().map(|v| v.outcome).collect();
     assert_eq!(outcomes, vec!["failed", "failed"]);
-    assert!(views.iter().all(|v| v.message.is_some()), "{views:?}");
+    assert_eq!(views[0].action.as_deref(), Some("delete"));
+    assert_eq!(
+        views[1].message.as_deref(),
+        Some("not sent: an earlier op of this asset was not applied"),
+        "the later op waits on the earlier one rather than being sent out of order"
+    );
+}
+
+/// A held op refused for good is dropped, not retried, with every later op of its asset; another
+/// asset's ops are judged on their own.
+#[tokio::test]
+async fn a_held_op_refused_for_good_is_dropped_with_the_rest_of_its_asset() {
+    let scratch = Scratch::new();
+    let (mut ws, refused, other) = two_assets(&scratch);
+    ws.soft_delete(&refused, 30).expect("deletes");
+    ws.soft_delete(&other, 30).expect("deletes");
+    let op = |asset| {
+        remote::delete_op(&ws, &asset)
+            .expect("encodes")
+            .expect("a delete")
+    };
+    let (remote, session) = unreachable_server();
+    let others = PendingDelete {
+        asset_id: other,
+        op: op(other),
+    };
+    let pending = vec![
+        // Bytes that are not an op can only be refused again.
+        PendingDelete {
+            asset_id: refused,
+            op: b"not an op".to_vec(),
+        },
+        PendingDelete {
+            asset_id: refused,
+            op: op(refused),
+        },
+        others.clone(),
+    ];
+    let (kept, views) = send_deletes(&remote, &session, pending).await;
+    assert_eq!(kept, vec![others], "only the other asset's op is kept");
+    let outcomes: Vec<(Uuid, &str)> = views.iter().map(|v| (v.asset_id, v.outcome)).collect();
+    assert_eq!(
+        outcomes,
+        vec![
+            (refused, "refused"),
+            (refused, "refused"),
+            (other, "failed")
+        ]
+    );
+}
+
+/// A ledger that cannot be read leaves the push skipping nothing and the browser showing no
+/// line, rather than failing either.
+#[test]
+fn an_unreadable_ledger_skips_nothing_and_shows_no_line() {
+    let (_dir, state) = state();
+    fs::create_dir_all(state.root()).expect("a state dir");
+    fs::write(state.ledger_path(), b"not a ledger").expect("writes");
+    let read = delegated_assets(&state, &SystemBootClock::default());
+    assert!(read.is_err(), "the ledger does not parse");
+    assert!(delegated_or_none(read).is_empty());
+    let ledger = state.load_ledger();
+    assert!(ledger.is_err());
+    assert!(lines_or_none(ledger).is_empty());
 }

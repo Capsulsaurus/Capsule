@@ -738,8 +738,9 @@ pub(crate) enum PeerCommands {
         /// Print the run as one JSON document on stdout: each delegation with its state, each
         /// refused acknowledgement with a stable `kind` and the detail, each quarantined
         /// hand-off with its file, the stable `kind` of its refusal, the server's `code` when
-        /// it gave one, and the detail, and each delete made after a hand-off (held, sent,
-        /// superseded by a restore, or failed and kept)
+        /// it gave one, and the detail, and each delete made after a hand-off with the records
+        /// between the hand-off and it (held, sent, failed and kept, or refused and not
+        /// retried)
         #[arg(long)]
         json: bool,
     },

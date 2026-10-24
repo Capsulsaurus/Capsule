@@ -31,10 +31,11 @@
 //! the CLI database ([`crate::peering_state::DbDirectoryVersions`]).
 //!
 //! A delegated asset the origin deletes after the hand-off keeps its delete on the origin until
-//! the create's custody exists: `peer status` routes the library's signed delete through
-//! [`OriginLedger::hold_delete`], and sends the deletes [`OriginLedger::release`] hands back
-//! once its own custody check passes, so the server never sees a delete for an asset it has not
-//! indexed. `capsule push` skips an asset whose hand-off is still open and inside its deadline
+//! the create's custody exists: `peer status` routes the library's signed delete, with every
+//! record between the sealed head and it, through [`OriginLedger::hold_delete`], and sends what
+//! [`OriginLedger::release`] hands back, in chain order, once its own custody check passes, so
+//! the server never sees a delete for an asset it has not indexed, and the delete chains onto
+//! the head the server holds. `capsule push` skips an asset whose hand-off is still open and inside its deadline
 //! ([`open_delegations`]); the library browser shows each one with its ledger line
 //! ([`delegation_lines`]).
 //!
@@ -1720,8 +1721,9 @@ pub struct StatusSummary {
     pub refused_acks: Vec<PeerFailure>,
     /// Every hand-off this device quarantined: kept, not retried, until `peer discard`.
     pub quarantined: Vec<QuarantinedView>,
-    /// Every delete made after a hand-off: held until the create's custody, sent, superseded,
-    /// or failed and kept for the next run.
+    /// Every delete made after a hand-off, with the records between the sealed head and it:
+    /// held until the create's custody, sent, failed and kept for the next run, or refused for
+    /// good and dropped.
     pub deletes: Vec<DeleteView>,
 }
 
@@ -1777,27 +1779,36 @@ pub fn delegated_assets(
 /// deduplication makes that safe, only not cheap.
 #[must_use]
 pub fn delegated_for_push(device: Uuid) -> BTreeSet<Uuid> {
-    PeerState::for_device(device)
-        .and_then(|state| delegated_assets(&state, &SystemBootClock::default()))
-        .unwrap_or_else(|error| {
-            tracing::warn!(%error, "push: the origin ledger could not be read; skipping no delegated asset");
-            BTreeSet::new()
-        })
+    delegated_or_none(
+        PeerState::for_device(device)
+            .and_then(|state| delegated_assets(&state, &SystemBootClock::default())),
+    )
+}
+
+/// The push's skip set from reading the ledger: what it read, or nothing when it could not.
+fn delegated_or_none(read: Result<BTreeSet<Uuid>, PeerError>) -> BTreeSet<Uuid> {
+    read.unwrap_or_else(|error| {
+        tracing::warn!(%error, "push: the origin ledger could not be read; skipping no delegated asset");
+        BTreeSet::new()
+    })
 }
 
 /// [`delegation_lines`] of `device`'s persisted ledger, for the library browser. A ledger that
 /// cannot be read shows no line, which is logged: the browser still opens.
 #[must_use]
 pub fn delegation_lines_for(device: Uuid) -> BTreeMap<Uuid, String> {
-    PeerState::for_device(device)
-        .and_then(|state| state.load_ledger())
-        .map_or_else(
-            |error| {
-                tracing::warn!(%error, "library: the origin ledger could not be read; no delegation is shown");
-                BTreeMap::new()
-            },
-            |ledger| delegation_lines(&ledger, short_delegate_name),
-        )
+    lines_or_none(PeerState::for_device(device).and_then(|state| state.load_ledger()))
+}
+
+/// The browser's lines from reading the ledger: its lines, or none when it could not be read.
+fn lines_or_none(read: Result<OriginLedger, PeerError>) -> BTreeMap<Uuid, String> {
+    read.map_or_else(
+        |error| {
+            tracing::warn!(%error, "library: the origin ledger could not be read; no delegation is shown");
+            BTreeMap::new()
+        },
+        |ledger| delegation_lines(&ledger, short_delegate_name),
+    )
 }
 
 /// The name a delegate is shown under where space is short, as the library browser shows every
@@ -1823,24 +1834,29 @@ pub fn delegation_lines(
         .collect()
 }
 
-/// A delete the origin ledger released once the create's custody was confirmed, kept until the
-/// server applies it.
+/// One op of a delete's stretch (the delete, or a record between the sealed head and it) the
+/// origin ledger released once the create's custody was confirmed, kept until the server
+/// applies it or refuses it for good.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub struct PendingDelete {
-    /// The asset it deletes.
+    /// The asset it changes.
     pub asset_id: Uuid,
-    /// The lifecycle op, as [`remote::delete_op`] encoded it.
+    /// The lifecycle op, as [`remote::lifecycle_ops_after`] encoded it.
     pub op: Vec<u8>,
 }
 
-/// What happened to one delete made after a hand-off, as `capsule peer status` reports it.
+/// What happened to the ops of one delete made after a hand-off, as `capsule peer status`
+/// reports it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DeleteView {
     /// The asset.
     pub asset_id: Uuid,
+    /// The op's action (`delete`, `trash-restore`, `metadata-update`); `None` for a `held` line,
+    /// which stands for every op held for the asset.
+    pub action: Option<String>,
     /// `held` (the create has no confirmed custody yet), `sent` (the server applied it),
-    /// `superseded` (the asset was restored since, so the delete was dropped unsent) or
-    /// `failed` (kept, and sent again by the next run).
+    /// `failed` (not applied; kept, and sent again by the next run) or `refused` (refused for
+    /// good, such as a stale chain; dropped and not retried, the library keeps it).
     pub outcome: &'static str,
     /// The server's stable `error.*` code, for a failed one that carried it.
     pub code: Option<String>,
@@ -1849,9 +1865,12 @@ pub struct DeleteView {
 }
 
 /// Route every delete the library made after a hand-off through the ledger: for each
-/// delegation whose custody is not confirmed and whose library chain head is a `delete`, hold
-/// that signed delete ([`OriginLedger::hold_delete`]) unless it is held already. Returns the
-/// assets whose delete was newly held.
+/// delegation whose custody is not confirmed and whose chain after the sealed head holds a
+/// `delete`, hold every signed record of that stretch, in chain order
+/// ([`remote::lifecycle_ops_after`], [`OriginLedger::hold_delete`]), except those held
+/// already. The delete then chains onto what the server holds: an edit or a restore made
+/// between the hand-off and the delete is sent before it. Returns the assets with a newly
+/// held op.
 ///
 /// # Errors
 ///
@@ -1865,16 +1884,24 @@ pub fn hold_deletes(
         .delegations()
         .filter(|d| d.state != DelegationState::Released)
     {
-        let op = remote::delete_op(workspace, &delegation.asset_id)
-            .map_err(|error| PeerError::State(format!("a delete record: {error}")))?;
-        if let Some(op) = op.filter(|op| !delegation.held_deletes.contains(op)) {
+        let ops =
+            remote::lifecycle_ops_after(workspace, &delegation.asset_id, sealed_head(delegation))
+                .map_err(|error| PeerError::State(format!("a delete record: {error}")))?;
+        for op in ops
+            .into_iter()
+            .filter(|op| !delegation.held_deletes.contains(op))
+        {
             candidates.push((delegation.asset_id, op));
         }
     }
     let mut held = Vec::new();
     for (asset_id, op) in candidates {
         match ledger.hold_delete(asset_id, op) {
-            DeleteDisposition::Held => held.push(asset_id),
+            DeleteDisposition::Held => {
+                if held.last() != Some(&asset_id) {
+                    held.push(asset_id);
+                }
+            }
             // Only a released delegation sends now, and those were not routed here.
             DeleteDisposition::SendNow(_) => {}
         }
@@ -1882,52 +1909,102 @@ pub fn hold_deletes(
     Ok(held)
 }
 
-/// Send every delete in `outbox`, in order, under `session`, and keep the ones the server did
-/// not apply. A delete whose asset the library no longer holds in trash was undone by a restore
-/// after it was held, so it is dropped unsent rather than deleting what the user brought back.
+/// The hash of the provenance record `delegation` sealed: the chain head the server holds once
+/// the delegate uploads, which every op held after it must chain onto. `None` for a ledger entry
+/// that recorded no provenance blob.
+fn sealed_head(
+    delegation: &capsule_sdk::peering::Delegation,
+) -> Option<capsule_core::crypto::hash::Hash32> {
+    delegation
+        .own
+        .iter()
+        .find(|blob| blob.role == capsule_sdk::upload::BlobRole::Provenance)
+        .map(|blob| blob.hash)
+}
+
+/// Send every op in `outbox`, in order, under `session`, and keep the ones a later run can
+/// still apply.
+///
+/// An asset's ops are its chain from the sealed head on, so they go strictly in order and each
+/// is sent only once the one before it was applied:
+///
+/// - **applied** (or replayed) — `sent`, and dropped;
+/// - **not applied, and resending could succeed** (the server unreachable, the session not
+///   accepted, a server fault) — `failed`, kept with every later op of that asset, which is not
+///   sent this run;
+/// - **refused for good** ([`remote::OpFailure::permanent`]: a stale chain, a regressed epoch,
+///   a closed retention window, a malformed op) — `refused`, dropped with every later op of that
+///   asset, which could only be refused as a stale chain. Not retried: the library keeps its
+///   records, and the server keeps the asset as it was, so nothing is lost; the line names the
+///   server's code.
+///
+/// A restore made after a delete is in the stretch too, so it reaches the server after the
+/// delete it undoes; nothing is dropped for the asset's current trash state.
 async fn send_deletes(
     remote: &RemoteConfig,
     session: &Session,
-    workspace: &Workspace,
     outbox: Vec<PendingDelete>,
 ) -> (Vec<PendingDelete>, Vec<DeleteView>) {
     let mut kept = Vec::new();
     let mut views = Vec::new();
+    // The assets an op of which was not applied this run, and whether that was for good.
+    let mut stopped: BTreeMap<Uuid, bool> = BTreeMap::new();
     for pending in outbox {
         let asset_id = pending.asset_id;
-        if !workspace.is_trashed(&asset_id) {
-            tracing::warn!(%asset_id, "peer status: a held delete was undone by a restore; dropped unsent");
+        let action = op_action(&pending.op);
+        if let Some(&permanent) = stopped.get(&asset_id) {
+            tracing::debug!(%asset_id, permanent, "peer status: an earlier op of the asset was not applied; this one is not sent");
             views.push(DeleteView {
                 asset_id,
-                outcome: "superseded",
+                action,
+                outcome: if permanent { "refused" } else { "failed" },
                 code: None,
-                message: None,
+                message: Some("not sent: an earlier op of this asset was not applied".to_owned()),
             });
+            if !permanent {
+                kept.push(pending);
+            }
             continue;
         }
         match remote::send_op(remote, session.clone(), &pending.op).await {
             Ok(applied) => {
-                tracing::info!(%asset_id, sync_seq = applied.sync_seq, replayed = applied.replayed, "peer status: held delete sent after custody");
+                tracing::info!(%asset_id, action = ?action, sync_seq = applied.sync_seq, replayed = applied.replayed, "peer status: held op sent after custody");
                 views.push(DeleteView {
                     asset_id,
+                    action,
                     outcome: "sent",
                     code: None,
                     message: None,
                 });
             }
             Err(failure) => {
-                tracing::warn!(%asset_id, code = ?failure.code, error = %failure.message, "peer status: held delete not applied; kept for the next run");
+                let permanent = failure.permanent;
+                if permanent {
+                    tracing::warn!(%asset_id, action = ?action, code = ?failure.code, error = %failure.message, "peer status: held op refused for good; dropped, the library keeps it");
+                } else {
+                    tracing::warn!(%asset_id, action = ?action, code = ?failure.code, error = %failure.message, "peer status: held op not applied; kept for the next run");
+                    kept.push(pending);
+                }
                 views.push(DeleteView {
                     asset_id,
-                    outcome: "failed",
+                    action,
+                    outcome: if permanent { "refused" } else { "failed" },
                     code: failure.code,
                     message: Some(failure.message),
                 });
-                kept.push(pending);
+                stopped.insert(asset_id, permanent);
             }
         }
     }
     (kept, views)
+}
+
+/// The action a held op carries, as its envelope names it (`delete`, `trash-restore`,
+/// `metadata-update`), or `None` for bytes that are not an op.
+fn op_action(op: &[u8]) -> Option<String> {
+    serde_json::from_slice::<capsule_sdk::rest::types::OpRequest>(op)
+        .ok()
+        .map(|request| request.manifest_envelope.action)
 }
 
 /// `capsule peer status`: take `acks`, re-queue what is due, and release what the server holds
@@ -2042,7 +2119,7 @@ async fn status_with(
     // stops here sends them next time; a delete sent twice is a replay the server answers alike.
     state.save_outbox(&outbox)?;
     state.save_ledger(&ledger)?;
-    let (unsent, mut deletes) = send_deletes(remote, &session, workspace, outbox).await;
+    let (unsent, mut deletes) = send_deletes(remote, &session, outbox).await;
     state.save_outbox(&unsent)?;
     deletes.extend(
         ledger
@@ -2050,6 +2127,7 @@ async fn status_with(
             .filter(|d| d.state != DelegationState::Released && !d.held_deletes.is_empty())
             .map(|d| DeleteView {
                 asset_id: d.asset_id,
+                action: None,
                 outcome: "held",
                 code: None,
                 message: None,

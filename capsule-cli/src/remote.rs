@@ -2014,29 +2014,90 @@ pub fn delete_op(
     workspace: &Workspace,
     asset_id: &Uuid,
 ) -> Result<Option<Vec<u8>>, LifecycleError> {
-    use base64::Engine as _;
     let Some(asset) = workspace.asset(asset_id) else {
         return Ok(None);
     };
     let Some(head) = asset.chain.records().last() else {
         return Ok(None);
     };
-    let core = &head.manifest.core;
-    if core.action != capsule_core::crypto::provenance::Action::Delete {
+    if head.manifest.core.action != capsule_core::crypto::provenance::Action::Delete {
         return Ok(None);
     }
-    let manifest = capsule_core::cbor::to_canonical_vec(head)
+    encode_op(asset, head).map(Some)
+}
+
+/// The `POST /v1/albums/{album}/ops` bodies that carry `asset_id`'s chain from the record whose
+/// hash is `after` up to the library's head, in chain order, when that stretch holds a
+/// `delete`: what a delegated asset's origin ledger holds until the create's custody exists.
+///
+/// The server's chain head once the delegate uploads is the record the hand-off sealed
+/// (`after`), and invariant 17 refuses an op that does not chain onto it. So a delete made
+/// after an edit, or after a restore of an earlier delete, is sent with every record between
+/// the sealed head and it, each chaining onto the one before, rather than alone. With `after`
+/// unknown or not in the chain, only a head `delete` is returned (as [`delete_op`]).
+///
+/// Each op is [`delete_op`]'s shape. A record that binds a metadata blob carries the library's
+/// blob only when it is the one the record commits to: the library keeps the latest blob, so an
+/// edit superseded by a later edit goes without it, and the server refuses that op for good.
+///
+/// # Errors
+///
+/// [`LifecycleError::Cbor`] when a record does not encode, which is a corrupt library.
+pub fn lifecycle_ops_after(
+    workspace: &Workspace,
+    asset_id: &Uuid,
+    after: Option<capsule_core::crypto::hash::Hash32>,
+) -> Result<Vec<Vec<u8>>, LifecycleError> {
+    use capsule_core::crypto::provenance::Action;
+    let Some(asset) = workspace.asset(asset_id) else {
+        return Ok(Vec::new());
+    };
+    let records = asset.chain.records();
+    let sealed = after.and_then(|hash| records.iter().position(|r| r.record_hash() == hash));
+    let start = if let Some(index) = sealed {
+        index + 1
+    } else {
+        tracing::debug!(%asset_id, "lifecycle ops: the sealed head is not in the chain; the head alone");
+        records.len().saturating_sub(1)
+    };
+    let tail = records.get(start..).unwrap_or_default();
+    if !tail
+        .iter()
+        .any(|r| r.manifest.core.action == Action::Delete)
+    {
+        return Ok(Vec::new());
+    }
+    tracing::debug!(%asset_id, records = tail.len(), "lifecycle ops: the stretch after the sealed head");
+    tail.iter().map(|record| encode_op(asset, record)).collect()
+}
+
+/// One provenance record of `asset` as the JSON body of a lifecycle op.
+fn encode_op(
+    asset: &capsule_library::lifecycle::AssetState,
+    record: &capsule_core::crypto::provenance::ProvenanceRecord,
+) -> Result<Vec<u8>, LifecycleError> {
+    use base64::Engine as _;
+    let core = &record.manifest.core;
+    let manifest = capsule_core::cbor::to_canonical_vec(record)
         .map_err(|e| LifecycleError::Cbor(format!("encoding the provenance record: {e}")))?;
     let base64 = base64::engine::general_purpose::STANDARD;
+    let blob = core.metadata_blob_hash.and_then(|hash| {
+        let held = capsule_core::crypto::encryption::blob_ciphertext_hash(&asset.metadata_blob);
+        if held != hash {
+            tracing::warn!(
+                asset_id = %asset.asset_id,
+                action = ?core.action,
+                "lifecycle op: the metadata blob this record binds was superseded; sent without it"
+            );
+        }
+        (held == hash).then(|| base64.encode(&asset.metadata_blob))
+    });
     let request = capsule_sdk::rest::types::OpRequest {
         manifest_envelope: op_envelope(core),
         manifest_cbor: base64.encode(&manifest),
-        metadata_blob: core
-            .metadata_blob_hash
-            .map(|_| base64.encode(&asset.metadata_blob)),
+        metadata_blob: blob,
     };
     serde_json::to_vec(&request)
-        .map(Some)
         .map_err(|e| LifecycleError::Cbor(format!("encoding the lifecycle op: {e}")))
 }
 
@@ -2093,6 +2154,11 @@ pub struct OpFailure {
     pub code: Option<String>,
     /// The English detail.
     pub message: String,
+    /// Whether sending the same bytes again can only be refused again: the server judged the op
+    /// itself (`400`, `409`, `413`, `415`, `422` — a stale chain, a regressed epoch, a closed
+    /// retention window, a malformed op), or the held bytes are not an op. An unreachable server,
+    /// a session it did not accept, an upgrade it asked for and a server fault are not.
+    pub permanent: bool,
 }
 
 /// Send one lifecycle op [`delete_op`] encoded, under `session`.
@@ -2110,6 +2176,7 @@ pub(crate) async fn send_op(
     let failure = |message: String| OpFailure {
         code: None,
         message,
+        permanent: true,
     };
     let request: capsule_sdk::rest::types::OpRequest = serde_json::from_slice(op)
         .map_err(|error| failure(format!("the held op does not parse: {error}")))?;
@@ -2118,17 +2185,21 @@ pub(crate) async fn send_op(
         .album_id
         .clone()
         .ok_or_else(|| failure("the held op names no album".to_owned()))?;
-    let client = AuthenticatedClient::new(&remote.sync_endpoint, session)
-        .map_err(|error| failure(error.to_string()))?;
+    let client =
+        AuthenticatedClient::new(&remote.sync_endpoint, session).map_err(|error| OpFailure {
+            permanent: false,
+            ..failure(error.to_string())
+        })?;
     let applied = client
         .album_lifecycle_op(album_id, &remote.protocol_version, None, &request)
         .await
         .map_err(|error| {
-            let code = op_refusal_code(&error);
-            tracing::warn!(?code, %error, "lifecycle op refused");
+            let (code, permanent) = op_refusal(&error);
+            tracing::warn!(?code, permanent, %error, "lifecycle op refused");
             OpFailure {
                 code,
                 message: error.to_string(),
+                permanent,
             }
         })?
         .into_inner();
@@ -2146,26 +2217,27 @@ pub(crate) async fn send_op(
     })
 }
 
-/// The server's stable `error.*` code on a refused lifecycle op: every status the operation
-/// declares carries a problem body.
-fn op_refusal_code(
+/// The server's stable `error.*` code on a refused lifecycle op (every status the operation
+/// declares carries a problem body), and whether the refusal is of the op itself, so that
+/// resending it is refused again ([`OpFailure::permanent`]).
+fn op_refusal(
     error: &capsule_sdk::rest::Error<capsule_sdk::rest::AlbumLifecycleOpError>,
-) -> Option<String> {
+) -> (Option<String>, bool) {
     use capsule_sdk::rest::AlbumLifecycleOpError as Refusal;
     let capsule_sdk::rest::Error::Api(response) = error else {
-        return None;
+        return (None, false);
     };
-    Some(match response.inner() {
-        Refusal::Status409(problem) => problem.code.clone(),
-        Refusal::Status426(problem) => problem.code.clone(),
+    match response.inner() {
+        Refusal::Status409(problem) => (Some(problem.code.clone()), true),
+        Refusal::Status426(problem) => (Some(problem.code.clone()), false),
         Refusal::Status400(problem)
-        | Refusal::Status401(problem)
-        | Refusal::Status403(problem)
         | Refusal::Status413(problem)
         | Refusal::Status415(problem)
-        | Refusal::Status422(problem)
-        | Refusal::Status500(problem) => problem.code.clone(),
-    })
+        | Refusal::Status422(problem) => (Some(problem.code.clone()), true),
+        Refusal::Status401(problem) | Refusal::Status403(problem) | Refusal::Status500(problem) => {
+            (Some(problem.code.clone()), false)
+        }
+    }
 }
 
 // ─── Move release (#671) ─────────────────────────────────────────────────────
