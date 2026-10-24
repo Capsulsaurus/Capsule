@@ -172,6 +172,11 @@ impl<C: Read + Write, E: Read + Write> Session<C, E> {
         &mut self.event
     }
 
+    /// Give up the session and take back its command and event channels.
+    pub fn into_channels(self) -> (C, E) {
+        (self.command, self.event)
+    }
+
     fn take_transaction(&mut self) -> u32 {
         let id = self.next_transaction;
         if self.session_id.is_some() {

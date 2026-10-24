@@ -2,6 +2,7 @@
 //! (staged or streaming). The pure half — grouping, scope, default-album resolution and the
 //! upload policy — is `capsule_core::import`, re-exported here so callers name one path.
 
+pub(crate) mod camera;
 pub(crate) mod enrichment;
 pub(crate) mod executor;
 pub(crate) mod executor_cancellation;
@@ -11,6 +12,10 @@ pub(crate) mod progress;
 pub(crate) mod scanner;
 pub(crate) mod streaming;
 
+pub use camera::{
+    CameraAdapter, CameraDevice, CameraError, CameraObject, CameraReceipt, ObjectFailure,
+    PtpCamera, ReceivedObject,
+};
 pub use capsule_core::import::*;
 pub use enrichment::{CAPTION_MAX_BYTES, FAVORITE_RATING, SourceMetadataIndex, sidecar_enrichment};
 pub use executor::{execute, execute_with_source_metadata};

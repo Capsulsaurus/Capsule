@@ -1391,6 +1391,7 @@ dependencies = [
  "jiff",
  "p256",
  "proptest",
+ "ptpip-rs",
  "rawshift-image",
  "rusqlite",
  "rustix 1.1.4",
