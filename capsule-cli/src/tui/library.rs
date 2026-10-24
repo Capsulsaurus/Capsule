@@ -920,6 +920,11 @@ fn row_item(catalogue: &Catalogue, row: Row) -> ListItem<'static> {
             };
             // The id is in the detail pane; the row keeps to what fits beside it.
             let mut text = format!("{}  {}", when(asset), asset.ext);
+            // The ledger's line itself is in the detail pane; the row only marks the asset, first
+            // so a narrow list still shows it.
+            if catalogue.delegation(asset_id).is_some() {
+                text.push_str("  delegated");
+            }
             if let Some((stack_id, StackRole::Primary)) = asset.stack {
                 let count = catalogue.stack(stack_id).map_or(1, |s| s.members.len());
                 let _ = write!(text, "  stack of {count}");
@@ -977,6 +982,9 @@ fn asset_lines(catalogue: &Catalogue, asset: &AssetEntry) -> Vec<Line<'static>> 
     let row = |label: &str, value: String| Line::from(format!("{label:<17}{value}"));
     for (label, value) in &asset.rows {
         lines.push(row(label, value.clone()));
+    }
+    if let Some(line) = catalogue.delegation(asset.asset_id) {
+        lines.push(row("Upload:", line.to_owned()));
     }
     let album = catalogue.album(asset.album_id);
     lines.push(row(

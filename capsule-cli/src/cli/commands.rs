@@ -84,7 +84,8 @@ pub(crate) enum Commands {
         #[arg(long, conflicts_with = "push")]
         json: bool,
     },
-    /// Upload a local Capsule library to the server
+    /// Upload a local Capsule library to the server. An asset handed to another device with
+    /// `capsule peer delegate` is left to that device while its hand-off is open
     Push {
         /// Path to the Capsule library to push
         #[arg(long, value_name = "PATH")]
@@ -109,7 +110,8 @@ pub(crate) enum Commands {
         #[arg(long, value_name = "ASSET_ID")]
         asset: Vec<Uuid>,
         /// Print the run as one JSON document on stdout: the totals and each asset's outcome
-        /// (verified, failed with its error, or planned on a dry run)
+        /// (verified, failed with its error, delegated to another device, or planned on a dry
+        /// run)
         #[arg(long)]
         json: bool,
     },
@@ -720,7 +722,8 @@ pub(crate) enum PeerCommands {
     },
     /// Show this device's handed-off assets: take the other device's acknowledgements, take back
     /// uploads that are overdue or whose device was revoked, and release what the server holds.
-    /// Also lists every hand-off this device quarantined
+    /// A delete made after a hand-off is held until the server holds the asset, then sent. Also
+    /// lists every hand-off this device quarantined
     Status {
         /// Path to the Capsule library holding the assets
         #[arg(long, value_name = "PATH")]
@@ -733,9 +736,11 @@ pub(crate) enum PeerCommands {
         #[arg(long)]
         passphrase_stdin: bool,
         /// Print the run as one JSON document on stdout: each delegation with its state, each
-        /// refused acknowledgement with a stable `kind` and the detail, and each quarantined
+        /// refused acknowledgement with a stable `kind` and the detail, each quarantined
         /// hand-off with its file, the stable `kind` of its refusal, the server's `code` when
-        /// it gave one, and the detail
+        /// it gave one, and the detail, and each delete made after a hand-off with the records
+        /// between the hand-off and it (held, sent, failed and kept, or refused and not
+        /// retried)
         #[arg(long)]
         json: bool,
     },

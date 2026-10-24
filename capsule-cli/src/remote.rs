@@ -8,7 +8,8 @@
 //! the SDK's, not re-implemented here. These functions are the testable core the
 //! binary's command arms call and the E2E round-trip drives directly.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::fmt::Write as _;
 use std::path::PathBuf;
 
 use capsule_core::crypto::keys::{HybridVerifyingKey, MasterKey};
@@ -1089,6 +1090,10 @@ pub enum AssetPushStatus {
     Verified,
     /// The asset did not reach verified custody; `error` says where it stopped.
     Failed,
+    /// Skipped: the asset is handed to another device of the account and its delegation is
+    /// still inside its deadline ([`PushRun::delegated`]), so that device uploads it. Not a
+    /// failure; a re-queued delegation is pushed like any other asset.
+    Delegated,
 }
 
 /// Why an asset failed, in the shape `--json` reports it.
@@ -1222,6 +1227,9 @@ pub struct PushSummary {
     pub verified_assets: usize,
     /// Assets that did not; each is in `outcomes` with its error.
     pub failed_assets: usize,
+    /// Assets skipped because another device of the account holds an open hand-off for them
+    /// ([`AssetPushStatus::Delegated`]).
+    pub delegated_assets: usize,
     /// Verified custody receipts persisted to the library this run.
     pub receipts: usize,
     /// Blobs transferred to completion.
@@ -1523,12 +1531,19 @@ pub struct PushRun<'a> {
     pub events: TransferEvents,
     /// Told when each asset starts and finishes.
     pub observer: Option<&'a mut dyn FnMut(AssetProgress)>,
+    /// Assets handed to another device whose delegation is still open and inside its deadline
+    /// ([`crate::peer::open_delegations`]): each is reported [`AssetPushStatus::Delegated`] and
+    /// nothing of it is sent, so the push does not spend the bandwidth the hand-off saves.
+    /// Deduplication would make sending it safe; skipping it is only the cheaper of two correct
+    /// runs.
+    pub delegated: BTreeSet<Uuid>,
 }
 
 impl std::fmt::Debug for PushRun<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PushRun")
             .field("assets", &self.assets)
+            .field("delegated", &self.delegated)
             .field("events", &self.events)
             .field("observed", &self.observer.is_some())
             .finish()
@@ -1615,7 +1630,11 @@ async fn push_with(
 
     if options.dry_run {
         for asset_id in asset_ids {
-            let outcome = plan_asset(workspace, &scheduler, &held, options.force, asset_id);
+            let outcome = if run.delegated.contains(&asset_id) {
+                delegated(asset_id)
+            } else {
+                plan_asset(workspace, &scheduler, &held, options.force, asset_id)
+            };
             run.tell(|| AssetProgress::Finished(outcome.clone()));
             summary.record(outcome);
         }
@@ -1641,6 +1660,12 @@ async fn push_with(
         uncovered,
     };
     for asset_id in asset_ids {
+        if run.delegated.contains(&asset_id) {
+            let outcome = delegated(asset_id);
+            run.tell(|| AssetProgress::Finished(outcome.clone()));
+            summary.record(outcome);
+            continue;
+        }
         let mut outcome = AssetPushOutcome::new(asset_id, AssetPushStatus::Verified);
         if let Err(error) = pusher
             .push(asset_id, &mut outcome, &mut summary, &mut run)
@@ -1728,6 +1753,16 @@ fn plan_asset<H: std::hash::BuildHasher>(
         }
     }
     outcome
+}
+
+/// The outcome of an asset skipped because another device holds its open hand-off: nothing of
+/// it was read or sent.
+fn delegated(asset_id: Uuid) -> AssetPushOutcome {
+    tracing::info!(
+        %asset_id,
+        "push: skipped; handed to another device and still inside its deadline"
+    );
+    AssetPushOutcome::new(asset_id, AssetPushStatus::Delegated)
 }
 
 /// Everything a run shares across its assets.
@@ -1892,6 +1927,7 @@ impl PushSummary {
         match outcome.status {
             AssetPushStatus::Verified => self.verified_assets += 1,
             AssetPushStatus::Failed => self.failed_assets += 1,
+            AssetPushStatus::Delegated => self.delegated_assets += 1,
             AssetPushStatus::Planned => {}
         }
         self.outcomes.push(outcome);
@@ -1907,6 +1943,7 @@ impl PushSummary {
             pushed_assets = self.pushed_assets,
             verified_assets = self.verified_assets,
             failed_assets = self.failed_assets,
+            delegated_assets = self.delegated_assets,
             receipts = self.receipts,
             uploaded = self.uploaded_blobs,
             merged = self.merged_blobs,
@@ -1923,10 +1960,18 @@ impl PushSummary {
 /// receipts the run stored. English inline, as every CLI line is going to be (issue #680).
 #[must_use]
 pub fn custody_line(summary: &PushSummary) -> String {
-    format!(
+    let mut line = format!(
         "Custody verified for {} of {} assets; {} receipts stored in the library.",
         summary.verified_assets, summary.assets, summary.receipts
-    )
+    );
+    if summary.delegated_assets > 0 {
+        let _ = write!(
+            line,
+            " Skipped {} handed to another device; `capsule peer status` follows them.",
+            summary.delegated_assets
+        );
+    }
+    line
 }
 
 /// One failed asset, as the line the human output prints for it.
@@ -1948,6 +1993,251 @@ pub fn failed_run_reason(summary: &PushSummary) -> Option<String> {
             summary.failed_assets, summary.assets
         )
     })
+}
+
+// ─── Lifecycle ops ───────────────────────────────────────────────────────────
+
+/// The `POST /v1/albums/{album}/ops` body for `asset_id`'s chain head when that head is a
+/// `delete`, encoded as the JSON the request carries: the signed delete a delegated asset's
+/// origin ledger holds until the create's custody exists
+/// ([`OriginLedger::hold_delete`](capsule_sdk::peering::OriginLedger::hold_delete)).
+///
+/// Self-contained, so a held delete is sent later without the library: the manifest's
+/// canonical CBOR (the server's new chain head is its hash), the envelope projected from it,
+/// and the sealed metadata blob whenever the manifest binds one. `None` for an asset whose head
+/// is not a delete, or one the library does not hold.
+///
+/// # Errors
+///
+/// [`LifecycleError::Cbor`] when the record does not encode, which is a corrupt library.
+pub fn delete_op(
+    workspace: &Workspace,
+    asset_id: &Uuid,
+) -> Result<Option<Vec<u8>>, LifecycleError> {
+    let Some(asset) = workspace.asset(asset_id) else {
+        return Ok(None);
+    };
+    let Some(head) = asset.chain.records().last() else {
+        return Ok(None);
+    };
+    if head.manifest.core.action != capsule_core::crypto::provenance::Action::Delete {
+        return Ok(None);
+    }
+    encode_op(asset, head).map(Some)
+}
+
+/// The `POST /v1/albums/{album}/ops` bodies that carry `asset_id`'s chain from the record whose
+/// hash is `after` up to the library's head, in chain order, when that stretch holds a
+/// `delete`: what a delegated asset's origin ledger holds until the create's custody exists.
+///
+/// The server's chain head once the delegate uploads is the record the hand-off sealed
+/// (`after`), and invariant 17 refuses an op that does not chain onto it. So a delete made
+/// after an edit, or after a restore of an earlier delete, is sent with every record between
+/// the sealed head and it, each chaining onto the one before, rather than alone. With `after`
+/// unknown or not in the chain, only a head `delete` is returned (as [`delete_op`]).
+///
+/// Each op is [`delete_op`]'s shape. A record that binds a metadata blob carries the library's
+/// blob only when it is the one the record commits to: the library keeps the latest blob, so an
+/// edit superseded by a later edit goes without it, and the server refuses that op for good.
+///
+/// # Errors
+///
+/// [`LifecycleError::Cbor`] when a record does not encode, which is a corrupt library.
+pub fn lifecycle_ops_after(
+    workspace: &Workspace,
+    asset_id: &Uuid,
+    after: Option<capsule_core::crypto::hash::Hash32>,
+) -> Result<Vec<Vec<u8>>, LifecycleError> {
+    use capsule_core::crypto::provenance::Action;
+    let Some(asset) = workspace.asset(asset_id) else {
+        return Ok(Vec::new());
+    };
+    let records = asset.chain.records();
+    let sealed = after.and_then(|hash| records.iter().position(|r| r.record_hash() == hash));
+    let start = if let Some(index) = sealed {
+        index + 1
+    } else {
+        tracing::debug!(%asset_id, "lifecycle ops: the sealed head is not in the chain; the head alone");
+        records.len().saturating_sub(1)
+    };
+    let tail = records.get(start..).unwrap_or_default();
+    if !tail
+        .iter()
+        .any(|r| r.manifest.core.action == Action::Delete)
+    {
+        return Ok(Vec::new());
+    }
+    tracing::debug!(%asset_id, records = tail.len(), "lifecycle ops: the stretch after the sealed head");
+    tail.iter().map(|record| encode_op(asset, record)).collect()
+}
+
+/// One provenance record of `asset` as the JSON body of a lifecycle op.
+fn encode_op(
+    asset: &capsule_library::lifecycle::AssetState,
+    record: &capsule_core::crypto::provenance::ProvenanceRecord,
+) -> Result<Vec<u8>, LifecycleError> {
+    use base64::Engine as _;
+    let core = &record.manifest.core;
+    let manifest = capsule_core::cbor::to_canonical_vec(record)
+        .map_err(|e| LifecycleError::Cbor(format!("encoding the provenance record: {e}")))?;
+    let base64 = base64::engine::general_purpose::STANDARD;
+    let blob = core.metadata_blob_hash.and_then(|hash| {
+        let held = capsule_core::crypto::encryption::blob_ciphertext_hash(&asset.metadata_blob);
+        if held != hash {
+            tracing::warn!(
+                asset_id = %asset.asset_id,
+                action = ?core.action,
+                "lifecycle op: the metadata blob this record binds was superseded; sent without it"
+            );
+        }
+        (held == hash).then(|| base64.encode(&asset.metadata_blob))
+    });
+    let request = capsule_sdk::rest::types::OpRequest {
+        manifest_envelope: op_envelope(core),
+        manifest_cbor: base64.encode(&manifest),
+        metadata_blob: blob,
+    };
+    serde_json::to_vec(&request)
+        .map_err(|e| LifecycleError::Cbor(format!("encoding the lifecycle op: {e}")))
+}
+
+/// The server-visible projection of a lifecycle manifest: every field verbatim, naming the
+/// original's ciphertext, and no derivative (the server refuses the pair on a lifecycle write).
+fn op_envelope(
+    core: &capsule_core::crypto::provenance::ManifestCore,
+) -> capsule_sdk::rest::types::ManifestEnvelope {
+    let wire = |value: serde_json::Result<serde_json::Value>| {
+        value
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_owned))
+            .unwrap_or_default()
+    };
+    capsule_sdk::rest::types::ManifestEnvelope {
+        crypto_suite_id: i64::from(core.crypto_suite_id),
+        protocol_version: core.protocol_version.clone(),
+        album_id: Some(core.album_id.to_string()),
+        file_id: core.file_id.to_string(),
+        amk_version: i64::from(core.amk_version.0),
+        ciphertext_hash: core.ciphertext_hash.to_hex(),
+        plaintext_size: i64::try_from(core.plaintext_size).unwrap_or(i64::MAX),
+        chunk_size: i64::from(core.chunk_size),
+        key_mode: wire(serde_json::to_value(core.key_mode)),
+        metadata_blob_hash: core.metadata_blob_hash.map(|h| h.to_hex()),
+        original_blob_hash: None,
+        derivative_role: None,
+        derivative_format: None,
+        created_by_user: core.created_by_user.to_string(),
+        created_by_device: core.created_by_device.to_string(),
+        client_version: core.client_version.clone(),
+        timestamp: core.timestamp.clone(),
+        action: wire(serde_json::to_value(core.action)),
+        prior_provenance_hash: core.prior_provenance_hash.map(|h| h.to_hex()),
+        retention_until: core.retention_until.clone(),
+    }
+}
+
+/// What the server did with one lifecycle op.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct OpApplied {
+    /// The action it applied.
+    pub action: String,
+    /// The feed position it occupies.
+    pub sync_seq: u64,
+    /// Whether the server had applied it already (a replay is not an error).
+    pub replayed: bool,
+}
+
+/// Why a lifecycle op was not applied.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct OpFailure {
+    /// The server's stable `error.*` code, when it gave one.
+    pub code: Option<String>,
+    /// The English detail.
+    pub message: String,
+    /// Whether sending the same bytes again can only be refused again: the server judged the op
+    /// itself (`400`, `409`, `413`, `415`, `422` — a stale chain, a regressed epoch, a closed
+    /// retention window, a malformed op), or the held bytes are not an op. An unreachable server,
+    /// a session it did not accept, an upgrade it asked for and a server fault are not.
+    pub permanent: bool,
+}
+
+/// Send one lifecycle op [`delete_op`] encoded, under `session`.
+///
+/// # Errors
+///
+/// [`OpFailure`] when the bytes are not a lifecycle op, or the server refused or could not be
+/// reached.
+#[instrument(skip_all)]
+pub(crate) async fn send_op(
+    remote: &RemoteConfig,
+    session: Session,
+    op: &[u8],
+) -> Result<OpApplied, OpFailure> {
+    let failure = |message: String| OpFailure {
+        code: None,
+        message,
+        permanent: true,
+    };
+    let request: capsule_sdk::rest::types::OpRequest = serde_json::from_slice(op)
+        .map_err(|error| failure(format!("the held op does not parse: {error}")))?;
+    let album_id = request
+        .manifest_envelope
+        .album_id
+        .clone()
+        .ok_or_else(|| failure("the held op names no album".to_owned()))?;
+    let client =
+        AuthenticatedClient::new(&remote.sync_endpoint, session).map_err(|error| OpFailure {
+            permanent: false,
+            ..failure(error.to_string())
+        })?;
+    let applied = client
+        .album_lifecycle_op(album_id, &remote.protocol_version, None, &request)
+        .await
+        .map_err(|error| {
+            let (code, permanent) = op_refusal(&error);
+            tracing::warn!(?code, permanent, %error, "lifecycle op refused");
+            OpFailure {
+                code,
+                message: error.to_string(),
+                permanent,
+            }
+        })?
+        .into_inner();
+    tracing::info!(
+        asset_id = %applied.asset_id,
+        action = %applied.action,
+        sync_seq = applied.sync_seq,
+        replayed = applied.replayed,
+        "lifecycle op applied"
+    );
+    Ok(OpApplied {
+        action: applied.action,
+        sync_seq: u64::try_from(applied.sync_seq).unwrap_or_default(),
+        replayed: applied.replayed,
+    })
+}
+
+/// The server's stable `error.*` code on a refused lifecycle op (every status the operation
+/// declares carries a problem body), and whether the refusal is of the op itself, so that
+/// resending it is refused again ([`OpFailure::permanent`]).
+fn op_refusal(
+    error: &capsule_sdk::rest::Error<capsule_sdk::rest::AlbumLifecycleOpError>,
+) -> (Option<String>, bool) {
+    use capsule_sdk::rest::AlbumLifecycleOpError as Refusal;
+    let capsule_sdk::rest::Error::Api(response) = error else {
+        return (None, false);
+    };
+    match response.inner() {
+        Refusal::Status409(problem) => (Some(problem.code.clone()), true),
+        Refusal::Status426(problem) => (Some(problem.code.clone()), false),
+        Refusal::Status400(problem)
+        | Refusal::Status413(problem)
+        | Refusal::Status415(problem)
+        | Refusal::Status422(problem) => (Some(problem.code.clone()), true),
+        Refusal::Status401(problem) | Refusal::Status403(problem) | Refusal::Status500(problem) => {
+            (Some(problem.code.clone()), false)
+        }
+    }
 }
 
 // ─── Move release (#671) ─────────────────────────────────────────────────────

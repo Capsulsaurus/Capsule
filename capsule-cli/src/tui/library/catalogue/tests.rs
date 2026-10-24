@@ -260,7 +260,10 @@ fn outlines_and_places_compare_by_kind_and_bits() {
 fn debug_prints_counts_not_rows() {
     let fx = Fixture::with_assets(2);
     let printed = format!("{:?}", collect(&fx.ws));
-    assert_eq!(printed, "Catalogue { assets: 2, albums: 1, stacks: 0, .. }");
+    assert_eq!(
+        printed,
+        "Catalogue { assets: 2, albums: 1, stacks: 0, delegations: 0, .. }"
+    );
 }
 
 fn bare(asset_id: Uuid, album_id: Uuid, in_trash: bool) -> AssetEntry {

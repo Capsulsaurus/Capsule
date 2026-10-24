@@ -827,3 +827,397 @@ fn a_transiently_failed_held_hand_off_is_kept_for_the_next_run() {
         assert!(quarantined(&inbox).expect("lists").is_empty());
     }
 }
+
+// ─── Delegated assets: push, the library browser, deletes after hand-off ─────
+
+const DELEGATE: Uuid = Uuid::from_u128(0x0192_f1a0_0000_7000_8000_0000_0000_00d2);
+
+/// One ledger entry, as the origin ledger serializes it.
+fn delegation(
+    asset_id: Uuid,
+    state: &str,
+    epoch: &str,
+    deadline_ms: u64,
+    held: &[Vec<u8>],
+) -> serde_json::Value {
+    serde_json::json!({
+        "asset_id": asset_id,
+        "delegate": DELEGATE,
+        "hand_off": format!("handoff-{asset_id}"),
+        "own": [],
+        "release": [],
+        "clock_epoch": epoch,
+        "deadline_ms": deadline_ms,
+        "state": state,
+        "requeued_because": if state == "requeued" { serde_json::json!("deadline_expired") } else { serde_json::Value::Null },
+        "held_deletes": held,
+    })
+}
+
+fn ledger_of(entries: Vec<serde_json::Value>) -> OriginLedger {
+    let delegations: serde_json::Map<String, serde_json::Value> = entries
+        .into_iter()
+        .map(|entry| (entry["asset_id"].as_str().expect("an id").to_owned(), entry))
+        .collect();
+    serde_json::from_value(serde_json::json!({ "delegations": delegations })).expect("a ledger")
+}
+
+/// Push leaves to its delegate only an asset whose hand-off is open (handed off or
+/// acknowledged) and inside its deadline on this boot's clock; a passed deadline, another
+/// boot's clock, a re-queued and a released delegation are all pushed from here.
+#[test]
+fn only_an_open_hand_off_inside_its_deadline_is_left_to_its_delegate() {
+    let id = Uuid::from_u128;
+    let ledger = ledger_of(vec![
+        delegation(id(1), "handed_off", "boot", 10_000, &[]),
+        delegation(id(2), "acknowledged", "boot", 10_000, &[]),
+        delegation(id(3), "acknowledged", "boot", 5_000, &[]),
+        delegation(id(4), "handed_off", "an-earlier-boot", 10_000, &[]),
+        delegation(id(5), "requeued", "boot", 10_000, &[]),
+        delegation(id(6), "released", "boot", 10_000, &[]),
+    ]);
+    assert_eq!(
+        open_delegations(&ledger, "boot", 5_000),
+        BTreeSet::from([id(1), id(2)]),
+        "the deadline is exclusive: at it, the hand-off is due"
+    );
+
+    let (_dir, state) = state();
+    state.save_ledger(&ledger).expect("writes");
+    struct At(u64);
+    impl BootClock for At {
+        fn epoch(&self) -> String {
+            "boot".to_owned()
+        }
+        fn now_ms(&self) -> u64 {
+            self.0
+        }
+    }
+    assert_eq!(
+        delegated_assets(&state, &At(9_999)).expect("reads"),
+        BTreeSet::from([id(1), id(2)])
+    );
+    assert!(
+        delegated_assets(&state, &At(10_000))
+            .expect("reads")
+            .is_empty()
+    );
+}
+
+/// The library browser's lines: the ledger's own status line for every delegation whose custody
+/// is not confirmed, and none for a released one.
+#[test]
+fn every_unreleased_delegation_has_its_ledger_line_and_a_released_one_none() {
+    let id = Uuid::from_u128;
+    let ledger = ledger_of(vec![
+        delegation(id(1), "handed_off", "boot", 10_000, &[]),
+        delegation(id(2), "acknowledged", "boot", 10_000, &[]),
+        delegation(id(3), "requeued", "boot", 10_000, &[]),
+        delegation(id(4), "released", "boot", 10_000, &[]),
+    ]);
+    let lines = delegation_lines(&ledger, short_delegate_name);
+    let handed = "handed to device 000000d2, awaiting server";
+    assert_eq!(
+        lines,
+        BTreeMap::from([
+            (id(1), handed.to_owned()),
+            (id(2), handed.to_owned()),
+            (id(3), "re-queued to upload from this device".to_owned()),
+        ])
+    );
+    assert_eq!(
+        delegation_lines(&ledger, delegate_name).get(&id(1)),
+        Some(&format!("handed to device {DELEGATE}, awaiting server")),
+        "`peer status` names the delegate in full"
+    );
+}
+
+/// A library with two assets, both imported; neither deleted yet.
+fn two_assets(scratch: &Scratch) -> (Workspace, Uuid, Uuid) {
+    let lib = scratch.path().join("library");
+    fs::create_dir_all(&lib).expect("a library dir");
+    let mut ws = Workspace::create_with_params(
+        &lib,
+        b"passphrase",
+        capsule_core::crypto::primitives::Argon2Params {
+            mem_kib: 64,
+            t_cost: 1,
+            p_cost: 1,
+        },
+    )
+    .expect("a library");
+    let album = ws.default_album_id();
+    ws.ensure_album(album, "Imports").expect("an album");
+    let opts = capsule_library::lifecycle::SignedImportOptions {
+        move_source: false,
+        defer_source_release: false,
+        stack: None,
+        enrichment: None,
+    };
+    let mut import = |name: &str, bytes: &[u8]| {
+        let source = scratch.path().join(name);
+        fs::write(&source, bytes).expect("a source");
+        ws.import_asset_with(album, &source, &opts)
+            .expect("imports")
+            .asset_id
+    };
+    let deleted = import("deleted.jpg", b"the photo deleted after its hand-off");
+    let kept = import("kept.jpg", b"the photo kept");
+    (ws, deleted, kept)
+}
+
+/// A delete the library made after the hand-off is held in the ledger, once: only for a
+/// delegation whose custody is unconfirmed, only when the asset's head is a delete, and a
+/// second run holds nothing new. A released delegation is not routed (its create is indexed).
+#[test]
+fn a_delete_after_hand_off_is_held_once_in_the_ledger() {
+    let scratch = Scratch::new();
+    let (mut ws, deleted, kept) = two_assets(&scratch);
+    let mut released = ledger_of(vec![delegation(deleted, "released", "boot", 10_000, &[])]);
+    let mut ledger = ledger_of(vec![
+        delegation(deleted, "acknowledged", "boot", 10_000, &[]),
+        delegation(kept, "handed_off", "boot", 10_000, &[]),
+    ]);
+    assert!(
+        hold_deletes(&mut ledger, &ws).expect("routes").is_empty(),
+        "nothing is deleted yet"
+    );
+
+    ws.soft_delete(&deleted, 30).expect("deletes");
+    let op = remote::delete_op(&ws, &deleted)
+        .expect("encodes")
+        .expect("the head is a delete");
+    assert_eq!(
+        hold_deletes(&mut ledger, &ws).expect("routes"),
+        vec![deleted]
+    );
+    assert_eq!(ledger.get(&deleted).expect("held").held_deletes, vec![op]);
+    assert!(ledger.get(&kept).expect("held").held_deletes.is_empty());
+    assert!(
+        hold_deletes(&mut ledger, &ws).expect("routes").is_empty(),
+        "a delete already held is not held twice"
+    );
+    assert_eq!(ledger.get(&deleted).expect("held").held_deletes.len(), 1);
+
+    assert!(hold_deletes(&mut released, &ws).expect("routes").is_empty());
+    assert!(
+        released
+            .get(&deleted)
+            .expect("recorded")
+            .held_deletes
+            .is_empty()
+    );
+}
+
+/// The outbox of released deletes round-trips durably and starts empty.
+#[test]
+fn the_delete_outbox_round_trips_and_starts_empty() {
+    let (_dir, state) = state();
+    assert!(state.load_outbox().expect("reads").is_empty());
+    let outbox = vec![
+        PendingDelete {
+            asset_id: Uuid::from_u128(1),
+            op: b"{\"op\":1}".to_vec(),
+        },
+        PendingDelete {
+            asset_id: Uuid::from_u128(2),
+            op: b"{\"op\":2}".to_vec(),
+        },
+    ];
+    state.save_outbox(&outbox).expect("writes");
+    assert_eq!(state.load_outbox().expect("reads"), outbox);
+    state.save_outbox(&[]).expect("writes");
+    assert!(state.load_outbox().expect("reads").is_empty());
+}
+
+/// Endpoints on the discard port, where nothing answers, and a session resumed against them.
+fn unreachable_server() -> (RemoteConfig, Session) {
+    let remote = RemoteConfig {
+        auth_endpoint: "http://127.0.0.1:9/v1/auth".to_owned(),
+        sync_endpoint: "http://127.0.0.1:9".to_owned(),
+        upload_endpoint: "http://127.0.0.1:9/v1/upload".to_owned(),
+        albums_endpoint: "http://127.0.0.1:9/v1/albums".to_owned(),
+        protocol_version: capsule_core::crypto::primitives::PROTOCOL_VERSION.to_owned(),
+    };
+    let session = capsule_sdk::auth::AuthClient::new(&remote.auth_endpoint)
+        .expect("a base url")
+        .resume(capsule_sdk::auth::PersistedSession {
+            access_token: "access".to_owned().into(),
+            refresh_token: "refresh".to_owned().into(),
+            access_expires_at_unix: jiff::Timestamp::now().as_second() + 3600,
+        })
+        .expect("a resumed session");
+    (remote, session)
+}
+
+/// A ledger entry whose hand-off sealed the provenance record hashing to `sealed`.
+fn sealed_delegation(
+    asset_id: Uuid,
+    sealed: capsule_core::crypto::hash::Hash32,
+) -> serde_json::Value {
+    let mut entry = delegation(asset_id, "handed_off", "boot", 10_000, &[]);
+    entry["own"] = serde_json::json!([capsule_sdk::peering::delegation::OwnBlob {
+        role: capsule_sdk::upload::BlobRole::Provenance,
+        hash: sealed,
+        size: 0,
+    }]);
+    entry
+}
+
+/// The envelope of a held op.
+fn envelope_of(op: &[u8]) -> capsule_sdk::rest::types::ManifestEnvelope {
+    serde_json::from_slice::<capsule_sdk::rest::types::OpRequest>(op)
+        .expect("an op")
+        .manifest_envelope
+}
+
+/// A delete made after an edit, and a second delete made after a restore of the first, are
+/// held with every record between the sealed head and them, in chain order, so each op chains
+/// onto the one the server holds before it (invariant 17); an edit alone holds nothing.
+#[test]
+fn a_delete_after_an_edit_or_a_restore_is_held_with_every_record_since_the_hand_off() {
+    let scratch = Scratch::new();
+    let (mut ws, asset, _) = two_assets(&scratch);
+    let sealed = ws.asset(&asset).expect("held").chain.records()[0].record_hash();
+    let mut ledger = ledger_of(vec![sealed_delegation(asset, sealed)]);
+
+    ws.set_caption(&asset, "an edit after the hand-off")
+        .expect("edits");
+    assert!(
+        hold_deletes(&mut ledger, &ws).expect("routes").is_empty(),
+        "an edit without a delete is not routed here"
+    );
+
+    ws.soft_delete(&asset, 30).expect("deletes");
+    assert_eq!(hold_deletes(&mut ledger, &ws).expect("routes"), vec![asset]);
+    let held = ledger.get(&asset).expect("held").held_deletes.clone();
+    let actions: Vec<Option<String>> = held.iter().map(|op| op_action(op)).collect();
+    assert_eq!(
+        actions,
+        vec![
+            Some("metadata-update".to_owned()),
+            Some("delete".to_owned())
+        ]
+    );
+    let first =
+        serde_json::from_slice::<capsule_sdk::rest::types::OpRequest>(&held[0]).expect("an op");
+    assert!(
+        first.metadata_blob.is_some(),
+        "the edit carries the blob it binds"
+    );
+
+    ws.restore(&asset).expect("restores");
+    ws.soft_delete(&asset, 30).expect("deletes again");
+    assert_eq!(hold_deletes(&mut ledger, &ws).expect("routes"), vec![asset]);
+    let held = &ledger.get(&asset).expect("held").held_deletes;
+    let actions: Vec<Option<String>> = held.iter().map(|op| op_action(op)).collect();
+    assert_eq!(
+        actions,
+        ["metadata-update", "delete", "trash-restore", "delete"]
+            .map(|a| Some(a.to_owned()))
+            .to_vec()
+    );
+    let records = ws.asset(&asset).expect("held").chain.records();
+    for (op, prior) in held.iter().zip(records) {
+        assert_eq!(
+            envelope_of(op).prior_provenance_hash,
+            Some(prior.record_hash().to_hex()),
+            "each op chains onto the record before it, the first onto the sealed head"
+        );
+    }
+    assert!(
+        hold_deletes(&mut ledger, &ws).expect("routes").is_empty(),
+        "nothing already held is held twice"
+    );
+}
+
+/// A held op the server could not be reached for is kept, with every later op of its asset,
+/// which is not sent this run: each op chains onto the one before it.
+#[tokio::test]
+async fn a_delete_the_server_did_not_apply_is_kept_for_the_next_run() {
+    let scratch = Scratch::new();
+    let (mut ws, deleted, _) = two_assets(&scratch);
+    ws.soft_delete(&deleted, 30).expect("deletes");
+    let op = remote::delete_op(&ws, &deleted)
+        .expect("encodes")
+        .expect("a delete");
+    let (remote, session) = unreachable_server();
+    let pending = vec![
+        PendingDelete {
+            asset_id: deleted,
+            op: op.clone(),
+        },
+        PendingDelete {
+            asset_id: deleted,
+            op: b"not an op".to_vec(),
+        },
+    ];
+    let (kept, views) = send_deletes(&remote, &session, pending.clone()).await;
+    assert_eq!(kept, pending, "both are kept, in order");
+    let outcomes: Vec<&str> = views.iter().map(|v| v.outcome).collect();
+    assert_eq!(outcomes, vec!["failed", "failed"]);
+    assert_eq!(views[0].action.as_deref(), Some("delete"));
+    assert_eq!(
+        views[1].message.as_deref(),
+        Some("not sent: an earlier op of this asset was not applied"),
+        "the later op waits on the earlier one rather than being sent out of order"
+    );
+}
+
+/// A held op refused for good is dropped, not retried, with every later op of its asset; another
+/// asset's ops are judged on their own.
+#[tokio::test]
+async fn a_held_op_refused_for_good_is_dropped_with_the_rest_of_its_asset() {
+    let scratch = Scratch::new();
+    let (mut ws, refused, other) = two_assets(&scratch);
+    ws.soft_delete(&refused, 30).expect("deletes");
+    ws.soft_delete(&other, 30).expect("deletes");
+    let op = |asset| {
+        remote::delete_op(&ws, &asset)
+            .expect("encodes")
+            .expect("a delete")
+    };
+    let (remote, session) = unreachable_server();
+    let others = PendingDelete {
+        asset_id: other,
+        op: op(other),
+    };
+    let pending = vec![
+        // Bytes that are not an op can only be refused again.
+        PendingDelete {
+            asset_id: refused,
+            op: b"not an op".to_vec(),
+        },
+        PendingDelete {
+            asset_id: refused,
+            op: op(refused),
+        },
+        others.clone(),
+    ];
+    let (kept, views) = send_deletes(&remote, &session, pending).await;
+    assert_eq!(kept, vec![others], "only the other asset's op is kept");
+    let outcomes: Vec<(Uuid, &str)> = views.iter().map(|v| (v.asset_id, v.outcome)).collect();
+    assert_eq!(
+        outcomes,
+        vec![
+            (refused, "refused"),
+            (refused, "refused"),
+            (other, "failed")
+        ]
+    );
+}
+
+/// A ledger that cannot be read leaves the push skipping nothing and the browser showing no
+/// line, rather than failing either.
+#[test]
+fn an_unreadable_ledger_skips_nothing_and_shows_no_line() {
+    let (_dir, state) = state();
+    fs::create_dir_all(state.root()).expect("a state dir");
+    fs::write(state.ledger_path(), b"not a ledger").expect("writes");
+    let read = delegated_assets(&state, &SystemBootClock::default());
+    assert!(read.is_err(), "the ledger does not parse");
+    assert!(delegated_or_none(read).is_empty());
+    let ledger = state.load_ledger();
+    assert!(ledger.is_err());
+    assert!(lines_or_none(ledger).is_empty());
+}
