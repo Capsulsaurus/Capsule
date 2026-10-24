@@ -12,6 +12,7 @@ members = [
     "capsule-wasm",
     "capsule-server",
     "capsule-server/migration",
+    "ptpip-rs",
     "xtask",
 ]
 # capsule-sdk's REST client is generated at build time by spargen from the committed
@@ -28,6 +29,7 @@ default-members = [
     "capsule-sdk",
     "capsule-server",
     "capsule-server/migration",
+    "ptpip-rs",
 ]
 resolver = "3"
 # The cargo-fuzz harness is its own workspace: it links libFuzzer and is built only by

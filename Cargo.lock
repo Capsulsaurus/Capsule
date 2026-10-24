@@ -5920,6 +5920,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ptpip-rs"
+version = "0.1.0"
+dependencies = [
+ "jiff",
+ "thiserror 2.0.20",
+ "tracing",
+]
+
+[[package]]
 name = "ptr_meta"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
