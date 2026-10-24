@@ -2016,10 +2016,10 @@ async fn status_with(
         .filter(|d| d.state != DelegationState::Released)
         .map(|d| d.asset_id)
         .collect();
-    let releases: Vec<HeldRelease> = pending
-        .iter()
-        .filter_map(|id| workspace.upload_bundle(id).ok())
-        .map(|bundle| HeldRelease::for_original(&bundle))
+    let releases: Vec<HeldRelease> = ledger
+        .delegations()
+        .filter(|d| d.state != DelegationState::Released)
+        .map(recorded_release)
         .collect();
     let verifier = coordinator.resolve_custody(&releases).await;
 
@@ -2112,6 +2112,40 @@ pub fn discard(state: &PeerState, address: &str) -> Result<Discarded, PeerError>
         asset_id: note.asset_id,
         kind: note.kind,
     })
+}
+
+/// What releasing `delegation`'s original waits on, from the blobs the origin recorded at
+/// hand-off: the hashes the ledger's gate checks, with the sizes and roles the origin itself
+/// computed. Not re-derived from the library's current head, which may have moved since — a
+/// delete binds no metadata blob, so its bundle would no longer name the one the create did,
+/// and the custody check would never answer for it.
+fn recorded_release(delegation: &capsule_sdk::peering::Delegation) -> HeldRelease {
+    use capsule_core::crypto::receipts::{BlobRole as ReceiptRole, ReceiptExpectations};
+    use capsule_sdk::upload::BlobRole;
+    let blobs = delegation
+        .release
+        .iter()
+        .filter_map(|hash| delegation.own.iter().find(|blob| blob.hash == *hash))
+        .filter_map(|blob| {
+            let role = match blob.role {
+                BlobRole::Original => ReceiptRole::Original,
+                BlobRole::Metadata => ReceiptRole::Metadata,
+                BlobRole::Derivative => ReceiptRole::Derivative,
+                BlobRole::Provenance => ReceiptRole::Provenance,
+                BlobRole::Backup | BlobRole::DerivativeManifest => return None,
+            };
+            Some(ReceiptExpectations {
+                ciphertext_hash: blob.hash,
+                size: blob.size,
+                role,
+                envelope_hash: None,
+            })
+        })
+        .collect();
+    HeldRelease {
+        asset_id: delegation.asset_id,
+        blobs,
+    }
 }
 
 /// Whether this library's own `verify_asset` accepts `asset_id`: the crypto half of the gate.
