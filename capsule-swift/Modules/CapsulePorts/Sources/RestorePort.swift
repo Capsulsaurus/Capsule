@@ -133,7 +133,7 @@ public struct ShamirShareSummary: Sendable, Equatable, Hashable, Identifiable {
 
 /// Reading a backup artifact, and applying it.
 ///
-/// **Not yet in `CapsulePorts`.** `capsule-core::backup` owns export, manifest
+/// `capsule-core::backup` owns export, manifest
 /// verification, and the inverse restore path; this is the shape the flow needs
 /// from it.
 public protocol RestorePort: Sendable {

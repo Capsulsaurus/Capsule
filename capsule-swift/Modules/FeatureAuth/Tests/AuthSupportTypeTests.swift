@@ -1,4 +1,5 @@
 import CapsuleDomain
+import CapsulePorts
 import FeatureAuth
 import Foundation
 import Testing

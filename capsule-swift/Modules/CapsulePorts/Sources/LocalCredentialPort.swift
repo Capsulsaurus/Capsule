@@ -14,9 +14,8 @@ import Foundation
 /// widening it. It never returns, stores, or logs a token; a credential enters
 /// as a ``RedactedSecret`` and does not come back out.
 ///
-/// **Not yet in `CapsulePorts`.** Local auth is the default path a deployment
-/// gets (*Authentication — Design Principles*); this protocol belongs in
-/// `IdentityPorts.swift` once the SDK's ceremony surface is settled.
+/// Local auth is the default path a deployment gets
+/// (*Authentication — Design Principles*).
 public protocol LocalCredentialPort: Sendable {
     /// Sign in with the server's own credential ceremony.
     ///
