@@ -155,16 +155,18 @@ When an asset crosses a trust boundary — a [share link](/design/share-links/) 
 
 | Field | Default on export | Opt-in retains |
 | --- | --- | --- |
-| Camera serial number | Stripped | Full value |
-| Device identifier | Stripped | Full value |
-| Session ID | Stripped | Full value |
+| Camera serial number (the `serial` of `camera_id`; the model stays) | Emptied | Full value |
+| Device identifier (`device_id`, every register stamp's device, every OR-set `add_id` device) | Nil UUID; OR-set elements re-issued under it, tombstones dropped | Full value |
+| Session ID | Nil UUID | Full value |
 | GPS coordinates (`gps` and every `gps_user` value, superseded ones included) | Rounded to 2 decimal places (≈1 km) | Full precision |
-| Personal contact tags (faces matched to a known person) | Stripped | Retained |
+| Personal contact tags (faces matched to a known person) | Stripped with `regions`, the only field that names a face | Retained |
 | Image regions and their labels (`regions`) | Stripped | Retained |
 
-Stripping applies to the exported copy only; the library sidecar is untouched. Syncing the same user's own devices is not a boundary crossing. Stripping is the **issuing client's** obligation (the server holds no key); the server's half is containment — a share serves only the content addresses its record enumerates.
+Keys the exporting reader does not know (`_unknown`) are always dropped, under every opt-in: a key a newer schema added may itself be a boundary-crossing field. A copy with anything stripped is unsigned, because the library signature covered what was removed.
 
-Not implemented: only the region and GPS rows exist, as a per-export strip over the sidecar (`sidecar_for_export`) that no boundary crossing calls yet — a share record carries no sidecar. The rest of the client-side strip is tracked by [#432](https://github.com/Capsulsaurus/Capsule/issues/432); the external-backup crossing waits on a post-v1 client export command.
+Stripping applies to the exported copy only; the library sidecar is untouched. The opt-in is chosen for one export and never stored. Syncing the same user's own devices is not a boundary crossing. Stripping is the **issuing client's** obligation (the server holds no key); the server's half is containment — a share serves only the content addresses its record enumerates.
+
+A share link carries each covered asset's stripped sidecar inside its sealed record ([Share Links — The share metadata record](/design/share-links/#the-share-metadata-record)), so the blob the server stores is already stripped. The external-backup crossing waits on a post-v1 client export command, which applies the same strip.
 
 ## Collaborative Metadata
 
