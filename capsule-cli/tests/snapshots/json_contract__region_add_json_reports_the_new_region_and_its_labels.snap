@@ -1,0 +1,16 @@
+---
+source: capsule-cli/tests/json_contract.rs
+expression: "run_redacted(&scratch,\n&[\"region\", \"add\", \"--asset\", &asset, \"--rect\", \"0.1,0.2,0.3,0.4\", \"--label\",\n\"Ada\", \"--library\", path(&scratch.library()), \"--passphrase-stdin\",\n\"--json\",], &asset,)"
+---
+status: 0
+--- stdout ---
+{
+  "edit": "region-add",
+  "asset_id": "[ASSET]",
+  "region_id": "[REGION]",
+  "changed": true,
+  "labels": [
+    "Ada"
+  ]
+}
+--- stderr ---

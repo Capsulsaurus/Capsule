@@ -25,12 +25,15 @@ use std::path::{Path, PathBuf};
 use super::auth::{AuthAction, AuthEffect, AuthScreen};
 use super::form::FormKey;
 use super::import::{ImportAction, ImportEffect, ImportScreen};
-use super::library::{LibraryAction, LibraryEffect, LibraryScreen};
+use super::label_editor::{LabelAction, LabelEditor, LabelEffect};
+use super::library::{LibraryAction, LibraryEffect, LibraryScreen, Row};
+use super::metadata_repair::{MetadataRepair, RepairAction, RepairEffect};
 use super::push::{PushAction, PushEffect, PushScreen};
 use super::restore::{RestoreAction, RestoreEffect, RestoreScreen};
 use super::share::{ShareAction, ShareEffect, ShareScreen};
 use super::sync::{SyncAction, SyncEffect, SyncScreen};
 use super::transfer::{Stamped, TransferBoard};
+use crate::edit::LabelTarget;
 
 /// A library path as typed, with the canonical path it was resolved to outside the reducer.
 ///
@@ -94,6 +97,10 @@ pub enum Screen {
     Push,
     /// Browse a library's timeline, albums and stacks ([`super::library`]).
     Library,
+    /// Edit the labels and regions of what the browser has selected ([`super::label_editor`]).
+    Labels,
+    /// Correct the selected asset's capture time and location ([`super::metadata_repair`]).
+    Repair,
 }
 
 /// The answer to a confirmation a screen asked for before an act it cannot take back.
@@ -172,6 +179,14 @@ pub enum Action {
     Push(PushAction),
     /// The library browser.
     Library(LibraryAction),
+    /// Open the label editor on the browser's selected asset, album or stack.
+    EditLabels,
+    /// Open metadata repair on the browser's selected asset.
+    RepairMetadata,
+    /// The label editor.
+    Labels(LabelAction),
+    /// The metadata repair screen.
+    Repair(RepairAction),
 }
 
 /// Work the reducer asks the runtime to perform through the ports.
@@ -193,6 +208,10 @@ pub enum Effect {
     Push(PushEffect),
     /// The library browser's work.
     Library(LibraryEffect),
+    /// The label editor's work.
+    Labels(LabelEffect),
+    /// The metadata repair screen's work.
+    Repair(RepairEffect),
 }
 
 impl Effect {
@@ -210,6 +229,8 @@ impl Effect {
             Self::Import(effect) => Action::Import(effect.failed(reason)),
             Self::Push(effect) => Action::Push(effect.failed(reason)),
             Self::Library(effect) => Action::Library(effect.failed(reason)),
+            Self::Labels(effect) => Action::Labels(effect.failed(reason)),
+            Self::Repair(effect) => Action::Repair(effect.failed(reason)),
         }
     }
 }
@@ -229,6 +250,8 @@ pub struct AppState {
     import: ImportScreen,
     push: PushScreen,
     library: LibraryScreen,
+    labels: LabelEditor,
+    repair: MetadataRepair,
 }
 
 impl AppState {
@@ -247,6 +270,8 @@ impl AppState {
             import: ImportScreen::default(),
             push: PushScreen::default(),
             library: LibraryScreen::default(),
+            labels: LabelEditor::default(),
+            repair: MetadataRepair::default(),
         };
         tracing::debug!(target: "capsule_cli::tui", "TUI state initialised");
         (state, vec![Effect::LoadSession])
@@ -338,6 +363,18 @@ impl AppState {
         &self.library
     }
 
+    /// The label editor's state.
+    #[must_use]
+    pub fn labels(&self) -> &LabelEditor {
+        &self.labels
+    }
+
+    /// The metadata repair screen's state.
+    #[must_use]
+    pub fn repair(&self) -> &MetadataRepair {
+        &self.repair
+    }
+
     /// Whether the screen on top is taking text: keys then go into its form as
     /// [`Action::Form`], and only the editing bindings and the Ctrl bindings apply.
     #[must_use]
@@ -350,6 +387,8 @@ impl AppState {
             Screen::Import => self.import.is_editing(),
             Screen::Push => self.push.is_editing(),
             Screen::Library => self.library.is_editing(),
+            Screen::Labels => self.labels.is_editing(),
+            Screen::Repair => self.repair.is_editing(),
         }
     }
 
@@ -367,9 +406,11 @@ impl AppState {
             | Screen::Restore
             | Screen::Import
             | Screen::Push
-            | Screen::Library => false,
+            | Screen::Library
+            | Screen::Repair => false,
             Screen::Auth => self.auth.is_confirming(),
             Screen::Share => self.share.is_confirming(),
+            Screen::Labels => self.labels.is_confirming(),
         }
     }
 
@@ -387,6 +428,10 @@ impl AppState {
                 if self.screen() != screen {
                     self.stack.push(screen);
                 }
+                Vec::new()
+            }
+            // Esc on the label editor drops a region being drawn before it leaves the screen.
+            Action::Back if self.screen() == Screen::Labels && self.labels.cancel_draft() => {
                 Vec::new()
             }
             Action::Back => {
@@ -436,6 +481,14 @@ impl AppState {
                     .push
                     .on_form_key_guarded(key, self.import.running_library()),
                 Screen::Library => self.library.on_form_key(key),
+                Screen::Labels => {
+                    let busy = self.repair.is_working();
+                    self.labels.on_form_key(key, &self.library, busy)
+                }
+                Screen::Repair => {
+                    let busy = self.labels.is_working();
+                    self.repair.on_form_key(key, &self.library, busy)
+                }
             },
             Action::Answer(answer) => match self.screen() {
                 Screen::Home
@@ -445,9 +498,14 @@ impl AppState {
                 | Screen::Restore
                 | Screen::Import
                 | Screen::Push
-                | Screen::Library => Vec::new(),
+                | Screen::Library
+                | Screen::Repair => Vec::new(),
                 Screen::Auth => self.auth.on_answer(answer),
                 Screen::Share => self.share.on_answer(answer),
+                Screen::Labels => {
+                    let busy = self.repair.is_working();
+                    self.labels.on_answer(answer, &self.library, busy)
+                }
             },
             // A screen's outcome lands on its state whichever screen is on top, so leaving a
             // screen while its request runs loses nothing.
@@ -466,6 +524,53 @@ impl AppState {
             }
             Action::Push(action) => self.push.update(action),
             Action::Library(action) => self.library.update(action),
+            Action::EditLabels => {
+                let subject = match self.library.selected() {
+                    Some(Row::Asset(id)) => Some(LabelTarget::Asset(id)),
+                    Some(Row::Album(id)) => Some(LabelTarget::Album(id)),
+                    Some(Row::Stack(id)) => Some(LabelTarget::Stack(id)),
+                    None => None,
+                };
+                match subject {
+                    Some(subject) if self.library.ready().is_some() => {
+                        self.stack.push(Screen::Labels);
+                        self.labels.begin(subject, &self.library)
+                    }
+                    _ => Vec::new(),
+                }
+            }
+            Action::RepairMetadata => match self.library.selected_asset() {
+                Some(asset_id) if self.library.ready().is_some() => {
+                    self.stack.push(Screen::Repair);
+                    self.repair.begin(asset_id);
+                    Vec::new()
+                }
+                _ => Vec::new(),
+            },
+            // A written edit's snapshot goes to the browser first, so the screen that asked
+            // for it redraws from the library as it now is.
+            Action::Labels(LabelAction::Applied(Ok(edited))) => {
+                let effects = self
+                    .library
+                    .replace_catalogue(&edited.library, edited.catalogue);
+                self.labels.finish(Ok(edited.summary));
+                effects
+            }
+            Action::Repair(RepairAction::Applied(Ok(edited))) => {
+                let effects = self
+                    .library
+                    .replace_catalogue(&edited.library, edited.catalogue);
+                self.repair.finish(Ok(edited.summary));
+                effects
+            }
+            Action::Labels(action) => {
+                let busy = self.repair.is_working();
+                self.labels.update(action, &self.library, busy)
+            }
+            Action::Repair(action) => {
+                let busy = self.labels.is_working();
+                self.repair.update(action, &self.library, busy)
+            }
         };
         if !effects.is_empty() {
             tracing::debug!(target: "capsule_cli::tui", ?effects, "action requested effects");

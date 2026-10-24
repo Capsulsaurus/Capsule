@@ -415,6 +415,167 @@
       "name": "demo"
     },
     {
+      "about": "Correct an asset's capture time or location; the original's value is always kept",
+      "name": "edit",
+      "subcommands": [
+        {
+          "about": "Correct an asset's capture time; the original's capture time is kept beside it",
+          "args": [
+            {
+              "help": "The corrected instant, RFC 3339 with an offset (2021-07-04T18:30:00Z)",
+              "id": "time",
+              "positional": true,
+              "repeatable": false,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "TIME"
+              ]
+            },
+            {
+              "help": "The asset: its id, or a prefix of at least 8 hex characters of its content hash",
+              "id": "asset",
+              "long": "asset",
+              "positional": false,
+              "repeatable": false,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "ASSET"
+              ]
+            },
+            {
+              "help": "Path to the Capsule library",
+              "id": "library",
+              "long": "library",
+              "positional": false,
+              "repeatable": false,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "PATH"
+              ]
+            },
+            {
+              "help": "Read the library passphrase from stdin instead of prompting, so the command works in scripts and CI where there is no terminal",
+              "id": "passphrase_stdin",
+              "long": "passphrase-stdin",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            },
+            {
+              "help": "Print what the edit did as one JSON document on stdout: the target and its labels, capture time or location afterwards",
+              "id": "json",
+              "long": "json",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            }
+          ],
+          "name": "capture-time"
+        },
+        {
+          "about": "Correct an asset's location, or record that it has none; the original's location is kept beside it",
+          "args": [
+            {
+              "help": "The asset: its id, or a prefix of at least 8 hex characters of its content hash",
+              "id": "asset",
+              "long": "asset",
+              "positional": false,
+              "repeatable": false,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "ASSET"
+              ]
+            },
+            {
+              "help": "Latitude, in degrees",
+              "id": "lat",
+              "long": "lat",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": true,
+              "value_names": [
+                "DEGREES"
+              ]
+            },
+            {
+              "help": "Longitude, in degrees",
+              "id": "lon",
+              "long": "lon",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": true,
+              "value_names": [
+                "DEGREES"
+              ]
+            },
+            {
+              "default_values": [
+                "WGS-84"
+              ],
+              "help": "The datum the coordinates are in (stored verbatim, never converted): WGS-84 or GCJ-02",
+              "id": "datum",
+              "long": "datum",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": true,
+              "value_names": [
+                "DATUM"
+              ]
+            },
+            {
+              "help": "Record that the asset has no location",
+              "id": "clear",
+              "long": "clear",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            },
+            {
+              "help": "Path to the Capsule library",
+              "id": "library",
+              "long": "library",
+              "positional": false,
+              "repeatable": false,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "PATH"
+              ]
+            },
+            {
+              "help": "Read the library passphrase from stdin instead of prompting, so the command works in scripts and CI where there is no terminal",
+              "id": "passphrase_stdin",
+              "long": "passphrase-stdin",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            },
+            {
+              "help": "Print what the edit did as one JSON document on stdout: the target and its labels, capture time or location afterwards",
+              "id": "json",
+              "long": "json",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            }
+          ],
+          "name": "location"
+        }
+      ]
+    },
+    {
       "about": "Import files into a local Capsule library",
       "args": [
         {
@@ -514,6 +675,202 @@
         }
       ],
       "name": "import"
+    },
+    {
+      "about": "Add or remove a label on an asset, a region of one, a stack or an album",
+      "name": "label",
+      "subcommands": [
+        {
+          "about": "Add a label, as a signed edit",
+          "args": [
+            {
+              "help": "The label: 1 to 256 bytes once trimmed",
+              "id": "label",
+              "positional": true,
+              "repeatable": false,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "LABEL"
+              ]
+            },
+            {
+              "help": "Label this asset: its id, or a prefix of at least 8 hex characters of its SHA-256 content hash",
+              "id": "asset",
+              "long": "asset",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": true,
+              "value_names": [
+                "ASSET"
+              ]
+            },
+            {
+              "help": "Label this stack",
+              "id": "stack",
+              "long": "stack",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": true,
+              "value_names": [
+                "STACK_ID"
+              ]
+            },
+            {
+              "help": "Label this album",
+              "id": "album",
+              "long": "album",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": true,
+              "value_names": [
+                "ALBUM_ID"
+              ]
+            },
+            {
+              "help": "Label this region of the asset instead of the asset itself",
+              "id": "region",
+              "long": "region",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": true,
+              "value_names": [
+                "REGION_ID"
+              ]
+            },
+            {
+              "help": "Path to the Capsule library",
+              "id": "library",
+              "long": "library",
+              "positional": false,
+              "repeatable": false,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "PATH"
+              ]
+            },
+            {
+              "help": "Read the library passphrase from stdin instead of prompting, so the command works in scripts and CI where there is no terminal",
+              "id": "passphrase_stdin",
+              "long": "passphrase-stdin",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            },
+            {
+              "help": "Print what the edit did as one JSON document on stdout: the target and its labels, capture time or location afterwards",
+              "id": "json",
+              "long": "json",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            }
+          ],
+          "name": "add"
+        },
+        {
+          "about": "Remove a label: every add of it this device has seen",
+          "args": [
+            {
+              "help": "The label: 1 to 256 bytes once trimmed",
+              "id": "label",
+              "positional": true,
+              "repeatable": false,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "LABEL"
+              ]
+            },
+            {
+              "help": "Label this asset: its id, or a prefix of at least 8 hex characters of its SHA-256 content hash",
+              "id": "asset",
+              "long": "asset",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": true,
+              "value_names": [
+                "ASSET"
+              ]
+            },
+            {
+              "help": "Label this stack",
+              "id": "stack",
+              "long": "stack",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": true,
+              "value_names": [
+                "STACK_ID"
+              ]
+            },
+            {
+              "help": "Label this album",
+              "id": "album",
+              "long": "album",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": true,
+              "value_names": [
+                "ALBUM_ID"
+              ]
+            },
+            {
+              "help": "Label this region of the asset instead of the asset itself",
+              "id": "region",
+              "long": "region",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": true,
+              "value_names": [
+                "REGION_ID"
+              ]
+            },
+            {
+              "help": "Path to the Capsule library",
+              "id": "library",
+              "long": "library",
+              "positional": false,
+              "repeatable": false,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "PATH"
+              ]
+            },
+            {
+              "help": "Read the library passphrase from stdin instead of prompting, so the command works in scripts and CI where there is no terminal",
+              "id": "passphrase_stdin",
+              "long": "passphrase-stdin",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            },
+            {
+              "help": "Print what the edit did as one JSON document on stdout: the target and its labels, capture time or location afterwards",
+              "id": "json",
+              "long": "json",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            }
+          ],
+          "name": "remove"
+        }
+      ]
     },
     {
       "about": "Manage the local library",
@@ -1018,6 +1375,155 @@
         }
       ],
       "name": "push"
+    },
+    {
+      "about": "Mark or delete a circle or rectangle region on an asset",
+      "name": "region",
+      "subcommands": [
+        {
+          "about": "Mark a circle or rectangle region on an asset, in fractions of the image (display orientation), and print its id",
+          "args": [
+            {
+              "help": "The asset: its id, or a prefix of at least 8 hex characters of its content hash",
+              "id": "asset",
+              "long": "asset",
+              "positional": false,
+              "repeatable": false,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "ASSET"
+              ]
+            },
+            {
+              "help": "A circle: centre, a fraction of width and height, and radius, a fraction of the shorter side (min(width, height))",
+              "id": "circle",
+              "long": "circle",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": true,
+              "value_names": [
+                "CX,CY,R"
+              ]
+            },
+            {
+              "help": "A rectangle: top-left corner, width and height, each a fraction of the image",
+              "id": "rect",
+              "long": "rect",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": true,
+              "value_names": [
+                "X,Y,W,H"
+              ]
+            },
+            {
+              "help": "Give the region this label (repeatable)",
+              "id": "label",
+              "long": "label",
+              "positional": false,
+              "repeatable": true,
+              "required": false,
+              "takes_value": true,
+              "value_names": [
+                "LABEL"
+              ]
+            },
+            {
+              "help": "Path to the Capsule library",
+              "id": "library",
+              "long": "library",
+              "positional": false,
+              "repeatable": false,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "PATH"
+              ]
+            },
+            {
+              "help": "Read the library passphrase from stdin instead of prompting, so the command works in scripts and CI where there is no terminal",
+              "id": "passphrase_stdin",
+              "long": "passphrase-stdin",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            },
+            {
+              "help": "Print what the edit did as one JSON document on stdout: the target and its labels, capture time or location afterwards",
+              "id": "json",
+              "long": "json",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            }
+          ],
+          "name": "add"
+        },
+        {
+          "about": "Delete a region of an asset. Final: another device's edit of it does not bring it back",
+          "args": [
+            {
+              "help": "The region",
+              "id": "region",
+              "positional": true,
+              "repeatable": false,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "REGION_ID"
+              ]
+            },
+            {
+              "help": "The asset: its id, or a prefix of at least 8 hex characters of its content hash",
+              "id": "asset",
+              "long": "asset",
+              "positional": false,
+              "repeatable": false,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "ASSET"
+              ]
+            },
+            {
+              "help": "Path to the Capsule library",
+              "id": "library",
+              "long": "library",
+              "positional": false,
+              "repeatable": false,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "PATH"
+              ]
+            },
+            {
+              "help": "Read the library passphrase from stdin instead of prompting, so the command works in scripts and CI where there is no terminal",
+              "id": "passphrase_stdin",
+              "long": "passphrase-stdin",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            },
+            {
+              "help": "Print what the edit did as one JSON document on stdout: the target and its labels, capture time or location afterwards",
+              "id": "json",
+              "long": "json",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            }
+          ],
+          "name": "delete"
+        }
+      ]
     },
     {
       "about": "Repair a local library in place, one signed correction per affected asset",

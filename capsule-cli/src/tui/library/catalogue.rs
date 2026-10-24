@@ -12,10 +12,13 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use capsule_core::crypto::provenance::Action as ProvenanceAction;
-use capsule_core::sidecar::StackRole;
+use capsule_core::domain::GpsDatum;
+use capsule_core::sidecar::{GpsSource, RegionShape, StackRole};
 use capsule_library::lifecycle::Workspace;
 use jiff::Timestamp;
 use uuid::Uuid;
+
+use crate::show::Fix;
 
 /// One library as the browser shows it.
 ///
@@ -75,6 +78,96 @@ pub struct AssetEntry {
     pub rows: Vec<(&'static str, String)>,
     /// The provenance chain, oldest record first.
     pub history: Vec<HistoryEntry>,
+    /// The asset's own user labels, sorted.
+    pub labels: Vec<String>,
+    /// The asset's live regions, by id.
+    pub regions: Vec<RegionEntry>,
+    /// The capture instant as signed (the user's correction when one is recorded), RFC 3339.
+    pub capture_text: String,
+    /// The as-imported capture instant, present only beside a user correction.
+    pub capture_imported: Option<String>,
+    /// The effective location: the user's edit when one is recorded (which may be none),
+    /// else the as-imported fix.
+    pub location: Option<Place>,
+    /// The as-imported location, which an edit never overwrites.
+    pub location_imported: Option<Place>,
+    /// Whether a user location edit is recorded.
+    pub location_edited: bool,
+}
+
+/// A location fix, compared by the bits of its coordinates so a snapshot stays `Eq`.
+#[derive(Debug, Clone, Copy)]
+pub struct Place {
+    /// Latitude, in `datum`.
+    pub lat: f64,
+    /// Longitude, in `datum`.
+    pub lon: f64,
+    /// The datum the coordinates are in, stored verbatim.
+    pub datum: GpsDatum,
+    /// Where the fix came from.
+    pub source: GpsSource,
+}
+
+impl PartialEq for Place {
+    fn eq(&self, other: &Self) -> bool {
+        self.lat.to_bits() == other.lat.to_bits()
+            && self.lon.to_bits() == other.lon.to_bits()
+            && self.datum == other.datum
+            && self.source == other.source
+    }
+}
+
+impl Eq for Place {}
+
+impl From<Fix> for Place {
+    fn from(fix: Fix) -> Self {
+        Self {
+            lat: fix.lat,
+            lon: fix.lon,
+            datum: fix.datum,
+            source: fix.source,
+        }
+    }
+}
+
+/// A region's outline, compared by the bits of its coordinates so a snapshot stays `Eq`.
+#[derive(Debug, Clone, Copy)]
+pub struct Outline(pub RegionShape);
+
+impl Outline {
+    fn bits(self) -> [u32; 4] {
+        match self.0 {
+            RegionShape::Circle { cx, cy, r } => {
+                [cx.to_bits(), cy.to_bits(), r.to_bits(), u32::MAX]
+            }
+            RegionShape::Rect { x, y, w, h } => {
+                [x.to_bits(), y.to_bits(), w.to_bits(), h.to_bits()]
+            }
+        }
+    }
+}
+
+impl PartialEq for Outline {
+    fn eq(&self, other: &Self) -> bool {
+        matches!(
+            (self.0, other.0),
+            (RegionShape::Circle { .. }, RegionShape::Circle { .. })
+                | (RegionShape::Rect { .. }, RegionShape::Rect { .. })
+        ) && self.bits() == other.bits()
+    }
+}
+
+impl Eq for Outline {}
+
+/// One live region of an asset.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegionEntry {
+    /// The region id.
+    pub region_id: Uuid,
+    /// Its outline.
+    pub outline: Outline,
+    /// Its labels, sorted.
+    pub labels: Vec<String>,
 }
 
 impl AssetEntry {
@@ -343,6 +436,17 @@ fn entry(ws: &Workspace, asset_id: Uuid) -> Option<AssetEntry> {
             }
         })
         .collect();
+    let mut regions: Vec<RegionEntry> = ws
+        .regions(&asset_id)
+        .into_iter()
+        .map(|(region_id, region)| RegionEntry {
+            region_id,
+            outline: Outline(region.shape),
+            labels: region.labels.value().into_iter().collect(),
+        })
+        .collect();
+    // UUIDv7 ids sort by creation: the regions list in the order they were drawn.
+    regions.sort_by_key(|r| r.region_id);
     Some(AssetEntry {
         asset_id,
         album_id: view.album_id,
@@ -354,6 +458,13 @@ fn entry(ws: &Workspace, asset_id: Uuid) -> Option<AssetEntry> {
         stack: view.stack,
         rows: crate::show::rows(&view),
         history,
+        labels: view.tags_user.clone(),
+        regions,
+        capture_text: view.capture_timestamp.clone(),
+        capture_imported: view.capture_timestamp_imported.clone(),
+        location: view.gps.map(Place::from),
+        location_imported: view.gps_imported.map(Place::from),
+        location_edited: view.location_edited,
     })
 }
 

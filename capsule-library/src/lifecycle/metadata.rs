@@ -13,6 +13,7 @@ use capsule_core::sidecar::{AiTag, Gps, GpsSource, normalize_label};
 use jiff::Timestamp;
 use uuid::Uuid;
 
+use super::album::remove_label;
 use super::{LifecycleError, Result, Workspace, now_rfc3339};
 use crate::db::DatabaseDriver;
 
@@ -29,6 +30,46 @@ impl Workspace {
         self.append_lifecycle(asset_id, Action::MetadataUpdate, None, move |s, add_id| {
             s.tags_user.add(tag, add_id);
         })
+    }
+
+    /// Remove a user tag: every add of it this device has observed (OR-set observed-remove),
+    /// as one `metadata-update` provenance record. Returns how many adds were removed; 0 means
+    /// the asset does not carry the tag, and nothing is appended.
+    ///
+    /// The tag is matched both exactly as given and after the label rule ([`normalize_label`]),
+    /// so it names the label [`tag_add`](Self::tag_add) stored and also a tag stored before the
+    /// rule existed, spelled as it is listed. A tag the rule refuses, and that the asset does
+    /// not carry verbatim, is [`LifecycleError::InvalidLabel`]. An add this device has not yet
+    /// seen (a concurrent add on another device) survives the merge, as an OR-set's add-wins
+    /// rule says.
+    #[tracing::instrument(skip(self, tag), fields(asset_id = %asset_id))]
+    pub fn tag_remove(&mut self, asset_id: &Uuid, tag: &str) -> Result<usize> {
+        let normalized = normalize_label(tag);
+        let raw = tag.to_owned();
+        let carried = self
+            .assets
+            .get(asset_id)
+            .ok_or_else(|| LifecycleError::NotFound(format!("asset {asset_id}")))?
+            .sidecar
+            .tags_user
+            .entries()
+            .into_iter()
+            .filter(|(_, el)| *el == raw || normalized.as_ref().is_ok_and(|n| el == n))
+            .count();
+        if carried == 0 {
+            normalized?;
+            tracing::debug!(asset_id = %asset_id, "tag remove: the asset does not carry it");
+            return Ok(0);
+        }
+        let normalized = normalized.ok().filter(|n| *n != raw);
+        self.append_lifecycle(asset_id, Action::MetadataUpdate, None, move |s, _add_id| {
+            remove_label(&mut s.tags_user, &raw);
+            if let Some(normalized) = normalized {
+                remove_label(&mut s.tags_user, &normalized);
+            }
+        })?;
+        tracing::info!(asset_id = %asset_id, removed = carried, "user tag removed as a signed metadata-update");
+        Ok(carried)
     }
 
     /// Set the caption (LWW register) and emit a `metadata-update` provenance record.

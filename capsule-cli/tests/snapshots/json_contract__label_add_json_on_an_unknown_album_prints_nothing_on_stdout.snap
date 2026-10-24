@@ -1,0 +1,10 @@
+---
+source: capsule-cli/tests/json_contract.rs
+expression: "run(&scratch,\n&[\"label\", \"add\", \"trip\", \"--album\", \"0192f1a0-0000-7000-8000-000000000009\",\n\"--library\", path(&scratch.library()), \"--passphrase-stdin\", \"--json\",],)"
+---
+status: 1
+--- stdout ---
+
+--- stderr ---
+Error: 
+   0: Edit failed: This library has no album 0192f1a0-0000-7000-8000-000000000009.

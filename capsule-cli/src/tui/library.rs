@@ -20,7 +20,7 @@
 pub mod catalogue;
 
 use std::fmt::Write as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use capsule_core::media::{self, Decoder};
@@ -36,9 +36,12 @@ use ratatui_image::protocol::Protocol;
 use ratatui_image::{FilterType, Image, Resize};
 use uuid::Uuid;
 
-pub use self::catalogue::{AlbumEntry, AssetEntry, Catalogue, HistoryEntry, StackEntry};
+pub use self::catalogue::{
+    AlbumEntry, AssetEntry, Catalogue, HistoryEntry, Outline, Place, RegionEntry, StackEntry,
+};
 use super::form::{Field, Form, FormKey, FormOutcome, Secret};
 use super::state::{Effect, Loadable};
+use crate::utils::ids::short_id as short;
 
 /// How long the start-up query waits for the terminal to say which image protocol it speaks.
 /// A terminal answers in a few milliseconds; one that does not answer at all is treated as
@@ -401,6 +404,10 @@ pub struct LibraryScreen {
     invalid: Option<String>,
     /// The library last asked for, which the title names.
     library: Option<PathBuf>,
+    /// The library and passphrase the open catalogue was read with, kept while it is open so
+    /// the label editor and metadata repair can write to it without asking again. Dropped
+    /// when an open fails or another is asked for.
+    credentials: Option<OpenRequest>,
     catalogue: Option<Loadable<Catalogue>>,
     view: View,
     /// The selected row of each view's top-level list.
@@ -430,6 +437,7 @@ impl Default for LibraryScreen {
             editing: false,
             invalid: None,
             library: None,
+            credentials: None,
             catalogue: None,
             view: View::Timeline,
             cursors: [0; 3],
@@ -486,7 +494,15 @@ impl LibraryScreen {
         self.preview.as_ref()
     }
 
-    fn ready(&self) -> Option<&Catalogue> {
+    /// The open library and the credentials it was read with, for an edit to write to it.
+    #[must_use]
+    pub fn credentials(&self) -> Option<&OpenRequest> {
+        self.credentials.as_ref()
+    }
+
+    /// The open library's snapshot, once it is ready.
+    #[must_use]
+    pub fn ready(&self) -> Option<&Catalogue> {
         match &self.catalogue {
             Some(Loadable::Ready(catalogue)) => Some(catalogue),
             _ => None,
@@ -581,7 +597,10 @@ impl LibraryScreen {
             LibraryAction::Opened(result) => {
                 self.catalogue = Some(match result {
                     Ok(catalogue) => Loadable::Ready(catalogue),
-                    Err(reason) => Loadable::Failed(reason),
+                    Err(reason) => {
+                        self.credentials = None;
+                        Loadable::Failed(reason)
+                    }
                 });
                 self.view = View::Timeline;
                 self.cursors = [0; 3];
@@ -662,6 +681,38 @@ impl LibraryScreen {
         }
     }
 
+    /// Take a fresh snapshot of the open library, written by an edit: the view, the album or
+    /// stack being listed and the selected row are kept where the row still exists (an edited
+    /// capture time can move an asset along the timeline, and the selection follows it).
+    ///
+    /// A snapshot of any library but the one open now (another was opened while the edit ran)
+    /// is dropped.
+    pub fn replace_catalogue(&mut self, library: &Path, catalogue: Catalogue) -> Vec<Effect> {
+        let open = self.credentials.as_ref().map(|c| c.library.as_path());
+        if self.ready().is_none() || open != Some(library) {
+            tracing::debug!(target: "capsule_cli::tui", library = %library.display(), "edited catalogue dropped: that library is not the one open");
+            return Vec::new();
+        }
+        let selected = self.selected();
+        self.catalogue = Some(Loadable::Ready(catalogue));
+        if let Some((group, _)) = self.group {
+            let ready = self.ready().is_some_and(|c| match group {
+                Group::Album(id) => c.album(id).is_some(),
+                Group::Stack(id) => c.stack(id).is_some(),
+            });
+            if !ready {
+                self.group = None;
+            }
+        }
+        let source = self.row_source();
+        let found =
+            selected.and_then(|row| (0..source.len()).find(|&at| source.get(at) == Some(row)));
+        let last = source.len().saturating_sub(1);
+        let cursor = self.cursor_mut();
+        *cursor = found.unwrap_or((*cursor).min(last));
+        self.want_preview()
+    }
+
     /// Ask for the selected asset's preview, unless it is already shown or asked for, or a
     /// decode is running (its answer asks again).
     fn want_preview(&mut self) -> Vec<Effect> {
@@ -714,10 +765,12 @@ impl LibraryScreen {
                 self.editing = false;
                 self.library = Some(PathBuf::from(&library));
                 self.catalogue = Some(Loadable::Loading);
-                vec![Effect::Library(LibraryEffect::Open(OpenRequest {
+                let request = OpenRequest {
                     library: PathBuf::from(library),
                     passphrase,
-                }))]
+                };
+                self.credentials = Some(request.clone());
+                vec![Effect::Library(LibraryEffect::Open(request))]
             }
         }
     }
@@ -833,13 +886,6 @@ pub fn query_picker() -> Option<Picker> {
             None
         }
     }
-}
-
-/// Short form of an id: its last eight hex digits, since a UUIDv7 leads with its creation time
-/// and ids minted together share their first eight.
-fn short(id: Uuid) -> String {
-    let simple = id.simple().to_string();
-    simple[simple.len() - 8..].to_owned()
 }
 
 /// A capture instant as a list row prints it, in UTC.
