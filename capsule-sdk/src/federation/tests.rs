@@ -48,10 +48,13 @@ fn the_debug_rendering_never_carries_the_token() {
     );
 }
 
+/// One of the generated refresh refusal's variant constructors.
+type Wrap = fn(Box<rest::types::CodedProblem>) -> rest::RefreshCapabilityError;
+
 /// A refresh refusal as the generated client hands it over.
 fn refused(
     status: reqwest::StatusCode,
-    wrap: fn(Box<rest::types::CodedProblem>) -> rest::RefreshCapabilityError,
+    wrap: Wrap,
     code: &str,
 ) -> rest::Error<rest::RefreshCapabilityError> {
     let problem: rest::types::CodedProblem = serde_json::from_value(serde_json::json!({
@@ -72,11 +75,7 @@ fn refused(
 fn every_refresh_refusal_keeps_the_servers_code() {
     // #529: the `409` a peer acts on — the member it was granted for has left the roster, so the
     // next move is to ask the owner — reached the caller with its code dropped.
-    let cases: [(
-        reqwest::StatusCode,
-        fn(Box<rest::types::CodedProblem>) -> rest::RefreshCapabilityError,
-        &str,
-    ); 4] = [
+    let cases: [(reqwest::StatusCode, Wrap, &str); 4] = [
         (
             reqwest::StatusCode::CONFLICT,
             rest::RefreshCapabilityError::Status409,
