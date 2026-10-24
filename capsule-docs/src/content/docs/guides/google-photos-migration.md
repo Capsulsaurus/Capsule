@@ -79,6 +79,27 @@ The importer also handles Takeout's quirks: truncated sidecar names, `photo(1).j
 original, including localized suffixes), and sidecars split across parts. Results are
 deterministic across runs.
 
+## What the importer cannot guarantee
+
+The importer is built against the Takeout layout described above. These are its known limits;
+they do not fail the import, which is why the verification below is not optional:
+
+- **Only the fields in the table are read.** Every other field in a sidecar (people tags, for
+  example) is not imported.
+- **A sidecar that cannot be paired or parsed is skipped quietly.** Its media still imports, but
+  without that JSON's caption, favorite or fallback time and location. Pairing tries the
+  exact name, then the JSON's recorded title, then a shared name prefix of at least 16 characters;
+  a renamed file or a shorter truncated name can leave its sidecar unpaired.
+- **Edited copies are recognized by a fixed set of localized suffixes** (`-edited`, `-bearbeitet`,
+  `-modifié` and a few others). An edited copy in a language outside that set imports as its own
+  asset instead of stacking with its original.
+- **Google's export is the ceiling.** Capsule imports what Takeout put in the archive; it cannot
+  detect an item Google left out. Compare against Google's own item count.
+- **A format Capsule cannot decode still imports.** The original is stored byte for byte; only its
+  thumbnail or preview may be missing (HEIC decoding is not built in, for example).
+- **Google can change Takeout's layout.** A change in how it names or arranges files can degrade
+  pairing without an error. Run the checklist below on every migration, not just the first.
+
 ## Verify everything end to end
 
 **Counts.** Re-run the same import; a complete import reports `Nothing to import`. Compare against
