@@ -107,6 +107,12 @@ pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
 /// ([`PeerChannel::with_io_timeout`]).
 pub const DEFAULT_IO_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// The slowest rate, in bytes per second, at which a [`PeerClient`] keeps pulling a ranged
+/// answer. Each answer of `len` bytes must arrive whole within the channel's I/O timeout plus
+/// `len` divided by this rate, so a peer that trickles frames just inside the per-frame timeout
+/// cannot hold the pulling side indefinitely.
+pub const MIN_PULL_RATE: u64 = 64 * 1024;
+
 /// The largest data frame. A ranged answer is cut into frames of at most this many bytes.
 pub const MAX_DATA_FRAME: usize = 1024 * 1024;
 
@@ -1375,10 +1381,13 @@ impl PeerClient {
 
     /// Pull bytes of `address` from `start`: at most `max_len`, and never more than
     /// [`MAX_RANGE`]. The bytes are the peer's until the whole artifact hashes to its address.
+    /// The answer must arrive whole within the channel's I/O timeout plus its length at
+    /// [`MIN_PULL_RATE`].
     ///
     /// # Errors
     ///
-    /// A [`RangeFailure`] carrying whatever arrived before the failure.
+    /// A [`RangeFailure`] carrying whatever arrived before the failure; its error is
+    /// [`PeeringError::Timeout`] when a frame, or the whole answer, came too slowly.
     pub async fn range(
         &self,
         address: &str,
@@ -1418,10 +1427,24 @@ impl PeerClient {
             Ok(len) => len,
             Err(error) => return Err(fail(Vec::new(), error)),
         };
+        let budget = channel.io_timeout.saturating_add(Duration::from_millis(
+            len.saturating_mul(1000) / MIN_PULL_RATE,
+        ));
+        let deadline = tokio::time::Instant::now() + budget;
+        tracing::trace!(peer = %self.peer.device_id, len, ?budget, "peering: pulling a range");
         let mut received = Vec::new();
         while (received.len() as u64) < len {
             let remaining = usize::try_from(len - received.len() as u64).unwrap_or(usize::MAX);
-            match self.settle(channel.recv_data(remaining).await) {
+            let Ok(frame) = tokio::time::timeout_at(deadline, channel.recv_data(remaining)).await
+            else {
+                // Every frame arrived inside its own timeout, but too slowly overall: the peer
+                // is holding this pull open without making progress worth waiting for.
+                self.broken.store(true, Ordering::Release);
+                tracing::warn!(peer = %self.peer.device_id, len, received = received.len(), "peering: a range fell below the minimum pull rate");
+                let error = PeeringError::Timeout("pulling a range below the minimum rate");
+                return Err(fail(received, error));
+            };
+            match self.settle(frame) {
                 Ok(frame) if frame.is_empty() => {
                     // An empty frame makes no progress: a peer sending them would hold this
                     // loop for ever.

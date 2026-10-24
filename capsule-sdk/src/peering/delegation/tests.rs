@@ -22,8 +22,8 @@ use tokio::net::{TcpListener, TcpStream};
 use super::*;
 use crate::net::ConnectionClass;
 use crate::peering::channel::{
-    LocalPeer, MAX_ARTIFACT_LEN, MAX_LISTING, Message, Offered, RangeFailure, ServedRange, accept,
-    connect,
+    LocalPeer, MAX_ARTIFACT_LEN, MAX_LISTING, MIN_PULL_RATE, Message, Offered, RangeFailure,
+    ServedRange, accept, connect,
 };
 use crate::peering::session::{HandshakeLimiter, MemoryDirectoryVersions, SharedTrust};
 use crate::testmock::{MockRequest, MockResponse, MockServer};
@@ -1948,4 +1948,65 @@ async fn a_peer_that_stops_answering_times_out() {
     ));
     assert!(client.is_broken());
     drop(origin);
+}
+
+#[tokio::test]
+async fn a_peer_that_trickles_a_range_inside_each_frame_timeout_is_cut_at_the_minimum_rate() {
+    let fixture = Fixture::new();
+    let trust = fixture.trust();
+    let address = "d".repeat(64);
+    let len = 64_u64;
+    let io_timeout = Duration::from_millis(200);
+    // The answer's whole budget: the I/O timeout plus its length at the minimum rate.
+    let budget = io_timeout + Duration::from_millis(len * 1000 / MIN_PULL_RATE);
+    let (mut origin, delegate) = channel_pair(&fixture, &trust).await;
+    origin
+        .send(&Message::Listing {
+            artifacts: vec![Offered {
+                address: address.clone(),
+                len,
+            }],
+        })
+        .await
+        .expect("sends");
+    let client = PeerClient::open(delegate.with_io_timeout(io_timeout))
+        .await
+        .expect("opens");
+    // One byte per frame, each well inside the per-frame timeout, far too slow overall.
+    let trickling = async {
+        origin.recv().await.expect("a request");
+        origin
+            .send(&Message::RangeReply { len })
+            .await
+            .expect("sends");
+        for _ in 0..len {
+            tokio::time::sleep(Duration::from_millis(40)).await;
+            if origin.send_data(&[7]).await.is_err() {
+                break;
+            }
+        }
+    };
+    let pulling = async {
+        let started = tokio::time::Instant::now();
+        let pulled = client.range(&address, 0, None).await;
+        (pulled, started.elapsed())
+    };
+    let ((), (pulled, took)) = tokio::join!(trickling, pulling);
+    let Err(RangeFailure {
+        received,
+        error: PeeringError::Timeout(_),
+    }) = pulled
+    else {
+        panic!("a trickled range is cut: {pulled:?}");
+    };
+    assert!(
+        !received.is_empty() && (received.len() as u64) < len,
+        "what arrived is kept for a resume: {} bytes",
+        received.len()
+    );
+    assert!(
+        took < budget + io_timeout,
+        "cut at its budget ({budget:?}), not held for {took:?}"
+    );
+    assert!(client.is_broken());
 }

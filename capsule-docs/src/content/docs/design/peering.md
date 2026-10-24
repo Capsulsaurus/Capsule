@@ -81,7 +81,7 @@ refused outright: a device never peers with itself.
 
 Every payload byte travels inside that verified TLS session; there is no plaintext path. Each
 frame's length is checked against a fixed ceiling before it is read, every read and write is
-bounded in time, and every decision is made against the identity the handshake verified, never
+bounded in time, a ranged pull must sustain a minimum transfer rate, and every decision is made against the identity the handshake verified, never
 against a device id a frame claims. The serving device lists what it offers, then authorizes
 **each request** against the directory it pins at that moment, so a peer revoked mid-session is
 refused at its next request. Peering is LAN-only: a device dials and admits only loopback,
