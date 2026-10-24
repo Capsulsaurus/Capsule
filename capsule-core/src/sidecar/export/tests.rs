@@ -88,14 +88,37 @@ fn regions_are_stripped_by_default() {
 #[test]
 fn regions_are_kept_only_on_a_per_export_opt_in() {
     let library = sidecar_with_a_named_face();
-    let exported = sidecar_for_export(
+    let kept = sidecar_for_export(
         &library,
         ExportPrivacy {
             retain_regions: true,
             ..ExportPrivacy::default()
         },
     );
-    assert_eq!(exported, library, "nothing stripped, signature kept");
+    let labels: Vec<_> = kept
+        .regions
+        .values()
+        .filter_map(|register| register.current.as_ref()?.value.as_ref())
+        .flat_map(|region| region.labels.value())
+        .collect();
+    assert_eq!(labels, ["Alice"], "the opted-in region keeps its label");
+
+    let stripped = sidecar_for_export(
+        &library,
+        ExportPrivacy {
+            retain_regions: false,
+            ..ExportPrivacy::RETAIN_ALL
+        },
+    );
+    assert!(
+        stripped.regions.is_empty(),
+        "the region row alone is stripped"
+    );
+    assert_eq!(
+        sidecar_for_export(&library, ExportPrivacy::RETAIN_ALL),
+        library,
+        "nothing stripped, signature kept"
+    );
 }
 
 fn fix(lat: f64, lon: f64, source: GpsSource) -> Gps {
@@ -140,7 +163,14 @@ fn every_fix(s: &SidecarV1) -> Vec<Gps> {
 #[test]
 fn both_the_imported_and_the_user_location_are_rounded_by_default() {
     let library = sidecar_with_two_locations();
-    let exported = sidecar_for_export(&library, ExportPrivacy::default());
+    // Keep the history, so the superseded user edit is there to be rounded too.
+    let exported = sidecar_for_export(
+        &library,
+        ExportPrivacy {
+            retain_superseded: true,
+            ..ExportPrivacy::default()
+        },
+    );
 
     let fixes = every_fix(&exported);
     assert_eq!(fixes.len(), 3, "the as-imported fix and both user edits");
@@ -179,10 +209,20 @@ fn full_gps_precision_is_kept_only_on_a_per_export_opt_in() {
         &library,
         ExportPrivacy {
             retain_full_gps: true,
+            retain_superseded: true,
             ..ExportPrivacy::default()
         },
     );
-    assert_eq!(exported, library, "nothing stripped, signature kept");
+    assert_eq!(
+        every_fix(&exported),
+        every_fix(&library),
+        "full precision kept"
+    );
+    assert_eq!(
+        sidecar_for_export(&library, ExportPrivacy::RETAIN_ALL),
+        library,
+        "nothing stripped, signature kept"
+    );
 }
 
 #[test]
@@ -194,9 +234,245 @@ fn an_already_coarse_location_leaves_the_signature_in_place() {
         .gps_user
         .set(None, "2026-06-01T10:00:00Z", Uuid::from_u128(0xD1));
     library.sign(&HybridSigningKey::from_seed_bytes(&[1; 32], &[2; 32]));
+    let only_gps = ExportPrivacy {
+        retain_full_gps: false,
+        ..ExportPrivacy::RETAIN_ALL
+    };
     assert_eq!(
-        sidecar_for_export(&library, ExportPrivacy::default()),
+        sidecar_for_export(&library, only_gps),
         library,
         "nothing to round, so nothing was stripped"
     );
+}
+
+const DEVICE: Uuid = Uuid::from_u128(0xD1);
+const OTHER_DEVICE: Uuid = Uuid::from_u128(0xD2);
+const SESSION: Uuid = Uuid::from_u128(0x5E);
+const SERIAL: &str = "SN-0042-SECRET";
+/// A caption the user later rewrote, so it survives only in the superseded log.
+const REWRITTEN_CAPTION: &str = "Bob at the beach";
+
+/// A sidecar carrying a value for every row of the privacy table, written from two devices: a
+/// camera serial, the device and session ids, a full-precision location, a named face, user and
+/// AI tags (one removed), stamped caption and rating edits, and a key this reader does not know.
+fn sidecar_with_every_stripped_field() -> SidecarV1 {
+    let mut s = sidecar_with_two_locations();
+    let face = sidecar_with_a_named_face();
+    s.regions = face.regions;
+    s.camera_id = Some(crate::sidecar::CameraId {
+        model: "Example X100".into(),
+        serial: SERIAL.into(),
+    });
+    let first = AddId {
+        device: DEVICE,
+        counter: 0,
+    };
+    s.tags_user.add("beach".into(), first);
+    s.tags_user.add(
+        "holiday".into(),
+        AddId {
+            device: OTHER_DEVICE,
+            counter: 0,
+        },
+    );
+    s.tags_user.remove(first).expect("the add was observed");
+    s.tags_ai.add(
+        crate::sidecar::AiTag {
+            tag: "sea".into(),
+            model_id: "tagger".into(),
+            model_version: "1".into(),
+        },
+        AddId {
+            device: DEVICE,
+            counter: 1,
+        },
+    );
+    s.caption
+        .set(REWRITTEN_CAPTION.into(), "2026-06-01T10:00:00Z", DEVICE);
+    s.caption
+        .set("second".into(), "2026-06-02T10:00:00Z", OTHER_DEVICE);
+    s.rating.set(4, "2026-06-01T10:00:00Z", DEVICE);
+    s.unknown.insert(
+        "future_field".into(),
+        ciborium::value::Value::Text("unknown-to-this-reader".into()),
+    );
+    s.sign(&HybridSigningKey::from_seed_bytes(&[1; 32], &[2; 32]));
+    s
+}
+
+/// Whether `bytes` carries `id` in either of the forms a UUID serializes to.
+fn carries(bytes: &[u8], id: Uuid) -> bool {
+    let text = id.hyphenated().to_string();
+    let forms: [&[u8]; 2] = [id.as_bytes(), text.as_bytes()];
+    forms
+        .iter()
+        .any(|form| bytes.windows(form.len()).any(|w| w == *form))
+}
+
+/// Whether `bytes` contains `needle`.
+fn contains(bytes: &[u8], needle: &str) -> bool {
+    bytes.windows(needle.len()).any(|w| w == needle.as_bytes())
+}
+
+#[test]
+fn the_strict_copy_carries_no_row_of_the_privacy_table() {
+    let library = sidecar_with_every_stripped_field();
+    let exported = sidecar_for_export(&library, ExportPrivacy::default());
+    let bytes = exported.to_canonical_vec();
+
+    for id in [DEVICE, OTHER_DEVICE, SESSION] {
+        assert!(!carries(&bytes, id), "{id} does not leave");
+    }
+    assert!(
+        !contains(&bytes, SERIAL),
+        "the camera serial does not leave"
+    );
+    assert!(!contains(&bytes, "Alice"), "no personal contact tag leaves");
+    assert!(
+        !contains(&bytes, "unknown-to-this-reader"),
+        "a key this reader cannot judge does not leave"
+    );
+    assert!(exported.unknown.is_empty());
+    assert_eq!(exported.device_id, Uuid::nil());
+    assert_eq!(exported.session_id, Uuid::nil());
+    assert!(exported.regions.is_empty());
+    assert!(
+        !contains(&bytes, REWRITTEN_CAPTION),
+        "a caption the user rewrote does not leave"
+    );
+    assert!(exported.caption.superseded.is_empty());
+    assert!(exported.gps_user.superseded.is_empty());
+    let fixes = every_fix(&exported);
+    assert_eq!(fixes.len(), 2, "the as-imported fix and the live user edit");
+    assert!(
+        fixes
+            .iter()
+            .all(|f| (round_coordinate(f.lat), round_coordinate(f.lon)) == (f.lat, f.lon)),
+        "every coordinate is rounded: {fixes:?}"
+    );
+    assert!(
+        exported.signature.is_none(),
+        "the stripped copy is unsigned"
+    );
+
+    // What the recipient may see survives the strip.
+    let camera = exported.camera_id.as_ref().expect("the camera model stays");
+    assert_eq!(camera.model, "Example X100");
+    assert!(camera.serial.is_empty());
+    assert_eq!(
+        exported.tags_user.value(),
+        ["holiday".to_owned()].into(),
+        "the live tag stays, the removed one leaves with its tombstone"
+    );
+    assert_eq!(exported.tags_ai.value().len(), 1);
+    assert_eq!(
+        exported.caption.current.as_ref().map(|c| c.value.as_str()),
+        Some("second")
+    );
+    assert_eq!(exported.rating.current.as_ref().map(|r| r.value), Some(4));
+
+    // The re-encoded copy reads back as a sidecar.
+    assert_eq!(
+        SidecarV1::from_canonical_slice(&bytes, SIDECAR_SCHEMA_V1).as_ref(),
+        Ok(&exported)
+    );
+}
+
+#[test]
+fn the_library_sidecar_is_untouched_by_the_strip() {
+    let library = sidecar_with_every_stripped_field();
+    let before = library.to_canonical_vec();
+    let _ = sidecar_for_export(&library, ExportPrivacy::default());
+    assert_eq!(library.to_canonical_vec(), before);
+    assert!(
+        library.verify(&HybridSigningKey::from_seed_bytes(&[1; 32], &[2; 32]).verifying_key()),
+        "the library copy keeps a signature that verifies"
+    );
+}
+
+#[test]
+fn each_identifier_is_kept_only_on_its_own_opt_in() {
+    let library = sidecar_with_every_stripped_field();
+
+    let serial = sidecar_for_export(
+        &library,
+        ExportPrivacy {
+            retain_camera_serial: true,
+            ..ExportPrivacy::default()
+        },
+    );
+    assert_eq!(serial.camera_id, library.camera_id);
+    assert_eq!(serial.device_id, Uuid::nil());
+    assert_eq!(serial.session_id, Uuid::nil());
+
+    let device = sidecar_for_export(
+        &library,
+        ExportPrivacy {
+            retain_device_ids: true,
+            ..ExportPrivacy::default()
+        },
+    );
+    assert_eq!(device.device_id, DEVICE);
+    assert_eq!(
+        device.caption.current, library.caption.current,
+        "register stamps are kept"
+    );
+    assert!(
+        device.caption.superseded.is_empty(),
+        "the history still leaves"
+    );
+    assert_eq!(device.tags_user, library.tags_user, "add-ids are kept");
+    assert_eq!(device.session_id, Uuid::nil());
+    assert!(
+        device
+            .camera_id
+            .as_ref()
+            .is_some_and(|c| c.serial.is_empty())
+    );
+
+    let history = sidecar_for_export(
+        &library,
+        ExportPrivacy {
+            retain_superseded: true,
+            ..ExportPrivacy::default()
+        },
+    );
+    let kept: Vec<_> = history
+        .caption
+        .superseded
+        .iter()
+        .map(|stamped| stamped.value.as_str())
+        .collect();
+    assert_eq!(kept, [REWRITTEN_CAPTION], "the opted-in history is kept");
+    assert!(
+        history.caption.superseded.iter().all(|s| s.by.is_nil()),
+        "its stamps still lose their device"
+    );
+    assert_eq!(history.device_id, Uuid::nil());
+    assert_eq!(history.session_id, Uuid::nil());
+
+    let session = sidecar_for_export(
+        &library,
+        ExportPrivacy {
+            retain_session_id: true,
+            ..ExportPrivacy::default()
+        },
+    );
+    assert_eq!(session.session_id, SESSION);
+    assert_eq!(session.device_id, Uuid::nil());
+}
+
+#[test]
+fn unknown_keys_leave_under_no_opt_in() {
+    let library = sidecar_with_every_stripped_field();
+    let exported = sidecar_for_export(&library, ExportPrivacy::RETAIN_ALL);
+    assert!(exported.unknown.is_empty());
+    assert!(
+        exported.signature.is_none(),
+        "dropping a key voids the signature"
+    );
+    let mut expected = library.clone();
+    expected.unknown.clear();
+    expected.signature = None;
+    assert_eq!(exported, expected, "every opted-in row is kept as it was");
 }

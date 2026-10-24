@@ -227,6 +227,7 @@ async fn a_published_link_opens_through_the_browser_surface_from_what_the_server
                     KeyMode::Derived
                 },
                 wrapped_file_key: wrapped_file_key.map(WrappedFileKey),
+                sidecar: None,
             });
         }
 
