@@ -13315,6 +13315,86 @@
         }
       }
     },
+    "app.settings.advanced.empty.description": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This build has no developer options."
+          }
+        }
+      }
+    },
+    "app.settings.advanced.empty.title": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nothing to Adjust"
+          }
+        }
+      }
+    },
+    "app.settings.advanced.scenario.active": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Running Now"
+          }
+        }
+      }
+    },
+    "app.settings.advanced.scenario.clear": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use Launch Default"
+          }
+        }
+      }
+    },
+    "app.settings.advanced.scenario.footer": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The scenario is chosen when the app starts. A -mock-scenario launch argument takes precedence over the choice made here."
+          }
+        }
+      }
+    },
+    "app.settings.advanced.scenario.header": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mock Scenario"
+          }
+        }
+      }
+    },
+    "app.settings.advanced.scenario.next_launch": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Takes effect the next time Capsule launches."
+          }
+        }
+      }
+    },
+    "app.settings.advanced.scenario.picker": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Next Launch"
+          }
+        }
+      }
+    },
     "app.settings.ai.download": {
       "localizations": {
         "en": {

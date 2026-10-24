@@ -60,17 +60,34 @@ public enum MockScenario: String, Sendable, Equatable, Hashable, CaseIterable {
     /// developer running the app with no arguments must get a working library,
     /// and a typo in a test's argument shows up as the healthy world rather than
     /// a crash on launch.
-    public static func resolve(fromArguments arguments: [String]) -> MockScenario {
-        guard let position = arguments.firstIndex(of: launchArgument),
-              position + 1 < arguments.count,
+    ///
+    /// `persisted` is the override the Advanced settings screen records for the
+    /// next launch. It applies only when the arguments do not name
+    /// ``launchArgument`` at all: a launch that passes the argument — every UI
+    /// test, every Xcode scheme that sets one — gets exactly the world it asked
+    /// for, so a choice left behind on a device can never change which world a
+    /// test runs in. That holds for a mistyped name too, which still resolves to
+    /// ``healthy`` rather than to whatever was persisted.
+    public static func resolve(
+        fromArguments arguments: [String],
+        persisted: MockScenario? = nil
+    ) -> MockScenario {
+        guard let position = arguments.firstIndex(of: launchArgument) else {
+            return persisted ?? .healthy
+        }
+        guard position + 1 < arguments.count,
               let scenario = MockScenario(rawValue: arguments[position + 1])
         else { return .healthy }
         return scenario
     }
 
-    /// Read the scenario from the running process.
-    public static func resolve(from processInfo: ProcessInfo = .processInfo) -> MockScenario {
-        resolve(fromArguments: processInfo.arguments)
+    /// Read the scenario from the running process, falling back to `persisted`
+    /// when the process names none.
+    public static func resolve(
+        from processInfo: ProcessInfo = .processInfo,
+        persisted: MockScenario? = nil
+    ) -> MockScenario {
+        resolve(fromArguments: processInfo.arguments, persisted: persisted)
     }
 }
 

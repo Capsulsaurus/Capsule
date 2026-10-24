@@ -6,6 +6,7 @@ import CapsuleFoundation
 import CapsuleMock
 import CapsulePorts
 import FeatureAuth
+import FeatureSettings
 import FeatureSharing
 import FeatureTimeline
 import FeatureViewer
@@ -55,7 +56,8 @@ struct AppEnvironment {
 
     /// Every port, wired into one coherent scenario. Read the scenario name
     /// from `-mock-scenario`, so `xcrun simctl launch … -mock-scenario
-    /// quarantine` and an Xcode scheme argument select the same world.
+    /// quarantine` and an Xcode scheme argument select the same world; with no
+    /// such argument, from the override the Advanced settings screen recorded.
     let mock: MockEnvironment
 
     /// Which world this launch is running. Shown in diagnostics.
@@ -162,7 +164,31 @@ struct AppEnvironment {
 
     // MARK: Construction
 
-    init(mock: MockEnvironment = .fromLaunchArguments()) {
+    /// The world this launch runs: see ``launchWorld(_:defaults:)``.
+    init() {
+        self.init(mock: Self.launchWorld())
+    }
+
+    /// Read the scenario at launch.
+    ///
+    /// The command line wins: a launch that passes `-mock-scenario` — every UI
+    /// test, every scheme that sets one — gets that world whatever the device
+    /// has persisted. Only a launch that names none falls back to the
+    /// ``MockScenarioSelection`` the Advanced screen wrote, and then to the
+    /// healthy world. A scenario cannot be swapped under a running graph, which
+    /// is why the screen records a choice and this is where it takes effect.
+    static func launchWorld(
+        _ processInfo: ProcessInfo = .processInfo,
+        defaults: UserDefaults = .standard
+    ) -> MockEnvironment {
+        let persisted = MockScenarioSelection(defaults: defaults).selected()
+        CapsuleLog.app.debug(
+            "persisted mock scenario: \(persisted?.rawValue ?? "none", privacy: .public)"
+        )
+        return .fromLaunchArguments(processInfo, persisted: persisted)
+    }
+
+    init(mock: MockEnvironment) {
         self.mock = mock
         CapsuleLog.app.info("mock scenario: \(mock.scenario.rawValue, privacy: .public)")
 

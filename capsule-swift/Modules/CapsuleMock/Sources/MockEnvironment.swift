@@ -119,10 +119,15 @@ public struct MockEnvironment: Sendable {
     /// The composition root and the UI tests agree through the raw strings in
     /// ``MockScenario``, because a UI-test bundle links the app as a target and
     /// cannot import this module.
+    ///
+    /// `persisted` is the next-launch override the Advanced settings screen
+    /// records; the command line wins over it whenever it names a scenario, as
+    /// ``MockScenario/resolve(fromArguments:persisted:)`` documents.
     public static func fromLaunchArguments(
         _ processInfo: ProcessInfo = .processInfo,
+        persisted: MockScenario? = nil,
         clock: MockClock = .reference
     ) -> MockEnvironment {
-        MockEnvironment(scenario: .resolve(from: processInfo), clock: clock)
+        MockEnvironment(scenario: .resolve(from: processInfo, persisted: persisted), clock: clock)
     }
 }

@@ -85,6 +85,26 @@ struct SettingsEnvironmentTests {
     }
 }
 
+// MARK: - IsolatedDefaults
+
+/// An isolated defaults suite, torn down when the test ends: a settings test
+/// must never read or write the machine's own preferences.
+private final class IsolatedDefaults {
+    let name = "capsule.tests.\(UUID().uuidString)"
+    let defaults: UserDefaults
+
+    init() throws {
+        guard let suite = UserDefaults(suiteName: name) else {
+            throw CocoaError(.fileNoSuchFile)
+        }
+        defaults = suite
+    }
+
+    deinit {
+        defaults.removePersistentDomain(forName: name)
+    }
+}
+
 // MARK: - MockScenarioSelectionTests
 
 /// A scenario is chosen at launch, so switching one cannot take effect in
@@ -93,24 +113,6 @@ struct SettingsEnvironmentTests {
 @Suite("The scenario switcher records a choice for the next launch")
 @MainActor
 struct MockScenarioSelectionTests {
-    /// An isolated defaults suite, torn down when the test ends: a settings
-    /// test must never read or write the machine's own preferences.
-    private final class IsolatedDefaults {
-        let name = "capsule.tests.\(UUID().uuidString)"
-        let defaults: UserDefaults
-
-        init() throws {
-            guard let suite = UserDefaults(suiteName: name) else {
-                throw CocoaError(.fileNoSuchFile)
-            }
-            defaults = suite
-        }
-
-        deinit {
-            defaults.removePersistentDomain(forName: name)
-        }
-    }
-
     @Test("nothing is selected until something is selected")
     func noSelectionByDefault() throws {
         let store = try IsolatedDefaults()
@@ -144,5 +146,153 @@ struct MockScenarioSelectionTests {
         let selection = MockScenarioSelection(defaults: store.defaults)
 
         #expect(selection.selected() == nil, "a scenario this build cannot name is not a scenario")
+    }
+
+    /// The other half of the contract: what the switcher writes is what the
+    /// launch path reads, and a launch argument still wins over it.
+    @Test("a recorded choice is the next launch's world unless the launch names one")
+    func recordedChoiceReachesTheLaunchPath() throws {
+        let store = try IsolatedDefaults()
+        let selection = MockScenarioSelection(defaults: store.defaults)
+        selection.select(.quotaGraceExpired)
+        let persisted = selection.selected()
+
+        #expect(MockScenario.resolve(fromArguments: ["app"], persisted: persisted) == .quotaGraceExpired)
+        #expect(
+            MockScenario.resolve(
+                fromArguments: ["app", MockScenario.launchArgument, "offline"],
+                persisted: persisted
+            ) == .offline,
+            "a launch argument wins over the persisted override"
+        )
+        #expect(
+            MockScenario.resolve(
+                fromArguments: ["app", MockScenario.launchArgument, "typo"],
+                persisted: persisted
+            ) == .healthy,
+            "a named but unknown scenario is the healthy world, not the persisted one"
+        )
+        #expect(
+            MockScenario.resolve(fromArguments: ["app", MockScenario.launchArgument], persisted: persisted)
+                == .healthy
+        )
+        #expect(MockScenario.resolve(fromArguments: ["app"], persisted: nil) == .healthy)
+    }
+}
+
+// MARK: - AdvancedSettingsModelTests
+
+/// The Advanced screen's switcher: shown only against a mock world, and every
+/// choice is recorded for the next launch rather than applied in place.
+@Suite("The Advanced screen records a scenario for the next launch")
+@MainActor
+struct AdvancedSettingsModelTests {
+    @Test("a build with no mock world shows no switcher and writes nothing")
+    func noMockWorldNoSwitcher() throws {
+        let store = try IsolatedDefaults()
+        let model = AdvancedSettingsModel(
+            activeScenarioName: nil,
+            selection: MockScenarioSelection(defaults: store.defaults)
+        )
+
+        #expect(!model.showsScenarioSwitcher)
+        #expect(model.phase == .empty)
+
+        model.choose(.quarantine)
+
+        #expect(model.nextLaunchScenario == nil)
+        #expect(store.defaults.string(forKey: MockScenarioSelection.defaultsKey) == nil)
+    }
+
+    @Test("a mock world shows the switcher on the scenario it is running")
+    func mockWorldShowsSwitcher() throws {
+        let store = try IsolatedDefaults()
+        let model = AdvancedSettingsModel(
+            activeScenarioName: MockScenario.offline.rawValue,
+            selection: MockScenarioSelection(defaults: store.defaults)
+        )
+
+        #expect(model.showsScenarioSwitcher)
+        #expect(model.phase == .ready)
+        #expect(model.pickedScenario == .offline)
+        #expect(!model.appliesOnNextLaunch)
+        #expect(model.scenarios == MockScenario.allCases)
+    }
+
+    @Test("choosing a different scenario records it and says it applies next launch")
+    func choosingRecordsForNextLaunch() throws {
+        let store = try IsolatedDefaults()
+        let selection = MockScenarioSelection(defaults: store.defaults)
+        let model = AdvancedSettingsModel(
+            activeScenarioName: MockScenario.healthy.rawValue,
+            selection: selection
+        )
+
+        model.choose(.recoveryOverdue)
+
+        #expect(model.nextLaunchScenario == .recoveryOverdue)
+        #expect(model.pickedScenario == .recoveryOverdue)
+        #expect(model.appliesOnNextLaunch)
+        #expect(selection.selected() == .recoveryOverdue)
+    }
+
+    @Test("choosing the running scenario records it without a relaunch notice")
+    func choosingTheRunningScenarioNeedsNoNotice() throws {
+        let store = try IsolatedDefaults()
+        let model = AdvancedSettingsModel(
+            activeScenarioName: MockScenario.quarantine.rawValue,
+            selection: MockScenarioSelection(defaults: store.defaults)
+        )
+
+        model.choose(.quarantine)
+
+        #expect(model.nextLaunchScenario == .quarantine)
+        #expect(!model.appliesOnNextLaunch)
+    }
+
+    @Test("an override recorded earlier is shown when the screen opens")
+    func earlierOverrideIsShown() throws {
+        let store = try IsolatedDefaults()
+        let selection = MockScenarioSelection(defaults: store.defaults)
+        selection.select(.hugeLibrary)
+
+        let model = AdvancedSettingsModel(
+            activeScenarioName: MockScenario.healthy.rawValue,
+            selection: selection
+        )
+
+        #expect(model.nextLaunchScenario == .hugeLibrary)
+        #expect(model.pickedScenario == .hugeLibrary)
+        #expect(model.appliesOnNextLaunch)
+    }
+
+    @Test("clearing the override hands the next launch back to its arguments")
+    func clearingForgetsTheOverride() throws {
+        let store = try IsolatedDefaults()
+        let selection = MockScenarioSelection(defaults: store.defaults)
+        let model = AdvancedSettingsModel(
+            activeScenarioName: MockScenario.healthy.rawValue,
+            selection: selection
+        )
+        model.choose(.offline)
+
+        model.clearOverride()
+
+        #expect(model.nextLaunchScenario == nil)
+        #expect(model.pickedScenario == .healthy)
+        #expect(!model.appliesOnNextLaunch)
+        #expect(selection.selected() == nil)
+    }
+
+    @Test("a running scenario name this build cannot parse is shown as the healthy world")
+    func unparseableRunningNameFallsBack() throws {
+        let store = try IsolatedDefaults()
+        let model = AdvancedSettingsModel(
+            activeScenarioName: "a-scenario-from-the-future",
+            selection: MockScenarioSelection(defaults: store.defaults)
+        )
+
+        #expect(model.showsScenarioSwitcher)
+        #expect(model.pickedScenario == .healthy)
     }
 }

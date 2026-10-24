@@ -58,7 +58,7 @@ public extension SettingsBuildInfo {
 
 // MARK: - MockScenarioSelection
 
-/// The persisted mock-scenario override the Advanced screen writes.
+/// The persisted mock-scenario override ``AdvancedSettingsView`` writes.
 ///
 /// A scenario is chosen at launch — ``MockEnvironment`` builds its whole world
 /// from one, and half the app's screens are unreachable from a healthy library
@@ -72,7 +72,8 @@ public extension SettingsBuildInfo {
 @MainActor
 public struct MockScenarioSelection {
     /// The defaults key. Shared with the app's composition root, which reads it
-    /// at launch and turns it into the launch argument the UI tests also use.
+    /// at launch as the fallback when the launch arguments name no scenario —
+    /// a `-mock-scenario` argument, which the UI tests always pass, wins.
     public static let defaultsKey = "capsule.settings.mock_scenario"
 
     private let defaults: UserDefaults

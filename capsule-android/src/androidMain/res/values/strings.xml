@@ -897,6 +897,14 @@
     <string name="app_settings_account_type_label">Account Type</string>
     <string name="app_settings_account_type_registered">Registered</string>
     <string name="app_settings_account_type_sponsored">Sponsored</string>
+    <string name="app_settings_advanced_empty_description">This build has no developer options.</string>
+    <string name="app_settings_advanced_empty_title">Nothing to Adjust</string>
+    <string name="app_settings_advanced_scenario_active">Running Now</string>
+    <string name="app_settings_advanced_scenario_clear">Use Launch Default</string>
+    <string name="app_settings_advanced_scenario_footer">The scenario is chosen when the app starts. A -mock-scenario launch argument takes precedence over the choice made here.</string>
+    <string name="app_settings_advanced_scenario_header">Mock Scenario</string>
+    <string name="app_settings_advanced_scenario_next_launch">Takes effect the next time Capsule launches.</string>
+    <string name="app_settings_advanced_scenario_picker">Next Launch</string>
     <string name="app_settings_ai_download">Download</string>
     <string name="app_settings_ai_empty_description">This device can\'t run Capsule\'s on-device models.</string>
     <string name="app_settings_ai_empty_title">Not Available Here</string>
