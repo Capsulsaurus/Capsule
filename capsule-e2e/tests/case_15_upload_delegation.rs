@@ -311,6 +311,19 @@ fn kinds_of(feed: &[capsule_sdk::sync::FeedEntry], asset: Uuid) -> Vec<ChangeKin
 /// server only once A's own custody check finds the create's receipts; it is sent once.
 #[tokio::test]
 async fn e2e_case_15_a_delete_after_hand_off_reaches_the_server_only_once_custody_exists() {
+    delete_after_hand_off(false).await;
+}
+
+/// As above, with an edit between the hand-off and the delete: the server's head is the create B
+/// uploaded, so the delete chains onto the edit only once the edit is there. Both are held, and
+/// both are sent in chain order once custody exists, so the server applies the delete rather
+/// than refusing it as a stale chain.
+#[tokio::test]
+async fn e2e_case_15_an_edit_then_a_delete_after_hand_off_both_reach_the_server_in_order() {
+    delete_after_hand_off(true).await;
+}
+
+async fn delete_after_hand_off(edit_first: bool) {
     let server = Server::boot().await;
     let remote = remote_for(&server);
     let mut a = Device::register(&server, "delegation-delete").await;
@@ -336,7 +349,17 @@ async fn e2e_case_15_a_delete_after_hand_off_reaches_the_server_only_once_custod
     assert!(handed.failed.is_empty(), "{handed:#?}");
 
     // ── A deletes the asset; B has not uploaded it, so the delete is held ─────────────────
+    if edit_first {
+        a.workspace
+            .set_caption(&asset, "captioned after the hand-off")
+            .expect("A edits it");
+    }
     a.workspace.soft_delete(&asset, 30).expect("A deletes it");
+    let sent: &[&str] = if edit_first {
+        &["sent", "sent"]
+    } else {
+        &["sent"]
+    };
     let held = peer::status(
         &remote,
         &cli_a.store,
@@ -413,11 +436,24 @@ async fn e2e_case_15_a_delete_after_hand_off_reaches_the_server_only_once_custod
         "{released:#?}"
     );
     let outcomes: Vec<&str> = released.deletes.iter().map(|d| d.outcome).collect();
-    assert_eq!(outcomes, vec!["sent"], "{released:#?}");
+    assert_eq!(outcomes, sent, "{released:#?}");
+    let kinds = kinds_of(&a.feed(&server).await, asset);
     assert!(
-        kinds_of(&a.feed(&server).await, asset).contains(&ChangeKind::Deleted),
-        "the delete reached the server after the create's custody"
+        kinds.contains(&ChangeKind::Deleted),
+        "the delete reached the server after the create's custody: {kinds:?}"
     );
+    if edit_first {
+        let actions: Vec<Option<&str>> = released
+            .deletes
+            .iter()
+            .map(|d| d.action.as_deref())
+            .collect();
+        assert_eq!(
+            actions,
+            vec![Some("metadata-update"), Some("delete")],
+            "the edit went first, so the delete chained onto it"
+        );
+    }
 
     // Sent once: a later run has nothing left to send.
     let after = peer::status(
