@@ -1,9 +1,18 @@
 #!/usr/bin/env bash
-#MISE description="Generate the capsule_sdk uniffi Kotlin/Swift bindings from its compiled cdylib"
+#MISE description="Generate the capsule_sdk uniffi Kotlin/Swift bindings and dump their surface (--check: fail if the dump is stale)"
 set -euo pipefail
+# `--check` verifies the committed capsule-sdk/bindings-surface.json instead of rewriting it;
+# the Rust gate runs it that way. Anything else is a typo that must not silently mean "write".
+check=""
+case "${1:-}" in
+    "") ;;
+    --check) check="--check" ;;
+    *) echo "usage: mise run gen-bindings [--check]" >&2; exit 2 ;;
+esac
 ext="so"; [ "$(uname)" = "Darwin" ] && ext="dylib"
 out="target/bindings"
-rm -rf "$out"
+surface="target/bindings-surface"
+rm -rf "$out" "$surface"
 
 # The `capsule_sdk` namespace (one pinned uniffi, 0.31.1):
 # capsule-sdk's `FfiCapsuleClient`/`FfiSession` user-flow primitives, its
@@ -16,6 +25,11 @@ lib="target/debug/libcapsule_sdk.${ext}"
 for lang in kotlin swift; do
     cargo run -q -p capsule-sdk --features ffi-bindgen --bin uniffi-bindgen -- \
         generate --library "$lib" --language "$lang" --out-dir "$out/$lang"
+    # A second, unformatted copy for the surface dump. uniffi runs ktlint over Kotlin when one
+    # is on PATH; a developer's machine usually has it and the Rust CI job does not, so a dump
+    # read from formatted output would depend on the machine that wrote it.
+    cargo run -q -p capsule-sdk --features ffi-bindgen --bin uniffi-bindgen -- \
+        generate --no-format --library "$lib" --language "$lang" --out-dir "$surface/$lang"
 done
 
 # Smoke: the surface must have produced non-empty sources in both languages, and
@@ -34,48 +48,13 @@ for f in "$out"/kotlin/uniffi/* "$out"/swift/*.swift; do
 done
 
 # Non-empty is not enough: a verb that fails to cross the namespace boundary still
-# leaves a large, plausible file behind. Assert the surfaces each lane actually
-# consumes are present by name.
-#
-#   Client/session — the networked user flows (login → upload → status → sync).
-#   Workspace verbs — the capsule_sdk verbs the iOS lane depends on:
-#          enroll (incl. hardware-signer parity), album, seal+import, the
-#          seal→upload bridge, verify, sync-apply, escrow, device directory.
-#   Alert surface — the shared predicate plus the per-class
-#          pre-arm deadlines a client actually schedules its alarms from. The
-#          arm call is the one that must not go missing: without it a client
-#          can only ask "what is true now?", which is the question pre-arming
-#          exists to stop it having to ask.
-require() {  # $1=file  $2..=symbols
-    local file="$1"; shift
-    for sym in "$@"; do
-        grep -q "$sym" "$file" \
-            || { echo "binding surface missing '$sym' in $file" >&2; exit 1; }
-    done
-}
-for f in "$sdk_kt" "$sdk_swift"; do
-    require "$f" FfiCapsuleClient FfiSession
-    require "$f" FfiWorkspace FfiHardwareSigner FfiSyncEntry FfiAssetFacts FfiUploadBlob
-    require "$f" FfiAlert FfiClassDeadline FfiNotifyInput
-done
-# Both languages lower these free functions to the same camelCase spelling.
-require "$sdk_swift" evaluateAlerts preArmDeadlines nextAlertDeadline
-require "$sdk_kt" evaluateAlerts preArmDeadlines nextAlertDeadline
-# Swift and Kotlin lower method names differently (camelCase vs camelCase on the
-# object); assert the verbs per-language rather than assuming one spelling.
-require "$sdk_swift" sealAsset uploadBlobs applySyncEntry escrowBlob \
-    signedDeviceDirectory publishDeviceDirectory escrowPut escrowGet \
-    createWithP256HardwareSigner
-require "$sdk_kt" sealAsset uploadBlobs applySyncEntry escrowBlob \
-    signedDeviceDirectory publishDeviceDirectory escrowPut escrowGet \
-    createWithP256HardwareSigner
-# The rest of what capsule-core-kotlin and capsule-core-swift drive (#424, #579): the
-# Ed25519 hardware-signer constructor, the key-agreement seam and the hardware DEK
-# round-trip, the device tier they enroll at, and the verify verb.
-for f in "$sdk_kt" "$sdk_swift"; do
-    require "$f" FfiHardwareKeyAgreement FfiHardwareSignerError FfiDeviceTier \
-        createWithHardwareSigner p256HardwareDekRoundTrip verifyAsset
-done
+# leaves a large, plausible file behind. `xtask bindings-surface` reads the declarations
+# out of the unformatted copy, fails unless every verb the native clients consume is
+# declared in both languages (its `REQUIRED` table: client/session, the workspace verbs,
+# the alert surface, and the hardware seams) and the two languages declare the same
+# names, then writes them to the committed capsule-sdk/bindings-surface.json that
+# /reference/sdk/swift/ and /reference/sdk/kotlin/ are generated from.
+cargo run -q -p xtask -- bindings-surface ${check:+"$check"}
 
 echo "uniffi bindings written to $out (capsule_sdk, kotlin + swift)"
-echo "surface check passed: client/session, workspace verbs and alert surface present in both languages"
+echo "surface check passed: every required declaration present in both languages"

@@ -1,0 +1,3649 @@
+{
+  "schema": 1,
+  "namespace": "capsule_sdk",
+  "uniffi": "0.31.1",
+  "languages": {
+    "swift": {
+      "source": "capsule_sdk.swift",
+      "declarations": [
+        {
+          "kind": "class",
+          "name": "FfiCapsuleClient",
+          "signature": "open class FfiCapsuleClient: FfiCapsuleClientProtocol, @unchecked Sendable",
+          "doc": "The unauthenticated entry point over the SDK's auth + upload endpoints. Turns\ncredentials into an [`FfiSession`] handle; the protocol pin and endpoints are\ncaptured once here and reused by every session this client mints.",
+          "members": [
+            {
+              "kind": "init",
+              "name": "init",
+              "signature": "public convenience init(authBaseUrl: String, uploadBaseUrl: String, protocolVersion: String, cohortHash: String?) throws",
+              "doc": "Build a client.\n\n- `auth_base_url` is the auth endpoint root (e.g. `https://api.example.com/auth`).\n- `upload_base_url` is the upload endpoint root (`POST` target; chunk/HEAD hang\nunder `{upload_base_url}/{id}`).\n- `protocol_version` is the pinned protocol date (`YYYY-MM-DD`).\n- `cohort_hash` is the optional advisory device-cohort digest; `None`\nsends nothing (the server behaves identically).",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "login",
+              "signature": "func login(email: String, password: String) async throws -> FfiLoginOutcome",
+              "doc": "Authenticate with email + password, returning an authenticated session handle.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "register",
+              "signature": "func register(email: String, password: String) async throws -> FfiSession",
+              "doc": "Create an account and return an authenticated session handle (the server\nissues tokens on registration).\nAn address and a password, and nothing else: the server takes nothing else.\nA display name is a fact about a person, and the profile surface that would hold one is\nowed rather than assumed.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "verifySecondFactor",
+              "signature": "func verifySecondFactor(mfaToken: String, totpCode: String) async throws -> FfiSession",
+              "doc": "Complete a sign-in with the code an authenticator app is showing.\n\n`mfa_token` is what [`FfiLoginOutcome::SecondFactorRequired`] carried. It is good once\nand for five minutes.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "protocol",
+          "name": "FfiHardwareKeyAgreement",
+          "signature": "public protocol FfiHardwareKeyAgreement: AnyObject, Sendable",
+          "doc": "The per-platform **key-agreement** element (Secure Enclave `P256.KeyAgreement`, StrongBox\nECDH, TPM 2.0 ECDH), implemented by native Swift/Kotlin over the uniffi foreign-trait\nboundary — the ECDH analogue of [`FfiHardwareSigner`], and this namespace's declaration of\n`capsule-core`'s `HardwareKeyAgreement` contract.\n\nIt backs the hardware-bound classical half of the device **encryption** key:\nthe element holds a static P-256 private key and performs the ECDH, so the scalar never\nleaves hardware, while Rust drives the software-sealed ML-KEM-768 half and the hybrid\ncombiner. Failures reuse [`FfiHardwareSignerError`], exactly as core's trait reuses its\nsigner error.",
+          "members": [
+            {
+              "kind": "func",
+              "name": "enroll",
+              "signature": "func enroll(keyAlias: String) throws -> Data",
+              "doc": "Generate (or bind to) the hardware P-256 key-agreement keypair for `key_alias`,\nreturning its public key as **uncompressed SEC1** (`0x04‖x‖y`, 65 bytes). Idempotent per\nalias.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "publicKey",
+              "signature": "func publicKey(keyAlias: String) throws -> Data",
+              "doc": "The uncompressed-SEC1 P-256 public key for an already-enrolled `key_alias`.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "keyAgreement",
+              "signature": "func keyAgreement(keyAlias: String, peerPublic: Data) throws -> Data",
+              "doc": "ECDH against `peer_public` (the sender's ephemeral P-256 public key, uncompressed SEC1)\nwith the hardware key for `key_alias`, returning the **raw 32-byte shared secret** (the\nbig-endian x-coordinate, before any KDF).",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "assertNonExportable",
+              "signature": "func assertNonExportable(keyAlias: String) throws",
+              "doc": "Non-exportability assertion: a conforming element MUST refuse to reveal the private\nbytes, returning [`FfiHardwareSignerError::Exportable`] if they can be read.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "protocol",
+          "name": "FfiHardwareSigner",
+          "signature": "public protocol FfiHardwareSigner: AnyObject, Sendable",
+          "doc": "The per-platform secure element (Secure Enclave, StrongBox, TPM), implemented by native\nSwift/Kotlin over the uniffi foreign-trait boundary.\n\nThe byte shapes are fixed by the constructor the element is handed to, not by the trait:\n\n- [`FfiWorkspace::create_with_p256_hardware_signer`] — the **P-256** shape shipping\nelements actually provide: [`enroll`](Self::enroll) /\n[`classical_public_key`](Self::classical_public_key) return a SEC1 public key and\n[`sign_classical`](Self::sign_classical) a **DER-encoded ECDSA** signature over\n`SHA-256(msg)`.\n- [`FfiWorkspace::create_with_hardware_signer`] — the **Ed25519** shape: a 32-byte public\nkey and a 64-byte signature over `msg`. No shipping secure element holds Ed25519 keys, so\nthis is the software/TPM reference path.\n\nEither way Rust composes the classical half with a software-sealed ML-DSA-65 half into the\npublished hybrid device key.",
+          "members": [
+            {
+              "kind": "func",
+              "name": "enroll",
+              "signature": "func enroll(keyAlias: String) throws -> Data",
+              "doc": "Generate (or bind to) the hardware keypair for `key_alias`, returning its public key in\nthe constructor's shape: a SEC1 P-256 key for\n[`FfiWorkspace::create_with_p256_hardware_signer`], a 32-byte Ed25519 key for\n[`FfiWorkspace::create_with_hardware_signer`]. Idempotent per alias.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "classicalPublicKey",
+              "signature": "func classicalPublicKey(keyAlias: String) throws -> Data",
+              "doc": "The public key for an already-enrolled `key_alias`, in the same constructor-dependent\nshape [`enroll`](Self::enroll) returns (SEC1 P-256, or 32-byte Ed25519).",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "signClassical",
+              "signature": "func signClassical(keyAlias: String, msg: Data) throws -> Data",
+              "doc": "Sign `msg` with the hardware key for `key_alias`, in the constructor's shape: a\nDER-encoded ECDSA signature over `SHA-256(msg)` for\n[`FfiWorkspace::create_with_p256_hardware_signer`], a 64-byte Ed25519 signature over\n`msg` for [`FfiWorkspace::create_with_hardware_signer`].",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "assertNonExportable",
+              "signature": "func assertNonExportable(keyAlias: String) throws",
+              "doc": "Non-exportability assertion: a conforming element MUST refuse to reveal the private\nbytes, returning [`FfiHardwareSignerError::Exportable`] if they can be read.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "class",
+          "name": "FfiSession",
+          "signature": "open class FfiSession: FfiSessionProtocol, @unchecked Sendable",
+          "doc": "An authenticated session handle. Owns the SDK token store internally (auto\npre-flight refresh, single-flight, `401`-retry-once); **no token ever crosses\nthe FFI boundary**. Every flow rides this handle.",
+          "members": [
+            {
+              "kind": "func",
+              "name": "escrowGet",
+              "signature": "func escrowGet(apiBaseUrl: String) async throws -> Data",
+              "doc": "Fetch this account's escrow blob (`GET /v1/auth/escrow`) as opaque canonical CBOR — the\nbytes [`FfiWorkspace::verify_escrow_blob`](FfiWorkspace::verify_escrow_blob) checks and\na recovery flow unwraps.\n\nNo escrow enrolled yet is [`FfiError::Escrow`] carrying `error.escrow.not_stored` — the\ncode that separates \"set up a recovery key\" from \"we could not read the one you have\".\nA refused credential is [`FfiError::Auth`].",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "escrowPut",
+              "signature": "func escrowPut(apiBaseUrl: String, blob: Data) async throws -> FfiEscrowStored",
+              "doc": "Store or replace this account's **master-key escrow blob** (`PUT /v1/auth/escrow`).\n`blob` is the opaque canonical CBOR\n[`FfiWorkspace::escrow_blob`](FfiWorkspace::escrow_blob) minted — the master key itself\nnever crosses this boundary in either direction.\n\nSingle active escrow: the server replaces any prior blob in the same transaction, so the\nsecret a rotation retired unwraps nothing.\n\n`api_base_url` is the API root the session authenticates against (the per-call endpoint\nconvention this surface already uses for `sync_pull`). A URL operation paths cannot hang\noff is [`FfiError::InvalidArgument`]; a refused credential is [`FfiError::Auth`], so a\ncaller re-authenticates rather than retrying; everything else is\n[`FfiError::Escrow`] with the server's `error.escrow.*` code when it sent one.\n\nThe answer says what the store did: [`FfiEscrowStored::replaced`] separates \"recovery\nset up\" from \"recovery key replaced\" (the previous secret has stopped working).",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "fetchBlobToPath",
+              "signature": "func fetchBlobToPath(blobBaseUrl: String, hash: String, size: UInt64, path: String) async throws",
+              "doc": "**Fetch** the blob at content address `hash` (`size` bytes, as the sync feed's\n[`FfiBlobRef`] declares) into the file at `path`, created or truncated.\n\nThe blob streams to disk in bounded `Range` windows, so memory is bounded by one window\nwhatever the blob's size, and its content address is checked as it lands. On any error\nthe file is removed: a path this returns `Ok` for holds exactly the verified ciphertext.\nA session that cannot authorize the fetch is [`FfiError::Auth`], so the app signs in\nagain; every other failure is [`FfiError::Fetch`].\n\n`blob_base_url` is the root the blob route hangs off (`{blob_base_url}/blob/{hash}`),\nthe server's `/v1` root.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "fetchDeviceDirectory",
+              "signature": "func fetchDeviceDirectory(apiBaseUrl: String, userId: String, pinnedUserIk: Data) async throws -> Data",
+              "doc": "Fetch a user's signed device directory, **verified under `pinned_user_ik`** (the bytes\n[`FfiWorkspace::user_ik_public`](FfiWorkspace::user_ik_public) returns) before it is\nhanded back. A document that does not verify is an error, never a return value.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "isAuthenticated",
+              "signature": "func isAuthenticated() async -> Bool",
+              "doc": "Whether the session currently holds tokens (`false` after logout).",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "logout",
+              "signature": "func logout() async throws",
+              "doc": "Revoke the session server-side and clear the local store (idempotent).",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "publishDeviceDirectory",
+              "signature": "func publishDeviceDirectory(apiBaseUrl: String, directoryCbor: Data, userIk: Data) async throws -> UInt64",
+              "doc": "Publish this device's **signed device directory**, returning the `directory_version` the\nserver now stores. `directory_cbor` is the opaque document\n[`FfiWorkspace::signed_device_directory`](FfiWorkspace::signed_device_directory)\nproduced; it travels verbatim, because re-encoding it would detach it from the signature\nit carries. `user_ik` is the account's user identity **public** key the document is\nsigned under — the bytes [`FfiWorkspace::user_ik_public`](FfiWorkspace::user_ik_public)\nreturns — which the server anchors on first publish and verifies every publish against.\n\nPublish when the document changes (a device enrolled or revoked). The version must\nadvance — republishing an unchanged document answers the version-conflict code.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "pushAsset",
+              "signature": "func pushAsset(workspace: FfiWorkspace, assetId: String) async throws -> FfiPushReport",
+              "doc": "**Push** one sealed asset of `workspace` — every blob of its bundle, in ladder order\n(provenance and metadata, then derivative manifests and derivatives, then the\noriginal) — driving `capsule_sdk::push::push_bundle` inside the SDK.\n\nThe original never crosses the boundary: its ciphertext is re-derived from the\nplaintext on disk one upload chunk window at a time, so memory is bounded by the\ntransfer window whatever the original's size. The workspace lock is held only while the\nbundle is built, never across the network.\n\nEvery blob is driven; one the server already holds answers `duplicate_blob` and comes\nback [`FfiUploadOutcome::AlreadyStored`], so pushing twice is safe. The album must\nalready be provisioned on the server.\n\n**A create the server refused is re-sealed and retried once** (issue #822). When the\nalbum's epoch moved past the one the asset was sealed under, the server refuses its\ncreate for good; if this device holds a newer epoch, the asset is re-sealed at it\n(`Workspace::reseal_create`) and pushed again, once. A second refusal fails the push.\nWhen this device holds no newer epoch the push fails with [`FfiError::Upload`] carrying\nthe server's code and a detail saying there is no newer epoch to re-seal at, and the\nasset stays local. That detail names no missing key: the refusal may have had nothing to\ndo with the epoch (a revoked device, withdrawn write access), or another device rotated\nthe album and its key has not reached this one yet.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "syncPull",
+              "signature": "func syncPull(apiBaseUrl: String, cursor: Data, pageSize: UInt32) async throws -> FfiSyncPage",
+              "doc": "Pull one page of the key-free sync feed after `cursor` from `api_base_url`\n(`http[s]://host:port`). Pass an empty `cursor` for the first page; persist and pass\nback `next_cursor` to advance. The bearer rides the `Authorization` header\n(auto-refreshed); it never crosses the FFI boundary.\n\nThe parameter is the **API base URL** now, not a gRPC endpoint: the feed is\n`GET /v1/sync` on the same origin as every other call.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "upload",
+              "signature": "func upload(request: FfiUploadRequest, data: Data) async throws -> FfiUploadOutcome",
+              "doc": "Upload a full ciphertext blob (`data`) under `request`, driving the adaptive,\nresumable protocol with the code-driven recovery matrix.\n\n`data` crosses the boundary whole, so this is for blobs an app already holds in memory.\nTo push a sealed asset, original included, use [`push_asset`](Self::push_asset), which\nnever holds the original whole.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "uploadStatus",
+              "signature": "func uploadStatus(sessionId: String) async throws -> FfiUploadStatus?",
+              "doc": "Query an upload session's progress (`HEAD /upload/{id}`). `None` means the\nsession is gone (discarded/expired/never-existent).",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "class",
+          "name": "FfiWorkspace",
+          "signature": "open class FfiWorkspace: FfiWorkspaceProtocol, @unchecked Sendable",
+          "doc": "A Capsule workspace, callable from Swift/Kotlin: the durable library at a filesystem root\nplus everything an app does with it.\n\n`Workspace` mutates through `&mut self` while uniffi objects expose only `&self`; the\n`Mutex` supplies the interior mutability and serializes concurrent foreign calls.",
+          "members": [
+            {
+              "kind": "static func",
+              "name": "create",
+              "signature": "public static func create(root: String, passphrase: Data, tier: FfiDeviceTier, client: FfiClientBuild) throws -> FfiWorkspace",
+              "doc": "**Enroll**: create a brand-new library at `root`, guarded by `passphrase` at the\nArgon2id cost for `tier`. Mints the account, the device key, and the signed device\ndirectory, and seeds the durable album keystore.\n\n`client` is the app's own build identity: every manifest this workspace authors then\nreports `client_id/semver+commit` rather than the bare `capsule-core` default.",
+              "members": []
+            },
+            {
+              "kind": "static func",
+              "name": "createWithHardwareSigner",
+              "signature": "public static func createWithHardwareSigner(root: String, passphrase: Data, tier: FfiDeviceTier, hardware: FfiHardwareSigner, keyAlias: String, mlSeed: Data, client: FfiClientBuild) throws -> FfiWorkspace",
+              "doc": "**Enroll with a hardware-bound Ed25519 device key**: as [`create`](Self::create), but\nthe classical half of the device signing key is produced by `hardware` under\n`key_alias` over **Ed25519** (a 32-byte public key, 64-byte signatures). The\npost-quantum ML-DSA-65 half is the software-sealed `ml_seed` (32 bytes).\n\nNo shipping secure element holds Ed25519 keys, so this is the software/TPM reference\ncomposition; phones use\n[`create_with_p256_hardware_signer`](Self::create_with_p256_hardware_signer). It is the\nsame core call (`HardwareBackedSigner::enroll`) reached through this namespace's\n[`FfiHardwareSigner`] seam.",
+              "members": []
+            },
+            {
+              "kind": "static func",
+              "name": "createWithP256HardwareSigner",
+              "signature": "public static func createWithP256HardwareSigner(root: String, passphrase: Data, tier: FfiDeviceTier, hardware: FfiHardwareSigner, keyAlias: String, mlSeed: Data, client: FfiClientBuild) throws -> FfiWorkspace",
+              "doc": "**Enroll with a hardware-bound device key**: as [`create`](Self::create), but the\nclassical half of the device signing key is produced by `hardware` (a native Secure\nEnclave / StrongBox / TPM element) under `key_alias`, over **ECDSA-P256** — the\ncomposition shipping secure elements actually provide, none of which do Ed25519. The\npost-quantum ML-DSA-65 half is the software-sealed `ml_seed` (32 bytes).\n\nThe published device key carries the P-256 tag and `verify_asset` dispatches on it, so\nthis is constructor parity with `capsule-core`'s own\n`create_with_p256_hardware_signer` — the same core call, reached through this\nnamespace's [`FfiHardwareSigner`] seam.",
+              "members": []
+            },
+            {
+              "kind": "static func",
+              "name": "open",
+              "signature": "public static func `open`(root: String, passphrase: Data, tier: FfiDeviceTier, client: FfiClientBuild) throws -> FfiWorkspace",
+              "doc": "**Open** the existing library at `root` under `passphrase`, restoring its album keys and\nauthorities, every managed asset, and the `add_id` counter from disk. This is\nwhat makes an app relaunch resume rather than re-enroll.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "albums",
+              "signature": "func albums() throws -> [FfiAlbum]",
+              "doc": "Every album this workspace holds key material for.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "applySyncEntry",
+              "signature": "func applySyncEntry(entry: FfiSyncEntry) throws -> FfiSyncApplyOutcome",
+              "doc": "**Sync-apply**: verify one remote feed entry through the `verify_asset` chokepoint,\nbind and decrypt its metadata blob, and return either the facts to upsert or a named\nquarantine/hold verdict.\n\nNever silently drops and never silently accepts: a refused entry is a\n[`FfiSyncApplyOutcome::Quarantined`] the app must surface, not an error that aborts the\npage. Errors are reserved for a failure of this workspace itself.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "applySyncEntryFromFile",
+              "signature": "func applySyncEntryFromFile(entry: FfiSyncHead, ciphertextPath: String) throws -> FfiSyncApplyOutcome",
+              "doc": "[`apply_sync_entry`](Self::apply_sync_entry) for an entry whose original ciphertext is\nthe file at `ciphertext_path` — the one\n[`FfiSession::fetch_blob_to_path`](crate::ffi::FfiSession::fetch_blob_to_path) wrote —\nread in memory bounded by one STREAM chunk whatever the original's size.\n\nThe same chokepoint and verdicts: the file is hashed, and that digest is what the\ncontent-integrity step checks against the manifest's content address, so a file that is\nnot the committed ciphertext is quarantined as `Rejected.CiphertextHashMismatch`, as\n`apply_sync_entry` quarantines those bytes. Nothing is written anywhere.\n\nA malformed `album_id` or `local_chain_head` is refused before the file is opened, so a\nbad argument never costs a read of the original. The file is hashed before the workspace\nis locked, so other verbs are not held up while a large original is read.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "assetIds",
+              "signature": "func assetIds() throws -> [String]",
+              "doc": "Every managed asset id (UUID strings).",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "createAlbum",
+              "signature": "func createAlbum(name: String) throws -> String",
+              "doc": "Create an album (minting AMK_v1, its write-tier and admin keys, and an attested\nauthority, then persisting the keystore). Returns the album id.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "defaultAlbumId",
+              "signature": "func defaultAlbumId() throws -> String",
+              "doc": "The default album's id, derived deterministically from the account master key — so every\ndevice of this account computes the same value with nothing to synchronize.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "deviceId",
+              "signature": "func deviceId() throws -> String",
+              "doc": "This device's id (UUID string) — the `created_by_device` of every manifest it authors,\nand the id to report as the session's `device_id`.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "ensureAlbum",
+              "signature": "func ensureAlbum(albumId: String, name: String) throws -> String",
+              "doc": "Resolve `album_id` to the album this workspace already holds, or create it under `name`.\nThis is the verb first-run wiring wants for the default album: it is idempotent across\nrelaunches, where [`create_album`](Self::create_album) would refuse.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "escrowBlob",
+              "signature": "func escrowBlob(recoverySecret: Data, tier: FfiDeviceTier) throws -> Data",
+              "doc": "Mint the **master-key escrow blob** under `recovery_secret`, as opaque canonical CBOR —\nthe bytes [`FfiSession::escrow_put`](crate::ffi::FfiSession::escrow_put) stores.\n\nThe master key never crosses this boundary: it is wrapped inside `capsule-core` and only\nthe wrapped blob comes out. `recovery_secret` is the ≥128-bit secret shown to the user\nexactly once at first-device enrollment.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "openSyncedOriginal",
+              "signature": "func openSyncedOriginal(entry: FfiSyncHead, ciphertextPath: String, destinationPath: String) throws -> FfiOpenedOriginal",
+              "doc": "**Open a synced original** from the ciphertext file at `ciphertext_path` to its plaintext\nat `destination_path`, in memory bounded by a few STREAM chunks whatever its size.\n\nThe entry goes through the chokepoint as\n[`apply_sync_entry_from_file`](Self::apply_sync_entry_from_file) would take it, then the\nfile is hashed while it is decrypted: it opens only if it is the ciphertext the manifest\ncommits to, every chunk authenticates, and the plaintext hashes to the signed sidecar's\ndigest. The plaintext is written to a hidden staging file beside the destination and\nrenamed into place only once all of that holds, so `destination_path` is untouched by\nany other verdict and never holds a partial or unverified original. An existing file there\nis replaced only by a verified one.\n\nThe workspace stays locked while the original decrypts.\n\n# Errors\n\n[`FfiError::Workspace`] when a file cannot be read or written, or the workspace itself\nfails; [`FfiError::InvalidArgument`] for a malformed entry or a destination with no file\nname. A refused entry is a verdict, never an error.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "provenanceHead",
+              "signature": "func provenanceHead(assetId: String) throws -> Data",
+              "doc": "The asset's **head provenance record** as opaque canonical CBOR — the exact bytes the\n`provenance` blob carries, the feed serves back as `manifest_cbor`, and a receiving\ndevice runs through [`apply_sync_entry`](Self::apply_sync_entry).\n\nThe record wraps the head signed manifest with its chain position. That wrapper is not\noptional: the server's chain head is the SHA-256 of these bytes while a client's next\n`prior_provenance_hash` is the record's own hash, so the bare manifest is the one\nencoding under which no lifecycle op can ever chain. Canonical CBOR is deterministic, so\nthe manifest inside is byte-identical to its own signed bytes — nothing is re-authored\nand the two signatures still verify over exactly what they covered.\n\nUse [`signed_manifest`](Self::signed_manifest) when the *manifest* is what is wanted.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "readPlaintext",
+              "signature": "func readPlaintext(assetId: String) throws -> Data",
+              "doc": "The plaintext bytes of a managed asset (what a gallery renders for a locally-held\noriginal).",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "sealAsset",
+              "signature": "func sealAsset(albumId: String, fileName: String, bytes: Data) throws -> String",
+              "doc": "**Seal + import**: take bytes the app already holds (a PhotoKit / MediaStore export),\nderive the file key, STREAM-encrypt, author and sign the create manifest, seal the\nsigned sidecar into its metadata blob, append the provenance chain, and self-verify\nthrough the `verify_asset` chokepoint. Returns the asset id.\n\n`file_name` is consulted for its extension and nothing else. One call, one core call:\nthe whole sealing order is `capsule-core`'s.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "signedDeviceDirectory",
+              "signature": "func signedDeviceDirectory() throws -> Data",
+              "doc": "This workspace's **signed device directory** as opaque canonical CBOR — the bytes\n[`FfiSession::publish_device_directory`](crate::ffi::FfiSession::publish_device_directory)\nsends. Until this is published, every asset this device signs is an unknown device to\nevery other device, so first-device enrollment publishes before it uploads.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "signedManifest",
+              "signature": "func signedManifest(assetId: String) throws -> Data",
+              "doc": "The asset's **head signed manifest** as opaque canonical CBOR.\n\nThis is a serialization of an already-signed structure, not a re-authoring: the two\nsignatures the manifest carries are covered by these bytes, which is why they travel\nverbatim and are never re-modeled on any wire.\n\n**Not what the sync feed carries** — that is\n[`provenance_head`](Self::provenance_head), the record that wraps this manifest with its\nchain position. Handing these bytes to\n[`apply_sync_entry`](Self::apply_sync_entry) is refused as malformed.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "uploadBlobs",
+              "signature": "func uploadBlobs(assetId: String) throws -> [FfiUploadBlob]",
+              "doc": "Everything needed to push one sealed asset, in ladder order: for each blob, the\n`POST /upload` body (manifest envelope projected per the server's invariant-15 rule)\nand the bytes. Feed each straight to\n[`FfiSession::upload`](crate::ffi::FfiSession::upload).\n\nThe index tier (`T0`) is **two** blobs — the provenance record then the sealed metadata\nblob — because the server publishes an asset to other devices only once it holds both\nroles. Push all of them: an app that stopped after the metadata blob would upload an\nasset no device, its own included, could ever see.\n\nThe original's ciphertext is re-derived from the manifest's recorded nonce prefix and\ngated on the manifest's own content address, so what reaches the network is what the\nsigned manifest vouches for.\n\nEvery blob comes back whole, the original included. To push without holding the\noriginal in memory, use [`FfiSession::push_asset`](crate::ffi::FfiSession::push_asset).",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "userId",
+              "signature": "func userId() throws -> String",
+              "doc": "The account owner's user id (UUID string).",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "userIkPublic",
+              "signature": "func userIkPublic() throws -> Data",
+              "doc": "This account's user identity **public** key — the pin a fetched device directory is\nverified against.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "verifyAsset",
+              "signature": "func verifyAsset(assetId: String) throws -> FfiVerifyOutcome",
+              "doc": "Run the `verify_asset` chokepoint over a managed asset, regenerating its ciphertext\ndeterministically. This is the same single chokepoint sync-apply routes through — it is\nexposed here so an app can re-check its own library (an integrity sweep), never as a\nsecond verification path.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "verifyEscrowBlob",
+              "signature": "func verifyEscrowBlob(blob: Data, recoverySecret: Data) throws -> Bool",
+              "doc": "Local, network-free check that `recovery_secret` still opens `blob` to *this* device's\nmaster key — the recovery verification cadence's predicate. `blob` is the canonical CBOR\n[`FfiSession::escrow_get`](crate::ffi::FfiSession::escrow_get) returns.\n\nA `false` is not necessarily a wrong secret: the cached blob may be stale after a\nrotation on another device, so refresh it and re-check once before telling the user\nanything.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "struct",
+          "name": "FfiAlbum",
+          "signature": "public struct FfiAlbum: Equatable, Hashable",
+          "doc": "One album this workspace holds key material for.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "albumId",
+              "signature": "public var albumId: String",
+              "doc": "Album id (UUID string).",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "name",
+              "signature": "public var name: String",
+              "doc": "Display name, which lives only in the client's own state — it never crosses the wire.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "struct",
+          "name": "FfiAlert",
+          "signature": "public struct FfiAlert: Equatable, Hashable",
+          "doc": "One alert that is true at an instant.\n\nNever a localized string: `class` selects the app's own `notification.*` catalog key and\n`params` are interpolated into it, so a server can neither supply nor influence the words a\nuser reads.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "class",
+              "signature": "public var `class`: FfiAlertClass",
+              "doc": "Which alert this is.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "severity",
+              "signature": "public var severity: FfiAlertSeverity",
+              "doc": "How prominently to present it.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "deadline",
+              "signature": "public var deadline: String?",
+              "doc": "The instant whose passing made this alert true (RFC 3339), for the two pre-armable\nclasses; `None` for the three whose condition is server-held.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "params",
+              "signature": "public var params: [String: String]",
+              "doc": "Catalog parameters — `count`, `days_behind`, `grace`, and the pair\n`recovery_check_due` always carries: `snooze_budget` (`available` / `spent`) and\n`recovery` (`check` / `rewrap`).",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "struct",
+          "name": "FfiAssetFacts",
+          "signature": "public struct FfiAssetFacts: Equatable, Hashable",
+          "doc": "The verified facts one applied entry contributes, flattened for a catalog upsert.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "assetId",
+              "signature": "public var assetId: String",
+              "doc": "The asset id (UUID string).",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "albumId",
+              "signature": "public var albumId: String",
+              "doc": "The album id (UUID string).",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "amkVersion",
+              "signature": "public var amkVersion: UInt32",
+              "doc": "The AMK epoch the asset is sealed under.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "ciphertextHash",
+              "signature": "public var ciphertextHash: String",
+              "doc": "The original's ciphertext content address (lowercase hex).",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "plaintextSize",
+              "signature": "public var plaintextSize: UInt64",
+              "doc": "The original's plaintext length in bytes.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "action",
+              "signature": "public var action: String",
+              "doc": "The head manifest's lifecycle action (`create`, `metadata-update`, `delete`, …).",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "timestamp",
+              "signature": "public var timestamp: String",
+              "doc": "RFC3339 authoring timestamp of the head manifest.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "createdByDevice",
+              "signature": "public var createdByDevice: String",
+              "doc": "The device that authored it (UUID string), resolved in the signed device directory.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "provenanceHead",
+              "signature": "public var provenanceHead: Data",
+              "doc": "The 32-byte provenance head this entry establishes — persist it and pass it back as\n[`FfiSyncEntry::local_chain_head`] next time.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "metadata",
+              "signature": "public var metadata: FfiAssetMetadata?",
+              "doc": "The decrypted, signature-checked metadata.\n\n`None` exactly when the action mints no metadata blob — a `delete` tombstone or a\n`trash-restore`. Those are fully-verified entries that simply carry no metadata, so an\napp applies the lifecycle change and leaves the row's metadata as it stands.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "struct",
+          "name": "FfiAssetMetadata",
+          "signature": "public struct FfiAssetMetadata: Equatable, Hashable",
+          "doc": "The decrypted sidecar's facts, flattened for a catalog upsert.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "sidecarSchema",
+              "signature": "public var sidecarSchema: UInt16",
+              "doc": "Sidecar schema version.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "contentType",
+              "signature": "public var contentType: String",
+              "doc": "The original's MIME type.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "captureTimestamp",
+              "signature": "public var captureTimestamp: String",
+              "doc": "RFC3339 capture time the asset is dated by: the user's correction when one is recorded,\nelse the as-imported value.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "width",
+              "signature": "public var width: UInt32?",
+              "doc": "Pixel width, when the sidecar records dimensions.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "height",
+              "signature": "public var height: UInt32?",
+              "doc": "Pixel height, when the sidecar records dimensions.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "lqipChromahash",
+              "signature": "public var lqipChromahash: Data?",
+              "doc": "LQIP chromahash bytes — renderable the instant metadata syncs, at zero extra request.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "lqipDominantColor",
+              "signature": "public var lqipDominantColor: Data?",
+              "doc": "LQIP dominant colour, as three RGB bytes.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "caption",
+              "signature": "public var caption: String?",
+              "doc": "The caption LWW register's current value, if any.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "tags",
+              "signature": "public var tags: [String]",
+              "doc": "The user-tag OR-set's current members, sorted.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "rating",
+              "signature": "public var rating: UInt8?",
+              "doc": "The rating LWW register's current value, if any.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "hidden",
+              "signature": "public var hidden: Bool",
+              "doc": "Whether the asset is hidden from default views.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "struct",
+          "name": "FfiBlobManifest",
+          "signature": "public struct FfiBlobManifest: Equatable, Hashable",
+          "doc": "FFI mirror of [`BlobManifest`] — an asset's blobs by role.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "original",
+              "signature": "public var original: FfiBlobRef?",
+              "doc": "The original ciphertext blob, when this entry carries one.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "derivatives",
+              "signature": "public var derivatives: [FfiBlobRef]",
+              "doc": "Derivative / metadata / provenance blobs.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "struct",
+          "name": "FfiBlobRef",
+          "signature": "public struct FfiBlobRef: Equatable, Hashable",
+          "doc": "FFI mirror of [`BlobRef`] — a blob's content address and role.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "ciphertextHash",
+              "signature": "public var ciphertextHash: String",
+              "doc": "Ciphertext content address (lowercase hex).",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "role",
+              "signature": "public var role: String",
+              "doc": "`original | metadata | derivative | provenance`.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "size",
+              "signature": "public var size: UInt64",
+              "doc": "Ciphertext size in bytes.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "struct",
+          "name": "FfiClassDeadline",
+          "signature": "public struct FfiClassDeadline: Equatable, Hashable",
+          "doc": "One class and the instant its local notification should be armed for.\n\nA class absent from [`pre_arm_deadlines`]'s result has no timer to hold: cancel whatever it\nhas.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "class",
+              "signature": "public var `class`: FfiAlertClass",
+              "doc": "The class whose timer this is — also the `notification.*` catalog key the app renders\nwhen it fires.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "deadline",
+              "signature": "public var deadline: String",
+              "doc": "When to fire it (RFC 3339).",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "struct",
+          "name": "FfiClientBuild",
+          "signature": "public struct FfiClientBuild: Equatable, Hashable",
+          "doc": "A foreign client's self-reported build identity: its product id and own semver.\nThe git commit + dirty flag come from the core this app links, together composing the\n`client_id/semver+commit` `client_version` every manifest carries — so a defect in a shipped\napp build is traceable across the assets it produced.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "clientId",
+              "signature": "public var clientId: String",
+              "doc": "The app's product id, e.g. `capsule-ios`.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "semver",
+              "signature": "public var semver: String",
+              "doc": "The app's own semantic version, e.g. `1.4.2`.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "struct",
+          "name": "FfiEscrowStored",
+          "signature": "public struct FfiEscrowStored: Equatable, Hashable",
+          "doc": "FFI mirror of [`EscrowStored`] — what [`FfiSession::escrow_put`] did.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "storedAt",
+              "signature": "public var storedAt: String",
+              "doc": "When the server accepted the blob, RFC 3339, on the server's clock.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "replaced",
+              "signature": "public var replaced: Bool",
+              "doc": "Whether this displaced an earlier escrow: `false` is a first enrollment (recovery set\nup), `true` a replacement (the previous recovery secret has stopped working).",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "struct",
+          "name": "FfiFeedEntry",
+          "signature": "public struct FfiFeedEntry: Equatable, Hashable",
+          "doc": "FFI mirror of [`FeedEntry`] — one decoded sync feed entry. Ids/manifest/metadata\ncross as opaque bytes.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "albumId",
+              "signature": "public var albumId: Data",
+              "doc": "The album this entry belongs to.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "syncSeq",
+              "signature": "public var syncSeq: UInt64",
+              "doc": "Per-album, strictly-increasing anti-rewind high-water mark.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "protocolVersion",
+              "signature": "public var protocolVersion: String",
+              "doc": "The album protocol pin (`YYYY-MM-DD`).",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "kind",
+              "signature": "public var kind: FfiChangeKind",
+              "doc": "What changed.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "assetId",
+              "signature": "public var assetId: Data",
+              "doc": "The asset id.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "manifestCbor",
+              "signature": "public var manifestCbor: Data",
+              "doc": "The signed `AssetManifest` as opaque canonical CBOR.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "metadataBlob",
+              "signature": "public var metadataBlob: Data",
+              "doc": "The encrypted metadata blob's content address, as UTF-8 bytes; empty for deletes.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "blobs",
+              "signature": "public var blobs: FfiBlobManifest",
+              "doc": "Content addresses of the asset's blobs by role.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "originalHeld",
+              "signature": "public var originalHeld: Bool",
+              "doc": "Whether the original blob is finalized server-side.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "changedAt",
+              "signature": "public var changedAt: String",
+              "doc": "When the change happened, RFC 3339, on the server's clock.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "struct",
+          "name": "FfiManifestEnvelope",
+          "signature": "public struct FfiManifestEnvelope: Equatable, Hashable",
+          "doc": "FFI mirror of [`ManifestEnvelope`] — the server-visible envelope fields the\nimport pipeline builds and signs; opaque to this layer, carried verbatim.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "cryptoSuiteId",
+              "signature": "public var cryptoSuiteId: UInt16",
+              "doc": "Crypto suite the blob is sealed under.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "protocolVersion",
+              "signature": "public var protocolVersion: String",
+              "doc": "Protocol date (`YYYY-MM-DD`).",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "albumId",
+              "signature": "public var albumId: String?",
+              "doc": "Optional album this blob belongs to.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "fileId",
+              "signature": "public var fileId: String",
+              "doc": "The asset id this blob belongs to (UUIDv7).",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "amkVersion",
+              "signature": "public var amkVersion: UInt32",
+              "doc": "AMK epoch the blob is sealed under.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "ciphertextHash",
+              "signature": "public var ciphertextHash: String",
+              "doc": "Ciphertext content hash, lowercase hex.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "plaintextSize",
+              "signature": "public var plaintextSize: UInt64",
+              "doc": "Plaintext size in bytes.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "chunkSize",
+              "signature": "public var chunkSize: UInt32",
+              "doc": "STREAM plaintext chunk size.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "keyMode",
+              "signature": "public var keyMode: String",
+              "doc": "`derived | wrapped`.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "metadataBlobHash",
+              "signature": "public var metadataBlobHash: String?",
+              "doc": "Hash of the bundle's metadata blob, when known.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "derivativeRole",
+              "signature": "public var derivativeRole: String?",
+              "doc": "A derivative blob's role (`thumbnail | preview | embedding`); `None` for every other\nblob.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "derivativeFormat",
+              "signature": "public var derivativeFormat: String?",
+              "doc": "A derivative blob's format, e.g. `image/jxl`; set exactly when `derivative_role` is.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "createdByUser",
+              "signature": "public var createdByUser: String",
+              "doc": "The authoring user.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "createdByDevice",
+              "signature": "public var createdByDevice: String",
+              "doc": "The authoring device.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "clientVersion",
+              "signature": "public var clientVersion: String",
+              "doc": "The exact client build.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "timestamp",
+              "signature": "public var timestamp: String",
+              "doc": "RFC 3339 authoring timestamp.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "action",
+              "signature": "public var action: String",
+              "doc": "Lifecycle action (`create` for a fresh bundle).",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "priorProvenanceHash",
+              "signature": "public var priorProvenanceHash: String?",
+              "doc": "Prior provenance hash, for append-only chains.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "retentionUntil",
+              "signature": "public var retentionUntil: String?",
+              "doc": "Optional retention floor.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "struct",
+          "name": "FfiNotifyInput",
+          "signature": "public struct FfiNotifyInput: Equatable, Hashable",
+          "doc": "The device-held state the predicate decides from, flattened for the bindings.\n\nCounts and instants only — no album id, no title, no asset id. An all-default value (every\n`Option` `None`, every count `0`, an empty map) is the \"just installed, learned nothing\"\ninput, and yields no alerts and no deadline.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "lastCompletedSync",
+              "signature": "public var lastCompletedSync: String?",
+              "doc": "When the last **completed** sync finished (RFC 3339). `None` on a device that has never\ncompleted one — which raises no `sync_stale`, because the alert is about a *stale* sync\nand not a missing one. When `None`, `unsynced_changes` is ignored.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "unsyncedChanges",
+              "signature": "public var unsyncedChanges: UInt64",
+              "doc": "Changes still waiting to reach the server, including originals still pending under a\nstaged upload policy.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "recoveryNextDue",
+              "signature": "public var recoveryNextDue: String?",
+              "doc": "When the next recovery-verification prompt becomes due (RFC 3339). Project it from the\nscheduler with\n[`RecoveryCadence::notify_facts`](crate::recovery::RecoveryCadence::notify_facts) rather\nthan computing it here. `None` before recovery is set up, which ignores the other three\n`recovery_*` fields.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "recoverySnoozedUntil",
+              "signature": "public var recoverySnoozedUntil: String?",
+              "doc": "When an active snooze on the recovery prompt expires (RFC 3339), if one is active. A\nsnooze ending *before* `recovery_next_due` does not make the check due earlier. This is\nthe canonical place to snooze the recovery check — not\n[`suppressed_until`](Self::suppressed_until), which is for the other five classes.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "recoverySnoozeBudgetSpent",
+              "signature": "public var recoverySnoozeBudgetSpent: Bool",
+              "doc": "Whether the consecutive-snooze budget is spent — the class has degraded to a persistent,\nnon-blocking badge: still reported, no longer pre-armed.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "recoveryRewrapDue",
+              "signature": "public var recoveryRewrapDue: Bool",
+              "doc": "Whether the scheduler has escalated to the guided re-wrap (repeated failures, or the user\ndeclaring the secret lost). Surfaces as the alert's `recovery` parameter, so the app\nroutes into the re-wrap flow instead of rendering a routine verification prompt.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "quotaState",
+              "signature": "public var quotaState: FfiQuotaAdvisory?",
+              "doc": "The state from the last `GET /v1/quota`. `None` before the first one.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "quarantinePending",
+              "signature": "public var quarantinePending: UInt64",
+              "doc": "How many items sit on the client's quarantine surfaces awaiting a human. **Excludes\npending drops** — they have their own class, so counting them here raises both.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "dropsPending",
+              "signature": "public var dropsPending: UInt64",
+              "doc": "How many guest drops are awaiting review and adoption.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "suppressedUntil",
+              "signature": "public var suppressedUntil: [String: String]",
+              "doc": "Per-class **snooze**: class wire name (`sync_stale`, …) to the RFC 3339 instant the\nsnooze runs until, exclusive. A class snoozed past `now` reports nothing, and its alarm\nis **deferred to the snooze end** rather than cancelled — a class snoozed after it fired\nmust fire again when the snooze expires. Use [`disabled`](Self::disabled) to turn a class\noff; do not encode that as a far-future instant here. An unrecognized class name is an\n[`FfiError::InvalidArgument`].\n\n**This map is for the other five classes.** Recovery snoozing belongs in\n[`recovery_snoozed_until`](Self::recovery_snoozed_until), which the cadence scheduler\nowns together with the budget that bounds it. An entry here for `recovery_check_due` is\nhonoured as a fallback (the later of the two wins) but is not the canonical channel.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "disabled",
+              "signature": "public var disabled: [String]",
+              "doc": "Per-class **disable**: the wire names of the classes the user turned off. They report\nnothing and hold no alarm, at any instant. Disabling suppresses the warning and never\nthe behavior. An unrecognized class name is an [`FfiError::InvalidArgument`].",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "struct",
+          "name": "FfiPushReport",
+          "signature": "public struct FfiPushReport: Equatable, Hashable",
+          "doc": "What [`FfiSession::push_asset`] did — FFI mirror of [`AssetPushReport`].",
+          "members": [
+            {
+              "kind": "field",
+              "name": "assetId",
+              "signature": "public var assetId: String",
+              "doc": "The asset id (UUID string).",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "pushed",
+              "signature": "public var pushed: [FfiPushedBlob]",
+              "doc": "Every blob whose session was opened, in ladder order.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "bytes",
+              "signature": "public var bytes: UInt64",
+              "doc": "Total bytes handed to the upload client, the original included.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "struct",
+          "name": "FfiPushedBlob",
+          "signature": "public struct FfiPushedBlob: Equatable, Hashable",
+          "doc": "How one blob of a pushed asset resolved — FFI mirror of [`PushedBlob`].",
+          "members": [
+            {
+              "kind": "field",
+              "name": "tier",
+              "signature": "public var tier: String",
+              "doc": "The ladder tier the blob occupies (`index` / `preview` / `original`), the vocabulary\n[`FfiUploadBlob::tier`] uses.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "hash",
+              "signature": "public var hash: String",
+              "doc": "The blob's content address (lowercase hex).",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "outcome",
+              "signature": "public var outcome: FfiUploadOutcome",
+              "doc": "Whether it transferred or merged onto a blob the server already held.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "struct",
+          "name": "FfiSyncEntry",
+          "signature": "public struct FfiSyncEntry: Equatable, Hashable",
+          "doc": "One remote feed entry to apply, as a sync feed delivers it.\n\n`album_id` and the two id-bearing fields carry the feed's own **16-byte UUID** form (the\n`bytes album_id` of `capsule.sync.v1.SyncEntry`), so an entry from\n[`FfiSession::sync_pull`](crate::ffi::FfiSession::sync_pull) is passed through unchanged.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "albumId",
+              "signature": "public var albumId: Data",
+              "doc": "The album the feed claims this entry belongs to — 16 raw UUID bytes. Cross-checked\nagainst the manifest by the chokepoint itself, never trusted on its own.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "manifestCbor",
+              "signature": "public var manifestCbor: Data",
+              "doc": "The signed `AssetManifest` as opaque canonical CBOR, carried verbatim.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "metadataBlob",
+              "signature": "public var metadataBlob: Data",
+              "doc": "The sealed metadata blob the manifest commits to.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "originalCiphertext",
+              "signature": "public var originalCiphertext: Data",
+              "doc": "The asset's original ciphertext. Required: the chokepoint's content-integrity step\nhashes it against the manifest's declared content address, and there is no variant of\nthat check which skips it — so fetch the original blob before applying.\n\nIt crosses whole, so this record costs the original's full size in memory. An original\nof any size is received with\n[`FfiSession::fetch_blob_to_path`](crate::ffi::FfiSession::fetch_blob_to_path), and\napplied and opened from that file with an [`FfiSyncHead`] through\n[`FfiWorkspace::apply_sync_entry_from_file`] and [`FfiWorkspace::open_synced_original`],\nin bounded memory.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "localChainHead",
+              "signature": "public var localChainHead: Data?",
+              "doc": "The 32-byte provenance head your catalog already holds for this asset, or `None` if it\nhas never seen it. This is what decides replay and fork; feed back\n[`FfiAssetFacts::provenance_head`] after a successful apply.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "struct",
+          "name": "FfiSyncHead",
+          "signature": "public struct FfiSyncHead: Equatable, Hashable",
+          "doc": "One remote feed entry whose original is **on disk** rather than in hand: an\n[`FfiSyncEntry`] without its `original_ciphertext`, which\n[`FfiWorkspace::apply_sync_entry_from_file`] and [`FfiWorkspace::open_synced_original`] read\nfrom the file [`FfiSession::fetch_blob_to_path`](crate::ffi::FfiSession::fetch_blob_to_path)\nproduced, in memory bounded by one STREAM chunk whatever the original's size.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "albumId",
+              "signature": "public var albumId: Data",
+              "doc": "As [`FfiSyncEntry::album_id`].",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "manifestCbor",
+              "signature": "public var manifestCbor: Data",
+              "doc": "As [`FfiSyncEntry::manifest_cbor`].",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "metadataBlob",
+              "signature": "public var metadataBlob: Data",
+              "doc": "As [`FfiSyncEntry::metadata_blob`].",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "localChainHead",
+              "signature": "public var localChainHead: Data?",
+              "doc": "As [`FfiSyncEntry::local_chain_head`].",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "struct",
+          "name": "FfiSyncPage",
+          "signature": "public struct FfiSyncPage: Equatable, Hashable",
+          "doc": "FFI mirror of [`SyncPage`] — a decoded page plus the opaque cursor for the next\npull (the client persists `next_cursor` and passes it back to advance).",
+          "members": [
+            {
+              "kind": "field",
+              "name": "entries",
+              "signature": "public var entries: [FfiFeedEntry]",
+              "doc": "The changes in this page, in strictly-increasing per-album `sync_seq` order.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "nextCursor",
+              "signature": "public var nextCursor: Data",
+              "doc": "The opaque cursor to pass to the next [`FfiSession::sync_pull`].",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "hasMore",
+              "signature": "public var hasMore: Bool",
+              "doc": "Whether the server holds changes beyond this page.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "struct",
+          "name": "FfiUploadBlob",
+          "signature": "public struct FfiUploadBlob: Equatable, Hashable",
+          "doc": "One transferable blob of a sealed asset, paired with the `POST /upload` body that declares\nit. Hand [`request`](Self::request) and [`bytes`](Self::bytes) straight to\n[`FfiSession::upload`](crate::ffi::FfiSession::upload) — this record exists so an app never\nhas to assemble a manifest envelope itself.\n\nThe blobs come back in **ladder order**: the metadata blob (T0 — the index tier that makes\nthe asset visible), then derivatives (T1), then the original (T2).\n\n[`bytes`](Self::bytes) holds each blob whole, the original included, so an original costs\nits full size in memory here. [`FfiSession::push_asset`](crate::ffi::FfiSession::push_asset)\npushes the same blobs with the original streamed, and is the path for an original of any\nsize.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "tier",
+              "signature": "public var tier: String",
+              "doc": "The ladder tier this blob occupies (`index` / `preview` / `original`).",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "hash",
+              "signature": "public var hash: String",
+              "doc": "The blob's content address (lowercase hex) — the value the server dedups on.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "request",
+              "signature": "public var request: FfiUploadRequest",
+              "doc": "The `POST /upload` body for this blob, with the manifest envelope already projected.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "bytes",
+              "signature": "public var bytes: Data",
+              "doc": "The bytes to transfer.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "struct",
+          "name": "FfiUploadRequest",
+          "signature": "public struct FfiUploadRequest: Equatable, Hashable",
+          "doc": "FFI mirror of [`CreateUploadRequest`] — the `POST /upload` body.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "size",
+              "signature": "public var size: UInt64",
+              "doc": "Ciphertext size in bytes.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "hash",
+              "signature": "public var hash: String",
+              "doc": "Ciphertext content hash, lowercase hex.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "contentType",
+              "signature": "public var contentType: String",
+              "doc": "MIME type (closed enum per protocol version).",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "cryptoSuiteId",
+              "signature": "public var cryptoSuiteId: UInt16",
+              "doc": "Crypto suite the blob is sealed under.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "protocolVersion",
+              "signature": "public var protocolVersion: String",
+              "doc": "Protocol date (`YYYY-MM-DD`) this client speaks.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "blobRole",
+              "signature": "public var blobRole: FfiBlobRole",
+              "doc": "This blob's role in its bundle.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "manifestEnvelope",
+              "signature": "public var manifestEnvelope: FfiManifestEnvelope",
+              "doc": "The unencrypted manifest fields the server validates.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "albumId",
+              "signature": "public var albumId: String?",
+              "doc": "Optional album to add the asset to.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "ownerId",
+              "signature": "public var ownerId: String?",
+              "doc": "Optional owner id (defaults to the authenticated uploader).",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "intentId",
+              "signature": "public var intentId: String?",
+              "doc": "Album-upgrade intent id (album upgrade ceremony only).",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "struct",
+          "name": "FfiUploadStatus",
+          "signature": "public struct FfiUploadStatus: Equatable, Hashable",
+          "doc": "FFI mirror of [`HeadInfo`] — the `HEAD /upload/{id}` resumption/status primitive.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "offset",
+              "signature": "public var offset: UInt64",
+              "doc": "Next expected byte (authoritative received-byte count).",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "totalSize",
+              "signature": "public var totalSize: UInt64?",
+              "doc": "Declared total size, when known.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "status",
+              "signature": "public var status: String",
+              "doc": "Session state (`X-Capsule-Upload-Status`).",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum",
+          "name": "FfiAlertClass",
+          "signature": "public enum FfiAlertClass: Equatable, Hashable",
+          "doc": "Every alert class, flattened for the bindings. A closed enum on both sides of the boundary.",
+          "members": [
+            {
+              "kind": "case",
+              "name": "syncStale",
+              "signature": "case syncStale",
+              "doc": "Two weeks without a completed sync while changes remain un-synced.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "recoveryCheckDue",
+              "signature": "case recoveryCheckDue",
+              "doc": "A recovery-secret verification check is due.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "quotaSoft",
+              "signature": "case quotaSoft",
+              "doc": "Storage crossed the soft limit and is below the hard limit.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "quotaGraceExpiring",
+              "signature": "case quotaGraceExpiring",
+              "doc": "Storage is over the hard limit — the grace window is counting, or has closed.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "quarantinePending",
+              "signature": "case quarantinePending",
+              "doc": "Items are sitting on a quarantine surface awaiting a human.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "dropPending",
+              "signature": "case dropPending",
+              "doc": "Guest drops are awaiting review and adoption.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum",
+          "name": "FfiAlertSeverity",
+          "signature": "public enum FfiAlertSeverity: Equatable, Hashable",
+          "doc": "How prominently a client presents an alert. **Neither variant gates anything** — no alert\nblocks sync, unlock, upload, or any critical flow.",
+          "members": [
+            {
+              "kind": "case",
+              "name": "advisory",
+              "signature": "case advisory",
+              "doc": "Informational: nothing is failing, and nothing is about to.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "warning",
+              "signature": "case warning",
+              "doc": "Something is already degraded or is being refused.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum",
+          "name": "FfiBlobRole",
+          "signature": "public enum FfiBlobRole: Equatable, Hashable",
+          "doc": "FFI mirror of [`BlobRole`] (snake_case on the wire, closed enum).",
+          "members": [
+            {
+              "kind": "case",
+              "name": "original",
+              "signature": "case original",
+              "doc": "The source asset.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "derivative",
+              "signature": "case derivative",
+              "doc": "A client-generated thumbnail/preview.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "metadata",
+              "signature": "case metadata",
+              "doc": "The CBOR metadata document.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "provenance",
+              "signature": "case provenance",
+              "doc": "Append-only provenance.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "backup",
+              "signature": "case backup",
+              "doc": "A library backup artifact.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "derivativeManifest",
+              "signature": "case derivativeManifest",
+              "doc": "A derivative tier's signed manifest.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum",
+          "name": "FfiChangeKind",
+          "signature": "public enum FfiChangeKind: Equatable, Hashable",
+          "doc": "FFI mirror of [`ChangeKind`].",
+          "members": [
+            {
+              "kind": "case",
+              "name": "created",
+              "signature": "case created",
+              "doc": "A new asset became visible in the album.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "updated",
+              "signature": "case updated",
+              "doc": "An existing asset advanced — new metadata, new bytes, or a restore.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "deleted",
+              "signature": "case deleted",
+              "doc": "The asset was tombstoned.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum",
+          "name": "FfiDeviceTier",
+          "signature": "public enum FfiDeviceTier: Equatable, Hashable",
+          "doc": "Device hardware tier, selecting the Argon2id cost at wrap time. Mirrors core's `DeviceTier`\nin this namespace (see the module docs on why it is not shared).",
+          "members": [
+            {
+              "kind": "case",
+              "name": "lowRam",
+              "signature": "case lowRam",
+              "doc": "≤ 2 GiB total RAM (entry-level Android / embedded).",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "normal",
+              "signature": "case normal",
+              "doc": "Default for phones and laptops.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "desktop",
+              "signature": "case desktop",
+              "doc": "≥ 8 GiB; used when wrapping new escrow blobs from a desktop.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum",
+          "name": "FfiError",
+          "signature": "public enum FfiError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError",
+          "doc": "Every failure the FFI flows can surface, flattened by originating layer. Each\nvariant carries the stable `error.*` catalog `code` (when one applies — clients\nlocalize it) and the English detail `message` (stays English), mirroring the\nSDK's `{ error, code }` contract so foreign apps switch on the code, never a\nbare HTTP status.",
+          "members": [
+            {
+              "kind": "case",
+              "name": "Auth",
+              "signature": "case Auth",
+              "doc": "An authentication flow (login/register/refresh/logout) failed.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "Upload",
+              "signature": "case Upload",
+              "doc": "An upload flow (create/transfer/status) failed.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "Sync",
+              "signature": "case Sync",
+              "doc": "A sync flow (pull/reconcile) failed.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "Workspace",
+              "signature": "case Workspace",
+              "doc": "A local workspace operation failed — opening the library, sealing an asset, reading a\nmanaged asset. This is the *workspace* failing, never an entry being refused: a refused\nsync entry is a [`FfiSyncApplyOutcome::Quarantined`] verdict, not an error.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "Escrow",
+              "signature": "case Escrow",
+              "doc": "A master-key escrow flow (store/fetch) failed.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "Directory",
+              "signature": "case Directory",
+              "doc": "A device-directory flow (publish/fetch) failed.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "Fetch",
+              "signature": "case Fetch",
+              "doc": "A blob fetch ([`FfiSession::fetch_blob_to_path`]) failed: the blob is gone, still\nawaiting its original, refused, did not hash to its content address, or could not be\nwritten locally. Nothing is left at the destination path.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "InvalidArgument",
+              "signature": "case InvalidArgument",
+              "doc": "A foreign argument was structurally invalid (e.g. an un-parseable URL) before\nany network call.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum",
+          "name": "FfiHardwareSignerError",
+          "signature": "public enum FfiHardwareSignerError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError",
+          "doc": "Failure surfaced by a foreign [`FfiHardwareSigner`]. Mirrors `capsule-core`'s\n`HardwareSignerError` variant for variant — it is the same contract, declared in the\n`capsule_sdk` namespace because core's own type carries no uniffi derive.",
+          "members": [
+            {
+              "kind": "case",
+              "name": "AuthCancelled",
+              "signature": "case AuthCancelled(message: String)",
+              "doc": "The user cancelled the biometric / the element refused authentication.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "Unavailable",
+              "signature": "case Unavailable(message: String)",
+              "doc": "No secure element is available on this device.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "NotFound",
+              "signature": "case NotFound(message: String)",
+              "doc": "No key exists for the requested alias.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "Exportable",
+              "signature": "case Exportable(message: String)",
+              "doc": "The private key was readable — non-exportability is violated (a failure).",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "Backend",
+              "signature": "case Backend(message: String)",
+              "doc": "Any other backend error.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum",
+          "name": "FfiLoginOutcome",
+          "signature": "public enum FfiLoginOutcome",
+          "doc": "What a password login answered with, across the FFI.\n\nAn enum rather than an optional session handle: \"signed in\" and \"needs a code\" are different\nstates an app renders differently, and a `null` handle beside a `mfaToken` string would let a\ncaller read one while acting on the other.",
+          "members": [
+            {
+              "kind": "case",
+              "name": "session",
+              "signature": "case session",
+              "doc": "The account has no second factor, and this is its session.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "secondFactorRequired",
+              "signature": "case secondFactorRequired",
+              "doc": "The password verified and a code is still needed.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum",
+          "name": "FfiOpenedOriginal",
+          "signature": "public enum FfiOpenedOriginal: Equatable, Hashable",
+          "doc": "How [`FfiWorkspace::open_synced_original`] resolved. Only `Opened` leaves anything at the\ndestination path.",
+          "members": [
+            {
+              "kind": "case",
+              "name": "opened",
+              "signature": "case opened",
+              "doc": "Verified end to end and decrypted: the destination now holds the original's plaintext,\nwhich hashes to the signed sidecar's digest.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "refused",
+              "signature": "case refused",
+              "doc": "The entry did not apply, exactly as\n[`apply_sync_entry`](FfiWorkspace::apply_sync_entry) would say: held pending or\nquarantined. A ciphertext file that is not the original the manifest commits to is\nquarantined as `Rejected.CiphertextHashMismatch`.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "undecryptable",
+              "signature": "case undecryptable",
+              "doc": "The entry applied, but its file key could not be recovered or its ciphertext failed\nauthentication under it.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "digestMismatch",
+              "signature": "case digestMismatch",
+              "doc": "The ciphertext opened, but the plaintext does not hash to the signed sidecar's digest.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum",
+          "name": "FfiQuotaAdvisory",
+          "signature": "public enum FfiQuotaAdvisory: Equatable, Hashable",
+          "doc": "The quota state, as `GET /v1/quota` reports it.",
+          "members": [
+            {
+              "kind": "case",
+              "name": "ok",
+              "signature": "case ok",
+              "doc": "Below the soft limit. All uploads succeed normally.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "softWarning",
+              "signature": "case softWarning",
+              "doc": "At or above the soft limit and below the hard limit. Uploads succeed; the client warns.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "hardExceeded",
+              "signature": "case hardExceeded",
+              "doc": "At or above the hard limit. New uploads are rejected; the grace window is counting.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "graceExpired",
+              "signature": "case graceExpired",
+              "doc": "Over the hard limit for longer than the grace window; metadata-growth writes are\nrefused too.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "suspended",
+              "signature": "case suspended",
+              "doc": "An admin or billing action rather than a threshold. Raises no quota alert.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum",
+          "name": "FfiSyncApplyOutcome",
+          "signature": "public enum FfiSyncApplyOutcome: Equatable, Hashable",
+          "doc": "How applying one remote entry resolved — the three verdicts the client validation duties\npermit. There is no \"ignored\" case: a failure is always a named quarantine or a hold.",
+          "members": [
+            {
+              "kind": "case",
+              "name": "applied",
+              "signature": "case applied",
+              "doc": "Verified end to end; upsert the facts.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "pending",
+              "signature": "case pending",
+              "doc": "Authorization is intact but the epoch's AMK has not arrived locally yet. Hold and retry\n— never quarantine.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "quarantined",
+              "signature": "case quarantined",
+              "doc": "Refused. `reason` is a stable, switchable code; `detail` is English developer text.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum",
+          "name": "FfiUploadOutcome",
+          "signature": "public enum FfiUploadOutcome: Equatable, Hashable",
+          "doc": "FFI mirror of [`UploadOutcome`] — how a full upload resolved.",
+          "members": [
+            {
+              "kind": "case",
+              "name": "completed",
+              "signature": "case completed",
+              "doc": "Every declared byte transferred; the server has begun finalization.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "alreadyStored",
+              "signature": "case alreadyStored",
+              "doc": "The blob was already stored server-side (the `duplicate_blob` → merge path).",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum",
+          "name": "FfiVerifyOutcome",
+          "signature": "public enum FfiVerifyOutcome: Equatable, Hashable",
+          "doc": "The verification verdict, flattened for FFI (reasons as stable reason-code strings).",
+          "members": [
+            {
+              "kind": "case",
+              "name": "accept",
+              "signature": "case accept",
+              "doc": "The asset verified and may enter the trusted set.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "terminalReject",
+              "signature": "case terminalReject",
+              "doc": "The asset is permanently rejected (quarantined); `reason` is the reason code.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "pending",
+              "signature": "case pending",
+              "doc": "The asset is recoverable-pending (held + retried); `reason` is the reason code.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "func",
+          "name": "evaluateAlerts",
+          "signature": "public func evaluateAlerts(input: FfiNotifyInput, now: String) throws -> [FfiAlert]",
+          "doc": "Every alert that is true at `now`, in delivery order.\n\nPure and offline: no network call, no library open, no clock read — `now` is the caller's, so\nthe same input always gives the same answer and an app can drive it from a test clock.\n\n# Errors\n\n[`FfiError::InvalidArgument`] if `now` or any instant in `input` is not RFC 3339, or if\n`suppressed_until` names something that is not an alert class.",
+          "members": []
+        },
+        {
+          "kind": "func",
+          "name": "nextAlertDeadline",
+          "signature": "public func nextAlertDeadline(input: FfiNotifyInput, now: String) throws -> String?",
+          "doc": "The earliest instant in [`pre_arm_deadlines`] (RFC 3339), or `None` when there is nothing to\narm.\n\nFor a host that can hold only one timer. **An app that schedules per class wants\n[`pre_arm_deadlines`]**: the minimum discards the later class's alarm, and on a device the app\nnever runs on again that alert is simply lost.\n\n# Errors\n\nAs [`evaluate_alerts`].",
+          "members": []
+        },
+        {
+          "kind": "func",
+          "name": "preArmDeadlines",
+          "signature": "public func preArmDeadlines(input: FfiNotifyInput, now: String) throws -> [FfiClassDeadline]",
+          "doc": "The instant to arm a local notification for, **per class** — the call an app schedules its\n`UNCalendarNotificationTrigger` / `AlarmManager` alarms from.\n\nReconcile your timers against the result: a class present here should hold exactly one alarm\nat the returned instant, and a class absent from it should hold none. Recompute after **any**\nstate change; that is the whole of the arm / re-arm / cancel rule on the client side.\n\nOnly the two classes whose deadline a device can compute alone ever appear. The other three\ndepend on server state and surface at next app launch — a real gap the design accepts.\n\n# Errors\n\nAs [`evaluate_alerts`].",
+          "members": []
+        },
+        {
+          "kind": "func",
+          "name": "p256HardwareDekRoundTrip",
+          "signature": "public func p256HardwareDekRoundTrip(hardware: FfiHardwareKeyAgreement, keyAlias: String, mlSeed: Data) throws -> Bool",
+          "doc": "Smoke the **hardware-bound P-256 device encryption key** across the FFI seam:\nenroll a key-agreement key in `hardware` under `key_alias`, publish the hybrid public key,\nencapsulate a fresh shared secret to it **in software** (the sender side), then\n**decapsulate through the element's ECDH**. Returns `true` iff the two secrets match —\nproving the element's ECDH composes into the hybrid KEM without the private scalar leaving\nhardware. `ml_seed` (32 bytes) is the software-sealed ML-KEM-768 half.\n\nThe DEK is not yet wired into workspace creation, so this focused round-trip is the\ncomposition's on-device check — the DEK analogue of\n[`FfiWorkspace::create_with_p256_hardware_signer`]. Every step is one `capsule-core` call.",
+          "members": []
+        }
+      ]
+    },
+    "kotlin": {
+      "source": "uniffi/capsule_sdk/capsule_sdk.kt",
+      "declarations": [
+        {
+          "kind": "class",
+          "name": "FfiCapsuleClient",
+          "signature": "open class FfiCapsuleClient: Disposable, AutoCloseable, FfiCapsuleClientInterface",
+          "doc": "The unauthenticated entry point over the SDK's auth + upload endpoints. Turns\ncredentials into an [`FfiSession`] handle; the protocol pin and endpoints are\ncaptured once here and reused by every session this client mints.",
+          "members": [
+            {
+              "kind": "constructor",
+              "name": "constructor",
+              "signature": "constructor(authBaseUrl: kotlin.String, uploadBaseUrl: kotlin.String, protocolVersion: kotlin.String, cohortHash: kotlin.String?)",
+              "doc": "Build a client.\n\n- `auth_base_url` is the auth endpoint root (e.g. `https://api.example.com/auth`).\n- `upload_base_url` is the upload endpoint root (`POST` target; chunk/HEAD hang\nunder `{upload_base_url}/{id}`).\n- `protocol_version` is the pinned protocol date (`YYYY-MM-DD`).\n- `cohort_hash` is the optional advisory device-cohort digest; `None`\nsends nothing (the server behaves identically).",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "login",
+              "signature": "suspend fun login(email: kotlin.String, password: kotlin.String): FfiLoginOutcome",
+              "doc": "Authenticate with email + password, returning an authenticated session handle.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "register",
+              "signature": "suspend fun register(email: kotlin.String, password: kotlin.String): FfiSession",
+              "doc": "Create an account and return an authenticated session handle (the server\nissues tokens on registration).\nAn address and a password, and nothing else: the server takes nothing else.\nA display name is a fact about a person, and the profile surface that would hold one is\nowed rather than assumed.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "verifySecondFactor",
+              "signature": "suspend fun verifySecondFactor(mfaToken: kotlin.String, totpCode: kotlin.String): FfiSession",
+              "doc": "Complete a sign-in with the code an authenticator app is showing.\n\n`mfa_token` is what [`FfiLoginOutcome::SecondFactorRequired`] carried. It is good once\nand for five minutes.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "interface",
+          "name": "FfiHardwareKeyAgreement",
+          "signature": "public interface FfiHardwareKeyAgreement",
+          "doc": "The per-platform **key-agreement** element (Secure Enclave `P256.KeyAgreement`, StrongBox\nECDH, TPM 2.0 ECDH), implemented by native Swift/Kotlin over the uniffi foreign-trait\nboundary — the ECDH analogue of [`FfiHardwareSigner`], and this namespace's declaration of\n`capsule-core`'s `HardwareKeyAgreement` contract.\n\nIt backs the hardware-bound classical half of the device **encryption** key:\nthe element holds a static P-256 private key and performs the ECDH, so the scalar never\nleaves hardware, while Rust drives the software-sealed ML-KEM-768 half and the hybrid\ncombiner. Failures reuse [`FfiHardwareSignerError`], exactly as core's trait reuses its\nsigner error.",
+          "members": [
+            {
+              "kind": "fun",
+              "name": "enroll",
+              "signature": "fun enroll(keyAlias: kotlin.String): kotlin.ByteArray",
+              "doc": "Generate (or bind to) the hardware P-256 key-agreement keypair for `key_alias`,\nreturning its public key as **uncompressed SEC1** (`0x04‖x‖y`, 65 bytes). Idempotent per\nalias.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "publicKey",
+              "signature": "fun publicKey(keyAlias: kotlin.String): kotlin.ByteArray",
+              "doc": "The uncompressed-SEC1 P-256 public key for an already-enrolled `key_alias`.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "keyAgreement",
+              "signature": "fun keyAgreement(keyAlias: kotlin.String, peerPublic: kotlin.ByteArray): kotlin.ByteArray",
+              "doc": "ECDH against `peer_public` (the sender's ephemeral P-256 public key, uncompressed SEC1)\nwith the hardware key for `key_alias`, returning the **raw 32-byte shared secret** (the\nbig-endian x-coordinate, before any KDF).",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "assertNonExportable",
+              "signature": "fun assertNonExportable(keyAlias: kotlin.String)",
+              "doc": "Non-exportability assertion: a conforming element MUST refuse to reveal the private\nbytes, returning [`FfiHardwareSignerError::Exportable`] if they can be read.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "interface",
+          "name": "FfiHardwareSigner",
+          "signature": "public interface FfiHardwareSigner",
+          "doc": "The per-platform secure element (Secure Enclave, StrongBox, TPM), implemented by native\nSwift/Kotlin over the uniffi foreign-trait boundary.\n\nThe byte shapes are fixed by the constructor the element is handed to, not by the trait:\n\n- [`FfiWorkspace::create_with_p256_hardware_signer`] — the **P-256** shape shipping\nelements actually provide: [`enroll`](Self::enroll) /\n[`classical_public_key`](Self::classical_public_key) return a SEC1 public key and\n[`sign_classical`](Self::sign_classical) a **DER-encoded ECDSA** signature over\n`SHA-256(msg)`.\n- [`FfiWorkspace::create_with_hardware_signer`] — the **Ed25519** shape: a 32-byte public\nkey and a 64-byte signature over `msg`. No shipping secure element holds Ed25519 keys, so\nthis is the software/TPM reference path.\n\nEither way Rust composes the classical half with a software-sealed ML-DSA-65 half into the\npublished hybrid device key.",
+          "members": [
+            {
+              "kind": "fun",
+              "name": "enroll",
+              "signature": "fun enroll(keyAlias: kotlin.String): kotlin.ByteArray",
+              "doc": "Generate (or bind to) the hardware keypair for `key_alias`, returning its public key in\nthe constructor's shape: a SEC1 P-256 key for\n[`FfiWorkspace::create_with_p256_hardware_signer`], a 32-byte Ed25519 key for\n[`FfiWorkspace::create_with_hardware_signer`]. Idempotent per alias.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "classicalPublicKey",
+              "signature": "fun classicalPublicKey(keyAlias: kotlin.String): kotlin.ByteArray",
+              "doc": "The public key for an already-enrolled `key_alias`, in the same constructor-dependent\nshape [`enroll`](Self::enroll) returns (SEC1 P-256, or 32-byte Ed25519).",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "signClassical",
+              "signature": "fun signClassical(keyAlias: kotlin.String, msg: kotlin.ByteArray): kotlin.ByteArray",
+              "doc": "Sign `msg` with the hardware key for `key_alias`, in the constructor's shape: a\nDER-encoded ECDSA signature over `SHA-256(msg)` for\n[`FfiWorkspace::create_with_p256_hardware_signer`], a 64-byte Ed25519 signature over\n`msg` for [`FfiWorkspace::create_with_hardware_signer`].",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "assertNonExportable",
+              "signature": "fun assertNonExportable(keyAlias: kotlin.String)",
+              "doc": "Non-exportability assertion: a conforming element MUST refuse to reveal the private\nbytes, returning [`FfiHardwareSignerError::Exportable`] if they can be read.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "class",
+          "name": "FfiSession",
+          "signature": "open class FfiSession: Disposable, AutoCloseable, FfiSessionInterface",
+          "doc": "An authenticated session handle. Owns the SDK token store internally (auto\npre-flight refresh, single-flight, `401`-retry-once); **no token ever crosses\nthe FFI boundary**. Every flow rides this handle.",
+          "members": [
+            {
+              "kind": "fun",
+              "name": "escrowGet",
+              "signature": "suspend fun escrowGet(apiBaseUrl: kotlin.String): kotlin.ByteArray",
+              "doc": "Fetch this account's escrow blob (`GET /v1/auth/escrow`) as opaque canonical CBOR — the\nbytes [`FfiWorkspace::verify_escrow_blob`](FfiWorkspace::verify_escrow_blob) checks and\na recovery flow unwraps.\n\nNo escrow enrolled yet is [`FfiError::Escrow`] carrying `error.escrow.not_stored` — the\ncode that separates \"set up a recovery key\" from \"we could not read the one you have\".\nA refused credential is [`FfiError::Auth`].",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "escrowPut",
+              "signature": "suspend fun escrowPut(apiBaseUrl: kotlin.String, blob: kotlin.ByteArray): FfiEscrowStored",
+              "doc": "Store or replace this account's **master-key escrow blob** (`PUT /v1/auth/escrow`).\n`blob` is the opaque canonical CBOR\n[`FfiWorkspace::escrow_blob`](FfiWorkspace::escrow_blob) minted — the master key itself\nnever crosses this boundary in either direction.\n\nSingle active escrow: the server replaces any prior blob in the same transaction, so the\nsecret a rotation retired unwraps nothing.\n\n`api_base_url` is the API root the session authenticates against (the per-call endpoint\nconvention this surface already uses for `sync_pull`). A URL operation paths cannot hang\noff is [`FfiError::InvalidArgument`]; a refused credential is [`FfiError::Auth`], so a\ncaller re-authenticates rather than retrying; everything else is\n[`FfiError::Escrow`] with the server's `error.escrow.*` code when it sent one.\n\nThe answer says what the store did: [`FfiEscrowStored::replaced`] separates \"recovery\nset up\" from \"recovery key replaced\" (the previous secret has stopped working).",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "fetchBlobToPath",
+              "signature": "suspend fun fetchBlobToPath(blobBaseUrl: kotlin.String, hash: kotlin.String, size: kotlin.ULong, path: kotlin.String)",
+              "doc": "**Fetch** the blob at content address `hash` (`size` bytes, as the sync feed's\n[`FfiBlobRef`] declares) into the file at `path`, created or truncated.\n\nThe blob streams to disk in bounded `Range` windows, so memory is bounded by one window\nwhatever the blob's size, and its content address is checked as it lands. On any error\nthe file is removed: a path this returns `Ok` for holds exactly the verified ciphertext.\nA session that cannot authorize the fetch is [`FfiError::Auth`], so the app signs in\nagain; every other failure is [`FfiError::Fetch`].\n\n`blob_base_url` is the root the blob route hangs off (`{blob_base_url}/blob/{hash}`),\nthe server's `/v1` root.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "fetchDeviceDirectory",
+              "signature": "suspend fun fetchDeviceDirectory(apiBaseUrl: kotlin.String, userId: kotlin.String, pinnedUserIk: kotlin.ByteArray): kotlin.ByteArray",
+              "doc": "Fetch a user's signed device directory, **verified under `pinned_user_ik`** (the bytes\n[`FfiWorkspace::user_ik_public`](FfiWorkspace::user_ik_public) returns) before it is\nhanded back. A document that does not verify is an error, never a return value.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "isAuthenticated",
+              "signature": "suspend fun isAuthenticated(): kotlin.Boolean",
+              "doc": "Whether the session currently holds tokens (`false` after logout).",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "logout",
+              "signature": "suspend fun logout()",
+              "doc": "Revoke the session server-side and clear the local store (idempotent).",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "publishDeviceDirectory",
+              "signature": "suspend fun publishDeviceDirectory(apiBaseUrl: kotlin.String, directoryCbor: kotlin.ByteArray, userIk: kotlin.ByteArray): kotlin.ULong",
+              "doc": "Publish this device's **signed device directory**, returning the `directory_version` the\nserver now stores. `directory_cbor` is the opaque document\n[`FfiWorkspace::signed_device_directory`](FfiWorkspace::signed_device_directory)\nproduced; it travels verbatim, because re-encoding it would detach it from the signature\nit carries. `user_ik` is the account's user identity **public** key the document is\nsigned under — the bytes [`FfiWorkspace::user_ik_public`](FfiWorkspace::user_ik_public)\nreturns — which the server anchors on first publish and verifies every publish against.\n\nPublish when the document changes (a device enrolled or revoked). The version must\nadvance — republishing an unchanged document answers the version-conflict code.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "pushAsset",
+              "signature": "suspend fun pushAsset(workspace: FfiWorkspace, assetId: kotlin.String): FfiPushReport",
+              "doc": "**Push** one sealed asset of `workspace` — every blob of its bundle, in ladder order\n(provenance and metadata, then derivative manifests and derivatives, then the\noriginal) — driving `capsule_sdk::push::push_bundle` inside the SDK.\n\nThe original never crosses the boundary: its ciphertext is re-derived from the\nplaintext on disk one upload chunk window at a time, so memory is bounded by the\ntransfer window whatever the original's size. The workspace lock is held only while the\nbundle is built, never across the network.\n\nEvery blob is driven; one the server already holds answers `duplicate_blob` and comes\nback [`FfiUploadOutcome::AlreadyStored`], so pushing twice is safe. The album must\nalready be provisioned on the server.\n\n**A create the server refused is re-sealed and retried once** (issue #822). When the\nalbum's epoch moved past the one the asset was sealed under, the server refuses its\ncreate for good; if this device holds a newer epoch, the asset is re-sealed at it\n(`Workspace::reseal_create`) and pushed again, once. A second refusal fails the push.\nWhen this device holds no newer epoch the push fails with [`FfiError::Upload`] carrying\nthe server's code and a detail saying there is no newer epoch to re-seal at, and the\nasset stays local. That detail names no missing key: the refusal may have had nothing to\ndo with the epoch (a revoked device, withdrawn write access), or another device rotated\nthe album and its key has not reached this one yet.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "syncPull",
+              "signature": "suspend fun syncPull(apiBaseUrl: kotlin.String, cursor: kotlin.ByteArray, pageSize: kotlin.UInt): FfiSyncPage",
+              "doc": "Pull one page of the key-free sync feed after `cursor` from `api_base_url`\n(`http[s]://host:port`). Pass an empty `cursor` for the first page; persist and pass\nback `next_cursor` to advance. The bearer rides the `Authorization` header\n(auto-refreshed); it never crosses the FFI boundary.\n\nThe parameter is the **API base URL** now, not a gRPC endpoint: the feed is\n`GET /v1/sync` on the same origin as every other call.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "upload",
+              "signature": "suspend fun upload(request: FfiUploadRequest, data: kotlin.ByteArray): FfiUploadOutcome",
+              "doc": "Upload a full ciphertext blob (`data`) under `request`, driving the adaptive,\nresumable protocol with the code-driven recovery matrix.\n\n`data` crosses the boundary whole, so this is for blobs an app already holds in memory.\nTo push a sealed asset, original included, use [`push_asset`](Self::push_asset), which\nnever holds the original whole.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "uploadStatus",
+              "signature": "suspend fun uploadStatus(sessionId: kotlin.String): FfiUploadStatus?",
+              "doc": "Query an upload session's progress (`HEAD /upload/{id}`). `None` means the\nsession is gone (discarded/expired/never-existent).",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "class",
+          "name": "FfiWorkspace",
+          "signature": "open class FfiWorkspace: Disposable, AutoCloseable, FfiWorkspaceInterface",
+          "doc": "A Capsule workspace, callable from Swift/Kotlin: the durable library at a filesystem root\nplus everything an app does with it.\n\n`Workspace` mutates through `&mut self` while uniffi objects expose only `&self`; the\n`Mutex` supplies the interior mutability and serializes concurrent foreign calls.",
+          "members": [
+            {
+              "kind": "fun",
+              "name": "create",
+              "signature": "@Throws(FfiException::class) fun create(root: kotlin.String, passphrase: kotlin.ByteArray, tier: FfiDeviceTier, client: FfiClientBuild): FfiWorkspace",
+              "doc": "**Enroll**: create a brand-new library at `root`, guarded by `passphrase` at the\nArgon2id cost for `tier`. Mints the account, the device key, and the signed device\ndirectory, and seeds the durable album keystore.\n\n`client` is the app's own build identity: every manifest this workspace authors then\nreports `client_id/semver+commit` rather than the bare `capsule-core` default.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "createWithHardwareSigner",
+              "signature": "@Throws(FfiException::class) fun createWithHardwareSigner(root: kotlin.String, passphrase: kotlin.ByteArray, tier: FfiDeviceTier, hardware: FfiHardwareSigner, keyAlias: kotlin.String, mlSeed: kotlin.ByteArray, client: FfiClientBuild): FfiWorkspace",
+              "doc": "**Enroll with a hardware-bound Ed25519 device key**: as [`create`](Self::create), but\nthe classical half of the device signing key is produced by `hardware` under\n`key_alias` over **Ed25519** (a 32-byte public key, 64-byte signatures). The\npost-quantum ML-DSA-65 half is the software-sealed `ml_seed` (32 bytes).\n\nNo shipping secure element holds Ed25519 keys, so this is the software/TPM reference\ncomposition; phones use\n[`create_with_p256_hardware_signer`](Self::create_with_p256_hardware_signer). It is the\nsame core call (`HardwareBackedSigner::enroll`) reached through this namespace's\n[`FfiHardwareSigner`] seam.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "createWithP256HardwareSigner",
+              "signature": "@Throws(FfiException::class) fun createWithP256HardwareSigner(root: kotlin.String, passphrase: kotlin.ByteArray, tier: FfiDeviceTier, hardware: FfiHardwareSigner, keyAlias: kotlin.String, mlSeed: kotlin.ByteArray, client: FfiClientBuild): FfiWorkspace",
+              "doc": "**Enroll with a hardware-bound device key**: as [`create`](Self::create), but the\nclassical half of the device signing key is produced by `hardware` (a native Secure\nEnclave / StrongBox / TPM element) under `key_alias`, over **ECDSA-P256** — the\ncomposition shipping secure elements actually provide, none of which do Ed25519. The\npost-quantum ML-DSA-65 half is the software-sealed `ml_seed` (32 bytes).\n\nThe published device key carries the P-256 tag and `verify_asset` dispatches on it, so\nthis is constructor parity with `capsule-core`'s own\n`create_with_p256_hardware_signer` — the same core call, reached through this\nnamespace's [`FfiHardwareSigner`] seam.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "open",
+              "signature": "@Throws(FfiException::class) fun open(root: kotlin.String, passphrase: kotlin.ByteArray, tier: FfiDeviceTier, client: FfiClientBuild): FfiWorkspace",
+              "doc": "**Open** the existing library at `root` under `passphrase`, restoring its album keys and\nauthorities, every managed asset, and the `add_id` counter from disk. This is\nwhat makes an app relaunch resume rather than re-enroll.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "albums",
+              "signature": "fun albums(): List<FfiAlbum>",
+              "doc": "Every album this workspace holds key material for.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "applySyncEntry",
+              "signature": "fun applySyncEntry(entry: FfiSyncEntry): FfiSyncApplyOutcome",
+              "doc": "**Sync-apply**: verify one remote feed entry through the `verify_asset` chokepoint,\nbind and decrypt its metadata blob, and return either the facts to upsert or a named\nquarantine/hold verdict.\n\nNever silently drops and never silently accepts: a refused entry is a\n[`FfiSyncApplyOutcome::Quarantined`] the app must surface, not an error that aborts the\npage. Errors are reserved for a failure of this workspace itself.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "applySyncEntryFromFile",
+              "signature": "fun applySyncEntryFromFile(entry: FfiSyncHead, ciphertextPath: kotlin.String): FfiSyncApplyOutcome",
+              "doc": "[`apply_sync_entry`](Self::apply_sync_entry) for an entry whose original ciphertext is\nthe file at `ciphertext_path` — the one\n[`FfiSession::fetch_blob_to_path`](crate::ffi::FfiSession::fetch_blob_to_path) wrote —\nread in memory bounded by one STREAM chunk whatever the original's size.\n\nThe same chokepoint and verdicts: the file is hashed, and that digest is what the\ncontent-integrity step checks against the manifest's content address, so a file that is\nnot the committed ciphertext is quarantined as `Rejected.CiphertextHashMismatch`, as\n`apply_sync_entry` quarantines those bytes. Nothing is written anywhere.\n\nA malformed `album_id` or `local_chain_head` is refused before the file is opened, so a\nbad argument never costs a read of the original. The file is hashed before the workspace\nis locked, so other verbs are not held up while a large original is read.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "assetIds",
+              "signature": "fun assetIds(): List<kotlin.String>",
+              "doc": "Every managed asset id (UUID strings).",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "createAlbum",
+              "signature": "fun createAlbum(name: kotlin.String): kotlin.String",
+              "doc": "Create an album (minting AMK_v1, its write-tier and admin keys, and an attested\nauthority, then persisting the keystore). Returns the album id.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "defaultAlbumId",
+              "signature": "fun defaultAlbumId(): kotlin.String",
+              "doc": "The default album's id, derived deterministically from the account master key — so every\ndevice of this account computes the same value with nothing to synchronize.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "deviceId",
+              "signature": "fun deviceId(): kotlin.String",
+              "doc": "This device's id (UUID string) — the `created_by_device` of every manifest it authors,\nand the id to report as the session's `device_id`.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "ensureAlbum",
+              "signature": "fun ensureAlbum(albumId: kotlin.String, name: kotlin.String): kotlin.String",
+              "doc": "Resolve `album_id` to the album this workspace already holds, or create it under `name`.\nThis is the verb first-run wiring wants for the default album: it is idempotent across\nrelaunches, where [`create_album`](Self::create_album) would refuse.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "escrowBlob",
+              "signature": "fun escrowBlob(recoverySecret: kotlin.ByteArray, tier: FfiDeviceTier): kotlin.ByteArray",
+              "doc": "Mint the **master-key escrow blob** under `recovery_secret`, as opaque canonical CBOR —\nthe bytes [`FfiSession::escrow_put`](crate::ffi::FfiSession::escrow_put) stores.\n\nThe master key never crosses this boundary: it is wrapped inside `capsule-core` and only\nthe wrapped blob comes out. `recovery_secret` is the ≥128-bit secret shown to the user\nexactly once at first-device enrollment.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "openSyncedOriginal",
+              "signature": "fun openSyncedOriginal(entry: FfiSyncHead, ciphertextPath: kotlin.String, destinationPath: kotlin.String): FfiOpenedOriginal",
+              "doc": "**Open a synced original** from the ciphertext file at `ciphertext_path` to its plaintext\nat `destination_path`, in memory bounded by a few STREAM chunks whatever its size.\n\nThe entry goes through the chokepoint as\n[`apply_sync_entry_from_file`](Self::apply_sync_entry_from_file) would take it, then the\nfile is hashed while it is decrypted: it opens only if it is the ciphertext the manifest\ncommits to, every chunk authenticates, and the plaintext hashes to the signed sidecar's\ndigest. The plaintext is written to a hidden staging file beside the destination and\nrenamed into place only once all of that holds, so `destination_path` is untouched by\nany other verdict and never holds a partial or unverified original. An existing file there\nis replaced only by a verified one.\n\nThe workspace stays locked while the original decrypts.\n\n# Errors\n\n[`FfiError::Workspace`] when a file cannot be read or written, or the workspace itself\nfails; [`FfiError::InvalidArgument`] for a malformed entry or a destination with no file\nname. A refused entry is a verdict, never an error.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "provenanceHead",
+              "signature": "fun provenanceHead(assetId: kotlin.String): kotlin.ByteArray",
+              "doc": "The asset's **head provenance record** as opaque canonical CBOR — the exact bytes the\n`provenance` blob carries, the feed serves back as `manifest_cbor`, and a receiving\ndevice runs through [`apply_sync_entry`](Self::apply_sync_entry).\n\nThe record wraps the head signed manifest with its chain position. That wrapper is not\noptional: the server's chain head is the SHA-256 of these bytes while a client's next\n`prior_provenance_hash` is the record's own hash, so the bare manifest is the one\nencoding under which no lifecycle op can ever chain. Canonical CBOR is deterministic, so\nthe manifest inside is byte-identical to its own signed bytes — nothing is re-authored\nand the two signatures still verify over exactly what they covered.\n\nUse [`signed_manifest`](Self::signed_manifest) when the *manifest* is what is wanted.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "readPlaintext",
+              "signature": "fun readPlaintext(assetId: kotlin.String): kotlin.ByteArray",
+              "doc": "The plaintext bytes of a managed asset (what a gallery renders for a locally-held\noriginal).",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "sealAsset",
+              "signature": "fun sealAsset(albumId: kotlin.String, fileName: kotlin.String, bytes: kotlin.ByteArray): kotlin.String",
+              "doc": "**Seal + import**: take bytes the app already holds (a PhotoKit / MediaStore export),\nderive the file key, STREAM-encrypt, author and sign the create manifest, seal the\nsigned sidecar into its metadata blob, append the provenance chain, and self-verify\nthrough the `verify_asset` chokepoint. Returns the asset id.\n\n`file_name` is consulted for its extension and nothing else. One call, one core call:\nthe whole sealing order is `capsule-core`'s.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "signedDeviceDirectory",
+              "signature": "fun signedDeviceDirectory(): kotlin.ByteArray",
+              "doc": "This workspace's **signed device directory** as opaque canonical CBOR — the bytes\n[`FfiSession::publish_device_directory`](crate::ffi::FfiSession::publish_device_directory)\nsends. Until this is published, every asset this device signs is an unknown device to\nevery other device, so first-device enrollment publishes before it uploads.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "signedManifest",
+              "signature": "fun signedManifest(assetId: kotlin.String): kotlin.ByteArray",
+              "doc": "The asset's **head signed manifest** as opaque canonical CBOR.\n\nThis is a serialization of an already-signed structure, not a re-authoring: the two\nsignatures the manifest carries are covered by these bytes, which is why they travel\nverbatim and are never re-modeled on any wire.\n\n**Not what the sync feed carries** — that is\n[`provenance_head`](Self::provenance_head), the record that wraps this manifest with its\nchain position. Handing these bytes to\n[`apply_sync_entry`](Self::apply_sync_entry) is refused as malformed.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "uploadBlobs",
+              "signature": "fun uploadBlobs(assetId: kotlin.String): List<FfiUploadBlob>",
+              "doc": "Everything needed to push one sealed asset, in ladder order: for each blob, the\n`POST /upload` body (manifest envelope projected per the server's invariant-15 rule)\nand the bytes. Feed each straight to\n[`FfiSession::upload`](crate::ffi::FfiSession::upload).\n\nThe index tier (`T0`) is **two** blobs — the provenance record then the sealed metadata\nblob — because the server publishes an asset to other devices only once it holds both\nroles. Push all of them: an app that stopped after the metadata blob would upload an\nasset no device, its own included, could ever see.\n\nThe original's ciphertext is re-derived from the manifest's recorded nonce prefix and\ngated on the manifest's own content address, so what reaches the network is what the\nsigned manifest vouches for.\n\nEvery blob comes back whole, the original included. To push without holding the\noriginal in memory, use [`FfiSession::push_asset`](crate::ffi::FfiSession::push_asset).",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "userId",
+              "signature": "fun userId(): kotlin.String",
+              "doc": "The account owner's user id (UUID string).",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "userIkPublic",
+              "signature": "fun userIkPublic(): kotlin.ByteArray",
+              "doc": "This account's user identity **public** key — the pin a fetched device directory is\nverified against.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "verifyAsset",
+              "signature": "fun verifyAsset(assetId: kotlin.String): FfiVerifyOutcome",
+              "doc": "Run the `verify_asset` chokepoint over a managed asset, regenerating its ciphertext\ndeterministically. This is the same single chokepoint sync-apply routes through — it is\nexposed here so an app can re-check its own library (an integrity sweep), never as a\nsecond verification path.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "verifyEscrowBlob",
+              "signature": "fun verifyEscrowBlob(blob: kotlin.ByteArray, recoverySecret: kotlin.ByteArray): kotlin.Boolean",
+              "doc": "Local, network-free check that `recovery_secret` still opens `blob` to *this* device's\nmaster key — the recovery verification cadence's predicate. `blob` is the canonical CBOR\n[`FfiSession::escrow_get`](crate::ffi::FfiSession::escrow_get) returns.\n\nA `false` is not necessarily a wrong secret: the cached blob may be stale after a\nrotation on another device, so refresh it and re-check once before telling the user\nanything.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "data class",
+          "name": "FfiAlbum",
+          "signature": "data class FfiAlbum",
+          "doc": "One album this workspace holds key material for.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "albumId",
+              "signature": "var albumId: kotlin.String",
+              "doc": "Album id (UUID string).",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "name",
+              "signature": "var name: kotlin.String",
+              "doc": "Display name, which lives only in the client's own state — it never crosses the wire.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "data class",
+          "name": "FfiAlert",
+          "signature": "data class FfiAlert",
+          "doc": "One alert that is true at an instant.\n\nNever a localized string: `class` selects the app's own `notification.*` catalog key and\n`params` are interpolated into it, so a server can neither supply nor influence the words a\nuser reads.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "class",
+              "signature": "var class: FfiAlertClass",
+              "doc": "Which alert this is.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "severity",
+              "signature": "var severity: FfiAlertSeverity",
+              "doc": "How prominently to present it.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "deadline",
+              "signature": "var deadline: kotlin.String?",
+              "doc": "The instant whose passing made this alert true (RFC 3339), for the two pre-armable\nclasses; `None` for the three whose condition is server-held.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "params",
+              "signature": "var params: Map<kotlin.String, kotlin.String>",
+              "doc": "Catalog parameters — `count`, `days_behind`, `grace`, and the pair\n`recovery_check_due` always carries: `snooze_budget` (`available` / `spent`) and\n`recovery` (`check` / `rewrap`).",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "data class",
+          "name": "FfiAssetFacts",
+          "signature": "data class FfiAssetFacts",
+          "doc": "The verified facts one applied entry contributes, flattened for a catalog upsert.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "assetId",
+              "signature": "var assetId: kotlin.String",
+              "doc": "The asset id (UUID string).",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "albumId",
+              "signature": "var albumId: kotlin.String",
+              "doc": "The album id (UUID string).",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "amkVersion",
+              "signature": "var amkVersion: kotlin.UInt",
+              "doc": "The AMK epoch the asset is sealed under.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "ciphertextHash",
+              "signature": "var ciphertextHash: kotlin.String",
+              "doc": "The original's ciphertext content address (lowercase hex).",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "plaintextSize",
+              "signature": "var plaintextSize: kotlin.ULong",
+              "doc": "The original's plaintext length in bytes.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "action",
+              "signature": "var action: kotlin.String",
+              "doc": "The head manifest's lifecycle action (`create`, `metadata-update`, `delete`, …).",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "timestamp",
+              "signature": "var timestamp: kotlin.String",
+              "doc": "RFC3339 authoring timestamp of the head manifest.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "createdByDevice",
+              "signature": "var createdByDevice: kotlin.String",
+              "doc": "The device that authored it (UUID string), resolved in the signed device directory.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "provenanceHead",
+              "signature": "var provenanceHead: kotlin.ByteArray",
+              "doc": "The 32-byte provenance head this entry establishes — persist it and pass it back as\n[`FfiSyncEntry::local_chain_head`] next time.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "metadata",
+              "signature": "var metadata: FfiAssetMetadata?",
+              "doc": "The decrypted, signature-checked metadata.\n\n`None` exactly when the action mints no metadata blob — a `delete` tombstone or a\n`trash-restore`. Those are fully-verified entries that simply carry no metadata, so an\napp applies the lifecycle change and leaves the row's metadata as it stands.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "data class",
+          "name": "FfiAssetMetadata",
+          "signature": "data class FfiAssetMetadata",
+          "doc": "The decrypted sidecar's facts, flattened for a catalog upsert.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "sidecarSchema",
+              "signature": "var sidecarSchema: kotlin.UShort",
+              "doc": "Sidecar schema version.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "contentType",
+              "signature": "var contentType: kotlin.String",
+              "doc": "The original's MIME type.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "captureTimestamp",
+              "signature": "var captureTimestamp: kotlin.String",
+              "doc": "RFC3339 capture time the asset is dated by: the user's correction when one is recorded,\nelse the as-imported value.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "width",
+              "signature": "var width: kotlin.UInt?",
+              "doc": "Pixel width, when the sidecar records dimensions.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "height",
+              "signature": "var height: kotlin.UInt?",
+              "doc": "Pixel height, when the sidecar records dimensions.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "lqipChromahash",
+              "signature": "var lqipChromahash: kotlin.ByteArray?",
+              "doc": "LQIP chromahash bytes — renderable the instant metadata syncs, at zero extra request.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "lqipDominantColor",
+              "signature": "var lqipDominantColor: kotlin.ByteArray?",
+              "doc": "LQIP dominant colour, as three RGB bytes.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "caption",
+              "signature": "var caption: kotlin.String?",
+              "doc": "The caption LWW register's current value, if any.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "tags",
+              "signature": "var tags: List<kotlin.String>",
+              "doc": "The user-tag OR-set's current members, sorted.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "rating",
+              "signature": "var rating: kotlin.UByte?",
+              "doc": "The rating LWW register's current value, if any.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "hidden",
+              "signature": "var hidden: kotlin.Boolean",
+              "doc": "Whether the asset is hidden from default views.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "data class",
+          "name": "FfiBlobManifest",
+          "signature": "data class FfiBlobManifest",
+          "doc": "FFI mirror of [`BlobManifest`] — an asset's blobs by role.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "original",
+              "signature": "var original: FfiBlobRef?",
+              "doc": "The original ciphertext blob, when this entry carries one.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "derivatives",
+              "signature": "var derivatives: List<FfiBlobRef>",
+              "doc": "Derivative / metadata / provenance blobs.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "data class",
+          "name": "FfiBlobRef",
+          "signature": "data class FfiBlobRef",
+          "doc": "FFI mirror of [`BlobRef`] — a blob's content address and role.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "ciphertextHash",
+              "signature": "var ciphertextHash: kotlin.String",
+              "doc": "Ciphertext content address (lowercase hex).",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "role",
+              "signature": "var role: kotlin.String",
+              "doc": "`original | metadata | derivative | provenance`.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "size",
+              "signature": "var size: kotlin.ULong",
+              "doc": "Ciphertext size in bytes.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "data class",
+          "name": "FfiClassDeadline",
+          "signature": "data class FfiClassDeadline",
+          "doc": "One class and the instant its local notification should be armed for.\n\nA class absent from [`pre_arm_deadlines`]'s result has no timer to hold: cancel whatever it\nhas.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "class",
+              "signature": "var class: FfiAlertClass",
+              "doc": "The class whose timer this is — also the `notification.*` catalog key the app renders\nwhen it fires.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "deadline",
+              "signature": "var deadline: kotlin.String",
+              "doc": "When to fire it (RFC 3339).",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "data class",
+          "name": "FfiClientBuild",
+          "signature": "data class FfiClientBuild",
+          "doc": "A foreign client's self-reported build identity: its product id and own semver.\nThe git commit + dirty flag come from the core this app links, together composing the\n`client_id/semver+commit` `client_version` every manifest carries — so a defect in a shipped\napp build is traceable across the assets it produced.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "clientId",
+              "signature": "var clientId: kotlin.String",
+              "doc": "The app's product id, e.g. `capsule-ios`.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "semver",
+              "signature": "var semver: kotlin.String",
+              "doc": "The app's own semantic version, e.g. `1.4.2`.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "data class",
+          "name": "FfiEscrowStored",
+          "signature": "data class FfiEscrowStored",
+          "doc": "FFI mirror of [`EscrowStored`] — what [`FfiSession::escrow_put`] did.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "storedAt",
+              "signature": "var storedAt: kotlin.String",
+              "doc": "When the server accepted the blob, RFC 3339, on the server's clock.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "replaced",
+              "signature": "var replaced: kotlin.Boolean",
+              "doc": "Whether this displaced an earlier escrow: `false` is a first enrollment (recovery set\nup), `true` a replacement (the previous recovery secret has stopped working).",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "data class",
+          "name": "FfiFeedEntry",
+          "signature": "data class FfiFeedEntry",
+          "doc": "FFI mirror of [`FeedEntry`] — one decoded sync feed entry. Ids/manifest/metadata\ncross as opaque bytes.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "albumId",
+              "signature": "var albumId: kotlin.ByteArray",
+              "doc": "The album this entry belongs to.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "syncSeq",
+              "signature": "var syncSeq: kotlin.ULong",
+              "doc": "Per-album, strictly-increasing anti-rewind high-water mark.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "protocolVersion",
+              "signature": "var protocolVersion: kotlin.String",
+              "doc": "The album protocol pin (`YYYY-MM-DD`).",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "kind",
+              "signature": "var kind: FfiChangeKind",
+              "doc": "What changed.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "assetId",
+              "signature": "var assetId: kotlin.ByteArray",
+              "doc": "The asset id.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "manifestCbor",
+              "signature": "var manifestCbor: kotlin.ByteArray",
+              "doc": "The signed `AssetManifest` as opaque canonical CBOR.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "metadataBlob",
+              "signature": "var metadataBlob: kotlin.ByteArray",
+              "doc": "The encrypted metadata blob's content address, as UTF-8 bytes; empty for deletes.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "blobs",
+              "signature": "var blobs: FfiBlobManifest",
+              "doc": "Content addresses of the asset's blobs by role.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "originalHeld",
+              "signature": "var originalHeld: kotlin.Boolean",
+              "doc": "Whether the original blob is finalized server-side.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "changedAt",
+              "signature": "var changedAt: kotlin.String",
+              "doc": "When the change happened, RFC 3339, on the server's clock.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "data class",
+          "name": "FfiManifestEnvelope",
+          "signature": "data class FfiManifestEnvelope",
+          "doc": "FFI mirror of [`ManifestEnvelope`] — the server-visible envelope fields the\nimport pipeline builds and signs; opaque to this layer, carried verbatim.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "cryptoSuiteId",
+              "signature": "var cryptoSuiteId: kotlin.UShort",
+              "doc": "Crypto suite the blob is sealed under.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "protocolVersion",
+              "signature": "var protocolVersion: kotlin.String",
+              "doc": "Protocol date (`YYYY-MM-DD`).",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "albumId",
+              "signature": "var albumId: kotlin.String?",
+              "doc": "Optional album this blob belongs to.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "fileId",
+              "signature": "var fileId: kotlin.String",
+              "doc": "The asset id this blob belongs to (UUIDv7).",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "amkVersion",
+              "signature": "var amkVersion: kotlin.UInt",
+              "doc": "AMK epoch the blob is sealed under.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "ciphertextHash",
+              "signature": "var ciphertextHash: kotlin.String",
+              "doc": "Ciphertext content hash, lowercase hex.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "plaintextSize",
+              "signature": "var plaintextSize: kotlin.ULong",
+              "doc": "Plaintext size in bytes.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "chunkSize",
+              "signature": "var chunkSize: kotlin.UInt",
+              "doc": "STREAM plaintext chunk size.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "keyMode",
+              "signature": "var keyMode: kotlin.String",
+              "doc": "`derived | wrapped`.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "metadataBlobHash",
+              "signature": "var metadataBlobHash: kotlin.String?",
+              "doc": "Hash of the bundle's metadata blob, when known.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "derivativeRole",
+              "signature": "var derivativeRole: kotlin.String?",
+              "doc": "A derivative blob's role (`thumbnail | preview | embedding`); `None` for every other\nblob.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "derivativeFormat",
+              "signature": "var derivativeFormat: kotlin.String?",
+              "doc": "A derivative blob's format, e.g. `image/jxl`; set exactly when `derivative_role` is.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "createdByUser",
+              "signature": "var createdByUser: kotlin.String",
+              "doc": "The authoring user.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "createdByDevice",
+              "signature": "var createdByDevice: kotlin.String",
+              "doc": "The authoring device.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "clientVersion",
+              "signature": "var clientVersion: kotlin.String",
+              "doc": "The exact client build.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "timestamp",
+              "signature": "var timestamp: kotlin.String",
+              "doc": "RFC 3339 authoring timestamp.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "action",
+              "signature": "var action: kotlin.String",
+              "doc": "Lifecycle action (`create` for a fresh bundle).",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "priorProvenanceHash",
+              "signature": "var priorProvenanceHash: kotlin.String?",
+              "doc": "Prior provenance hash, for append-only chains.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "retentionUntil",
+              "signature": "var retentionUntil: kotlin.String?",
+              "doc": "Optional retention floor.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "data class",
+          "name": "FfiNotifyInput",
+          "signature": "data class FfiNotifyInput",
+          "doc": "The device-held state the predicate decides from, flattened for the bindings.\n\nCounts and instants only — no album id, no title, no asset id. An all-default value (every\n`Option` `None`, every count `0`, an empty map) is the \"just installed, learned nothing\"\ninput, and yields no alerts and no deadline.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "lastCompletedSync",
+              "signature": "var lastCompletedSync: kotlin.String? = null",
+              "doc": "When the last **completed** sync finished (RFC 3339). `None` on a device that has never\ncompleted one — which raises no `sync_stale`, because the alert is about a *stale* sync\nand not a missing one. When `None`, `unsynced_changes` is ignored.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "unsyncedChanges",
+              "signature": "var unsyncedChanges: kotlin.ULong = 0uL",
+              "doc": "Changes still waiting to reach the server, including originals still pending under a\nstaged upload policy.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "recoveryNextDue",
+              "signature": "var recoveryNextDue: kotlin.String? = null",
+              "doc": "When the next recovery-verification prompt becomes due (RFC 3339). Project it from the\nscheduler with\n[`RecoveryCadence::notify_facts`](crate::recovery::RecoveryCadence::notify_facts) rather\nthan computing it here. `None` before recovery is set up, which ignores the other three\n`recovery_*` fields.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "recoverySnoozedUntil",
+              "signature": "var recoverySnoozedUntil: kotlin.String? = null",
+              "doc": "When an active snooze on the recovery prompt expires (RFC 3339), if one is active. A\nsnooze ending *before* `recovery_next_due` does not make the check due earlier. This is\nthe canonical place to snooze the recovery check — not\n[`suppressed_until`](Self::suppressed_until), which is for the other five classes.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "recoverySnoozeBudgetSpent",
+              "signature": "var recoverySnoozeBudgetSpent: kotlin.Boolean = false",
+              "doc": "Whether the consecutive-snooze budget is spent — the class has degraded to a persistent,\nnon-blocking badge: still reported, no longer pre-armed.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "recoveryRewrapDue",
+              "signature": "var recoveryRewrapDue: kotlin.Boolean = false",
+              "doc": "Whether the scheduler has escalated to the guided re-wrap (repeated failures, or the user\ndeclaring the secret lost). Surfaces as the alert's `recovery` parameter, so the app\nroutes into the re-wrap flow instead of rendering a routine verification prompt.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "quotaState",
+              "signature": "var quotaState: FfiQuotaAdvisory? = null",
+              "doc": "The state from the last `GET /v1/quota`. `None` before the first one.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "quarantinePending",
+              "signature": "var quarantinePending: kotlin.ULong = 0uL",
+              "doc": "How many items sit on the client's quarantine surfaces awaiting a human. **Excludes\npending drops** — they have their own class, so counting them here raises both.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "dropsPending",
+              "signature": "var dropsPending: kotlin.ULong = 0uL",
+              "doc": "How many guest drops are awaiting review and adoption.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "suppressedUntil",
+              "signature": "var suppressedUntil: Map<kotlin.String, kotlin.String> = mapOf()",
+              "doc": "Per-class **snooze**: class wire name (`sync_stale`, …) to the RFC 3339 instant the\nsnooze runs until, exclusive. A class snoozed past `now` reports nothing, and its alarm\nis **deferred to the snooze end** rather than cancelled — a class snoozed after it fired\nmust fire again when the snooze expires. Use [`disabled`](Self::disabled) to turn a class\noff; do not encode that as a far-future instant here. An unrecognized class name is an\n[`FfiError::InvalidArgument`].\n\n**This map is for the other five classes.** Recovery snoozing belongs in\n[`recovery_snoozed_until`](Self::recovery_snoozed_until), which the cadence scheduler\nowns together with the budget that bounds it. An entry here for `recovery_check_due` is\nhonoured as a fallback (the later of the two wins) but is not the canonical channel.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "disabled",
+              "signature": "var disabled: List<kotlin.String> = listOf()",
+              "doc": "Per-class **disable**: the wire names of the classes the user turned off. They report\nnothing and hold no alarm, at any instant. Disabling suppresses the warning and never\nthe behavior. An unrecognized class name is an [`FfiError::InvalidArgument`].",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "data class",
+          "name": "FfiPushReport",
+          "signature": "data class FfiPushReport",
+          "doc": "What [`FfiSession::push_asset`] did — FFI mirror of [`AssetPushReport`].",
+          "members": [
+            {
+              "kind": "field",
+              "name": "assetId",
+              "signature": "var assetId: kotlin.String",
+              "doc": "The asset id (UUID string).",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "pushed",
+              "signature": "var pushed: List<FfiPushedBlob>",
+              "doc": "Every blob whose session was opened, in ladder order.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "bytes",
+              "signature": "var bytes: kotlin.ULong",
+              "doc": "Total bytes handed to the upload client, the original included.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "data class",
+          "name": "FfiPushedBlob",
+          "signature": "data class FfiPushedBlob",
+          "doc": "How one blob of a pushed asset resolved — FFI mirror of [`PushedBlob`].",
+          "members": [
+            {
+              "kind": "field",
+              "name": "tier",
+              "signature": "var tier: kotlin.String",
+              "doc": "The ladder tier the blob occupies (`index` / `preview` / `original`), the vocabulary\n[`FfiUploadBlob::tier`] uses.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "hash",
+              "signature": "var hash: kotlin.String",
+              "doc": "The blob's content address (lowercase hex).",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "outcome",
+              "signature": "var outcome: FfiUploadOutcome",
+              "doc": "Whether it transferred or merged onto a blob the server already held.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "data class",
+          "name": "FfiSyncEntry",
+          "signature": "data class FfiSyncEntry",
+          "doc": "One remote feed entry to apply, as a sync feed delivers it.\n\n`album_id` and the two id-bearing fields carry the feed's own **16-byte UUID** form (the\n`bytes album_id` of `capsule.sync.v1.SyncEntry`), so an entry from\n[`FfiSession::sync_pull`](crate::ffi::FfiSession::sync_pull) is passed through unchanged.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "albumId",
+              "signature": "var albumId: kotlin.ByteArray",
+              "doc": "The album the feed claims this entry belongs to — 16 raw UUID bytes. Cross-checked\nagainst the manifest by the chokepoint itself, never trusted on its own.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "manifestCbor",
+              "signature": "var manifestCbor: kotlin.ByteArray",
+              "doc": "The signed `AssetManifest` as opaque canonical CBOR, carried verbatim.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "metadataBlob",
+              "signature": "var metadataBlob: kotlin.ByteArray",
+              "doc": "The sealed metadata blob the manifest commits to.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "originalCiphertext",
+              "signature": "var originalCiphertext: kotlin.ByteArray",
+              "doc": "The asset's original ciphertext. Required: the chokepoint's content-integrity step\nhashes it against the manifest's declared content address, and there is no variant of\nthat check which skips it — so fetch the original blob before applying.\n\nIt crosses whole, so this record costs the original's full size in memory. An original\nof any size is received with\n[`FfiSession::fetch_blob_to_path`](crate::ffi::FfiSession::fetch_blob_to_path), and\napplied and opened from that file with an [`FfiSyncHead`] through\n[`FfiWorkspace::apply_sync_entry_from_file`] and [`FfiWorkspace::open_synced_original`],\nin bounded memory.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "localChainHead",
+              "signature": "var localChainHead: kotlin.ByteArray?",
+              "doc": "The 32-byte provenance head your catalog already holds for this asset, or `None` if it\nhas never seen it. This is what decides replay and fork; feed back\n[`FfiAssetFacts::provenance_head`] after a successful apply.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "data class",
+          "name": "FfiSyncHead",
+          "signature": "data class FfiSyncHead",
+          "doc": "One remote feed entry whose original is **on disk** rather than in hand: an\n[`FfiSyncEntry`] without its `original_ciphertext`, which\n[`FfiWorkspace::apply_sync_entry_from_file`] and [`FfiWorkspace::open_synced_original`] read\nfrom the file [`FfiSession::fetch_blob_to_path`](crate::ffi::FfiSession::fetch_blob_to_path)\nproduced, in memory bounded by one STREAM chunk whatever the original's size.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "albumId",
+              "signature": "var albumId: kotlin.ByteArray",
+              "doc": "As [`FfiSyncEntry::album_id`].",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "manifestCbor",
+              "signature": "var manifestCbor: kotlin.ByteArray",
+              "doc": "As [`FfiSyncEntry::manifest_cbor`].",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "metadataBlob",
+              "signature": "var metadataBlob: kotlin.ByteArray",
+              "doc": "As [`FfiSyncEntry::metadata_blob`].",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "localChainHead",
+              "signature": "var localChainHead: kotlin.ByteArray?",
+              "doc": "As [`FfiSyncEntry::local_chain_head`].",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "data class",
+          "name": "FfiSyncPage",
+          "signature": "data class FfiSyncPage",
+          "doc": "FFI mirror of [`SyncPage`] — a decoded page plus the opaque cursor for the next\npull (the client persists `next_cursor` and passes it back to advance).",
+          "members": [
+            {
+              "kind": "field",
+              "name": "entries",
+              "signature": "var entries: List<FfiFeedEntry>",
+              "doc": "The changes in this page, in strictly-increasing per-album `sync_seq` order.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "nextCursor",
+              "signature": "var nextCursor: kotlin.ByteArray",
+              "doc": "The opaque cursor to pass to the next [`FfiSession::sync_pull`].",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "hasMore",
+              "signature": "var hasMore: kotlin.Boolean",
+              "doc": "Whether the server holds changes beyond this page.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "data class",
+          "name": "FfiUploadBlob",
+          "signature": "data class FfiUploadBlob",
+          "doc": "One transferable blob of a sealed asset, paired with the `POST /upload` body that declares\nit. Hand [`request`](Self::request) and [`bytes`](Self::bytes) straight to\n[`FfiSession::upload`](crate::ffi::FfiSession::upload) — this record exists so an app never\nhas to assemble a manifest envelope itself.\n\nThe blobs come back in **ladder order**: the metadata blob (T0 — the index tier that makes\nthe asset visible), then derivatives (T1), then the original (T2).\n\n[`bytes`](Self::bytes) holds each blob whole, the original included, so an original costs\nits full size in memory here. [`FfiSession::push_asset`](crate::ffi::FfiSession::push_asset)\npushes the same blobs with the original streamed, and is the path for an original of any\nsize.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "tier",
+              "signature": "var tier: kotlin.String",
+              "doc": "The ladder tier this blob occupies (`index` / `preview` / `original`).",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "hash",
+              "signature": "var hash: kotlin.String",
+              "doc": "The blob's content address (lowercase hex) — the value the server dedups on.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "request",
+              "signature": "var request: FfiUploadRequest",
+              "doc": "The `POST /upload` body for this blob, with the manifest envelope already projected.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "bytes",
+              "signature": "var bytes: kotlin.ByteArray",
+              "doc": "The bytes to transfer.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "data class",
+          "name": "FfiUploadRequest",
+          "signature": "data class FfiUploadRequest",
+          "doc": "FFI mirror of [`CreateUploadRequest`] — the `POST /upload` body.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "size",
+              "signature": "var size: kotlin.ULong",
+              "doc": "Ciphertext size in bytes.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "hash",
+              "signature": "var hash: kotlin.String",
+              "doc": "Ciphertext content hash, lowercase hex.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "contentType",
+              "signature": "var contentType: kotlin.String",
+              "doc": "MIME type (closed enum per protocol version).",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "cryptoSuiteId",
+              "signature": "var cryptoSuiteId: kotlin.UShort",
+              "doc": "Crypto suite the blob is sealed under.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "protocolVersion",
+              "signature": "var protocolVersion: kotlin.String",
+              "doc": "Protocol date (`YYYY-MM-DD`) this client speaks.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "blobRole",
+              "signature": "var blobRole: FfiBlobRole",
+              "doc": "This blob's role in its bundle.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "manifestEnvelope",
+              "signature": "var manifestEnvelope: FfiManifestEnvelope",
+              "doc": "The unencrypted manifest fields the server validates.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "albumId",
+              "signature": "var albumId: kotlin.String?",
+              "doc": "Optional album to add the asset to.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "ownerId",
+              "signature": "var ownerId: kotlin.String?",
+              "doc": "Optional owner id (defaults to the authenticated uploader).",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "intentId",
+              "signature": "var intentId: kotlin.String?",
+              "doc": "Album-upgrade intent id (album upgrade ceremony only).",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "data class",
+          "name": "FfiUploadStatus",
+          "signature": "data class FfiUploadStatus",
+          "doc": "FFI mirror of [`HeadInfo`] — the `HEAD /upload/{id}` resumption/status primitive.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "offset",
+              "signature": "var offset: kotlin.ULong",
+              "doc": "Next expected byte (authoritative received-byte count).",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "totalSize",
+              "signature": "var totalSize: kotlin.ULong?",
+              "doc": "Declared total size, when known.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "status",
+              "signature": "var status: kotlin.String",
+              "doc": "Session state (`X-Capsule-Upload-Status`).",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum class",
+          "name": "FfiAlertClass",
+          "signature": "enum class FfiAlertClass",
+          "doc": "Every alert class, flattened for the bindings. A closed enum on both sides of the boundary.",
+          "members": [
+            {
+              "kind": "entry",
+              "name": "SYNC_STALE",
+              "signature": "SYNC_STALE,",
+              "doc": "Two weeks without a completed sync while changes remain un-synced.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "RECOVERY_CHECK_DUE",
+              "signature": "RECOVERY_CHECK_DUE,",
+              "doc": "A recovery-secret verification check is due.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "QUOTA_SOFT",
+              "signature": "QUOTA_SOFT,",
+              "doc": "Storage crossed the soft limit and is below the hard limit.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "QUOTA_GRACE_EXPIRING",
+              "signature": "QUOTA_GRACE_EXPIRING,",
+              "doc": "Storage is over the hard limit — the grace window is counting, or has closed.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "QUARANTINE_PENDING",
+              "signature": "QUARANTINE_PENDING,",
+              "doc": "Items are sitting on a quarantine surface awaiting a human.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "DROP_PENDING",
+              "signature": "DROP_PENDING;",
+              "doc": "Guest drops are awaiting review and adoption.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum class",
+          "name": "FfiAlertSeverity",
+          "signature": "enum class FfiAlertSeverity",
+          "doc": "How prominently a client presents an alert. **Neither variant gates anything** — no alert\nblocks sync, unlock, upload, or any critical flow.",
+          "members": [
+            {
+              "kind": "entry",
+              "name": "ADVISORY",
+              "signature": "ADVISORY,",
+              "doc": "Informational: nothing is failing, and nothing is about to.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "WARNING",
+              "signature": "WARNING;",
+              "doc": "Something is already degraded or is being refused.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum class",
+          "name": "FfiBlobRole",
+          "signature": "enum class FfiBlobRole",
+          "doc": "FFI mirror of [`BlobRole`] (snake_case on the wire, closed enum).",
+          "members": [
+            {
+              "kind": "entry",
+              "name": "ORIGINAL",
+              "signature": "ORIGINAL,",
+              "doc": "The source asset.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "DERIVATIVE",
+              "signature": "DERIVATIVE,",
+              "doc": "A client-generated thumbnail/preview.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "METADATA",
+              "signature": "METADATA,",
+              "doc": "The CBOR metadata document.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "PROVENANCE",
+              "signature": "PROVENANCE,",
+              "doc": "Append-only provenance.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "BACKUP",
+              "signature": "BACKUP,",
+              "doc": "A library backup artifact.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "DERIVATIVE_MANIFEST",
+              "signature": "DERIVATIVE_MANIFEST;",
+              "doc": "A derivative tier's signed manifest.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum class",
+          "name": "FfiChangeKind",
+          "signature": "enum class FfiChangeKind",
+          "doc": "FFI mirror of [`ChangeKind`].",
+          "members": [
+            {
+              "kind": "entry",
+              "name": "CREATED",
+              "signature": "CREATED,",
+              "doc": "A new asset became visible in the album.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "UPDATED",
+              "signature": "UPDATED,",
+              "doc": "An existing asset advanced — new metadata, new bytes, or a restore.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "DELETED",
+              "signature": "DELETED;",
+              "doc": "The asset was tombstoned.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum class",
+          "name": "FfiDeviceTier",
+          "signature": "enum class FfiDeviceTier",
+          "doc": "Device hardware tier, selecting the Argon2id cost at wrap time. Mirrors core's `DeviceTier`\nin this namespace (see the module docs on why it is not shared).",
+          "members": [
+            {
+              "kind": "entry",
+              "name": "LOW_RAM",
+              "signature": "LOW_RAM,",
+              "doc": "≤ 2 GiB total RAM (entry-level Android / embedded).",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "NORMAL",
+              "signature": "NORMAL,",
+              "doc": "Default for phones and laptops.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "DESKTOP",
+              "signature": "DESKTOP;",
+              "doc": "≥ 8 GiB; used when wrapping new escrow blobs from a desktop.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "sealed class",
+          "name": "FfiException",
+          "signature": "sealed class FfiException: kotlin.Exception()",
+          "doc": "Every failure the FFI flows can surface, flattened by originating layer. Each\nvariant carries the stable `error.*` catalog `code` (when one applies — clients\nlocalize it) and the English detail `message` (stays English), mirroring the\nSDK's `{ error, code }` contract so foreign apps switch on the code, never a\nbare HTTP status.",
+          "members": [
+            {
+              "kind": "variant",
+              "name": "Auth",
+              "signature": "class Auth",
+              "doc": "An authentication flow (login/register/refresh/logout) failed.",
+              "members": []
+            },
+            {
+              "kind": "variant",
+              "name": "Upload",
+              "signature": "class Upload",
+              "doc": "An upload flow (create/transfer/status) failed.",
+              "members": []
+            },
+            {
+              "kind": "variant",
+              "name": "Sync",
+              "signature": "class Sync",
+              "doc": "A sync flow (pull/reconcile) failed.",
+              "members": []
+            },
+            {
+              "kind": "variant",
+              "name": "Workspace",
+              "signature": "class Workspace",
+              "doc": "A local workspace operation failed — opening the library, sealing an asset, reading a\nmanaged asset. This is the *workspace* failing, never an entry being refused: a refused\nsync entry is a [`FfiSyncApplyOutcome::Quarantined`] verdict, not an error.",
+              "members": []
+            },
+            {
+              "kind": "variant",
+              "name": "Escrow",
+              "signature": "class Escrow",
+              "doc": "A master-key escrow flow (store/fetch) failed.",
+              "members": []
+            },
+            {
+              "kind": "variant",
+              "name": "Directory",
+              "signature": "class Directory",
+              "doc": "A device-directory flow (publish/fetch) failed.",
+              "members": []
+            },
+            {
+              "kind": "variant",
+              "name": "Fetch",
+              "signature": "class Fetch",
+              "doc": "A blob fetch ([`FfiSession::fetch_blob_to_path`]) failed: the blob is gone, still\nawaiting its original, refused, did not hash to its content address, or could not be\nwritten locally. Nothing is left at the destination path.",
+              "members": []
+            },
+            {
+              "kind": "variant",
+              "name": "InvalidArgument",
+              "signature": "class InvalidArgument",
+              "doc": "A foreign argument was structurally invalid (e.g. an un-parseable URL) before\nany network call.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "sealed class",
+          "name": "FfiHardwareSignerException",
+          "signature": "sealed class FfiHardwareSignerException(message: String): kotlin.Exception(message)",
+          "doc": "Failure surfaced by a foreign [`FfiHardwareSigner`]. Mirrors `capsule-core`'s\n`HardwareSignerError` variant for variant — it is the same contract, declared in the\n`capsule_sdk` namespace because core's own type carries no uniffi derive.",
+          "members": [
+            {
+              "kind": "variant",
+              "name": "AuthCancelled",
+              "signature": "class AuthCancelled(message: String) : FfiHardwareSignerException(message)",
+              "doc": "The user cancelled the biometric / the element refused authentication.",
+              "members": []
+            },
+            {
+              "kind": "variant",
+              "name": "Unavailable",
+              "signature": "class Unavailable(message: String) : FfiHardwareSignerException(message)",
+              "doc": "No secure element is available on this device.",
+              "members": []
+            },
+            {
+              "kind": "variant",
+              "name": "NotFound",
+              "signature": "class NotFound(message: String) : FfiHardwareSignerException(message)",
+              "doc": "No key exists for the requested alias.",
+              "members": []
+            },
+            {
+              "kind": "variant",
+              "name": "Exportable",
+              "signature": "class Exportable(message: String) : FfiHardwareSignerException(message)",
+              "doc": "The private key was readable — non-exportability is violated (a failure).",
+              "members": []
+            },
+            {
+              "kind": "variant",
+              "name": "Backend",
+              "signature": "class Backend(message: String) : FfiHardwareSignerException(message)",
+              "doc": "Any other backend error.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "sealed class",
+          "name": "FfiLoginOutcome",
+          "signature": "sealed class FfiLoginOutcome: Disposable",
+          "doc": "What a password login answered with, across the FFI.\n\nAn enum rather than an optional session handle: \"signed in\" and \"needs a code\" are different\nstates an app renders differently, and a `null` handle beside a `mfaToken` string would let a\ncaller read one while acting on the other.",
+          "members": [
+            {
+              "kind": "variant",
+              "name": "Session",
+              "signature": "data class Session",
+              "doc": "The account has no second factor, and this is its session.",
+              "members": []
+            },
+            {
+              "kind": "variant",
+              "name": "SecondFactorRequired",
+              "signature": "data class SecondFactorRequired",
+              "doc": "The password verified and a code is still needed.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "sealed class",
+          "name": "FfiOpenedOriginal",
+          "signature": "sealed class FfiOpenedOriginal",
+          "doc": "How [`FfiWorkspace::open_synced_original`] resolved. Only `Opened` leaves anything at the\ndestination path.",
+          "members": [
+            {
+              "kind": "variant",
+              "name": "Opened",
+              "signature": "data class Opened",
+              "doc": "Verified end to end and decrypted: the destination now holds the original's plaintext,\nwhich hashes to the signed sidecar's digest.",
+              "members": []
+            },
+            {
+              "kind": "variant",
+              "name": "Refused",
+              "signature": "data class Refused",
+              "doc": "The entry did not apply, exactly as\n[`apply_sync_entry`](FfiWorkspace::apply_sync_entry) would say: held pending or\nquarantined. A ciphertext file that is not the original the manifest commits to is\nquarantined as `Rejected.CiphertextHashMismatch`.",
+              "members": []
+            },
+            {
+              "kind": "variant",
+              "name": "Undecryptable",
+              "signature": "data class Undecryptable",
+              "doc": "The entry applied, but its file key could not be recovered or its ciphertext failed\nauthentication under it.",
+              "members": []
+            },
+            {
+              "kind": "variant",
+              "name": "DigestMismatch",
+              "signature": "data class DigestMismatch",
+              "doc": "The ciphertext opened, but the plaintext does not hash to the signed sidecar's digest.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum class",
+          "name": "FfiQuotaAdvisory",
+          "signature": "enum class FfiQuotaAdvisory",
+          "doc": "The quota state, as `GET /v1/quota` reports it.",
+          "members": [
+            {
+              "kind": "entry",
+              "name": "OK",
+              "signature": "OK,",
+              "doc": "Below the soft limit. All uploads succeed normally.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "SOFT_WARNING",
+              "signature": "SOFT_WARNING,",
+              "doc": "At or above the soft limit and below the hard limit. Uploads succeed; the client warns.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "HARD_EXCEEDED",
+              "signature": "HARD_EXCEEDED,",
+              "doc": "At or above the hard limit. New uploads are rejected; the grace window is counting.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "GRACE_EXPIRED",
+              "signature": "GRACE_EXPIRED,",
+              "doc": "Over the hard limit for longer than the grace window; metadata-growth writes are\nrefused too.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "SUSPENDED",
+              "signature": "SUSPENDED;",
+              "doc": "An admin or billing action rather than a threshold. Raises no quota alert.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "sealed class",
+          "name": "FfiSyncApplyOutcome",
+          "signature": "sealed class FfiSyncApplyOutcome",
+          "doc": "How applying one remote entry resolved — the three verdicts the client validation duties\npermit. There is no \"ignored\" case: a failure is always a named quarantine or a hold.",
+          "members": [
+            {
+              "kind": "variant",
+              "name": "Applied",
+              "signature": "data class Applied",
+              "doc": "Verified end to end; upsert the facts.",
+              "members": []
+            },
+            {
+              "kind": "variant",
+              "name": "Pending",
+              "signature": "data class Pending",
+              "doc": "Authorization is intact but the epoch's AMK has not arrived locally yet. Hold and retry\n— never quarantine.",
+              "members": []
+            },
+            {
+              "kind": "variant",
+              "name": "Quarantined",
+              "signature": "data class Quarantined",
+              "doc": "Refused. `reason` is a stable, switchable code; `detail` is English developer text.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "sealed class",
+          "name": "FfiUploadOutcome",
+          "signature": "sealed class FfiUploadOutcome",
+          "doc": "FFI mirror of [`UploadOutcome`] — how a full upload resolved.",
+          "members": [
+            {
+              "kind": "variant",
+              "name": "Completed",
+              "signature": "data class Completed",
+              "doc": "Every declared byte transferred; the server has begun finalization.",
+              "members": []
+            },
+            {
+              "kind": "variant",
+              "name": "AlreadyStored",
+              "signature": "data class AlreadyStored",
+              "doc": "The blob was already stored server-side (the `duplicate_blob` → merge path).",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "sealed class",
+          "name": "FfiVerifyOutcome",
+          "signature": "sealed class FfiVerifyOutcome",
+          "doc": "The verification verdict, flattened for FFI (reasons as stable reason-code strings).",
+          "members": [
+            {
+              "kind": "variant",
+              "name": "Accept",
+              "signature": "object Accept : FfiVerifyOutcome()",
+              "doc": "The asset verified and may enter the trusted set.",
+              "members": []
+            },
+            {
+              "kind": "variant",
+              "name": "TerminalReject",
+              "signature": "data class TerminalReject",
+              "doc": "The asset is permanently rejected (quarantined); `reason` is the reason code.",
+              "members": []
+            },
+            {
+              "kind": "variant",
+              "name": "Pending",
+              "signature": "data class Pending",
+              "doc": "The asset is recoverable-pending (held + retried); `reason` is the reason code.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "fun",
+          "name": "evaluateAlerts",
+          "signature": "@Throws(FfiException::class) fun evaluateAlerts(input: FfiNotifyInput, now: kotlin.String): List<FfiAlert>",
+          "doc": "Every alert that is true at `now`, in delivery order.\n\nPure and offline: no network call, no library open, no clock read — `now` is the caller's, so\nthe same input always gives the same answer and an app can drive it from a test clock.\n\n# Errors\n\n[`FfiError::InvalidArgument`] if `now` or any instant in `input` is not RFC 3339, or if\n`suppressed_until` names something that is not an alert class.",
+          "members": []
+        },
+        {
+          "kind": "fun",
+          "name": "nextAlertDeadline",
+          "signature": "@Throws(FfiException::class) fun nextAlertDeadline(input: FfiNotifyInput, now: kotlin.String): kotlin.String?",
+          "doc": "The earliest instant in [`pre_arm_deadlines`] (RFC 3339), or `None` when there is nothing to\narm.\n\nFor a host that can hold only one timer. **An app that schedules per class wants\n[`pre_arm_deadlines`]**: the minimum discards the later class's alarm, and on a device the app\nnever runs on again that alert is simply lost.\n\n# Errors\n\nAs [`evaluate_alerts`].",
+          "members": []
+        },
+        {
+          "kind": "fun",
+          "name": "preArmDeadlines",
+          "signature": "@Throws(FfiException::class) fun preArmDeadlines(input: FfiNotifyInput, now: kotlin.String): List<FfiClassDeadline>",
+          "doc": "The instant to arm a local notification for, **per class** — the call an app schedules its\n`UNCalendarNotificationTrigger` / `AlarmManager` alarms from.\n\nReconcile your timers against the result: a class present here should hold exactly one alarm\nat the returned instant, and a class absent from it should hold none. Recompute after **any**\nstate change; that is the whole of the arm / re-arm / cancel rule on the client side.\n\nOnly the two classes whose deadline a device can compute alone ever appear. The other three\ndepend on server state and surface at next app launch — a real gap the design accepts.\n\n# Errors\n\nAs [`evaluate_alerts`].",
+          "members": []
+        },
+        {
+          "kind": "fun",
+          "name": "p256HardwareDekRoundTrip",
+          "signature": "@Throws(FfiException::class) fun p256HardwareDekRoundTrip(hardware: FfiHardwareKeyAgreement, keyAlias: kotlin.String, mlSeed: kotlin.ByteArray): kotlin.Boolean",
+          "doc": "Smoke the **hardware-bound P-256 device encryption key** across the FFI seam:\nenroll a key-agreement key in `hardware` under `key_alias`, publish the hybrid public key,\nencapsulate a fresh shared secret to it **in software** (the sender side), then\n**decapsulate through the element's ECDH**. Returns `true` iff the two secrets match —\nproving the element's ECDH composes into the hybrid KEM without the private scalar leaving\nhardware. `ml_seed` (32 bytes) is the software-sealed ML-KEM-768 half.\n\nThe DEK is not yet wired into workspace creation, so this focused round-trip is the\ncomposition's on-device check — the DEK analogue of\n[`FfiWorkspace::create_with_p256_hardware_signer`]. Every step is one `capsule-core` call.",
+          "members": []
+        }
+      ]
+    }
+  }
+}
