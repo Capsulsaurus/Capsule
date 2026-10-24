@@ -988,6 +988,9 @@ async fn sync_with<C: ConnectionTrait + TransactionTrait>(
     };
     let mut albums = std::collections::HashSet::new();
     let mut resynced = false;
+    // The latest server clock reading among the landed entries, which floors the device clock
+    // the retention sweep judges deadlines at.
+    let mut server_clock = None;
 
     loop {
         // `pull_into` validates the page against the in-memory `SyncState`
@@ -1022,8 +1025,16 @@ async fn sync_with<C: ConnectionTrait + TransactionTrait>(
             summary.applied += page.entries.len();
         } else {
             summary.applied += syncstore::persist_page(db, &page).await?;
+            server_clock = server_clock.max(syncstore::latest_changed_at(&page));
         }
         summary.pages += 1;
+    }
+    if !dry_run {
+        // Only here, at the feed's head: a delete landed on one page may be restored on a later
+        // one, and sweeping before that page lands would tombstone a restored asset for good. A
+        // run that landed no page still owes the sweep, since a window closes on the clock.
+        let at = syncstore::judged_at(jiff::Timestamp::now(), server_clock);
+        syncstore::record_elapsed_purges(db, at).await?;
     }
 
     summary.albums = albums.len();

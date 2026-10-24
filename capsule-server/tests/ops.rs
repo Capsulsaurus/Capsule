@@ -172,8 +172,8 @@ async fn feed(fixture: &Fixture, bearer: &str) -> Value {
 
 // ===========================================================================================
 
-/// A delete tombstones the asset, and the tombstone reaches the feed carrying no byte
-/// references.
+/// A delete tombstones the asset, and the tombstone reaches the feed carrying its signed delete
+/// record and no byte references.
 #[tokio::test]
 async fn a_delete_tombstones_the_asset_and_reaches_the_feed() {
     let fixture = Fixture::working();
@@ -195,16 +195,20 @@ async fn a_delete_tombstones_the_asset_and_reaches_the_feed() {
     let entry = &page["entries"][0];
     assert_eq!(entry["change"], "deleted");
     assert_eq!(entry["sync_seq"], applied["sync_seq"]);
+    let served = entry["manifest_cbor"]
+        .as_str()
+        .expect("a tombstone carries its delete record");
     assert_eq!(
-        entry["manifest_cbor"],
-        Value::Null,
-        "a tombstone points at nothing: a client that fetched its blobs would be fetching \
-         bytes the delete exists to stop it wanting"
+        BASE64.decode(served).expect("base64"),
+        manifest("d1"),
+        "the delete record, byte for byte: it is how a client reads the retention window"
     );
     assert!(
         entry["blobs"].as_array().expect("blob refs").is_empty(),
-        "a tombstone carries no byte references"
+        "a tombstone points at nothing: a client that fetched its blobs would be fetching \
+         bytes the delete exists to stop it wanting"
     );
+    assert!(entry["metadata_blob"].is_null());
 }
 
 /// A restore returns the asset, and both changes are on the feed in order.

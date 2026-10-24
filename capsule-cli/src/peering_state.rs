@@ -14,7 +14,9 @@
 //! - **Tombstones** ([`load_tombstones`]) are the assets this device recorded as **purged**
 //!   ([`record_purged`]), kept in a table the store refuses to update or delete from. A delete is
 //!   not a tombstone: it moves the asset to trash, and a `trash-restore` reverses it until its
-//!   retention window closes, so the sync feed's `Deleted` records nothing here. The set is what
+//!   retention window closes, so the sync feed's `Deleted` records nothing here by itself. The
+//!   sync store records the purge once that window has closed
+//!   ([`crate::syncstore::record_elapsed_purges`]). The set is what
 //!   [`capsule_sdk::peering::ingest`] takes as [`LocalLibrary::tombstones`]; a row that does not
 //!   decode fails the whole load rather than leaving a gap a peer could resurrect through.
 //!
@@ -335,8 +337,9 @@ pub fn feed_asset_uuid(id: &[u8]) -> Option<Uuid> {
 
 /// Record a tombstone for each of `assets`, purged at `at`: the asset has left the trash for
 /// good, so no `trash-restore` can bring it back and no peer may. An
-/// asset already tombstoned keeps its first record. Called by a purge, in the transaction that
-/// applies it; never for a delete, which only moves the asset to trash.
+/// asset already tombstoned keeps its first record. Called by the sync store's retention sweep
+/// ([`crate::syncstore::record_elapsed_purges`]); never for a delete still in its retention
+/// window, which only moves the asset to trash.
 ///
 /// # Errors
 ///
@@ -367,8 +370,10 @@ pub async fn record_purged<C: ConnectionTrait>(
 /// store holds live. An asset in trash is not in the set: it is still restorable, and its delete
 /// manifest is the local chain head, so ingest already quarantines a peer's older copy as stale.
 /// A live sync row for a purged asset is not a sequence the protocol allows (a `trash-restore`
-/// recovers only an asset still in trash, and a purge is what ends that); the device follows its
-/// sync store and logs it rather than refusing a live asset.
+/// recovers only an asset still in trash, and a purge is what ends that), but it can reach the
+/// store: this device judges a retention window by its own clock, floored by the server's, so a
+/// clock running ahead records a purge a restore then beats. The device follows its sync store
+/// and logs it rather than refusing a live asset.
 ///
 /// # Errors
 ///

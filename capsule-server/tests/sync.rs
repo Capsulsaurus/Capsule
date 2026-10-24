@@ -8,8 +8,11 @@ mod support;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
+use capsule_core::crypto::hash::Hash32;
 use capsule_server::blob::{BlobStore, ContentAddress};
-use capsule_server::index::{AssetIndex, BlobRecord, PendingAsset};
+use capsule_server::index::{
+    AssetIndex, BlobRecord, LifecycleOp, OpAction, OpOutcome, PendingAsset, PurgeOutcome,
+};
 use capsule_server::membership::{MemberRole, MembershipStore as _, RosterRecord};
 use capsule_server::store::{AlbumId, AssetId, BlobRole, OwnerId, UserId};
 use capsule_server::sync::{CURSOR_KEY_LEN, CursorCodec, CursorScope};
@@ -301,24 +304,69 @@ async fn original_held_flips_when_the_original_lands() {
     assert_eq!(entry["blobs"][0]["size"], 4096);
 }
 
-/// A tombstone tells a client the asset is gone and nothing else.
+/// Move `asset` to trash with a signed delete whose bytes are `delete_manifest`, its retention
+/// floor at `retention_until`.
+async fn delete(
+    fixture: &Fixture,
+    asset: &AssetId,
+    delete_manifest: &[u8],
+    retention_until: Timestamp,
+) {
+    let provenance = store_blob(fixture, delete_manifest).await;
+    let chain_head = fixture
+        .index
+        .read(asset)
+        .await
+        .expect("the index reads")
+        .expect("the row exists")
+        .chain_head;
+    let outcome = fixture
+        .index
+        .apply_op(LifecycleOp {
+            asset_id: asset.clone(),
+            owner_id: owner(),
+            album_id: album(),
+            action: OpAction::Delete,
+            manifest_hash: Hash32::from_bytes([0xde; 32]),
+            prior_provenance_hash: chain_head,
+            amk_version: 1,
+            provenance,
+            metadata: None,
+            original: None,
+            retention_until: Some(retention_until),
+            at: Timestamp::UNIX_EPOCH,
+        })
+        .await
+        .expect("the index applies");
+    assert!(
+        matches!(outcome, OpOutcome::Applied { .. }),
+        "the delete applies: {outcome:?}"
+    );
+}
+
+/// A tombstone carries its signed delete record and no byte reference: the record is what tells
+/// a client the retention window, and a blob list would invite a fetch of collected bytes.
 #[tokio::test]
-async fn a_tombstone_carries_no_byte_references() {
+async fn a_tombstone_carries_its_delete_record_and_no_byte_references() {
     let fixture = Fixture::working();
     let bearer = bearer(&fixture).await;
     let (asset, _) = publish(&fixture, "doomed").await;
-    fixture
-        .index
-        .tombstone(&asset, Timestamp::UNIX_EPOCH)
-        .await
-        .expect("the index tombstones");
+    let record = b"signed-delete-for-doomed";
+    delete(
+        &fixture,
+        &asset,
+        record,
+        Timestamp::from_second(60).expect("an instant"),
+    )
+    .await;
 
     let body = page(&fixture, &bearer, "", StatusCode::OK).await;
     let entry = &body["entries"][0];
     assert_eq!(entry["change"], "deleted");
-    assert!(
-        entry["manifest_cbor"].is_null(),
-        "a tombstone must not hand back a manifest for an asset that is gone"
+    assert_eq!(
+        entry["manifest_cbor"],
+        BASE64.encode(record),
+        "a tombstone serves its delete record byte for byte, so a client can read its window"
     );
     assert!(entry["metadata_blob"].is_null());
     assert!(
@@ -326,6 +374,34 @@ async fn a_tombstone_carries_no_byte_references() {
         "a tombstone's blob list invites a client to fetch bytes GC may already have collected"
     );
     assert_eq!(entry["original_held"], false);
+}
+
+/// A purge drops the delete record with the rest of the asset's references, so the entry of a
+/// purged asset carries no manifest.
+#[tokio::test]
+async fn a_purged_tombstone_carries_no_manifest() {
+    let fixture = Fixture::working();
+    let bearer = bearer(&fixture).await;
+    let (asset, _) = publish(&fixture, "purged").await;
+    let until = Timestamp::from_second(60).expect("an instant");
+    delete(&fixture, &asset, b"signed-delete-for-purged", until).await;
+    let outcome = fixture
+        .index
+        .purge(&asset, until)
+        .await
+        .expect("the index purges");
+    assert!(
+        matches!(outcome, PurgeOutcome::Purged(_)),
+        "the window has closed: {outcome:?}"
+    );
+
+    let body = page(&fixture, &bearer, "", StatusCode::OK).await;
+    let entry = &body["entries"][0];
+    assert_eq!(entry["change"], "deleted");
+    assert!(
+        entry["manifest_cbor"].is_null(),
+        "the purge dropped the provenance blob, and the feed must not invent one"
+    );
 }
 
 /// Paging sees every entry exactly once, at any page size.

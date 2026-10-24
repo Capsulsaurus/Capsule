@@ -552,7 +552,8 @@ async fn an_unreadable_synced_id_refuses_the_whole_set() {
     let db = file.connect().await;
     exec(
         &db,
-        "INSERT INTO synced_assets VALUES ('!!not base64!!', 'YQ==', 1, 'created', 0, 0)",
+        "INSERT INTO synced_assets (asset_id, album_id, sync_seq, kind, original_held, tombstoned) \
+         VALUES ('!!not base64!!', 'YQ==', 1, 'created', 0, 0)",
     )
     .await
     .expect("writes");

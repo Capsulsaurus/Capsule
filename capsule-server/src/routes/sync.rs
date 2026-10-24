@@ -38,11 +38,16 @@
 //!
 //! # What a tombstone discloses
 //!
-//! A `deleted` entry carries no manifest, no metadata reference and no blob list. The row still
-//! holds them — GC decides what happens to bytes, not this surface — but sending them would
-//! invite a client to fetch blobs that may already be collected, and a deletion needs none of
-//! it to be applied. The index reports the row truthfully; the wire decides what a tombstone
+//! A `deleted` entry carries no metadata reference, no blob list and no derivative manifest. The
+//! row still holds them — GC decides what happens to bytes, not this surface — but sending them
+//! would invite a client to fetch blobs that may already be collected, and a deletion needs none
+//! of it to be applied. The index reports the row truthfully; the wire decides what a tombstone
 //! says.
+//!
+//! It does carry its asset manifest, inline: the signed `delete` record that moved the asset to
+//! trash. That is no byte reference, and it is what tells a client the asset's retention window,
+//! the `retention_until` after which a `trash-restore` is refused and the asset is purged. A
+//! purge drops the provenance blob, so the entry of a purged asset carries none.
 //!
 //! # Base64 is not a re-serialization
 //!
@@ -156,8 +161,9 @@ pub struct SyncEntry {
     pub change: WireChangeKind,
     /// The signed manifest, base64 of the provenance blob's exact bytes.
     ///
-    /// Absent on a tombstone, and absent — with a loud server-side log — when the index names a
-    /// provenance blob the store cannot produce.
+    /// On a tombstone, the signed `delete` record, whose `retention_until` is the asset's
+    /// retention window; absent once a purge has dropped it. Absent too — with a loud
+    /// server-side log — when the index names a provenance blob the store cannot produce.
     pub manifest_cbor: Option<String>,
     /// The encrypted metadata blob's content address.
     pub metadata_blob: Option<String>,
@@ -638,7 +644,9 @@ async fn album_read_access(
 /// Render one index entry onto the wire, reading its manifest bytes.
 async fn render(sync: &SyncContext, entry: FeedEntry) -> SyncEntry {
     let deleted = entry.change == ChangeKind::Deleted;
-    let manifest = match entry.provenance.as_ref().filter(|_| !deleted) {
+    // A tombstone's manifest is its signed delete record, the one thing a client needs to know
+    // the retention window by; see the module docs on what a tombstone discloses.
+    let manifest = match entry.provenance.as_ref() {
         Some(address) => read_manifest(sync, address, &entry, ManifestKind::Asset).await,
         None => None,
     };

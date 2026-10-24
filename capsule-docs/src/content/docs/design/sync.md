@@ -20,6 +20,8 @@ Each entry carries:
 
 Never original or derivative bytes. The client decrypts metadata, then decides what to [fetch](/design/transfer/download/).
 
+A delete carries only its signed manifest, the `delete` record whose `retention_until` closes the asset's [retention window](/design/organization/#retention-window): no metadata, no blob manifest and no derivative manifest, since none is needed to apply a deletion and a blob reference would invite a fetch of collected bytes. A purge drops the record with the rest of the asset's references, so the delete entry of a purged asset carries no manifest at all.
+
 ### Cursor Authenticity and Anti-Rewind
 
 - The cursor is **MAC'd by the server** under a server-only key, bound to the caller and, for an album page, the album (`capsule-server::sync::cursor`). A forged, mutated or foreign cursor is refused; the client re-syncs from zero.
