@@ -8092,12 +8092,12 @@
     "context": "Local alert title when the guided recovery re-wrap is due (recovery = rewrap)."
   },
   "notification.sync_stale.body": {
-    "message": "{count, plural, one {# change has not reached your server in {days_behind} days. Open Capsule to sync.} other {# changes have not reached your server in {days_behind} days. Open Capsule to sync.}}",
-    "context": "Local alert body when the library has gone two weeks without a completed sync while changes remain un-synced. {count} is the number of un-synced changes; {days_behind} is the whole number of days since the last completed sync."
+    "message": "{count, plural, one {# change has not reached your server yet. Open Capsule to sync.} other {# changes have not reached your server yet. Open Capsule to sync.}}",
+    "context": "Local alert body when the library has gone two weeks without a completed sync while changes remain un-synced. {count} is the number of un-synced changes."
   },
   "notification.sync_stale.title": {
-    "message": "Your library has not synced",
-    "context": "Local alert title when the library has gone two weeks without a completed sync while changes remain un-synced."
+    "message": "Not synced for {days_behind} days",
+    "context": "Local alert title when the library has gone two weeks without a completed sync while changes remain un-synced. {days_behind} is the whole number of days since the last completed sync, always 14 or more."
   },
   "security.added": {
     "message": "Added: {date}",

@@ -47507,13 +47507,13 @@
               "one": {
                 "stringUnit": {
                   "state": "translated",
-                  "value": "%1$lld change has not reached your server in %2$@ days. Open Capsule to sync."
+                  "value": "%lld change has not reached your server yet. Open Capsule to sync."
                 }
               },
               "other": {
                 "stringUnit": {
                   "state": "translated",
-                  "value": "%1$lld changes have not reached your server in %2$@ days. Open Capsule to sync."
+                  "value": "%lld changes have not reached your server yet. Open Capsule to sync."
                 }
               }
             }
@@ -47526,7 +47526,7 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Your library has not synced"
+            "value": "Not synced for %@ days"
           }
         }
       }

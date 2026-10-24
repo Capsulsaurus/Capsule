@@ -22,13 +22,13 @@ struct AlertsTests {
         #expect(warnings == [.syncStale, .quotaGraceExpiring, .quarantinePending])
     }
 
-    @Test("sync_stale renders its count as the plural and days behind as text")
+    @Test("sync_stale renders days behind in its title and its count as the body's plural")
     func syncStaleCopy() {
         let copy = Alert(alertClass: .syncStale, params: ["count": "7", "days_behind": "15"]).copy
         #expect(copy.titleKey == "notification.sync_stale.title")
+        #expect(copy.titleArguments == ["15"])
         #expect(copy.bodyKey == "notification.sync_stale.body")
         #expect(copy.count == 7)
-        #expect(copy.textArguments == ["15"])
     }
 
     @Test("recovery = rewrap selects the re-wrap copy and destination, never the check")

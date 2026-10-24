@@ -2011,7 +2011,7 @@
     <string name="notification_recovery_check_due_check_title">Time to check your recovery secret</string>
     <string name="notification_recovery_check_due_rewrap_body">Your recovery secret could not be confirmed. Set up a new one so you can still recover your library.</string>
     <string name="notification_recovery_check_due_rewrap_title">Replace your recovery secret</string>
-    <string name="notification_sync_stale_title">Your library has not synced</string>
+    <string name="notification_sync_stale_title">Not synced for %s days</string>
     <string name="security_added">Added: %s</string>
     <string name="security_deleting">Deleting…</string>
     <string name="security_last_active">Last active: %s</string>
@@ -2157,8 +2157,8 @@
         <item quantity="other">%d items are waiting for your decision.</item>
     </plurals>
     <plurals name="notification_sync_stale_body">
-        <item quantity="one">%1$d change has not reached your server in %2$s days. Open Capsule to sync.</item>
-        <item quantity="other">%1$d changes have not reached your server in %2$s days. Open Capsule to sync.</item>
+        <item quantity="one">%d change has not reached your server yet. Open Capsule to sync.</item>
+        <item quantity="other">%d changes have not reached your server yet. Open Capsule to sync.</item>
     </plurals>
     <plurals name="share_items">
         <item quantity="one">%d item</item>

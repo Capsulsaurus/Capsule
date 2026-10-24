@@ -87,11 +87,10 @@ object AlertNotifications {
     ): Pair<String, String> {
         val resources = context.resources
         val count = copy.count ?: 0
-        val args: Array<Any> = arrayOf(count, *copy.textArguments.toTypedArray())
         return when (copy.stem) {
             "notification.sync_stale" ->
-                resources.getString(R.string.notification_sync_stale_title) to
-                    resources.getQuantityString(R.plurals.notification_sync_stale_body, count, *args)
+                resources.getString(R.string.notification_sync_stale_title, *copy.titleArguments.toTypedArray()) to
+                    resources.getQuantityString(R.plurals.notification_sync_stale_body, count, count)
             "notification.recovery_check_due.rewrap" ->
                 resources.getString(R.string.notification_recovery_check_due_rewrap_title) to
                     resources.getString(R.string.notification_recovery_check_due_rewrap_body)
@@ -109,10 +108,10 @@ object AlertNotifications {
                     resources.getString(R.string.notification_quota_grace_expiring_counting_body)
             "notification.quarantine_pending" ->
                 resources.getString(R.string.notification_quarantine_pending_title) to
-                    resources.getQuantityString(R.plurals.notification_quarantine_pending_body, count, *args)
+                    resources.getQuantityString(R.plurals.notification_quarantine_pending_body, count, count)
             else ->
                 resources.getString(R.string.notification_drop_pending_title) to
-                    resources.getQuantityString(R.plurals.notification_drop_pending_body, count, *args)
+                    resources.getQuantityString(R.plurals.notification_drop_pending_body, count, count)
         }
     }
 }

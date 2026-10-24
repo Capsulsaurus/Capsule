@@ -146,28 +146,28 @@ public enum AlertDestination: String, Sendable, Hashable, CaseIterable {
 /// The `notification.*` messages use a whole-message plural at most (the only
 /// ICU form the generator compiles), so an enumerated parameter such as
 /// `recovery` or `grace` selects a *key* rather than an ICU `select` arm, and
-/// a numeric one is the plural's count. `arguments` follows the source
-/// message's specifier order: the count first, then text.
+/// a count is a plural body's only argument. `sync_stale`'s second number,
+/// `days_behind`, is therefore its *title*'s text argument.
 public struct AlertCopy: Sendable, Hashable {
     /// The `notification.*` key of the title.
     public let titleKey: String
+    /// The title's text arguments, in specifier order.
+    public let titleArguments: [String]
     /// The `notification.*` key of the body.
     public let bodyKey: String
-    /// The body's plural count, when the body is a plural.
+    /// The body's plural count, when the body is a plural — its only argument.
     public let count: Int?
-    /// The body's text arguments, in specifier order after the count.
-    public let textArguments: [String]
 
     public init(alert: Alert) {
         let stem: String
         var count: Int?
-        var text: [String] = []
+        var title: [String] = []
         let params = alert.params
         switch alert.alertClass {
         case .syncStale:
             stem = "notification.sync_stale"
             count = Self.integer(params[Alert.Parameter.count])
-            text = [params[Alert.Parameter.daysBehind] ?? String(SyncStatus.stalenessThresholdDays)]
+            title = [params[Alert.Parameter.daysBehind] ?? String(SyncStatus.stalenessThresholdDays)]
         case .recoveryCheckDue:
             stem = alert.isGuidedRewrap
                 ? "notification.recovery_check_due.rewrap"
@@ -186,9 +186,9 @@ public struct AlertCopy: Sendable, Hashable {
             count = Self.integer(params[Alert.Parameter.count])
         }
         titleKey = "\(stem).title"
+        titleArguments = title
         bodyKey = "\(stem).body"
         self.count = count
-        textArguments = text
     }
 
     /// A count parameter as an integer. A malformed one renders as zero

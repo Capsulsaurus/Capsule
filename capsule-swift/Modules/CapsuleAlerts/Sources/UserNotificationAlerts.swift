@@ -80,12 +80,12 @@ struct AlertNotificationText {
     let body: String
 
     init(copy: AlertCopy, bundle: Bundle) {
-        title = bundle.localizedString(forKey: copy.titleKey, value: nil, table: nil)
-        let format = bundle.localizedString(forKey: copy.bodyKey, value: nil, table: nil)
-        var arguments: [any CVarArg] = []
-        if let count = copy.count { arguments.append(count) }
-        arguments.append(contentsOf: copy.textArguments.map { $0 as NSString })
-        body = arguments.isEmpty ? format : String(format: format, locale: .current, arguments: arguments)
+        let titleFormat = bundle.localizedString(forKey: copy.titleKey, value: nil, table: nil)
+        title = copy.titleArguments.isEmpty
+            ? titleFormat
+            : String(format: titleFormat, locale: .current, arguments: copy.titleArguments.map { $0 as NSString })
+        let bodyFormat = bundle.localizedString(forKey: copy.bodyKey, value: nil, table: nil)
+        body = copy.count.map { String(format: bodyFormat, locale: .current, arguments: [$0]) } ?? bodyFormat
     }
 }
 

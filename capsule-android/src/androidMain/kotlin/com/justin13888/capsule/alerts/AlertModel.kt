@@ -113,14 +113,17 @@ enum class AlertDestination {
  *
  * The `notification.*` messages are at most a whole-message plural (the only ICU
  * form the generator compiles), so an enumerated parameter (`recovery`, `grace`)
- * selects a key and a numeric one is the plural's quantity. [stem] is the catalog
- * key without its `.title` / `.body` suffix; the Android resource names are the
- * same with `.` replaced by `_`.
+ * selects a key and a count is a plural body's only argument - so `sync_stale`'s
+ * `days_behind` is its title's text argument. [stem] is the catalog key without its
+ * `.title` / `.body` suffix; the Android resource names are the same with `.`
+ * replaced by `_`.
  */
 data class AlertCopy(
     val stem: String,
+    /** The body's plural quantity, when the body is a plural. */
     val count: Int?,
-    val textArguments: List<String>,
+    /** The title's text arguments, in specifier order. */
+    val titleArguments: List<String>,
 ) {
     val titleKey: String get() = "$stem.title"
     val bodyKey: String get() = "$stem.body"
