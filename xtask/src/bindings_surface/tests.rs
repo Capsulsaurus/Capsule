@@ -36,6 +36,20 @@ open func login(email: String, password: String)async throws  -> FfiLoginOutcome
     return try await call()
 }
 }
+/**
+ * A session.
+ */
+open class FfiSession: @unchecked Sendable {
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+    /**
+     * Open with no arguments.
+     */
+public convenience init()throws  {
+    self.init(unsafeFromHandle: 0)
+}
+}
 public struct FfiConverterTypeFfiCapsuleClient: FfiConverter {
     public static func lift(_ handle: UInt64) throws -> FfiCapsuleClient { fatalError() }
 }
@@ -102,6 +116,23 @@ open class FfiCapsuleClient: Disposable, AutoCloseable, FfiCapsuleClientInterfac
         return call("${email}")
     }
     companion object
+}
+interface Disposable {
+    fun destroy()
+}
+open class FfiSession: Disposable, AutoCloseable
+{
+    constructor(noHandle: NoHandle) {
+        this.handle = 0
+    }
+    /**
+     * Open with no arguments.
+     */
+    constructor() :
+        this(UniffiWithHandle, 0L)
+}
+open class FfiSessionImpl: FfiSession
+{
 }
 /**
  * One album.
@@ -207,6 +238,7 @@ fn scans_the_swift_surface() {
         names(&declarations),
         [
             ("class", "FfiCapsuleClient"),
+            ("class", "FfiSession"),
             ("struct", "FfiAlbum"),
             ("enum", "FfiDeviceTier"),
             ("func", "evaluateAlerts"),
@@ -228,6 +260,17 @@ fn scans_the_swift_surface() {
         "func login(email: String, password: String) async throws -> FfiLoginOutcome",
         "the method is read from the protocol requirement, not the implementation"
     );
+    let session = find_named(&declarations, "FfiSession");
+    assert_eq!(
+        names(&session.members),
+        [("init", "init")],
+        "a zero-argument constructor is the caller's; `init(noHandle:)` is plumbing"
+    );
+    assert_eq!(
+        session.members[0].signature,
+        "public convenience init() throws"
+    );
+    assert_eq!(session.members[0].doc, "Open with no arguments.");
     let album = find_named(&declarations, "FfiAlbum");
     assert_eq!(
         names(&album.members),
@@ -249,6 +292,7 @@ fn scans_the_kotlin_surface() {
         names(&declarations),
         [
             ("class", "FfiCapsuleClient"),
+            ("class", "FfiSession"),
             ("data class", "FfiAlbum"),
             ("enum class", "FfiDeviceTier"),
             ("sealed class", "FfiException"),
@@ -265,6 +309,13 @@ fn scans_the_kotlin_surface() {
         "suspend fun login(email: kotlin.String, password: kotlin.String): FfiLoginOutcome",
         "backtick quoting is removed"
     );
+    let session = find_named(&declarations, "FfiSession");
+    assert_eq!(
+        names(&session.members),
+        [("constructor", "constructor")],
+        "a zero-argument constructor is the caller's; `constructor(noHandle:)` is plumbing"
+    );
+    assert_eq!(session.members[0].signature, "constructor()");
     let album = find_named(&declarations, "FfiAlbum");
     assert_eq!(
         names(&album.members),
@@ -384,4 +435,27 @@ fn check_fails_on_drift_and_names_the_task() {
         format!("{err:#}").contains("mise run gen-bindings"),
         "{err:#}"
     );
+}
+
+#[test]
+fn refuses_a_top_level_type_that_is_neither_an_export_nor_uniffi_runtime() {
+    let swift = format!("{SWIFT}public struct AlbumCursor {{\n    public var next: String\n}}\n");
+    let err = scan_swift(&swift).unwrap_err().to_string();
+    assert!(err.contains("`AlbumCursor`"), "{err}");
+    assert!(err.contains("UNIFFI_RUNTIME"), "{err}");
+    let kotlin =
+        format!("{KOTLIN}data class AlbumCursor (\n    var `next`: kotlin.String\n){{\n}}\n");
+    let err = scan_kotlin(&kotlin).unwrap_err().to_string();
+    assert!(err.contains("`AlbumCursor`"), "{err}");
+}
+
+#[test]
+fn an_impl_is_runtime_only_beside_the_type_it_implements() {
+    let kotlin = format!("{KOTLIN}open class FfiOrphanImpl\n{{\n}}\n");
+    let declarations = scan_kotlin(&kotlin).unwrap();
+    assert!(
+        declarations.iter().any(|d| d.name == "FfiOrphanImpl"),
+        "an `Ffi…Impl` with no `Ffi…` beside it is an export, not uniffi's runtime"
+    );
+    assert!(!declarations.iter().any(|d| d.name == "FfiSessionImpl"));
 }

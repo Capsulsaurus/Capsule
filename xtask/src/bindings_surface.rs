@@ -20,10 +20,13 @@
 //! - A **top-level declaration** is a depth-0 line declaring a type whose name carries the
 //!   `Ffi` prefix every `capsule_sdk` export has (minus uniffi's own `FfiConverter*`), or a
 //!   free function (in Kotlin, one whose name uniffi backtick-quoted, which it does only for
-//!   generated names).
+//!   generated names). A public top-level type that is neither an `Ffi…` export nor one of
+//!   uniffi's own runtime types is fatal: the prefix is a convention, and a type outside it
+//!   would otherwise vanish from both languages without the parity check noticing.
 //! - A type's **members** are the depth-1 declarations of its block: an object's methods come
 //!   from the `…Protocol` (Swift) or `…Interface` (Kotlin) uniffi pairs it with, its
-//!   constructors from the class itself; a record's fields, an enum's cases, and a sealed
+//!   constructors (a zero-argument one included) from the class itself, minus uniffi's
+//!   handle plumbing; a record's fields, an enum's cases, and a sealed
 //!   class's variants from the type's own block.
 //! - A declaration's **doc comment** is the `/** … */` block directly above it.
 //!
@@ -526,9 +529,42 @@ fn members_matching(
         .collect()
 }
 
-/// Whether a type name is a `capsule_sdk` export, rather than uniffi's own runtime.
-fn is_export(name: &str) -> bool {
-    name.starts_with("Ffi") && !name.starts_with("FfiConverter") && !name.ends_with("Impl")
+/// The public top-level types uniffi 0.31's own runtime declares, by name, in either language.
+///
+/// Listed by name rather than matched by pattern so that a uniffi bump which adds one fails
+/// [`is_export`] loudly instead of either dropping it or publishing it.
+const UNIFFI_RUNTIME: &[&str] = &[
+    "RustBuffer",
+    "InternalException",
+    "Disposable",
+    "UniffiRustCallStatusErrorHandler",
+    "UniffiCleaner",
+];
+
+/// Whether the top-level type `name` is a `capsule_sdk` export (`Ok(true)`) or uniffi's own
+/// runtime (`Ok(false)`): an `FfiConverter*`, an `Ffi…Impl` beside the declared `Ffi…` it
+/// implements, or a name in [`UNIFFI_RUNTIME`].
+///
+/// Anything else is an error. Every export carries the `Ffi` prefix only by convention, so a
+/// type that is neither would otherwise be dropped from both languages alike, which the parity
+/// check cannot notice and which leaves a page that looks complete.
+fn is_export(types: &[(usize, String, String)], name: &str) -> Result<bool> {
+    if name.starts_with("FfiConverter")
+        || name
+            .strip_suffix("Impl")
+            .is_some_and(|base| base.starts_with("Ffi") && find(types, base).is_some())
+        || UNIFFI_RUNTIME.contains(&name)
+    {
+        return Ok(false);
+    }
+    if name.starts_with("Ffi") {
+        return Ok(true);
+    }
+    bail!(
+        "top-level type `{name}` is neither a `capsule_sdk` export (named `Ffi…`) nor a known \
+         uniffi runtime type; give the export the `Ffi` prefix, or, if uniffi declares it, add it \
+         to `UNIFFI_RUNTIME` in xtask/src/bindings_surface.rs"
+    )
 }
 
 /// Index of the depth-0 type declaration named `name` among `types`.
@@ -550,9 +586,10 @@ pub(crate) fn scan_swift(source: &str) -> Result<Vec<Declaration>> {
         LazyLock::new(|| Regex::new(r"^\s*func (\w+)\(").expect("valid regex"));
     static STATIC: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"^\s*public static func `?(\w+)`?\(").expect("valid regex"));
-    static INIT: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"^\s*public (convenience )?init\((\w+)").expect("valid regex")
-    });
+    // Any parameter list, an empty one included: a zero-argument `#[uniffi::constructor]` is
+    // `public convenience init()`. The plumbing inits are told apart by `convenience` below.
+    static INIT: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^\s*public (convenience )?init\(").expect("valid regex"));
     static FIELD: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"^\s*public var `?(\w+)`?:").expect("valid regex"));
     static CASE: LazyLock<Regex> =
@@ -576,7 +613,7 @@ pub(crate) fn scan_swift(source: &str) -> Result<Vec<Declaration>> {
             continue;
         };
         let (kind, name) = (&captures[1], &captures[2]);
-        if !is_export(name) {
+        if !is_export(&types, name)? {
             continue;
         }
         let mut declaration = member(&lines, i, kind, name);
@@ -652,8 +689,11 @@ pub(crate) fn scan_kotlin(source: &str) -> Result<Vec<Declaration>> {
         Regex::new(r"^\s*(?:@Throws\([^)]*\)\s*)?(?:suspend\s+)?fun `(\w+)`\(")
             .expect("valid regex")
     });
+    // A first parameter uniffi backtick-quoted, or an empty list delegating to `this(…)`: a
+    // zero-argument `#[uniffi::constructor]` is `constructor() :`. The plumbing constructors
+    // (`withHandle:`, `noHandle:`) have unquoted parameters and open a block instead.
     static CONSTRUCTOR: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"^\s*constructor\(`").expect("valid regex"));
+        LazyLock::new(|| Regex::new(r"^\s*constructor\((?:`|\)\s*:)").expect("valid regex"));
     static FIELD: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"^\s*(?:val|var) `(\w+)`:").expect("valid regex"));
     static ENTRY: LazyLock<Regex> =
@@ -677,7 +717,7 @@ pub(crate) fn scan_kotlin(source: &str) -> Result<Vec<Declaration>> {
             continue;
         };
         let (kind, name) = (&captures[1], &captures[2]);
-        if !is_export(name) {
+        if !is_export(&types, name)? {
             continue;
         }
         let mut declaration = member(&lines, i, kind, name);
