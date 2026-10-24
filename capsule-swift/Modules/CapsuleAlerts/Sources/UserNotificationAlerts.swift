@@ -145,6 +145,7 @@ public final class AlertNotificationResponder: NSObject, UNUserNotificationCente
     }
 
     /// Become the notification center's delegate.
+    @MainActor
     public func install() {
         UNUserNotificationCenter.current().delegate = self
     }
