@@ -1292,7 +1292,7 @@ async fn listen(
                     summary.refused.push(PeerFailure::new(
                         &subject,
                         "peering_timeout",
-                        "no peer completed a hand-off session before the listen timeout",
+                        "no peer connected and verified before the listen timeout",
                     ));
                 }
                 break;
