@@ -17,4 +17,6 @@ public enum CapsuleLog {
     public static let imagePipeline = Logger(subsystem: subsystem, category: "image-pipeline")
     public static let interface = Logger(subsystem: subsystem, category: "ui")
     public static let diagnostics = Logger(subsystem: subsystem, category: "diagnostics")
+    /// Local alerts: the arm / re-arm / cancel loop, the permission prompt, snoozes.
+    public static let alerts = Logger(subsystem: subsystem, category: "alerts")
 }
