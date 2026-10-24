@@ -15,6 +15,7 @@ import {
     authFetch,
     login,
     PROTOCOL_VERSION,
+    profileLabel,
     refreshAccessToken,
     register,
     verifyTotpLogin,
@@ -161,5 +162,34 @@ describe('the protocol handshake', () => {
         const call = theRequest();
         expect(call.url).toEndWith('/v1/auth/login/verify-totp');
         expect(call.protocol).toBe(PROTOCOL_VERSION);
+    });
+});
+
+// A federated account may have no address (`ProfileResponse.email` is optional), so the label
+// falls back from the display name to the address to the account id, which is always present.
+describe('profileLabel', () => {
+    const base = { user_id: 'acct-1', created_at: '2026-01-01T00:00:00Z' };
+
+    test('prefers the display name', () => {
+        expect(
+            profileLabel({ ...base, display_name: 'Ada', email: 'a@x.test' }),
+        ).toBe('Ada');
+    });
+
+    test('falls back to the address without a display name', () => {
+        expect(profileLabel({ ...base, email: 'a@x.test' })).toBe('a@x.test');
+        expect(
+            profileLabel({ ...base, display_name: null, email: 'a@x.test' }),
+        ).toBe('a@x.test');
+    });
+
+    test('falls back to the account id without an address', () => {
+        expect(profileLabel(base)).toBe('acct-1');
+        expect(profileLabel({ ...base, display_name: null, email: null })).toBe(
+            'acct-1',
+        );
+        expect(profileLabel({ ...base, display_name: '', email: '' })).toBe(
+            'acct-1',
+        );
     });
 });

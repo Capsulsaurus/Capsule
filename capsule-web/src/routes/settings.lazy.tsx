@@ -150,7 +150,9 @@ function Settings() {
                             {/* Read-only. Changing a login address needs proof the caller
                                 controls the new one, and this deployment has no way to obtain
                                 it — so the server has no field for it rather than a field it
-                                refuses. */}
+                                refuses. A federated account with no address shows the field
+                                empty: an account id is not an address, so it is not shown
+                                here. */}
                             <Input
                                 id="email"
                                 type="email"

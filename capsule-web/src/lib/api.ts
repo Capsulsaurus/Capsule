@@ -270,9 +270,23 @@ export async function totpDisable(totpCode: string): Promise<void> {
  */
 export interface UserProfile {
     user_id: string;
-    email: string;
-    display_name?: string;
+    /**
+     * The address the account signs in with, if it has one. Absent for a federated account whose
+     * provider asserted no verified address, so nothing may assume it is there.
+     */
+    email?: string | null;
+    display_name?: string | null;
     created_at: string;
+}
+
+/**
+ * What to call the person a profile belongs to: the name they chose to be shown as, else the
+ * address they sign in with, else the account id, which every profile carries.
+ *
+ * An empty string counts as absent at each step, so a blank value never renders as a blank label.
+ */
+export function profileLabel(profile: UserProfile): string {
+    return profile.display_name || profile.email || profile.user_id;
 }
 
 export async function getProfile(): Promise<UserProfile> {
