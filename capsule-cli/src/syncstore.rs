@@ -135,16 +135,16 @@ enum Retention {
     Open,
     /// The asset is in trash until this deadline, in unix seconds rounded up.
     Until(i64),
-    /// A delete the server serves with no manifest: the purge has dropped the asset's
-    /// provenance, so the asset is purged already.
-    Purged,
 }
 
-/// The retention window `entry` names. Only a `Deleted` entry has one: its manifest is the
-/// asset's delete record, whose `retention_until` is the deadline after which the server refuses
-/// a `trash-restore` ([Organization § Retention Window]). A record that does not decode, is not a
-/// delete of this asset, or names no readable deadline is [`Retention::Open`]: a tombstone is
-/// permanent, so a delete this device cannot read is left in trash rather than recorded.
+/// The retention window `entry` names. Only a `Deleted` entry has one: the server serves a
+/// tombstone with its signed delete record as the manifest, whose `retention_until` is the
+/// deadline after which the server refuses a `trash-restore` ([Organization § Retention
+/// Window]). A delete with no manifest, or whose record does not decode, is not a delete of this
+/// asset, or names no readable deadline is [`Retention::Open`]: a tombstone is permanent, so a
+/// delete this device cannot read is left in trash rather than recorded. That includes the
+/// entry of an asset already purged (the purge drops the record), and every tombstone from a
+/// server that predates serving the record, since neither is positive evidence of a purge.
 ///
 /// [Organization § Retention Window]: https://docs/design/organization/#retention-window
 fn retention_of(entry: &FeedEntry) -> Retention {
@@ -152,7 +152,8 @@ fn retention_of(entry: &FeedEntry) -> Retention {
         return Retention::Open;
     }
     if entry.manifest_cbor.is_empty() {
-        return Retention::Purged;
+        tracing::debug!("sync: a delete carries no manifest; it is held in trash with no deadline");
+        return Retention::Open;
     }
     let record = match ProvenanceRecord::decode(&entry.manifest_cbor) {
         Ok(record) => record,
@@ -188,53 +189,44 @@ fn ceil_second(at: Timestamp) -> i64 {
     }
 }
 
-/// The time a page's retention deadlines are judged at: the device's clock `now`, floored by the
-/// latest `changed_at` among the page's entries. A `changed_at` is a reading of the server's
-/// clock, the one that refuses a late `trash-restore`, so a deadline it has passed has passed on
-/// the server too however far behind this device's clock is. A `changed_at` that does not parse
-/// is no floor.
-fn judged_at(now: Timestamp, page: &SyncPage) -> Timestamp {
+/// The latest `changed_at` among `page`'s entries, or `None` when none parses. A `changed_at`
+/// is a reading of the server's clock, the one that refuses a late `trash-restore`.
+#[must_use]
+pub fn latest_changed_at(page: &SyncPage) -> Option<Timestamp> {
     page.entries
         .iter()
         .filter_map(|entry| entry.changed_at.parse::<Timestamp>().ok())
-        .fold(now, Timestamp::max)
+        .max()
 }
 
-/// Land a validated page: upsert every asset, record the purges it reveals, and advance the
-/// stored cursor, all in one transaction. Returns the number of entries written.
+/// The time retention deadlines are judged at: the device's clock `now`, floored by `server`,
+/// the latest server clock reading the drain saw ([`latest_changed_at`]). A deadline the server's
+/// clock has passed has passed on the server too, however far behind this device's clock is.
+#[must_use]
+pub fn judged_at(now: Timestamp, server: Option<Timestamp>) -> Timestamp {
+    server.map_or(now, |server| server.max(now))
+}
+
+/// Land a validated page: upsert every asset and advance the stored cursor, in one transaction.
+/// Returns the number of entries written.
 ///
 /// A `Deleted` entry marks the asset tombstoned and stores its retention deadline, the
 /// `retention_until` of its delete record: a delete moves the asset to trash, which a
 /// `trash-restore` reverses until that deadline, so the delete alone is not a peering tombstone.
 /// Any other entry clears the deadline, which is how a restore takes the asset out of the sweep.
-/// The sweep ([`record_elapsed_purges`]) then records as purged every asset in trash whose
-/// deadline has passed at `now`, floored by the latest `changed_at` in the page (a reading of
-/// the server's clock), together with any delete the server serves without a manifest, in the
-/// same transaction.
+/// Landing a page records no purge: a restore of the same asset may sit on a later page, so the
+/// sweep ([`record_elapsed_purges`]) runs only once the drain has reached the feed's head.
 #[instrument(level = "debug", skip_all, fields(entries = page.entries.len()), err)]
 pub async fn persist_page<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     page: &SyncPage,
-    now: Timestamp,
 ) -> Result<usize, SyncStoreError> {
-    let at = judged_at(now, page);
     let txn = db.begin().await?;
-    let mut purged = Vec::new();
 
     for entry in &page.entries {
         let retention_until = match retention_of(entry) {
             Retention::Open => None,
             Retention::Until(until) => Some(until),
-            Retention::Purged => {
-                if let Some(asset) = feed_asset_uuid(&entry.asset_id) {
-                    purged.push(asset);
-                } else {
-                    tracing::debug!(
-                        "sync: a purged asset's id is not a UUID, so no peer can offer it"
-                    );
-                }
-                None
-            }
         };
         let model = synced_asset::ActiveModel {
             asset_id: Set(encode_id(&entry.asset_id)),
@@ -262,15 +254,6 @@ pub async fn persist_page<C: ConnectionTrait + TransactionTrait>(
             .await?;
     }
 
-    if !purged.is_empty() {
-        tracing::info!(
-            count = purged.len(),
-            "sync: the server serves deletes with no manifest; their assets are purged"
-        );
-        record_purged(&txn, &purged, at).await?;
-    }
-    record_elapsed_purges(&txn, at).await?;
-
     sync_cursor::Entity::insert(sync_cursor::ActiveModel {
         id: Set(CURSOR_ROW_ID),
         cursor: Set(page.next_cursor.as_bytes().to_vec()),
@@ -293,8 +276,10 @@ pub async fn persist_page<C: ConnectionTrait + TransactionTrait>(
 /// back and no peer may ([`record_purged`]). An asset whose id is not a UUID is skipped: no peer
 /// can name it. A swept row's deadline is cleared once its tombstone is written, so each purge is
 /// recorded once; recording an asset again would keep its first record anyway, so the sweep is
-/// safe to repeat. [`persist_page`] runs it in each page's transaction, and a sync run runs it
-/// once more after its last page, since a window closes on the clock and not on a feed entry.
+/// safe to repeat. A sync run runs it once the drain has reached the feed's head, and only
+/// then: a delete on one page may be restored on a later one, and the restore clears the
+/// deadline only when that page lands. It runs on a run that landed no page too, since a window
+/// closes on the clock and not on a feed entry.
 ///
 /// # Errors
 ///

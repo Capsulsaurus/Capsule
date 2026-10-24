@@ -12,9 +12,6 @@ use sea_orm::{Database, DatabaseConnection};
 use super::*;
 use crate::peering_state::load_tombstones;
 
-/// The device clock the round-trip tests land pages at.
-const EPOCH: Timestamp = Timestamp::UNIX_EPOCH;
-
 async fn connect(path: &std::path::Path) -> DatabaseConnection {
     let url = format!("sqlite://{}?mode=rwc", path.display());
     let db = Database::connect(&url).await.expect("connect sqlite");
@@ -127,7 +124,7 @@ async fn persist_then_reload_round_trips_cursor_and_high_water() {
         0x11,
     );
     state.apply_page(&page1).unwrap();
-    let written = persist_page(&db, &page1, EPOCH).await.unwrap();
+    let written = persist_page(&db, &page1).await.unwrap();
     assert_eq!(written, 3);
 
     // Simulate a restart: reload the state from disk.
@@ -156,7 +153,7 @@ async fn a_reset_for_a_new_epoch_drops_the_floor_and_keeps_the_rows() {
         ],
         0x31,
     );
-    persist_page(&db, &held, EPOCH).await.unwrap();
+    persist_page(&db, &held).await.unwrap();
 
     reset_for_resync(&db).await.unwrap();
 
@@ -168,7 +165,7 @@ async fn a_reset_for_a_new_epoch_drops_the_floor_and_keeps_the_rows() {
     // The rebuilt numbering, lower than what was held, applies.
     let rebuilt = page(vec![entry(&album, b"e1", 3, ChangeKind::Created)], 0x32);
     reloaded.apply_page(&rebuilt).unwrap();
-    persist_page(&db, &rebuilt, EPOCH).await.unwrap();
+    persist_page(&db, &rebuilt).await.unwrap();
     let reloaded = load_sync_state(&db, "2026-12-31").await.unwrap();
     assert_eq!(reloaded.high_water(&album), Some(3));
 
@@ -184,9 +181,9 @@ async fn upsert_advances_and_delete_tombstones() {
     let album = b"album".to_vec();
 
     let p1 = page(vec![entry(&album, b"x", 1, ChangeKind::Created)], 0x21);
-    persist_page(&db, &p1, EPOCH).await.unwrap();
+    persist_page(&db, &p1).await.unwrap();
     let p2 = page(vec![entry(&album, b"x", 2, ChangeKind::Updated)], 0x22);
-    persist_page(&db, &p2, EPOCH).await.unwrap();
+    persist_page(&db, &p2).await.unwrap();
 
     // One row (upserted), now at seq 2.
     let all = list_assets(&db, true).await.unwrap();
@@ -196,7 +193,7 @@ async fn upsert_advances_and_delete_tombstones() {
 
     // Delete tombstones it.
     let p3 = page(vec![entry(&album, b"x", 3, ChangeKind::Deleted)], 0x23);
-    persist_page(&db, &p3, EPOCH).await.unwrap();
+    persist_page(&db, &p3).await.unwrap();
 
     assert!(
         list_assets(&db, false).await.unwrap().is_empty(),
@@ -245,9 +242,17 @@ async fn a_delete_whose_window_has_closed_is_a_tombstone_after_a_restart() {
         ],
         0x31,
     );
-    persist_page(&db, &landed, ts("2026-02-01T00:00:00Z"))
-        .await
-        .unwrap();
+    persist_page(&db, &landed).await.unwrap();
+    assert!(
+        load_tombstones(&db).await.unwrap().is_empty(),
+        "landing a page records no purge; the sweep does, at the feed's head"
+    );
+    assert_eq!(
+        record_elapsed_purges(&db, ts("2026-02-01T00:00:00Z"))
+            .await
+            .unwrap(),
+        2
+    );
     drop(db);
 
     let db = connect(&path).await;
@@ -277,16 +282,12 @@ async fn a_restore_inside_the_window_clears_the_deadline_and_leaves_no_tombstone
         )],
         0x41,
     );
-    persist_page(&db, &deleted, ts("2026-01-01T00:00:00Z"))
-        .await
-        .unwrap();
+    persist_page(&db, &deleted).await.unwrap();
     let restored = page(
         vec![entry(b"album", asset.as_bytes(), 2, ChangeKind::Updated)],
         0x42,
     );
-    persist_page(&db, &restored, ts("2026-01-02T00:00:00Z"))
-        .await
-        .unwrap();
+    persist_page(&db, &restored).await.unwrap();
 
     let rows = synced_asset::Entity::find().all(&db).await.unwrap();
     assert_eq!(retention_stored(&rows, asset), None);
@@ -307,6 +308,48 @@ async fn a_restore_inside_the_window_clears_the_deadline_and_leaves_no_tombstone
     let _ = std::fs::remove_file(path);
 }
 
+/// A device back after a deadline drains a delete on one page and its on-time restore on a
+/// later one. Landing the first page must not tombstone the asset: the sweep waits for the head.
+#[tokio::test]
+async fn a_restore_on_a_later_page_beats_a_deadline_passed_on_the_device_clock() {
+    let (db, path) = temp_db().await;
+    let asset = Uuid::from_u128(14);
+    let deleted = page(
+        vec![delete(
+            asset,
+            1,
+            record(asset, Action::Delete, Some("2026-02-01T00:00:00Z")),
+            "2026-01-01T00:00:00Z",
+        )],
+        0x91,
+    );
+    persist_page(&db, &deleted).await.unwrap();
+    assert!(
+        load_tombstones(&db).await.unwrap().is_empty(),
+        "the drain has not reached the head, so nothing is swept yet"
+    );
+    let restored = page(
+        vec![FeedEntry {
+            changed_at: "2026-01-15T00:00:00Z".to_string(),
+            ..entry(b"album", asset.as_bytes(), 2, ChangeKind::Updated)
+        }],
+        0x92,
+    );
+    persist_page(&db, &restored).await.unwrap();
+
+    let at = judged_at(ts("2026-06-01T00:00:00Z"), latest_changed_at(&restored));
+    assert_eq!(record_elapsed_purges(&db, at).await.unwrap(), 0);
+    assert!(
+        peering_tombstone::Entity::find()
+            .all(&db)
+            .await
+            .unwrap()
+            .is_empty(),
+        "an on-time restore leaves no tombstone, however late the device comes back"
+    );
+    let _ = std::fs::remove_file(path);
+}
+
 #[tokio::test]
 async fn a_window_closes_at_its_deadline_and_not_before() {
     let (db, path) = temp_db().await;
@@ -320,9 +363,13 @@ async fn a_window_closes_at_its_deadline_and_not_before() {
         )],
         0x51,
     );
-    persist_page(&db, &deleted, ts("2026-01-01T00:00:00Z"))
-        .await
-        .unwrap();
+    persist_page(&db, &deleted).await.unwrap();
+    assert_eq!(
+        record_elapsed_purges(&db, ts("2026-01-01T00:00:00Z"))
+            .await
+            .unwrap(),
+        0
+    );
     assert!(load_tombstones(&db).await.unwrap().is_empty());
     assert_eq!(
         record_elapsed_purges(&db, ts("2026-01-01T00:00:00.9Z"))
@@ -370,7 +417,10 @@ async fn the_server_clock_in_the_page_floors_a_slow_device_clock() {
         ],
         0x61,
     );
-    persist_page(&db, &landed, EPOCH).await.unwrap();
+    persist_page(&db, &landed).await.unwrap();
+    let at = judged_at(Timestamp::UNIX_EPOCH, latest_changed_at(&landed));
+    assert_eq!(at, ts("2026-03-01T00:00:00Z"));
+    record_elapsed_purges(&db, at).await.unwrap();
     assert_eq!(load_tombstones(&db).await.unwrap(), BTreeSet::from([asset]));
     let tombstone = peering_tombstone::Entity::find_by_id(asset.hyphenated().to_string())
         .one(&db)
@@ -385,26 +435,51 @@ async fn the_server_clock_in_the_page_floors_a_slow_device_clock() {
     let _ = std::fs::remove_file(path);
 }
 
+#[test]
+fn the_device_clock_is_floored_by_the_server_clock_and_never_lowered() {
+    let now = ts("2026-02-01T00:00:00Z");
+    assert_eq!(judged_at(now, None), now);
+    assert_eq!(judged_at(now, Some(ts("2026-01-01T00:00:00Z"))), now);
+    assert_eq!(
+        judged_at(now, Some(ts("2026-03-01T00:00:00Z"))),
+        ts("2026-03-01T00:00:00Z")
+    );
+    let unparsable = page(
+        vec![FeedEntry {
+            changed_at: "yesterday".to_string(),
+            ..entry(b"album", b"a", 1, ChangeKind::Created)
+        }],
+        0x62,
+    );
+    assert_eq!(
+        latest_changed_at(&unparsable),
+        None,
+        "an unparsable changed_at is no floor"
+    );
+}
+
+/// The server serves a tombstone with no manifest once a purge has dropped its record, and every
+/// tombstone from a server that predates serving the record. Neither is positive evidence of a
+/// purge, so neither records a permanent tombstone.
 #[tokio::test]
-async fn a_delete_served_without_a_manifest_is_already_purged() {
+async fn a_delete_served_without_a_manifest_stays_in_trash() {
     let (db, path) = temp_db().await;
     let asset = Uuid::from_u128(8);
     let landed = page(
-        vec![
-            delete(asset, 1, Vec::new(), "2026-01-01T00:00:00Z"),
-            FeedEntry {
-                manifest_cbor: Vec::new(),
-                ..entry(b"album", b"not-a-uuid", 2, ChangeKind::Deleted)
-            },
-        ],
+        vec![delete(asset, 1, Vec::new(), "2026-01-01T00:00:00Z")],
         0x71,
     );
-    persist_page(&db, &landed, EPOCH).await.unwrap();
+    persist_page(&db, &landed).await.unwrap();
     assert_eq!(
-        load_tombstones(&db).await.unwrap(),
-        BTreeSet::from([asset]),
-        "an id no peer can name is skipped, not an error"
+        record_elapsed_purges(&db, ts("2030-01-01T00:00:00Z"))
+            .await
+            .unwrap(),
+        0
     );
+    assert!(load_tombstones(&db).await.unwrap().is_empty());
+    let rows = synced_asset::Entity::find().all(&db).await.unwrap();
+    assert!(rows[0].tombstoned, "the asset is in trash");
+    assert_eq!(retention_stored(&rows, asset), None);
     let _ = std::fs::remove_file(path);
 }
 
@@ -447,7 +522,8 @@ async fn a_delete_this_device_cannot_read_stays_in_trash() {
         ],
         0x81,
     );
-    persist_page(&db, &landed, ts("2030-01-01T00:00:00Z"))
+    persist_page(&db, &landed).await.unwrap();
+    record_elapsed_purges(&db, ts("2030-01-01T00:00:00Z"))
         .await
         .unwrap();
     assert!(

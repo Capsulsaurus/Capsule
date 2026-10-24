@@ -15,8 +15,8 @@
 //!   ([`record_purged`]), kept in a table the store refuses to update or delete from. A delete is
 //!   not a tombstone: it moves the asset to trash, and a `trash-restore` reverses it until its
 //!   retention window closes, so the sync feed's `Deleted` records nothing here by itself. The
-//!   sync store records the purge once that window has closed, or when the server serves the
-//!   delete with no manifest ([`crate::syncstore::persist_page`]). The set is what
+//!   sync store records the purge once that window has closed
+//!   ([`crate::syncstore::record_elapsed_purges`]). The set is what
 //!   [`capsule_sdk::peering::ingest`] takes as [`LocalLibrary::tombstones`]; a row that does not
 //!   decode fails the whole load rather than leaving a gap a peer could resurrect through.
 //!
@@ -337,9 +337,9 @@ pub fn feed_asset_uuid(id: &[u8]) -> Option<Uuid> {
 
 /// Record a tombstone for each of `assets`, purged at `at`: the asset has left the trash for
 /// good, so no `trash-restore` can bring it back and no peer may. An
-/// asset already tombstoned keeps its first record. Called by the sync store, in the transaction
-/// that lands the purge ([`crate::syncstore::record_elapsed_purges`]); never for a delete still
-/// in its retention window, which only moves the asset to trash.
+/// asset already tombstoned keeps its first record. Called by the sync store's retention sweep
+/// ([`crate::syncstore::record_elapsed_purges`]); never for a delete still in its retention
+/// window, which only moves the asset to trash.
 ///
 /// # Errors
 ///

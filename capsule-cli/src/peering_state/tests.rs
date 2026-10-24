@@ -405,7 +405,6 @@ async fn a_deleted_then_restored_asset_is_never_a_tombstone() {
             entry(ChangeKind::Created, raw.as_bytes(), 1),
             entry(ChangeKind::Created, text_id.as_bytes(), 2),
         ]),
-        Timestamp::UNIX_EPOCH,
     )
     .await
     .expect("lands");
@@ -415,7 +414,6 @@ async fn a_deleted_then_restored_asset_is_never_a_tombstone() {
             entry(ChangeKind::Deleted, raw.as_bytes(), 3),
             entry(ChangeKind::Deleted, text_id.as_bytes(), 4),
         ]),
-        Timestamp::UNIX_EPOCH,
     )
     .await
     .expect("lands the deletes");
@@ -430,7 +428,6 @@ async fn a_deleted_then_restored_asset_is_never_a_tombstone() {
             entry(ChangeKind::Updated, raw.as_bytes(), 5),
             entry(ChangeKind::Updated, text_id.as_bytes(), 6),
         ]),
-        Timestamp::UNIX_EPOCH,
     )
     .await
     .expect("lands the restores");
@@ -465,7 +462,6 @@ async fn a_purged_asset_stays_tombstoned_after_a_restart() {
                 entry(ChangeKind::Created, by_text_id.as_bytes(), 2),
                 entry(ChangeKind::Created, b"not-a-uuid", 3),
             ]),
-            Timestamp::UNIX_EPOCH,
         )
         .await
         .expect("lands");
@@ -476,7 +472,6 @@ async fn a_purged_asset_stays_tombstoned_after_a_restart() {
                 entry(ChangeKind::Deleted, by_text_id.as_bytes(), 5),
                 entry(ChangeKind::Deleted, b"not-a-uuid", 6),
             ]),
-            Timestamp::UNIX_EPOCH,
         )
         .await
         .expect("lands the deletes");
@@ -511,7 +506,6 @@ async fn a_purged_asset_the_sync_store_holds_live_is_not_returned() {
     persist_page(
         &db,
         &page(vec![entry(ChangeKind::Updated, asset.as_bytes(), 1)]),
-        Timestamp::UNIX_EPOCH,
     )
     .await
     .expect("lands");
