@@ -656,7 +656,7 @@ fn an_mls_authority_album_exports_without_an_authority_entry() {
     ws.authorities.insert(
         album,
         Authority::OpenMls(Box::new(
-            OpenMlsAuthority::create_self_group(album).unwrap(),
+            OpenMlsAuthority::create_self_group(crate::ambient::system_ids(), album).unwrap(),
         )),
     );
 

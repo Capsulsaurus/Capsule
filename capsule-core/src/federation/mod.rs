@@ -31,6 +31,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::ambient::IdSource;
 use crate::cbor;
 use crate::crypto::keys::{HybridSignature, HybridSigningKey, HybridVerifyingKey};
 use crate::metadata::crdt::Lww;
@@ -165,10 +166,10 @@ impl AlbumGroupAssertion {
     }
 }
 
-/// Mint a fresh `group_id` — a UUIDv7, per the assertion schema. The creator mints it once and
-/// carries it in the [`AlbumGroupInvite`].
-pub fn mint_group_id() -> Uuid {
-    Uuid::now_v7()
+/// Mint a fresh `group_id` — a UUIDv7 from `ids`, per the assertion schema. The creator mints it
+/// once and carries it in the [`AlbumGroupInvite`].
+pub fn mint_group_id(ids: IdSource<'_>) -> Uuid {
+    ids.uuid_v7()
 }
 
 /// Group-aware invite **data** riding the existing album invite: the `group_id` plus the sibling

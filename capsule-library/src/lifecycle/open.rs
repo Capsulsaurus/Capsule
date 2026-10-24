@@ -276,6 +276,7 @@ impl Workspace {
             tracing::warn!(error = %e, "workspace create from master: the sealed identity did not open");
         })?;
         let account = Account::from_parts(
+            crate::ambient::system_ids(),
             user_id,
             master,
             user_ik,
@@ -458,17 +459,20 @@ impl Workspace {
                     "workspace create: enrolling the device encryption key's classical half in the \
                      secure element"
                 );
-                Account::create_with_hardware_dek(binding.element, binding.key_alias).map_err(
-                    |e| {
-                        // The element's own reason (unavailable / cancelled / backend) is the only
-                        // thing that tells an operator whether to retry, so it is logged before it
-                        // is flattened into the `&'static str` the crypto error carries.
-                        tracing::error!(error = %e, "workspace create: hardware DEK enrollment failed");
-                        CryptoError::Key("hardware DEK enrollment failed")
-                    },
-                )?
+                Account::create_with_hardware_dek(
+                    crate::ambient::system_ids(),
+                    binding.element,
+                    binding.key_alias,
+                )
+                .map_err(|e| {
+                    // The element's own reason (unavailable / cancelled / backend) is the only
+                    // thing that tells an operator whether to retry, so it is logged before it
+                    // is flattened into the `&'static str` the crypto error carries.
+                    tracing::error!(error = %e, "workspace create: hardware DEK enrollment failed");
+                    CryptoError::Key("hardware DEK enrollment failed")
+                })?
             }
-            None => Account::create(),
+            None => Account::create(crate::ambient::system_ids()),
         };
         Self::finish_create(root, library, passphrase, params, account, device_signer)
     }
@@ -607,6 +611,7 @@ impl Workspace {
         } else {
             let account = match dek_binding {
                 Some(binding) => Account::create_with_hardware_dek(
+                    crate::ambient::system_ids(),
                     binding.element,
                     binding.key_alias,
                 )
@@ -614,7 +619,7 @@ impl Workspace {
                     tracing::error!(error = %e, "workspace open: hardware DEK enrollment failed");
                     CryptoError::Key("hardware DEK enrollment failed")
                 })?,
-                None => Account::create(),
+                None => Account::create(crate::ambient::system_ids()),
             };
             let file = account.to_file_with(passphrase, params)?;
             let acct_bytes =
