@@ -78,6 +78,45 @@ struct CompositeAssetProviderTests {
 
         #expect(snapshot.isEmpty)
     }
+
+    @Test("a failing provider is not shown as an empty library")
+    func failureBehindEmptyTimelineIsThrown() async {
+        let composite = CompositeAssetProvider(providers: [
+            MockAssetProvider(assets: [], status: .denied),
+            MockAssetProvider(assets: []),
+        ])
+
+        await #expect(throws: MockAssetProvider.MockError.self) {
+            _ = try await composite.loadTimeline()
+        }
+    }
+
+    @Test("a change merges the published snapshot without re-reading its provider")
+    func changeReusesPublishedSnapshot() async throws {
+        let library = ScriptedProvider(assets: Fixtures.assets(count: 2))
+        let managed = ScriptedProvider(assets: [])
+        let composite = CompositeAssetProvider(providers: [library, managed])
+        var changes = composite.changes().makeAsyncIterator()
+
+        let published = SentinelSnapshot(assets: Fixtures.assets(count: 3))
+        library.publish(published)
+        let first = try #require(await changes.next())
+
+        #expect((first.snapshot as? SentinelSnapshot) === published)
+        #expect(await library.loadCount == 0)
+        #expect(await managed.loadCount == 1)
+
+        // The other side changing reuses the snapshot the library last
+        // published instead of reading the library again.
+        let imported = Fixtures.asset(id: .managed(uuid: "imported"), captureDate: .distantFuture)
+        managed.publish(InMemoryAssetSnapshot([imported]))
+        let second = try #require(await changes.next())
+
+        #expect(second.snapshot.count == 4)
+        #expect(second.snapshot.asset(at: 0).id == imported.id)
+        #expect(await library.loadCount == 0)
+        #expect(await managed.loadCount == 1)
+    }
 }
 
 // MARK: - Fixtures
@@ -112,4 +151,43 @@ private struct SnapshotProvider: AssetProvider {
     func setFavorite(_: Bool, for _: AssetID) async throws {}
 
     func delete(_: [AssetID]) async throws {}
+}
+
+/// A provider whose change stream the test drives and whose reads it counts.
+///
+/// The stream is made up front, so a change published before the composite
+/// has subscribed is buffered rather than lost.
+private actor ScriptedProvider: AssetProvider {
+    private let assets: [Asset]
+    private let stream: AsyncStream<AssetChange>
+    private let continuation: AsyncStream<AssetChange>.Continuation
+    /// The number of times ``loadTimeline()`` has been called.
+    private(set) var loadCount = 0
+
+    init(assets: [Asset]) {
+        self.assets = assets
+        (stream, continuation) = AsyncStream.makeStream(of: AssetChange.self)
+    }
+
+    /// Publish `snapshot` as this provider's new state.
+    nonisolated func publish(_ snapshot: any AssetSnapshot) {
+        continuation.yield(.reload(snapshot))
+    }
+
+    func authorizationStatus() -> AssetAuthorizationStatus { .authorized }
+
+    func requestAuthorization() -> AssetAuthorizationStatus { .authorized }
+
+    func loadTimeline() -> any AssetSnapshot {
+        loadCount += 1
+        return InMemoryAssetSnapshot(assets)
+    }
+
+    func asset(for _: AssetID) -> Asset? { nil }
+
+    nonisolated func changes() -> AsyncStream<AssetChange> { stream }
+
+    func setFavorite(_: Bool, for _: AssetID) {}
+
+    func delete(_: [AssetID]) {}
 }

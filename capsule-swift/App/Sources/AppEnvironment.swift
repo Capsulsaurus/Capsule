@@ -249,7 +249,9 @@ struct AppEnvironment {
     /// managed store, interleaved by capture date.
     ///
     /// While the managed store is empty the port-backed snapshot passes through
-    /// the composite unchanged, so its paging is kept for the large scenarios.
+    /// the composite unchanged, with no extra copy or sort. A port-backed load
+    /// failure with nothing imported is thrown rather than shown as an empty
+    /// library, so the timeline still reaches its failed state.
     static func composeTimeline(library: any AssetProvider, managed: ManagedProvider) -> any AssetProvider {
         CompositeAssetProvider(providers: [library, managed])
     }
