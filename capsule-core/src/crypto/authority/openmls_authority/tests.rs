@@ -13,6 +13,7 @@ use openmls::prelude::KeyPackage;
 use openmls::prelude::tls_codec::Deserialize as _;
 
 use super::*;
+use crate::ambient::testing::TestIds;
 use crate::crypto::authority::{AlbumAuthority, ReferenceAuthority};
 use crate::crypto::hash;
 use crate::crypto::keys::directory::{DeviceEntry, DirectoryCore};
@@ -141,7 +142,8 @@ fn create_manifest_core(album: Uuid, epoch: AmkVersion, user: Uuid, device: Uuid
 
 #[test]
 fn ciphersuite_is_pinned_xwing_0x004d() {
-    let auth = OpenMlsAuthority::create_self_group(Uuid::from_u128(0xA1)).unwrap();
+    let auth = OpenMlsAuthority::create_self_group(TestIds::new(126).ids(), Uuid::from_u128(0xA1))
+        .unwrap();
     assert_eq!(auth.ciphersuite(), PINNED_CIPHERSUITE);
     assert_eq!(u16::from(auth.ciphersuite()), PINNED_CIPHERSUITE_ID);
     assert_eq!(PINNED_CIPHERSUITE_ID, 0x004D);
@@ -166,7 +168,8 @@ fn key_package_leaf_advertises_only_the_pinned_suite() {
 
 #[test]
 fn genesis_epoch_and_ceiling() {
-    let auth = OpenMlsAuthority::create_self_group(Uuid::from_u128(0xA1)).unwrap();
+    let auth = OpenMlsAuthority::create_self_group(TestIds::new(127).ids(), Uuid::from_u128(0xA1))
+        .unwrap();
     assert!(auth.admin_chain_verifies());
     assert_eq!(auth.epoch_ceiling(), AmkVersion(1));
     assert_eq!(auth.mls_epoch(), 0);
@@ -178,7 +181,9 @@ fn genesis_epoch_and_ceiling() {
 
 #[test]
 fn amk_export_is_deterministic_and_advances_with_epoch() {
-    let mut auth = OpenMlsAuthority::create_self_group(Uuid::from_u128(0xA1)).unwrap();
+    let mut auth =
+        OpenMlsAuthority::create_self_group(TestIds::new(128).ids(), Uuid::from_u128(0xA1))
+            .unwrap();
     let a1 = auth.export_current_amk().unwrap();
     let a2 = auth.export_current_amk().unwrap();
     assert_eq!(a1, a2, "AMK export must be deterministic within an epoch");
@@ -196,15 +201,17 @@ fn amk_export_is_deterministic_and_advances_with_epoch() {
 
 #[test]
 fn different_albums_export_different_amks() {
-    let a = OpenMlsAuthority::create_self_group(Uuid::from_u128(0xA1)).unwrap();
-    let b = OpenMlsAuthority::create_self_group(Uuid::from_u128(0xB2)).unwrap();
+    let a = OpenMlsAuthority::create_self_group(TestIds::new(129).ids(), Uuid::from_u128(0xA1))
+        .unwrap();
+    let b = OpenMlsAuthority::create_self_group(TestIds::new(130).ids(), Uuid::from_u128(0xB2))
+        .unwrap();
     assert_ne!(a.amk(AmkVersion(1)), b.amk(AmkVersion(1)));
 }
 
 #[test]
 fn verify_asset_accepts_manifest_under_live_mls_authority() {
     let album = Uuid::from_u128(0xA1);
-    let auth = OpenMlsAuthority::create_self_group(album).unwrap();
+    let auth = OpenMlsAuthority::create_self_group(TestIds::new(131).ids(), album).unwrap();
     let device = HybridSigningKey::from_seed_bytes(&[1; 32], &[2; 32]);
     let user = Uuid::from_u128(0x05E2);
     let dev_id = Uuid::from_u128(0xD1);
@@ -224,7 +231,7 @@ fn verify_asset_accepts_manifest_under_live_mls_authority() {
 #[test]
 fn pending_when_amk_not_yet_delivered_then_accept_on_delivery() {
     let album = Uuid::from_u128(0xA1);
-    let mut auth = OpenMlsAuthority::create_self_group(album).unwrap();
+    let mut auth = OpenMlsAuthority::create_self_group(TestIds::new(132).ids(), album).unwrap();
     let v2 = auth.advance_epoch(false).unwrap();
     assert_eq!(v2, AmkVersion(2));
     assert!(!auth.has_amk(AmkVersion(2)));
@@ -251,7 +258,7 @@ fn pending_when_amk_not_yet_delivered_then_accept_on_delivery() {
 #[test]
 fn parity_with_reference_authority_over_equivalent_history() {
     let album = Uuid::from_u128(0xA1);
-    let mut mls = OpenMlsAuthority::create_self_group(album).unwrap();
+    let mut mls = OpenMlsAuthority::create_self_group(TestIds::new(133).ids(), album).unwrap();
     let admin = HybridSigningKey::from_seed_bytes(&[7; 32], &[8; 32]);
     let w1 = HybridSigningKey::from_seed_bytes(&[3; 32], &[4; 32]);
     let w2 = HybridSigningKey::from_seed_bytes(&[5; 32], &[6; 32]);
@@ -589,6 +596,7 @@ fn own_message_echoed_back_is_an_unexpected_message_and_changes_nothing() {
     // The upgrade-intent receive path refuses its own echoed intent the same way.
     let proposal = admin
         .propose_upgrade(
+            TestIds::new(134).ids(),
             PROTOCOL_VERSION,
             CRYPTO_SUITE_ID,
             "2027-01-01",
@@ -927,6 +935,7 @@ fn upgrade_idempotency_no_second_fork_after_resume() {
     // Steps 1–2: propose + quiesce.
     let proposal = admin
         .propose_upgrade(
+            TestIds::new(135).ids(),
             PROTOCOL_VERSION,
             CRYPTO_SUITE_ID,
             "2027-01-01",
@@ -975,6 +984,7 @@ fn upgrade_aborts_on_divergent_frozen_state() {
 
     let proposal = admin
         .propose_upgrade(
+            TestIds::new(136).ids(),
             PROTOCOL_VERSION,
             CRYPTO_SUITE_ID,
             "2027-01-01",
@@ -1019,6 +1029,7 @@ fn upgrade_forks_and_replays_stranded_writes() {
     const TARGET_SUITE: u16 = 0x0002;
     let proposal = admin
         .propose_upgrade(
+            TestIds::new(137).ids(),
             PROTOCOL_VERSION,
             CRYPTO_SUITE_ID,
             "2027-01-01",
@@ -1104,6 +1115,7 @@ fn tombstoned_album_refuses_writes_and_old_keys_do_not_verify_in_fork() {
 
     admin
         .propose_upgrade(
+            TestIds::new(138).ids(),
             PROTOCOL_VERSION,
             CRYPTO_SUITE_ID,
             "2027-01-01",
@@ -1123,7 +1135,7 @@ fn tombstoned_album_refuses_writes_and_old_keys_do_not_verify_in_fork() {
         Err(OpenMlsAuthorityError::Tombstoned(_))
     ));
     assert!(matches!(
-        admin.begin_rekey(RekeyReason::AdminInitiated),
+        admin.begin_rekey(TestIds::new(139).ids(), RekeyReason::AdminInitiated),
         Err(OpenMlsAuthorityError::Tombstoned(_))
     ));
 
@@ -1168,6 +1180,7 @@ fn upgrade_intent_signature_and_single_flight_are_enforced() {
 
     let proposal = admin
         .propose_upgrade(
+            TestIds::new(140).ids(),
             PROTOCOL_VERSION,
             CRYPTO_SUITE_ID,
             "2027-01-01",
@@ -1237,6 +1250,7 @@ fn upgrade_intent_signature_and_single_flight_are_enforced() {
     // And the proposer itself rejects a second propose while quiescing.
     assert!(matches!(
         admin.propose_upgrade(
+            TestIds::new(141).ids(),
             PROTOCOL_VERSION,
             CRYPTO_SUITE_ID,
             "2028-01-01",
@@ -1485,7 +1499,9 @@ fn rekey_group_makes_precompromise_keys_useless() {
     let compromised_amk = admin.amk(compromised_epoch).unwrap();
 
     // Full re-key (suspected compromise response).
-    let outcome = admin.rekey_group(RekeyReason::SuspectedCompromise).unwrap();
+    let outcome = admin
+        .rekey_group(TestIds::new(142).ids(), RekeyReason::SuspectedCompromise)
+        .unwrap();
     bob.process_commit(to_in(outcome.commit)).unwrap();
     for m in outcome.key_delivery {
         bob.process_key_delivery(to_in(m)).unwrap();
@@ -1519,7 +1535,9 @@ fn rekey_atomicity_resumes_after_a_mid_ceremony_crash() {
         OpenMlsAuthority::create_album(admin_dev.identity(), album, HistoryPolicy::Full).unwrap();
 
     // Phase 1 only: the re-key commit merges (epoch advances) but the broadcast has not happened.
-    let (intent_id, _commit) = admin.begin_rekey(RekeyReason::ScheduledRotation).unwrap();
+    let (intent_id, _commit) = admin
+        .begin_rekey(TestIds::new(143).ids(), RekeyReason::ScheduledRotation)
+        .unwrap();
     let epoch_after_commit = admin.mls_epoch();
     assert!(admin.rekey_in_progress());
 
@@ -1586,6 +1604,7 @@ fn e2e_case_8_album_upgrade_ceremony() {
     // Step 1–2: admin initiates the upgrade; both members quiesce.
     let proposal = admin
         .propose_upgrade(
+            TestIds::new(144).ids(),
             PROTOCOL_VERSION,
             CRYPTO_SUITE_ID,
             "2027-06-01",
