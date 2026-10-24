@@ -4506,17 +4506,36 @@ pub(crate) fn signed_report(
     reason: Option<&str>,
     reported_at: &str,
 ) -> serde_json::Value {
-    let claim = ReportClaim {
-        reporting_server: reporting_server.to_owned(),
-        reported_user: reported_user.to_owned(),
-        asset_hash: asset_hash.to_owned(),
-        album_id: album.as_str().to_owned(),
-        reason: reason.map(str::to_owned),
-        reported_at: reported_at.to_owned(),
-    };
+    sign_report(
+        pair,
+        &ReportClaim {
+            reporting_server: reporting_server.to_owned(),
+            recipient_server: SERVER_ORIGIN.to_owned(),
+            // A fresh nonce per report, as a peer mints one: the server accepts each once.
+            nonce: uuid::Uuid::now_v7().to_string(),
+            reported_user: reported_user.to_owned(),
+            asset_hash: asset_hash.to_owned(),
+            album_id: album.as_str().to_owned(),
+            reason: reason.map(str::to_owned),
+            reported_at: reported_at.to_owned(),
+        },
+    )
+}
+
+/// The instant the suite's reports are signed at: the fixture clock's own start, so a report is
+/// inside the server's freshness window until a case moves the clock.
+pub(crate) const REPORTED_AT: &str = "1970-01-01T00:00:00Z";
+
+/// `claim` as the body a peer sends, signed by `pair`.
+pub(crate) fn sign_report(
+    pair: &ring::signature::Ed25519KeyPair,
+    claim: &ReportClaim,
+) -> serde_json::Value {
     let signature = pair.sign(&claim.signing_bytes().expect("a claim encodes"));
     serde_json::json!({
         "reporting_server": claim.reporting_server,
+        "recipient_server": claim.recipient_server,
+        "nonce": claim.nonce,
         "reported_user": claim.reported_user,
         "asset_hash": claim.asset_hash,
         "album_id": claim.album_id,
