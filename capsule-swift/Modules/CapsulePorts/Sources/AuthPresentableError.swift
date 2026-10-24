@@ -52,7 +52,7 @@ public struct AuthPresentableError: Sendable, Equatable, Hashable, Identifiable 
     }
 
     /// Whether this reads as "we cannot reach the server right now", which is
-    /// the state every screen in this module has to render.
+    /// the state every auth screen has to render.
     public var isOffline: Bool {
         kind == .temporarilyUnavailable
     }

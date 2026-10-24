@@ -57,10 +57,8 @@ public struct TotpEnrollment: Sendable {
 
 /// Enrolling a second factor on an existing account.
 ///
-/// **Not yet in `CapsulePorts`.** *Authentication — Account Types* names
-/// password+TOTP and passkeys as the local-auth factors; the enrolment surface
-/// is not yet in the SDK contract, so it is declared next to the two screens
-/// that drive it.
+/// *Authentication — Account Types* names password+TOTP and passkeys as the
+/// local-auth factors.
 public protocol SecondFactorPort: Sendable {
     /// Whether this platform has an authenticator that can hold a passkey.
     /// A device with none must be told so, not shown a button that fails.

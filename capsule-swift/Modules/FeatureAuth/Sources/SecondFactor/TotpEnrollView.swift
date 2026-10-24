@@ -1,3 +1,4 @@
+import CapsulePorts
 import CapsuleUI
 import SwiftUI
 

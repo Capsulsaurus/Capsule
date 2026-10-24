@@ -132,10 +132,9 @@ public enum HardwareKeyAvailability: Sendable, Equatable, Hashable {
 
 /// The first-device ceremony.
 ///
-/// **Not yet in `CapsulePorts`.** `first_device_setup` lives in
-/// `capsule-core::crypto::keys` (*Device Enrollment — Contract Skeleton*); this
-/// protocol is the shape the screen needs from it and moves to `CapsulePorts`
-/// with the FFI surface.
+/// `first_device_setup` lives in `capsule-core::crypto::keys`
+/// (*Device Enrollment — Contract Skeleton*); this protocol is the shape the
+/// screen needs from it.
 public protocol FirstDeviceEnrollmentPort: Sendable {
     /// What this device can do, asked **before** the ceremony starts so the
     /// rail can say "in this device's secure element" or "in software" up
