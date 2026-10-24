@@ -33,6 +33,16 @@ import ManagedStore
 /// `PhotoKitProvider` and its siblings still live in `AssetKit` for the FFI
 /// lane, and are simply not referenced from here.
 ///
+/// ## What the picker imports, the timeline shows
+///
+/// The picker-driven importer writes the on-disk managed store, so the
+/// timeline is not the port-backed provider alone: it is a
+/// ``CompositeAssetProvider`` over that provider and the store's own
+/// ``ManagedProvider``. The importer is handed **the same** `ManagedProvider`
+/// instance, so the refresh it publishes after an import is a change on a
+/// source the timeline is subscribed to. Two instances would be two catalogs'
+/// worth of truth and one of them unseen.
+///
 /// ## Two surfaces, on purpose
 ///
 /// The existing screens consume the older `AssetKit` protocols and are not
@@ -160,7 +170,8 @@ struct AppEnvironment {
         // this provider's `AssetLocationSource` conformance, which the erased
         // `any AssetProvider` the rest of the app sees does not carry.
         let library = PortBackedAssetProvider(library: mock.library, organize: mock.organize)
-        assetProvider = library
+        let managed = Self.makeManagedLane(root: Self.libraryRoot())
+        assetProvider = Self.composeTimeline(library: library, managed: managed.provider)
         captionStore = PortBackedCaptionStore(library: mock.library, organize: mock.organize)
         albumProvider = PortBackedAlbumProvider(albums: mock.albums, library: mock.library)
         // Constructed here rather than at its own assignment below because the
@@ -185,7 +196,7 @@ struct AppEnvironment {
             metadataSource: MockMetadataSource(locations: library)
         )
         placeNames = SystemPlaceNameResolver()
-        importer = Self.makeImporter()
+        importer = managed.importer
 
         serverDiscovery = PreviewServerDiscovery(environment: mock)
         credentials = PreviewCredentials(environment: mock)
@@ -200,17 +211,24 @@ struct AppEnvironment {
         diagnostics = DiagnosticsCoordinator(consent: consent)
     }
 
-    /// The picker-driven import flow.
+    /// The on-disk managed store's two faces: the provider the timeline reads
+    /// it through, and the picker-driven importer that writes it.
+    struct ManagedLane {
+        let provider: ManagedProvider
+        let importer: LibraryImporter
+    }
+
+    /// The picker-driven import flow and the provider that reads what it writes.
     ///
-    /// Still writing into the on-disk managed store rather than through
-    /// ``ImportPort``: `LibraryImporter` is declared in `FeatureTimeline` and
-    /// takes a `ManagedProvider` by constructor, so re-pointing it at the port
-    /// is a change to that module rather than to this one. Nothing here touches
-    /// the system photo library — the picker is out-of-process and needs no
-    /// authorization — but until the importer is re-pointed, an imported file
-    /// lands in the managed catalog that the mock timeline does not read.
-    private static func makeImporter() -> LibraryImporter {
-        let layout = ManagedLibraryLayout(root: libraryRoot())
+    /// The importer writes the on-disk managed store rather than through
+    /// ``ImportPort``, which is a scope-based scan/plan/execute flow with no
+    /// entry point for a handful of picked files. Nothing here touches the
+    /// system photo library — the picker is out-of-process and needs no
+    /// authorization. The one `ManagedProvider` built here is shared by the
+    /// importer and, through ``composeTimeline(library:managed:)``, the
+    /// timeline, which is what makes an import visible once it completes.
+    static func makeManagedLane(root: URL) -> ManagedLane {
+        let layout = ManagedLibraryLayout(root: root)
         let library = ManagedLibrary(layout: layout, catalogOpener: InMemoryCatalogOpener())
         let importService = ImportService(
             library: library,
@@ -219,10 +237,23 @@ struct AppEnvironment {
             metadataExtractor: ImageIOMetadataExtractor(),
             sidecarCoder: JSONSidecarCoder()
         )
-        return LibraryImporter(
-            importService: importService,
-            managedProvider: ManagedProvider(library: library)
+        let provider = ManagedProvider(library: library)
+        CapsuleLog.app.debug("managed lane composed at \(root.path, privacy: .private)")
+        return ManagedLane(
+            provider: provider,
+            importer: LibraryImporter(importService: importService, managedProvider: provider)
         )
+    }
+
+    /// The timeline every screen reads: the port-backed library and the
+    /// managed store, interleaved by capture date.
+    ///
+    /// While the managed store is empty the port-backed snapshot passes through
+    /// the composite unchanged, with no extra copy or sort. A port-backed load
+    /// failure with nothing imported is thrown rather than shown as an empty
+    /// library, so the timeline still reaches its failed state.
+    static func composeTimeline(library: any AssetProvider, managed: ManagedProvider) -> any AssetProvider {
+        CompositeAssetProvider(providers: [library, managed])
     }
 
     /// The managed library's root, falling back to the temporary directory if
