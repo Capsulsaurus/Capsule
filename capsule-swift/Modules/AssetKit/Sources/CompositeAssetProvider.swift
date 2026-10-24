@@ -87,10 +87,26 @@ public final class CompositeAssetProvider: AssetProvider {
 
     /// Load every provider's timeline and merge it, newest first. A provider
     /// that throws is skipped.
-    private static func mergedSnapshot(of providers: [any AssetProvider]) async -> InMemoryAssetSnapshot {
-        var assets: [Asset] = []
+    ///
+    /// When at most one provider has any assets, its snapshot is returned
+    /// **unchanged** rather than copied. A provider's snapshot may be lazy - the
+    /// port-backed one pages its rows in and answers provisional stand-ins for
+    /// windows not yet loaded - and copying it would read every row once,
+    /// freezing each provisional stand-in into a row that never loads. Merging
+    /// still copies, so it is only paid once a second source actually holds
+    /// something.
+    private static func mergedSnapshot(of providers: [any AssetProvider]) async -> any AssetSnapshot {
+        var snapshots: [any AssetSnapshot] = []
         for provider in providers {
-            guard let snapshot = try? await provider.loadTimeline() else { continue }
+            guard let snapshot = try? await provider.loadTimeline(), !snapshot.isEmpty else { continue }
+            snapshots.append(snapshot)
+        }
+        if snapshots.count <= 1 {
+            return snapshots.first ?? InMemoryAssetSnapshot([])
+        }
+        CapsuleLog.assetKit.debug("merging \(snapshots.count, privacy: .public) non-empty timelines")
+        var assets: [Asset] = []
+        for snapshot in snapshots {
             for index in 0 ..< snapshot.count {
                 assets.append(snapshot.asset(at: index))
             }
