@@ -100,11 +100,14 @@ ignore = [
     { id = "RUSTSEC-2026-0330", reason = "libcrux-kem 0.0.9: pinned by hpke-rs-libcrux 0.7 via openmls_libcrux_crypto 0.4.0 (latest); tracked in #646" },
     { id = "RUSTSEC-2026-0331", reason = "libcrux-kem 0.0.9: pinned by hpke-rs-libcrux 0.7 via openmls_libcrux_crypto 0.4.0 (latest); tracked in #646" },
 
-    # crypto-bigint 0.5.5 is pinned through elliptic-curve 0.13 by p256 0.13 and p384 0.13,
-    # which openmls_basic_credential 0.6.0, the latest release, requires. The fix (0.7.6)
-    # needs the elliptic-curve 0.14 line, which no openmls_basic_credential release admits.
-    # It is a timing side channel in constant-time arithmetic. Remove this entry in #881.
-    { id = "RUSTSEC-2026-0387", reason = "crypto-bigint 0.5.5 via p256/p384 0.13, pinned by openmls_basic_credential 0.6.0 (latest); tracked in #881" },
+    # crypto-bigint 0.5.5 is pinned through elliptic-curve 0.13 by p256 0.13 and p384 0.13.
+    # It is a timing side channel in constant-time arithmetic, and Capsule's own key code
+    # runs on it: capsule-core and capsule-library depend on p256 0.13 directly (the hybrid
+    # DSK's ECDSA half and the hybrid DEK's ECDH half), and capsule-sdk as a dev-dependency,
+    # although p256 0.14 is released. openmls_basic_credential 0.6.0, the latest release,
+    # also requires p256/p384 0.13, so bumping those three crates alone does not clear the
+    # advisory. Remove this entry in #881, which bumps them and waits on openmls.
+    { id = "RUSTSEC-2026-0387", reason = "crypto-bigint 0.5.5 via p256 0.13 (direct in capsule-core, capsule-library, capsule-sdk dev) and p256/p384 0.13 pinned by openmls_basic_credential 0.6.0 (latest); tracked in #881" },
 
     # quick-xml 0.37.5 is required (`^0.37.5`) by little_exif 0.6.23, the latest release,
     # reached through rawshift-image's metadata path in capsule-core's `media` feature. Both
