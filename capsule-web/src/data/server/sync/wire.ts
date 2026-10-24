@@ -63,8 +63,9 @@ export interface SyncEntry {
     /**
      * The signed manifest — base64 of the provenance blob's exact bytes. Opaque here.
      *
-     * Absent on a tombstone, and absent when the index names a provenance blob the store
-     * cannot produce (the server logs loudly in that case).
+     * On a tombstone, the signed delete record, and absent once a purge has dropped it. Absent
+     * too when the index names a provenance blob the store cannot produce (the server logs
+     * loudly in that case).
      */
     manifestCbor?: string;
     /** The encrypted metadata blob's content address. Opaque here. */

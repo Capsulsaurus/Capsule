@@ -28208,7 +28208,7 @@
               "string",
               "null"
             ],
-            "description": "The signed manifest, base64 of the provenance blob's exact bytes.\n\nAbsent on a tombstone, and absent — with a loud server-side log — when the index names a\nprovenance blob the store cannot produce."
+            "description": "The signed manifest, base64 of the provenance blob's exact bytes.\n\nOn a tombstone, the signed `delete` record, whose `retention_until` is the asset's\nretention window; absent once a purge has dropped it. Absent too — with a loud\nserver-side log — when the index names a provenance blob the store cannot produce."
           },
           "metadata_blob": {
             "type": [
