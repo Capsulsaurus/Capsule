@@ -32,6 +32,7 @@ use super::form::{Field, Form, FormKey, FormOutcome, Secret, Status};
 use super::library::{Catalogue, LibraryScreen, PreviewImage, PreviewRequest};
 use super::state::{Answer, Effect, Loadable};
 use crate::edit::{Edit, LabelTarget};
+use crate::utils::ids::short_id as short;
 
 /// The longest edge, in pixels, the region preview is decoded to: half blocks draw two pixels
 /// a cell, so this covers a pane far wider than any terminal.
@@ -783,12 +784,6 @@ impl LabelEditor {
             Answer::No => Vec::new(),
         }
     }
-}
-
-/// Short form of an id: its last eight hex digits.
-fn short(id: Uuid) -> String {
-    let simple = id.simple().to_string();
-    simple[simple.len() - 8..].to_owned()
 }
 
 /// What a label target is called in a status line: `asset 1a2b3c4d`.

@@ -41,6 +41,7 @@ pub use self::catalogue::{
 };
 use super::form::{Field, Form, FormKey, FormOutcome, Secret};
 use super::state::{Effect, Loadable};
+use crate::utils::ids::short_id as short;
 
 /// How long the start-up query waits for the terminal to say which image protocol it speaks.
 /// A terminal answers in a few milliseconds; one that does not answer at all is treated as
@@ -885,13 +886,6 @@ pub fn query_picker() -> Option<Picker> {
             None
         }
     }
-}
-
-/// Short form of an id: its last eight hex digits, since a UUIDv7 leads with its creation time
-/// and ids minted together share their first eight.
-fn short(id: Uuid) -> String {
-    let simple = id.simple().to_string();
-    simple[simple.len() - 8..].to_owned()
 }
 
 /// A capture instant as a list row prints it, in UTC.

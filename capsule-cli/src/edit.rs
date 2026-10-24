@@ -30,6 +30,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::show::{Fix, gps_datum_name, gps_source_name};
+use crate::utils::ids::short_id as short;
 
 /// What a label edit applies to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -468,12 +469,6 @@ pub fn summary(report: &EditReport) -> String {
                 .unwrap_or_default()
         ),
     }
-}
-
-/// Short form of an id: its last eight hex digits (a UUIDv7 leads with its creation time).
-fn short(id: Uuid) -> String {
-    let simple = id.simple().to_string();
-    simple[simple.len() - 8..].to_owned()
 }
 
 /// Parse a finite number.

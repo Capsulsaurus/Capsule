@@ -27,6 +27,7 @@ use super::library::{AssetEntry, Catalogue, LibraryScreen, Place};
 use super::state::Effect;
 use crate::edit::{Edit, parse_coordinate, parse_datum};
 use crate::show::{gps_datum_name, gps_source_name};
+use crate::utils::ids::short_id as short;
 
 /// How many assets are shown on each side of the one being repaired.
 pub const SPAN: usize = 3;
@@ -452,11 +453,6 @@ impl MetadataRepair {
             datum,
         })
     }
-}
-
-fn short(id: Uuid) -> String {
-    let simple = id.simple().to_string();
-    simple[simple.len() - 8..].to_owned()
 }
 
 fn asset_lines(asset: &AssetEntry) -> Vec<Line<'static>> {
