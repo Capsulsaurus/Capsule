@@ -16,14 +16,15 @@ section's overview page. If a generated page is wrong, fix the source annotation
 | --- | --- | --- | --- |
 | REST | [REST API](/reference/api/) | `capsule-server/openapi.json` | `mise run openapi-check-kynos` |
 | Command line | [CLI](/reference/cli/) | `capsule-cli/cli-surface.json` | `mise run cli-surface-check` |
+| Swift and Kotlin | [SDK](/reference/sdk/) | `capsule-sdk/bindings-surface.json` | `mise run gen-bindings --check` |
+| Browser | [SDK](/reference/sdk/) | `capsule-wasm/wasm-surface.d.ts` | `mise run wasm-surface-check` |
+| Rust crates | [Crates](/reference/crates/) | workspace rustdoc, not committed | `mise run doc-check-rust` |
 
-## Not published yet
+The [Rust](/reference/sdk/rust/) SDK page and [Crates](/reference/crates/) are hand-written: the
+Rust surface's item-level reference is rustdoc, which is built by the Rust gate and is too large
+to commit.
 
-- **Rust SDK and workspace rustdoc** (the workspace is `publish = false`, so not on docs.rs).
-- **Swift and Kotlin bindings** and the **browser surface** (`capsule_wasm.d.ts`): generated
-  output is not committed, so each needs a committed surface dump first.
-
-Until then:
+Related:
 
 - The REST surface-to-transport map is [API Surfaces](/design/api-surfaces/), and the contract
   rules server code follows are [API Practices](/development/api-practices/).

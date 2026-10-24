@@ -17,7 +17,7 @@
  * edited, so committing one only creates a copy that can disagree with its source. Fix the
  * clap `about` or the schema description and regenerate.
  *
- * Six failure modes are deliberately fatal rather than degraded, because
+ * Seven failure modes are deliberately fatal rather than degraded, because
  * `developer-docs.md` calls a stale reference page worse than a missing one — a missing page
  * is obvious and a wrong one is believed:
  *
@@ -32,9 +32,12 @@
  *   5. a schema composes with **`oneOf`, `allOf`, or `anyOf`** — this renderer flattens a
  *      schema to a property table, which cannot express a union or an intersection, and
  *      would render one as an empty or a half-true model;
- *   6. artifact prose carries a **setext heading** — see [`demoteHeadings`].
+ *   6. artifact prose carries a **setext heading** — see [`demoteHeadings`];
+ *   7. an SDK artifact carries a declaration its reader does not know — a line of the wasm
+ *      digest outside wasm-bindgen's layout, or a binding declaration kind no page section
+ *      lists — exit naming it, so a new kind of export cannot publish unlisted.
  *
- * The last three are unreachable on the committed document today. They are fatal rather
+ * Modes 4 to 7 are unreachable on the committed artifacts today. They are fatal rather
  * than deferred because each is a case where the renderer's *silent* answer is a confident
  * lie, and a build failure naming the operation is how the first one to appear gets
  * handled instead of shipped.
@@ -43,10 +46,22 @@
  * before `astro dev` and `astro build`.
  */
 
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+    existsSync,
+    mkdirSync,
+    readdirSync,
+    readFileSync,
+    rmSync,
+    writeFileSync,
+} from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { API_GROUPS, CLI_PAGES, groupForPath } from './reference-groups.mjs';
+import {
+    API_GROUPS,
+    CLI_PAGES,
+    groupForPath,
+    SDK_PAGES,
+} from './reference-groups.mjs';
 
 /** Repo-relative path of the committed command-tree artifact. */
 export const CLI_SURFACE = 'capsule-cli/cli-surface.json';
@@ -66,11 +81,27 @@ export const OPENAPI_DOCUMENT = 'capsule-server/openapi.json';
  */
 const OPENAPI_VERSION = '3.2';
 
+/** Repo-relative path of the committed uniffi binding surface dump. */
+export const BINDINGS_SURFACE = 'capsule-sdk/bindings-surface.json';
+
+/** Binding-dump schema version this script understands. */
+const BINDINGS_SCHEMA = 1;
+
+/** Repo-relative path of the committed `capsule_wasm.d.ts` surface digest. */
+export const WASM_SURFACE = 'capsule-wasm/wasm-surface.d.ts';
+
 /** Repo-relative directory the generated CLI pages are written to. */
 const CLI_OUT = 'capsule-docs/src/content/docs/reference/cli';
 
 /** Repo-relative directory the generated REST pages are written to. */
 const API_OUT = 'capsule-docs/src/content/docs/reference/api';
+
+/**
+ * Repo-relative directory the generated SDK pages are written to. Unlike the CLI and REST
+ * directories it also holds one hand-written page — see `SDK_PAGES` — so it is cleared file
+ * by file rather than as a whole.
+ */
+const SDK_OUT = 'capsule-docs/src/content/docs/reference/sdk';
 
 /** HTTP methods a path item may carry. Anything else in a path item is not an operation. */
 const METHODS = [
@@ -357,6 +388,26 @@ function yamlString(text) {
 }
 
 /**
+ * Read an artifact's text, naming its emitter when it is absent.
+ *
+ * @param {string} root Repository root.
+ * @param {string} relPath Repo-relative artifact path.
+ * @returns {string}
+ */
+function readArtifactText(root, relPath) {
+    try {
+        return readFileSync(join(root, relPath), 'utf8');
+    } catch (cause) {
+        throw new Error(
+            `cannot read the description artifact ${relPath}: ${cause.message}. ` +
+                'Run its emitter (`mise run cli-surface`, `mise run openapi-kynos`, ' +
+                '`mise run gen-bindings`, `mise run wasm-surface`) and commit the result.',
+            { cause },
+        );
+    }
+}
+
+/**
  * Read and validate a JSON artifact.
  *
  * @param {string} root Repository root.
@@ -364,16 +415,7 @@ function yamlString(text) {
  * @returns {unknown}
  */
 function readArtifact(root, relPath) {
-    let raw;
-    try {
-        raw = readFileSync(join(root, relPath), 'utf8');
-    } catch (cause) {
-        throw new Error(
-            `cannot read the description artifact ${relPath}: ${cause.message}. ` +
-                'Run its emitter (`mise run cli-surface`, `mise run openapi-kynos`) and commit the result.',
-            { cause },
-        );
-    }
+    const raw = readArtifactText(root, relPath);
     try {
         return JSON.parse(raw);
     } catch (cause) {
@@ -1190,6 +1232,401 @@ export function renderApiPage(group, operations, document) {
 }
 
 /**
+ * One declaration on an SDK page: a function, a type, or a member of a type.
+ *
+ * Both SDK artifacts arrive in this shape — the binding dump carries it directly, and the wasm
+ * digest is read into it by [`parseWasmSurface`] — so one renderer serves every SDK page.
+ *
+ * @typedef {object} SurfaceDeclaration
+ * @property {string} kind What the declaration is, in its own language's words (`func`,
+ *   `class`, `struct`, `data class`, `function`, …).
+ * @property {string} name The name a caller writes.
+ * @property {string} signature The declaration as the generated source spells it.
+ * @property {string} doc Its doc comment, as Markdown, or `''`.
+ * @property {SurfaceDeclaration[]} members A type's members, in source order; `[]` otherwise.
+ */
+
+/**
+ * The text of a `/** … *\/` block opening at `lines[start]`, and the index after it.
+ *
+ * @param {string[]} lines
+ * @param {number} start
+ * @returns {[string, number]}
+ */
+function readJsDoc(lines, start) {
+    const single = /^\s*\/\*\*(.*)\*\/\s*$/.exec(lines[start]);
+    if (single) return [single[1].trim(), start + 1];
+    const body = [];
+    for (let i = start + 1; i < lines.length; i += 1) {
+        if (/^\s*\*\/\s*$/.test(lines[i])) {
+            return [body.join('\n').trim(), i + 1];
+        }
+        body.push(lines[i].replace(/^\s*\* ?/, ''));
+    }
+    throw new Error(
+        `${WASM_SURFACE}: the doc comment opening on line ${start + 1} never closes`,
+    );
+}
+
+/**
+ * Read the committed wasm digest into declarations.
+ *
+ * The digest is TypeScript `wasm-bindgen` wrote, so this reads exactly the layout it writes and
+ * refuses everything else: a top-level line it does not recognize is fatal rather than
+ * skipped, because skipping it would publish a page missing a declaration and looking whole.
+ * The layout is `wasm-bindgen`'s, pinned in `mise.toml`, so a bump that changes it fails here
+ * and gets this reader updated.
+ *
+ * `private constructor();` is dropped: it is how `wasm-bindgen` says a class has no public
+ * constructor, which the page says in words instead.
+ *
+ * @param {string} text The digest.
+ * @returns {SurfaceDeclaration[]}
+ */
+export function parseWasmSurface(text) {
+    const lines = text.split('\n');
+    /** @type {SurfaceDeclaration[]} */
+    const declarations = [];
+    let doc = '';
+    let i = 0;
+    while (i < lines.length) {
+        const line = lines[i];
+        if (line.trim() === '' || line.startsWith('//')) {
+            i += 1;
+            continue;
+        }
+        if (line.startsWith('/**')) {
+            [doc, i] = readJsDoc(lines, i);
+            continue;
+        }
+        const fn = /^export function ([\w$]+)\(.*;$/.exec(line);
+        if (fn) {
+            declarations.push({
+                kind: 'function',
+                name: fn[1],
+                signature: line,
+                doc,
+                members: [],
+            });
+            doc = '';
+            i += 1;
+            continue;
+        }
+        const type = /^export (class|enum|interface) ([\w$]+)\b.*\{$/.exec(
+            line,
+        );
+        if (type) {
+            const declaration = {
+                kind: type[1],
+                name: type[2],
+                signature: line.replace(/\s*\{$/, ''),
+                doc,
+                members: [],
+            };
+            doc = '';
+            i += 1;
+            let memberDoc = '';
+            while (i < lines.length && lines[i] !== '}') {
+                const member = lines[i];
+                if (member.trim() === '') {
+                    i += 1;
+                } else if (/^\s+\/\*\*/.test(member)) {
+                    [memberDoc, i] = readJsDoc(lines, i);
+                } else if (member.trim() === 'private constructor();') {
+                    memberDoc = '';
+                    i += 1;
+                } else {
+                    const name =
+                        /^\s+(?:readonly\s+|static\s+)*([\w$]+|\[[^\]]+\])/.exec(
+                            member,
+                        );
+                    if (!name) {
+                        throw new Error(
+                            `${WASM_SURFACE}:${i + 1}: cannot read a member of ` +
+                                `${declaration.name} from "${member.trim()}"`,
+                        );
+                    }
+                    declaration.members.push({
+                        kind: /^\s+readonly\s/.test(member)
+                            ? 'property'
+                            : 'method',
+                        name: name[1],
+                        signature: member.trim(),
+                        doc: memberDoc,
+                        members: [],
+                    });
+                    memberDoc = '';
+                    i += 1;
+                }
+            }
+            if (i >= lines.length) {
+                throw new Error(
+                    `${WASM_SURFACE}: ${declaration.name} opens a block that never closes`,
+                );
+            }
+            declarations.push(declaration);
+            i += 1;
+            continue;
+        }
+        throw new Error(
+            `${WASM_SURFACE}:${i + 1}: unrecognized declaration "${line}". This reader knows ` +
+                'the layout wasm-bindgen writes; update it rather than publishing a page that ' +
+                'silently leaves the declaration out.',
+        );
+    }
+    if (declarations.length === 0) {
+        throw new Error(
+            `${WASM_SURFACE} declares nothing. capsule-wasm exports a share viewer and a drop ` +
+                'sealer; an empty digest is a regression in the digest step.',
+        );
+    }
+    return declarations;
+}
+
+/**
+ * The committed wasm surface, as declarations.
+ *
+ * @param {string} root Repository root.
+ * @returns {SurfaceDeclaration[]}
+ */
+export function readWasmSurface(root) {
+    return parseWasmSurface(readArtifactText(root, WASM_SURFACE));
+}
+
+/**
+ * The committed uniffi binding dump, validated.
+ *
+ * @param {string} root Repository root.
+ * @returns {Record<string, any>}
+ */
+export function readBindingsSurface(root) {
+    const dump = readArtifact(root, BINDINGS_SURFACE);
+    if (dump?.schema !== BINDINGS_SCHEMA) {
+        throw new Error(
+            `${BINDINGS_SURFACE} declares schema ${dump?.schema}, and this generator was ` +
+                `written against schema ${BINDINGS_SCHEMA}. Update ${GENERATED_BY} rather than ` +
+                'rendering a document it does not understand.',
+        );
+    }
+    for (const language of ['swift', 'kotlin']) {
+        const declarations = dump.languages?.[language]?.declarations;
+        if (!Array.isArray(declarations) || declarations.length === 0) {
+            throw new Error(
+                `${BINDINGS_SURFACE} describes no ${language} declarations. Both languages ` +
+                    'are generated from one cdylib, so an empty one is a regression in the ' +
+                    'dump step, not a binding that shrank.',
+            );
+        }
+    }
+    return dump;
+}
+
+/**
+ * Prose from a generated binding's doc comment, ready for a page body.
+ *
+ * The comments are Rust doc comments carried through a binding generator, so they keep
+ * rustdoc's link forms. The `[text](path)` form is handled by [`rewriteLinks`]; the shorthand
+ * ``[`item`]``, which rustdoc resolves by name, is unwrapped to its code span here, because
+ * Markdown would otherwise print its brackets.
+ *
+ * @param {string} doc
+ * @param {number} offset Heading levels to demote by.
+ * @returns {string}
+ */
+function docProse(doc, offset) {
+    return demoteHeadings(
+        rewriteLinks(doc).replace(/\[(`[^`\]]+`)\](?![([])/g, '$1'),
+        offset,
+    );
+}
+
+/**
+ * One declaration, with its members under it.
+ *
+ * @param {SurfaceDeclaration} declaration
+ * @param {string} fence The code-fence language.
+ * @param {number} level Heading level of the declaration.
+ * @returns {string}
+ */
+function renderDeclaration(declaration, fence, level) {
+    const sections = [
+        `${'#'.repeat(level)} \`${declaration.name}\``,
+        `\`\`\`${fence}\n${declaration.signature}\n\`\`\``,
+    ];
+    if (declaration.doc) sections.push(docProse(declaration.doc, level));
+    // Fields, cases, and properties read as one table; something a caller calls gets a
+    // heading of its own, so it has an anchor and a place in the table of contents.
+    const values = declaration.members.filter(
+        (member) => !CALLABLE.has(member.kind),
+    );
+    if (values.length > 0) {
+        sections.push(
+            table(
+                ['Member', 'Declaration', 'Description'],
+                values.map((member) => [
+                    codeSpan(member.name),
+                    escapePipes(codeSpan(member.signature)),
+                    cell(member.doc) || '—',
+                ]),
+            ),
+        );
+    }
+    for (const member of declaration.members) {
+        if (CALLABLE.has(member.kind)) {
+            sections.push(renderDeclaration(member, fence, level + 1));
+        }
+    }
+    return sections.join('\n\n');
+}
+
+/**
+ * `text` as an inline code span. Swift keeps the backticks it quotes a keyword with
+ * (``public var `class`: FfiAlertClass``), and a single-backtick span would end at the first
+ * of them, so such text gets a double-backtick delimiter with the padding CommonMark strips.
+ *
+ * @param {string} text
+ * @returns {string}
+ */
+function codeSpan(text) {
+    return text.includes('`') ? `\`\` ${text} \`\`` : `\`${text}\``;
+}
+
+/** Member kinds a caller calls, across the three languages. */
+const CALLABLE = new Set([
+    'func',
+    'static func',
+    'init',
+    'fun',
+    'constructor',
+    'method',
+]);
+
+/**
+ * Headings for each declaration kind, in the order a page lists them. A kind missing from
+ * this table is fatal: it would otherwise be rendered under no heading or not at all.
+ */
+const KIND_SECTIONS = {
+    swift: [
+        ['Functions', ['func']],
+        ['Classes', ['class']],
+        ['Protocols', ['protocol']],
+        ['Structs', ['struct']],
+        ['Enums', ['enum']],
+    ],
+    kotlin: [
+        ['Functions', ['fun']],
+        ['Classes', ['class']],
+        ['Interfaces', ['interface']],
+        ['Data classes', ['data class']],
+        ['Enums and sealed classes', ['enum class', 'sealed class']],
+    ],
+    ts: [
+        ['Functions', ['function']],
+        ['Classes', ['class']],
+        ['Interfaces', ['interface']],
+        ['Enums', ['enum']],
+    ],
+};
+
+/**
+ * The body of an SDK page: one section per declaration kind, in [`KIND_SECTIONS`] order.
+ *
+ * @param {SurfaceDeclaration[]} declarations
+ * @param {'swift' | 'kotlin' | 'ts'} fence
+ * @param {string} source The artifact, for error messages.
+ * @returns {string}
+ */
+function renderDeclarations(declarations, fence, source) {
+    const sections = KIND_SECTIONS[fence];
+    const known = new Set(sections.flatMap(([, kinds]) => kinds));
+    for (const declaration of declarations) {
+        if (!known.has(declaration.kind)) {
+            throw new Error(
+                `${source}: ${declaration.name} is a ${declaration.kind}, which no section of ` +
+                    `the ${fence} page lists. Add the kind to KIND_SECTIONS in ${GENERATED_BY}.`,
+            );
+        }
+    }
+    return sections
+        .map(([heading, kinds]) => {
+            const matching = declarations.filter((d) => kinds.includes(d.kind));
+            if (matching.length === 0) return '';
+            return [
+                `## ${heading}`,
+                ...matching.map((d) => renderDeclaration(d, fence, 3)),
+            ].join('\n\n');
+        })
+        .filter(Boolean)
+        .join('\n\n');
+}
+
+/**
+ * Frontmatter and banner for an SDK page.
+ *
+ * @param {import('./reference-groups.mjs').SdkPage} page
+ * @param {string} artifact
+ * @param {string[]} intro Prose lines after the banner.
+ * @returns {string}
+ */
+function sdkHead(page, artifact, intro) {
+    return [
+        '---',
+        `title: ${yamlString(page.label)}`,
+        `description: ${yamlString(page.description)}`,
+        'status: stable',
+        '---',
+        '',
+        `<!-- Generated from ${artifact} by ${GENERATED_BY}. Do not edit. -->`,
+        '',
+        ...intro,
+    ].join('\n');
+}
+
+/**
+ * The generated `/reference/sdk/wasm/` page.
+ *
+ * @param {import('./reference-groups.mjs').SdkPage} page
+ * @param {SurfaceDeclaration[]} declarations
+ * @returns {string} Markdown, frontmatter included.
+ */
+export function renderWasmPage(page, declarations) {
+    const head = sdkHead(page, WASM_SURFACE, [
+        `Generated from \`${WASM_SURFACE}\`, the public half of the \`capsule_wasm.d.ts\``,
+        'wasm-bindgen emits for `capsule-wasm`, which `mise run wasm-surface-check` keeps',
+        'current in the web gate. To change a description on this page, change the Rust doc',
+        'comment it comes from and regenerate; this file is build output. Classes have no',
+        'public constructor: a caller gets one from the function that returns it, and calls',
+        '`free()` when done with it. Errors are thrown as an `Error` whose `message` is the',
+        'stable code each description names. Which SDK serves which platform is the',
+        '[SDK overview](/reference/sdk/).',
+    ]);
+    return `${tidyBlankLines(`${head}\n\n${renderDeclarations(declarations, 'ts', WASM_SURFACE)}`)}\n`;
+}
+
+/**
+ * The generated `/reference/sdk/swift/` or `/reference/sdk/kotlin/` page.
+ *
+ * @param {import('./reference-groups.mjs').SdkPage} page
+ * @param {Record<string, any>} dump The parsed binding dump.
+ * @returns {string} Markdown, frontmatter included.
+ */
+export function renderBindingsPage(page, dump) {
+    const language = page.language;
+    const surface = dump.languages[language];
+    const head = sdkHead(page, BINDINGS_SURFACE, [
+        `Generated from \`${BINDINGS_SURFACE}\`, the dump \`mise run gen-bindings\` writes from`,
+        `the \`${dump.namespace}\` ${language === 'swift' ? 'Swift' : 'Kotlin'} sources uniffi ${dump.uniffi}`,
+        `generates (\`${surface.source}\`), and checks with \`--check\` in the Rust gate. It lists`,
+        'every declaration the namespace exports; the generated source also carries the',
+        "converters and checksums uniffi needs internally, which are not a caller's surface. To",
+        'change a description on this page, change the Rust doc comment it comes from and',
+        'regenerate; this file is build output. Which SDK serves which platform is the',
+        '[SDK overview](/reference/sdk/).',
+    ]);
+    return `${tidyBlankLines(`${head}\n\n${renderDeclarations(surface.declarations, language, BINDINGS_SURFACE)}`)}\n`;
+}
+
+/**
  * Emit every generated reference page under `root`.
  *
  * Artifacts are read and validated first, before anything is written, so a missing or
@@ -1202,6 +1639,8 @@ export function generate(root) {
     const surface = readCliSurface(root);
     const document = readOpenApiDocument(root);
     const buckets = bucketOperations(document);
+    const bindings = readBindingsSurface(root);
+    const wasm = readWasmSurface(root);
 
     /** @type {Array<{ path: string, body: string }>} */
     const pages = [
@@ -1213,6 +1652,13 @@ export function generate(root) {
             path: `${API_OUT}/${group.slug}.md`,
             body: renderApiPage(group, buckets.get(group.slug) ?? [], document),
         })),
+        ...SDK_PAGES.filter((page) => page.artifact !== null).map((page) => ({
+            path: `${SDK_OUT}/${page.slug}.md`,
+            body:
+                page.artifact === 'wasm'
+                    ? renderWasmPage(page, wasm)
+                    : renderBindingsPage(page, bindings),
+        })),
     ];
 
     // Cleared, not merged into. A page this run no longer emits — a group renamed, a surface
@@ -1222,6 +1668,23 @@ export function generate(root) {
     // directories, so the hand-written overviews beside them survive.
     for (const directory of [CLI_OUT, API_OUT]) {
         rmSync(join(root, directory), { recursive: true, force: true });
+    }
+    // The SDK directory also holds the hand-written pages `SDK_PAGES` marks with a null
+    // artifact, so every other file in it is cleared and those are kept.
+    const handWritten = new Set(
+        SDK_PAGES.filter((page) => page.artifact === null).map(
+            (page) => `${page.slug}.md`,
+        ),
+    );
+    if (existsSync(join(root, SDK_OUT))) {
+        for (const entry of readdirSync(join(root, SDK_OUT))) {
+            if (!handWritten.has(entry)) {
+                rmSync(join(root, SDK_OUT, entry), {
+                    recursive: true,
+                    force: true,
+                });
+            }
+        }
     }
 
     for (const { path, body } of pages) {

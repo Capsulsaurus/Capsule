@@ -81,11 +81,17 @@ jobs:
               - '.github/workflows/ci.yml'
             web:
               - 'capsule-web/**'
+              # `check-web` builds capsule-wasm and runs `wasm-surface-check` against the
+              # committed digest beside it, so a change to the module's exports, to the
+              # digest, or to the step that cuts it must pay the web gate.
+              - 'capsule-wasm/**'
+              - 'xtask/src/wasm_surface.rs'
+              - 'xtask/src/wasm_surface/**'
               - 'mise.toml'
               - 'mise-tasks/**'
               - '.github/workflows/ci.yml'
             # Every artifact the docs build reads, not just `capsule-docs/**` — the
-            # generator turns two committed description artifacts into the `/reference/`
+            # generator turns four committed description artifacts into the `/reference/`
             # pages, so a filter that names only the site lets a stale reference page
             # publish on a change to the surface it describes. See
             # design/developer-docs.md, "Artifacts cross the boundary, not toolchains".
@@ -93,6 +99,8 @@ jobs:
               - 'capsule-docs/**'
               - 'capsule-cli/cli-surface.json'
               - 'capsule-server/openapi.json'
+              - 'capsule-sdk/bindings-surface.json'
+              - 'capsule-wasm/wasm-surface.d.ts'
               # `capsule-docs/biome.jsonc` extends the root one, so a change there can fail
               # this job's format and lint steps from outside `capsule-docs/**`.
               - 'biome.jsonc'
@@ -114,8 +122,11 @@ jobs:
               - 'capsule-server/openapi.json'
               # No check reads this one today; it is here because the cross-links check
               # resolves any repo-relative path a document names, and the reference prose
-              # now names this artifact. Cheap: the job installs nothing.
+              # now names this artifact. Cheap: the job installs nothing. The SDK pages
+              # name the two binding dumps the same way.
               - 'capsule-cli/cli-surface.json'
+              - 'capsule-sdk/bindings-surface.json'
+              - 'capsule-wasm/wasm-surface.d.ts'
               - 'capsule-*/src/**'
               - '**/*.md'
               - '**/*.mdx'
@@ -212,6 +223,17 @@ jobs:
           install: false
       - name: Check (fmt + clippy + build)
         run: mise run check-rust
+      # `doc-check-rust` above has already rendered the workspace rustdoc into target/doc.
+      # The workspace is `publish = false`, so docs.rs never builds it, and it is far too
+      # large to commit; /reference/crates/ points readers here until it is hosted beside
+      # the site. master only, so pull requests do not each store a copy.
+      - name: Upload workspace rustdoc
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: rustdoc
+          path: target/doc
+          retention-days: 30
       # The cargo-fuzz targets live in their own workspace, which no step above builds. Type-
       # checking them on every pull request keeps a decoder change from silently breaking a
       # target the scheduled workflow only runs nightly.

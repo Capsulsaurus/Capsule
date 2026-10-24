@@ -40,11 +40,16 @@ filter matches. That forces the boundary:
 | --- | --- | --- | --- | --- | --- |
 | REST | Kynos OpenAPI 3.2 document | `gen_openapi` | `openapi-check-kynos` | `/reference/api/` | Implemented |
 | CLI | command-tree JSON | `gen_cli_surface` | `cli-surface-check` | `/reference/cli/` | Implemented |
-| Rust SDK | rustdoc HTML (uncommitted) | `cargo doc -p capsule-sdk` | broken intra-doc links denied | `/reference/sdk/rust/` → `/reference/crates/` | Planned |
-| Swift / Kotlin bindings | uniffi surface JSON dumped from the cdylib | a dump step on `mise-tasks/gen-bindings` | `--check` on the dump | `/reference/sdk/swift/`, `/reference/sdk/kotlin/` | Planned |
-| Browser | surface digest of `capsule_wasm.d.ts` | a dump step on `build-wasm` | `--check` on the dump | `/reference/sdk/wasm/` | Planned |
+| Rust SDK | rustdoc HTML (uncommitted) | `cargo doc --workspace` (`doc-check-rust`) | broken intra-doc links denied | `/reference/sdk/rust/` → `/reference/crates/` | Implemented; not yet hosted |
+| Swift / Kotlin bindings | `capsule-sdk/bindings-surface.json` | `xtask bindings-surface`, run by `mise-tasks/gen-bindings` | `gen-bindings --check` (Rust gate) | `/reference/sdk/swift/`, `/reference/sdk/kotlin/` | Implemented |
+| Browser | `capsule-wasm/wasm-surface.d.ts` | `mise run wasm-surface`, after `build-wasm` | `wasm-surface-check` (web gate) | `/reference/sdk/wasm/` | Implemented |
 
-The binding outputs are gitignored, so each needs a small committed dump beside its generation step.
+The binding outputs are gitignored, so each has a small committed dump beside its generation step.
+The binding dump's format is this repository's, not uniffi's: uniffi offers no stable
+machine-readable description of a namespace, so the dump records the declarations the native
+clients consume as the generated sources spell them, and fails when one is missing. The browser
+digest is the caller-facing half of the declaration file wasm-bindgen emits, kept verbatim. Its
+check runs in the web gate because only the web job installs wasm-bindgen.
 
 **Rustdoc is the one exception to one chrome:** the workspace is `publish = false` (no docs.rs) and
 rustdoc emits a whole site, so it is linked out from `/reference/crates/`. `/reference/sdk/rust/`

@@ -155,6 +155,56 @@ export const API_GROUPS = [
 ];
 
 /**
+ * An SDK page: one language a Capsule client can be written in.
+ *
+ * `artifact` names the committed surface dump the page is generated from. `null` marks the
+ * one hand-written page in the section — `/reference/sdk/rust/` — which
+ * `design/developer-docs.md` keeps as a Starlight narrative linking into rustdoc, because the
+ * Rust surface's item-level reference is rustdoc itself and rustdoc is never committed.
+ *
+ * @typedef {ReferencePage & { artifact: 'bindings' | 'wasm' | null, language?: 'swift' | 'kotlin' }} SdkPage
+ */
+
+/**
+ * The SDK pages, in reading order: the crate every other surface wraps, the two native
+ * binding languages in platform-tier order (iOS stabilizes first), then the browser.
+ *
+ * @type {SdkPage[]}
+ */
+export const SDK_PAGES = [
+    {
+        slug: 'rust',
+        label: 'Rust',
+        description:
+            'capsule-sdk, the Rust crate every Capsule client is built on, and where its item-level reference lives.',
+        artifact: null,
+    },
+    {
+        slug: 'swift',
+        label: 'Swift',
+        description:
+            'The capsule_sdk uniffi surface the Apple clients drive, generated from the committed binding dump.',
+        artifact: 'bindings',
+        language: 'swift',
+    },
+    {
+        slug: 'kotlin',
+        label: 'Kotlin',
+        description:
+            'The capsule_sdk uniffi surface the Android client drives, generated from the committed binding dump.',
+        artifact: 'bindings',
+        language: 'kotlin',
+    },
+    {
+        slug: 'wasm',
+        label: 'Browser (WASM)',
+        description:
+            'The capsule-wasm surface the read-only web client imports, generated from the committed declaration digest.',
+        artifact: 'wasm',
+    },
+];
+
+/**
  * The group a path belongs to, by longest matching prefix, or `null` when none matches.
  *
  * Longest-prefix rather than first-match so the table's *reading* order and its *matching*
@@ -208,5 +258,15 @@ export function referenceSidebar() {
                 })),
             ],
         },
+        {
+            label: 'SDK',
+            items: [
+                { slug: 'reference/sdk' },
+                ...SDK_PAGES.map((page) => ({
+                    slug: `reference/sdk/${page.slug}`,
+                })),
+            ],
+        },
+        { slug: 'reference/crates' },
     ];
 }
