@@ -1009,6 +1009,11 @@ async fn apply_replace(
                 reason: "the album epoch this manifest was written under has been superseded",
             })
         }
+        // Only a `trash-restore` is refused for an elapsed window, and a replace is not one;
+        // answered as a refusal rather than an unreachable panic all the same.
+        crate::index::OpOutcome::RetentionElapsed { .. } => Err(FinalizeFailure::ReplaceRefused {
+            reason: "the asset's retention window has closed",
+        }),
         // The asset is gone, or was never this caller's. Creation reserved the row, so this is
         // a race with a delete rather than a server inconsistency.
         crate::index::OpOutcome::NotFound => Err(FinalizeFailure::ReplaceRefused {

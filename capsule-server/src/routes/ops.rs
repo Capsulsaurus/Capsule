@@ -233,6 +233,24 @@ pub enum OpRejection {
         code: &'static str,
     },
 
+    /// A `trash-restore` arrived at or after the asset's signed retention floor, judged by the
+    /// server's clock: the window in which the trash recovers an asset has closed.
+    ///
+    /// Permanent for this asset — no rebase or retry reopens the window — and fail-safe: nothing
+    /// was written, no sequence number was minted, and the asset stays in the trash until the
+    /// purge removes it.
+    #[error("this asset's retention window has closed, so it can no longer be restored")]
+    #[problem(status = 409, title = "Retention elapsed")]
+    RetentionElapsed {
+        /// The signed retention floor the restore came too late for (RFC 3339). Reached only by
+        /// the asset's owner, whose own delete fixed it, so it discloses nothing.
+        #[problem(extension)]
+        retention_until: String,
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
     /// The account is suspended.
     ///
     /// The same status, code and reasoning as `POST /v1/upload`'s: a suspension removes the
@@ -292,6 +310,9 @@ pub enum OpRejection {
 /// An op carrying a metadata blob is metadata growth: past the quota grace window it is
 /// `403 error.quota.grace_locked`, and while the operator has suspended the account's quota
 /// `403 error.quota.suspended`. A `delete` or `trash-restore` is never refused by quota.
+///
+/// A `trash-restore` the server accepts at or after the tombstone's signed `retention_until`
+/// is `409 error.upload.retention_elapsed`: the trash recovers an asset only within its window.
 #[kynos::post(
     "/v1/albums/{album_id}/ops",
     operation_id = "album_lifecycle_op",
@@ -574,6 +595,13 @@ pub async fn apply_op(
             error_codes::UPLOAD_AMK_REGRESSED,
             &format!("amk_version regresses against the album's recorded epoch {stored}"),
         )),
+        OpOutcome::RetentionElapsed { retention_until } => {
+            tracing::info!(%owner, asset = %asset_id, %retention_until, "a trash-restore was refused: the retention window has closed");
+            Err(OpRejection::RetentionElapsed {
+                retention_until: retention_until.to_string(),
+                code: error_codes::UPLOAD_RETENTION_ELAPSED,
+            })
+        }
         OpOutcome::NotFound => {
             tracing::info!(%owner, asset = %asset_id, "a lifecycle write was refused: not this album's asset");
             Err(OpRejection::album_access_denied())

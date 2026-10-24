@@ -1926,6 +1926,7 @@
     <string name="error_upload_rate_limited">Uploading is paused for a moment. It\'ll resume on its own.</string>
     <string name="error_upload_receipt_not_available">The upload hasn\'t finished, so its storage receipt isn\'t available yet.</string>
     <string name="error_upload_replace_incomplete">Capsule is still receiving this photo\'s new version. It\'ll finish on its own.</string>
+    <string name="error_upload_retention_elapsed">This item has been in the trash too long to be restored.</string>
     <string name="error_upload_session_not_active">This upload has already finished.</string>
     <string name="error_upload_session_not_found">The upload session expired. Starting over…</string>
     <string name="error_upload_size_exceeded">The upload sent more data than it declared.</string>
