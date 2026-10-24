@@ -87,7 +87,7 @@ they do not fail the import, which is why the verification below is not optional
 - **Only the fields in the table are read.** Every other field in a sidecar (people tags, for
   example) is not imported.
 - **A sidecar that cannot be paired or parsed is skipped quietly.** Its media still imports, but
-  without that JSON's caption, favorite, album or fallback time and location. Pairing tries the
+  without that JSON's caption, favorite or fallback time and location. Pairing tries the
   exact name, then the JSON's recorded title, then a shared name prefix of at least 16 characters;
   a renamed file or a shorter truncated name can leave its sidecar unpaired.
 - **Edited copies are recognized by a fixed set of localized suffixes** (`-edited`, `-bearbeitet`,
