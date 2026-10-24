@@ -536,3 +536,94 @@ async fn capacity_refusal_offers_a_deadline_for_the_ceiling_and_none_for_an_outa
         );
     }
 }
+
+/// One key of every [`CounterKey`] variant, for the partition-mapping tests.
+fn one_key_per_variant() -> Vec<CounterKey> {
+    vec![
+        CounterKey::LoginAttempts(UserId::new("u")),
+        CounterKey::EnrollmentRedemption(EnrollmentSpelling::Full),
+        CounterKey::EnrollmentRedemptionMalformed,
+        CounterKey::ShareLink(String::new()),
+        CounterKey::ShareSource(String::new()),
+        CounterKey::DropLink(String::new()),
+        CounterKey::DropSource(String::new()),
+        CounterKey::DeepVerify(UserId::new("u")),
+        CounterKey::UploadSessions(UserId::new("u")),
+        CounterKey::UploadChunks(UserId::new("u")),
+        CounterKey::UploadSessionsSource(String::new()),
+        CounterKey::UploadChunksSource(String::new()),
+        CounterKey::SecondFactor(String::new()),
+        CounterKey::RegistrationSource(String::new()),
+        CounterKey::OidcAuthorize(String::new()),
+        CounterKey::OidcAuthorizeRefused,
+        CounterKey::OidcDevice,
+        CounterKey::PeerRequests(String::new()),
+        CounterKey::FederatedReports(String::new()),
+        CounterKey::PeerReports(String::new()),
+        CounterKey::FederatedIntake(String::new()),
+    ]
+}
+
+/// Drive one store future to completion on a runtime of its own, off any test runtime.
+fn block_on<T>(future: impl std::future::Future<Output = T>) -> T {
+    tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("a runtime")
+        .block_on(future)
+}
+
+#[test]
+fn every_variant_has_a_partition_of_its_own() {
+    let keys = one_key_per_variant();
+    // One partition per variant, no more and no fewer: a spare slot is a variant this list
+    // forgot, and a missing one is a variant `partition_index` cannot place.
+    assert_eq!(keys.len(), PARTITION_COUNT);
+
+    let indices: std::collections::BTreeSet<usize> =
+        keys.iter().map(CounterKey::partition_index).collect();
+    assert_eq!(indices.len(), keys.len(), "two variants share a partition");
+    assert!(
+        indices.iter().all(|index| *index < PARTITION_COUNT),
+        "{indices:?}"
+    );
+
+    // One name per variant too, so the partition a log line names is the partition it is.
+    let names: std::collections::BTreeSet<&str> = keys.iter().map(CounterKey::as_str).collect();
+    assert_eq!(names.len(), keys.len());
+}
+
+#[test]
+fn a_held_partition_does_not_block_a_hit_on_another() {
+    let counters = Arc::new(InMemoryCounters::new());
+    let flooded = CounterKey::DropLink("held".to_owned());
+    // A window that has lapsed by the time the other partition is hit, so the purge would
+    // collect it if it could.
+    block_on(counters.hit(&flooded, budget(), at(0))).expect("answers");
+
+    let held = lock(counters.partition(&flooded).expect("a partition"));
+
+    // Hit another variant from a second thread while the drop partition is held. Under one lock
+    // for every partition this would block until `held` drops, which is never inside the bound.
+    let (sent, received) = std::sync::mpsc::channel();
+    let other = Arc::clone(&counters);
+    let worker = std::thread::spawn(move || {
+        let verdict =
+            block_on(other.hit(&CounterKey::ShareLink("free".to_owned()), budget(), at(11)));
+        sent.send(verdict).expect("the test is listening");
+    });
+    let verdict = received
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("a hit on another partition must not wait on a held one")
+        .expect("answers");
+    assert!(verdict.admits());
+
+    // The held partition was skipped by the purge rather than waited on.
+    assert_eq!(held.len(), 1, "a held partition is skipped, not purged");
+    drop(held);
+    worker.join().expect("the worker finished");
+
+    // And the next write once it is released collects it.
+    block_on(counters.hit(&CounterKey::ShareLink("next".to_owned()), budget(), at(11)))
+        .expect("answers");
+    assert_eq!(counters.len_of(&flooded), 0);
+}

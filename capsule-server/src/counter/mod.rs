@@ -100,15 +100,21 @@
 //! keyed on the client address [`crate::client_addr`] resolves through the deployment's trusted
 //! proxies (#704), so one address cannot fill a partition faster than its own budget allows.
 //!
-//! # One lock, and what that does and does not cover
+//! # One lock per partition, and what that does and does not cover
 //!
-//! Every partition lives behind the same [`Mutex`]. Admission is genuinely independent — one
-//! partition's occupancy is invisible to another's ceiling — but *latency* is not: a sustained
-//! flood against one key serialises `hit`, `peek` and `reset` for every other. The critical
-//! section holds no `.await` and does `O(log n)` work over at most [`ceilings::UPLOAD_CHUNKS_SOURCE`] entries a partition, so at
-//! these sizes it is contention rather than denial. Stated because the claim above ("the windows
-//! one surface holds are not the windows another is denied") is about admission and should not be
-//! read as a latency guarantee. Per-partition locking is deferred to issue #477, not overlooked.
+//! Each partition lives behind a [`Mutex`] of its own, in a fixed array built once and read
+//! without a lock. Admission is independent — one partition's occupancy is invisible to
+//! another's ceiling — and so is *latency*: a sustained flood against one key serialises `hit`,
+//! `peek` and `reset` for that variant only, and a caller charging another variant never waits
+//! on it. The atomicity [`CounterStore::hit`] promises survives the split because a key never
+//! spans two partitions, so its charge and its decision are still one critical section.
+//!
+//! What a hit costs another partition is at most a purge of it, and only when that partition is
+//! free: the lapsed windows of a partition nobody writes to are collected by whoever writes next
+//! anywhere, through a `try_lock` that skips a partition someone holds rather than waiting on
+//! it. Within one partition the flood still contends with itself — the critical section holds no
+//! `.await` and does `O(log n)` work over at most that partition's ceiling — which is contention
+//! the flood's own surface pays, bounded by the ceiling it is filling.
 //!
 //! This is defence in depth, not a licence. Every derived key should still be bounded where it
 //! is built — the OIDC authorize validates the redirect before it charges
@@ -333,6 +339,37 @@ impl CounterKey {
             Self::FederatedReports(_) => "federated_reports",
             Self::PeerReports(_) => "peer_reports",
             Self::FederatedIntake(_) => "federated_intake",
+        }
+    }
+
+    /// Which of [`InMemoryCounters`]' [`PARTITION_COUNT`] partitions this key lives in.
+    ///
+    /// One index per variant, exactly as [`Self::as_str`] is one name per variant, so a key
+    /// never spans two partitions and its charge-and-decide stays under one lock. An exhaustive
+    /// match rather than a lookup by name, so a new variant cannot compile without a partition.
+    fn partition_index(&self) -> usize {
+        match self {
+            Self::LoginAttempts(_) => 0,
+            Self::EnrollmentRedemption(_) => 1,
+            Self::EnrollmentRedemptionMalformed => 2,
+            Self::ShareLink(_) => 3,
+            Self::ShareSource(_) => 4,
+            Self::DropLink(_) => 5,
+            Self::DropSource(_) => 6,
+            Self::DeepVerify(_) => 7,
+            Self::UploadSessions(_) => 8,
+            Self::UploadChunks(_) => 9,
+            Self::UploadSessionsSource(_) => 10,
+            Self::UploadChunksSource(_) => 11,
+            Self::SecondFactor(_) => 12,
+            Self::RegistrationSource(_) => 13,
+            Self::OidcAuthorize(_) => 14,
+            Self::OidcAuthorizeRefused => 15,
+            Self::OidcDevice => 16,
+            Self::PeerRequests(_) => 17,
+            Self::FederatedReports(_) => 18,
+            Self::PeerReports(_) => 19,
+            Self::FederatedIntake(_) => 20,
         }
     }
 
@@ -653,9 +690,10 @@ pub struct InMemoryCounters {
     /// Set by [`InMemoryCounters::with_ceiling`], and then the ceiling of **every** partition.
     /// `None` in production, where each variant carries its own.
     ceiling_override: Option<usize>,
-    /// Partitioned by [`CounterKey::as_str`], so one variant's occupancy is invisible to
-    /// another's ceiling. An emptied partition is dropped by the purge rather than left behind.
-    windows: Mutex<BTreeMap<&'static str, BTreeMap<CounterKey, Window>>>,
+    /// One lock per [`CounterKey`] variant, so one variant's occupancy is invisible to
+    /// another's ceiling and one variant's traffic never waits on another's lock. The array
+    /// itself is fixed at construction and read without a lock.
+    windows: Partitions,
 }
 
 /// One key's open window.
@@ -672,8 +710,18 @@ struct Window {
     purge_after: Timestamp,
 }
 
-/// The partitioned window map: one inner map per [`CounterKey`] variant.
-type Partitions = BTreeMap<&'static str, BTreeMap<CounterKey, Window>>;
+/// How many [`CounterKey`] variants there are, and so how many partitions the store holds.
+///
+/// [`CounterKey::partition_index`] maps every variant below this; the counter tests hold one
+/// key per variant and fail if the two disagree.
+const PARTITION_COUNT: usize = 21;
+
+/// One variant's windows, behind that variant's own lock.
+type Partition = Mutex<BTreeMap<CounterKey, Window>>;
+
+/// The partitioned window map: one independently locked map per [`CounterKey`] variant,
+/// indexed by [`CounterKey::partition_index`].
+type Partitions = [Partition; PARTITION_COUNT];
 
 impl InMemoryCounters {
     /// An empty set of counters, each variant bounded by its own [`CounterKey::ceiling`].
@@ -696,8 +744,14 @@ impl InMemoryCounters {
     ///
     /// For tests that assert the *cardinality* of the key space rather than any one verdict —
     /// the property a caller-controlled key silently destroys.
+    ///
+    /// Each partition is counted under its own lock in turn, so under concurrent writes the sum
+    /// is not one snapshot of the whole store.
     pub fn len(&self) -> usize {
-        lock(&self.windows).values().map(BTreeMap::len).sum()
+        self.windows
+            .iter()
+            .map(|partition| lock(partition).len())
+            .sum()
     }
 
     /// How many distinct keys hold a window in `key`'s partition.
@@ -705,9 +759,8 @@ impl InMemoryCounters {
     /// The number the ceiling is actually compared against, so a test can assert that filling
     /// one surface left another's occupancy alone.
     pub fn len_of(&self, key: &CounterKey) -> usize {
-        lock(&self.windows)
-            .get(key.as_str())
-            .map_or(0, BTreeMap::len)
+        self.partition(key)
+            .map_or(0, |partition| lock(partition).len())
     }
 
     /// Whether no key holds a window.
@@ -720,12 +773,47 @@ impl InMemoryCounters {
         self.ceiling_override.unwrap_or_else(|| key.ceiling())
     }
 
-    /// Drop every window whose budget has lapsed, and every partition thereby emptied.
-    fn purge(windows: &mut Partitions, now: Timestamp) {
-        windows.retain(|_, partition| {
-            partition.retain(|_, window| now < window.purge_after);
-            !partition.is_empty()
-        });
+    /// `key`'s partition, or `None` were [`CounterKey::partition_index`] ever to reach past
+    /// [`PARTITION_COUNT`] — which the counter tests rule out for every variant.
+    fn partition(&self, key: &CounterKey) -> Option<&Partition> {
+        self.windows.get(key.partition_index())
+    }
+
+    /// Drop every window in `windows` whose budget has lapsed.
+    fn purge(windows: &mut BTreeMap<CounterKey, Window>, now: Timestamp) {
+        windows.retain(|_, window| now < window.purge_after);
+    }
+
+    /// Purge every partition except `own` that nobody else holds right now.
+    ///
+    /// Opportunistic, so a write still collects what lapsed in a partition nobody writes to,
+    /// without ever waiting on another partition's lock: a partition another caller holds is
+    /// skipped, and that caller purges it on its own write. One lock at a time, and never while
+    /// `own`'s is held, so no ordering between partition locks exists to deadlock on.
+    fn purge_others(&self, own: usize, now: Timestamp) {
+        for (index, partition) in self.windows.iter().enumerate() {
+            if index == own {
+                continue;
+            }
+            let mut guard = match partition.try_lock() {
+                Ok(guard) => guard,
+                Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+                Err(std::sync::TryLockError::WouldBlock) => continue,
+            };
+            Self::purge(&mut guard, now);
+        }
+    }
+}
+
+/// The refusal for a key no partition holds; see [`InMemoryCounters::partition`].
+fn unpartitioned(key: &CounterKey) -> crate::store::StoreError {
+    tracing::error!(
+        counter = key.as_str(),
+        "a counter key maps to no partition; the hit was refused rather than counted"
+    );
+    crate::store::StoreError::Unavailable {
+        store: COUNTER_STORE,
+        detail: format!("no partition holds `{}`", key.as_str()),
     }
 }
 
@@ -771,15 +859,18 @@ impl CounterStore for InMemoryCounters {
         at: Timestamp,
     ) -> StoreFuture<'a, Verdict> {
         Box::pin(async move {
-            let mut windows = lock(&self.windows);
+            let own = key.partition_index();
+            let partition = self.partition(key).ok_or_else(|| unpartitioned(key))?;
+            self.purge_others(own, at);
+
+            // Everything from here is under this key's partition lock alone: the charge and the
+            // decision stay one critical section, and no other variant's caller waits on it.
+            let mut windows = lock(partition);
             Self::purge(&mut windows, at);
 
-            let held = windows
-                .get(key.as_str())
-                .and_then(|partition| partition.get(key))
-                .copied();
+            let held = windows.get(key).copied();
             let ceiling = self.ceiling_for(key);
-            let occupancy = windows.get(key.as_str()).map_or(0, BTreeMap::len);
+            let occupancy = windows.len();
             // Only a key with no window yet can be refused, and only by its own partition's
             // occupancy. A key already being counted keeps being counted, and another variant's
             // flood is not visible here at all.
@@ -824,10 +915,7 @@ impl CounterStore for InMemoryCounters {
                             purge_after: crate::store::deadline(at, budget.window),
                         },
                     };
-                    windows
-                        .entry(key.as_str())
-                        .or_default()
-                        .insert(key.clone(), updated);
+                    windows.insert(key.clone(), updated);
                     Ok(Verdict::Admitted {
                         remaining: budget.limit.saturating_sub(updated.hits),
                     })
@@ -843,24 +931,16 @@ impl CounterStore for InMemoryCounters {
         at: Timestamp,
     ) -> StoreFuture<'a, Verdict> {
         Box::pin(async move {
-            let windows = lock(&self.windows);
-            let held = windows
-                .get(key.as_str())
-                .and_then(|partition| partition.get(key))
-                .copied();
+            let partition = self.partition(key).ok_or_else(|| unpartitioned(key))?;
+            let held = lock(partition).get(key).copied();
             Ok(verdict(held, budget, at).0)
         })
     }
 
     fn reset<'a>(&'a self, key: &'a CounterKey) -> StoreFuture<'a, ()> {
         Box::pin(async move {
-            let mut windows = lock(&self.windows);
-            if let Some(partition) = windows.get_mut(key.as_str())
-                && partition.remove(key).is_some()
-            {
-                if partition.is_empty() {
-                    windows.remove(key.as_str());
-                }
+            let partition = self.partition(key).ok_or_else(|| unpartitioned(key))?;
+            if lock(partition).remove(key).is_some() {
                 tracing::debug!(counter = key.as_str(), "a counter window was cleared");
             }
             Ok(())
