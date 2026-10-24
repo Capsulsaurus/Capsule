@@ -30,10 +30,27 @@ public final class AdvancedSettingsModel {
     /// Every scenario the switcher offers, in declaration order.
     public let scenarios: [MockScenario] = MockScenario.allCases
 
+    /// The scenario the next launch runs when no override is recorded: the one
+    /// this launch's arguments name, or ``MockScenario/healthy`` for a launch
+    /// with none.
+    ///
+    /// This is not ``activeScenarioName``: a launch with no arguments may be
+    /// running a world it read from a saved choice, and once that choice is
+    /// cleared the next argument-less launch runs the healthy world instead.
+    public let launchDefaultScenario: MockScenario
+
     private let selection: MockScenarioSelection
 
-    public init(activeScenarioName: String?, selection: MockScenarioSelection) {
+    /// - Parameter launchArguments: this launch's process arguments. The next
+    ///   launch is assumed to receive the same ones, as an Xcode scheme or a
+    ///   home-screen launch does.
+    public init(
+        activeScenarioName: String?,
+        launchArguments: [String],
+        selection: MockScenarioSelection
+    ) {
         self.activeScenarioName = activeScenarioName
+        launchDefaultScenario = MockScenario.resolve(fromArguments: launchArguments)
         self.selection = selection
         nextLaunchScenario = selection.selected()
     }
@@ -49,19 +66,15 @@ public final class AdvancedSettingsModel {
     }
 
     /// The scenario the picker shows as chosen: the recorded override, or else
-    /// the one running now.
-    ///
-    /// A running name this build cannot parse falls back to ``MockScenario/healthy``,
-    /// which is also what the launch path does with one.
+    /// the ``launchDefaultScenario`` the next launch falls back to.
     public var pickedScenario: MockScenario {
-        nextLaunchScenario ?? activeScenarioName.flatMap(MockScenario.init(rawValue:)) ?? .healthy
+        nextLaunchScenario ?? launchDefaultScenario
     }
 
     /// Whether the next launch will run a different world from this one — the
     /// condition for showing the relaunch notice.
     public var appliesOnNextLaunch: Bool {
-        guard let nextLaunchScenario else { return false }
-        return nextLaunchScenario.rawValue != activeScenarioName
+        pickedScenario.rawValue != activeScenarioName
     }
 
     /// Record a scenario for the next launch.
@@ -86,6 +99,8 @@ public final class AdvancedSettingsModel {
     public func clearOverride() {
         selection.clear()
         nextLaunchScenario = nil
-        CapsuleLog.app.info("mock scenario override cleared")
+        CapsuleLog.app.info(
+            "mock scenario override cleared; next launch runs: \(self.launchDefaultScenario.rawValue, privacy: .public)"
+        )
     }
 }

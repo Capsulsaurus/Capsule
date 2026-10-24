@@ -192,6 +192,7 @@ struct AdvancedSettingsModelTests {
         let store = try IsolatedDefaults()
         let model = AdvancedSettingsModel(
             activeScenarioName: nil,
+            launchArguments: ["app"],
             selection: MockScenarioSelection(defaults: store.defaults)
         )
 
@@ -204,11 +205,12 @@ struct AdvancedSettingsModelTests {
         #expect(store.defaults.string(forKey: MockScenarioSelection.defaultsKey) == nil)
     }
 
-    @Test("a mock world shows the switcher on the scenario it is running")
+    @Test("a mock world launched by argument shows the switcher on the scenario it is running")
     func mockWorldShowsSwitcher() throws {
         let store = try IsolatedDefaults()
         let model = AdvancedSettingsModel(
             activeScenarioName: MockScenario.offline.rawValue,
+            launchArguments: ["app", MockScenario.launchArgument, MockScenario.offline.rawValue],
             selection: MockScenarioSelection(defaults: store.defaults)
         )
 
@@ -225,6 +227,7 @@ struct AdvancedSettingsModelTests {
         let selection = MockScenarioSelection(defaults: store.defaults)
         let model = AdvancedSettingsModel(
             activeScenarioName: MockScenario.healthy.rawValue,
+            launchArguments: ["app"],
             selection: selection
         )
 
@@ -241,6 +244,7 @@ struct AdvancedSettingsModelTests {
         let store = try IsolatedDefaults()
         let model = AdvancedSettingsModel(
             activeScenarioName: MockScenario.quarantine.rawValue,
+            launchArguments: ["app"],
             selection: MockScenarioSelection(defaults: store.defaults)
         )
 
@@ -258,6 +262,7 @@ struct AdvancedSettingsModelTests {
 
         let model = AdvancedSettingsModel(
             activeScenarioName: MockScenario.healthy.rawValue,
+            launchArguments: ["app"],
             selection: selection
         )
 
@@ -272,6 +277,7 @@ struct AdvancedSettingsModelTests {
         let selection = MockScenarioSelection(defaults: store.defaults)
         let model = AdvancedSettingsModel(
             activeScenarioName: MockScenario.healthy.rawValue,
+            launchArguments: ["app"],
             selection: selection
         )
         model.choose(.offline)
@@ -284,11 +290,55 @@ struct AdvancedSettingsModelTests {
         #expect(selection.selected() == nil)
     }
 
+    /// The running world came from the saved choice, not from an argument, so
+    /// clearing it hands the next argument-less launch to the healthy world —
+    /// and the screen must say so rather than keep showing the running one.
+    @Test("clearing a saved choice the running world came from shows the healthy world next")
+    func clearingTheSavedRunningWorldShowsHealthyNext() throws {
+        let store = try IsolatedDefaults()
+        let selection = MockScenarioSelection(defaults: store.defaults)
+        selection.select(.quarantine)
+        let model = AdvancedSettingsModel(
+            activeScenarioName: MockScenario.quarantine.rawValue,
+            launchArguments: ["app"],
+            selection: selection
+        )
+
+        #expect(model.pickedScenario == .quarantine)
+        #expect(!model.appliesOnNextLaunch)
+
+        model.clearOverride()
+
+        #expect(model.launchDefaultScenario == .healthy)
+        #expect(model.pickedScenario == .healthy)
+        #expect(model.appliesOnNextLaunch, "the next launch runs healthy, not quarantine")
+        #expect(MockScenario.resolve(fromArguments: ["app"], persisted: selection.selected()) == .healthy)
+    }
+
+    @Test("clearing the override of a launch that names its world returns to that world")
+    func clearingUnderALaunchArgumentKeepsItsWorld() throws {
+        let store = try IsolatedDefaults()
+        let selection = MockScenarioSelection(defaults: store.defaults)
+        let model = AdvancedSettingsModel(
+            activeScenarioName: MockScenario.offline.rawValue,
+            launchArguments: ["app", MockScenario.launchArgument, MockScenario.offline.rawValue],
+            selection: selection
+        )
+        model.choose(.quarantine)
+
+        model.clearOverride()
+
+        #expect(model.launchDefaultScenario == .offline)
+        #expect(model.pickedScenario == .offline)
+        #expect(!model.appliesOnNextLaunch)
+    }
+
     @Test("a running scenario name this build cannot parse is shown as the healthy world")
     func unparseableRunningNameFallsBack() throws {
         let store = try IsolatedDefaults()
         let model = AdvancedSettingsModel(
             activeScenarioName: "a-scenario-from-the-future",
+            launchArguments: ["app"],
             selection: MockScenarioSelection(defaults: store.defaults)
         )
 

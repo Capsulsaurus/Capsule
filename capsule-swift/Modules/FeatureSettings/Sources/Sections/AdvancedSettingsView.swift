@@ -21,6 +21,7 @@ public struct AdvancedSettingsView: View {
         self.init(
             model: AdvancedSettingsModel(
                 activeScenarioName: environment.activeScenarioName,
+                launchArguments: ProcessInfo.processInfo.arguments,
                 selection: MockScenarioSelection()
             )
         )
