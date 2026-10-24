@@ -456,7 +456,8 @@ pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// Each new session resumes the delegate's partial pulls.
 pub const MAX_REDIALS: u32 = 3;
 
-/// How long `peer accept --listen` waits, by default, for a peer to complete a hand-off session.
+/// How long `peer accept --listen` waits, by default, for a peer to connect and verify. A
+/// verified session is not cut by it.
 pub const DEFAULT_LISTEN_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Where `capsule peer delegate` sends its hand-offs.
@@ -1245,8 +1246,9 @@ async fn accept_with(
 /// waiting. Handshakes run concurrently ([`Admission`]), so one that stalls never holds the
 /// listener, and the listen timeout bounds the wait for a connection and every handshake. A
 /// verified session is not cut by it: it runs to its end, each of its frames bounded by the
-/// channel's I/O timeout, so a slow but live pull is never thrown away. Each verified session pulls every hand-off the peer offers, verifies it was sealed by
-/// that peer for this device, persists it durably and acknowledges it over the same channel. A
+/// channel's I/O timeout and each ranged pull by the channel's minimum pull rate, so a slow but
+/// live pull is never thrown away and a trickling one is. Each verified session pulls every
+/// hand-off the peer offers, verifies it was sealed by that peer for this device, persists it durably and acknowledges it over the same channel. A
 /// session the channel severs keeps its partial pulls, and the listener waits for the origin to
 /// dial again, resuming them; a session that ends cleanly ends the listening.
 async fn listen(
@@ -1298,8 +1300,8 @@ async fn listen(
         };
         sessions += 1;
         let peer = client.peer().device_id;
-        // Not bounded by the listen deadline: a verified session runs to its end, and each of its
-        // frames is bounded by the channel's I/O timeout.
+        // Not bounded by the listen deadline: a verified session runs to its end, each of its
+        // frames bounded by the channel's I/O timeout and each range by its minimum pull rate.
         let taken = take_hand_offs(
             &client,
             local.trust,

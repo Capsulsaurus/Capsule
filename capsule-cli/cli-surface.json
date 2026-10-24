@@ -707,7 +707,7 @@
               "default_values": [
                 "300"
               ],
-              "help": "Seconds `--listen` waits for a peer to complete a hand-off session",
+              "help": "Seconds `--listen` waits for a peer to connect and verify; a verified session is not cut by it, but runs to its end at a minimum transfer rate",
               "id": "listen_timeout",
               "long": "listen-timeout",
               "positional": false,

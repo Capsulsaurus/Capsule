@@ -525,7 +525,8 @@ pub(crate) enum PeerCommands {
         /// peers are admitted. The address bound is printed on stderr
         #[arg(long, value_name = "ADDR")]
         listen: Option<SocketAddr>,
-        /// Seconds `--listen` waits for a peer to complete a hand-off session
+        /// Seconds `--listen` waits for a peer to connect and verify; a verified session is not
+        /// cut by it, but runs to its end at a minimum transfer rate
         #[arg(
             long,
             value_name = "SECONDS",
