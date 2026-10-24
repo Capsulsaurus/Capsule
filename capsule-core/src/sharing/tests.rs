@@ -138,7 +138,91 @@ fn shared_asset(tag: u8) -> SharedAsset {
         nonce_prefix: [tag; 7],
         key_mode: crate::crypto::provenance::KeyMode::Derived,
         wrapped_file_key: None,
+        sidecar: None,
     }
+}
+
+/// A sidecar for the asset `shared_asset(tag)` names.
+#[cfg(feature = "native")]
+fn sidecar_for(tag: u8) -> crate::sidecar::SidecarV1 {
+    use crate::metadata::crdt::{Lww, OrSet};
+    crate::sidecar::SidecarV1 {
+        sidecar_schema: crate::sidecar::SIDECAR_SCHEMA_V1,
+        crypto_suite_id: crate::crypto::primitives::CRYPTO_SUITE_ID,
+        uuid: Uuid::from_u128(u128::from(tag)),
+        hash: crate::crypto::hash::Hash32([tag; 32]),
+        capture_timestamp: "2026-05-31T10:00:00Z".into(),
+        capture_timestamp_user: Lww::new(),
+        import_timestamp: "2026-05-31T11:00:00Z".into(),
+        content_type: "image/png".into(),
+        dimensions: None,
+        lqip: None,
+        tags_user: OrSet::new(),
+        tags_ai: OrSet::new(),
+        caption: Lww::new(),
+        rating: Lww::new(),
+        stack_membership: Lww::new(),
+        regions: crate::sidecar::Regions::new(),
+        cull: Lww::new(),
+        hidden: Lww::new(),
+        camera_id: None,
+        device_id: Uuid::nil(),
+        session_id: Uuid::nil(),
+        gps: None,
+        gps_user: Lww::new(),
+        provenance_chain_hash: None,
+        unknown: BTreeMap::new(),
+        signature: None,
+    }
+}
+
+/// #432: an asset's export sidecar travels sealed inside the record and decodes back on the
+/// recipient side; a record without one is unchanged on the wire.
+#[test]
+#[cfg(feature = "native")]
+fn an_export_sidecar_travels_inside_the_sealed_record() {
+    let material = sample_material();
+    let fragment = rng::random_array::<LINK_SECRET_LEN>();
+    let opaque_id = generate_opaque_id();
+    let wrapped = encapsulate_scope(&material, &fragment, &opaque_id, None, fast()).unwrap();
+    let sidecar = sidecar_for(1);
+    let with = SharedAsset {
+        sidecar: Some(sidecar.to_canonical_vec()),
+        ..shared_asset(1)
+    };
+
+    let publication = publish_share(&wrapped, &fragment, &opaque_id, None, vec![with]).unwrap();
+    let record = open_share_metadata(&publication.metadata_blob, &opaque_id, &fragment).unwrap();
+    assert_eq!(record.assets[0].exported_sidecar(), Ok(Some(sidecar)));
+
+    let without = cbor::to_canonical_vec(&shared_asset(1)).unwrap();
+    assert!(
+        !without.windows(7).any(|w| w == b"sidecar"),
+        "an asset with no sidecar has no sidecar key"
+    );
+    assert_eq!(shared_asset(1).exported_sidecar(), Ok(None));
+}
+
+/// #432: a sidecar that does not decode, or names another asset, is refused by the reader.
+#[test]
+#[cfg(feature = "native")]
+fn a_foreign_or_corrupt_export_sidecar_is_malformed() {
+    let foreign = SharedAsset {
+        sidecar: Some(sidecar_for(2).to_canonical_vec()),
+        ..shared_asset(1)
+    };
+    assert!(matches!(
+        foreign.exported_sidecar(),
+        Err(SharingError::Malformed(_))
+    ));
+    let corrupt = SharedAsset {
+        sidecar: Some(vec![0xFF, 0x00]),
+        ..shared_asset(1)
+    };
+    assert!(matches!(
+        corrupt.exported_sidecar(),
+        Err(SharingError::Malformed(_))
+    ));
 }
 
 /// #614: a link-only link carries its scope inside the sealed record, which opens with the

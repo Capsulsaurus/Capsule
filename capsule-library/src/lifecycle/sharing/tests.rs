@@ -480,7 +480,7 @@ fn a_published_album_link_opens_every_covered_asset() {
     let link = ws
         .create_link(ShareScope::Album(album_id), Some(expiry), None)
         .unwrap();
-    let publication = ws.publish_link(&link).unwrap();
+    let publication = ws.publish_link(&link, ExportPrivacy::default()).unwrap();
     assert_eq!(
         publication.wrapped_secret, None,
         "no passphrase, no wrapped secret"
@@ -503,7 +503,9 @@ fn a_published_album_link_opens_every_covered_asset() {
     assert_eq!(open_as_viewer(&ws, &link, &publication, None), expected);
     assert_eq!(publication.serves.len(), 1 + expected.len());
 
-    let records = ws.shared_assets(ShareScope::Album(album_id)).unwrap();
+    let records = ws
+        .shared_assets(ShareScope::Album(album_id), ExportPrivacy::default())
+        .unwrap();
     let guest = records.iter().find(|a| a.asset_id == adopted).unwrap();
     assert_eq!(
         guest.key_mode,
@@ -536,11 +538,13 @@ fn a_published_asset_link_opens_behind_its_passphrase() {
     let link = ws
         .create_link(ShareScope::Asset(asset_id), None, Some("hunter2"))
         .unwrap();
-    let publication = ws.publish_link(&link).unwrap();
+    let publication = ws.publish_link(&link, ExportPrivacy::default()).unwrap();
     assert!(publication.wrapped_secret.is_some());
     assert_eq!(publication.serves.len(), 2);
 
-    let records = ws.shared_assets(ShareScope::Asset(asset_id)).unwrap();
+    let records = ws
+        .shared_assets(ShareScope::Asset(asset_id), ExportPrivacy::default())
+        .unwrap();
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].amk_version, 0);
     assert_eq!(
@@ -564,17 +568,165 @@ fn publishing_refuses_a_trashed_asset_and_an_unknown_scope() {
     let (_, asset_id) = imported_asset(&mut ws, b"\xFF\xD8\xFF trash me");
     ws.soft_delete(&asset_id, 30).unwrap();
     assert_eq!(
-        ws.shared_assets(ShareScope::Asset(asset_id)),
+        ws.shared_assets(ShareScope::Asset(asset_id), ExportPrivacy::default()),
         Err(SharingError::ScopeUnavailable)
     );
     assert_eq!(
-        ws.shared_assets(ShareScope::Album(Uuid::now_v7())),
+        ws.shared_assets(ShareScope::Album(Uuid::now_v7()), ExportPrivacy::default()),
         Err(SharingError::ScopeUnavailable)
     );
     assert_eq!(
-        ws.shared_assets(ShareScope::Asset(Uuid::now_v7())),
+        ws.shared_assets(ShareScope::Asset(Uuid::now_v7()), ExportPrivacy::default()),
         Err(SharingError::ScopeUnavailable)
     );
+}
+
+const SERIAL: &str = "SN-0042-SECRET";
+const FACE: &str = "Alice Example";
+
+/// An imported asset whose sidecar carries a value for every row of the privacy table: the
+/// importing device and session ids (from the import itself), a camera serial, a
+/// full-precision user location, a caption stamped by this device, and a named face.
+fn asset_with_every_stripped_field(ws: &mut Workspace) -> (Uuid, Uuid) {
+    let (album_id, asset_id) = imported_asset(ws, b"\xFF\xD8\xFF a private photo");
+    ws.set_location(
+        &asset_id,
+        48.858_370,
+        2.294_481,
+        capsule_core::domain::GpsDatum::Wgs84,
+    )
+    .unwrap();
+    ws.set_caption(&asset_id, "at the tower").unwrap();
+    let region = ws
+        .add_region(
+            &asset_id,
+            capsule_core::sidecar::RegionShape::Rect {
+                x: 0.1,
+                y: 0.1,
+                w: 0.2,
+                h: 0.3,
+            },
+        )
+        .unwrap();
+    ws.add_region_label(&asset_id, &region, FACE).unwrap();
+    ws.assets.get_mut(&asset_id).unwrap().sidecar.camera_id =
+        Some(capsule_core::sidecar::CameraId {
+            model: "Example X100".into(),
+            serial: SERIAL.into(),
+        });
+    (album_id, asset_id)
+}
+
+/// Open `publication` as a share recipient and decode the one export sidecar it carries.
+fn recipient_sidecar(
+    link: &ShareLink,
+    publication: &SharePublication,
+) -> capsule_core::sidecar::SidecarV1 {
+    let record = capsule_core::sharing::open_share_metadata(
+        &publication.metadata_blob,
+        &link.opaque_id,
+        &link.fragment_secret,
+    )
+    .unwrap();
+    assert_eq!(record.assets.len(), 1);
+    record.assets[0]
+        .exported_sidecar()
+        .unwrap()
+        .expect("every shared asset carries its export sidecar")
+}
+
+/// Whether `bytes` carries `id` in either of the forms a UUID serializes to.
+fn carries_id(bytes: &[u8], id: Uuid) -> bool {
+    let text = id.hyphenated().to_string();
+    let forms: [&[u8]; 2] = [id.as_bytes(), text.as_bytes()];
+    forms
+        .iter()
+        .any(|form| bytes.windows(form.len()).any(|w| w == *form))
+}
+
+/// Whether `bytes` contains `needle`.
+fn carries_text(bytes: &[u8], needle: &str) -> bool {
+    bytes.windows(needle.len()).any(|w| w == needle.as_bytes())
+}
+
+/// #432: a share issued through the workspace carries no field of the privacy table: the
+/// recipient-opened sidecar has no device, session or camera serial, no named face, and only a
+/// rounded location, while the library's own sidecar keeps every one of them.
+#[test]
+fn a_published_link_carries_no_stripped_field_and_leaves_the_library_sidecar_intact() {
+    let lib = TempDir::new().unwrap();
+    let mut ws = fast_workspace(lib.path());
+    let (_, asset_id) = asset_with_every_stripped_field(&mut ws);
+    let library = ws.asset(&asset_id).unwrap().sidecar.clone();
+    let library_bytes = library.to_canonical_vec();
+    assert_ne!(library.device_id, Uuid::nil());
+    assert_ne!(library.session_id, Uuid::nil());
+
+    let link = ws
+        .create_link(ShareScope::Asset(asset_id), None, None)
+        .unwrap();
+    let publication = ws.publish_link(&link, ExportPrivacy::default()).unwrap();
+    let seen = recipient_sidecar(&link, &publication);
+    let seen_bytes = seen.to_canonical_vec();
+
+    for id in [library.device_id, library.session_id, ws.device_id()] {
+        assert!(
+            !carries_id(&seen_bytes, id),
+            "{id} does not reach the recipient"
+        );
+    }
+    assert!(!carries_text(&seen_bytes, SERIAL), "no camera serial");
+    assert!(!carries_text(&seen_bytes, FACE), "no personal contact tag");
+    assert!(seen.regions.is_empty());
+    let location = seen
+        .effective_gps()
+        .expect("the location is rounded, not removed");
+    assert_eq!((location.lat, location.lon), (48.86, 2.29));
+    assert_eq!(
+        seen.caption.current.as_ref().map(|c| c.value.as_str()),
+        Some("at the tower"),
+        "what may cross the boundary still does"
+    );
+    assert_eq!(
+        seen.camera_id.as_ref().map(|c| c.model.as_str()),
+        Some("Example X100")
+    );
+
+    // The library keeps every stripped field: the strip worked on a copy.
+    let after = &ws.asset(&asset_id).unwrap().sidecar;
+    assert_eq!(after.to_canonical_vec(), library_bytes);
+    assert!(carries_text(&library_bytes, SERIAL));
+    assert!(carries_text(&library_bytes, FACE));
+}
+
+/// #432: the retention opt-in is a per-export value: an issuer that opts in for one link hands
+/// that recipient the full values, and the next link it issues without one is stripped again.
+#[test]
+fn the_retention_opt_in_applies_to_one_link_only() {
+    let lib = TempDir::new().unwrap();
+    let mut ws = fast_workspace(lib.path());
+    let (_, asset_id) = asset_with_every_stripped_field(&mut ws);
+    let library = ws.asset(&asset_id).unwrap().sidecar.clone();
+
+    let kept = ws
+        .create_link(ShareScope::Asset(asset_id), None, None)
+        .unwrap();
+    let publication = ws.publish_link(&kept, ExportPrivacy::RETAIN_ALL).unwrap();
+    let seen = recipient_sidecar(&kept, &publication);
+    let mut expected = library.clone();
+    expected.unknown.clear();
+    if expected != library {
+        expected.signature = None;
+    }
+    assert_eq!(seen, expected, "every opted-in row reaches the recipient");
+
+    let strict = ws
+        .create_link(ShareScope::Asset(asset_id), None, None)
+        .unwrap();
+    let publication = ws.publish_link(&strict, ExportPrivacy::default()).unwrap();
+    let seen = recipient_sidecar(&strict, &publication);
+    assert_eq!(seen.device_id, Uuid::nil(), "the opt-in was not stored");
+    assert!(seen.regions.is_empty());
 }
 
 /// A scope the workspace does not manage cannot be shared.

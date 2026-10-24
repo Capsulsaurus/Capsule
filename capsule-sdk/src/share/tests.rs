@@ -59,6 +59,7 @@ fn published(passphrase: Option<&str>) -> (ShareLink, SharePublication) {
         nonce_prefix: [0x07; capsule_core::crypto::encryption::NONCE_PREFIX_LEN],
         key_mode: capsule_core::crypto::provenance::KeyMode::Derived,
         wrapped_file_key: None,
+        sidecar: None,
     };
     let publication = publish_share(
         &wrapped_scope,
