@@ -496,8 +496,13 @@ run = [
 ]
 
 [tasks.build-windows]
-description = "Build the capsule-sdk FFI for x86_64-pc-windows-msvc (Tier 2)"
-run = "cargo build -p capsule-sdk --features ffi --target x86_64-pc-windows-msvc"
+description = "Build the capsule-sdk FFI and compile capsule-library's tests for x86_64-pc-windows-msvc (Tier 2)"
+# The second step compiles (but does not run) capsule-library's test targets, so its
+# `cfg(windows)` test modules - the TBS signer's TPM smoke test among them - build on every PR.
+run = [
+  "cargo build -p capsule-sdk --features ffi --target x86_64-pc-windows-msvc",
+  "cargo test -p capsule-library --no-run --target x86_64-pc-windows-msvc",
+]
 
 # Sequential: each builds capsule-sdk (and capsule-core under it) into the shared target/ tree.
 [tasks.build-targets]
