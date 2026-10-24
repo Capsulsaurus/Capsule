@@ -344,33 +344,39 @@ impl CounterKey {
 
     /// Which of [`InMemoryCounters`]' [`PARTITION_COUNT`] partitions this key lives in.
     ///
-    /// One index per variant, exactly as [`Self::as_str`] is one name per variant, so a key
+    /// One slot per variant, exactly as [`Self::as_str`] is one name per variant, so a key
     /// never spans two partitions and its charge-and-decide stays under one lock. An exhaustive
-    /// match rather than a lookup by name, so a new variant cannot compile without a partition.
-    fn partition_index(&self) -> usize {
+    /// match rather than a lookup by name, so a new variant cannot compile without a partition,
+    /// and a [`Slot`] rather than a number, so it cannot name a partition the store lacks.
+    fn partition_slot(&self) -> Slot {
         match self {
-            Self::LoginAttempts(_) => 0,
-            Self::EnrollmentRedemption(_) => 1,
-            Self::EnrollmentRedemptionMalformed => 2,
-            Self::ShareLink(_) => 3,
-            Self::ShareSource(_) => 4,
-            Self::DropLink(_) => 5,
-            Self::DropSource(_) => 6,
-            Self::DeepVerify(_) => 7,
-            Self::UploadSessions(_) => 8,
-            Self::UploadChunks(_) => 9,
-            Self::UploadSessionsSource(_) => 10,
-            Self::UploadChunksSource(_) => 11,
-            Self::SecondFactor(_) => 12,
-            Self::RegistrationSource(_) => 13,
-            Self::OidcAuthorize(_) => 14,
-            Self::OidcAuthorizeRefused => 15,
-            Self::OidcDevice => 16,
-            Self::PeerRequests(_) => 17,
-            Self::FederatedReports(_) => 18,
-            Self::PeerReports(_) => 19,
-            Self::FederatedIntake(_) => 20,
+            Self::LoginAttempts(_) => Slot::LoginAttempts,
+            Self::EnrollmentRedemption(_) => Slot::EnrollmentRedemption,
+            Self::EnrollmentRedemptionMalformed => Slot::EnrollmentRedemptionMalformed,
+            Self::ShareLink(_) => Slot::ShareLink,
+            Self::ShareSource(_) => Slot::ShareSource,
+            Self::DropLink(_) => Slot::DropLink,
+            Self::DropSource(_) => Slot::DropSource,
+            Self::DeepVerify(_) => Slot::DeepVerify,
+            Self::UploadSessions(_) => Slot::UploadSessions,
+            Self::UploadChunks(_) => Slot::UploadChunks,
+            Self::UploadSessionsSource(_) => Slot::UploadSessionsSource,
+            Self::UploadChunksSource(_) => Slot::UploadChunksSource,
+            Self::SecondFactor(_) => Slot::SecondFactor,
+            Self::RegistrationSource(_) => Slot::RegistrationSource,
+            Self::OidcAuthorize(_) => Slot::OidcAuthorize,
+            Self::OidcAuthorizeRefused => Slot::OidcAuthorizeRefused,
+            Self::OidcDevice => Slot::OidcDevice,
+            Self::PeerRequests(_) => Slot::PeerRequests,
+            Self::FederatedReports(_) => Slot::FederatedReports,
+            Self::PeerReports(_) => Slot::PeerReports,
+            Self::FederatedIntake(_) => Slot::FederatedIntake,
         }
+    }
+
+    /// The array index of [`Self::partition_slot`], below [`PARTITION_COUNT`] by construction.
+    fn partition_index(&self) -> usize {
+        self.partition_slot() as usize
     }
 
     /// How many simultaneously live windows this variant's partition may hold.
@@ -710,11 +716,48 @@ struct Window {
     purge_after: Timestamp,
 }
 
-/// How many [`CounterKey`] variants there are, and so how many partitions the store holds.
-///
-/// [`CounterKey::partition_index`] maps every variant below this; the counter tests hold one
-/// key per variant and fail if the two disagree.
-const PARTITION_COUNT: usize = 21;
+/// Declares [`Slot`] and derives [`PARTITION_COUNT`] from the same list, so the two cannot
+/// disagree: adding a slot grows the array, and no slot can index past it.
+macro_rules! partition_slots {
+    ($($slot:ident),+ $(,)?) => {
+        /// One partition of [`InMemoryCounters`], named for the [`CounterKey`] variant it holds.
+        ///
+        /// Fieldless with implicit discriminants, so `slot as usize` runs `0..PARTITION_COUNT`
+        /// and indexing the partition array with it cannot go out of bounds.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        #[repr(usize)]
+        enum Slot {
+            $($slot),+
+        }
+
+        /// How many partitions the store holds: one per [`Slot`], counted from its declaration.
+        const PARTITION_COUNT: usize = [$(Slot::$slot),+].len();
+    };
+}
+
+partition_slots!(
+    LoginAttempts,
+    EnrollmentRedemption,
+    EnrollmentRedemptionMalformed,
+    ShareLink,
+    ShareSource,
+    DropLink,
+    DropSource,
+    DeepVerify,
+    UploadSessions,
+    UploadChunks,
+    UploadSessionsSource,
+    UploadChunksSource,
+    SecondFactor,
+    RegistrationSource,
+    OidcAuthorize,
+    OidcAuthorizeRefused,
+    OidcDevice,
+    PeerRequests,
+    FederatedReports,
+    PeerReports,
+    FederatedIntake,
+);
 
 /// One variant's windows, behind that variant's own lock.
 type Partition = Mutex<BTreeMap<CounterKey, Window>>;
@@ -759,8 +802,7 @@ impl InMemoryCounters {
     /// The number the ceiling is actually compared against, so a test can assert that filling
     /// one surface left another's occupancy alone.
     pub fn len_of(&self, key: &CounterKey) -> usize {
-        self.partition(key)
-            .map_or(0, |partition| lock(partition).len())
+        lock(self.partition(key)).len()
     }
 
     /// Whether no key holds a window.
@@ -773,10 +815,10 @@ impl InMemoryCounters {
         self.ceiling_override.unwrap_or_else(|| key.ceiling())
     }
 
-    /// `key`'s partition, or `None` were [`CounterKey::partition_index`] ever to reach past
-    /// [`PARTITION_COUNT`] — which the counter tests rule out for every variant.
-    fn partition(&self, key: &CounterKey) -> Option<&Partition> {
-        self.windows.get(key.partition_index())
+    /// `key`'s partition. Infallible: [`CounterKey::partition_index`] is a [`Slot`]'s
+    /// discriminant, and [`PARTITION_COUNT`] is counted from the same declaration.
+    fn partition(&self, key: &CounterKey) -> &Partition {
+        &self.windows[key.partition_index()]
     }
 
     /// Drop every window in `windows` whose budget has lapsed.
@@ -802,18 +844,6 @@ impl InMemoryCounters {
             };
             Self::purge(&mut guard, now);
         }
-    }
-}
-
-/// The refusal for a key no partition holds; see [`InMemoryCounters::partition`].
-fn unpartitioned(key: &CounterKey) -> crate::store::StoreError {
-    tracing::error!(
-        counter = key.as_str(),
-        "a counter key maps to no partition; the hit was refused rather than counted"
-    );
-    crate::store::StoreError::Unavailable {
-        store: COUNTER_STORE,
-        detail: format!("no partition holds `{}`", key.as_str()),
     }
 }
 
@@ -860,7 +890,7 @@ impl CounterStore for InMemoryCounters {
     ) -> StoreFuture<'a, Verdict> {
         Box::pin(async move {
             let own = key.partition_index();
-            let partition = self.partition(key).ok_or_else(|| unpartitioned(key))?;
+            let partition = self.partition(key);
             self.purge_others(own, at);
 
             // Everything from here is under this key's partition lock alone: the charge and the
@@ -931,7 +961,7 @@ impl CounterStore for InMemoryCounters {
         at: Timestamp,
     ) -> StoreFuture<'a, Verdict> {
         Box::pin(async move {
-            let partition = self.partition(key).ok_or_else(|| unpartitioned(key))?;
+            let partition = self.partition(key);
             let held = lock(partition).get(key).copied();
             Ok(verdict(held, budget, at).0)
         })
@@ -939,7 +969,7 @@ impl CounterStore for InMemoryCounters {
 
     fn reset<'a>(&'a self, key: &'a CounterKey) -> StoreFuture<'a, ()> {
         Box::pin(async move {
-            let partition = self.partition(key).ok_or_else(|| unpartitioned(key))?;
+            let partition = self.partition(key);
             if lock(partition).remove(key).is_some() {
                 tracing::debug!(counter = key.as_str(), "a counter window was cleared");
             }

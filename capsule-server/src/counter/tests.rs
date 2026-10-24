@@ -575,17 +575,20 @@ fn block_on<T>(future: impl std::future::Future<Output = T>) -> T {
 #[test]
 fn every_variant_has_a_partition_of_its_own() {
     let keys = one_key_per_variant();
-    // One partition per variant, no more and no fewer: a spare slot is a variant this list
-    // forgot, and a missing one is a variant `partition_index` cannot place.
-    assert_eq!(keys.len(), PARTITION_COUNT);
-
+    // No index can reach past the array: `PARTITION_COUNT` is counted from the `Slot`
+    // declaration whose discriminants the indices are, so this holds for any variant, listed
+    // here or not.
     let indices: std::collections::BTreeSet<usize> =
         keys.iter().map(CounterKey::partition_index).collect();
-    assert_eq!(indices.len(), keys.len(), "two variants share a partition");
     assert!(
         indices.iter().all(|index| *index < PARTITION_COUNT),
         "{indices:?}"
     );
+
+    // One slot per variant, no more and no fewer: a spare slot is a variant this list forgot,
+    // and a shared one is two variants sharing a fate.
+    assert_eq!(keys.len(), PARTITION_COUNT);
+    assert_eq!(indices.len(), keys.len(), "two variants share a partition");
 
     // One name per variant too, so the partition a log line names is the partition it is.
     let names: std::collections::BTreeSet<&str> = keys.iter().map(CounterKey::as_str).collect();
@@ -600,7 +603,7 @@ fn a_held_partition_does_not_block_a_hit_on_another() {
     // collect it if it could.
     block_on(counters.hit(&flooded, budget(), at(0))).expect("answers");
 
-    let held = lock(counters.partition(&flooded).expect("a partition"));
+    let held = lock(counters.partition(&flooded));
 
     // Hit another variant from a second thread while the drop partition is held. Under one lock
     // for every partition this would block until `held` drops, which is never inside the bound.
