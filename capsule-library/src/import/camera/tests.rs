@@ -33,6 +33,10 @@ struct FakeCamera {
     partial: bool,
     faults: BTreeMap<u32, Fault>,
     unreadable_records: Vec<u32>,
+    /// A second storage whose object list the camera refuses, like an empty card slot.
+    refused_storage: Option<u32>,
+    /// Refuse the storage list itself.
+    refuse_storage_list: bool,
     /// `(handle, offset)` of every `read_object` call.
     reads: Vec<(u32, u64)>,
     staging_root: PathBuf,
@@ -65,6 +69,16 @@ impl FakeCamera {
         self
     }
 
+    /// Give `handle` a capture date and, where `size_known` is false, no declared size.
+    fn record(mut self, handle: u32, captured_at: Option<DateTime>, size_known: bool) -> Self {
+        let object = &mut self.objects.get_mut(&handle).expect("object exists").0;
+        object.captured_at = captured_at;
+        if !size_known {
+            object.size = None;
+        }
+        self
+    }
+
     fn folder(mut self, handle: u32) -> Self {
         self.objects.insert(
             handle,
@@ -91,10 +105,22 @@ impl CameraDevice for FakeCamera {
     }
 
     fn storage_ids(&mut self) -> Result<Vec<u32>, CameraError> {
-        Ok(vec![STORAGE])
+        if self.refuse_storage_list {
+            return Err(CameraError::Refused {
+                operation: "GetStorageIDs".into(),
+                code: "Device_Busy".into(),
+            });
+        }
+        Ok(self.refused_storage.into_iter().chain([STORAGE]).collect())
     }
 
     fn object_handles(&mut self, storage: u32) -> Result<Vec<u32>, CameraError> {
+        if Some(storage) == self.refused_storage {
+            return Err(CameraError::Refused {
+                operation: "GetObjectHandles".into(),
+                code: "Store_Not_Available".into(),
+            });
+        }
         assert_eq!(storage, STORAGE);
         // Deliberately out of order: the adapter owns the ordering.
         Ok(self.objects.keys().rev().copied().collect())
@@ -242,10 +268,51 @@ fn enumeration_orders_by_storage_then_handle_then_capture_date() {
     }
 
     let mut failures = Vec::new();
-    let listed = enumerate(&mut Listing(vec![a, b, c]), &mut failures).unwrap();
+    let mut storage_failures = Vec::new();
+    let listed = enumerate(
+        &mut Listing(vec![a, b, c]),
+        &mut failures,
+        &mut storage_failures,
+    )
+    .unwrap();
     let order: Vec<(u32, u32)> = listed.iter().map(|o| (o.storage, o.handle)).collect();
     assert_eq!(order, vec![(1, 3), (1, 9), (2, 1)]);
     assert!(failures.is_empty());
+    assert!(storage_failures.is_empty());
+}
+
+#[test]
+fn a_storage_the_camera_will_not_list_is_reported_and_the_others_are_received() {
+    let tmp = TempDir::new().unwrap();
+    let adapter = CameraAdapter::new(tmp.path());
+    let mut camera = FakeCamera::new(tmp.path()).file(0x20, DCIM_100, "DSC00001.JPG", &shot(1, 50));
+    // Sorts before `STORAGE`, so the refusal comes first.
+    camera.refused_storage = Some(0x0000_0001);
+
+    let receipt = adapter.receive(&mut camera).unwrap();
+
+    assert_eq!(receipt.received.len(), 1);
+    assert!(receipt.failures.is_empty());
+    assert_eq!(receipt.storage_failures.len(), 1);
+    assert_eq!(receipt.storage_failures[0].storage, Some(0x0000_0001));
+    assert!(matches!(
+        receipt.storage_failures[0].error,
+        CameraError::Refused { .. }
+    ));
+}
+
+#[test]
+fn a_refused_storage_list_is_reported_not_fatal() {
+    let tmp = TempDir::new().unwrap();
+    let adapter = CameraAdapter::new(tmp.path());
+    let mut camera = FakeCamera::new(tmp.path()).file(0x20, DCIM_100, "DSC00001.JPG", &shot(1, 50));
+    camera.refuse_storage_list = true;
+
+    let receipt = adapter.receive(&mut camera).unwrap();
+
+    assert!(receipt.received.is_empty());
+    assert_eq!(receipt.storage_failures.len(), 1);
+    assert_eq!(receipt.storage_failures[0].storage, None);
 }
 
 #[test]
@@ -408,6 +475,144 @@ fn a_staged_file_of_the_wrong_size_is_fetched_again() {
 
     assert!(!second.received[0].already_staged);
     assert_eq!(fs::read(&second.received[0].path).unwrap(), shot(1, 64));
+}
+
+fn captured(day: i8) -> Option<DateTime> {
+    Some(jiff::civil::date(2026, 3, day).at(10, 0, 0, 0))
+}
+
+#[test]
+fn a_new_object_under_a_staged_name_is_received_beside_the_old_one() {
+    // A reformatted card restarts its counter: same folder handle, name and fixed size.
+    let tmp = TempDir::new().unwrap();
+    let adapter = CameraAdapter::new(tmp.path());
+    let mut before = FakeCamera::new(tmp.path())
+        .file(0x20, DCIM_100, "DSC00001.ARW", &shot(1, 64))
+        .record(0x20, captured(1), true);
+    let first = adapter.receive(&mut before).unwrap();
+    let mut after = FakeCamera::new(tmp.path())
+        .file(0x20, DCIM_100, "DSC00001.ARW", &shot(9, 64))
+        .record(0x20, captured(2), true);
+
+    let second = adapter.receive(&mut after).unwrap();
+
+    assert_eq!(after.reads, vec![(0x20, 0)]);
+    let new = &second.received[0];
+    assert!(!new.already_staged);
+    assert_ne!(new.path, first.received[0].path);
+    assert_eq!(fs::read(&new.path).unwrap(), shot(9, 64));
+    assert_eq!(fs::read(&first.received[0].path).unwrap(), shot(1, 64));
+    // Both are scanned; the older one is never overwritten.
+    let extracted = adapter
+        .extract(std::slice::from_ref(&second.objects_root))
+        .unwrap();
+    assert_eq!(extracted.entries.len(), 2);
+
+    // Each copy is still recognised as its own object.
+    let again = adapter.receive(&mut after).unwrap();
+    assert!(again.received[0].already_staged);
+    assert_eq!(again.received[0].path, new.path);
+    let old_again = adapter.receive(&mut before).unwrap();
+    assert!(old_again.received[0].already_staged);
+    assert_eq!(old_again.received[0].path, first.received[0].path);
+}
+
+#[test]
+fn an_object_of_unknown_size_is_matched_on_its_identity_not_its_path() {
+    let tmp = TempDir::new().unwrap();
+    let adapter = CameraAdapter::new(tmp.path());
+    let mut before = FakeCamera::new(tmp.path())
+        .file(0x20, DCIM_100, "C0001.MP4", &shot(1, 64))
+        .record(0x20, captured(1), false);
+    adapter.receive(&mut before).unwrap();
+    assert!(
+        adapter.receive(&mut before).unwrap().received[0].already_staged,
+        "the same object is not fetched twice"
+    );
+    let mut after = FakeCamera::new(tmp.path())
+        .file(0x20, DCIM_100, "C0001.MP4", &shot(2, 80))
+        .record(0x20, captured(2), false);
+
+    let receipt = adapter.receive(&mut after).unwrap();
+
+    assert!(!receipt.received[0].already_staged);
+    assert_eq!(fs::read(&receipt.received[0].path).unwrap(), shot(2, 80));
+}
+
+#[test]
+fn a_staged_file_with_no_identity_record_is_left_alone() {
+    let tmp = TempDir::new().unwrap();
+    let adapter = CameraAdapter::new(tmp.path());
+    let mut camera = FakeCamera::new(tmp.path()).file(0x20, DCIM_100, "DSC00001.JPG", &shot(1, 64));
+    let stray = staging::object_path(tmp.path(), &camera.objects[&0x20].0, 0);
+    fs::create_dir_all(stray.parent().unwrap()).unwrap();
+    fs::write(&stray, shot(5, 64)).unwrap();
+
+    let receipt = adapter.receive(&mut camera).unwrap();
+
+    assert!(!receipt.received[0].already_staged);
+    assert_ne!(receipt.received[0].path, stray);
+    assert_eq!(fs::read(&stray).unwrap(), shot(5, 64));
+}
+
+/// Interrupt `raw` at byte 400 on a camera that can resume, and return the partial file.
+fn interrupted(tmp: &TempDir, raw: &[u8]) -> (CameraAdapter, FakeCamera, PathBuf) {
+    let adapter = CameraAdapter::new(tmp.path());
+    let mut camera = FakeCamera::new(tmp.path()).file(0x20, DCIM_100, "DSC00001.ARW", raw);
+    camera.partial = true;
+    camera.faults.insert(0x20, Fault::DisconnectAfter(400));
+    adapter.receive(&mut camera).unwrap_err();
+    let partial = staging::partial_path(tmp.path(), &camera.objects[&0x20].0);
+    assert_eq!(fs::metadata(&partial).unwrap().len(), 400);
+    assert!(staging::checkpoint_path(&partial).exists());
+    (adapter, camera, partial)
+}
+
+#[test]
+fn a_partial_prefix_corrupted_since_its_checkpoint_restarts_the_object() {
+    let tmp = TempDir::new().unwrap();
+    let raw = shot(7, 1000);
+    let (adapter, mut camera, partial) = interrupted(&tmp, &raw);
+    let mut bytes = fs::read(&partial).unwrap();
+    bytes[10] ^= 0xFF;
+    fs::write(&partial, bytes).unwrap();
+
+    let receipt = adapter.receive(&mut camera).unwrap();
+
+    assert_eq!(receipt.received[0].resumed_from, 0);
+    assert_eq!(fs::read(&receipt.received[0].path).unwrap(), raw);
+    assert_eq!(camera.reads, vec![(0x20, 0), (0x20, 0)]);
+    assert!(!staging::checkpoint_path(&partial).exists());
+}
+
+#[test]
+fn a_partial_file_without_a_checkpoint_restarts_the_object() {
+    let tmp = TempDir::new().unwrap();
+    let raw = shot(7, 1000);
+    let (adapter, mut camera, partial) = interrupted(&tmp, &raw);
+    fs::remove_file(staging::checkpoint_path(&partial)).unwrap();
+
+    let receipt = adapter.receive(&mut camera).unwrap();
+
+    assert_eq!(receipt.received[0].resumed_from, 0);
+    assert_eq!(fs::read(&receipt.received[0].path).unwrap(), raw);
+}
+
+#[test]
+fn bytes_past_the_checkpoint_are_received_again() {
+    let tmp = TempDir::new().unwrap();
+    let raw = shot(7, 1000);
+    let (adapter, mut camera, partial) = interrupted(&tmp, &raw);
+    // A later run's bytes that were never checkpointed, possibly torn by a crash.
+    let mut unconfirmed = fs::OpenOptions::new().append(true).open(&partial).unwrap();
+    unconfirmed.write_all(&[0u8; 100]).unwrap();
+    drop(unconfirmed);
+
+    let receipt = adapter.receive(&mut camera).unwrap();
+
+    assert_eq!(receipt.received[0].resumed_from, 400);
+    assert_eq!(fs::read(&receipt.received[0].path).unwrap(), raw);
+    assert_eq!(receipt.received[0].sha256, hash_bytes(&raw));
 }
 
 #[test]

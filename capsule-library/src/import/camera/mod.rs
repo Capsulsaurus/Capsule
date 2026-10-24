@@ -191,6 +191,16 @@ pub struct ObjectFailure {
     pub error: CameraError,
 }
 
+/// A storage, or the storage list itself, that the camera would not enumerate.
+#[derive(Debug)]
+pub struct StorageFailure {
+    /// The storage (card slot) whose object list was refused; `None` when the camera refused to
+    /// list its storages at all.
+    pub storage: Option<u32>,
+    /// Why it failed.
+    pub error: CameraError,
+}
+
 /// The outcome of [`CameraAdapter::receive`].
 #[derive(Debug)]
 pub struct CameraReceipt {
@@ -200,6 +210,9 @@ pub struct CameraReceipt {
     pub received: Vec<ReceivedObject>,
     /// Every object that failed, in enumeration order. Never dropped silently.
     pub failures: Vec<ObjectFailure>,
+    /// Every storage whose objects could not be listed, such as an empty or unavailable card
+    /// slot, in storage order. Its objects are neither received nor listed in `failures`.
+    pub storage_failures: Vec<StorageFailure>,
 }
 
 /// The camera import source adapter, staging into `staging_root`.
@@ -226,17 +239,20 @@ impl CameraAdapter {
     ///
     /// Folders are skipped; every file is received whatever its format. A fatal error (the
     /// connection or the local disk) returns `Err` and leaves what was staged in place for the
-    /// next run to resume; any other error is recorded in [`CameraReceipt::failures`] and the run
-    /// moves on.
+    /// next run to resume. Any other error is recorded and the run moves on: a storage the camera
+    /// will not list in [`CameraReceipt::storage_failures`], an object in
+    /// [`CameraReceipt::failures`].
     pub fn receive(&self, device: &mut dyn CameraDevice) -> Result<CameraReceipt, CameraError> {
         let started = Instant::now();
         let root = &self.staging_root;
         tracing::info!(staging_root = %root.display(), "camera import: receive starts");
         let mut failures = Vec::new();
-        let objects = enumerate(device, &mut failures)?;
+        let mut storage_failures = Vec::new();
+        let objects = enumerate(device, &mut failures, &mut storage_failures)?;
         tracing::info!(
             objects = objects.len(),
             unreadable = failures.len(),
+            unlisted_storages = storage_failures.len(),
             "camera import: enumerated"
         );
 
@@ -275,6 +291,7 @@ impl CameraAdapter {
             received = received.len(),
             already_staged = received.iter().filter(|r| r.already_staged).count(),
             failed = failures.len(),
+            unlisted_storages = storage_failures.len(),
             bytes,
             elapsed_ms = started.elapsed().as_millis() as u64,
             "camera import: receive complete"
@@ -283,6 +300,7 @@ impl CameraAdapter {
             objects_root: self.objects_root(),
             received,
             failures,
+            storage_failures,
         })
     }
 }
@@ -329,17 +347,45 @@ impl SourceAdapter for CameraAdapter {
 }
 
 /// Every file object on the camera, in the contract's order. An object whose record cannot be
-/// read is a failure, not an omission.
+/// read is a failure, not an omission, and so is a storage the camera will not list: the other
+/// storages are still enumerated.
 fn enumerate(
     device: &mut dyn CameraDevice,
     failures: &mut Vec<ObjectFailure>,
+    storage_failures: &mut Vec<StorageFailure>,
 ) -> Result<Vec<CameraObject>, CameraError> {
-    let mut storages = device.storage_ids()?;
+    let mut storages = match device.storage_ids() {
+        Ok(storages) => storages,
+        Err(error) if !error.is_fatal() => {
+            tracing::warn!(%error, "camera import: storage list refused");
+            storage_failures.push(StorageFailure {
+                storage: None,
+                error,
+            });
+            return Ok(Vec::new());
+        }
+        Err(error) => return Err(error),
+    };
     storages.sort_unstable();
     storages.dedup();
     let mut objects = Vec::new();
     for storage in storages {
-        let mut handles = device.object_handles(storage)?;
+        let mut handles = match device.object_handles(storage) {
+            Ok(handles) => handles,
+            Err(error) if !error.is_fatal() => {
+                tracing::warn!(
+                    storage = format_args!("{storage:08x}"),
+                    %error,
+                    "camera import: storage not listed; continuing with the others"
+                );
+                storage_failures.push(StorageFailure {
+                    storage: Some(storage),
+                    error,
+                });
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
         handles.sort_unstable();
         handles.dedup();
         tracing::debug!(
@@ -400,38 +446,43 @@ fn receive_one(
     device: &mut dyn CameraDevice,
     object: &CameraObject,
 ) -> Result<ReceivedObject, CameraError> {
-    let final_path = staging::object_path(root, object);
-    if let Some(done) = already_staged(&final_path, object)? {
-        return Ok(done);
-    }
+    let generation = match find_slot(root, object)? {
+        Slot::Staged(done) => return Ok(done),
+        Slot::Free { generation } => generation,
+    };
+    let final_path = staging::object_path(root, object, generation);
 
     let partial = staging::partial_path(root, object);
+    let checkpoint = staging::checkpoint_path(&partial);
     let parent = partial.parent().unwrap_or(root);
     fs::create_dir_all(parent).map_err(staging_error(parent))?;
 
-    // Continue a partial file only where the camera can serve the rest and the size is known.
-    let mut hasher = Sha256Hasher::new();
-    let mut offset = 0u64;
-    let existing = fs::metadata(&partial).map_or(0, |m| m.len());
-    let resumable = device.supports_partial_reads()
-        && object
-            .size
-            .is_some_and(|size| existing > 0 && existing < size);
-    let file = if resumable {
-        let mut reader = File::open(&partial).map_err(staging_error(&partial))?;
-        hash_into(&mut reader, &mut hasher).map_err(staging_error(&partial))?;
-        offset = existing;
+    // Continue a partial file only where the camera can serve the rest, the size is known, and
+    // the prefix an earlier run made durable still hashes to its checkpoint.
+    let durable = match object.size {
+        Some(size) if device.supports_partial_reads() => {
+            durable_prefix(&partial, &checkpoint, size)
+        }
+        _ => None,
+    };
+    let (file, hasher, offset) = if let Some((offset, hasher)) = durable {
+        let file = OpenOptions::new()
+            .append(true)
+            .open(&partial)
+            .map_err(staging_error(&partial))?;
+        // Bytes past the checkpoint were never confirmed durable; receive them again.
+        file.set_len(offset).map_err(staging_error(&partial))?;
         tracing::debug!(
             handle = format_args!("{:08x}", object.handle),
             offset,
             "camera import: resuming partial object"
         );
-        OpenOptions::new()
-            .append(true)
-            .open(&partial)
-            .map_err(staging_error(&partial))?
+        (file, hasher, offset)
     } else {
-        File::create(&partial).map_err(staging_error(&partial))?
+        // A stale checkpoint could only ever match the very bytes it recorded; drop it anyway.
+        let _ = fs::remove_file(&checkpoint);
+        let file = File::create(&partial).map_err(staging_error(&partial))?;
+        (file, Sha256Hasher::new(), 0)
     };
 
     let mut sink = HashingSink {
@@ -447,13 +498,24 @@ fn receive_one(
                 source,
             });
         }
-        Err(error) => {
-            // Keep the partial file only when the connection dropped: that is what resuming is
-            // for. A refusal says nothing about the bytes already written, so start over.
-            if !matches!(error, CameraError::Disconnected(_)) {
-                drop(sink);
-                let _ = fs::remove_file(&partial);
+        Err(error @ CameraError::Disconnected(_)) => {
+            // Keep the partial file only when the connection dropped, which is what resuming is
+            // for, and only once its bytes are synced and its checkpoint records them.
+            if let Err(source) = checkpoint_partial(sink, offset, &partial, &checkpoint) {
+                tracing::warn!(
+                    handle = format_args!("{:08x}", object.handle),
+                    path = %partial.display(),
+                    %source,
+                    "camera import: partial object not made durable; it will restart"
+                );
+                discard(&partial, &checkpoint);
             }
+            return Err(error);
+        }
+        Err(error) => {
+            // A refusal says nothing about the bytes already written, so start over.
+            drop(sink);
+            discard(&partial, &checkpoint);
             return Err(error);
         }
     };
@@ -480,7 +542,7 @@ fn receive_one(
     if let Some(declared) = object.size
         && declared != size
     {
-        let _ = fs::remove_file(&partial);
+        discard(&partial, &checkpoint);
         return Err(CameraError::SizeMismatch {
             handle: object.handle,
             declared,
@@ -491,7 +553,7 @@ fn receive_one(
     let received_hash = hasher.finalize();
     let staged_hash = hash_file(&partial).map_err(staging_error(&partial))?;
     if staged_hash != received_hash {
-        let _ = fs::remove_file(&partial);
+        discard(&partial, &checkpoint);
         return Err(CameraError::IntegrityMismatch {
             handle: object.handle,
             received: received_hash,
@@ -499,12 +561,20 @@ fn receive_one(
         });
     }
 
+    // Record which object this is before the file appears, so a staged file always has one.
+    let identity = staging::identity_path(root, object, generation);
+    let identity_parent = identity.parent().unwrap_or(root);
+    fs::create_dir_all(identity_parent).map_err(staging_error(identity_parent))?;
+    write_synced(&identity, staging::identity_key(object).as_bytes())
+        .map_err(staging_error(&identity))?;
     let dir = final_path.parent().unwrap_or(root);
     fs::create_dir_all(dir).map_err(staging_error(dir))?;
     fs::rename(&partial, &final_path).map_err(staging_error(&final_path))?;
+    let _ = fs::remove_file(&checkpoint);
     tracing::debug!(
         handle = format_args!("{:08x}", object.handle),
         path = %final_path.display(),
+        generation,
         size,
         resumed_from = offset,
         sha256 = %received_hash,
@@ -520,48 +590,151 @@ fn receive_one(
     })
 }
 
-/// An object an earlier run already verified and staged, if its staged file still matches the
-/// camera's declared size. Its bytes were verified before the rename that put them there.
-fn already_staged(
-    final_path: &Path,
-    object: &CameraObject,
-) -> Result<Option<ReceivedObject>, CameraError> {
-    let Ok(metadata) = fs::metadata(final_path) else {
-        return Ok(None);
-    };
-    if object.size.is_some_and(|size| size != metadata.len()) {
-        tracing::warn!(
-            path = %final_path.display(),
-            staged = metadata.len(),
-            declared = ?object.size,
-            "camera import: staged file differs from the camera's object; fetching again"
-        );
-        return Ok(None);
-    }
-    let sha256 = hash_file(final_path).map_err(staging_error(final_path))?;
-    tracing::debug!(
-        handle = format_args!("{:08x}", object.handle),
-        path = %final_path.display(),
-        "camera import: already staged"
-    );
-    Ok(Some(ReceivedObject {
-        object: object.clone(),
-        path: final_path.to_path_buf(),
-        size: metadata.len(),
-        sha256,
-        resumed_from: 0,
-        already_staged: true,
-    }))
+/// The most folder generations one staged path is probed through before the run gives up.
+const MAX_GENERATIONS: u32 = 1024;
+
+/// Where an object goes in the staging tree.
+enum Slot {
+    /// An earlier run already verified and staged this very object.
+    Staged(ReceivedObject),
+    /// The folder generation to stage it in: free, or holding a damaged copy of this object.
+    Free { generation: u32 },
 }
 
-fn hash_into(reader: &mut dyn Read, hasher: &mut Sha256Hasher) -> io::Result<()> {
+/// Find `object`'s place in the staging tree.
+///
+/// A staged file is this object only when the identity recorded beside it is this object's
+/// identity key; a file without one, or with another object's, is left alone and the next folder
+/// generation is tried. A staged copy of this object whose size differs from the camera's declared
+/// size is damaged and is received again in place. An accepted copy's bytes were verified before
+/// the rename that put them there.
+fn find_slot(root: &Path, object: &CameraObject) -> Result<Slot, CameraError> {
+    let key = staging::identity_key(object);
+    for generation in 0..MAX_GENERATIONS {
+        let path = staging::object_path(root, object, generation);
+        let Ok(metadata) = fs::metadata(&path) else {
+            return Ok(Slot::Free { generation });
+        };
+        let recorded = fs::read_to_string(staging::identity_path(root, object, generation)).ok();
+        if recorded.as_deref().map(str::trim) != Some(key.as_str()) {
+            tracing::debug!(
+                handle = format_args!("{:08x}", object.handle),
+                path = %path.display(),
+                "camera import: staged path holds another object; trying the next generation"
+            );
+            continue;
+        }
+        if object.size.is_some_and(|size| size != metadata.len()) {
+            tracing::warn!(
+                path = %path.display(),
+                staged = metadata.len(),
+                declared = ?object.size,
+                "camera import: staged file differs from the camera's object; fetching again"
+            );
+            return Ok(Slot::Free { generation });
+        }
+        let sha256 = hash_file(&path).map_err(staging_error(&path))?;
+        tracing::debug!(
+            handle = format_args!("{:08x}", object.handle),
+            path = %path.display(),
+            "camera import: already staged"
+        );
+        return Ok(Slot::Staged(ReceivedObject {
+            object: object.clone(),
+            path,
+            size: metadata.len(),
+            sha256,
+            resumed_from: 0,
+            already_staged: true,
+        }));
+    }
+    Err(CameraError::Staging {
+        path: staging::object_path(root, object, 0),
+        source: io::Error::other(format!(
+            "{MAX_GENERATIONS} staged objects already hold this path"
+        )),
+    })
+}
+
+/// The length of `partial`'s prefix that an earlier run made durable, and a hasher over it, if
+/// its checkpoint is readable and the prefix on disk still hashes to the recorded digest. A
+/// prefix a crash corrupted, or one never checkpointed, is not resumed.
+fn durable_prefix(partial: &Path, checkpoint: &Path, size: u64) -> Option<(u64, Sha256Hasher)> {
+    let recorded = fs::read_to_string(checkpoint).ok()?;
+    let (len, digest) = recorded.trim().split_once(' ')?;
+    let len: u64 = len.parse().ok()?;
+    let digest = Hash32::from_hex(digest).ok()?;
+    if len == 0 || len >= size {
+        return None;
+    }
+    let mut hasher = Sha256Hasher::new();
+    let read = File::open(partial)
+        .and_then(|file| hash_into(&mut file.take(len), &mut hasher))
+        .ok()?;
+    if read != len || hasher.clone().finalize() != digest {
+        tracing::warn!(
+            path = %partial.display(),
+            checkpoint = len,
+            on_disk = read,
+            "camera import: partial object no longer matches its checkpoint; restarting it"
+        );
+        return None;
+    }
+    Some((len, hasher))
+}
+
+/// Sync what `sink` holds to disk, then record its length and digest in `checkpoint`.
+fn checkpoint_partial(
+    sink: HashingSink<BufWriter<File>>,
+    offset: u64,
+    partial: &Path,
+    checkpoint: &Path,
+) -> io::Result<()> {
+    let HashingSink {
+        inner,
+        hasher,
+        written,
+    } = sink;
+    let file = inner.into_inner().map_err(io::IntoInnerError::into_error)?;
+    file.sync_all()?;
+    drop(file);
+    let len = offset + written;
+    write_synced(
+        checkpoint,
+        format!("{len} {}\n", hasher.finalize().to_hex()).as_bytes(),
+    )?;
+    tracing::debug!(
+        path = %partial.display(),
+        len,
+        "camera import: partial object checkpointed"
+    );
+    Ok(())
+}
+
+/// Write `bytes` to a fresh file at `path` and sync it.
+fn write_synced(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let mut file = File::create(path)?;
+    file.write_all(bytes)?;
+    file.sync_all()
+}
+
+/// Remove a partial file and its checkpoint, so the object starts over next time.
+fn discard(partial: &Path, checkpoint: &Path) {
+    let _ = fs::remove_file(partial);
+    let _ = fs::remove_file(checkpoint);
+}
+
+/// Hash `reader` to its end into `hasher`; returns the bytes read.
+fn hash_into(reader: &mut dyn Read, hasher: &mut Sha256Hasher) -> io::Result<u64> {
     let mut buf = vec![0u8; 64 * 1024];
+    let mut total = 0u64;
     loop {
         let n = reader.read(&mut buf)?;
         if n == 0 {
-            return Ok(());
+            return Ok(total);
         }
         hasher.update(&buf[..n]);
+        total += n as u64;
     }
 }
 
