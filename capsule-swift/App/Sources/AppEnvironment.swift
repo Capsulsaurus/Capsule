@@ -1,4 +1,5 @@
 import AssetKit
+import CapsuleAlerts
 import CapsuleCatalog
 import CapsuleDiagnostics
 import CapsuleDomain
@@ -98,6 +99,19 @@ struct AppEnvironment {
     /// Wires MetricKit, breadcrumbs, the crash prompt, and bug-report export.
     let diagnostics: DiagnosticsCoordinator
 
+    /// The local-alert loop: per-class arm / re-arm / cancel, permission at
+    /// first use, and the bounded snooze. See ``makeAlerts(mock:)``.
+    let alerts: AlertCoordinator
+    /// The notification-center delegate, held for the app's lifetime so a tap
+    /// — including one that launched the app — reaches the router.
+    ///
+    /// Not installed in the mock lane: nothing there is armed with the OS, so
+    /// there is nothing to tap, and touching `UNUserNotificationCenter` at all
+    /// is what the mock lane avoids. The lane that composes
+    /// `UserNotificationAlertScheduler` calls `install()` beside it, before
+    /// launch finishes.
+    let alertResponder: AlertNotificationResponder
+
     // MARK: Raw ports
 
     // Forwarded rather than stored: `MockEnvironment` already owns the graph,
@@ -124,7 +138,12 @@ struct AppEnvironment {
     var auth: any AuthPort { mock.auth }
     var devices: any DevicePort { mock.devices }
     var enrollment: any EnrollmentPort { mock.enrollment }
-    var recovery: any RecoveryPort { mock.recovery }
+    /// Wrapped so every verify, snooze or rotation refreshes the alerts: the
+    /// port has no change stream for ``runAlertLoop()`` to follow.
+    var recovery: any RecoveryPort {
+        let alerts = alerts
+        return AlertRefreshingRecoveryPort(mock.recovery) { _ = await alerts.refresh() }
+    }
 
     var quarantine: any QuarantinePort { mock.quarantine }
     var maintenance: any MaintenancePort { mock.maintenance }
@@ -235,6 +254,9 @@ struct AppEnvironment {
         let consent = ConsentStore()
         consentStore = consent
         diagnostics = DiagnosticsCoordinator(consent: consent)
+
+        alerts = Self.makeAlerts(mock: mock)
+        alertResponder = AlertNotificationResponder()
     }
 
     /// The on-disk managed store's two faces: the provider the timeline reads

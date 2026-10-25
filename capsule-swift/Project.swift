@@ -183,6 +183,20 @@ private let moduleTargets: [Target] =
         testDependencies: []
     )
 
+    // Alerts — the client half of local alerts: the per-class arm / re-arm /
+    // cancel loop over `UNUserNotificationCenter`, permission at first use,
+    // and the bounded snooze. The predicate itself is a port; its tests run
+    // over the mock lane's in-memory adapters.
+    + module(
+        "CapsuleAlerts",
+        dependencies: [
+            .target(name: "CapsuleFoundation"),
+            .target(name: "CapsuleDomain"),
+            .target(name: "CapsulePorts"),
+        ],
+        testDependencies: [.target(name: "CapsuleMock")]
+    )
+
     // Diagnostics — MetricKit crash/perf collection, consent, breadcrumbs,
     // redacted bug-report bundles, and an opt-in self-hosted uploader.
     + module(
@@ -510,6 +524,7 @@ private let appTarget: Target = .target(
         .target(name: "ImagePipeline"),
         .target(name: "AssetKit"),
         .target(name: "CapsuleDiagnostics"),
+        .target(name: "CapsuleAlerts"),
         .target(name: "CapsuleFoundation"),
         .target(name: "CapsuleCatalog"),
         .target(name: "CapsuleDomain"),
@@ -564,6 +579,7 @@ private let testTargetNames: [TestableTarget] = (ffiEnabled ? ["CapsuleCatalogFF
     "CapsulePortsTests",
     "CapsuleNavigationTests",
     "CapsuleMockTests",
+    "CapsuleAlertsTests",
     "CapsuleUITests",
     "ManagedStoreTests",
     "AssetKitTests",

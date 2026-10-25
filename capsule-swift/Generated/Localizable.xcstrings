@@ -47315,6 +47315,222 @@
         }
       }
     },
+    "notification.channel.description": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reminders about your library that need your attention, such as a sync that has fallen behind or a recovery check that is due."
+          }
+        }
+      }
+    },
+    "notification.channel.name": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Library alerts"
+          }
+        }
+      }
+    },
+    "notification.drop_pending.body": {
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld guest drop is waiting for you to review it."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld guest drops are waiting for you to review them."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "notification.drop_pending.title": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Drops to review"
+          }
+        }
+      }
+    },
+    "notification.quarantine_pending.body": {
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld item is waiting for your decision."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld items are waiting for your decision."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "notification.quarantine_pending.title": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Items need your review"
+          }
+        }
+      }
+    },
+    "notification.quota_grace_expiring.counting.body": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your storage is full, so new uploads are paused. Free up space before the grace period ends to keep editing."
+          }
+        }
+      }
+    },
+    "notification.quota_grace_expiring.counting.title": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Storage full"
+          }
+        }
+      }
+    },
+    "notification.quota_grace_expiring.expired.body": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The storage grace period has ended. Uploads and edits that add data are paused until you free up space."
+          }
+        }
+      }
+    },
+    "notification.quota_grace_expiring.expired.title": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Storage grace period ended"
+          }
+        }
+      }
+    },
+    "notification.quota_soft.body": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You are close to your storage limit. Uploads still work for now."
+          }
+        }
+      }
+    },
+    "notification.quota_soft.title": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Storage almost full"
+          }
+        }
+      }
+    },
+    "notification.recovery_check_due.check.body": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confirm you can still recover your library if you lose this device."
+          }
+        }
+      }
+    },
+    "notification.recovery_check_due.check.title": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Time to check your recovery secret"
+          }
+        }
+      }
+    },
+    "notification.recovery_check_due.rewrap.body": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your recovery secret could not be confirmed. Set up a new one so you can still recover your library."
+          }
+        }
+      }
+    },
+    "notification.recovery_check_due.rewrap.title": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Replace your recovery secret"
+          }
+        }
+      }
+    },
+    "notification.sync_stale.body": {
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld change has not reached your server yet. Open Capsule to sync."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld changes have not reached your server yet. Open Capsule to sync."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "notification.sync_stale.title": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not synced for %@ days"
+          }
+        }
+      }
+    },
     "security.added": {
       "localizations": {
         "ar": {

@@ -8027,6 +8027,78 @@
     "message": "No data available",
     "context": "Empty-state message when a view has nothing to show."
   },
+  "notification.channel.description": {
+    "message": "Reminders about your library that need your attention, such as a sync that has fallen behind or a recovery check that is due.",
+    "context": "Android notification-channel description shown in the system notification settings for Capsule's local alerts."
+  },
+  "notification.channel.name": {
+    "message": "Library alerts",
+    "context": "Android notification-channel name shown in the system notification settings for Capsule's local alerts."
+  },
+  "notification.drop_pending.body": {
+    "message": "{count, plural, one {# guest drop is waiting for you to review it.} other {# guest drops are waiting for you to review them.}}",
+    "context": "Local alert body when guest uploads (drops) await review and adoption. {count} is the number of pending drops."
+  },
+  "notification.drop_pending.title": {
+    "message": "Drops to review",
+    "context": "Local alert title when guest uploads (drops) await review and adoption."
+  },
+  "notification.quarantine_pending.body": {
+    "message": "{count, plural, one {# item is waiting for your decision.} other {# items are waiting for your decision.}}",
+    "context": "Local alert body when items sit on a quarantine surface awaiting a human. {count} is the number of held items."
+  },
+  "notification.quarantine_pending.title": {
+    "message": "Items need your review",
+    "context": "Local alert title when items sit on a quarantine surface awaiting a human."
+  },
+  "notification.quota_grace_expiring.counting.body": {
+    "message": "Your storage is full, so new uploads are paused. Free up space before the grace period ends to keep editing.",
+    "context": "Local alert body when storage is over the hard limit and the grace window is still counting (grace = counting)."
+  },
+  "notification.quota_grace_expiring.counting.title": {
+    "message": "Storage full",
+    "context": "Local alert title when storage is over the hard limit and the grace window is still counting (grace = counting)."
+  },
+  "notification.quota_grace_expiring.expired.body": {
+    "message": "The storage grace period has ended. Uploads and edits that add data are paused until you free up space.",
+    "context": "Local alert body when storage has been over the hard limit for longer than the grace window (grace = expired)."
+  },
+  "notification.quota_grace_expiring.expired.title": {
+    "message": "Storage grace period ended",
+    "context": "Local alert title when storage has been over the hard limit for longer than the grace window (grace = expired)."
+  },
+  "notification.quota_soft.body": {
+    "message": "You are close to your storage limit. Uploads still work for now.",
+    "context": "Local alert body when storage crossed the soft limit but is below the hard limit."
+  },
+  "notification.quota_soft.title": {
+    "message": "Storage almost full",
+    "context": "Local alert title when storage crossed the soft limit but is below the hard limit."
+  },
+  "notification.recovery_check_due.check.body": {
+    "message": "Confirm you can still recover your library if you lose this device.",
+    "context": "Local alert body for the routine recovery-secret verification check (recovery = check)."
+  },
+  "notification.recovery_check_due.check.title": {
+    "message": "Time to check your recovery secret",
+    "context": "Local alert title for the routine recovery-secret verification check (recovery = check)."
+  },
+  "notification.recovery_check_due.rewrap.body": {
+    "message": "Your recovery secret could not be confirmed. Set up a new one so you can still recover your library.",
+    "context": "Local alert body when the recovery secret has failed verification repeatedly or was declared lost, and the guided re-wrap is due (recovery = rewrap). Opening it leads to replacing the secret, not to a routine check."
+  },
+  "notification.recovery_check_due.rewrap.title": {
+    "message": "Replace your recovery secret",
+    "context": "Local alert title when the guided recovery re-wrap is due (recovery = rewrap)."
+  },
+  "notification.sync_stale.body": {
+    "message": "{count, plural, one {# change has not reached your server yet. Open Capsule to sync.} other {# changes have not reached your server yet. Open Capsule to sync.}}",
+    "context": "Local alert body when the library has gone two weeks without a completed sync while changes remain un-synced. {count} is the number of un-synced changes."
+  },
+  "notification.sync_stale.title": {
+    "message": "Not synced for {days_behind} days",
+    "context": "Local alert title when the library has gone two weeks without a completed sync while changes remain un-synced. {days_behind} is the whole number of days since the last completed sync, always 14 or more."
+  },
   "security.added": {
     "message": "Added: {date}",
     "context": "Passkey added-on timestamp line."

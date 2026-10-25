@@ -14,7 +14,7 @@ This doc owns alert delivery and the vocabulary. The server holds only ciphertex
 | **Wake** | server → client | Nothing: "something changed for you" | This doc |
 | **Hint** | server ↔ server, peer ↔ peer | "A new event exists in album A"; advisory, no authority | [Federation](/design/federation/#pull-only-federation), [Peering](/design/peering/#sync) |
 
-Alert classes and trigger predicates live in `capsule-core::notify`, one decision function for every platform; delivery is native per client. Open: the per-platform delivery, the `notification.*` catalog keys and the permission request are not built, so no alert reaches a user yet.
+Alert classes and trigger predicates live in `capsule-core::notify`, one decision function for every platform; delivery is native per client. Open: the Apple mock lane arms into an in-memory scheduler rather than `UNUserNotificationCenter` until the Rust-backed adapter is composed, the Android app has no flow yet that records the facts the predicate reads, and the pre-armed delivery smoke has not run on a device.
 
 ## Tier 0 — Local Alerts
 
@@ -42,25 +42,27 @@ A closed enum. Thresholds belong to the trigger owner. Parameters are plain valu
 
 Server-side conditions (`quota_*`, `quarantine_pending`, `drop_pending`) cannot be pre-armed and surface at next launch; [Tier 1](#tier-1--wake) is what would close that gap.
 
+The client loop is one idempotent refresh, run after every state change: read the facts, take the badge set from `evaluate_alerts` and the per-class instants from `pre_arm_deadlines`, then reconcile the OS timers against them. A class present holds exactly one timer at its instant (a moved instant or changed copy cancels and re-arms it); a class absent holds none. `next_alert_deadline` is never the client's input: it is the minimum, and arming only it loses the later class's alarm. The armed copy is fixed at arm time, because the alarm fires with the app not running: `sync_stale` carries the current un-synced count and the days to its deadline, `recovery_check_due` its `recovery` split. A tap on `recovery = rewrap` opens the guided re-wrap, never the routine verification prompt.
+
 ### Delivery
 
 | Platform | API | Fires with app not running |
 | --- | --- | --- |
-| iOS | `UNUserNotificationCenter` (calendar / time-interval triggers) | Yes |
-| Android | `NotificationManagerCompat` via `AlarmManager.setExactAndAllowWhileIdle` (or `WorkManager`) | Yes |
+| iOS | `UNUserNotificationCenter` (calendar triggers at an absolute UTC instant, one request identifier per class) | Yes |
+| Android | `NotificationManager` from an `AlarmManager.setAndAllowWhileIdle` alarm, one `PendingIntent` per class, re-armed after reboot | Yes |
 | Desktop | Native OS notifications | While running |
 | Web | Service-worker `Notification` | Best-effort |
 | CLI | Exit codes and stderr | n/a |
 
-Permission is requested the first time a class has something to say, never at first launch.
+Permission is requested the first time a class has something to say, never at first launch: the first refresh that has a timer to arm asks, once. Android alarms are inexact on purpose: a two-week or ninety-day deadline needs no minute precision, an inexact alarm fires late but never early (so its alert is still true on arrival), and an exact one would need the `SCHEDULE_EXACT_ALARM` special-access grant.
 
 ### Shared Alert Mechanics
 
-- **Snooze is bounded, then becomes a badge** that never escalates back to an alert.
+- **Snooze is bounded, then becomes a badge** that never escalates back to an alert. A snooze lasts a day and defers the class's timer to its end; after three consecutive snoozes the class is badge-only until its condition clears, which restores the budget. The recovery check is snoozed by its own cadence scheduler, which owns that budget.
 - **Disabling suppresses the warning, never the behavior** it reports on.
 - **No alert ever blocks** any flow.
 - **Permission denial is not an error:** every class degrades to its in-app badge; no retry, no nag.
-- **Copy is a catalog key** under `notification.*` in `locales/` ([i18n](/design/i18n/)).
+- **Copy is a catalog key** under `notification.*` in `locales/` ([i18n](/design/i18n/)): `notification.<class>.title` / `.body`, with an enumerated parameter selecting the key (`notification.recovery_check_due.rewrap.*`, `notification.quota_grace_expiring.expired.*`) because the catalog compiles only a whole-message plural, and a count as that plural's quantity.
 
 ## Tier 1 — Wake
 

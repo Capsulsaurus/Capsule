@@ -24,4 +24,10 @@ public enum CapsuleSignpost {
         subsystem: CapsuleLog.subsystem,
         category: "import"
     )
+
+    /// Local-alert refresh intervals (facts, predicate, timer reconcile).
+    public static let alerts = OSSignposter(
+        subsystem: CapsuleLog.subsystem,
+        category: "alerts"
+    )
 }
