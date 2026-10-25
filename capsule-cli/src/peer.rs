@@ -588,7 +588,10 @@ pub struct PeerFailure {
     /// bundle), `read` (the file could not be read), `ack_malformed` (it is not an
     /// acknowledgement), `peer_mismatch` (the device at `--peer` is not the `--to` device) or
     /// `not_acknowledged` (the peering session ended without the delegate's acknowledgement),
-    /// or `refusals_elided` (`--listen` refused more distinct sources than it itemizes).
+    /// or `refusals_elided` (`--listen` refused more distinct sources than it itemizes); for
+    /// `peer offer` and `peer pull`, also `not_held` (a named asset this library does not hold),
+    /// `export` (the library could not be exported) and `not_written` (an asset the ingest
+    /// applied could not be written).
     pub kind: &'static str,
     /// The server's stable `error.*` code, when it supplied one.
     pub code: Option<String>,
