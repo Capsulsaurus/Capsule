@@ -100,15 +100,26 @@
 //! keyed on the client address [`crate::client_addr`] resolves through the deployment's trusted
 //! proxies (#704), so one address cannot fill a partition faster than its own budget allows.
 //!
-//! # One lock, and what that does and does not cover
+//! # One lock per partition, and what that does and does not cover
 //!
-//! Every partition lives behind the same [`Mutex`]. Admission is genuinely independent — one
-//! partition's occupancy is invisible to another's ceiling — but *latency* is not: a sustained
-//! flood against one key serialises `hit`, `peek` and `reset` for every other. The critical
-//! section holds no `.await` and does `O(log n)` work over at most [`ceilings::UPLOAD_CHUNKS_SOURCE`] entries a partition, so at
-//! these sizes it is contention rather than denial. Stated because the claim above ("the windows
-//! one surface holds are not the windows another is denied") is about admission and should not be
-//! read as a latency guarantee. Per-partition locking is deferred to issue #477, not overlooked.
+//! Each partition lives behind a [`Mutex`] of its own, in a fixed array built once and read
+//! without a lock. Admission is independent — one partition's occupancy is invisible to
+//! another's ceiling — and so, nearly, is *latency*: a sustained flood against one key
+//! serialises `hit`, `peek` and `reset` for that variant only. A caller charging another variant
+//! never waits on the flood's charges, and the flood's own hits never wait on any other lock.
+//! The atomicity [`CounterStore::hit`] promises survives the split because a key never spans two
+//! partitions, so its charge and its decision are still one critical section.
+//!
+//! The one way another variant's traffic holds a partition's lock is a purge of it. The lapsed
+//! windows of a partition nobody writes to are collected by whoever writes next anywhere, but
+//! only once a lock-free hint says one of them has lapsed, and only through a `try_lock` that
+//! skips a partition someone holds rather than waiting on it. So a caller of one variant can
+//! wait behind another variant's caller only for a sweep of its own partition's lapsed windows,
+//! at most once per lapse there: how often that happens is set by its own partition's traffic,
+//! never by the rate of the flood next door. Within one partition the flood still contends with
+//! itself — the critical section holds no `.await` and its purge is linear in at most that
+//! partition's ceiling — which is contention the flood's own surface pays, bounded by the
+//! ceiling it is filling.
 //!
 //! This is defence in depth, not a licence. Every derived key should still be bounded where it
 //! is built — the OIDC authorize validates the redirect before it charges
@@ -117,6 +128,7 @@
 //! [`CounterKey::EnrollmentRedemptionMalformed`]).
 
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use jiff::{SignedDuration, Timestamp};
@@ -334,6 +346,43 @@ impl CounterKey {
             Self::PeerReports(_) => "peer_reports",
             Self::FederatedIntake(_) => "federated_intake",
         }
+    }
+
+    /// Which of [`InMemoryCounters`]' [`PARTITION_COUNT`] partitions this key lives in.
+    ///
+    /// One slot per variant, exactly as [`Self::as_str`] is one name per variant, so a key
+    /// never spans two partitions and its charge-and-decide stays under one lock. An exhaustive
+    /// match rather than a lookup by name, so a new variant cannot compile without a partition,
+    /// and a [`Slot`] rather than a number, so it cannot name a partition the store lacks.
+    fn partition_slot(&self) -> Slot {
+        match self {
+            Self::LoginAttempts(_) => Slot::LoginAttempts,
+            Self::EnrollmentRedemption(_) => Slot::EnrollmentRedemption,
+            Self::EnrollmentRedemptionMalformed => Slot::EnrollmentRedemptionMalformed,
+            Self::ShareLink(_) => Slot::ShareLink,
+            Self::ShareSource(_) => Slot::ShareSource,
+            Self::DropLink(_) => Slot::DropLink,
+            Self::DropSource(_) => Slot::DropSource,
+            Self::DeepVerify(_) => Slot::DeepVerify,
+            Self::UploadSessions(_) => Slot::UploadSessions,
+            Self::UploadChunks(_) => Slot::UploadChunks,
+            Self::UploadSessionsSource(_) => Slot::UploadSessionsSource,
+            Self::UploadChunksSource(_) => Slot::UploadChunksSource,
+            Self::SecondFactor(_) => Slot::SecondFactor,
+            Self::RegistrationSource(_) => Slot::RegistrationSource,
+            Self::OidcAuthorize(_) => Slot::OidcAuthorize,
+            Self::OidcAuthorizeRefused => Slot::OidcAuthorizeRefused,
+            Self::OidcDevice => Slot::OidcDevice,
+            Self::PeerRequests(_) => Slot::PeerRequests,
+            Self::FederatedReports(_) => Slot::FederatedReports,
+            Self::PeerReports(_) => Slot::PeerReports,
+            Self::FederatedIntake(_) => Slot::FederatedIntake,
+        }
+    }
+
+    /// The array index of [`Self::partition_slot`], below [`PARTITION_COUNT`] by construction.
+    fn partition_index(&self) -> usize {
+        self.partition_slot() as usize
     }
 
     /// How many simultaneously live windows this variant's partition may hold.
@@ -653,9 +702,11 @@ pub struct InMemoryCounters {
     /// Set by [`InMemoryCounters::with_ceiling`], and then the ceiling of **every** partition.
     /// `None` in production, where each variant carries its own.
     ceiling_override: Option<usize>,
-    /// Partitioned by [`CounterKey::as_str`], so one variant's occupancy is invisible to
-    /// another's ceiling. An emptied partition is dropped by the purge rather than left behind.
-    windows: Mutex<BTreeMap<&'static str, BTreeMap<CounterKey, Window>>>,
+    /// One lock per [`CounterKey`] variant, so one variant's occupancy is invisible to
+    /// another's ceiling, and one variant's charges never wait on another's (only, at most once
+    /// per lapse, on a purge of their own lapsed windows; see the module docs). The array
+    /// itself is fixed at construction and read without a lock.
+    windows: Partitions,
 }
 
 /// One key's open window.
@@ -672,8 +723,93 @@ struct Window {
     purge_after: Timestamp,
 }
 
-/// The partitioned window map: one inner map per [`CounterKey`] variant.
-type Partitions = BTreeMap<&'static str, BTreeMap<CounterKey, Window>>;
+/// Declares [`Slot`] and derives [`PARTITION_COUNT`] from the same list, so the two cannot
+/// disagree: adding a slot grows the array, and no slot can index past it.
+macro_rules! partition_slots {
+    ($($slot:ident),+ $(,)?) => {
+        /// One partition of [`InMemoryCounters`], named for the [`CounterKey`] variant it holds.
+        ///
+        /// Fieldless with implicit discriminants, so `slot as usize` runs `0..PARTITION_COUNT`
+        /// and indexing the partition array with it cannot go out of bounds.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        #[repr(usize)]
+        enum Slot {
+            $($slot),+
+        }
+
+        /// How many partitions the store holds: one per [`Slot`], counted from its declaration.
+        const PARTITION_COUNT: usize = [$(Slot::$slot),+].len();
+    };
+}
+
+partition_slots!(
+    LoginAttempts,
+    EnrollmentRedemption,
+    EnrollmentRedemptionMalformed,
+    ShareLink,
+    ShareSource,
+    DropLink,
+    DropSource,
+    DeepVerify,
+    UploadSessions,
+    UploadChunks,
+    UploadSessionsSource,
+    UploadChunksSource,
+    SecondFactor,
+    RegistrationSource,
+    OidcAuthorize,
+    OidcAuthorizeRefused,
+    OidcDevice,
+    PeerRequests,
+    FederatedReports,
+    PeerReports,
+    FederatedIntake,
+);
+
+/// One variant's windows, behind that variant's own lock, with a lock-free hint of when the
+/// earliest of them lapses.
+#[derive(Debug)]
+struct Partition {
+    windows: Mutex<BTreeMap<CounterKey, Window>>,
+    /// The earliest `purge_after` among `windows`, in whole milliseconds rounded down, or
+    /// [`i64::MAX`] when nothing is held.
+    ///
+    /// Written only under `windows`' lock and read without it, so another variant's caller can
+    /// tell that nothing here has lapsed without touching the lock. A purge hint like
+    /// [`Window::purge_after`] itself: a stale read at worst delays a sweep to a later write or
+    /// spends one that drops nothing, and admission never reads it.
+    next_lapse_ms: AtomicI64,
+}
+
+impl Default for Partition {
+    fn default() -> Self {
+        Self {
+            windows: Mutex::default(),
+            next_lapse_ms: AtomicI64::new(i64::MAX),
+        }
+    }
+}
+
+impl Partition {
+    /// Whether some window here may have lapsed by `now`, read without the lock.
+    ///
+    /// Strictly after the rounded-down millisecond, so an open gate means a window whose
+    /// `purge_after` is before `now` is held, or was until a [`CounterStore::reset`] removed it;
+    /// the second costs one sweep that drops nothing and re-derives the hint.
+    fn may_have_lapsed(&self, now: Timestamp) -> bool {
+        now.as_millisecond() > self.next_lapse_ms.load(Ordering::Relaxed)
+    }
+
+    /// Lower the lapse hint to cover a window that lapses at `purge_after`; call under the lock.
+    fn note_lapse(&self, purge_after: Timestamp) {
+        self.next_lapse_ms
+            .fetch_min(purge_after.as_millisecond(), Ordering::Relaxed);
+    }
+}
+
+/// The partitioned window map: one independently locked map per [`CounterKey`] variant,
+/// indexed by [`CounterKey::partition_index`].
+type Partitions = [Partition; PARTITION_COUNT];
 
 impl InMemoryCounters {
     /// An empty set of counters, each variant bounded by its own [`CounterKey::ceiling`].
@@ -696,8 +832,14 @@ impl InMemoryCounters {
     ///
     /// For tests that assert the *cardinality* of the key space rather than any one verdict —
     /// the property a caller-controlled key silently destroys.
+    ///
+    /// Each partition is counted under its own lock in turn, so under concurrent writes the sum
+    /// is not one snapshot of the whole store.
     pub fn len(&self) -> usize {
-        lock(&self.windows).values().map(BTreeMap::len).sum()
+        self.windows
+            .iter()
+            .map(|partition| lock(&partition.windows).len())
+            .sum()
     }
 
     /// How many distinct keys hold a window in `key`'s partition.
@@ -705,9 +847,7 @@ impl InMemoryCounters {
     /// The number the ceiling is actually compared against, so a test can assert that filling
     /// one surface left another's occupancy alone.
     pub fn len_of(&self, key: &CounterKey) -> usize {
-        lock(&self.windows)
-            .get(key.as_str())
-            .map_or(0, BTreeMap::len)
+        lock(&self.partition(key).windows).len()
     }
 
     /// Whether no key holds a window.
@@ -720,12 +860,54 @@ impl InMemoryCounters {
         self.ceiling_override.unwrap_or_else(|| key.ceiling())
     }
 
-    /// Drop every window whose budget has lapsed, and every partition thereby emptied.
-    fn purge(windows: &mut Partitions, now: Timestamp) {
-        windows.retain(|_, partition| {
-            partition.retain(|_, window| now < window.purge_after);
-            !partition.is_empty()
+    /// `key`'s partition. Infallible: [`CounterKey::partition_index`] is a [`Slot`]'s
+    /// discriminant, and [`PARTITION_COUNT`] is counted from the same declaration.
+    fn partition(&self, key: &CounterKey) -> &Partition {
+        &self.windows[key.partition_index()]
+    }
+
+    /// Drop every window in `windows` whose budget has lapsed, and re-derive `partition`'s
+    /// lapse hint from what is left. `windows` is `partition`'s own map, held by the caller.
+    fn purge(partition: &Partition, windows: &mut BTreeMap<CounterKey, Window>, now: Timestamp) {
+        let mut next_lapse_ms = i64::MAX;
+        windows.retain(|_, window| {
+            let live = now < window.purge_after;
+            if live {
+                next_lapse_ms = next_lapse_ms.min(window.purge_after.as_millisecond());
+            }
+            live
         });
+        partition
+            .next_lapse_ms
+            .store(next_lapse_ms, Ordering::Relaxed);
+    }
+
+    /// Purge every partition except `own` that holds a lapsed window and that nobody else
+    /// holds right now, and return how many were swept.
+    ///
+    /// Opportunistic, so a write still collects what lapsed in a partition nobody writes to.
+    /// A partition whose earliest window has not lapsed is passed over on its lock-free hint
+    /// without its lock being touched, so how often another variant's traffic takes this
+    /// partition's lock is set by how often windows *here* lapse — at most once per lapse —
+    /// and never by that traffic's own rate. A partition another caller holds is skipped
+    /// rather than waited on, and that caller purges it on its own write. One lock at a time,
+    /// and never while `own`'s is held, so no ordering between partition locks exists to
+    /// deadlock on.
+    fn purge_others(&self, own: usize, now: Timestamp) -> usize {
+        let mut swept = 0;
+        for (index, partition) in self.windows.iter().enumerate() {
+            if index == own || !partition.may_have_lapsed(now) {
+                continue;
+            }
+            let mut guard = match partition.windows.try_lock() {
+                Ok(guard) => guard,
+                Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+                Err(std::sync::TryLockError::WouldBlock) => continue,
+            };
+            Self::purge(partition, &mut guard, now);
+            swept += 1;
+        }
+        swept
     }
 }
 
@@ -771,15 +953,25 @@ impl CounterStore for InMemoryCounters {
         at: Timestamp,
     ) -> StoreFuture<'a, Verdict> {
         Box::pin(async move {
-            let mut windows = lock(&self.windows);
-            Self::purge(&mut windows, at);
+            let own = key.partition_index();
+            let partition = self.partition(key);
+            let swept = self.purge_others(own, at);
+            if swept > 0 {
+                tracing::trace!(
+                    counter = key.as_str(),
+                    swept,
+                    "a hit collected lapsed windows from other partitions"
+                );
+            }
 
-            let held = windows
-                .get(key.as_str())
-                .and_then(|partition| partition.get(key))
-                .copied();
+            // Everything from here is under this key's partition lock alone: the charge and the
+            // decision stay one critical section, and no other variant's caller waits on it.
+            let mut windows = lock(&partition.windows);
+            Self::purge(partition, &mut windows, at);
+
+            let held = windows.get(key).copied();
             let ceiling = self.ceiling_for(key);
-            let occupancy = windows.get(key.as_str()).map_or(0, BTreeMap::len);
+            let occupancy = windows.len();
             // Only a key with no window yet can be refused, and only by its own partition's
             // occupancy. A key already being counted keeps being counted, and another variant's
             // flood is not visible here at all.
@@ -824,10 +1016,8 @@ impl CounterStore for InMemoryCounters {
                             purge_after: crate::store::deadline(at, budget.window),
                         },
                     };
-                    windows
-                        .entry(key.as_str())
-                        .or_default()
-                        .insert(key.clone(), updated);
+                    windows.insert(key.clone(), updated);
+                    partition.note_lapse(updated.purge_after);
                     Ok(Verdict::Admitted {
                         remaining: budget.limit.saturating_sub(updated.hits),
                     })
@@ -843,24 +1033,16 @@ impl CounterStore for InMemoryCounters {
         at: Timestamp,
     ) -> StoreFuture<'a, Verdict> {
         Box::pin(async move {
-            let windows = lock(&self.windows);
-            let held = windows
-                .get(key.as_str())
-                .and_then(|partition| partition.get(key))
-                .copied();
+            let partition = self.partition(key);
+            let held = lock(&partition.windows).get(key).copied();
             Ok(verdict(held, budget, at).0)
         })
     }
 
     fn reset<'a>(&'a self, key: &'a CounterKey) -> StoreFuture<'a, ()> {
         Box::pin(async move {
-            let mut windows = lock(&self.windows);
-            if let Some(partition) = windows.get_mut(key.as_str())
-                && partition.remove(key).is_some()
-            {
-                if partition.is_empty() {
-                    windows.remove(key.as_str());
-                }
+            let partition = self.partition(key);
+            if lock(&partition.windows).remove(key).is_some() {
                 tracing::debug!(counter = key.as_str(), "a counter window was cleared");
             }
             Ok(())

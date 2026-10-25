@@ -1997,6 +1997,21 @@
     <string name="nav_storage_usage">15 GB used of 2 TB</string>
     <string name="nav_trash">Trash</string>
     <string name="no_data_available">No data available</string>
+    <string name="notification_channel_description">Reminders about your library that need your attention, such as a sync that has fallen behind or a recovery check that is due.</string>
+    <string name="notification_channel_name">Library alerts</string>
+    <string name="notification_drop_pending_title">Drops to review</string>
+    <string name="notification_quarantine_pending_title">Items need your review</string>
+    <string name="notification_quota_grace_expiring_counting_body">Your storage is full, so new uploads are paused. Free up space before the grace period ends to keep editing.</string>
+    <string name="notification_quota_grace_expiring_counting_title">Storage full</string>
+    <string name="notification_quota_grace_expiring_expired_body">The storage grace period has ended. Uploads and edits that add data are paused until you free up space.</string>
+    <string name="notification_quota_grace_expiring_expired_title">Storage grace period ended</string>
+    <string name="notification_quota_soft_body">You are close to your storage limit. Uploads still work for now.</string>
+    <string name="notification_quota_soft_title">Storage almost full</string>
+    <string name="notification_recovery_check_due_check_body">Confirm you can still recover your library if you lose this device.</string>
+    <string name="notification_recovery_check_due_check_title">Time to check your recovery secret</string>
+    <string name="notification_recovery_check_due_rewrap_body">Your recovery secret could not be confirmed. Set up a new one so you can still recover your library.</string>
+    <string name="notification_recovery_check_due_rewrap_title">Replace your recovery secret</string>
+    <string name="notification_sync_stale_title">Not synced for %s days</string>
     <string name="security_added">Added: %s</string>
     <string name="security_deleting">Deleting…</string>
     <string name="security_last_active">Last active: %s</string>
@@ -2132,6 +2147,18 @@
     <plurals name="drop_upload_button">
         <item quantity="one">Upload %d file</item>
         <item quantity="other">Upload %d files</item>
+    </plurals>
+    <plurals name="notification_drop_pending_body">
+        <item quantity="one">%d guest drop is waiting for you to review it.</item>
+        <item quantity="other">%d guest drops are waiting for you to review them.</item>
+    </plurals>
+    <plurals name="notification_quarantine_pending_body">
+        <item quantity="one">%d item is waiting for your decision.</item>
+        <item quantity="other">%d items are waiting for your decision.</item>
+    </plurals>
+    <plurals name="notification_sync_stale_body">
+        <item quantity="one">%d change has not reached your server yet. Open Capsule to sync.</item>
+        <item quantity="other">%d changes have not reached your server yet. Open Capsule to sync.</item>
     </plurals>
     <plurals name="share_items">
         <item quantity="one">%d item</item>
