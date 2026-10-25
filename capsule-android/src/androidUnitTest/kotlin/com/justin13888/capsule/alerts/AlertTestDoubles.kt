@@ -17,11 +17,15 @@ fun day(
 class RulesPolicy : AlertPolicy {
     var refuse = false
 
+    /** The core cannot be reached, as [FfiAlertPolicy] reports a missing native library. */
+    var unavailable = false
+
     override fun evaluate(
         facts: NotifyFacts,
         now: Instant,
     ): List<Alert> {
         require(!refuse) { "refused" }
+        check(!unavailable) { "unavailable" }
         return AlertClass.entries.mapNotNull { alertClass ->
             val until = facts.suppressedUntil[alertClass]
             when {
@@ -37,6 +41,7 @@ class RulesPolicy : AlertPolicy {
         now: Instant,
     ): List<ClassDeadline> {
         require(!refuse) { "refused" }
+        check(!unavailable) { "unavailable" }
         return AlertClass.entries.mapNotNull { alertClass ->
             val condition = condition(alertClass, facts)
             if (!alertClass.isPreArmable || alertClass in facts.disabled || condition == null) return@mapNotNull null

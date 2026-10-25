@@ -15,6 +15,12 @@ import uniffi.capsule_sdk.preArmDeadlines as ffiPreArmDeadlines
  *
  * A refused input (`FfiException`) is rethrown as [IllegalArgumentException], which the
  * coordinator treats as "leave the armed alarms as they were".
+ *
+ * A core that cannot be reached - no `libcapsule_sdk.so` or no JNA dispatch library
+ * in the APK, which surfaces as a [LinkageError] (`UnsatisfiedLinkError` on the first
+ * call, `NoClassDefFoundError` on every later one) - is rethrown as
+ * [IllegalStateException], which the coordinator treats the same way. It never escapes
+ * to the activity: a missing native library degrades alerts, it does not crash launch.
  */
 class FfiAlertPolicy : AlertPolicy {
     override fun evaluate(
@@ -42,6 +48,8 @@ class FfiAlertPolicy : AlertPolicy {
             body()
         } catch (error: FfiException) {
             throw IllegalArgumentException("the alert predicate refused its input", error)
+        } catch (error: LinkageError) {
+            throw IllegalStateException("the alert predicate's native library is unavailable", error)
         }
 
     private fun NotifyFacts.toFfi() =

@@ -24,7 +24,10 @@ data class AlertRefreshOutcome(
         /** Permission is refused: badges only, every alarm cancelled. Not an error. */
         BADGES_ONLY,
 
-        /** The predicate refused its input; the armed alarms were left as they were. */
+        /**
+         * The predicate refused its input or could not be reached; the armed alarms
+         * were left as they were.
+         */
         POLICY_FAILED,
     }
 }
@@ -70,6 +73,9 @@ class AlertCoordinator(
             stillTrue = policy.evaluate(input.copy(suppressedUntil = raw.suppressedUntil), now).map { it.alertClass }.toSet()
         } catch (error: IllegalArgumentException) {
             log.log(Level.WARNING, "alert predicate refused its input", error)
+            return AlertRefreshOutcome(AlertRefreshOutcome.Delivery.POLICY_FAILED, badges, emptyList())
+        } catch (error: IllegalStateException) {
+            log.log(Level.WARNING, "alert predicate is unavailable", error)
             return AlertRefreshOutcome(AlertRefreshOutcome.Delivery.POLICY_FAILED, badges, emptyList())
         }
         badges = reported

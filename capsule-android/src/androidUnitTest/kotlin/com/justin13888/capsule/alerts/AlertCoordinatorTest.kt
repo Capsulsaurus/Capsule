@@ -189,4 +189,16 @@ class AlertCoordinatorTest {
         assertEquals(AlertRefreshOutcome.Delivery.POLICY_FAILED, outcome.delivery)
         assertEquals(mapOf(AlertClass.SYNC_STALE to day(14)), harness.armedAt())
     }
+
+    @Test
+    fun anUnreachablePredicateLeavesTheAlarmsAsTheyWere() {
+        val armed = ArmedAlarm(Alert(AlertClass.SYNC_STALE), day(14))
+        val harness = Harness(scheduler = FakeScheduler(listOf(armed)))
+        harness.policy.unavailable = true
+
+        val outcome = harness.coordinator.refresh()
+
+        assertEquals(AlertRefreshOutcome.Delivery.POLICY_FAILED, outcome.delivery)
+        assertEquals(mapOf(AlertClass.SYNC_STALE to day(14)), harness.armedAt())
+    }
 }

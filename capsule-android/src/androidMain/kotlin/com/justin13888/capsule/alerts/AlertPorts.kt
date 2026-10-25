@@ -5,6 +5,9 @@ import java.time.Instant
 /**
  * The alert predicate - `capsule-core::notify`, one decision function for every
  * platform. The app adapts the core's exports ([FfiAlertPolicy]); tests script it.
+ *
+ * Both calls throw [IllegalArgumentException] when the predicate refuses its input and
+ * [IllegalStateException] when it cannot be reached; nothing else may escape.
  */
 interface AlertPolicy {
     /** Every alert true at [now] - the in-app badge set. */
