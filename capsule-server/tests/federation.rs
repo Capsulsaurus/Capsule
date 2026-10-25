@@ -2250,6 +2250,72 @@ async fn an_accounts_mints_are_budgeted() {
     assert_eq!(refused["code"], "error.federation.rate_budget_exceeded");
 }
 
+/// Fill `sample`'s partition to its shipped ceiling with keys `fill` builds.
+async fn saturate(
+    fixture: &Fixture,
+    sample: &CounterKey,
+    budget: capsule_server::counter::Budget,
+    fill: impl Fn(usize) -> CounterKey,
+) {
+    for i in 0..sample.ceiling() {
+        fixture
+            .counters
+            .hit(&fill(i), budget, fixture.clock.now())
+            .await
+            .expect("the partition has room until it is full");
+    }
+}
+
+#[tokio::test]
+async fn a_full_mint_partition_is_a_429_never_a_500() {
+    // #912: a full partition is the limiter working, so it answers as a spent budget does, not
+    // as the outage a `500` reports.
+    let dsk = support::identity_key();
+    let (fixture, bearer) = anchored(&dsk).await;
+    publish_roster(&fixture, &bearer, &dsk, 1, &[(BOB, MemberRole::Reader)])
+        .await
+        .assert_status(StatusCode::OK);
+    saturate(
+        &fixture,
+        &CounterKey::CapabilityMints(support::user()),
+        budgets::CAPABILITY_MINTS,
+        |i| CounterKey::CapabilityMints(UserId::new(format!("filler-{i}"))),
+    )
+    .await;
+
+    let refused = mint(&fixture, &bearer, mint_body("read")).await;
+    refused.assert_status(StatusCode::TOO_MANY_REQUESTS);
+    let refused: Value = refused.json();
+    assert_eq!(refused["code"], "error.federation.rate_budget_exceeded");
+}
+
+#[tokio::test]
+async fn a_full_report_nonce_partition_is_a_429_never_a_500_or_a_replay() {
+    // #912: the nonce is spent after verification, so a full partition must neither read as a
+    // replay (`401`) nor as an outage (`500`).
+    let (fixture, _) = shared().await;
+    let (signer, public) = support::peer_keypair();
+    pin(&fixture, public).await;
+    let sample = CounterKey::FederatedReportNonce(format!("{PEER}:sample"));
+    saturate(&fixture, &sample, budgets::FEDERATED_REPORT_NONCE, |i| {
+        CounterKey::FederatedReportNonce(format!("filler.test:{i}"))
+    })
+    .await;
+
+    let refused = file(
+        &fixture,
+        support::sign_report(
+            &signer,
+            &claim("0192f1a8-7c4e-4b6a-9d3e-000000000009", support::REPORTED_AT),
+        ),
+    )
+    .await;
+    refused.assert_status(StatusCode::TOO_MANY_REQUESTS);
+    let refused: Value = refused.json();
+    assert_eq!(refused["code"], "error.moderation.report_rate_limited");
+    assert_eq!(queued(&fixture).await, 0, "nothing is filed");
+}
+
 #[tokio::test]
 async fn a_deadline_at_exactly_the_lifetime_ceiling_is_a_400_never_a_500() {
     // #529. The route measured the ninety days from the request's instant and the store from the

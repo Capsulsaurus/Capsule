@@ -585,14 +585,22 @@ pub async fn issue_capability(
     let album = AlbumId::new(&path.album_id);
 
     // Every mint writes a capability row, so an account's mints are budgeted before any store is
-    // read. Fail closed: a counter that cannot answer is a `500`, never an admission.
+    // read. Fail closed: a counter that cannot answer is a `500`, never an admission, and a full
+    // partition is the limiter working, so it is the same `429` a spent budget gets.
     let key = CounterKey::CapabilityMints(UserId::new(credential.user.as_str()));
     match counters
         .hit(&key, budgets::CAPABILITY_MINTS)
         .await
         .map_err(|error| {
-            tracing::error!(%error, user = %credential.user, "the mint counter could not be reached");
-            MintRejection::unavailable()
+            if let Some(retry_after) = counters.capacity_refusal(&error, budgets::CAPABILITY_MINTS) {
+                tracing::warn!(%error, user = %credential.user, %retry_after, "a mint was refused: the mint counter is at capacity");
+                MintRejection::RateLimited {
+                    code: error_codes::FEDERATION_RATE_BUDGET_EXCEEDED,
+                }
+            } else {
+                tracing::error!(%error, user = %credential.user, "the mint counter could not be reached");
+                MintRejection::unavailable()
+            }
         })? {
         crate::counter::Verdict::Admitted { .. } => {}
         crate::counter::Verdict::Limited { retry_after } => {
@@ -1413,13 +1421,20 @@ pub async fn submit_federated_report(
         budgets::FEDERATED_INTAKE,
     )
     .await?;
-    match charge(&counters, &nonce, budgets::FEDERATED_REPORT_NONCE).await {
-        Ok(()) => {}
-        Err(ReportRejection::RateLimited { .. }) => {
+    // Spent by hand rather than through `charge`: a `Limited` verdict here is a replay, which
+    // is a `401`, while a full partition is the limiter at capacity, which is the `429` every
+    // other report budget gives — never the `500` of a store that could not answer.
+    match counters
+        .hit(&nonce, budgets::FEDERATED_REPORT_NONCE)
+        .await
+        .map_err(|error| {
+            refused_by_counter(&counters, &error, &nonce, budgets::FEDERATED_REPORT_NONCE)
+        })? {
+        crate::counter::Verdict::Admitted { .. } => {}
+        crate::counter::Verdict::Limited { .. } => {
             tracing::warn!(%peer, "a federated report replayed a nonce");
             return Err(ReportRejection::unsigned());
         }
-        Err(refusal) => return Err(refusal),
     }
 
     // Does the account exist here? The answer decides whether a row is written and **never what
@@ -1512,10 +1527,11 @@ async fn charge(
     key: &CounterKey,
     budget: crate::counter::Budget,
 ) -> Result<(), ReportRejection> {
-    match counters.hit(key, budget).await.map_err(|error| {
-        tracing::error!(%error, kind = key.as_str(), "a report counter could not be reached");
-        ReportRejection::unavailable()
-    })? {
+    match counters
+        .hit(key, budget)
+        .await
+        .map_err(|error| refused_by_counter(counters, &error, key, budget))?
+    {
         crate::counter::Verdict::Admitted { .. } => Ok(()),
         crate::counter::Verdict::Limited { retry_after } => {
             tracing::info!(kind = key.as_str(), %retry_after, "a federated report budget is spent");
@@ -1523,6 +1539,28 @@ async fn charge(
                 code: error_codes::MODERATION_REPORT_RATE_LIMITED,
             })
         }
+    }
+}
+
+/// What a report counter that refused to answer tells the peer.
+///
+/// Fail closed either way. A full partition is the limiter working as designed and clears
+/// within its window, so it is the `429` a spent budget gets; anything else is a store that
+/// could not answer, which is the `500`.
+fn refused_by_counter(
+    counters: &CounterContext,
+    error: &crate::store::StoreError,
+    key: &CounterKey,
+    budget: crate::counter::Budget,
+) -> ReportRejection {
+    if let Some(retry_after) = counters.capacity_refusal(error, budget) {
+        tracing::warn!(%error, kind = key.as_str(), %retry_after, "a report counter is at capacity");
+        ReportRejection::RateLimited {
+            code: error_codes::MODERATION_REPORT_RATE_LIMITED,
+        }
+    } else {
+        tracing::error!(%error, kind = key.as_str(), "a report counter could not be reached");
+        ReportRejection::unavailable()
     }
 }
 
