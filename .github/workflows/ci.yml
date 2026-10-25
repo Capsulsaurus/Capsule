@@ -79,6 +79,8 @@ jobs:
               - 'capsule-web/src/i18n/messages/**'
               - 'capsule-swift/Generated/**'
               - 'capsule-android/src/androidMain/res/values*/strings.xml'
+              # The `prev-release-compat` job's flow.
+              - 'scripts/prev-release-compat.sh'
               - '.github/workflows/ci.yml'
             web:
               - 'capsule-web/**'
@@ -432,6 +434,48 @@ jobs:
           cat "$RUNNER_TEMP/capsule-server.log" || true
           docker compose -f capsule-server/compose.yaml --profile oidc logs dex || true
 
+  # The previous release's `capsule` against the server built here, and this build's `capsule`
+  # against the previous release's `capsule-server` (#761), through one fixed flow: register,
+  # login, import, push, status, restore. Inside the server's protocol window the push must reach
+  # verified custody and the restore must match byte for byte; outside it every write must be
+  # refused with `426` and nothing lost. scripts/prev-release-compat.sh owns the flow and resolves
+  # the release: the newest published one whose tag is an ancestor of the commit under test.
+  #
+  # Not in `required`, and deliberately red until a release exists: with no previous release the
+  # script fails loudly rather than passing vacuously. It joins `required` once it has passed
+  # against a real release. `fetch-depth: 0` because resolving the release walks tag ancestry and
+  # reads the release's protocol version from its tree.
+  prev-release-compat:
+    name: Compat (previous release)
+    needs: changes
+    if: ${{ needs.changes.outputs.rust == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install Rust toolchain
+        run: rustup toolchain install
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+      # nasm and libdav1d: capsule-cli's codecs, as in the `rust` job.
+      - name: Install nasm and libdav1d
+        run: sudo apt-get update && sudo apt-get install -y nasm libdav1d-dev
+      - name: Build the binaries under test
+        run: cargo build -p capsule-cli -p capsule-server --bins
+      - name: Previous release against this build, both directions
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/prev-release-compat.sh target/debug
+      - name: Upload the flows' logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: prev-release-compat-logs
+          path: ${{ runner.temp }}/prev-release-compat.*/
+          if-no-files-found: ignore
+
   # Verify the app FFI — capsule-sdk with `--features ffi`, plus the capsule-core-ffi
   # umbrella on Apple, both linking capsule-core — cross-compiles to the formally
   # supported targets (mobile + desktop). Tier 1 (Apple, Android) gates; Tier 2 (Windows MSVC, aarch64 Linux)
@@ -684,6 +728,8 @@ jobs:
   # `rust-advisories`, unfiltered, #507), and `changes` is checked ahead of it under a stricter rule,
   # because "skipped" is only trustworthy when the filter that skipped it ran.
   # A job in `needs` but absent from both checks is a gate that cannot fail.
+  # `prev-release-compat` is absent from both on purpose (#761): it fails until a release exists,
+  # and joins `needs` and the loop once it has passed against one.
   required:
     name: required
     if: always()
