@@ -138,7 +138,12 @@ struct AppEnvironment {
     var auth: any AuthPort { mock.auth }
     var devices: any DevicePort { mock.devices }
     var enrollment: any EnrollmentPort { mock.enrollment }
-    var recovery: any RecoveryPort { mock.recovery }
+    /// Wrapped so every verify, snooze or rotation refreshes the alerts: the
+    /// port has no change stream for ``runAlertLoop()`` to follow.
+    var recovery: any RecoveryPort {
+        let alerts = alerts
+        return AlertRefreshingRecoveryPort(mock.recovery) { _ = await alerts.refresh() }
+    }
 
     var quarantine: any QuarantinePort { mock.quarantine }
     var maintenance: any MaintenancePort { mock.maintenance }

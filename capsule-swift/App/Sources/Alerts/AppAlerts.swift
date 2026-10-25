@@ -51,11 +51,15 @@ extension AppEnvironment {
         let sync = sync
         let quota = quota
         let quarantine = quarantine
+        let drops = drops
         let settings = settings
+        // Recovery has no change stream: `recovery` is wrapped in
+        // `AlertRefreshingRecoveryPort`, which refreshes after each call instead.
         await withTaskGroup(of: Void.self) { group in
             group.addTask { await Self.refresh(alerts, onEach: sync.changes()) }
             group.addTask { await Self.refresh(alerts, onEach: quota.changes()) }
             group.addTask { await Self.refresh(alerts, onEach: quarantine.changes()) }
+            group.addTask { await Self.refresh(alerts, onEach: drops.changes()) }
             group.addTask { await Self.refresh(alerts, onEach: settings.changes()) }
         }
     }
