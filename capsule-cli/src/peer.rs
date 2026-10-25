@@ -19,6 +19,9 @@
 //!   own custody check of its own hashes and a read-back of its own copy, and lists every
 //!   hand-off this device quarantined.
 //! - **`peer discard`** (the delegate): deletes one quarantined hand-off, on the user's word.
+//! - **`peer offer`** and **`peer pull`**: sync a delta-scoped backup artifact from one device
+//!   to the other over the channel, ingested against the receiver's persisted tombstones
+//!   ([`sync`]).
 //!
 //! The hand-off rides a file or the peering channel: the courier is opaque and the hand-off
 //! self-verifying, so neither carries trust for its contents
@@ -84,6 +87,10 @@ use crate::peering_state::DbDirectoryVersions;
 use crate::remote::{self, RemoteConfig, RemoteError};
 use crate::session::SessionStore;
 
+pub mod sync;
+
+pub use sync::{OfferOptions, OfferSummary, PullSummary, ingest_tombstones, offer, pull};
+
 /// The file suffix a hand-off is written under.
 pub const HAND_OFF_SUFFIX: &str = "capsule-handoff";
 
@@ -109,6 +116,10 @@ pub enum PeerError {
     /// A hand-off written to files names no delegate (`--to`).
     #[error("a hand-off written to files must name the device it is for")]
     NoDelegate,
+    /// `peer pull` could not read this device's purge tombstones, so it refuses to ingest
+    /// rather than run with an empty set a peer could resurrect a purged asset through.
+    #[error("the tombstones cannot be read, so nothing is ingested: {0}")]
+    Tombstones(String),
     /// The `--listen` address could not be bound.
     #[error("listen on {address}: {error}")]
     Listen {

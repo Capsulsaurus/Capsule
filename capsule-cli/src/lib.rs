@@ -865,6 +865,38 @@ async fn dispatch(command: Commands) -> Result<()> {
                 let ws = open_workspace(&library, passphrase_stdin)?;
                 peer_discard(&ws, &hand_off, json)?;
             }
+            PeerCommands::Offer {
+                library,
+                peer,
+                to,
+                asset,
+                passphrase_stdin,
+                json,
+            } => {
+                let options = peer::OfferOptions {
+                    peer,
+                    to,
+                    assets: asset.into_iter().collect(),
+                };
+                let ws = open_workspace(&library, passphrase_stdin)?;
+                peer_offer(&ws, &options, json).await?;
+            }
+            PeerCommands::Pull {
+                library,
+                listen,
+                listen_timeout,
+                passphrase_stdin,
+                json,
+            } => {
+                let mut ws = open_workspace(&library, passphrase_stdin)?;
+                peer_pull(
+                    &mut ws,
+                    listen,
+                    std::time::Duration::from_secs(listen_timeout),
+                    json,
+                )
+                .await?;
+            }
         },
 
         // ── Demo ──────────────────────────────────────────────────────────
@@ -2608,6 +2640,118 @@ fn peer_discard(workspace: &Workspace, hand_off: &str, json: bool) -> Result<()>
         );
     }
     Ok(())
+}
+
+/// `capsule peer offer`: send this library's assets to the device at `--peer`.
+async fn peer_offer(workspace: &Workspace, options: &peer::OfferOptions, json: bool) -> Result<()> {
+    let remote = remote::RemoteConfig::from_env();
+    let store = session_store()?;
+    let state = peer::PeerState::for_device(workspace.device_id())
+        .map_err(|error| peer_run_error("Offer", &error))?;
+    let versions = peer_floor(workspace, &state, "Offer").await?;
+    let summary = peer::offer(&remote, &store, workspace, &versions, options)
+        .await
+        .map_err(|error| peer_run_error("Offer", &error))?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&summary)?);
+    } else {
+        if let (Some(receiver), Some(artifact)) = (summary.receiver, &summary.artifact) {
+            println!(
+                "{}",
+                format!(
+                    "Offered {} asset(s) to device {receiver} as {artifact} ({} bytes); it \
+                     pulled {} bytes",
+                    summary.assets.len(),
+                    summary.bytes,
+                    summary.served_bytes
+                )
+                .green()
+            );
+        }
+        for failed in &summary.failed {
+            println!(
+                "{}",
+                format!("{}: not offered: {}", failed.subject, failed.message).red()
+            );
+        }
+    }
+    if summary.failed.is_empty() {
+        Ok(())
+    } else {
+        Err(eyre!(
+            "Offer finished with {} failure(s)",
+            summary.failed.len()
+        ))
+    }
+}
+
+/// `capsule peer pull`: take what the device that dials in offers, against the tombstones this
+/// device persisted.
+async fn peer_pull(
+    workspace: &mut Workspace,
+    listen: std::net::SocketAddr,
+    timeout: std::time::Duration,
+    json: bool,
+) -> Result<()> {
+    let remote = remote::RemoteConfig::from_env();
+    let store = session_store()?;
+    let state = peer::PeerState::for_device(workspace.device_id())
+        .map_err(|error| peer_run_error("Pull", &error))?;
+    let db = db::init_sqlite()
+        .await
+        .map_err(|e| eyre!("Failed to open local database: {e}"))?;
+    // Read before anything binds or dials: a set that cannot be read refuses the run.
+    peer::ingest_tombstones(&db)
+        .await
+        .map_err(|error| peer_run_error("Pull", &error))?;
+    let versions = peer_floor(workspace, &state, "Pull").await?;
+    let listener = peer::PeerListener::bind(listen, timeout)
+        .await
+        .map_err(|error| peer_run_error("Pull", &error))?;
+    let bound = listener
+        .local_addr()
+        .map_err(|error| peer_run_error("Pull", &error))?;
+    eprintln!(
+        "Listening for a peer on {bound} for up to {}s",
+        timeout.as_secs()
+    );
+    let summary = peer::pull(&remote, &store, workspace, &db, &versions, &listener)
+        .await
+        .map_err(|error| peer_run_error("Pull", &error))?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&summary)?);
+    } else {
+        let peer = summary
+            .peer
+            .map_or_else(|| "the peer".to_owned(), |id| format!("device {id}"));
+        println!(
+            "{}",
+            format!(
+                "From {peer}: {} applied, {} already held, {} refused as purged here, {} \
+                 quarantined as stale, {} incomplete",
+                summary.applied.len(),
+                summary.identical.len(),
+                summary.tombstoned.len(),
+                summary.quarantined.len(),
+                summary.incomplete.len()
+            )
+            .green()
+        );
+        for failed in summary.failed.iter().chain(&summary.refused) {
+            println!(
+                "{}",
+                format!("{}: {}", failed.subject, failed.message).red()
+            );
+        }
+    }
+    if summary.has_failures() {
+        Err(eyre!(
+            "Pull finished with {} failure(s)",
+            summary.failed.len()
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 /// `capsule list`: query the sync-fed local store and render it.
