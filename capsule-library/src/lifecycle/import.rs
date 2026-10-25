@@ -221,7 +221,7 @@ impl<R: Read> Read for Tee<R> {
 struct StagedOriginal(Option<Staged>);
 
 impl StagedOriginal {
-    /// Rename the copy into place; a no-op for an original already at its media path.
+    /// Rename the copy into place.
     fn commit(mut self) -> Result<()> {
         self.0.take().map_or(Ok(()), Staged::commit)
     }
@@ -785,23 +785,18 @@ impl Workspace {
         // The media bucket every file of this asset resolves to: the resolved capture time.
         let bucket = capture_utc;
         let media_path = media_file_path(&self.root, bucket, asset_id, &ext);
-        // Bytes already at their own media path are signed where they lie: nothing is copied,
-        // and the Move-mode release below must not delete what is now the asset. Anything else
-        // is copied to `{media}.tmp` in the same pass that encrypts it.
-        let in_place = is_same_file(src, &media_path);
-        let (staged, copy) = if in_place {
-            (StagedOriginal(None), None)
-        } else {
-            create_dir_durable(&media_dir(&self.root, bucket))?;
-            let tmp = tmp_path(&media_path);
-            let staged = StagedOriginal(Some(Staged {
-                tmp: tmp.clone(),
-                target: media_path.clone(),
-            }));
-            let copy = fs::File::create(&tmp)
-                .map_err(|e| LifecycleError::Io(format!("stage {}: {e}", tmp.display())))?;
-            (staged, Some(copy))
-        };
+        // The original is copied to `{media}.tmp` in the same pass that encrypts it. The asset
+        // id is fresh, so its media path cannot already name the source.
+        create_dir_durable(&media_dir(&self.root, bucket))?;
+        let tmp = tmp_path(&media_path);
+        let staged = StagedOriginal(Some(Staged {
+            tmp: tmp.clone(),
+            target: media_path.clone(),
+        }));
+        let copy = Some(
+            fs::File::create(&tmp)
+                .map_err(|e| LifecycleError::Io(format!("stage {}: {e}", tmp.display())))?,
+        );
         let mut held_reader = held.as_deref().unwrap_or_default();
         let reader: &mut dyn Read = if held.is_some() {
             &mut held_reader
@@ -844,7 +839,6 @@ impl Workspace {
         tracing::debug!(
             asset_id = %asset_id,
             plaintext_size = enc.plaintext_size,
-            in_place,
             "import: original hashed, encrypted and staged in one pass"
         );
 
@@ -1019,7 +1013,7 @@ impl Workspace {
         // Move mode: release the source only after the durable, self-verified commit — unless
         // the caller defers release to its server-side verify-before-destroy gate,
         // where the source is the only copy until the *server* durably holds it.
-        if opts.move_source && !opts.defer_source_release && !in_place {
+        if opts.move_source && !opts.defer_source_release {
             let _ = fs::remove_file(src);
         }
 
