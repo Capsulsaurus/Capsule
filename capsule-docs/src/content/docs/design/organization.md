@@ -161,17 +161,15 @@ number of devices converge deterministically, and every change is a signed `meta
   from [share links](/design/share-links/), and kept only when the user opts in for that export
   ([Privacy on Export](/design/metadata/#privacy-on-export)); asset, stack and album labels follow the same rule as captions.
 - **Search.** Smart-album `contains` predicates over `tags_user` match a label at any level
-  attached to the asset: its own, its regions', its stack's and its album's.
-
+  attached to the asset: its own, its live regions', its stack's and its album's. A deleted
+  region's labels never match, and a stack's labels match only while the asset is a current
+  member of that stack.
 - **Merge.** Asset, stack and album labels merge as OR-sets. A region's register merges as a
   semilattice: deleting a region is final (its tombstone absorbs any concurrent or later edit;
   a region id is never reused), and two live writes keep the later shape and the union of their
   labels. Album names merge by LWW.
 - **Restore.** A backup artifact carries each album's and stack's record sealed under its AMK,
   so a restored device recovers album names and labels rather than showing `Recovered album`.
-
-Not yet implemented: smart-album search across label levels
-([#722](https://github.com/Capsulsaurus/Capsule/issues/722)).
 
 ## Culling
 
