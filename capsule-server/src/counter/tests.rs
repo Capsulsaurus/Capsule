@@ -603,7 +603,7 @@ fn a_held_partition_does_not_block_a_hit_on_another() {
     // collect it if it could.
     block_on(counters.hit(&flooded, budget(), at(0))).expect("answers");
 
-    let held = lock(counters.partition(&flooded));
+    let held = lock(&counters.partition(&flooded).windows);
 
     // Hit another variant from a second thread while the drop partition is held. Under one lock
     // for every partition this would block until `held` drops, which is never inside the bound.
@@ -629,4 +629,43 @@ fn a_held_partition_does_not_block_a_hit_on_another() {
     block_on(counters.hit(&CounterKey::ShareLink("next".to_owned()), budget(), at(11)))
         .expect("answers");
     assert_eq!(counters.len_of(&flooded), 0);
+}
+
+#[test]
+fn a_flood_next_door_takes_no_lock_until_something_lapses() {
+    let counters = Arc::new(InMemoryCounters::new());
+    let quiet = CounterKey::ShareLink("quiet".to_owned());
+    let flood = CounterKey::DropLink("flood".to_owned());
+    block_on(counters.hit(&quiet, budget(), at(0))).expect("answers");
+
+    // While nothing in the share partition has lapsed, a drop flood passes it over on the
+    // lock-free hint: its lock is not taken however many drop hits arrive.
+    for _ in 0..100 {
+        block_on(counters.hit(&flood, budget(), at(5))).expect("answers");
+    }
+    assert_eq!(counters.purge_others(flood.partition_index(), at(5)), 0);
+
+    // Held by a share caller, it is still not waited on once a window there lapses: the drop
+    // hit answers within the bound and leaves the held partition to its holder.
+    let held = lock(&counters.partition(&quiet).windows);
+    let (sent, received) = std::sync::mpsc::channel();
+    let other = Arc::clone(&counters);
+    let worker = std::thread::spawn(move || {
+        let verdict =
+            block_on(other.hit(&CounterKey::DropLink("late".to_owned()), budget(), at(11)));
+        sent.send(verdict).expect("the test is listening");
+    });
+    received
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("a drop hit must not wait on a held share partition")
+        .expect("answers");
+    assert_eq!(held.len(), 1, "a held partition is skipped, not purged");
+    drop(held);
+    worker.join().expect("the worker finished");
+
+    // Released and lapsed, it is swept exactly once: the sweep re-derives the hint, so the
+    // next drop hit passes it over again.
+    assert_eq!(counters.purge_others(flood.partition_index(), at(11)), 1);
+    assert_eq!(counters.len_of(&quiet), 0);
+    assert_eq!(counters.purge_others(flood.partition_index(), at(11)), 0);
 }
