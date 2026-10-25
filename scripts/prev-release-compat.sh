@@ -144,6 +144,12 @@ if [ -z "$prev_dir" ]; then
 	prev_dir="$work/release/capsule-v${version}-${TARGET}"
 	prev_protocol=$(git show "refs/tags/$prev_tag:$PRIMITIVES" | protocol_of)
 	[ -n "$prev_protocol" ] || die "no PROTOCOL_VERSION in $PRIMITIVES at $prev_tag"
+	prev_catalog="$work/release-en.json"
+	git show "refs/tags/$prev_tag:locales/en.json" >"$prev_catalog" ||
+		die "no locales/en.json at $prev_tag"
+else
+	# A stand-in for the release speaks this tree's catalog.
+	prev_catalog="$repo_root/locales/en.json"
 fi
 
 for bin in "$new_dir/capsule" "$new_dir/capsule-server" "$prev_dir/capsule" "$prev_dir/capsule-server"; do
@@ -210,15 +216,22 @@ step_failed() {
 	die "$label: $name: $why"
 }
 
-# Whether a refused step carried the protocol gate's code.
+# Whether a refused step carried the protocol gate's refusal: its stable code (a `--json`
+# document), or the English catalog message the CLI renders that code as (a person's line).
 refused_by_gate() {
-	grep -qF "$REFUSAL_CODE" "$1/$2.stdout" "$1/$2.stderr"
+	grep -qF -e "$REFUSAL_CODE" -e "$refusal_message" "$1/$2.stdout" "$1/$2.stderr"
 }
 
-# `run_flow LABEL CLI SERVER CLIENT_PROTOCOL PORT`
+# The English message a client renders the refusal code as, from that client's catalog on stdin.
+refusal_message_of() {
+	jq -er --arg code "$REFUSAL_CODE" '.[$code].message'
+}
+
+# `run_flow LABEL CLI SERVER CLIENT_PROTOCOL PORT CLIENT_CATALOG`
 run_flow() {
 	label=$1 cli=$2
 	local server=$3 client_protocol=$4 port=$5
+	refusal_message=$(refusal_message_of <"$6") || die "$label: no $REFUSAL_CODE message in $6"
 	local dir="$work/$label"
 	mkdir -p "$dir/home" "$dir/blobs" "$dir/out"
 	log "── $label: capsule ($cli) against capsule-server ($server)"
@@ -303,6 +316,8 @@ run_flow() {
 	wait "$server_pid" 2>/dev/null || true
 }
 
-run_flow old-cli-new-server "$prev_dir/capsule" "$new_dir/capsule-server" "$prev_protocol" 3901
-run_flow new-cli-old-server "$new_dir/capsule" "$prev_dir/capsule-server" "$new_protocol" 3902
+run_flow old-cli-new-server "$prev_dir/capsule" "$new_dir/capsule-server" "$prev_protocol" 3901 \
+	"$prev_catalog"
+run_flow new-cli-old-server "$new_dir/capsule" "$prev_dir/capsule-server" "$new_protocol" 3902 \
+	"$repo_root/locales/en.json"
 log "both directions passed"
