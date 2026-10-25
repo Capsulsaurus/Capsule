@@ -434,9 +434,11 @@ pub const SHARE_METADATA_VERSION: &str = "share-metadata/v1";
 /// `derived`, and `wrapped_file_key` is present iff `key_mode = wrapped`. Nothing here is a key:
 /// the nonce prefix is public by construction and the wrapped key is AMK-sealed ciphertext.
 ///
-/// The record carries no capture metadata (no EXIF, GPS, camera serial or device id), so the
-/// [Privacy on Export] strip has nothing to remove from it today. A field that adds any is a
-/// boundary-crossing field and must be added already stripped (#432).
+/// The asset's capture metadata travels only in [`sidecar`](Self::sidecar), the copy the issuing
+/// client already passed through the [Privacy on Export] strip (`sidecar_for_export`, a
+/// `native` item) before sealing. Every other field
+/// is key-free crypto plumbing; a field that adds capture metadata is a boundary-crossing field
+/// and must be added already stripped.
 ///
 /// [Privacy on Export]: https://docs/design/metadata/#privacy-on-export
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -463,6 +465,41 @@ pub struct SharedAsset {
     /// The AMK-sealed file key; present iff `key_mode = wrapped`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wrapped_file_key: Option<crate::crypto::provenance::WrappedFileKey>,
+    /// Canonical CBOR of the asset's **export** sidecar: the library sidecar after the
+    /// [Privacy on Export] strip, unsigned once anything was stripped. Wire-absent when the
+    /// issuer sent none, so a record without it encodes byte-identically to one written before
+    /// the field existed, and a reader that predates it ignores it. A `native` reader decodes
+    /// it with `SharedAsset::exported_sidecar`; the browser viewer carries it unread.
+    ///
+    /// [Privacy on Export]: https://docs/design/metadata/#privacy-on-export
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "serde_bytes")]
+    pub sidecar: Option<Vec<u8>>,
+}
+
+#[cfg(feature = "native")]
+impl SharedAsset {
+    /// Decode the [`sidecar`](Self::sidecar) the issuer sealed for this asset, if any.
+    ///
+    /// # Errors
+    ///
+    /// [`SharingError::Malformed`] when the bytes are not a sidecar this reader understands, or
+    /// are the sidecar of another asset.
+    pub fn exported_sidecar(&self) -> Result<Option<crate::sidecar::SidecarV1>, SharingError> {
+        let Some(bytes) = self.sidecar.as_deref() else {
+            return Ok(None);
+        };
+        let sidecar = crate::sidecar::SidecarV1::from_canonical_slice(
+            bytes,
+            crate::sidecar::SIDECAR_SCHEMA_V1,
+        )
+        .map_err(|_| SharingError::Malformed("a shared asset's sidecar does not decode"))?;
+        if sidecar.uuid != self.asset_id {
+            return Err(SharingError::Malformed(
+                "a shared asset's sidecar names another asset",
+            ));
+        }
+        Ok(Some(sidecar))
+    }
 }
 
 /// The record a share viewer starts from, sealed into the blob at the link's `metadata_hash`

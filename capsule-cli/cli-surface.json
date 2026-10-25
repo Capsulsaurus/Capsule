@@ -1211,7 +1211,7 @@
           "name": "discard"
         },
         {
-          "about": "Show this device's handed-off assets: take the other device's acknowledgements, take back uploads that are overdue or whose device was revoked, and release what the server holds. Also lists every hand-off this device quarantined",
+          "about": "Show this device's handed-off assets: take the other device's acknowledgements, take back uploads that are overdue or whose device was revoked, and release what the server holds. A delete made after a hand-off is held until the server holds the asset, then sent. Also lists every hand-off this device quarantined",
           "args": [
             {
               "help": "Path to the Capsule library holding the assets",
@@ -1247,7 +1247,7 @@
               "takes_value": false
             },
             {
-              "help": "Print the run as one JSON document on stdout: each delegation with its state, each refused acknowledgement with a stable `kind` and the detail, and each quarantined hand-off with its file, the stable `kind` of its refusal, the server's `code` when it gave one, and the detail",
+              "help": "Print the run as one JSON document on stdout: each delegation with its state, each refused acknowledgement with a stable `kind` and the detail, each quarantined hand-off with its file, the stable `kind` of its refusal, the server's `code` when it gave one, and the detail, and each delete made after a hand-off with the records between the hand-off and it (held, sent, failed and kept, or refused and not retried)",
               "id": "json",
               "long": "json",
               "positional": false,
@@ -1261,7 +1261,7 @@
       ]
     },
     {
-      "about": "Upload a local Capsule library to the server",
+      "about": "Upload a local Capsule library to the server. An asset handed to another device with `capsule peer delegate` is left to that device while its hand-off is open",
       "args": [
         {
           "help": "Path to the Capsule library to push",
@@ -1324,7 +1324,7 @@
           ]
         },
         {
-          "help": "Print the run as one JSON document on stdout: the totals and each asset's outcome (verified, failed with its error, or planned on a dry run)",
+          "help": "Print the run as one JSON document on stdout: the totals and each asset's outcome (verified, failed with its error, delegated to another device, or planned on a dry run)",
           "id": "json",
           "long": "json",
           "positional": false,

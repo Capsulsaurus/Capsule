@@ -119,6 +119,7 @@ fn shared_asset(
             KeyMode::Derived
         },
         wrapped_file_key: wrapped_file_key.map(WrappedFileKey),
+        sidecar: None,
     }
 }
 

@@ -13,8 +13,12 @@
 //! on the signer's signature, and refuses one signed by a key that is not the named device's —
 //! uploaded by a device of the account all the same — and one naming another account.
 //!
+//! A delete A makes after the hand-off reaches the server only once A's own custody check finds
+//! the create B uploaded, and `capsule push` leaves an open hand-off to B but pushes a re-queued
+//! one.
+//!
 //! The rows decided on one device (tampering, partial hand-off, an older delegate, a revoked
-//! delegate, a delete after hand-off, double upload) are unit tests in
+//! delegate, the ledger's hold of a delete after hand-off, double upload) are unit tests in
 //! `capsule-sdk/src/peering/delegation/tests.rs`; the signer check's are in
 //! `capsule-server/src/upload/signer/tests.rs` and `capsule-server/tests/upload.rs`.
 
@@ -26,7 +30,7 @@ use capsule_cli::peer::{
     self, ACK_SUFFIX, AcceptOptions, BootClock, DelegateOptions, PeerListener, PeerState,
 };
 use capsule_cli::peering_state::DbDirectoryVersions;
-use capsule_cli::remote::{self, PushOptions, RemoteConfig};
+use capsule_cli::remote::{self, AssetPushStatus, PushOptions, RemoteConfig};
 use capsule_cli::session::SessionStore;
 use capsule_core::crypto::keys::MasterKey;
 use capsule_core::crypto::primitives::DeviceTier;
@@ -40,6 +44,7 @@ use capsule_sdk::net::ConnectionClass;
 use capsule_sdk::peering::{DelegationState, RequeueReason};
 use capsule_sdk::push::{bundle_blobs, create_request};
 use capsule_sdk::recovery::RecoveryClient;
+use capsule_sdk::sync::ChangeKind;
 use capsule_sdk::upload::{UploadError, UploadOutcome};
 use migration::{Migrator, MigratorTrait as _};
 use tempfile::TempDir;
@@ -292,6 +297,179 @@ async fn e2e_case_15_a_delegate_uploads_a_sealed_bundle_and_the_origin_releases_
     );
 }
 
+/// The asset's feed entries, as the change kinds the server published for it.
+fn kinds_of(feed: &[capsule_sdk::sync::FeedEntry], asset: Uuid) -> Vec<ChangeKind> {
+    let wanted = asset.to_string().into_bytes();
+    feed.iter()
+        .filter(|entry| entry.asset_id == wanted || entry.asset_id == asset.as_bytes())
+        .map(|entry| entry.kind)
+        .collect()
+}
+
+/// A deletes the asset after handing it to B. The delete stays on A, held in the origin ledger,
+/// while the server has not indexed the create — B has not uploaded it yet — and reaches the
+/// server only once A's own custody check finds the create's receipts; it is sent once.
+#[tokio::test]
+async fn e2e_case_15_a_delete_after_hand_off_reaches_the_server_only_once_custody_exists() {
+    delete_after_hand_off(false).await;
+}
+
+/// As above, with an edit between the hand-off and the delete: the server's head is the create B
+/// uploaded, so the delete chains onto the edit only once the edit is there. Both are held, and
+/// both are sent in chain order once custody exists, so the server applies the delete rather
+/// than refusing it as a stale chain.
+#[tokio::test]
+async fn e2e_case_15_an_edit_then_a_delete_after_hand_off_both_reach_the_server_in_order() {
+    delete_after_hand_off(true).await;
+}
+
+async fn delete_after_hand_off(edit_first: bool) {
+    let server = Server::boot().await;
+    let remote = remote_for(&server);
+    let mut a = Device::register(&server, "delegation-delete").await;
+    let asset = a.import_file("deleted-after.jpg", &synthetic_jpeg());
+    let (_b_root, b, session_b) = second_device(&server, &a).await;
+    let cli_a = Cli::signed_in(&a.login_again(&server).await, a.workspace.device_id()).await;
+    let cli_b = Cli::signed_in(&session_b, b.device_id()).await;
+    let clock = Clock(AtomicU64::new(1_000));
+    let out = tempfile::tempdir().expect("the courier's directory");
+
+    let options = DelegateOptions::new(b.device_id(), vec![asset], out.path().to_owned());
+    let handed = peer::delegate(
+        &remote,
+        &cli_a.store,
+        &a.workspace,
+        &cli_a.state,
+        &cli_a.versions,
+        &clock,
+        &options,
+    )
+    .await
+    .expect("the hand-off runs");
+    assert!(handed.failed.is_empty(), "{handed:#?}");
+
+    // ── A deletes the asset; B has not uploaded it, so the delete is held ─────────────────
+    if edit_first {
+        a.workspace
+            .set_caption(&asset, "captioned after the hand-off")
+            .expect("A edits it");
+    }
+    a.workspace.soft_delete(&asset, 30).expect("A deletes it");
+    let sent: &[&str] = if edit_first {
+        &["sent", "sent"]
+    } else {
+        &["sent"]
+    };
+    let held = peer::status(
+        &remote,
+        &cli_a.store,
+        &a.workspace,
+        &cli_a.state,
+        &cli_a.versions,
+        &clock,
+        &[],
+    )
+    .await
+    .expect("status runs");
+    let outcomes: Vec<&str> = held.deletes.iter().map(|d| d.outcome).collect();
+    assert_eq!(outcomes, vec!["held"], "{held:#?}");
+    assert_eq!(held.delegations[0].state, DelegationState::HandedOff);
+    assert!(
+        kinds_of(&a.feed(&server).await, asset).is_empty(),
+        "the server has seen neither the create nor the delete"
+    );
+    // A second run does not hold it twice, and still sends nothing.
+    let again = peer::status(
+        &remote,
+        &cli_a.store,
+        &a.workspace,
+        &cli_a.state,
+        &cli_a.versions,
+        &clock,
+        &[],
+    )
+    .await
+    .expect("status runs");
+    let outcomes: Vec<&str> = again.deletes.iter().map(|d| d.outcome).collect();
+    assert_eq!(outcomes, vec!["held"], "{again:#?}");
+
+    // ── B uploads the create under its own session ────────────────────────────────────────
+    let file = hand_off_file(out.path(), asset);
+    let accepted = peer::accept(
+        &remote,
+        &cli_b.store,
+        &b,
+        &cli_b.state,
+        &cli_b.versions,
+        &AcceptOptions {
+            from: vec![file.clone()],
+            policy: UploadPolicy::Full,
+            connection: ConnectionClass::Unmetered,
+            listen: None,
+        },
+    )
+    .await
+    .expect("the accept runs");
+    assert_eq!(accepted.uploads.len(), 1, "{accepted:#?}");
+    assert_eq!(accepted.uploads[0].outcome, "removed", "{accepted:#?}");
+    let kinds = kinds_of(&a.feed(&server).await, asset);
+    assert!(
+        !kinds.is_empty() && !kinds.contains(&ChangeKind::Deleted),
+        "the create is indexed and nothing deleted it yet: {kinds:?}"
+    );
+
+    // ── A's own custody check releases it and sends the held delete ───────────────────────
+    let released = peer::status(
+        &remote,
+        &cli_a.store,
+        &a.workspace,
+        &cli_a.state,
+        &cli_a.versions,
+        &clock,
+        &[file.with_extension(ACK_SUFFIX)],
+    )
+    .await
+    .expect("status runs");
+    assert_eq!(
+        released.delegations[0].state,
+        DelegationState::Released,
+        "{released:#?}"
+    );
+    let outcomes: Vec<&str> = released.deletes.iter().map(|d| d.outcome).collect();
+    assert_eq!(outcomes, sent, "{released:#?}");
+    let kinds = kinds_of(&a.feed(&server).await, asset);
+    assert!(
+        kinds.contains(&ChangeKind::Deleted),
+        "the delete reached the server after the create's custody: {kinds:?}"
+    );
+    if edit_first {
+        let actions: Vec<Option<&str>> = released
+            .deletes
+            .iter()
+            .map(|d| d.action.as_deref())
+            .collect();
+        assert_eq!(
+            actions,
+            vec![Some("metadata-update"), Some("delete")],
+            "the edit went first, so the delete chained onto it"
+        );
+    }
+
+    // Sent once: a later run has nothing left to send.
+    let after = peer::status(
+        &remote,
+        &cli_a.store,
+        &a.workspace,
+        &cli_a.state,
+        &cli_a.versions,
+        &clock,
+        &[],
+    )
+    .await
+    .expect("status runs");
+    assert!(after.deletes.is_empty(), "{after:#?}");
+}
+
 /// `capsule peer delegate --peer` against `capsule peer accept --listen` on loopback: A dials B's
 /// listener, the pair completes the mutual TLS handshake and the hybrid identity check, B pulls
 /// the hand-off over the verified channel, persists it and acknowledges it over the same channel,
@@ -526,6 +704,28 @@ async fn e2e_case_15_a_delegate_that_dies_mid_upload_is_re_queued_and_the_origin
     .await
     .expect("the hand-off runs");
 
+    // While the hand-off is open and inside its deadline, `capsule push` leaves it to B.
+    let push_now = |delegated| remote::PushRun {
+        delegated,
+        ..remote::PushRun::default()
+    };
+    let skipped = remote::push_run(
+        &remote,
+        &cli_a.store,
+        &mut a.workspace,
+        PushOptions::default(),
+        push_now(peer::delegated_assets(&cli_a.state, &clock).expect("the ledger reads")),
+    )
+    .await
+    .expect("A pushes");
+    assert_eq!(skipped.delegated_assets, 1, "{skipped:#?}");
+    assert_eq!(skipped.outcomes[0].status, AssetPushStatus::Delegated);
+    assert_eq!(skipped.uploaded_blobs, 0, "nothing of it was sent");
+    assert!(
+        kinds_of(&a.feed(&server).await, asset).is_empty(),
+        "the server has not seen the asset"
+    );
+
     // B took the bundle and died before uploading a byte. Nothing arrives; the deadline passes.
     clock.0.store(60_000, Ordering::SeqCst);
     let due = peer::status(
@@ -549,16 +749,25 @@ async fn e2e_case_15_a_delegate_that_dies_mid_upload_is_re_queued_and_the_origin
         "re-queued to upload from this device"
     );
 
-    // A uploads it itself; either upload's custody releases the original.
-    let pushed = remote::push(
+    // A re-queued asset is pushed from here: A uploads it itself, and either upload's custody
+    // releases the original.
+    let delegated = peer::delegated_assets(&cli_a.state, &clock).expect("the ledger reads");
+    assert!(
+        delegated.is_empty(),
+        "a re-queued hand-off is not left to B"
+    );
+    let pushed = remote::push_run(
         &remote,
         &cli_a.store,
         &mut a.workspace,
         PushOptions::default(),
+        push_now(delegated),
     )
     .await
     .expect("A pushes");
     assert_eq!(pushed.verified_assets, 1, "{pushed:#?}");
+    assert_eq!(pushed.delegated_assets, 0);
+    assert_eq!(pushed.outcomes[0].status, AssetPushStatus::Verified);
     let released = peer::status(
         &remote,
         &cli_a.store,

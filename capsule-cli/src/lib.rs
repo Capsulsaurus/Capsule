@@ -1948,8 +1948,12 @@ async fn push_workspace(
     let assets = only
         .as_ref()
         .map_or_else(|| workspace.asset_ids().len(), Vec::len);
+    // An asset handed to another device and still inside its deadline is that device's to
+    // upload; a re-queued one is pushed from here.
+    let delegated = peer::delegated_for_push(workspace.device_id());
     let run = || remote::PushRun {
         assets: only.clone(),
+        delegated: delegated.clone(),
         ..remote::PushRun::default()
     };
 
@@ -1998,7 +2002,10 @@ async fn push_workspace(
                     )
                     .cyan()
                 );
-            } else if summary.is_no_op() && summary.failed_assets == 0 {
+            } else if summary.is_no_op()
+                && summary.failed_assets == 0
+                && summary.delegated_assets == 0
+            {
                 println!(
                     "{}",
                     "Everything in this library is already on the server.".cyan()
@@ -2523,6 +2530,36 @@ async fn peer_status(workspace: &Workspace, acks: &[PathBuf], json: bool) -> Res
                 )
                 .yellow()
             );
+        }
+        for delete in &summary.deletes {
+            let line = match delete.outcome {
+                "held" => format!(
+                    "{}: delete held until the server holds the asset",
+                    delete.asset_id
+                )
+                .yellow(),
+                "sent" => format!(
+                    "{}: {} sent",
+                    delete.asset_id,
+                    delete.action.as_deref().unwrap_or("delete")
+                )
+                .green(),
+                "refused" => format!(
+                    "{}: {} refused by the server, not retried; the library keeps it: {}",
+                    delete.asset_id,
+                    delete.action.as_deref().unwrap_or("delete"),
+                    delete.message.as_deref().unwrap_or("no detail")
+                )
+                .red(),
+                _ => format!(
+                    "{}: {} not applied, kept for the next run: {}",
+                    delete.asset_id,
+                    delete.action.as_deref().unwrap_or("delete"),
+                    delete.message.as_deref().unwrap_or("no detail")
+                )
+                .red(),
+            };
+            println!("{line}");
         }
     }
     if summary.refused_acks.is_empty() {

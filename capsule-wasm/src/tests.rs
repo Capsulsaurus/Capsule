@@ -264,6 +264,7 @@ fn the_metadata_view_projects_the_record_in_the_shapes_the_viewer_takes() {
         nonce_prefix: [0x07; NONCE_PREFIX_LEN],
         key_mode: KeyMode::Wrapped,
         wrapped_file_key: Some(wrapped_key.clone()),
+        sidecar: None,
     };
     let publication = publish_share(
         &wrapped,
