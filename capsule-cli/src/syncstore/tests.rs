@@ -91,6 +91,7 @@ fn entry(album: &[u8], asset: &[u8], seq: u64, kind: ChangeKind) -> FeedEntry {
         blobs: BlobManifest::default(),
         derivative_manifests: Vec::new(),
         original_held: true,
+        purged: false,
         changed_at: "1970-01-01T00:00:00Z".to_string(),
     }
 }
@@ -458,9 +459,112 @@ fn the_device_clock_is_floored_by_the_server_clock_and_never_lowered() {
     );
 }
 
-/// The server serves a tombstone with no manifest once a purge has dropped its record, and every
-/// tombstone from a server that predates serving the record. Neither is positive evidence of a
-/// purge, so neither records a permanent tombstone.
+/// A device that first syncs after a purge never sees the delete record: the purge dropped it.
+/// The server's purge signal alone records the tombstone, at the time the sweep judges (#885).
+#[tokio::test]
+async fn a_device_first_syncing_after_a_purge_records_its_tombstone() {
+    let (db, path) = temp_db().await;
+    let purged = Uuid::from_u128(15);
+    let by_text = Uuid::from_u128(16);
+    let mut by_text_entry = FeedEntry {
+        purged: true,
+        ..delete(by_text, 2, Vec::new(), "2026-01-01T00:00:00Z")
+    };
+    by_text_entry.asset_id = by_text.hyphenated().to_string().into_bytes();
+    let landed = page(
+        vec![
+            FeedEntry {
+                purged: true,
+                ..delete(purged, 1, Vec::new(), "2026-01-01T00:00:00Z")
+            },
+            by_text_entry,
+        ],
+        0xa1,
+    );
+    persist_page(&db, &landed).await.unwrap();
+    assert!(
+        load_tombstones(&db).await.unwrap().is_empty(),
+        "landing a page records no purge; the sweep does, at the feed's head"
+    );
+    let at = judged_at(Timestamp::UNIX_EPOCH, latest_changed_at(&landed));
+    assert_eq!(record_elapsed_purges(&db, at).await.unwrap(), 2);
+    assert_eq!(
+        load_tombstones(&db).await.unwrap(),
+        BTreeSet::from([purged, by_text]),
+        "the signal alone is evidence of a purge, whatever the device's clock says"
+    );
+    let tombstone = peering_tombstone::Entity::find_by_id(purged.hyphenated().to_string())
+        .one(&db)
+        .await
+        .unwrap()
+        .expect("a row");
+    assert_eq!(tombstone.recorded_at, at.to_string());
+    let rows = synced_asset::Entity::find().all(&db).await.unwrap();
+    assert!(rows.iter().all(|row| row.tombstoned));
+    assert_eq!(
+        retention_stored(&rows, purged),
+        None,
+        "a recorded purge leaves the sweep"
+    );
+    let _ = std::fs::remove_file(path);
+}
+
+/// The signal outranks the record: a purged tombstone is recorded even when the delete record it
+/// still carries names a deadline this device's clock has not reached.
+#[tokio::test]
+async fn the_purge_signal_closes_a_window_the_device_clock_holds_open() {
+    let (db, path) = temp_db().await;
+    let asset = Uuid::from_u128(17);
+    let landed = page(
+        vec![FeedEntry {
+            purged: true,
+            ..delete(
+                asset,
+                1,
+                record(asset, Action::Delete, Some("2030-01-01T00:00:00Z")),
+                "2026-01-01T00:00:00Z",
+            )
+        }],
+        0xa2,
+    );
+    persist_page(&db, &landed).await.unwrap();
+    assert_eq!(
+        record_elapsed_purges(&db, ts("2026-01-02T00:00:00Z"))
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(load_tombstones(&db).await.unwrap(), BTreeSet::from([asset]));
+    let _ = std::fs::remove_file(path);
+}
+
+/// The signal means something only on a tombstone: a live entry carrying it stays live and out
+/// of the sweep.
+#[tokio::test]
+async fn the_purge_signal_on_a_live_entry_records_nothing() {
+    let (db, path) = temp_db().await;
+    let asset = Uuid::from_u128(18);
+    let landed = page(
+        vec![FeedEntry {
+            purged: true,
+            ..entry(b"album", asset.as_bytes(), 1, ChangeKind::Updated)
+        }],
+        0xa3,
+    );
+    persist_page(&db, &landed).await.unwrap();
+    assert_eq!(
+        record_elapsed_purges(&db, ts("2030-01-01T00:00:00Z"))
+            .await
+            .unwrap(),
+        0
+    );
+    assert!(load_tombstones(&db).await.unwrap().is_empty());
+    let _ = std::fs::remove_file(path);
+}
+
+/// A tombstone with no manifest and no purge signal: a server that predates serving the record
+/// or the signal, or one that could not produce the record. Neither is positive evidence of a
+/// purge, so neither records a permanent tombstone, exactly as before the signal existed.
 #[tokio::test]
 async fn a_delete_served_without_a_manifest_stays_in_trash() {
     let (db, path) = temp_db().await;
