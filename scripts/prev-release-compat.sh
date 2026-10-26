@@ -11,13 +11,17 @@
 # `capsule-v<version>-x86_64-unknown-linux-gnu.tar.gz` archive (the layout release.yml publishes).
 # Its protocol version is read from `capsule-core/src/crypto/primitives.rs` at that tag. With
 # `--prev-dir`, DIR stands in for the release (a local run, or a self-test against the new build)
-# and `--prev-protocol` names its protocol version.
+# and `--prev-protocol` names its protocol version. Both servers inherit PROTOCOL_MIN and
+# PROTOCOL_MAX, so a self-test can move the window off the client's version to drive the refused
+# arm: `PROTOCOL_MIN=2027-01-01 PROTOCOL_MAX=2027-12-31 scripts/prev-release-compat.sh target/debug
+# --prev-dir target/debug --prev-protocol 2026-05-31`.
 #
 # There is no vacuous pass: no release older than HEAD is a failure, loudly, as is a release that
 # lacks the archive or either binary.
 #
-# The flow, per direction: register, login, `library init`, import one fixture, `push`, `status`,
-# `restore`. Which outcome is required is decided before the flow runs, from the server's
+# The flow, per direction: register, login, `library init`, `auth escrow`, `auth recover` (the one
+# CLI path that lists a device in the account's directory, which push requires), import one
+# fixture, `push`, `status`, `restore`. Which outcome is required is decided before the flow runs, from the server's
 # advertised window (`GET /v1/version`, the `X-Capsule-Protocol-Min`/`-Max` headers) and the
 # client's protocol version:
 #
@@ -49,7 +53,7 @@ die() {
 }
 
 usage() {
-	sed -n '2,15p' "$0" >&2
+	sed -n "2,20p" "$0" >&2
 	exit 2
 }
 
@@ -87,6 +91,9 @@ if [ -n "$prev_dir" ] && [ -z "$prev_protocol" ]; then
 fi
 
 repo_root=$(git rev-parse --show-toplevel)
+# The interpreter itself, not a version-manager shim: the escrow helper runs under the flow's
+# isolated HOME, where a shim finds none of its configuration.
+python=$(python3 -I -c 'import sys; print(sys.executable)')
 new_protocol=$(protocol_of <"$repo_root/$PRIMITIVES")
 [ -n "$new_protocol" ] || die "no PROTOCOL_VERSION in $PRIMITIVES"
 
@@ -104,10 +111,11 @@ cleanup() {
 trap cleanup EXIT
 
 # ── Resolve the previous release ─────────────────────────────────────────────
+# `resolve_release TAGS`: the first of TAGS (newest first, one per line) that is an ancestor of
+# HEAD and does not point at it.
 resolve_release() {
-	local head tag tag_commit
+	local tags=$1 head tag tag_commit
 	head=$(git rev-parse HEAD)
-	# Newest first. `gh release list` sorts by creation date, which is the order releases are cut.
 	while IFS= read -r tag; do
 		[ -n "$tag" ] || continue
 		git fetch --quiet --no-tags origin "refs/tags/$tag:refs/tags/$tag" 2>/dev/null || true
@@ -124,14 +132,17 @@ resolve_release() {
 			return 0
 		fi
 		log "release $tag: not an ancestor of HEAD; skipped"
-	done < <(gh release list --exclude-drafts --exclude-pre-releases --limit 100 \
-		--json tagName --jq '.[].tagName')
+	done <<<"$tags"
 	return 1
 }
 
 if [ -z "$prev_dir" ]; then
 	command -v gh >/dev/null || die "gh is required to resolve the previous release"
-	if ! prev_tag=$(resolve_release); then
+	# Newest first: `gh release list` sorts by creation date, the order releases are cut. A
+	# listing that fails is a failure of its own, never "no release".
+	release_tags=$(gh release list --exclude-drafts --exclude-pre-releases --limit 100 \
+		--json tagName --jq '.[].tagName') || die "listing the repository's releases failed"
+	if ! prev_tag=$(resolve_release "$release_tags"); then
 		die "no published release is older than $(git rev-parse --short HEAD). This job cannot pass before the first release exists; it is not in \`required\` until it has passed against one (#761)."
 	fi
 	version=${prev_tag#v}
@@ -199,6 +210,60 @@ cli_run() {
 		timeout "$CLI_TIMEOUT" "$cli" "$@" >"$dir/$name.stdout" 2>"$dir/$name.stderr" || status=$?
 	printf '%s\n' "$status" >"$dir/$name.status"
 	log "  capsule $* -> exit $status"
+	return "$status"
+}
+
+# `cli_escrow DIR LIBRARY`: `capsule auth escrow`, which binds the library to the signed-in
+# account (push refuses an unbound library's uploads) and confirms the minted recovery secret on a
+# terminal prompt. A pseudo-terminal answers it: the passphrase goes in as the `--passphrase-stdin`
+# line, and the 64-hex secret the command prints is typed back once its prompt appears. Writes
+# DIR/escrow.{stdout,stderr,status} like `cli_run`; the run is cut at CLI_TIMEOUT seconds.
+cli_escrow() {
+	local dir=$1 library=$2
+	local status=0
+	: >"$dir/escrow.stderr"
+	env -u CAPSULE_AUTH_ENDPOINT -u CAPSULE_SYNC_ENDPOINT -u CAPSULE_UPLOAD_ENDPOINT \
+		-u CAPSULE_ALBUMS_ENDPOINT -u CAPSULE_PROTOCOL \
+		CAPSULE_ENDPOINT="$endpoint" HOME="$dir/home" XDG_CONFIG_HOME="$dir/home/config" \
+		XDG_DATA_HOME="$dir/home/data" XDG_CACHE_HOME="$dir/home/cache" NO_COLOR=1 RUST_LOG=off \
+		COMPAT_PASSPHRASE="$PASSPHRASE" \
+		"$python" -I - "$CLI_TIMEOUT" "$cli" auth escrow --library "$library" --passphrase-stdin \
+		>"$dir/escrow.stdout" 2>"$dir/escrow.stderr" <<'PY' || status=$?
+import os, pty, re, select, sys, time
+
+timeout, argv = float(sys.argv[1]), sys.argv[2:]
+pid, fd = pty.fork()
+if pid == 0:
+    os.execvp(argv[0], argv)
+os.write(fd, os.environ["COMPAT_PASSPHRASE"].encode() + b"\n")
+deadline, seen, answered = time.monotonic() + timeout, b"", False
+while True:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        os.kill(pid, 9)
+        sys.stderr.write(f"auth escrow did not exit within {timeout:.0f}s\n")
+        break
+    ready, _, _ = select.select([fd], [], [], min(remaining, 1.0))
+    if not ready:
+        continue
+    try:
+        chunk = os.read(fd, 4096)
+    except OSError:
+        break
+    if not chunk:
+        break
+    sys.stdout.buffer.write(chunk)
+    sys.stdout.flush()
+    seen += chunk
+    secret = re.search(rb"\b([0-9a-f]{64})\b", seen)
+    if not answered and secret and b"Type the recovery secret back" in seen:
+        os.write(fd, secret.group(1) + b"\r")
+        answered = True
+_, raw = os.waitpid(pid, 0)
+sys.exit(os.waitstatus_to_exitcode(raw) if os.WIFEXITED(raw) else 1)
+PY
+	printf '%s\n' "$status" >"$dir/escrow.status"
+	log "  capsule auth escrow --library $library --passphrase-stdin -> exit $status"
 	return "$status"
 }
 
@@ -272,16 +337,21 @@ run_flow() {
 		if cli_run "$dir" login "$PASSWORD"$'\n' auth login --email "$email" --password-stdin; then
 			step_failed "$dir" login "a client outside the window signed in"
 		fi
-		# The local half still works, and the refused push loses nothing.
+		refused_by_gate "$dir" login || step_failed "$dir" login "refused, but not with $REFUSAL_CODE"
+		# The local half still works, and the refused push loses nothing: the imported asset
+		# still opens from the library afterwards.
 		cli_run "$dir" init '' library init "$library" --name compat ||
 			step_failed "$dir" init "library init failed"
 		cli_run "$dir" import "$PASSPHRASE"$'\n' import "$fixture_dir" --library "$library" \
 			--passphrase-stdin --json || step_failed "$dir" import "import failed"
+		local asset
+		asset=$(jq -er '.outcomes[0].asset_id' "$dir/import.stdout") ||
+			step_failed "$dir" import "the report names no imported asset"
 		if cli_run "$dir" push "$PASSPHRASE"$'\n' push --library "$library" --passphrase-stdin --json; then
 			step_failed "$dir" push "a client outside the window pushed"
 		fi
-		cli_run "$dir" verify "$PASSPHRASE"$'\n' verify --library "$library" --passphrase-stdin --json ||
-			step_failed "$dir" verify "the library no longer verifies after the refused push"
+		cli_run "$dir" show "$PASSPHRASE"$'\n' show "$asset" --library "$library" --passphrase-stdin ||
+			step_failed "$dir" show "the imported asset no longer opens after the refused push"
 		[ "$(sha256sum "$fixture" | cut -d' ' -f1)" = "$fixture_sum" ] ||
 			die "$label: the fixture changed"
 		log "  $label: every write refused with $REFUSAL_CODE; nothing lost"
@@ -290,8 +360,20 @@ run_flow() {
 			step_failed "$dir" register "register failed"
 		cli_run "$dir" login "$PASSWORD"$'\n' auth login --email "$email" --password-stdin ||
 			step_failed "$dir" login "login failed"
-		cli_run "$dir" init '' library init "$library" --name compat ||
+		# A library created by `library init` is bound to the account by `auth escrow`, but only
+		# `auth recover` publishes a device into the account's directory, and push refuses an
+		# upload from a device the directory does not list. So the flow escrows a first library
+		# and recovers the account into the one it imports into: both are CLI commands a release
+		# ships, and both cross the wire under test.
+		local escrowed="$dir/escrowed-library"
+		cli_run "$dir" init '' library init "$escrowed" --name compat ||
 			step_failed "$dir" init "library init failed"
+		cli_escrow "$dir" "$escrowed" || step_failed "$dir" escrow "auth escrow failed"
+		local secret
+		secret=$(grep -oE '[0-9a-f]{64}' "$dir/escrow.stdout" | head -n 1)
+		[ -n "$secret" ] || step_failed "$dir" escrow "printed no recovery secret"
+		cli_run "$dir" recover "$secret"$'\n'"$PASSPHRASE"$'\n' auth recover --library "$library" \
+			--recovery-secret-stdin --passphrase-stdin || step_failed "$dir" recover "auth recover failed"
 		cli_run "$dir" import "$PASSPHRASE"$'\n' import "$fixture_dir" --library "$library" \
 			--passphrase-stdin --json || step_failed "$dir" import "import failed"
 		cli_run "$dir" push "$PASSPHRASE"$'\n' push --library "$library" --passphrase-stdin --json ||
