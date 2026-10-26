@@ -4,6 +4,12 @@
 # `capsule-server`, each driven through one fixed flow.
 #
 #   scripts/prev-release-compat.sh NEW_BIN_DIR [--prev-dir DIR --prev-protocol YYYY-MM-DD]
+#   scripts/prev-release-compat.sh --resolve-only
+#
+# `--resolve-only` resolves the previous release as below and prints its tag, or nothing when no
+# release older than HEAD exists, and exits 0 either way; a failed listing still exits 1. CI runs
+# it first, so the flow's job is skipped, not red, until the first release exists, and runs on
+# its own from the first release on.
 #
 # NEW_BIN_DIR holds `capsule` and `capsule-server` built from the commit under test. Without
 # `--prev-dir`, the previous release is resolved and downloaded: the newest published, non-draft,
@@ -16,8 +22,8 @@
 # arm: `PROTOCOL_MIN=2027-01-01 PROTOCOL_MAX=2027-12-31 scripts/prev-release-compat.sh target/debug
 # --prev-dir target/debug --prev-protocol 2026-05-31`.
 #
-# There is no vacuous pass: no release older than HEAD is a failure, loudly, as is a release that
-# lacks the archive or either binary.
+# There is no vacuous pass: run without `--resolve-only`, no release older than HEAD is a failure,
+# loudly, as is a release that lacks the archive or either binary.
 #
 # The flow, per direction: register, login, `library init`, `auth escrow`, `auth recover` (the one
 # CLI path that lists a device in the account's directory, which push requires), import one
@@ -53,7 +59,7 @@ die() {
 }
 
 usage() {
-	sed -n "2,20p" "$0" >&2
+	sed -n "2,26p" "$0" >&2
 	exit 2
 }
 
@@ -66,8 +72,13 @@ protocol_of() {
 new_dir=''
 prev_dir=''
 prev_protocol=''
+resolve_only=''
 while [ $# -gt 0 ]; do
 	case "$1" in
+	--resolve-only)
+		resolve_only=1
+		shift
+		;;
 	--prev-dir)
 		prev_dir=${2:?--prev-dir needs a directory}
 		shift 2
@@ -85,30 +96,14 @@ while [ $# -gt 0 ]; do
 		;;
 	esac
 done
-[ -n "$new_dir" ] || usage
+if [ -n "$resolve_only" ]; then
+	[ -z "$new_dir$prev_dir$prev_protocol" ] || die "--resolve-only takes no other argument"
+else
+	[ -n "$new_dir" ] || usage
+fi
 if [ -n "$prev_dir" ] && [ -z "$prev_protocol" ]; then
 	die "--prev-dir needs --prev-protocol"
 fi
-
-repo_root=$(git rev-parse --show-toplevel)
-# The interpreter itself, not a version-manager shim: the escrow helper runs under the flow's
-# isolated HOME, where a shim finds none of its configuration.
-python=$(python3 -I -c 'import sys; print(sys.executable)')
-new_protocol=$(protocol_of <"$repo_root/$PRIMITIVES")
-[ -n "$new_protocol" ] || die "no PROTOCOL_VERSION in $PRIMITIVES"
-
-work=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/prev-release-compat.XXXXXX")
-log "work directory: $work"
-
-pids=()
-cleanup() {
-	local pid
-	for pid in "${pids[@]}"; do
-		kill "$pid" 2>/dev/null || true
-		wait "$pid" 2>/dev/null || true
-	done
-}
-trap cleanup EXIT
 
 # ── Resolve the previous release ─────────────────────────────────────────────
 # `resolve_release TAGS`: the first of TAGS (newest first, one per line) that is an ancestor of
@@ -136,14 +131,50 @@ resolve_release() {
 	return 1
 }
 
-if [ -z "$prev_dir" ]; then
+# `list_release_tags`: the published, non-draft, non-prerelease release tags, newest first:
+# `gh release list` sorts by creation date, the order releases are cut. A listing that fails is a
+# failure of its own, never "no release".
+list_release_tags() {
 	command -v gh >/dev/null || die "gh is required to resolve the previous release"
-	# Newest first: `gh release list` sorts by creation date, the order releases are cut. A
-	# listing that fails is a failure of its own, never "no release".
-	release_tags=$(gh release list --exclude-drafts --exclude-pre-releases --limit 100 \
-		--json tagName --jq '.[].tagName') || die "listing the repository's releases failed"
+	gh release list --exclude-drafts --exclude-pre-releases --limit 100 \
+		--json tagName --jq '.[].tagName' || die "listing the repository's releases failed"
+}
+
+if [ -n "$resolve_only" ]; then
+	release_tags=$(list_release_tags)
+	if prev_tag=$(resolve_release "$release_tags"); then
+		log "previous release: $prev_tag"
+		printf '%s\n' "$prev_tag"
+	else
+		log "no published release is older than $(git rev-parse --short HEAD); nothing to check against yet (#761)"
+	fi
+	exit 0
+fi
+
+repo_root=$(git rev-parse --show-toplevel)
+# The interpreter itself, not a version-manager shim: the escrow helper runs under the flow's
+# isolated HOME, where a shim finds none of its configuration.
+python=$(python3 -I -c 'import sys; print(sys.executable)')
+new_protocol=$(protocol_of <"$repo_root/$PRIMITIVES")
+[ -n "$new_protocol" ] || die "no PROTOCOL_VERSION in $PRIMITIVES"
+
+work=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/prev-release-compat.XXXXXX")
+log "work directory: $work"
+
+pids=()
+cleanup() {
+	local pid
+	for pid in "${pids[@]}"; do
+		kill "$pid" 2>/dev/null || true
+		wait "$pid" 2>/dev/null || true
+	done
+}
+trap cleanup EXIT
+
+if [ -z "$prev_dir" ]; then
+	release_tags=$(list_release_tags)
 	if ! prev_tag=$(resolve_release "$release_tags"); then
-		die "no published release is older than $(git rev-parse --short HEAD). This job cannot pass before the first release exists; it is not in \`required\` until it has passed against one (#761)."
+		die "no published release is older than $(git rev-parse --short HEAD). This flow cannot pass before the first release exists; CI resolves the release with --resolve-only first and skips the flow until one does (#761)."
 	fi
 	version=${prev_tag#v}
 	asset="capsule-v${version}-${TARGET}.tar.gz"

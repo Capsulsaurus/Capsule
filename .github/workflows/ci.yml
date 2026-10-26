@@ -441,14 +441,40 @@ jobs:
   # refused with `426` and nothing lost. scripts/prev-release-compat.sh owns the flow and resolves
   # the release: the newest published one whose tag is an ancestor of the commit under test.
   #
-  # Not in `required`, and deliberately red until a release exists: with no previous release the
-  # script fails loudly rather than passing vacuously. It joins `required` once it has passed
-  # against a real release. `fetch-depth: 0` because resolving the release walks tag ancestry and
-  # reads the release's protocol version from its tree.
-  prev-release-compat:
-    name: Compat (previous release)
+  # `prev-release` resolves the release first (`--resolve-only`): with none older than the commit
+  # under test its `tag` output is empty, it leaves a notice, and the flow's job reports
+  # "skipped" - never a pass - until the first release exists, then runs on its own. A failed
+  # release listing fails `prev-release`, never reads as "no release". Neither job is in
+  # `required`; the flow's job joins it once it has passed against a real release.
+  # `fetch-depth: 0` because resolving the release walks tag ancestry and reads the release's
+  # protocol version from its tree.
+  prev-release:
+    name: Compat (resolve previous release)
     needs: changes
     if: ${{ needs.changes.outputs.rust == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Resolve the newest release older than this commit
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=$(scripts/prev-release-compat.sh --resolve-only)
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if [ -z "$tag" ]; then
+            echo "::notice title=Compat (previous release) skipped::No published release is older than this commit, so there is nothing to check against yet (#761)."
+          fi
+
+  prev-release-compat:
+    name: Compat (previous release)
+    needs: [changes, prev-release]
+    if: ${{ needs.changes.outputs.rust == 'true' && needs.prev-release.outputs.tag != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -728,8 +754,8 @@ jobs:
   # `rust-advisories`, unfiltered, #507), and `changes` is checked ahead of it under a stricter rule,
   # because "skipped" is only trustworthy when the filter that skipped it ran.
   # A job in `needs` but absent from both checks is a gate that cannot fail.
-  # `prev-release-compat` is absent from both on purpose (#761): it fails until a release exists,
-  # and joins `needs` and the loop once it has passed against one.
+  # `prev-release` and `prev-release-compat` are absent from both on purpose (#761): the flow is
+  # skipped until a release exists, and joins `needs` and the loop once it has passed against one.
   required:
     name: required
     if: always()
