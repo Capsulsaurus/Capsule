@@ -354,24 +354,6 @@ pub(crate) enum LibraryCommands {
         /// Path to the library
         path: PathBuf,
     },
-    /// Migrate unsigned sidecars from an older library into signed assets
-    Migrate {
-        /// Path to the library
-        path: PathBuf,
-        /// Read the library passphrase from stdin instead of prompting, so the command
-        /// works in scripts and CI where there is no terminal.
-        #[arg(long)]
-        passphrase_stdin: bool,
-        /// Retention window, in days, for an asset the old library had already deleted:
-        /// it is moved to trash with this much time left before it is purged
-        #[arg(
-            long,
-            value_name = "DAYS",
-            default_value_t = crate::migrate::DEFAULT_RETAIN_DAYS,
-            value_parser = clap::value_parser!(i64).range(0..)
-        )]
-        retain_days: i64,
-    },
 }
 
 #[derive(Subcommand, Debug)]

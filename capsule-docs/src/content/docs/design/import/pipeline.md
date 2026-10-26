@@ -38,7 +38,7 @@ For each planned file, in [prioritization](#upload-prioritization) order:
 3. generate [derivatives](/design/thumbnails/);
 4. hand each blob of the bundle to its own upload session.
 
-Steps 1–3 parallelize across files. Execution is cancellable at file boundaries; re-running re-derives the plan and skips completed work. A library holding pre-signed-path unsigned sidecars is reported by the index rebuild and brought forward with `Workspace::migrate_unsigned_sidecars`.
+Steps 1–3 parallelize across files. Execution is cancellable at file boundaries; re-running re-derives the plan and skips completed work.
 
 ## Import-Upload Streaming Mode
 
