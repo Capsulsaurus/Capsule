@@ -49499,6 +49499,86 @@
         }
       }
     },
+    "settings.language.description": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Language picks the words on screen. Region picks how dates, times and numbers are written. Both follow your system until you change them, and stay on this device."
+          }
+        }
+      }
+    },
+    "settings.language.language_label": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Language"
+          }
+        }
+      }
+    },
+    "settings.language.profile_link": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "← Profile settings"
+          }
+        }
+      }
+    },
+    "settings.language.region_label": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Region"
+          }
+        }
+      }
+    },
+    "settings.language.system_default": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "System default (%@)"
+          }
+        }
+      }
+    },
+    "settings.language.system_unknown": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "System default"
+          }
+        }
+      }
+    },
+    "settings.language.title": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Language & Region"
+          }
+        }
+      }
+    },
+    "settings.language_link": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Language & region →"
+          }
+        }
+      }
+    },
     "settings.password.description": {
       "localizations": {
         "ar": {
