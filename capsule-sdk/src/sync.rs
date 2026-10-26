@@ -164,6 +164,13 @@ pub struct FeedEntry {
     /// Whether the original blob is finalized on the server (`awaiting-original`
     /// derived state when `false`; staged uploads).
     pub original_held: bool,
+    /// Whether the server has purged the asset (#885): its retention window closed and its
+    /// references are gone, so no `trash-restore` can bring it back. Only ever set on a
+    /// [`ChangeKind::Deleted`] entry, and `false` from a server that predates the signal.
+    ///
+    /// The positive evidence of a purge. An empty [`Self::manifest_cbor`] is not: the server
+    /// also serves none when it cannot produce the blob.
+    pub purged: bool,
     /// When the change happened, RFC 3339, on the server's clock.
     pub changed_at: String,
 }
@@ -756,6 +763,9 @@ fn decode_entry(entry: rest::types::SyncEntry) -> Result<FeedEntry, SyncError> {
         blobs: decode_blobs(entry.blobs),
         derivative_manifests,
         original_held: entry.original_held,
+        // Optional on the wire: a server that predates the signal sends no key, and that is no
+        // purge. A signal on anything but a tombstone is not one either.
+        purged: kind == ChangeKind::Deleted && entry.purged.unwrap_or(false),
         changed_at: entry.changed_at,
     })
 }

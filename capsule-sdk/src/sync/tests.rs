@@ -31,6 +31,7 @@ fn entry(album_id: &[u8], sync_seq: u64, protocol: &str) -> FeedEntry {
         blobs: BlobManifest::default(),
         derivative_manifests: Vec::new(),
         original_held: true,
+        purged: false,
         changed_at: "1970-01-01T00:00:00Z".to_string(),
     }
 }
@@ -314,6 +315,42 @@ fn derivative_manifests_decode_to_their_exact_bytes() {
 fn an_entry_without_derivative_manifests_decodes_to_none() {
     let decoded = decode_entry(wire_entry(serde_json::json!({}))).unwrap();
     assert!(decoded.derivative_manifests.is_empty());
+}
+
+// ─── Wire decoding: the purge signal (#885) ──────────────────────────────────
+
+/// A purged tombstone decodes with its signal set.
+#[test]
+fn a_purged_tombstone_decodes_with_the_signal() {
+    let decoded = decode_entry(wire_entry(serde_json::json!({
+        "change": "deleted",
+        "manifest_cbor": null,
+        "purged": true,
+    })))
+    .unwrap();
+    assert_eq!(decoded.kind, ChangeKind::Deleted);
+    assert!(decoded.purged);
+    assert!(decoded.manifest_cbor.is_empty());
+}
+
+/// A server that predates the signal sends no key, and that is no purge: the tombstone behaves
+/// as it did before the signal existed.
+#[test]
+fn a_tombstone_without_the_signal_is_not_purged() {
+    let decoded = decode_entry(wire_entry(serde_json::json!({
+        "change": "deleted",
+        "manifest_cbor": null,
+    })))
+    .unwrap();
+    assert!(!decoded.purged);
+}
+
+/// The signal means something only on a tombstone; a live entry carrying it is not purged.
+#[test]
+fn the_signal_on_a_live_entry_is_ignored() {
+    let decoded = decode_entry(wire_entry(serde_json::json!({ "purged": true }))).unwrap();
+    assert_eq!(decoded.kind, ChangeKind::Created);
+    assert!(!decoded.purged);
 }
 
 // ─── Sync epoch (#697) ───────────────────────────────────────────────────────

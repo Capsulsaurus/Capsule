@@ -358,6 +358,7 @@ fn feed_entry(id: &str, original_held: bool, with_original_ref: bool) -> FeedEnt
         },
         derivative_manifests: vec![format!("{id}-thumb-manifest").into_bytes()],
         original_held,
+        purged: false,
         changed_at: "1970-01-01T00:00:00Z".to_string(),
     }
 }
