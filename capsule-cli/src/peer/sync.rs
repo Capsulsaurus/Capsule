@@ -272,7 +272,8 @@ pub struct PullSummary {
     /// Assets that failed to restore or arrived without the metadata their manifest commits to.
     pub incomplete: Vec<Uuid>,
     /// What failed: an asset the ingest applied that could not be written (`not_written`), an
-    /// artifact that could not be pulled or opened, or no peer before the listen timeout.
+    /// artifact that could not be pulled or opened, no peer before the listen timeout, or a
+    /// listener that failed before a peer was verified.
     pub failed: Vec<PeerFailure>,
     /// The connections refused while listening (off the local network, over the handshake
     /// budget, or a handshake that failed), one entry per source address and kind.
@@ -440,6 +441,40 @@ pub(crate) async fn receive(
     summary
 }
 
+/// The session an admission got, or `None` with the reason recorded in `summary.failed`: the
+/// listen timeout passed (`peering_timeout`), or the listener itself failed (`peering_io`,
+/// whose detail the admission's refusals carry). Either way nothing was pulled, so the run
+/// must exit non-zero.
+fn admitted_client<T>(
+    admitted: Admitted<T>,
+    subject: &str,
+    summary: &mut PullSummary,
+) -> Option<T> {
+    match admitted {
+        Admitted::Session(source, client) => {
+            tracing::debug!(%source, "peer pull: a handshake completed");
+            Some(client)
+        }
+        Admitted::TimedOut => {
+            summary.failed.push(PeerFailure::new(
+                subject,
+                "peering_timeout",
+                "no peer connected and verified before the listen timeout",
+            ));
+            None
+        }
+        Admitted::Failed => {
+            tracing::warn!(listening = %subject, "peer pull: the listener failed; nothing was pulled");
+            summary.failed.push(PeerFailure::new(
+                subject,
+                "peering_io",
+                "the listener failed before a peer was verified",
+            ));
+            None
+        }
+    }
+}
+
 /// Admit one verified session on `listener` and pull every artifact its peer lists, then end
 /// it. `None` when no session was verified before the listener's timeout (recorded in
 /// `summary`). A session is not resumed by a later one: each session seals its artifact under
@@ -467,23 +502,10 @@ async fn session(
     let admitted = admission
         .next_session(&listener.listener, &subject, deadline, &handshake)
         .await;
-    let client = match admitted {
-        Admitted::Session(source, client) => {
-            tracing::info!(%source, peer = %client.peer().device_id, "peer pull: verified session");
-            Some(client)
-        }
-        Admitted::TimedOut => {
-            summary.failed.push(PeerFailure::new(
-                &subject,
-                "peering_timeout",
-                "no peer connected and verified before the listen timeout",
-            ));
-            None
-        }
-        Admitted::Failed => None,
-    };
+    let client = admitted_client(admitted, &subject, summary);
     summary.refused.extend(admission.into_refusals());
     let client = client?;
+    tracing::info!(peer = %client.peer().device_id, "peer pull: verified session");
 
     let mut artifacts = Vec::new();
     for offered in client.listing().to_vec() {

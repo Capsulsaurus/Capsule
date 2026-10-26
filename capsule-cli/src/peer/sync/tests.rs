@@ -292,6 +292,29 @@ async fn a_pull_with_no_peer_reports_the_timeout() {
     assert!(pulled.has_failures());
 }
 
+/// A listener that fails before a peer is verified pulled nothing, so the run fails: the
+/// failure is in `failed`, not only among the refusals.
+#[test]
+fn a_listener_failure_fails_the_pull() {
+    let mut summary = PullSummary::default();
+    let client: Option<()> = admitted_client(Admitted::Failed, "127.0.0.1:9", &mut summary);
+    assert!(client.is_none());
+    assert_eq!(summary.failed.len(), 1);
+    assert_eq!(summary.failed[0].kind, "peering_io");
+    assert_eq!(summary.failed[0].subject, "127.0.0.1:9");
+    assert!(summary.has_failures());
+}
+
+/// A completed handshake is handed back and records no failure.
+#[test]
+fn an_admitted_session_records_no_failure() {
+    let mut summary = PullSummary::default();
+    let source = "127.0.0.1:9".parse().expect("an address");
+    let client = admitted_client(Admitted::Session(source, 7_u8), "127.0.0.1:9", &mut summary);
+    assert_eq!(client, Some(7));
+    assert!(!summary.has_failures());
+}
+
 /// A tombstone store that cannot be read refuses the ingest: `peer pull` fails before it opens
 /// a session, binds, or touches the network, rather than ingesting against an empty set.
 #[tokio::test]
