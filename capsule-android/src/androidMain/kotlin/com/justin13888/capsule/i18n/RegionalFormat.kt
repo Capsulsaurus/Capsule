@@ -12,6 +12,9 @@ import java.util.Locale
  * carries the app language's region instead of the user's.
  */
 object RegionalFormat {
+    /** The platform's ICU data, read once: which language-region pairs it can format. */
+    private val hasData by lazy { FormattingLocale.availableIn(DateFormat.getAvailableLocales()) }
+
     /** The formatting locale for [context]: its language with the system's region. */
     fun locale(context: Context): Locale =
         FormattingLocale.of(
@@ -19,6 +22,7 @@ object RegionalFormat {
             // The system resources keep the device's own locale, whatever language the
             // app was given.
             system = Resources.getSystem().configuration.locales[0],
+            hasData = hasData,
         )
 
     fun date(
