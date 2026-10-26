@@ -936,3 +936,73 @@ fn a_peer_asset_of_an_album_not_held_is_refused_unwritten() {
     assert!(c.asset(&id).is_none());
     assert!(c.local_heads().is_empty());
 }
+
+/// A forward update carries the peer's metadata, opened from its sealed blob: the tag the peer
+/// added arrives, the caption both devices held before survives, and both are what a reopen
+/// reads back, so a later edit is sealed over them rather than over an empty stand-in.
+#[test]
+fn a_forward_peer_update_carries_the_peers_metadata_and_keeps_the_held() {
+    let (lib_a, lib_b, src) = (
+        TempDir::new().unwrap(),
+        TempDir::new().unwrap(),
+        TempDir::new().unwrap(),
+    );
+    let (mut a, mut b, _) = paired(lib_a.path(), lib_b.path(), src.path(), 1);
+    let held = *b.assets.keys().next().unwrap();
+    a.set_caption(&held, "the harbour").unwrap();
+    let restored = restored_from(&a, src.path());
+    b.apply_peer_restored(&restored[&held]).unwrap();
+    assert_eq!(
+        b.assets[&held].sidecar.caption.get().map(String::as_str),
+        Some("the harbour")
+    );
+    let content_type = b.assets[&held].sidecar.content_type.clone();
+    assert_eq!(content_type, a.assets[&held].sidecar.content_type);
+    assert_ne!(content_type, "application/octet-stream");
+
+    a.tag_add(&held, "keeper").unwrap();
+    let restored = restored_from(&a, src.path());
+    b.apply_peer_restored(&restored[&held]).unwrap();
+
+    let sidecar = &b.assets[&held].sidecar;
+    assert!(sidecar.tags_user.value().contains("keeper"));
+    assert_eq!(sidecar.caption.get(), a.assets[&held].sidecar.caption.get());
+    assert_eq!(sidecar.content_type, content_type);
+    assert_eq!(b.assets[&held].metadata_blob, a.assets[&held].metadata_blob);
+
+    drop(b);
+    let b = Workspace::open(lib_b.path(), b"device b", FAST_PARAMS).unwrap();
+    let sidecar = &b.assets[&held].sidecar;
+    assert!(sidecar.tags_user.value().contains("keeper"));
+    assert_eq!(sidecar.caption.get(), a.assets[&held].sidecar.caption.get());
+    assert_eq!(sidecar.content_type, content_type);
+    assert_eq!(b.assets[&held].metadata_blob, a.assets[&held].metadata_blob);
+}
+
+/// A peer asset whose sealed metadata blob is not the one its chain commits to is refused, and
+/// the held asset is left exactly as it was.
+#[test]
+fn a_peer_update_whose_metadata_blob_does_not_bind_is_refused_unwritten() {
+    let (lib_a, lib_b, src) = (
+        TempDir::new().unwrap(),
+        TempDir::new().unwrap(),
+        TempDir::new().unwrap(),
+    );
+    let (mut a, mut b, _) = paired(lib_a.path(), lib_b.path(), src.path(), 1);
+    let held = *b.assets.keys().next().unwrap();
+    let head_before = b.local_heads().get(&held).copied();
+    let blob_before = b.assets[&held].metadata_blob.clone();
+    a.tag_add(&held, "keeper").unwrap();
+    let mut restored = restored_from(&a, src.path()).remove(&held).unwrap();
+    let last = restored.metadata_blob.len() - 1;
+    restored.metadata_blob[last] ^= 0x01;
+
+    let refused = b.apply_peer_restored(&restored).unwrap_err();
+    assert!(
+        matches!(refused, LifecycleError::RestoredMetadata(_)),
+        "{refused:?}"
+    );
+    assert_eq!(b.local_heads().get(&held).copied(), head_before);
+    assert_eq!(b.assets[&held].metadata_blob, blob_before);
+    assert!(!b.assets[&held].sidecar.tags_user.value().contains("keeper"));
+}

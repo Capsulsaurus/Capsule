@@ -11,6 +11,7 @@ use capsule_core::backup::{
     VerifyOutcome as RecoveryVerdict,
 };
 use capsule_core::crypto::authority::Authority;
+use capsule_core::crypto::encryption::{blob_ciphertext_hash, blob_nonce, open_blob};
 use capsule_core::crypto::hash::{self, Hash32};
 use capsule_core::crypto::keys::albumstore::{AlbumStore, AmkRow, PersistedAuthority};
 use capsule_core::crypto::keys::{Amk, HybridVerifyingKey};
@@ -26,7 +27,7 @@ use jiff::Timestamp;
 use uuid::Uuid;
 
 use super::album::{read_doc_file, stack_doc_path};
-use super::{AssetState, LifecycleError, Result, Workspace, now_rfc3339};
+use super::{AssetState, LifecycleError, Result, StackPlacement, Workspace, now_rfc3339};
 use crate::album_store::AlbumStoreFile;
 
 /// Display name given to an album that arrives only as escrowed keys in a backup artifact. An
@@ -439,7 +440,7 @@ impl Workspace {
 
         let mut added = 0;
         for restored in &report.applied {
-            self.write_restored(restored)?;
+            self.write_restored(restored, SidecarSource::StandIn)?;
             added += 1;
         }
         tracing::info!(added, "backup: import complete");
@@ -455,12 +456,15 @@ impl Workspace {
     /// this library does not hold would be one it could neither push nor export. A forward
     /// update keeps the held asset's media path (its extension and date bucket) and stack
     /// placement, so the original is rewritten in place, and keeps any evidence log this device
-    /// already holds over the peer's copy.
+    /// already holds over the peer's copy. The sidecar written is the one the peer's sealed
+    /// metadata blob carries, opened and verified, so the peer's metadata arrives and none of
+    /// what was held before its head is lost.
     ///
     /// # Errors
     ///
-    /// [`LifecycleError::NotFound`] when the album or its epoch is not held (nothing is
-    /// written), or the I/O, chain or index failure that stopped the write.
+    /// [`LifecycleError::NotFound`] when the album or its epoch is not held, and
+    /// [`LifecycleError::RestoredMetadata`] when the sealed metadata does not stand (nothing is
+    /// written in either case), or the I/O, chain or index failure that stopped the write.
     #[tracing::instrument(skip_all, fields(asset_id = %restored.asset_id, album_id = %restored.album_id))]
     pub fn apply_peer_restored(&mut self, restored: &backup::RestoredAsset) -> Result<()> {
         let epoch = restored
@@ -482,49 +486,59 @@ impl Workspace {
             )));
         }
         let forward = self.assets.contains_key(&restored.asset_id);
-        self.write_restored(restored)?;
+        self.write_restored(restored, SidecarSource::Sealed)?;
         tracing::info!(forward, "peer: restored asset written");
         Ok(())
     }
 
     /// Write a restored asset's original, signed artifacts, evidence logs and index rows, and
     /// hold it in this workspace. An asset already held keeps its media path and stack.
-    fn write_restored(&mut self, restored: &backup::RestoredAsset) -> Result<()> {
+    fn write_restored(
+        &mut self,
+        restored: &backup::RestoredAsset,
+        source: SidecarSource,
+    ) -> Result<()> {
         let head = &restored
             .provenance
             .last()
             .ok_or_else(|| LifecycleError::Cbor("restored provenance is empty".into()))?
             .manifest;
         let held = self.assets.get(&restored.asset_id);
-        // Keep `capture_utc` and the sidecar's `capture_timestamp` in agreement: a reopened
-        // workspace derives an asset's media directory from that field. A new asset is stamped
-        // with the head manifest's timestamp (wall-clock "now" would file it under a month its
-        // own sidecar disagrees with); a held one keeps its own, so its original is rewritten
-        // where it already is.
-        let (capture_utc, capture_timestamp, ext, stack) = match held {
-            Some(held) => (
-                held.capture_utc,
-                held.sidecar.capture_timestamp.clone(),
-                held.ext.clone(),
-                held.stack.clone(),
-            ),
-            None => (
-                head.core
-                    .timestamp
-                    .parse::<Timestamp>()
-                    .map_or_else(|_| Timestamp::now().as_second(), Timestamp::as_second),
-                head.core.timestamp.clone(),
-                "bin".to_string(),
-                None,
-            ),
-        };
         let mut chain = ProvenanceChain::new();
         for rec in &restored.provenance {
             chain
                 .append(rec.clone())
                 .map_err(|e| LifecycleError::Cbor(format!("restore chain: {e}")))?;
         }
-        let sidecar = self.decode_restored_sidecar(restored, head, capture_timestamp)?;
+        let sidecar = match source {
+            SidecarSource::Sealed => {
+                self.open_restored_sidecar(restored, head, held.map(|h| &h.sidecar))?
+            }
+            SidecarSource::StandIn => self.stand_in_sidecar(restored, head),
+        };
+        // Keep `capture_utc` and the sidecar's `capture_timestamp` in agreement: a reopened
+        // workspace derives an asset's media directory from that field. A new asset is filed
+        // under its sidecar's capture time (wall-clock "now" would file it under a month its
+        // own sidecar disagrees with); a held one keeps its own, so its original is rewritten
+        // where it already is.
+        let (capture_utc, ext, held_stack) = match held {
+            Some(held) => (held.capture_utc, held.ext.clone(), held.stack.clone()),
+            None => (
+                sidecar
+                    .capture_timestamp
+                    .parse::<Timestamp>()
+                    .or_else(|_| head.core.timestamp.parse::<Timestamp>())
+                    .map_or_else(|_| Timestamp::now().as_second(), Timestamp::as_second),
+                "bin".to_string(),
+                None,
+            ),
+        };
+        // The sidecar's signed `stack_membership` register is the durable placement, as a
+        // reopen reads it; an unwritten register keeps the placement already held.
+        let stack = match sidecar.stack_membership.get() {
+            Some(membership) => membership.as_ref().map(StackPlacement::from_membership),
+            None => held_stack,
+        };
         let asset = AssetState {
             asset_id: restored.asset_id,
             album_id: restored.album_id,
@@ -609,21 +623,98 @@ impl Workspace {
         Ok(())
     }
 
-    fn decode_restored_sidecar(
+    /// The signed sidecar a restored asset's sealed `metadata_blob` carries: bound to the
+    /// latest manifest of its chain that commits to a metadata blob, opened under the album key
+    /// of that manifest's epoch, decoded, and verified under the account's user IK, as
+    /// `apply_remote_entry` admits a server entry. The sidecar is adopted byte for byte, so the
+    /// blob kept beside it still round-trips to the committed hash.
+    ///
+    /// An empty blob is a library written before sealed metadata was durable: a held asset
+    /// keeps its own sidecar, and a new one gets a stand-in from the head manifest.
+    ///
+    /// # Errors
+    ///
+    /// [`LifecycleError::RestoredMetadata`] when the blob is not the one the chain commits to,
+    /// its epoch's key is not held, or it does not open, decode, verify or describe this asset.
+    fn open_restored_sidecar(
         &self,
         restored: &backup::RestoredAsset,
         head: &AssetManifest,
-        capture_timestamp: String,
+        held: Option<&SidecarV1>,
     ) -> Result<SidecarV1> {
-        // Minimal sidecar reconstructed from the head manifest (the full encrypted metadata
-        // blob is preserved verbatim in the artifact; decoding it requires the AMK, which we
-        // hold). Here we synthesise a plaintext-equivalent sidecar for the local library.
+        let refuse = |why: &str| {
+            tracing::warn!(
+                why,
+                "restore: the asset's sealed metadata does not stand; not writing it"
+            );
+            LifecycleError::RestoredMetadata(format!("asset {}: {why}", restored.asset_id))
+        };
+        let blob = restored.metadata_blob.as_slice();
+        if blob.is_empty() {
+            tracing::warn!(
+                held = held.is_some(),
+                "restore: the asset carries no sealed metadata blob; keeping what is held"
+            );
+            return Ok(match held {
+                Some(held) => held.clone(),
+                None => self.stand_in_sidecar(restored, head),
+            });
+        }
+        let Some(binding) = restored
+            .provenance
+            .iter()
+            .rev()
+            .map(|rec| &rec.manifest.core)
+            .find(|core| core.action.binds_metadata_blob())
+        else {
+            return Err(refuse(
+                "no manifest in its chain commits to a metadata blob",
+            ));
+        };
+        if binding.metadata_blob_hash != Some(blob_ciphertext_hash(blob)) {
+            return Err(refuse(
+                "the metadata blob is not the one its chain commits to",
+            ));
+        }
+        let epoch = binding.amk_version.0;
+        let Some(amk) = self.album(&restored.album_id)?.amks.get(&epoch).copied() else {
+            return Err(refuse(
+                "the album key of the metadata blob's epoch is not held",
+            ));
+        };
+        let Some(nonce) = blob_nonce(blob) else {
+            return Err(refuse("the metadata blob is truncated"));
+        };
+        let blob_key = Amk::from_bytes(amk).derive_blob_key(&restored.asset_id, &nonce);
+        let plaintext = open_blob(&blob_key, blob)
+            .map_err(|_| refuse("the metadata blob does not open under its album key"))?;
+        let sidecar = SidecarV1::from_canonical_slice(&plaintext, SIDECAR_SCHEMA_V1)
+            .map_err(|_| refuse("the sealed sidecar does not decode"))?;
+        if !sidecar.verify(&self.user_ik_public()) {
+            return Err(refuse("the sealed sidecar's signature does not verify"));
+        }
+        if sidecar.uuid != restored.asset_id
+            || sidecar.hash != hash::hash_bytes(&restored.plaintext)
+        {
+            return Err(refuse("the sealed sidecar describes another original"));
+        }
+        tracing::debug!(epoch, "restore: sealed sidecar opened and verified");
+        Ok(sidecar)
+    }
+
+    /// A stand-in sidecar from the head manifest, for an asset whose library never persisted
+    /// a sealed metadata blob: no user metadata survives, because none was carried.
+    fn stand_in_sidecar(
+        &self,
+        restored: &backup::RestoredAsset,
+        head: &AssetManifest,
+    ) -> SidecarV1 {
         let mut sidecar = SidecarV1 {
             sidecar_schema: SIDECAR_SCHEMA_V1,
             crypto_suite_id: CRYPTO_SUITE_ID,
             uuid: restored.asset_id,
             hash: hash::hash_bytes(&restored.plaintext),
-            capture_timestamp,
+            capture_timestamp: head.core.timestamp.clone(),
             capture_timestamp_user: Lww::new(),
             import_timestamp: now_rfc3339(),
             content_type: "application/octet-stream".into(),
@@ -642,16 +733,25 @@ impl Workspace {
             session_id: Uuid::now_v7(),
             gps: None,
             gps_user: Lww::new(),
-            // Mirror the head manifest's prior (the sealing invariant for its action); the true
-            // sidecar plaintext lives in the preserved `metadata_blob`, decodable by an album
-            // member that holds the AMK.
+            // Mirror the head manifest's prior (the sealing invariant for its action).
             provenance_chain_hash: head.core.prior_provenance_hash,
             unknown: BTreeMap::new(),
             signature: None,
         };
         sidecar.sign(&self.account.user_ik);
-        Ok(sidecar)
+        sidecar
     }
+}
+
+/// Where [`Workspace::write_restored`] takes a restored asset's sidecar from.
+#[derive(Debug, Clone, Copy)]
+enum SidecarSource {
+    /// The sealed metadata blob, opened and verified under this account's user IK: a peer of
+    /// the same account sealed it, so its metadata is facts this library adopts.
+    Sealed,
+    /// A stand-in from the head manifest, re-signed by this library: a backup may come from
+    /// another account, whose sidecar signature this account cannot vouch for.
+    StandIn,
 }
 
 /// Merge one album's escrowed AMK `rows` and the authority the artifact `carried` into `store`.
