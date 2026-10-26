@@ -376,6 +376,14 @@
     <string name="security_unknown_device">Unknown device</string>
     <string name="settings_confirm_new_password">Confirm New Password</string>
     <string name="settings_current_password">Current Password</string>
+    <string name="settings_language_description">Language picks the words on screen. Region picks how dates, times and numbers are written. Both follow your system until you change them, and stay on this device.</string>
+    <string name="settings_language_language_label">Language</string>
+    <string name="settings_language_profile_link">← Profile settings</string>
+    <string name="settings_language_region_label">Region</string>
+    <string name="settings_language_system_default">System default (%s)</string>
+    <string name="settings_language_system_unknown">System default</string>
+    <string name="settings_language_title">Language &amp; Region</string>
+    <string name="settings_language_link">Language &amp; region →</string>
     <string name="settings_password_description">Enter your current password to set a new one.</string>
     <string name="settings_password_title">Change Password</string>
     <string name="settings_password_mismatch">New passwords do not match.</string>
