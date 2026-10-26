@@ -561,6 +561,8 @@ fn one_key_per_variant() -> Vec<CounterKey> {
         CounterKey::FederatedReports(String::new()),
         CounterKey::PeerReports(String::new()),
         CounterKey::FederatedIntake(String::new()),
+        CounterKey::FederatedReportNonce(String::new()),
+        CounterKey::CapabilityMints(UserId::new("u")),
     ]
 }
 

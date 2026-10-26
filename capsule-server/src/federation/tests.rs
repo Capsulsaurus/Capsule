@@ -14,6 +14,49 @@ fn a_peer_id_is_canonical() {
     assert_ne!(PeerId::new("other.test"), PeerId::new("another.test"));
 }
 
+#[test]
+fn a_caller_supplied_peer_must_be_a_host_name() {
+    for accepted in [
+        "other.test",
+        "Other.Test.",
+        " localhost ",
+        "a-b.c1.example",
+        "10.0.0.1",
+    ] {
+        assert_eq!(
+            PeerId::parse(accepted),
+            Ok(PeerId::new(accepted)),
+            "{accepted:?}"
+        );
+    }
+    let longest = format!(
+        "{}.{}.{}.{}",
+        "a".repeat(63),
+        "b".repeat(63),
+        "c".repeat(63),
+        "d".repeat(61)
+    );
+    assert_eq!(longest.len(), MAX_PEER_ID_BYTES);
+    assert!(PeerId::parse(&longest).is_ok());
+    for refused in [
+        String::new(),
+        "   ".to_owned(),
+        "other.test:443".to_owned(),
+        "https://other.test".to_owned(),
+        "other.test/path".to_owned(),
+        "user@other.test".to_owned(),
+        "other..test".to_owned(),
+        "-other.test".to_owned(),
+        "other-.test".to_owned(),
+        "oth er.test".to_owned(),
+        "ötherr.test".to_owned(),
+        format!("{}.test", "a".repeat(64)),
+        format!("{longest}a"),
+    ] {
+        assert_eq!(PeerId::parse(&refused), Err(InvalidPeerId), "{refused:?}");
+    }
+}
+
 /// A counter that cannot be reached.
 #[derive(Debug)]
 struct DownCounters;
