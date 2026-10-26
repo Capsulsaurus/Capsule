@@ -278,16 +278,25 @@ pub enum CounterKey {
     /// chooses, so a peer cycling accounts gets a fresh per-account allowance each time, and
     /// only a key that ignores the account bounds the peer's total volume.
     PeerReports(String),
-    /// Attempts at `POST /v1/federation/reports`, keyed on the **claimed** reporting origin.
+    /// Reports at `POST /v1/federation/reports` from one **verified** reporting peer.
     ///
-    /// Charged before the peer is looked up, which is the only place a bound can sit on this
-    /// route: it is the server's one unauthenticated write, and everything after it — a store
-    /// read and an Ed25519 verification — is work an anonymous caller would otherwise get for
-    /// free. The key is attacker-chosen and that is stated rather than papered over: it bounds
-    /// one claimed origin looping, not a caller cycling origins, and this server has no trusted
-    /// client address to key on instead (see
-    /// [`CounterKey::RegistrationSource`], which waits on the same missing fact).
+    /// Charged only once the report's signature has verified under the peer's pinned key
+    /// (#529). Keyed on a claimed origin before verification, it was a budget anybody could
+    /// spend on a real peer's behalf by sending garbage under its name, silencing it. What an
+    /// anonymous caller can ask for before this is one peer-store read and one Ed25519
+    /// verification — the same work every bearer check costs on any authenticated route.
     FederatedIntake(String),
+    /// One report nonce from one verified peer, keyed on `"{reporting_server}:{nonce}"` (#529).
+    ///
+    /// A one-hit budget whose window starts at the first hit is exactly "seen inside this
+    /// window", so the counter port is the replay cache and no second store exists for it. Charged
+    /// after the signature verifies, so a third party cannot burn a peer's nonces.
+    FederatedReportNonce(String),
+    /// Capability mints by one account (#529).
+    ///
+    /// Keyed on the authenticated owner: every mint writes a capability row, and nothing else
+    /// bounds how many an account can write.
+    CapabilityMints(UserId),
 }
 
 /// Which of the two spellings an enrollment code was presented in.
@@ -345,6 +354,8 @@ impl CounterKey {
             Self::FederatedReports(_) => "federated_reports",
             Self::PeerReports(_) => "peer_reports",
             Self::FederatedIntake(_) => "federated_intake",
+            Self::FederatedReportNonce(_) => "federated_report_nonce",
+            Self::CapabilityMints(_) => "capability_mints",
         }
     }
 
@@ -410,6 +421,8 @@ impl CounterKey {
             Self::PeerRequests(_) | Self::PeerReports(_) => ceilings::PEER_ORIGIN,
             Self::FederatedReports(_) => ceilings::FEDERATED_REPORTS,
             Self::FederatedIntake(_) => ceilings::FEDERATED_INTAKE,
+            Self::FederatedReportNonce(_) => ceilings::FEDERATED_REPORT_NONCE,
+            Self::CapabilityMints(_) => ceilings::CAPABILITY_MINTS,
         }
     }
 
@@ -420,7 +433,8 @@ impl CounterKey {
             Self::LoginAttempts(user)
             | Self::DeepVerify(user)
             | Self::UploadSessions(user)
-            | Self::UploadChunks(user) => user.as_str(),
+            | Self::UploadChunks(user)
+            | Self::CapabilityMints(user) => user.as_str(),
             Self::EnrollmentRedemption(spelling) => spelling.as_str(),
             Self::ShareLink(scope)
             | Self::ShareSource(scope)
@@ -434,6 +448,7 @@ impl CounterKey {
             | Self::FederatedReports(scope)
             | Self::PeerReports(scope)
             | Self::FederatedIntake(scope)
+            | Self::FederatedReportNonce(scope)
             | Self::RegistrationSource(scope) => scope,
             // The two unit variants are each **one** global bucket by construction — that is why
             // they are unit variants rather than a scoped one carrying a sentinel string (see
@@ -682,15 +697,24 @@ pub mod ceilings {
     pub const FEDERATED_REPORTS: usize = 20_000;
 
     /// [`CounterKey::FederatedIntake`](super::CounterKey::FederatedIntake) — 1-hour window,
-    /// keyed on the **claimed** reporting origin.
+    /// keyed on a **verified** reporting peer.
     ///
-    /// The one federation key charged before anything is authenticated, so the key space is
-    /// attacker-chosen outright and this ceiling is the only bound on it. Sized like
-    /// [`SHARE_LINK`] and [`DROP_LINK`], the other partitions a caller supplies the key for:
-    /// twenty thousand distinct claimed origins in an hour is under six a second, and spending
-    /// it costs the intake path its first-time keys and costs no other surface anything. That
-    /// containment is the whole reason it is a partition rather than a share of one.
-    pub const FEDERATED_INTAKE: usize = 20_000;
+    /// Only a peer an operator pinned can hold a window here, so the key space is the pinned
+    /// list, which is what [`PEER_ORIGIN`] is sized for.
+    pub const FEDERATED_INTAKE: usize = PEER_ORIGIN;
+
+    /// [`CounterKey::FederatedReportNonce`](super::CounterKey::FederatedReportNonce) — 10-minute
+    /// window, keyed on a verified peer and a nonce it chose.
+    ///
+    /// Each verified report charges one, and a verified peer is held to
+    /// [`budgets::FEDERATED_INTAKE`](super::budgets::FEDERATED_INTAKE) reports an hour, so one
+    /// peer holds at most fifty live windows here. Twenty thousand is four hundred peers doing
+    /// that at once.
+    pub const FEDERATED_REPORT_NONCE: usize = 20_000;
+
+    /// [`CounterKey::CapabilityMints`](super::CounterKey::CapabilityMints) — 1-hour window, keyed
+    /// on an authenticated account. Bounded by the directory, as `LOGIN_ATTEMPTS` is.
+    pub const CAPABILITY_MINTS: usize = 10_000;
 }
 
 /// A deterministic in-memory adapter.

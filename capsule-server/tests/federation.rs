@@ -1223,7 +1223,7 @@ async fn uncharged(fixture: &Fixture, key: &CounterKey, budget: capsule_server::
         capsule_server::counter::Verdict::Admitted {
             remaining: budget.limit
         },
-        "{key:?} was charged on a deployment that does not federate"
+        "{key:?} was charged when nothing should have been"
     );
 }
 
@@ -1380,7 +1380,7 @@ fn report(pair: &ring::signature::Ed25519KeyPair, hash: &str, reason: Option<&st
         hash,
         &album(),
         reason,
-        "2026-09-02T00:00:00Z",
+        support::REPORTED_AT,
     )
 }
 
@@ -1471,7 +1471,7 @@ async fn a_filed_reports_signature_re_verifies_against_the_row_that_was_stored()
         &hash,
         &album(),
         Some("csam"),
-        "2026-09-02T00:00:00Z",
+        support::REPORTED_AT,
     );
     file(&fixture, body.clone())
         .await
@@ -1489,7 +1489,7 @@ async fn a_filed_reports_signature_re_verifies_against_the_row_that_was_stored()
     );
     assert_eq!(
         filed.reported_at,
-        "2026-09-02T00:00:00Z".parse::<Timestamp>().unwrap()
+        support::REPORTED_AT.parse::<Timestamp>().unwrap()
     );
 
     // The row re-verifies, months later, with nothing but its own two byte strings and the key.
@@ -1509,6 +1509,11 @@ async fn a_filed_reports_signature_re_verifies_against_the_row_that_was_stored()
     // normalized fields would produce something else entirely.
     let rebuilt = capsule_server::federation::ReportClaim {
         reporting_server: filed.reporting_server.clone(),
+        recipient_server: body["recipient_server"]
+            .as_str()
+            .expect("a recipient")
+            .to_owned(),
+        nonce: body["nonce"].as_str().expect("a nonce").to_owned(),
         reported_user: filed.reported_user.as_str().to_owned(),
         asset_hash: filed.asset_hash.clone(),
         album_id: filed.album_id.as_str().to_owned(),
@@ -1619,16 +1624,27 @@ async fn a_peers_reports_about_one_account_are_bounded_and_another_account_is_it
             &hash,
             &album(),
             None,
-            "2026-09-02T00:00:00Z",
+            support::REPORTED_AT,
         ),
     )
     .await
     .assert_status(StatusCode::ACCEPTED);
 
     fixture.clock.advance(budgets::FEDERATED_REPORTS.window);
-    file(&fixture, report(&signer, &hash, None))
-        .await
-        .assert_status(StatusCode::ACCEPTED);
+    file(
+        &fixture,
+        support::signed_report(
+            &signer,
+            PEER,
+            &reported(),
+            &hash,
+            &album(),
+            None,
+            &fixture.clock.now().to_string(),
+        ),
+    )
+    .await
+    .assert_status(StatusCode::ACCEPTED);
 }
 
 #[tokio::test]
@@ -1927,7 +1943,7 @@ async fn a_peer_cycling_accounts_meets_a_ceiling_the_per_account_budget_cannot_g
             &hash,
             &album(),
             None,
-            "2026-09-02T00:00:00Z",
+            support::REPORTED_AT,
         ),
     )
     .await;
@@ -1937,19 +1953,46 @@ async fn a_peer_cycling_accounts_meets_a_ceiling_the_per_account_budget_cannot_g
 }
 
 #[tokio::test]
-async fn an_anonymous_caller_is_bounded_before_the_peer_store_is_read() {
-    // M2's deliverable half. `POST /v1/federation/reports` is this server's only unauthenticated
-    // write; everything past the intake budget is a store read and an Ed25519 verification, and
-    // an anonymous caller would otherwise get both for free on every request.
+async fn a_stranger_cannot_spend_a_real_peers_intake_budget() {
+    // #529. Charged on the origin a body merely *claimed*, the intake budget was one anybody
+    // could spend in a real peer's name by sending garbage under it — silencing the peer for an
+    // hour. It is charged only once the signature verifies.
     let (fixture, _) = shared().await;
-    let (signer, _) = support::peer_keypair();
+    let (signer, public) = support::peer_keypair();
+    pin(&fixture, public).await;
     let hash = support::checksum(b"the reported bytes");
 
-    // Nobody pinned this peer, so a report is `403` — until the intake budget is spent, after
-    // which it is `429` and the peer store is never asked at all.
-    file(&fixture, report(&signer, &hash, None))
+    // A stranger floods reports claiming to be the peer, signed with its own key.
+    let (impostor, _) = support::peer_keypair();
+    for _ in 0..5 {
+        file(&fixture, report(&impostor, &hash, None))
+            .await
+            .assert_status(StatusCode::UNAUTHORIZED);
+    }
+    uncharged(
+        &fixture,
+        &CounterKey::FederatedIntake(PEER.to_owned()),
+        budgets::FEDERATED_INTAKE,
+    )
+    .await;
+    // An unknown peer is not charged anything either: there is no verified peer to charge.
+    let mut unknown = report(&impostor, &hash, None);
+    unknown["reporting_server"] = Value::from("stranger.test");
+    file(&fixture, unknown)
         .await
         .assert_status(StatusCode::FORBIDDEN);
+    uncharged(
+        &fixture,
+        &CounterKey::FederatedIntake("stranger.test".to_owned()),
+        budgets::FEDERATED_INTAKE,
+    )
+    .await;
+
+    // The real peer is unaffected — and its own report is what spends its own budget, until the
+    // budget is gone.
+    file(&fixture, report(&signer, &hash, None))
+        .await
+        .assert_status(StatusCode::ACCEPTED);
     for _ in 1..budgets::FEDERATED_INTAKE.limit {
         fixture
             .counters
@@ -1969,6 +2012,357 @@ async fn an_anonymous_caller_is_bounded_before_the_peer_store_is_read() {
     // The budget is above the policy one, so a real peer meets the budget that *is* the policy
     // first and never this one.
     const { assert!(budgets::FEDERATED_INTAKE.limit > budgets::PEER_REPORTS.limit) };
+}
+
+/// The claim the suite's reports carry, for the cases that need to vary one signed field.
+fn claim(nonce: &str, reported_at: &str) -> capsule_server::federation::ReportClaim {
+    capsule_server::federation::ReportClaim {
+        reporting_server: PEER.to_owned(),
+        recipient_server: support::SERVER_ORIGIN.to_owned(),
+        nonce: nonce.to_owned(),
+        reported_user: reported(),
+        asset_hash: support::checksum(b"the reported bytes"),
+        album_id: album().as_str().to_owned(),
+        reason: None,
+        reported_at: reported_at.to_owned(),
+    }
+}
+
+/// How many reports the queue holds.
+async fn queued(fixture: &Fixture) -> usize {
+    fixture
+        .moderation
+        .pending_reports()
+        .await
+        .expect("the store answers")
+        .len()
+}
+
+#[tokio::test]
+async fn a_signed_report_is_accepted_once_and_a_replay_spends_nothing() {
+    // #529. A captured report re-sent is the same signature over the same bytes, so only the
+    // nonce tells it apart — and a replay must not spend the real peer's budgets either, or
+    // replaying is a way to silence it.
+    let (fixture, _) = shared().await;
+    let (signer, public) = support::peer_keypair();
+    pin(&fixture, public).await;
+    let body = support::sign_report(
+        &signer,
+        &claim("0192f1a8-7c4e-4b6a-9d3e-000000000001", support::REPORTED_AT),
+    );
+
+    file(&fixture, body.clone())
+        .await
+        .assert_status(StatusCode::ACCEPTED);
+    let intake_key = CounterKey::FederatedIntake(PEER.to_owned());
+    let intake = fixture
+        .counters
+        .peek(&intake_key, budgets::FEDERATED_INTAKE, fixture.clock.now())
+        .await
+        .expect("the counter answers");
+
+    for _ in 0..3 {
+        let refused = file(&fixture, body.clone()).await;
+        refused.assert_status(StatusCode::UNAUTHORIZED);
+        let refused: Value = refused.json();
+        assert_eq!(refused["code"], "error.moderation.report_unsigned");
+    }
+    assert_eq!(queued(&fixture).await, 1, "a replay is not filed");
+    assert_eq!(
+        fixture
+            .counters
+            .peek(&intake_key, budgets::FEDERATED_INTAKE, fixture.clock.now())
+            .await
+            .expect("the counter answers"),
+        intake,
+        "a replay spends none of the peer's intake budget"
+    );
+
+    // Still refused late in the window, while the report itself is still fresh.
+    fixture
+        .clock
+        .advance(capsule_server::federation::REPORT_FRESHNESS);
+    file(&fixture, body)
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+
+    // A fresh nonce is a fresh report.
+    file(
+        &fixture,
+        support::sign_report(
+            &signer,
+            &claim(
+                "0192f1a8-7c4e-4b6a-9d3e-000000000002",
+                &fixture.clock.now().to_string(),
+            ),
+        ),
+    )
+    .await
+    .assert_status(StatusCode::ACCEPTED);
+    assert_eq!(queued(&fixture).await, 2);
+}
+
+#[tokio::test]
+async fn a_report_signed_for_another_server_or_at_another_time_is_refused() {
+    // #529: the claim binds its recipient and its moment, and the signature binds the claim.
+    let (fixture, _) = shared().await;
+    let (signer, public) = support::peer_keypair();
+    pin(&fixture, public).await;
+
+    let mut elsewhere = claim("0192f1a8-7c4e-4b6a-9d3e-000000000003", support::REPORTED_AT);
+    elsewhere.recipient_server = "third.test".to_owned();
+    let stale = claim(
+        "0192f1a8-7c4e-4b6a-9d3e-000000000004",
+        "1969-12-31T23:54:59Z",
+    );
+    let early = claim(
+        "0192f1a8-7c4e-4b6a-9d3e-000000000005",
+        "1970-01-01T00:05:01Z",
+    );
+    for (name, claim) in [
+        ("another recipient", elsewhere),
+        ("signed too long ago", stale),
+        ("signed in the future", early),
+    ] {
+        let refused = file(&fixture, support::sign_report(&signer, &claim)).await;
+        refused.assert_status(StatusCode::UNAUTHORIZED);
+        let refused: Value = refused.json();
+        assert_eq!(
+            refused["code"], "error.moderation.report_unsigned",
+            "{name}"
+        );
+    }
+
+    // The recipient is compared as an origin, so a peer naming this server the way it writes
+    // its own name — any case, a trailing dot — is addressing it.
+    let mut spelled = claim("0192f1a8-7c4e-4b6a-9d3e-000000000006", support::REPORTED_AT);
+    spelled.recipient_server = "Capsule.Test.".to_owned();
+    file(&fixture, support::sign_report(&signer, &spelled))
+        .await
+        .assert_status(StatusCode::ACCEPTED);
+    // And at the edge of the window either way it is still fresh.
+    let edge = claim(
+        "0192f1a8-7c4e-4b6a-9d3e-000000000007",
+        "1970-01-01T00:05:00Z",
+    );
+    file(&fixture, support::sign_report(&signer, &edge))
+        .await
+        .assert_status(StatusCode::ACCEPTED);
+    assert_eq!(queued(&fixture).await, 2);
+
+    // A nonce too short to be one is malformed.
+    let short = claim("too-short", support::REPORTED_AT);
+    file(&fixture, support::sign_report(&signer, &short))
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn a_reason_is_signed_trimmed_like_every_other_field() {
+    // #529: design/moderation.md signs every field whitespace-trimmed. A peer following it signs
+    // the trimmed reason; the body may still carry the padding.
+    let (fixture, _) = shared().await;
+    let (signer, public) = support::peer_keypair();
+    pin(&fixture, public).await;
+    let mut trimmed = claim("0192f1a8-7c4e-4b6a-9d3e-000000000008", support::REPORTED_AT);
+    trimmed.reason = Some("csam".to_owned());
+    let mut body = support::sign_report(&signer, &trimmed);
+    body["reason"] = Value::from("  csam\n");
+
+    file(&fixture, body)
+        .await
+        .assert_status(StatusCode::ACCEPTED);
+    let pending = fixture
+        .moderation
+        .pending_reports()
+        .await
+        .expect("the store answers");
+    assert_eq!(pending[0].reason.as_deref(), Some("csam"));
+}
+
+#[tokio::test]
+async fn a_mint_refuses_a_peer_that_is_not_a_host_name_and_a_member_out_of_bounds() {
+    // #529: the peer becomes a row, a token's `sub`, a counter key and a log field.
+    let dsk = support::identity_key();
+    let (fixture, bearer) = anchored(&dsk).await;
+    publish_roster(&fixture, &bearer, &dsk, 1, &[(BOB, MemberRole::Reader)])
+        .await
+        .assert_status(StatusCode::OK);
+
+    let huge = "a".repeat(4096);
+    for (name, peer, member) in [
+        ("a URL", "https://other.test/", BOB),
+        ("a port", "other.test:8443", BOB),
+        ("a megabyte of name", huge.as_str(), BOB),
+        ("an empty label", "other..test", BOB),
+        ("a member out of bounds", PEER, huge.as_str()),
+    ] {
+        let refused = mint(
+            &fixture,
+            &bearer,
+            serde_json::json!({ "peer": peer, "member": member, "scope": "read" }),
+        )
+        .await;
+        refused.assert_status(StatusCode::BAD_REQUEST);
+        let refused: Value = refused.json();
+        assert_eq!(
+            refused["code"], "error.federation.capability_malformed",
+            "{name}"
+        );
+    }
+    // The canonical spelling of a real name is still a name.
+    let minted: Value = mint(
+        &fixture,
+        &bearer,
+        serde_json::json!({ "peer": "Other.Test.", "member": BOB, "scope": "read" }),
+    )
+    .await
+    .assert_status(StatusCode::CREATED)
+    .json();
+    assert_eq!(minted["peer"], PEER);
+}
+
+#[tokio::test]
+async fn an_accounts_mints_are_budgeted() {
+    // #529: every mint writes a capability row, so an account's mints are bounded.
+    let dsk = support::identity_key();
+    let (fixture, bearer) = anchored(&dsk).await;
+    publish_roster(&fixture, &bearer, &dsk, 1, &[(BOB, MemberRole::Reader)])
+        .await
+        .assert_status(StatusCode::OK);
+    for _ in 1..budgets::CAPABILITY_MINTS.limit {
+        fixture
+            .counters
+            .hit(
+                &CounterKey::CapabilityMints(support::user()),
+                budgets::CAPABILITY_MINTS,
+                fixture.clock.now(),
+            )
+            .await
+            .expect("the counter answers");
+    }
+    mint(&fixture, &bearer, mint_body("read"))
+        .await
+        .assert_status(StatusCode::CREATED);
+    let refused = mint(&fixture, &bearer, mint_body("read")).await;
+    refused.assert_status(StatusCode::TOO_MANY_REQUESTS);
+    let refused: Value = refused.json();
+    assert_eq!(refused["code"], "error.federation.rate_budget_exceeded");
+}
+
+/// Fill `sample`'s partition to its shipped ceiling with keys `fill` builds.
+async fn saturate(
+    fixture: &Fixture,
+    sample: &CounterKey,
+    budget: capsule_server::counter::Budget,
+    fill: impl Fn(usize) -> CounterKey,
+) {
+    for i in 0..sample.ceiling() {
+        fixture
+            .counters
+            .hit(&fill(i), budget, fixture.clock.now())
+            .await
+            .expect("the partition has room until it is full");
+    }
+}
+
+#[tokio::test]
+async fn a_full_mint_partition_is_a_429_never_a_500() {
+    // #912: a full partition is the limiter working, so it answers as a spent budget does, not
+    // as the outage a `500` reports.
+    let dsk = support::identity_key();
+    let (fixture, bearer) = anchored(&dsk).await;
+    publish_roster(&fixture, &bearer, &dsk, 1, &[(BOB, MemberRole::Reader)])
+        .await
+        .assert_status(StatusCode::OK);
+    saturate(
+        &fixture,
+        &CounterKey::CapabilityMints(support::user()),
+        budgets::CAPABILITY_MINTS,
+        |i| CounterKey::CapabilityMints(UserId::new(format!("filler-{i}"))),
+    )
+    .await;
+
+    let refused = mint(&fixture, &bearer, mint_body("read")).await;
+    refused.assert_status(StatusCode::TOO_MANY_REQUESTS);
+    let refused: Value = refused.json();
+    assert_eq!(refused["code"], "error.federation.rate_budget_exceeded");
+}
+
+#[tokio::test]
+async fn a_full_report_nonce_partition_is_a_429_never_a_500_or_a_replay() {
+    // #912: the nonce is spent after verification, so a full partition must neither read as a
+    // replay (`401`) nor as an outage (`500`).
+    let (fixture, _) = shared().await;
+    let (signer, public) = support::peer_keypair();
+    pin(&fixture, public).await;
+    let sample = CounterKey::FederatedReportNonce(format!("{PEER}:sample"));
+    saturate(&fixture, &sample, budgets::FEDERATED_REPORT_NONCE, |i| {
+        CounterKey::FederatedReportNonce(format!("filler.test:{i}"))
+    })
+    .await;
+
+    let refused = file(
+        &fixture,
+        support::sign_report(
+            &signer,
+            &claim("0192f1a8-7c4e-4b6a-9d3e-000000000009", support::REPORTED_AT),
+        ),
+    )
+    .await;
+    refused.assert_status(StatusCode::TOO_MANY_REQUESTS);
+    let refused: Value = refused.json();
+    assert_eq!(refused["code"], "error.moderation.report_rate_limited");
+    assert_eq!(queued(&fixture).await, 0, "nothing is filed");
+}
+
+#[tokio::test]
+async fn a_deadline_at_exactly_the_lifetime_ceiling_is_a_400_never_a_500() {
+    // #529. The route measured the ninety days from the request's instant and the store from the
+    // token's `issued_at`, which the codec floors to a whole second — so on a clock with a
+    // sub-second tail a deadline at exactly the ceiling passed the route and was a store `500`.
+    let dsk = support::identity_key();
+    let (fixture, bearer) = anchored(&dsk).await;
+    publish_roster(&fixture, &bearer, &dsk, 1, &[(BOB, MemberRole::Reader)])
+        .await
+        .assert_status(StatusCode::OK);
+    fixture.clock.advance(SignedDuration::from_millis(500));
+    let ceiling = fixture.clock.now() + capsule_server::federation::MAX_GRANT_LIFETIME;
+
+    let refused = mint(
+        &fixture,
+        &bearer,
+        serde_json::json!({
+            "peer": PEER, "member": BOB, "scope": "read", "renewable_until": ceiling.to_string(),
+        }),
+    )
+    .await;
+    refused.assert_status(StatusCode::BAD_REQUEST);
+    let refused: Value = refused.json();
+    assert_eq!(refused["code"], "error.federation.capability_malformed");
+
+    // A deadline at the ceiling measured from the whole second the grant is issued at is fine.
+    let issued = fixture
+        .clock
+        .now()
+        .round(jiff::Unit::Second)
+        .expect("rounds");
+    let issued = if issued > fixture.clock.now() {
+        issued - SignedDuration::from_secs(1)
+    } else {
+        issued
+    };
+    let at_ceiling = issued + capsule_server::federation::MAX_GRANT_LIFETIME;
+    mint(
+        &fixture,
+        &bearer,
+        serde_json::json!({
+            "peer": PEER, "member": BOB, "scope": "read",
+            "renewable_until": at_ceiling.to_string(),
+        }),
+    )
+    .await
+    .assert_status(StatusCode::CREATED);
 }
 
 #[tokio::test]
@@ -2090,7 +2484,7 @@ async fn a_report_about_an_account_this_server_does_not_host_is_accepted_and_dro
             &hash,
             &album(),
             Some("csam"),
-            "2026-09-02T00:00:00Z",
+            support::REPORTED_AT,
         ),
     )
     .await;

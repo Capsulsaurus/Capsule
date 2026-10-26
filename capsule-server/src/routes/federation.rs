@@ -14,6 +14,7 @@
 //! 403 error.moderation.server_blocked
 //! 404 error.federation.album_not_found | error.federation.not_configured
 //! 409 error.federation.member_not_on_roster
+//! 429 error.federation.rate_budget_exceeded
 //! 500 error.federation.unavailable
 //!
 //! DELETE /v1/albums/{album_id}/capabilities/{jti}
@@ -42,9 +43,9 @@
 //!
 //! # Off unless switched on
 //!
-//! Federation is deferred (#476), and two of these operations do store work for callers this
-//! server has not authenticated: report intake budgets on a claimed origin before any signature
-//! is checked, and minting is unbounded per account. So the whole surface sits behind
+//! Federation is deferred (#476), and a deployment that has not asked for it should not carry
+//! a surface peers can reach: report intake is the server's one write whose caller holds no
+//! credential of this server's, and a capability is a bearer token. So the whole surface sits behind
 //! `FEDERATION_ENABLED` (#509), **off by default**. Off, [`FederationGate`] refuses each operation
 //! with `404 error.federation.not_configured` before its credential, its body, a
 //! budget or a store is touched, and the read primitives honour no capability at all. Every
@@ -385,6 +386,15 @@ pub enum MintRejection {
         code: &'static str,
     },
 
+    /// The account's mint budget is spent.
+    #[error("this account has reached its capability mint budget")]
+    #[problem(status = 429, title = "Rate budget exceeded")]
+    RateLimited {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
     /// A collaborator could not answer, so nothing was minted.
     #[error("the capability could not be minted")]
     #[problem(status = 500, title = "Internal server error")]
@@ -547,19 +557,59 @@ pub async fn issue_capability(
     Inject(federation): Inject<FederationContext>,
     Inject(albums): Inject<AlbumContext>,
     Inject(membership): Inject<MembershipContext>,
+    Inject(counters): Inject<CounterContext>,
     Path(path): Path<CapabilitiesPath>,
     Json(request): Json<MintCapabilityRequest>,
 ) -> Result<MintReply, MintRejection> {
-    let peer = PeerId::new(request.peer.trim());
-    // A peer id is an origin, and an empty or whitespace one is a client bug rather than an
-    // unknown server. Checked before the store so a blank never becomes a row.
-    if peer.as_str().is_empty() || request.member.trim().is_empty() {
+    // A peer id is an origin, and anything that is not a host name — a blank, a URL, a port, a
+    // megabyte of text — is a client bug rather than an unknown server. Checked before any store
+    // or counter, because the value becomes a row, a token's `sub` and a log field. The member is
+    // bounded the way a report's account is, for the same reason.
+    let Ok(peer) = PeerId::parse(&request.peer) else {
+        tracing::info!(
+            length = request.peer.len(),
+            "a mint named a peer that is not a host name"
+        );
+        return Err(MintRejection::Malformed {
+            code: error_codes::FEDERATION_CAPABILITY_MALFORMED,
+        });
+    };
+    let member = request.member.trim();
+    if member.is_empty() || member.len() > report_bounds::IDENTIFIER {
+        tracing::info!(length = member.len(), "a mint named a member out of bounds");
         return Err(MintRejection::Malformed {
             code: error_codes::FEDERATION_CAPABILITY_MALFORMED,
         });
     }
-    let member = UserId::new(request.member.trim());
+    let member = UserId::new(member);
     let album = AlbumId::new(&path.album_id);
+
+    // Every mint writes a capability row, so an account's mints are budgeted before any store is
+    // read. Fail closed: a counter that cannot answer is a `500`, never an admission, and a full
+    // partition is the limiter working, so it is the same `429` a spent budget gets.
+    let key = CounterKey::CapabilityMints(UserId::new(credential.user.as_str()));
+    match counters
+        .hit(&key, budgets::CAPABILITY_MINTS)
+        .await
+        .map_err(|error| {
+            if let Some(retry_after) = counters.capacity_refusal(&error, budgets::CAPABILITY_MINTS) {
+                tracing::warn!(%error, user = %credential.user, %retry_after, "a mint was refused: the mint counter is at capacity");
+                MintRejection::RateLimited {
+                    code: error_codes::FEDERATION_RATE_BUDGET_EXCEEDED,
+                }
+            } else {
+                tracing::error!(%error, user = %credential.user, "the mint counter could not be reached");
+                MintRejection::unavailable()
+            }
+        })? {
+        crate::counter::Verdict::Admitted { .. } => {}
+        crate::counter::Verdict::Limited { retry_after } => {
+            tracing::info!(user = %credential.user, %retry_after, "a mint was refused: the account's mint budget is spent");
+            return Err(MintRejection::RateLimited {
+                code: error_codes::FEDERATION_RATE_BUDGET_EXCEEDED,
+            });
+        }
+    }
 
     // The album must be the caller's, and "not yours" is "not found" — the same answer the
     // roster and upgrade ceremonies give, so an album id somebody else holds discloses nothing.
@@ -625,8 +675,8 @@ pub async fn issue_capability(
                     code: error_codes::FEDERATION_CAPABILITY_MALFORMED,
                 });
             };
-            if until <= now || until > crate::store::deadline(now, MAX_GRANT_LIFETIME) {
-                tracing::info!(%album, %until, "a mint named a deadline outside the permitted window");
+            if until <= now {
+                tracing::info!(%album, %until, "a mint named a deadline in the past");
                 return Err(MintRejection::Malformed {
                     code: error_codes::FEDERATION_CAPABILITY_MALFORMED,
                 });
@@ -655,6 +705,16 @@ pub async fn issue_capability(
     let not_after = renewable_until.map_or(minted.grant.expires_at, |until| {
         until.max(minted.grant.expires_at)
     });
+    // The lifetime ceiling, measured from the instant the store measures it from: the token's
+    // `issued_at`, which the codec floors to a whole second. Measured from the request's `now`
+    // instead, a deadline at exactly ninety days passed here and was refused by the store as a
+    // `500` (#529). Nothing has been recorded yet, so this is still a plain `400`.
+    if not_after > crate::store::deadline(minted.grant.issued_at, MAX_GRANT_LIFETIME) {
+        tracing::info!(%album, %not_after, "a mint named a deadline past the lifetime ceiling");
+        return Err(MintRejection::Malformed {
+            code: error_codes::FEDERATION_CAPABILITY_MALFORMED,
+        });
+    }
     federation
         .capabilities()
         .issue(CapabilityRecord {
@@ -966,6 +1026,10 @@ mod report_bounds {
     pub(super) const INSTANT: usize = 64;
     /// A base64 Ed25519 signature is 88 bytes; this leaves room for padding variants.
     pub(super) const SIGNATURE: usize = 128;
+    /// A nonce: at least 16 bytes so it is not a counter, at most a UUID with room to spare.
+    pub(super) const NONCE_MIN: usize = 16;
+    /// See [`NONCE_MIN`].
+    pub(super) const NONCE_MAX: usize = 64;
 }
 
 /// A moderation report one peer server files against an account on this one.
@@ -976,6 +1040,10 @@ mod report_bounds {
 pub struct FederatedReportRequest {
     /// The peer filing the report, as its own `server-info` names it.
     pub reporting_server: String,
+    /// The server the report is addressed to — this one, as its own `server-info` names it.
+    pub recipient_server: String,
+    /// A value the peer never signs twice: 16 to 64 bytes, a UUID being the obvious choice.
+    pub nonce: String,
     /// The account on this server the report is about.
     pub reported_user: String,
     /// The content address of the asset complained about.
@@ -984,7 +1052,8 @@ pub struct FederatedReportRequest {
     pub album_id: String,
     /// A short reason, where the peer gives one.
     pub reason: Option<String>,
-    /// When the peer says it was reported, RFC 3339.
+    /// When the peer signed the report, RFC 3339. Refused when more than five minutes from this
+    /// server's clock either way.
     pub reported_at: String,
     /// The peer's Ed25519 signature over the canonical CBOR of the fields above, base64.
     pub signature: String,
@@ -1015,7 +1084,8 @@ pub enum ReportRejection {
         code: &'static str,
     },
 
-    /// The signature does not verify under the peer's pinned key.
+    /// The signature does not verify under the peer's pinned key — or it does, over a report
+    /// addressed to another server, signed outside the freshness window, or already filed.
     #[error("the report's signature could not be verified")]
     #[problem(status = 401, title = "Report unsigned")]
     Unsigned {
@@ -1075,6 +1145,13 @@ impl ReportRejection {
             code: error_codes::MODERATION_UNAVAILABLE,
         }
     }
+
+    /// The report does not authenticate a fresh report addressed to this server.
+    fn unsigned() -> Self {
+        Self::Unsigned {
+            code: error_codes::MODERATION_REPORT_UNSIGNED,
+        }
+    }
 }
 
 /// File a signed moderation report from a peer server.
@@ -1107,22 +1184,31 @@ impl ReportRejection {
 ///
 /// # The order the checks run in
 ///
-/// Bounds, then how much may be asked for at all, then who is speaking, then whether they are
-/// welcome, then whether they really said it, then whose account it is, then whether they have
-/// said it too often.
+/// Bounds, then whether it is addressed here and signed just now, then who is speaking, then
+/// whether they are welcome, then whether they really said it, then whether they said it before,
+/// then how much they may ask for at all, then whose account it is, then whether they have said
+/// it too often.
 ///
-/// Every field is length-capped first, before a store is read or a byte is keyed on. Then
-/// [`CounterKey::FederatedIntake`] — keyed on the
-/// *claimed* origin, so it bounds one origin looping rather than a caller cycling origins, which
-/// is the most this server can do without a trusted client address. Everything after it is a
-/// store read and an Ed25519 verification, and this is the only place a bound on that work can
-/// sit.
+/// Every field is length-capped first, and `reporting_server` must be a host name, before a store
+/// is read or a byte is keyed on. The recipient and the freshness window are pure checks on the
+/// body. **No budget is charged before the signature verifies** (design/moderation.md): a budget
+/// keyed on an origin a body merely claims is one a stranger spends in a real peer's name. What an
+/// anonymous caller gets before that is one peer-store read and one Ed25519 verification — the
+/// work every bearer check costs on any authenticated route.
 ///
-/// The **policy** budgets are charged last, after the signature verifies, so a third party
-/// spoofing `reporting_server` cannot spend a real peer's allowance. Two of them: the contract's
-/// per-`(server, account)` limit, and a per-peer ceiling that ignores the account, because
-/// `reported_user` is a string the peer chooses and a peer cycling accounts would otherwise mint
-/// itself a fresh allowance each time.
+/// Once verified: the nonce is checked (a replay is refused before anything is charged to the
+/// peer), then [`CounterKey::FederatedIntake`] bounds the peer's total intake, then the nonce is
+/// spent. Then the **policy** budgets: the contract's per-`(server, account)` limit, and a
+/// per-peer ceiling that ignores the account, because `reported_user` is a string the peer
+/// chooses and a peer cycling accounts would otherwise mint itself a fresh allowance each time.
+///
+/// # A signed report is accepted once, here, now
+///
+/// The claim names its recipient and carries a nonce and the instant it was signed; a report
+/// addressed to another server, signed more than
+/// [`REPORT_FRESHNESS`](crate::federation::REPORT_FRESHNESS) from this server's clock, or
+/// carrying a nonce this peer already used is `401 error.moderation.report_unsigned`. A peer that
+/// retries — after a `429`, a timeout, a `500` — signs again with a fresh nonce.
 ///
 /// Before any of that, the bytes parsed are bounded too: the federation group's body cap,
 /// [`MAX_FEDERATION_BODY_BYTES`](crate::limits::MAX_FEDERATION_BODY_BYTES), refuses a body past
@@ -1176,6 +1262,12 @@ pub async fn submit_federated_report(
             report_bounds::ORIGIN,
         ),
         (
+            "recipient_server",
+            request.recipient_server.trim(),
+            report_bounds::ORIGIN,
+        ),
+        ("nonce", request.nonce.trim(), report_bounds::NONCE_MAX),
+        (
             "reported_user",
             request.reported_user.trim(),
             report_bounds::IDENTIFIER,
@@ -1211,30 +1303,40 @@ pub async fn submit_federated_report(
             return Err(ReportRejection::malformed());
         }
     }
-    let peer = PeerId::new(request.reporting_server.trim());
-    if peer.as_str().is_empty() {
+    if request.nonce.trim().len() < report_bounds::NONCE_MIN {
+        tracing::info!(
+            length = request.nonce.trim().len(),
+            "a federated report's nonce is too short"
+        );
         return Err(ReportRejection::malformed());
     }
-    let Ok(reported_at) = request.reported_at.parse::<jiff::Timestamp>() else {
+    let Ok(peer) = PeerId::parse(&request.reporting_server) else {
+        tracing::info!("a federated report named a reporting_server that is not a host name");
+        return Err(ReportRejection::malformed());
+    };
+    let Ok(reported_at) = request.reported_at.trim().parse::<jiff::Timestamp>() else {
         tracing::info!(%peer, "a federated report carried an unreadable reported_at");
         return Err(ReportRejection::malformed());
     };
-    let Ok(signature) = BASE64.decode(request.signature.as_bytes()) else {
+    let Ok(signature) = BASE64.decode(request.signature.trim().as_bytes()) else {
         tracing::info!(%peer, "a federated report's signature is not base64");
         return Err(ReportRejection::malformed());
     };
 
-    // The bound on how much work an anonymous caller may ask for, charged **before** the peer
-    // is looked up — everything past this line is a store read and an Ed25519 verification. The
-    // key is the *claimed* origin, which is attacker-chosen: it bounds one origin looping and
-    // not a caller cycling origins, because this server has no trusted client address to key on
-    // instead. Stated here rather than left to look like more than it is.
-    charge(
-        &counters,
-        &CounterKey::FederatedIntake(peer.as_str().to_owned()),
-        budgets::FEDERATED_INTAKE,
-    )
-    .await?;
+    // Addressed here, and signed just now. Both are refused before the peer is looked up — they
+    // cost nothing to decide and the signature, checked below, is what makes them binding. The
+    // answer is the `401` an unverifiable report gets: a report signed for another server, or
+    // long ago, does not authenticate a report filed with this one now.
+    if PeerId::new(request.recipient_server.trim()).as_str()
+        != PeerId::new(federation.codec().server_id()).as_str()
+    {
+        tracing::info!(%peer, "a federated report was addressed to another server");
+        return Err(ReportRejection::unsigned());
+    }
+    if !federation::report::is_fresh(reported_at, federation.clock().now()) {
+        tracing::info!(%peer, %reported_at, "a federated report is outside the freshness window");
+        return Err(ReportRejection::unsigned());
+    }
 
     // Who is speaking. A peer nobody pinned, and a peer pinned without a key, are the same
     // answer: there is nothing to verify against, so nothing is verified.
@@ -1266,12 +1368,20 @@ pub async fn submit_federated_report(
     // implementing from the doc signs the bytes this verifies. In particular the peer's own
     // `reporting_server` string is signed as sent, not folded to the canonical `PeerId` form
     // used for the lookup, and `reported_at` is the RFC 3339 text and not a re-rendered instant.
+    // `reason` included: design/moderation.md's rule is that *every* signed field is trimmed,
+    // and signing it untrimmed made a peer following the doc fail verification on a reason with
+    // a trailing newline (#529).
     let claim = ReportClaim {
         reporting_server: request.reporting_server.trim().to_owned(),
+        recipient_server: request.recipient_server.trim().to_owned(),
+        nonce: request.nonce.trim().to_owned(),
         reported_user: request.reported_user.trim().to_owned(),
         asset_hash: request.asset_hash.trim().to_owned(),
         album_id: request.album_id.trim().to_owned(),
-        reason: request.reason.clone(),
+        reason: request
+            .reason
+            .as_deref()
+            .map(|reason| reason.trim().to_owned()),
         reported_at: request.reported_at.trim().to_owned(),
     };
     // Kept verbatim: these are the bytes the signature covers, and the only thing an operator
@@ -1282,11 +1392,50 @@ pub async fn submit_federated_report(
     claim
         .verify(&signature, &key)
         .map_err(|error| match error {
-            crate::federation::ReportError::NotAuthentic => ReportRejection::Unsigned {
-                code: error_codes::MODERATION_REPORT_UNSIGNED,
-            },
+            crate::federation::ReportError::NotAuthentic => ReportRejection::unsigned(),
             crate::federation::ReportError::Unencodable => ReportRejection::unavailable(),
         })?;
+
+    // From here on the peer is who it says it is, so its budgets are its own and nobody else
+    // can spend them (#529). A replay is refused **before** the intake budget is charged, so a
+    // party that captured a report cannot silence its peer by sending it again; the nonce is
+    // charged only after, so a pinned peer cannot grow the nonce partition past its intake
+    // budget. The peek and the hit are two steps, and the hit is the one that decides: two
+    // copies racing past the peek still meet a one-hit budget.
+    let nonce = CounterKey::FederatedReportNonce(format!("{peer}:{}", claim.nonce));
+    if !counters
+        .peek(&nonce, budgets::FEDERATED_REPORT_NONCE)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, %peer, "the report nonce counter could not be reached");
+            ReportRejection::unavailable()
+        })?
+        .admits()
+    {
+        tracing::warn!(%peer, "a federated report replayed a nonce");
+        return Err(ReportRejection::unsigned());
+    }
+    charge(
+        &counters,
+        &CounterKey::FederatedIntake(peer.as_str().to_owned()),
+        budgets::FEDERATED_INTAKE,
+    )
+    .await?;
+    // Spent by hand rather than through `charge`: a `Limited` verdict here is a replay, which
+    // is a `401`, while a full partition is the limiter at capacity, which is the `429` every
+    // other report budget gives — never the `500` of a store that could not answer.
+    match counters
+        .hit(&nonce, budgets::FEDERATED_REPORT_NONCE)
+        .await
+        .map_err(|error| {
+            refused_by_counter(&counters, &error, &nonce, budgets::FEDERATED_REPORT_NONCE)
+        })? {
+        crate::counter::Verdict::Admitted { .. } => {}
+        crate::counter::Verdict::Limited { .. } => {
+            tracing::warn!(%peer, "a federated report replayed a nonce");
+            return Err(ReportRejection::unsigned());
+        }
+    }
 
     // Does the account exist here? The answer decides whether a row is written and **never what
     // the peer is told** — see the module docs. A report naming an account this server does not
@@ -1378,10 +1527,11 @@ async fn charge(
     key: &CounterKey,
     budget: crate::counter::Budget,
 ) -> Result<(), ReportRejection> {
-    match counters.hit(key, budget).await.map_err(|error| {
-        tracing::error!(%error, kind = key.as_str(), "a report counter could not be reached");
-        ReportRejection::unavailable()
-    })? {
+    match counters
+        .hit(key, budget)
+        .await
+        .map_err(|error| refused_by_counter(counters, &error, key, budget))?
+    {
         crate::counter::Verdict::Admitted { .. } => Ok(()),
         crate::counter::Verdict::Limited { retry_after } => {
             tracing::info!(kind = key.as_str(), %retry_after, "a federated report budget is spent");
@@ -1389,6 +1539,28 @@ async fn charge(
                 code: error_codes::MODERATION_REPORT_RATE_LIMITED,
             })
         }
+    }
+}
+
+/// What a report counter that refused to answer tells the peer.
+///
+/// Fail closed either way. A full partition is the limiter working as designed and clears
+/// within its window, so it is the `429` a spent budget gets; anything else is a store that
+/// could not answer, which is the `500`.
+fn refused_by_counter(
+    counters: &CounterContext,
+    error: &crate::store::StoreError,
+    key: &CounterKey,
+    budget: crate::counter::Budget,
+) -> ReportRejection {
+    if let Some(retry_after) = counters.capacity_refusal(error, budget) {
+        tracing::warn!(%error, kind = key.as_str(), %retry_after, "a report counter is at capacity");
+        ReportRejection::RateLimited {
+            code: error_codes::MODERATION_REPORT_RATE_LIMITED,
+        }
+    } else {
+        tracing::error!(%error, kind = key.as_str(), "a report counter could not be reached");
+        ReportRejection::unavailable()
     }
 }
 

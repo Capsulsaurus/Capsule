@@ -205,10 +205,24 @@ pub const FEDERATED_REPORTS: Budget = Budget::new(20, SignedDuration::from_hours
 /// which account it named.
 pub const PEER_REPORTS: Budget = Budget::new(200, SignedDuration::from_hours(1));
 
-/// Attempts at `POST /v1/federation/reports` from one **claimed** origin.
+/// Signed reports at `POST /v1/federation/reports` from one **verified** peer.
 ///
-/// Three hundred an hour, charged before the peer is looked up. Deliberately above
-/// [`PEER_REPORTS`], because it is not a policy on reporting — it is the bound on how much work
-/// an anonymous caller can ask for on the server's one unauthenticated write, and a real peer
-/// must never meet it before meeting the budget that *is* the policy.
+/// Three hundred an hour, charged once the signature has verified under the peer's pinned key
+/// and before the account directory is read (#529). Charged before verification, on the origin
+/// a body merely claimed, it was a budget a stranger could spend in a real peer's name.
+/// Deliberately above [`PEER_REPORTS`]: it bounds the work a pinned peer can ask for, replays and
+/// unhosted accounts included, and a peer reporting honestly meets the budget that *is* the
+/// policy first.
 pub const FEDERATED_INTAKE: Budget = Budget::new(300, SignedDuration::from_hours(1));
+
+/// One use of one report nonce, per verified peer (#529).
+///
+/// A limit of one over [`REPORT_NONCE_WINDOW`](crate::federation::REPORT_NONCE_WINDOW): the
+/// second report carrying a nonce inside the span its first could still be fresh in is a replay.
+pub const FEDERATED_REPORT_NONCE: Budget = Budget::new(1, crate::federation::REPORT_NONCE_WINDOW);
+
+/// Capability mints per account (#529).
+///
+/// Sixty an hour. An owner sharing an album mints one grant per peer; sixty is an owner sharing
+/// with a peer a minute for an hour, and a script writing capability rows meets it at once.
+pub const CAPABILITY_MINTS: Budget = Budget::new(60, SignedDuration::from_hours(1));
