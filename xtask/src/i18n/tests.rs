@@ -98,17 +98,13 @@ fn android_locale_config_lists_every_supported_locale() {
 /// it drifts from `config.json`.
 #[test]
 fn android_locale_config_is_a_generated_output() {
-    let catalogs = Catalogs {
-        source: "en".to_string(),
-        supported: owned(&["en"]),
-        messages: BTreeMap::from([("en".to_string(), BTreeMap::new())]),
-    };
-    let outputs = catalogs.render().expect("renders");
-    assert!(
-        outputs
-            .iter()
-            .any(|(path, _)| path == Path::new(ANDROID_LOCALE_CONFIG))
-    );
+    let catalogs = Catalogs::load(&repo_root()).expect("the real catalogs load");
+    let outputs = catalogs.render().expect("the real catalogs compile");
+    let (_, xml) = outputs
+        .iter()
+        .find(|(path, _)| path == Path::new(ANDROID_LOCALE_CONFIG))
+        .expect("locales_config.xml is rendered");
+    assert_eq!(xml, &catalogs.android_locale_config());
 }
 
 const PREFIX: &str = "pub(crate) const SUPPORTED_LOCALES: &[&str] = ";
@@ -545,7 +541,10 @@ fn rendered_android() -> Vec<(PathBuf, String)> {
         .render()
         .expect("the real catalogs compile")
         .into_iter()
-        .filter(|(path, _)| path.to_string_lossy().contains("androidMain"))
+        .filter(|(path, _)| {
+            path.to_string_lossy().contains("androidMain")
+                && path.file_name().is_some_and(|name| name == "strings.xml")
+        })
         .collect()
 }
 
