@@ -17,6 +17,7 @@ import ptBrMessages from './messages/pt-BR.json';
 import ruMessages from './messages/ru.json';
 import zhHansMessages from './messages/zh-Hans.json';
 import zhHantMessages from './messages/zh-Hant.json';
+import type { PreferenceStorage } from './region';
 
 /** The source (authoring) locale — the final fallback. Mirrors `locales/config.json`. */
 export const SOURCE_LOCALE = 'en';
@@ -111,4 +112,74 @@ export function applyDocumentLocale(
 ): void {
     element.lang = locale;
     element.dir = directionFor(locale);
+}
+
+/** A stored preference: the key in `Storage`, absent meaning "follow the OS". */
+export const LANGUAGE_STORAGE_KEY = 'capsule.language';
+
+/** The supported locale `tag` names exactly (case-insensitively), else `undefined`. */
+export function normalizeLanguage(
+    tag: string | null | undefined,
+): string | undefined {
+    if (!tag) {
+        return undefined;
+    }
+    const lower = tag.trim().toLowerCase();
+    return SUPPORTED_LOCALES.find((locale) => locale.toLowerCase() === lower);
+}
+
+/** The stored language override, or `undefined` when the user follows the OS. */
+export function readLanguagePreference(
+    storage: PreferenceStorage | undefined,
+): string | undefined {
+    try {
+        return normalizeLanguage(storage?.getItem(LANGUAGE_STORAGE_KEY));
+    } catch {
+        // Storage can throw when the browser blocks it; treat as "follow the OS".
+        return undefined;
+    }
+}
+
+/** Store a language override, or clear it (`undefined`) to follow the OS again. */
+export function writeLanguagePreference(
+    storage: PreferenceStorage | undefined,
+    language: string | undefined,
+): void {
+    const normalized = normalizeLanguage(language);
+    try {
+        if (normalized) {
+            storage?.setItem(LANGUAGE_STORAGE_KEY, normalized);
+        } else {
+            storage?.removeItem(LANGUAGE_STORAGE_KEY);
+        }
+    } catch {
+        // A blocked store keeps the choice for this page load only.
+    }
+}
+
+/** The effective UI language: the stored override, else negotiated from the OS. */
+export function resolveLanguage(
+    storage: PreferenceStorage | undefined,
+    preferred: readonly string[] = navigator.languages,
+): string {
+    return readLanguagePreference(storage) ?? resolveLocale(preferred);
+}
+
+/** A pickable language, labelled in its own language so a reader can find theirs. */
+export interface LanguageOption {
+    code: string;
+    name: string;
+}
+
+/** Every supported language with its autonym, in `config.json` order. */
+export function languageOptions(): LanguageOption[] {
+    return SUPPORTED_LOCALES.map((code) => {
+        let name: string | undefined;
+        try {
+            name = new Intl.DisplayNames([code], { type: 'language' }).of(code);
+        } catch {
+            name = undefined;
+        }
+        return { code, name: name ?? code };
+    });
 }

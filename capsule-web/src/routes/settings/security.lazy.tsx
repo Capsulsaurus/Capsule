@@ -20,19 +20,17 @@ export const Route = createLazyFileRoute('/settings/security')({
     component: SecuritySettings,
 });
 
-/** Render an RFC 3339 instant, which is what every timestamp on the auth surface is. */
-function formatDate(rfc3339: string) {
-    return new Date(rfc3339).toLocaleDateString(undefined, {
+function DeviceCard({ device }: { device: Device }) {
+    const intl = useIntl();
+    // An RFC 3339 instant, which is what every timestamp on the auth surface is,
+    // formatted for the user's region.
+    const lastActive = intl.formatDate(new Date(device.last_active_at), {
         year: 'numeric',
         month: 'short',
         day: 'numeric',
         hour: '2-digit',
         minute: '2-digit',
     });
-}
-
-function DeviceCard({ device }: { device: Device }) {
-    const intl = useIntl();
     return (
         <div className="flex items-start justify-between p-3 rounded-md border">
             <div className="space-y-1 text-sm">
@@ -53,7 +51,7 @@ function DeviceCard({ device }: { device: Device }) {
                 <div className="text-muted-foreground text-xs">
                     <FormattedMessage
                         id="security.last_active"
-                        values={{ date: formatDate(device.last_active_at) }}
+                        values={{ date: lastActive }}
                     />
                 </div>
             </div>
