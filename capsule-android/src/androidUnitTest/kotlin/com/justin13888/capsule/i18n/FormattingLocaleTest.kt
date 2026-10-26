@@ -42,6 +42,7 @@ class FormattingLocaleTest {
                 clear()
                 set(2026, Calendar.JANUARY, 31)
             }.time
+
         fun short(locale: Locale) =
             DateFormat.getDateInstance(DateFormat.SHORT, locale).apply { timeZone = TimeZone.getTimeZone("UTC") }.format(date)
 
