@@ -22,8 +22,8 @@ use tokio::net::{TcpListener, TcpStream};
 use super::*;
 use crate::net::ConnectionClass;
 use crate::peering::channel::{
-    LocalPeer, MAX_ARTIFACT_LEN, MAX_LISTING, MIN_PULL_RATE, Message, Offered, RangeFailure,
-    ServedRange, accept, connect,
+    LocalPeer, MAX_ARTIFACT_LEN, MAX_LISTING, MIN_PERSIST_RATE, MIN_PULL_RATE, Message, Offered,
+    RangeFailure, ServedRange, accept, connect,
 };
 use crate::peering::session::{HandshakeLimiter, MemoryDirectoryVersions, SharedTrust};
 use crate::testmock::{MockRequest, MockResponse, MockServer};
@@ -2009,4 +2009,92 @@ async fn a_peer_that_trickles_a_range_inside_each_frame_timeout_is_cut_at_the_mi
         "cut at its budget ({budget:?}), not held for {took:?}"
     );
     assert!(client.is_broken());
+}
+
+#[test]
+fn the_wait_for_a_request_covers_persisting_the_largest_unacknowledged_artifact() {
+    let io_timeout = Duration::from_secs(30);
+    let large = 6 * MIN_PERSIST_RATE;
+    let mut offering = Offering::new();
+    let small = offering.offer(vec![1_u8; 1024]).expect("offers");
+    let big = offering
+        .offer(vec![2_u8; usize::try_from(large).expect("fits")])
+        .expect("offers");
+    let ack = |hand_off: &str| HandOffAck {
+        asset_id: Uuid::from_u128(1),
+        hand_off: hand_off.to_owned(),
+        delegate_device: Uuid::from_u128(2),
+    };
+
+    // Both pending: the larger one sets the wait.
+    assert_eq!(
+        offering.request_budget(io_timeout, &[]),
+        io_timeout + Duration::from_secs(6)
+    );
+    // The large one acknowledged: only the small one is left to persist.
+    assert_eq!(
+        offering.request_budget(io_timeout, &[ack(&big)]),
+        io_timeout + Duration::from_millis(1024 * 1000 / MIN_PERSIST_RATE)
+    );
+    // Everything acknowledged: one frame's timeout, as for any other request.
+    assert_eq!(
+        offering.request_budget(io_timeout, &[ack(&big), ack(&small)]),
+        io_timeout
+    );
+    // The largest artifact an offering takes still yields a bounded wait.
+    let ceiling = MAX_ARTIFACT_LEN * 1000 / MIN_PERSIST_RATE;
+    assert_eq!(
+        ceiling,
+        4096 * 1000,
+        "a 4 GiB hand-off waits about 68 minutes"
+    );
+    assert_eq!(Offering::new().request_budget(io_timeout, &[]), io_timeout);
+}
+
+#[tokio::test]
+async fn a_hand_off_persisted_past_one_frame_timeout_is_still_acknowledged_over_the_channel() {
+    let fixture = Fixture::new();
+    let trust = fixture.trust();
+    let io_timeout = Duration::from_millis(100);
+    // Half a second of persisting at the minimum rate: five frame timeouts.
+    let len = MIN_PERSIST_RATE / 2;
+    let persisting = Duration::from_millis(300);
+    let mut offering = Offering::new();
+    let address = offering
+        .offer(vec![9_u8; usize::try_from(len).expect("fits")])
+        .expect("offers");
+    let (origin, delegate) = channel_pair(&fixture, &trust).await;
+    let mut origin = origin.with_io_timeout(io_timeout);
+    let versions = MemoryDirectoryVersions::default();
+
+    let serving = serve(&mut origin, &offering, &trust, &versions, |_| Ok(()));
+    let taking = async {
+        let client = PeerClient::open(delegate).await.expect("the listing reads");
+        let mut pulled = Vec::new();
+        while (pulled.len() as u64) < len {
+            let start = pulled.len() as u64;
+            let range = client.range(&address, start, None).await.expect("served");
+            pulled.extend_from_slice(&range);
+        }
+        // Verifying and persisting takes longer than one frame's timeout on the origin.
+        tokio::time::sleep(persisting).await;
+        let ack = HandOffAck {
+            asset_id: Uuid::from_u128(1),
+            hand_off: address.clone(),
+            delegate_device: fixture.delegate,
+        };
+        let delivered = client.acknowledge(&ack).await;
+        // With nothing left unacknowledged, the origin waits one frame's timeout again; the
+        // delegate's end of the session reaches a channel the origin has given up on.
+        tokio::time::sleep(persisting).await;
+        let _gone = client.finish().await;
+        delivered
+    };
+    let (served, delivered) = tokio::join!(serving, taking);
+
+    delivered.expect("the origin was still waiting and took the acknowledgement");
+    assert!(
+        matches!(served, Err(PeeringError::Timeout(_))),
+        "the origin stops waiting once nothing is left to persist: {served:?}"
+    );
 }
