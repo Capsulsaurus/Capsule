@@ -192,10 +192,10 @@ pub(super) fn read_head(file: &mut fs::File) -> io::Result<Vec<u8>> {
     Ok(head)
 }
 
-/// The plaintext on its way into the encryptor: hashed as it passes and, unless the original
-/// already lies at its media path, copied into the staged library file — so one read of the
-/// source yields the signed `hash`, the ciphertext address and the library copy, and holds one
-/// STREAM chunk at a time.
+/// The plaintext on its way into the encryptor: hashed as it passes and, when the caller stages
+/// a copy, copied into the staged library file (reseal stages none, so `copy` is `None`) — so
+/// one read of the source yields the signed `hash`, the ciphertext address and any library copy,
+/// and holds one STREAM chunk at a time.
 pub(super) struct Tee<R> {
     pub(super) inner: R,
     pub(super) hasher: Sha256Hasher,
