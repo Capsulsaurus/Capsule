@@ -113,6 +113,13 @@ pub const DEFAULT_IO_TIMEOUT: Duration = Duration::from_secs(30);
 /// cannot hold the pulling side indefinitely.
 pub const MIN_PULL_RATE: u64 = 64 * 1024;
 
+/// The slowest rate, in bytes per second, at which a serving session expects its peer to verify
+/// and durably persist an artifact it pulled. While an offered artifact is unacknowledged, the
+/// session waits for the peer's next request for the channel's I/O timeout plus the largest such
+/// artifact's length at this rate ([`serve`]), so a large hand-off on slow storage is still
+/// acknowledged over the channel instead of timing out before its acknowledgement arrives.
+pub const MIN_PERSIST_RATE: u64 = 1024 * 1024;
+
 /// The largest data frame. A ranged answer is cut into frames of at most this many bytes.
 pub const MAX_DATA_FRAME: usize = 1024 * 1024;
 
@@ -871,7 +878,13 @@ impl PeerChannel {
 
     /// Receive one control message.
     pub(crate) async fn recv(&mut self) -> Result<Message, PeeringError> {
-        let payload = self.read_tagged(TAG_CONTROL, MAX_FRAME).await?;
+        self.recv_within(self.io_timeout).await
+    }
+
+    /// Receive one control message, waiting at most `limit` for the whole frame rather than the
+    /// channel's I/O timeout.
+    pub(crate) async fn recv_within(&mut self, limit: Duration) -> Result<Message, PeeringError> {
+        let payload = self.read_tagged(TAG_CONTROL, MAX_FRAME, limit).await?;
         let message: Message =
             serde_json::from_slice(&payload).map_err(|e| PeeringError::Codec(e.to_string()))?;
         tracing::trace!(peer = %self.peer.device_id, kind = message.name(), "peering: received");
@@ -888,7 +901,7 @@ impl PeerChannel {
 
     /// Receive one data frame of at most `at_most` bytes.
     pub(crate) async fn recv_data(&mut self, at_most: usize) -> Result<Vec<u8>, PeeringError> {
-        self.read_tagged(TAG_DATA, at_most.min(MAX_DATA_FRAME))
+        self.read_tagged(TAG_DATA, at_most.min(MAX_DATA_FRAME), self.io_timeout)
             .await
     }
 
@@ -912,11 +925,16 @@ impl PeerChannel {
         .await
     }
 
-    /// Read one frame, which must carry `tag` and at most `max` bytes. The length is checked
-    /// before any of the payload is read or allocated.
-    async fn read_tagged(&mut self, tag: u8, max: usize) -> Result<Vec<u8>, PeeringError> {
+    /// Read one frame within `limit`, which must carry `tag` and at most `max` bytes. The length
+    /// is checked before any of the payload is read or allocated.
+    async fn read_tagged(
+        &mut self,
+        tag: u8,
+        max: usize,
+        limit: Duration,
+    ) -> Result<Vec<u8>, PeeringError> {
         let stream = &mut self.stream;
-        within(self.io_timeout, "reading a frame", async {
+        within(limit, "reading a frame", async {
             let found = stream.read_u8().await.map_err(io_err)?;
             if found != tag {
                 return Err(PeeringError::Codec(format!(
@@ -1087,6 +1105,23 @@ impl Offering {
             })
             .collect()
     }
+
+    /// How long a serving session waits for the peer's next request once `acks` are taken:
+    /// `io_timeout`, plus the largest offered artifact no acknowledgement names yet at
+    /// [`MIN_PERSIST_RATE`] — the peer may be verifying and persisting it before it asks again.
+    /// Once every artifact is acknowledged, the wait is `io_timeout` alone.
+    pub(crate) fn request_budget(&self, io_timeout: Duration, acks: &[HandOffAck]) -> Duration {
+        let pending = self
+            .artifacts
+            .iter()
+            .filter(|(address, _)| !acks.iter().any(|ack| &ack.hand_off == *address))
+            .map(|(_, bytes)| bytes.len() as u64)
+            .max()
+            .unwrap_or(0);
+        io_timeout.saturating_add(Duration::from_millis(
+            pending.saturating_mul(1000) / MIN_PERSIST_RATE,
+        ))
+    }
 }
 
 /// One ranged answer a serving session sent.
@@ -1122,6 +1157,10 @@ pub struct ServeReport {
 /// - **An acknowledgement** is taken only when it names the verified peer as the delegate and an
 ///   offered address; then `on_ack` decides it. Its refusal is reported to the peer and the
 ///   session goes on.
+/// - **The wait for each request** is the channel's I/O timeout plus the largest
+///   unacknowledged offered artifact at [`MIN_PERSIST_RATE`]: the peer verifies and persists a
+///   pulled artifact before it acknowledges it, and that takes longer than one frame's timeout
+///   for a large artifact on slow storage.
 ///
 /// # Errors
 ///
@@ -1149,7 +1188,9 @@ where
         })
         .await?;
     loop {
-        let request = channel.recv().await?;
+        let budget = offering.request_budget(channel.io_timeout, &report.acks);
+        tracing::trace!(?budget, "peering: awaiting the next request");
+        let request = channel.recv_within(budget).await?;
         if request == Message::Done {
             tracing::info!(
                 served = report.served.len(),
