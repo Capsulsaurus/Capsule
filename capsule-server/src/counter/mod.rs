@@ -388,6 +388,8 @@ impl CounterKey {
             Self::FederatedReports(_) => Slot::FederatedReports,
             Self::PeerReports(_) => Slot::PeerReports,
             Self::FederatedIntake(_) => Slot::FederatedIntake,
+            Self::FederatedReportNonce(_) => Slot::FederatedReportNonce,
+            Self::CapabilityMints(_) => Slot::CapabilityMints,
         }
     }
 
@@ -788,6 +790,8 @@ partition_slots!(
     FederatedReports,
     PeerReports,
     FederatedIntake,
+    FederatedReportNonce,
+    CapabilityMints,
 );
 
 /// One variant's windows, behind that variant's own lock, with a lock-free hint of when the

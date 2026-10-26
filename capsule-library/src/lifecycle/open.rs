@@ -21,7 +21,7 @@ use jiff::tz::TimeZone;
 use uuid::Uuid;
 use walkdir::WalkDir;
 
-use super::migrate_unsigned::find_unanchored;
+use super::unanchored::find_unanchored;
 use super::{
     AssetState, LifecycleError, Result, StackPlacement, Workspace, media_dir, now_rfc3339,
 };
@@ -526,7 +526,7 @@ impl Workspace {
             share_links: HashMap::new(),
             upload_links: HashMap::new(),
             inbox: HashMap::new(),
-            unmigrated: Vec::new(),
+            unanchored: Vec::new(),
         })
     }
 
@@ -561,10 +561,10 @@ impl Workspace {
     /// A library with no `albums.cbor` predates this and opens with zero albums plus a `warn`
     /// naming backup restore — see [`AlbumStore::load`].
     ///
-    /// A library holding **unsigned pre-signed-path sidecars** still opens: those
-    /// assets have no provenance chain, so they are not restored, but each is reported through
-    /// [`unmigrated_sidecars`](Self::unmigrated_sidecars) with a `warn` naming
-    /// [`migrate_unsigned_sidecars`](Self::migrate_unsigned_sidecars) as the way in.
+    /// A library holding sidecars **no provenance chain anchors** — an interrupted write, a
+    /// torn or foreign file, a retired unsigned pre-signed-path record — still opens: those
+    /// assets are not restored, but each is reported through
+    /// [`unanchored_sidecars`](Self::unanchored_sidecars) with a `warn`, and never touched.
     ///
     /// Still session-scoped by design, and dropped on close: the federation group assertions
     /// (re-delivered by the feed), the pending guest-drop inbox (server-authoritative), and the
@@ -666,7 +666,7 @@ impl Workspace {
             share_links: HashMap::new(),
             upload_links: HashMap::new(),
             inbox: HashMap::new(),
-            unmigrated: Vec::new(),
+            unanchored: Vec::new(),
         };
         // Album keys, authorities, and every managed asset come back from disk here.
         // Without this the reopened workspace would hold an unlocked account and nothing else.
@@ -761,25 +761,23 @@ impl Workspace {
             "workspace open: assets restored from disk"
         );
 
-        // Second pass: the sidecars no chain anchors. An unsigned pre-signed-path
-        // record has never had one; a signed sidecar without one is an interrupted migration.
-        // Neither is restorable here — open holds no album write capability and must not author
-        // signed records unasked — so each is recorded and named, never silently dropped.
-        self.unmigrated = find_unanchored(&self.root);
-        for found in &self.unmigrated {
+        // Second pass: the sidecars no chain anchors. A signed sidecar without one is a write
+        // interrupted before its chain landed; anything else is torn, foreign, or a retired
+        // unsigned record. None is restorable here — open must not author signed records
+        // unasked — so each is recorded and named, never silently dropped.
+        self.unanchored = find_unanchored(&self.root);
+        for found in &self.unanchored {
             tracing::warn!(
                 sidecar = %found.path.display(),
                 asset_id = ?found.asset_id,
                 shape = ?found.shape,
-                "workspace open: sidecar with no provenance chain; the asset is invisible until \
-                 `Workspace::migrate_unsigned_sidecars` runs"
+                "workspace open: sidecar with no provenance chain; the asset is invisible"
             );
         }
-        if !self.unmigrated.is_empty() {
+        if !self.unanchored.is_empty() {
             tracing::info!(
-                unmigrated = self.unmigrated.len(),
-                "workspace open: unmigrated sidecars found; run \
-                 `Workspace::migrate_unsigned_sidecars` to admit them as signed assets"
+                unanchored = self.unanchored.len(),
+                "workspace open: sidecars with no provenance chain found; left untouched"
             );
         }
     }
