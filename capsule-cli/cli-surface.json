@@ -926,47 +926,6 @@
           "name": "init"
         },
         {
-          "about": "Migrate unsigned sidecars from an older library into signed assets",
-          "args": [
-            {
-              "help": "Path to the library",
-              "id": "path",
-              "positional": true,
-              "repeatable": false,
-              "required": true,
-              "takes_value": true,
-              "value_names": [
-                "PATH"
-              ]
-            },
-            {
-              "help": "Read the library passphrase from stdin instead of prompting, so the command works in scripts and CI where there is no terminal",
-              "id": "passphrase_stdin",
-              "long": "passphrase-stdin",
-              "positional": false,
-              "repeatable": false,
-              "required": false,
-              "takes_value": false
-            },
-            {
-              "default_values": [
-                "30"
-              ],
-              "help": "Retention window, in days, for an asset the old library had already deleted: it is moved to trash with this much time left before it is purged",
-              "id": "retain_days",
-              "long": "retain-days",
-              "positional": false,
-              "repeatable": false,
-              "required": false,
-              "takes_value": true,
-              "value_names": [
-                "DAYS"
-              ]
-            }
-          ],
-          "name": "migrate"
-        },
-        {
           "about": "Rebuild the SQLite index from sidecar files",
           "args": [
             {

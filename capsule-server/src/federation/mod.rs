@@ -49,7 +49,9 @@ pub use self::capability::{
 };
 pub use self::memory::{InMemoryCapabilities, InMemoryPeers};
 pub use self::peers::{BlockOutcome, PeerRecord, PeerStore, UnblockOutcome};
-pub use self::report::{ReportClaim, ReportError, verify_signed_report};
+pub use self::report::{
+    REPORT_FRESHNESS, REPORT_NONCE_WINDOW, ReportClaim, ReportError, verify_signed_report,
+};
 pub use self::scheme::{Principal, ReadBearer, VerifiedCapability};
 pub use self::store::{
     CapabilityFilter, CapabilityRecord, CapabilityStore, MAX_GRANT_LIFETIME, RefreshOutcome,
@@ -76,11 +78,50 @@ impl PeerId {
         Self(value.trim().trim_end_matches('.').to_ascii_lowercase())
     }
 
+    /// Wraps an origin a caller sent, refusing anything that is not a host name.
+    ///
+    /// [`Self::new`] folds and never refuses, because it also wraps values this server already
+    /// holds. This is the door for values a caller chose — the peer a mint names, the
+    /// `reporting_server` a report claims — and every one of them becomes a store row, a counter
+    /// key and a log field. So the grammar is checked before any of that: after folding, at most
+    /// [`MAX_PEER_ID_BYTES`], one or more dot-separated labels of 1 to 63 ASCII letters, digits
+    /// and hyphens, no label starting or ending with a hyphen (RFC 1035's preferred syntax, with
+    /// RFC 1123's leading digit). No port, no scheme, no path, no userinfo: a peer is named the
+    /// way its own `server-info` names itself.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InvalidPeerId`] when the folded value is not such a name.
+    pub fn parse(value: &str) -> Result<Self, InvalidPeerId> {
+        let peer = Self::new(value);
+        let host = peer.as_str();
+        let label_ok = |label: &str| {
+            (1..=63).contains(&label.len())
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+        };
+        if host.is_empty() || host.len() > MAX_PEER_ID_BYTES || !host.split('.').all(label_ok) {
+            return Err(InvalidPeerId);
+        }
+        Ok(peer)
+    }
+
     /// The origin as text.
     pub fn as_str(&self) -> &str {
         &self.0
     }
 }
+
+/// The longest peer origin [`PeerId::parse`] accepts: RFC 1035's ceiling on a domain name.
+pub const MAX_PEER_ID_BYTES: usize = 253;
+
+/// A caller-supplied peer origin that is not a host name. See [`PeerId::parse`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("a peer origin must be a host name")]
+pub struct InvalidPeerId;
 
 impl fmt::Display for PeerId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

@@ -224,7 +224,7 @@ fn evidence_logs_ride_the_backup_and_restore_byte_for_byte() {
     drop(b);
     let b = Workspace::open(lib_b.path(), b"device b", FAST_PARAMS).unwrap();
     assert_eq!(b.read_plaintext(&asset).unwrap(), original);
-    assert!(b.unmigrated_sidecars().is_empty());
+    assert!(b.unanchored_sidecars().is_empty());
 }
 
 /// A library with one photo in one album, exported to `archive`, with `pins` pinned first.

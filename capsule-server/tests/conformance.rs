@@ -1494,6 +1494,29 @@ async fn every_declared_response_is_exercised() {
     .await
     .assert_status(StatusCode::CONFLICT);
 
+    // 429: the account's mint budget is spent — charged before any store is read.
+    let mints = capsule_server::counter::CounterKey::CapabilityMints(support::user());
+    for _ in 0..capsule_server::counter::budgets::CAPABILITY_MINTS.limit {
+        fixture
+            .counters
+            .hit(
+                &mints,
+                capsule_server::counter::budgets::CAPABILITY_MINTS,
+                fixture.clock.now(),
+            )
+            .await
+            .expect("the counter answers");
+    }
+    mint(request.clone())
+        .send()
+        .await
+        .assert_status(StatusCode::TOO_MANY_REQUESTS);
+    fixture
+        .counters
+        .reset(&mints)
+        .await
+        .expect("the counter answers");
+
     // 500: the album store could not answer, which must never look like "not your album".
     fixture.albums.set_unavailable(true);
     mint(request.clone())
@@ -1667,7 +1690,7 @@ async fn every_declared_response_is_exercised() {
             &checksum(b"reported bytes"),
             &support::album(),
             reason,
-            "2026-09-02T00:00:00Z",
+            support::REPORTED_AT,
         )
     };
     report(signed(Some("csam")))
@@ -1717,7 +1740,7 @@ async fn every_declared_response_is_exercised() {
         &checksum(b"reported bytes"),
         &support::album(),
         None,
-        "2026-09-02T00:00:00Z",
+        support::REPORTED_AT,
     ))
     .send()
     .await

@@ -19,7 +19,7 @@ use capsule_library::import::{
     plan, scan_paths as scan_files,
 };
 use capsule_library::library::{Library, LibraryError, init_library, open_library, rebuild_index};
-use capsule_library::lifecycle::{DerivativeStatus, Workspace, unmigrated_sidecars};
+use capsule_library::lifecycle::{DerivativeStatus, Workspace, unanchored_sidecars};
 use capsule_sdk::cache_budget::DesktopConnectionClass;
 use cli::{
     AuthCommands, CacheCommands, Cli, Commands, EditCommands, EditLibraryArgs, ImportProviderArg,
@@ -44,7 +44,6 @@ pub mod edit;
 pub mod i18n;
 pub mod import_report;
 pub mod import_run;
-pub mod migrate;
 pub mod oidc;
 pub mod peer;
 pub mod peering_state;
@@ -77,20 +76,31 @@ fn as_capsule_cli(ws: Workspace) -> Workspace {
 /// The refusal every networked command gives before a session exists.
 pub(crate) const NOT_AUTHENTICATED: &str = "Not authenticated. Run 'capsule auth login' first.";
 
-/// The `capsule library info` row for the unmigrated-sidecar count, plus the pointer at
-/// `capsule library migrate` — `None` when nothing is left to migrate. The count comes from
-/// the keyless scan, since `info` opens the library without a passphrase.
+/// The line printed when a library holds sidecars no provenance chain anchors — the assets
+/// they name are hidden from every verb — or `None` when it holds none.
 #[must_use]
-fn library_info_unmigrated(unmigrated: usize) -> (String, Option<String>) {
-    let row = format!("Unmigrated sidecars: {unmigrated}");
-    let hint = match unmigrated {
+fn unanchored_notice(unanchored: usize) -> Option<String> {
+    match unanchored {
         0 => None,
-        1 => Some("Run `capsule library migrate` to admit the 1 unsigned sidecar.".to_owned()),
+        1 => Some(
+            "1 sidecar in this library has no provenance chain, so its asset is hidden.".to_owned(),
+        ),
         count => Some(format!(
-            "Run `capsule library migrate` to admit the {count} unsigned sidecars."
+            "{count} sidecars in this library have no provenance chain, so their assets are \
+             hidden."
         )),
-    };
-    (row, hint)
+    }
+}
+
+/// The `capsule library info` row for the unanchored-sidecar count, plus the
+/// [`unanchored_notice`] when there are any. The count comes from the keyless scan, since
+/// `info` opens the library without a passphrase.
+#[must_use]
+fn library_info_unanchored(unanchored: usize) -> (String, Option<String>) {
+    (
+        format!("Unanchored sidecars: {unanchored}"),
+        unanchored_notice(unanchored),
+    )
 }
 
 /// Resolve the persisted-session file path, erroring if the config directory
@@ -308,13 +318,13 @@ async fn dispatch(command: Commands) -> Result<()> {
                     cfg.last_scrubbed_at
                         .map_or_else(|| "never".to_string(), |t| t.to_string())
                 );
-                let unmigrated = unmigrated_sidecars(&path).len();
+                let unanchored = unanchored_sidecars(&path).len();
                 tracing::debug!(
                     library = %path.display(),
-                    unmigrated,
-                    "library info: unmigrated-sidecar count"
+                    unanchored,
+                    "library info: unanchored-sidecar count"
                 );
-                let (count_line, hint) = library_info_unmigrated(unmigrated);
+                let (count_line, hint) = library_info_unanchored(unanchored);
                 println!("  {count_line}");
                 if let Some(hint) = hint {
                     println!("{}", hint.yellow());
@@ -332,29 +342,6 @@ async fn dispatch(command: Commands) -> Result<()> {
                 println!("{}", "Index rebuilt successfully.".green());
                 lib.close()
                     .map_err(|e| eyre!("Failed to close library: {e}"))?;
-            }
-            LibraryCommands::Migrate {
-                path,
-                passphrase_stdin,
-                retain_days,
-            } => {
-                let mut ws = open_workspace_quiet(&path, passphrase_stdin)?;
-                println!(
-                    "{}",
-                    format!(
-                        "Migrating the unsigned sidecars in {} ({} found)…",
-                        path.to_string_lossy(),
-                        ws.unmigrated_sidecars().len()
-                    )
-                    .cyan()
-                );
-                match migrate::run(&mut ws, retain_days) {
-                    Ok(report) => print!(
-                        "{}",
-                        migrate::render(&report, ws.unmigrated_sidecars().len())
-                    ),
-                    Err(error) => return Err(eyre!("Migration failed: {error}")),
-                }
             }
         },
 
@@ -1732,25 +1719,18 @@ fn sync_run_error(error: &remote::RemoteError) -> eyre::Report {
 /// replacing it — minting a fresh one per run is exactly what left a reopened library unable to
 /// decrypt or extend its own prior imports (and would make a push unrepeatable).
 ///
-/// When the open found unsigned pre-signed-path sidecars, a notice naming their count
-/// and `capsule library migrate` goes to stderr, so every verb over such a library says why
-/// some assets are missing before the user runs the migration.
+/// When the open found sidecars no provenance chain anchors, the [`unanchored_notice`] goes to
+/// stderr, so every verb over such a library says why some assets are missing.
 fn open_workspace(library: &Path, passphrase_stdin: bool) -> Result<Workspace> {
-    let ws = open_workspace_quiet(library, passphrase_stdin)?;
-    if let Some(notice) = migrate::unmigrated_notice(ws.unmigrated_sidecars()) {
-        eprintln!("{}", notice.yellow());
-    }
-    Ok(ws)
-}
-
-/// [`open_workspace`] without the unmigrated-sidecar notice: for `capsule library migrate`,
-/// which reports the same count as the work it is about to do.
-fn open_workspace_quiet(library: &Path, passphrase_stdin: bool) -> Result<Workspace> {
     let passphrase = read_password(
         passphrase_stdin.then_some("--passphrase-stdin"),
         "Library passphrase".to_string(),
     )?;
-    open_workspace_with(library, &passphrase)
+    let ws = open_workspace_with(library, &passphrase)?;
+    if let Some(notice) = unanchored_notice(ws.unanchored_sidecars().len()) {
+        eprintln!("{}", notice.yellow());
+    }
+    Ok(ws)
 }
 
 /// Open the library `args` names, build an edit against it with `build` (which resolves the
@@ -1770,8 +1750,8 @@ fn edit_library(
     Ok(())
 }
 
-/// [`open_workspace_quiet`] with the passphrase already in hand: the TUI's forms collect it
-/// themselves.
+/// [`open_workspace`] with the passphrase already in hand and without the unanchored-sidecar
+/// notice: the TUI's forms collect the passphrase themselves.
 fn open_workspace_with(library: &Path, passphrase: &str) -> Result<Workspace> {
     let mut ws = as_capsule_cli(
         Workspace::open(library, passphrase.as_bytes(), DeviceTier::Normal.params())

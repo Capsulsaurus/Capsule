@@ -12,7 +12,10 @@
 //!
 //! [`RevocationList::revoke`] still accepts a `jti` this server never issued, and still
 //! publishes it: an operator revoking a token by hand from a peer's report, or a record that
-//! predates the store, is a fact the list must carry whether or not a row backs it.
+//! predates the store, is a fact the list must carry whether or not a row backs it. Where a row
+//! **does** back it, the list-side revoke is [`CapabilityStore::revoke_issued`]: it follows the
+//! refresh chain forward and ends every successor, because the `jti` an operator is handed is
+//! usually the minted one, and the first refresh already revoked that.
 //!
 //! # What the record binds that the token does not
 //!
