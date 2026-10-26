@@ -50,6 +50,10 @@ describe('normalizeRegion', () => {
         expect(normalizeRegion(' hk ')).toBe('HK');
     });
 
+    test('keeps a numeric M.49 code', () => {
+        expect(normalizeRegion('419')).toBe('419');
+    });
+
     test('refuses what is not a user region', () => {
         for (const code of [
             undefined,
@@ -57,7 +61,8 @@ describe('normalizeRegion', () => {
             '',
             'G',
             'GBR',
-            '419',
+            '41',
+            '4190',
             'ZZ',
             'XA',
             'QO',
@@ -75,6 +80,10 @@ describe('systemRegion', () => {
         expect(systemRegion(['zh-Hant', 'zh-Hant-HK', 'en-GB'])).toBe('HK');
     });
 
+    test('keeps a numeric region the browser reports', () => {
+        expect(systemRegion(['es-419', 'es'])).toBe('419');
+    });
+
     test('falls back to the likely region of the first tag', () => {
         expect(systemRegion(['en'])).toBe('US');
         expect(systemRegion(['ja'])).toBe('JP');
@@ -90,10 +99,20 @@ describe('systemRegion', () => {
 });
 
 describe('formattingLocale', () => {
-    test('substitutes the region into the UI language', () => {
-        expect(formattingLocale('zh-Hant', 'GB')).toBe('zh-Hant-GB');
+    test('substitutes the region where the runtime has data for the pair', () => {
+        expect(formattingLocale('zh-Hant', 'HK')).toBe('zh-Hant-HK');
         expect(formattingLocale('en', 'DE')).toBe('en-DE');
         expect(formattingLocale('pt-BR', 'PT')).toBe('pt-PT');
+        expect(formattingLocale('fr', 'CA')).toBe('fr-CA');
+        expect(formattingLocale('es', '419')).toBe('es-419');
+    });
+
+    test("uses the region's own locale where the pair has no data", () => {
+        expect(formattingLocale('zh-Hant', 'GB')).toBe('en-GB');
+        expect(formattingLocale('fr', 'US')).toBe('en-US');
+        expect(formattingLocale('de', 'US')).toBe('en-US');
+        expect(formattingLocale('ja', 'DE')).toBe('de-DE');
+        expect(formattingLocale('en', 'TW')).toBe('zh-TW');
     });
 
     test('uses the language alone without a usable region', () => {
@@ -101,36 +120,69 @@ describe('formattingLocale', () => {
         expect(formattingLocale('fr', 'ZZ')).toBe('fr');
     });
 
-    // The contract: region drives formatting and language keeps the words.
-    test('region decides date order while language keeps month names', () => {
-        const date = new Date(Date.UTC(2026, 0, 31, 12));
-        const options: Intl.DateTimeFormatOptions = { timeZone: 'UTC' };
-        expect(
-            new Intl.DateTimeFormat(
-                formattingLocale('en', 'US'),
-                options,
-            ).format(date),
-        ).toBe('1/31/2026');
-        expect(
-            new Intl.DateTimeFormat(
-                formattingLocale('en', 'GB'),
-                options,
-            ).format(date),
-        ).toBe('31/01/2026');
-        const long = new Intl.DateTimeFormat(formattingLocale('fr', 'US'), {
-            ...options,
+    const date = new Date(Date.UTC(2026, 0, 31, 12));
+    const utc: Intl.DateTimeFormatOptions = { timeZone: 'UTC' };
+    const numericDate = (language: string, region: string) =>
+        new Intl.DateTimeFormat(formattingLocale(language, region), utc).format(
+            date,
+        );
+    const grouped = (language: string, region: string) =>
+        new Intl.NumberFormat(formattingLocale(language, region)).format(
+            1234567.5,
+        );
+
+    // The contract: region drives formatting, for every language.
+    test('region decides date order', () => {
+        expect(numericDate('en', 'US')).toBe('1/31/2026');
+        expect(numericDate('en', 'GB')).toBe('31/01/2026');
+        // CLDR has no zh-Hant-GB: without the fallback this is 2026/1/31.
+        expect(numericDate('zh-Hant', 'GB')).toBe('31/01/2026');
+        // CLDR has no fr-US: without the fallback this is 31/01/2026.
+        expect(numericDate('fr', 'US')).toBe('1/31/2026');
+    });
+
+    test('region decides number grouping', () => {
+        expect(grouped('en', 'US')).toBe('1,234,567.5');
+        expect(grouped('en', 'DE')).toBe('1.234.567,5');
+        // CLDR has no de-US or ja-DE: without the fallback these follow de and ja.
+        expect(grouped('de', 'US')).toBe('1,234,567.5');
+        expect(grouped('ja', 'DE')).toBe('1.234.567,5');
+        // es-419 groups unlike es.
+        expect(grouped('es', '419')).toBe('1,234,567.5');
+    });
+
+    test('language keeps month names where the pair has data', () => {
+        const long = new Intl.DateTimeFormat(formattingLocale('fr', 'CA'), {
+            ...utc,
             month: 'long',
         }).format(date);
         expect(long).toBe('janvier');
     });
 
-    test('region decides number grouping', () => {
-        expect(
-            new Intl.NumberFormat(formattingLocale('en', 'US')).format(1234.5),
-        ).toBe('1,234.5');
-        expect(
-            new Intl.NumberFormat(formattingLocale('en', 'DE')).format(1234.5),
-        ).toBe('1.234,5');
+    test('every supported language follows the region it is paired with', () => {
+        const languages = [
+            'en',
+            'zh-Hans',
+            'zh-Hant',
+            'ja',
+            'ko',
+            'fr',
+            'de',
+            'es',
+            'pt-BR',
+            'it',
+            'ru',
+            'hi',
+            'ar',
+        ];
+        for (const language of languages) {
+            for (const region of ['US', 'GB', 'DE', 'JP', 'HK', '419']) {
+                const resolved = new Intl.DateTimeFormat(
+                    formattingLocale(language, region),
+                ).resolvedOptions().locale;
+                expect(new Intl.Locale(resolved).region).toBe(region);
+            }
+        }
     });
 });
 
@@ -179,6 +231,9 @@ describe('regionOptions', () => {
         expect(codes).toContain('HK');
         expect(codes).not.toContain('ZZ');
         expect(codes).not.toContain('EU');
+        // A numeric region with formatting data is offered; a continent is not.
+        expect(codes).toContain('419');
+        expect(codes).not.toContain('002');
         expect(options.find((option) => option.code === 'GB')?.name).toBe(
             'United Kingdom',
         );
