@@ -374,12 +374,17 @@ async fn a_tombstone_carries_its_delete_record_and_no_byte_references() {
         "a tombstone's blob list invites a client to fetch bytes GC may already have collected"
     );
     assert_eq!(entry["original_held"], false);
+    assert_eq!(
+        entry["purged"], false,
+        "an asset in trash is still restorable, so its tombstone is no purge"
+    );
 }
 
 /// A purge drops the delete record with the rest of the asset's references, so the entry of a
-/// purged asset carries no manifest.
+/// purged asset carries no manifest, and says it is purged: the positive evidence a device that
+/// first syncs after the purge records its tombstone on (#885).
 #[tokio::test]
-async fn a_purged_tombstone_carries_no_manifest() {
+async fn a_purged_tombstone_carries_no_manifest_and_the_purge_signal() {
     let fixture = Fixture::working();
     let bearer = bearer(&fixture).await;
     let (asset, _) = publish(&fixture, "purged").await;
@@ -401,6 +406,10 @@ async fn a_purged_tombstone_carries_no_manifest() {
     assert!(
         entry["manifest_cbor"].is_null(),
         "the purge dropped the provenance blob, and the feed must not invent one"
+    );
+    assert_eq!(
+        entry["purged"], true,
+        "a purged asset's tombstone carries the signal a client records its tombstone on"
     );
 }
 
@@ -684,6 +693,10 @@ async fn a_missing_provenance_blob_still_yields_an_entry() {
     assert!(
         entry["manifest_cbor"].is_null(),
         "there is no manifest to serve and the feed must not invent one"
+    );
+    assert_eq!(
+        entry["purged"], false,
+        "a manifest the store cannot produce is no purge"
     );
     assert_eq!(
         entry["metadata_blob"],

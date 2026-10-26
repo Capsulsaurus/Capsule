@@ -28281,6 +28281,10 @@
             "type": "boolean",
             "description": "Whether the original has landed. `false` is the derived `awaiting-original` state."
           },
+          "purged": {
+            "type": "boolean",
+            "description": "Whether the asset has been purged: its retention window closed and the server dropped\nits references, so no `trash-restore` can bring it back (#885).\n\nOnly ever `true` on a tombstone. This, not an absent `manifest_cbor`, is a client's\nevidence of a purge: the manifest is also absent when the store cannot produce it. A\nserver that predates the field sends no key, which reads as `false`."
+          },
           "changed_at": {
             "type": "string",
             "description": "When the change happened, RFC 3339."
