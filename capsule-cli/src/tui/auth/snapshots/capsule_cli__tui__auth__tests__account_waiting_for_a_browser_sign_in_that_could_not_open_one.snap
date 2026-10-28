@@ -1,0 +1,24 @@
+---
+source: capsule-cli/src/tui/auth/tests.rs
+expression: "draw_tall(&on_auth_with(browser_prompt(false), ProviderFlow::Browser))"
+---
+Capsule · Account · Signed out
+┌Account───────────────────────────────────────────────────────────────────────┐
+│Not signed in.                                                                │
+│                                                                              │
+│To sign in, open this address in a browser:                                   │
+│https://idp.test/authorize?state=st-4417                                      │
+│No browser could be opened from here. Open the address above in any browser.  │
+│Waiting up to 5 minutes for the sign-in to finish…                            │
+│                                                                              │
+│x cancels the sign-in.                                                        │
+│                                                                              │
+│Identity provider: w signs in with a browser here, d on another device        │
+│(scriptable: `capsule auth login --oidc [--device] --json`). New account:     │
+│`capsule auth register`.                                                      │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+l Sign in  o Sign out  w Sign in with a browser  d Sign in on another device  x

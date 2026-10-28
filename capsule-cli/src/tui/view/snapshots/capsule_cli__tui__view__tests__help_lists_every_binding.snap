@@ -20,6 +20,9 @@ Capsule · Key bindings · Signed out
 │b          Browse a library                                      Home         │
 │l          Sign in                                               Account      │
 │o          Sign out                                              Account      │
+│w          Sign in with a browser                                Account      │
+│d          Sign in on another device                             Account      │
+│x          Cancel the sign-in                                    Account      │
 │s          Sync now                                              Sync         │
 │f          Sync from the start                                   Sync         │
 │e          Fill in and run a restore                             Restore      │

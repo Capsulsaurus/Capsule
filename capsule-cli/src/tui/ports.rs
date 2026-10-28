@@ -545,35 +545,32 @@ impl ProviderSlot {
             tracing::info!(target: "capsule_cli::tui", attempt = previous.attempt, "a new identity-provider sign-in replaces the waiting one");
             previous.abort.abort();
         }
-        match prompt_rx.await {
-            Ok(prompt) => {
-                let mut waiting = self.lock();
-                match waiting.as_mut() {
-                    Some(current) if current.attempt == attempt => {
-                        current.outcome = Some(task);
-                        drop(waiting);
-                        tracing::info!(target: "capsule_cli::tui", attempt, "identity-provider sign-in begun; waiting");
-                        Ok(prompt)
-                    }
-                    // Cancelled or replaced while it began.
-                    _ => {
-                        drop(waiting);
-                        task.abort();
-                        Err(PROVIDER_CANCELLED.to_owned())
-                    }
+        if let Ok(prompt) = prompt_rx.await {
+            let mut waiting = self.lock();
+            match waiting.as_mut() {
+                Some(current) if current.attempt == attempt => {
+                    current.outcome = Some(task);
+                    drop(waiting);
+                    tracing::info!(target: "capsule_cli::tui", attempt, "identity-provider sign-in begun; waiting");
+                    Ok(prompt)
+                }
+                // Cancelled or replaced while it began.
+                _ => {
+                    drop(waiting);
+                    task.abort();
+                    Err(PROVIDER_CANCELLED.to_owned())
                 }
             }
-            Err(_) => {
-                // It ended before it had anything to show: the begin leg failed.
-                self.clear(attempt);
-                let reason = match task.await {
-                    Ok(Err(reason)) => reason,
-                    Ok(Ok(_)) => "the sign-in ended before it showed anything".to_owned(),
-                    Err(e) => joined(&e),
-                };
-                tracing::warn!(target: "capsule_cli::tui", attempt, %reason, "identity-provider sign-in did not begin");
-                Err(reason)
-            }
+        } else {
+            // It ended before it had anything to show: the begin leg failed.
+            self.clear(attempt);
+            let reason = match task.await {
+                Ok(Err(reason)) => reason,
+                Ok(Ok(_)) => "the sign-in ended before it showed anything".to_owned(),
+                Err(e) => joined(&e),
+            };
+            tracing::warn!(target: "capsule_cli::tui", attempt, %reason, "identity-provider sign-in did not begin");
+            Err(reason)
         }
     }
 

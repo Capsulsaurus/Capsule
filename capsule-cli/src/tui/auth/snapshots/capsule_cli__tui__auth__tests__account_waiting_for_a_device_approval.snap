@@ -1,0 +1,24 @@
+---
+source: capsule-cli/src/tui/auth/tests.rs
+expression: frame
+---
+Capsule · Account · Signed out
+┌Account───────────────────────────────────────────────────────────────────────┐
+│Not signed in.                                                                │
+│                                                                              │
+│On any device with a browser, open this address:                              │
+│https://idp.test/device                                                       │
+│and enter this code: WDJB-MJHT                                                │
+│Or open this address, which already carries the code:                         │
+│https://idp.test/device?user_code=WDJB-MJHT                                   │
+│Waiting up to 10 minutes for you to approve the sign-in…                      │
+│                                                                              │
+│x cancels the sign-in.                                                        │
+│                                                                              │
+│Identity provider: w signs in with a browser here, d on another device        │
+│(scriptable: `capsule auth login --oidc [--device] --json`). New account:     │
+│`capsule auth register`.                                                      │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+l Sign in  o Sign out  w Sign in with a browser  d Sign in on another device  x

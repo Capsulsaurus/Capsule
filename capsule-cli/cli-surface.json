@@ -96,7 +96,7 @@
               "takes_value": false
             },
             {
-              "help": "Print the outcome of a password sign-in as one JSON document on stdout; prompts and progress go to stderr. Not combined with --oidc, whose address is printed for a person",
+              "help": "Print the outcome as one JSON document on stdout; prompts, progress and, with --oidc, the sign-in address and code go to stderr",
               "id": "json",
               "long": "json",
               "positional": false,

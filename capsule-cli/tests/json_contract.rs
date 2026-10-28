@@ -56,7 +56,11 @@
 //!   no session is stored.
 //! - `auth_logout_json_without_a_session_reports_nothing_signed_out` — exit 0, one JSON document
 //!   saying there was no session to sign out.
-//! - `auth_login_json_with_oidc_is_a_usage_error` — the parser's exit status 2.
+//! - `auth_login_oidc_json_without_a_server_prints_nothing_on_stdout` — `--oidc --json` parses;
+//!   with no server to begin the ceremony: non-zero exit, empty stdout, the progress line and the
+//!   reason on stderr.
+//! - `auth_login_oidc_device_json_without_a_server_prints_nothing_on_stdout` — the same for
+//!   `--oidc --device --json`.
 //! - `share_create_json_over_an_empty_scope_prints_nothing_on_stdout` — a local refusal before
 //!   any request: non-zero exit, empty stdout, the reason on stderr.
 //! - `share_revoke_json_with_a_malformed_id_prints_nothing_on_stdout` — a local refusal before
@@ -592,9 +596,21 @@ fn auth_logout_json_without_a_session_reports_nothing_signed_out() {
 }
 
 #[test]
-fn auth_login_json_with_oidc_is_a_usage_error() {
+fn auth_login_oidc_json_without_a_server_prints_nothing_on_stdout() {
     let scratch = Scratch::new();
-    insta::assert_snapshot!(run(&scratch, &["auth", "login", "--oidc", "--json"]));
+    insta::assert_snapshot!(run(
+        &scratch,
+        &["auth", "login", "--oidc", "--no-browser", "--json"]
+    ));
+}
+
+#[test]
+fn auth_login_oidc_device_json_without_a_server_prints_nothing_on_stdout() {
+    let scratch = Scratch::new();
+    insta::assert_snapshot!(run(
+        &scratch,
+        &["auth", "login", "--oidc", "--device", "--json"]
+    ));
 }
 
 #[test]

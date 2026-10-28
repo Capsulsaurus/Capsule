@@ -8,9 +8,9 @@ Capsule · Account · Signed out
 │                                                                              │
 │Sign out and forget this device's session? y to sign out, n to cancel.        │
 │                                                                              │
-│Identity provider: `capsule auth login --oidc` (add `--device` to approve on  │
-│another device). New account: `capsule auth register`. Scriptable: `capsule   │
-│auth status --json`.                                                          │
+│Identity provider: w signs in with a browser here, d on another device        │
+│(scriptable: `capsule auth login --oidc [--device] --json`). New account:     │
+│`capsule auth register`.                                                      │
 │                                                                              │
 │                                                                              │
 │                                                                              │
