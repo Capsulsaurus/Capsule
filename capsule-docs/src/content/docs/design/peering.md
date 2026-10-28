@@ -113,7 +113,8 @@ which device to update. Artifact formats are versioned by
    only with its manifest, metadata and every blob its scope requires. A manifest behind the
    local chain head is quarantined as "peer sent stale state". **A purged asset is never
    resurrected**: the device keeps a tombstone for every asset it has purged, and ingest
-   refuses any asset it has a tombstone for. A deleted asset in
+   refuses any asset it has a tombstone for. A device that cannot read its tombstones refuses
+   the ingest before it opens a session, never running it against an empty set. A deleted asset in
    [trash](/design/organization/#recycling) is not a tombstone, since a `trash-restore`
    still recovers it; its delete manifest is the local chain head, so a peer's older copy is
    quarantined as stale. A device learns of a purge from the

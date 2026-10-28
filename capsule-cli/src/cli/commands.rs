@@ -745,6 +745,66 @@ pub(crate) enum PeerCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Send this library's assets to another device of this account over the LAN peering
+    /// channel: dial its `capsule peer pull --listen`, verify it over mutual TLS as a device of
+    /// this account, and serve it one backup artifact sealed for that session. The other device
+    /// skips what it already holds and refuses what it has purged
+    Offer {
+        /// Path to the Capsule library holding the assets
+        #[arg(long, value_name = "PATH")]
+        library: PathBuf,
+        /// The other device's `capsule peer pull --listen` address. Only a local-network
+        /// address is dialed
+        #[arg(long, value_name = "HOST:PORT")]
+        peer: String,
+        /// The device the channel must verify; refused if the device at `--peer` is another
+        #[arg(long, value_name = "DEVICE_ID")]
+        to: Option<Uuid>,
+        /// An asset to send (repeatable); without one, every asset in the library is sent
+        #[arg(long, value_name = "ASSET_ID")]
+        asset: Vec<Uuid>,
+        /// Read the library passphrase from stdin instead of prompting, so the command
+        /// works in scripts and CI where there is no terminal.
+        #[arg(long)]
+        passphrase_stdin: bool,
+        /// Print the run as one JSON document on stdout: the device the channel verified, the
+        /// artifact's content address, size and assets, how many bytes the other device pulled,
+        /// and each failure with a stable `kind` and the detail
+        #[arg(long)]
+        json: bool,
+    },
+    /// Take assets another device of this account sends with `capsule peer offer`: listen on
+    /// ADDR, verify the device over mutual TLS, pull its backup artifact and write every asset
+    /// that is new or a forward update. An asset this device has purged is refused, and the run
+    /// is refused before listening if the purge record cannot be read
+    Pull {
+        /// Path to this device's Capsule library
+        #[arg(long, value_name = "PATH")]
+        library: PathBuf,
+        /// The address to listen on (e.g. `0.0.0.0:7420`). Only local-network peers are
+        /// admitted. The address bound is printed on stderr
+        #[arg(long, value_name = "ADDR")]
+        listen: SocketAddr,
+        /// Seconds to wait for a peer to connect and verify; a verified session is not cut by
+        /// it, but runs to its end at a minimum transfer rate
+        #[arg(
+            long,
+            value_name = "SECONDS",
+            default_value_t = 300,
+            value_parser = clap::value_parser!(u64).range(1..)
+        )]
+        listen_timeout: u64,
+        /// Read the library passphrase from stdin instead of prompting, so the command
+        /// works in scripts and CI where there is no terminal.
+        #[arg(long)]
+        passphrase_stdin: bool,
+        /// Print the run as one JSON document on stdout: the peer, each artifact pulled, the
+        /// assets `applied`, `quarantined` (the peer sent stale state), `tombstoned` (purged
+        /// here), `identical` (already held) and `incomplete`, each failure and each refused
+        /// connection with a stable `kind` and the detail
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]

@@ -68,6 +68,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 pub use self::album::{AdoptedAlbumKeys, AlbumKeyEscrowPlan};
+pub use self::backup::PeerExport;
 use self::drops::{InboxEntry, IssuedLink};
 pub use self::enrollment::{
     ENROLLMENT_NONCE_LEN, ENROLLMENT_PAYLOAD_VERSION, EnrolleeKeys, EnrollmentPayload,
@@ -103,6 +104,11 @@ pub enum LifecycleError {
     /// the sidecar the workspace just wrote does not round-trip to the committed hash).
     #[error("metadata binding self-check failed: {0:?}")]
     MetadataUnbound(MetadataBinding),
+    /// A restored asset's sealed metadata blob (a backup's, or a peer delta's) is not the one
+    /// its chain commits to, or does not open, decode or verify under the account's user IK.
+    /// Nothing of the asset is written.
+    #[error("restored metadata refused: {0}")]
+    RestoredMetadata(String),
     /// Cryptographic error.
     #[error(transparent)]
     Crypto(#[from] CryptoError),

@@ -1211,6 +1211,141 @@
           "name": "discard"
         },
         {
+          "about": "Send this library's assets to another device of this account over the LAN peering channel: dial its `capsule peer pull --listen`, verify it over mutual TLS as a device of this account, and serve it one backup artifact sealed for that session. The other device skips what it already holds and refuses what it has purged",
+          "args": [
+            {
+              "help": "Path to the Capsule library holding the assets",
+              "id": "library",
+              "long": "library",
+              "positional": false,
+              "repeatable": false,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "PATH"
+              ]
+            },
+            {
+              "help": "The other device's `capsule peer pull --listen` address. Only a local-network address is dialed",
+              "id": "peer",
+              "long": "peer",
+              "positional": false,
+              "repeatable": false,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "HOST:PORT"
+              ]
+            },
+            {
+              "help": "The device the channel must verify; refused if the device at `--peer` is another",
+              "id": "to",
+              "long": "to",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": true,
+              "value_names": [
+                "DEVICE_ID"
+              ]
+            },
+            {
+              "help": "An asset to send (repeatable); without one, every asset in the library is sent",
+              "id": "asset",
+              "long": "asset",
+              "positional": false,
+              "repeatable": true,
+              "required": false,
+              "takes_value": true,
+              "value_names": [
+                "ASSET_ID"
+              ]
+            },
+            {
+              "help": "Read the library passphrase from stdin instead of prompting, so the command works in scripts and CI where there is no terminal",
+              "id": "passphrase_stdin",
+              "long": "passphrase-stdin",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            },
+            {
+              "help": "Print the run as one JSON document on stdout: the device the channel verified, the artifact's content address, size and assets, how many bytes the other device pulled, and each failure with a stable `kind` and the detail",
+              "id": "json",
+              "long": "json",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            }
+          ],
+          "name": "offer"
+        },
+        {
+          "about": "Take assets another device of this account sends with `capsule peer offer`: listen on ADDR, verify the device over mutual TLS, pull its backup artifact and write every asset that is new or a forward update. An asset this device has purged is refused, and the run is refused before listening if the purge record cannot be read",
+          "args": [
+            {
+              "help": "Path to this device's Capsule library",
+              "id": "library",
+              "long": "library",
+              "positional": false,
+              "repeatable": false,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "PATH"
+              ]
+            },
+            {
+              "help": "The address to listen on (e.g. `0.0.0.0:7420`). Only local-network peers are admitted. The address bound is printed on stderr",
+              "id": "listen",
+              "long": "listen",
+              "positional": false,
+              "repeatable": false,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "ADDR"
+              ]
+            },
+            {
+              "default_values": [
+                "300"
+              ],
+              "help": "Seconds to wait for a peer to connect and verify; a verified session is not cut by it, but runs to its end at a minimum transfer rate",
+              "id": "listen_timeout",
+              "long": "listen-timeout",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": true,
+              "value_names": [
+                "SECONDS"
+              ]
+            },
+            {
+              "help": "Read the library passphrase from stdin instead of prompting, so the command works in scripts and CI where there is no terminal",
+              "id": "passphrase_stdin",
+              "long": "passphrase-stdin",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            },
+            {
+              "help": "Print the run as one JSON document on stdout: the peer, each artifact pulled, the assets `applied`, `quarantined` (the peer sent stale state), `tombstoned` (purged here), `identical` (already held) and `incomplete`, each failure and each refused connection with a stable `kind` and the detail",
+              "id": "json",
+              "long": "json",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            }
+          ],
+          "name": "pull"
+        },
+        {
           "about": "Show this device's handed-off assets: take the other device's acknowledgements, take back uploads that are overdue or whose device was revoked, and release what the server holds. A delete made after a hand-off is held until the server holds the asset, then sent. Also lists every hand-off this device quarantined",
           "args": [
             {
