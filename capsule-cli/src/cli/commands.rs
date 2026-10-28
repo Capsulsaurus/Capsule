@@ -843,9 +843,9 @@ pub(crate) enum AuthCommands {
             conflicts_with_all = ["no_browser", "email", "password_stdin"]
         )]
         device: bool,
-        /// Print the outcome of a password sign-in as one JSON document on stdout; prompts and
-        /// progress go to stderr. Not combined with --oidc, whose address is printed for a person
-        #[arg(long, conflicts_with = "oidc")]
+        /// Print the outcome as one JSON document on stdout; prompts, progress and, with
+        /// --oidc, the sign-in address and code go to stderr
+        #[arg(long)]
         json: bool,
     },
     /// Set up recovery for a library: bind it to the signed-in account and store its recovery
