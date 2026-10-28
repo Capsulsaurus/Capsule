@@ -1221,3 +1221,81 @@ fn an_unreadable_ledger_skips_nothing_and_shows_no_line() {
     assert!(ledger.is_err());
     assert!(lines_or_none(ledger).is_empty());
 }
+
+#[test]
+fn the_redial_backoff_doubles_from_its_base() {
+    assert_eq!(redial_backoff(1), REDIAL_BACKOFF);
+    assert_eq!(redial_backoff(2), REDIAL_BACKOFF * 2);
+    assert_eq!(redial_backoff(3), REDIAL_BACKOFF * 4);
+    assert_eq!(
+        redial_backoff(u32::MAX),
+        redial_backoff(17),
+        "the doubling is capped"
+    );
+}
+
+/// A dial that fails like a sever and then succeeds: two attempts, each after its backoff.
+#[tokio::test(start_paused = true)]
+async fn a_redial_retries_a_severed_dial_after_backing_off() {
+    let mut redials = 0;
+    let mut attempts = 0;
+    let started = tokio::time::Instant::now();
+    let dialed = redial(&mut redials, || {
+        attempts += 1;
+        let result = if attempts == 1 {
+            Err(PeeringError::Io("the delegate is not accepting yet".into()))
+        } else {
+            Ok(attempts)
+        };
+        async move { result }
+    })
+    .await;
+    assert_eq!(dialed.expect("the second dial connects"), 2);
+    assert_eq!(redials, 2, "each attempt is counted");
+    assert_eq!(started.elapsed(), redial_backoff(1) + redial_backoff(2));
+}
+
+/// Every attempt times out: the redial gives up once it has spent the whole budget.
+#[tokio::test(start_paused = true)]
+async fn a_redial_gives_up_after_max_redials() {
+    let mut redials = 0;
+    let mut attempts = 0;
+    let dialed: Result<(), _> = redial(&mut redials, || {
+        attempts += 1;
+        async { Err(PeeringError::Timeout("connecting to the peer")) }
+    })
+    .await;
+    assert!(matches!(dialed, Err(PeeringError::Timeout(_))));
+    assert_eq!(attempts, MAX_REDIALS);
+    assert_eq!(redials, MAX_REDIALS);
+}
+
+/// The budget is shared across severs: what an earlier sever spent is not given back.
+#[tokio::test(start_paused = true)]
+async fn a_redial_spends_only_what_is_left_of_the_budget() {
+    let mut redials = MAX_REDIALS - 1;
+    let mut attempts = 0;
+    let dialed: Result<(), _> = redial(&mut redials, || {
+        attempts += 1;
+        async { Err(PeeringError::Io("refused".into())) }
+    })
+    .await;
+    assert!(dialed.is_err());
+    assert_eq!(attempts, 1);
+    assert_eq!(redials, MAX_REDIALS);
+}
+
+/// A refusal that is not a sever (the peer is off the LAN) is returned without retrying.
+#[tokio::test(start_paused = true)]
+async fn a_redial_does_not_retry_a_refusal() {
+    let mut redials = 0;
+    let mut attempts = 0;
+    let dialed: Result<(), _> = redial(&mut redials, || {
+        attempts += 1;
+        async { Err(PeeringError::NotLan(IpAddr::from([8, 8, 8, 8]))) }
+    })
+    .await;
+    assert!(matches!(dialed, Err(PeeringError::NotLan(_))));
+    assert_eq!(attempts, 1);
+    assert_eq!(redials, 1);
+}
