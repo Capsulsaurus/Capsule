@@ -1508,6 +1508,38 @@
     "message": "Current Password",
     "context": "Machine-translated seed pending human review."
   },
+  "settings.language.description": {
+    "message": "Language picks the words on screen. Region picks how dates, times and numbers are written. Both follow your system until you change them, and stay on this device.",
+    "context": "Language and region settings page description."
+  },
+  "settings.language.language_label": {
+    "message": "Language",
+    "context": "Label of the picker for the interface language."
+  },
+  "settings.language.profile_link": {
+    "message": "← Profile settings",
+    "context": "Link from language and region settings back to profile settings."
+  },
+  "settings.language.region_label": {
+    "message": "Region",
+    "context": "Label of the picker for the formatting region (dates, times, numbers)."
+  },
+  "settings.language.system_default": {
+    "message": "System default ({name})",
+    "context": "Picker option that follows the operating system. The value is the language or region name the system currently selects."
+  },
+  "settings.language.system_unknown": {
+    "message": "System default",
+    "context": "Picker option that follows the operating system, when the system reports no region."
+  },
+  "settings.language.title": {
+    "message": "Language & Region",
+    "context": "Language and region settings page heading."
+  },
+  "settings.language_link": {
+    "message": "Language & region →",
+    "context": "Link from profile settings to language and region settings."
+  },
   "settings.password.description": {
     "message": "Enter your current password to set a new one.",
     "context": "Machine-translated seed pending human review."

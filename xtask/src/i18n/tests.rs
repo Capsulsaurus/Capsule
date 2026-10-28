@@ -70,6 +70,43 @@ fn android_documents_contain_no_double_hyphen_in_comments() {
     }
 }
 
+/// The per-app language list names every supported locale, in order, as a BCP-47 tag,
+/// and its banner obeys the same no-`--` rule as every other Android document.
+#[test]
+fn android_locale_config_lists_every_supported_locale() {
+    let catalogs = Catalogs {
+        source: "en".to_string(),
+        supported: owned(&["en", "zh-Hant", "pt-BR"]),
+        messages: BTreeMap::new(),
+    };
+    let xml = catalogs.android_locale_config();
+    let names: Vec<&str> = xml
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("<locale android:name=\""))
+        .filter_map(|rest| rest.strip_suffix("\" />"))
+        .collect();
+    assert_eq!(names, ["en", "zh-Hant", "pt-BR"]);
+    assert!(xml.contains("<locale-config xmlns:android="));
+    for line in xml.lines() {
+        if let Some(body) = line.trim().strip_prefix("<!--") {
+            assert!(!body.trim_end_matches("-->").contains("--"), "{line}");
+        }
+    }
+}
+
+/// `locales_config.xml` is one of the rendered outputs, so `i18n --check` fails when
+/// it drifts from `config.json`.
+#[test]
+fn android_locale_config_is_a_generated_output() {
+    let catalogs = Catalogs::load(&repo_root()).expect("the real catalogs load");
+    let outputs = catalogs.render().expect("the real catalogs compile");
+    let (_, xml) = outputs
+        .iter()
+        .find(|(path, _)| path == Path::new(ANDROID_LOCALE_CONFIG))
+        .expect("locales_config.xml is rendered");
+    assert_eq!(xml, &catalogs.android_locale_config());
+}
+
 const PREFIX: &str = "pub(crate) const SUPPORTED_LOCALES: &[&str] = ";
 
 fn owned(items: &[&str]) -> Vec<String> {
@@ -504,7 +541,10 @@ fn rendered_android() -> Vec<(PathBuf, String)> {
         .render()
         .expect("the real catalogs compile")
         .into_iter()
-        .filter(|(path, _)| path.to_string_lossy().contains("androidMain"))
+        .filter(|(path, _)| {
+            path.to_string_lossy().contains("androidMain")
+                && path.file_name().is_some_and(|name| name == "strings.xml")
+        })
         .collect()
 }
 

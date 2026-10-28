@@ -107,12 +107,20 @@ function Settings() {
                 <h1 className="text-2xl font-bold">
                     <FormattedMessage id="settings.title" />
                 </h1>
-                <Link
-                    to="/settings/security"
-                    className="text-sm underline text-muted-foreground"
-                >
-                    <FormattedMessage id="settings.security_link" />
-                </Link>
+                <div className="flex gap-4">
+                    <Link
+                        to="/settings/language"
+                        className="text-sm underline text-muted-foreground"
+                    >
+                        <FormattedMessage id="settings.language_link" />
+                    </Link>
+                    <Link
+                        to="/settings/security"
+                        className="text-sm underline text-muted-foreground"
+                    >
+                        <FormattedMessage id="settings.security_link" />
+                    </Link>
+                </div>
             </div>
 
             <Card>

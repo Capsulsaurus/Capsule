@@ -497,7 +497,7 @@ function AssetList({ assets }: { assets: Asset[] }) {
             ),
             cell: (info) => (
                 <div className="text-right">
-                    {info.getValue().toLocaleDateString()}
+                    {intl.formatDate(info.getValue())}
                 </div>
             ),
             sortingFn: 'datetime',
