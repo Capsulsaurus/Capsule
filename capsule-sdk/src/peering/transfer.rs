@@ -297,7 +297,8 @@ impl<'a> ChannelBlobSource<'a> {
         }
     }
 
-    /// The bytes held so far, and the channel failure that stopped the pull, if one did.
+    /// The bytes held so far, and the first channel failure, the one that stopped the pull, if
+    /// one did.
     #[must_use]
     pub fn into_parts(self) -> (Vec<u8>, Option<PeeringError>) {
         (
@@ -343,7 +344,12 @@ impl BlobSource for ChannelBlobSource<'_> {
             Err(RangeFailure { received, error }) => {
                 tracing::debug!(%error, received = received.len(), "peering: a ranged pull broke off");
                 self.held().extend_from_slice(&received);
-                *self.failure.lock().unwrap_or_else(PoisonError::into_inner) = Some(error);
+                // The first failure is the diagnosis: once the channel breaks, every later call
+                // fails with a generic "broke earlier" that must not replace it.
+                self.failure
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .get_or_insert(error);
                 if received.is_empty() {
                     RangeOutcome::Status {
                         status: 0,
