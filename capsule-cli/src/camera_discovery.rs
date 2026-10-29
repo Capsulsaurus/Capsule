@@ -108,8 +108,10 @@ pub fn instance_name(fullname: &str) -> &str {
 }
 
 /// The address a client connects to among `addresses`: the lowest IPv4 one, else the lowest
-/// IPv6 one that is not link-local (a link-local address needs a scope a socket address taken
-/// from an answer does not carry). `None` when there is no such address.
+/// IPv6 one that is not link-local. A camera is offered at a plain address, the one
+/// `--json` prints and `--address` takes back, so the interface scope `mdns-sd` reports with
+/// each address is not kept, and a link-local address without its scope names no interface to
+/// connect through. `None` when there is no such address.
 #[must_use]
 pub fn connectable_address(addresses: &[IpAddr]) -> Option<IpAddr> {
     let lowest_v4 = addresses.iter().filter(|ip| ip.is_ipv4()).min();
@@ -260,6 +262,8 @@ impl Browser for MdnsBrowser {
                     fullname: resolved.fullname.clone(),
                     host: resolved.host.clone(),
                     port: resolved.port,
+                    // The interface scope each address carries is dropped: a camera is offered
+                    // at a plain address (see `connectable_address`).
                     addresses: resolved
                         .addresses
                         .iter()
