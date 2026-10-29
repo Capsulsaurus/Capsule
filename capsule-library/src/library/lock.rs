@@ -91,15 +91,18 @@ fn current_hostname() -> String {
     }
 }
 
+/// Whether `pid` names a live process. Android has Linux's `/proc` and needs it most: the
+/// system kills an app's process without notice, so every cold start after the first finds
+/// a lock its dead predecessor left behind.
 fn is_pid_alive(pid: u32) -> bool {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     {
         Path::new(&format!("/proc/{pid}")).exists()
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
     {
         let _ = pid;
-        // Conservative: assume alive on non-Linux (requires manual lock deletion)
+        // Conservative: assume alive elsewhere (requires manual lock deletion)
         true
     }
 }
