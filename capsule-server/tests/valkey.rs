@@ -557,6 +557,58 @@ async fn the_counter_suite_passes_against_valkey() {
     counters::run_all(store).await;
 }
 
+/// The pull worker's schedule, lease and circuit suite, against a real server (#964).
+#[tokio::test]
+async fn the_pull_job_suite_passes_against_valkey() {
+    let Some(server) = server().await else {
+        return;
+    };
+    let harness = ValkeyHarness::connect(&server.url).await;
+    let store = capsule_server::federation::pull::valkey::ValkeyPullJobs::new(
+        harness.stores.valkey().clone(),
+    );
+    capsule_server::federation::pull::conformance::run_all(&store).await;
+}
+
+/// Claims racing for one due job admit exactly one holder, decided on the server (#964).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn pull_job_claims_race_to_one_holder() {
+    use capsule_server::federation::PeerId;
+    use capsule_server::federation::pull::valkey::ValkeyPullJobs;
+    use capsule_server::federation::pull::{JobKey, PULL_LEASE, PullJobs};
+    use capsule_server::store::AlbumId;
+
+    let Some(server) = server().await else {
+        return;
+    };
+    let harness = ValkeyHarness::connect(&server.url).await;
+    let store = Arc::new(ValkeyPullJobs::new(harness.stores.valkey().clone()));
+    let job = JobKey::new(
+        PeerId::new("race.pull.test"),
+        AlbumId::new(uuid::Uuid::now_v7().to_string()),
+    );
+    let now = Timestamp::now();
+    let mut tasks = Vec::new();
+    for replica in 0..24 {
+        let store = store.clone();
+        let job = job.clone();
+        tasks.push(tokio::spawn(async move {
+            store
+                .claim(&job, &format!("replica-{replica}"), now, PULL_LEASE)
+                .await
+                .expect("the claim is answered")
+                .is_some()
+        }));
+    }
+    let mut admitted = 0;
+    for task in tasks {
+        if task.await.expect("the task finishes") {
+            admitted += 1;
+        }
+    }
+    assert_eq!(admitted, 1, "two replicas never pull one job");
+}
+
 /// The partition ceiling, against a real server (#519).
 #[tokio::test]
 async fn a_full_counter_partition_refuses_a_new_key_against_valkey() {
