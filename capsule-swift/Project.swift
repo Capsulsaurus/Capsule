@@ -238,7 +238,8 @@ private let moduleTargets: [Target] =
                 .target(name: "CapsulePorts"),
                 .xcframework(path: ".ffi/CapsuleCoreFFI.xcframework"),
             ],
-            testDependencies: []
+            // The alert-policy tests build `NotifyInput`s and read `Alert`s.
+            testDependencies: [.target(name: "CapsuleDomain")]
         )
         : [])
 
