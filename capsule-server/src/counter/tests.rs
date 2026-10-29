@@ -682,3 +682,35 @@ fn a_flood_next_door_takes_no_lock_until_something_lapses() {
     assert_eq!(counters.len_of(&quiet), 0);
     assert_eq!(counters.purge_others(flood.partition_index(), at(11)), 0);
 }
+
+#[tokio::test]
+async fn the_registration_source_budget_refuses_one_source_and_not_another() {
+    // The budget the register route charges (#1001), on the key it charges it under: the limit
+    // admits, the next hit waits out one window, and a second source is untouched.
+    let store = counters();
+    let budget = budgets::REGISTRATION_SOURCE;
+    let source = CounterKey::RegistrationSource("203.0.113.7".to_owned());
+    for _ in 0..budget.limit {
+        assert!(
+            store
+                .hit(&source, budget, at(0))
+                .await
+                .expect("answers")
+                .admits()
+        );
+    }
+    assert_eq!(
+        store.hit(&source, budget, at(0)).await.expect("answers"),
+        Verdict::Limited {
+            retry_after: crate::store::deadline(at(0), budget.window),
+        }
+    );
+    let other = CounterKey::RegistrationSource("203.0.113.8".to_owned());
+    assert!(
+        store
+            .hit(&other, budget, at(0))
+            .await
+            .expect("answers")
+            .admits()
+    );
+}

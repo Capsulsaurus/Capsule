@@ -217,12 +217,12 @@ pub enum CounterKey {
     SecondFactor(String),
     /// Account registrations from one source address.
     ///
-    /// Declared and consumed nowhere yet. The client address it needs now exists
-    /// ([`crate::client_addr`], #704) and the share and drop paths charge their source keys with
-    /// it; registration is the one **unauthenticated write** on the surface, so it is the next
-    /// place that fact is owed — recorded here rather than replaced by an email-keyed limiter,
-    /// which would bound repeated probes against one address while doing nothing about a sweep
-    /// across many.
+    /// Charged by `POST /v1/auth/register` with
+    /// [`ClientAddr::source_key`](crate::client_addr::ClientAddr::source_key) against
+    /// [`budgets::REGISTRATION_SOURCE`] (#1001): registration is the one **unauthenticated
+    /// write** on the surface, and this is what bounds its account oracle. Keyed on the source
+    /// rather than the email, because an email-keyed limiter would bound repeated probes against
+    /// one address while doing nothing about a sweep across many.
     RegistrationSource(String),
     /// Begun OIDC ceremonies naming one **admitted** redirect host.
     ///

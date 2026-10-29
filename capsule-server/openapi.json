@@ -11,7 +11,7 @@
           "auth"
         ],
         "summary": "Create an account, and open its first session.",
-        "description": "# Why it signs you in\n\nThe alternative is `201` with no body and a client that immediately posts the same\ncredentials to `/v1/auth/login`, which is one more round trip for one more chance to fail and\nnothing gained. It also makes the CLI's `capsule register` mean what a person expects: after\nit, you are registered *and* signed in.\n\n# What it does not do\n\n**It does not publish a device directory**, and the account is therefore unable to upload\nuntil its client publishes one. That is not an omission here: there is deliberately no\naccount-creation fallback for invariant 7's floor, precisely so that \"was this device in the\ndirectory\" has an honest answer for a brand-new account, and the honest answer is *no*. A\nclient's first action after registering is `POST /v1/auth/devices/directory`.\n\n**It is not rate-limited**, and that is a real gap rather than an oversight — see\n[`crate::auth::registry`] for the fact the limiter is waiting on. This is the one\nunauthenticated write on the surface.\n\n# `200`, where Salvo answered `201`\n\nKynos's `Created` requires a `Location` — a `201` that does not say *where* tells a client\nsomething exists and not how to reach it, which is a defect the type refuses to let you\ncommit. This server exposes no URL for an account: `GET /v1/auth/profile` is among the\noperations not ported to this server. Inventing a location to satisfy a status would be\ninventing a surface, so the status moved instead. What a caller actually needs — the token\npair — is in the body either way.",
+        "description": "# Why it signs you in\n\nThe alternative is `201` with no body and a client that immediately posts the same\ncredentials to `/v1/auth/login`, which is one more round trip for one more chance to fail and\nnothing gained. It also makes the CLI's `capsule register` mean what a person expects: after\nit, you are registered *and* signed in.\n\n# What it does not do\n\n**It does not publish a device directory**, and the account is therefore unable to upload\nuntil its client publishes one. That is not an omission here: there is deliberately no\naccount-creation fallback for invariant 7's floor, precisely so that \"was this device in the\ndirectory\" has an honest answer for a brand-new account, and the honest answer is *no*. A\nclient's first action after registering is `POST /v1/auth/devices/directory`.\n\n# Rate-limited per source\n\nThis is the one unauthenticated write on the surface, and its `409` is an account oracle, so\nevery attempt whose body parses is charged against [`budgets::REGISTRATION_SOURCE`] for the\ntrusted client address **before** the address and password are validated or the registry is\nasked anything: probing costs the prober whatever the answer. A body the `Json` extractor\nrefuses (`400`/`415`/`422`) never reaches the handler and is not charged; it learns nothing\nabout any account. A spent budget, or a full limiter partition, is\n`429 error.auth.rate_limited` with `Retry-After`; a counter store that cannot answer is `500`,\nnever an admission.\n\n# `200`, where Salvo answered `201`\n\nKynos's `Created` requires a `Location` — a `201` that does not say *where* tells a client\nsomething exists and not how to reach it, which is a defect the type refuses to let you\ncommit. This server exposes no URL for an account: `GET /v1/auth/profile` is among the\noperations not ported to this server. Inventing a location to satisfy a status would be\ninventing a surface, so the status moved instead. What a caller actually needs — the token\npair — is in the body either way.",
         "operationId": "register_user",
         "parameters": [
           {
@@ -270,6 +270,50 @@
               "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              },
+              "Retry-After": {
+                "description": "Seconds to wait before retrying (RFC 9110 delta-seconds): the problem's `retry_after` instant, measured from the server's clock.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 0.0,
+                  "format": "uint64"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistrationRateLimitedProblem"
                 }
               }
             }
@@ -29565,6 +29609,46 @@
           "code"
         ],
         "title": "ShareBlobRateLimitedProblem",
+        "description": "An RFC 9457 problem detail."
+      },
+      "RegistrationRateLimitedProblem": {
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer",
+            "maximum": 65535.0,
+            "minimum": 0.0,
+            "format": "uint16"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "instance": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string",
+            "description": "The stable `error.*` catalog code. The client localizes this; `detail` stays English. Present on every problem this server renders."
+          },
+          "retry_after": {
+            "type": "integer",
+            "format": "uint64",
+            "description": "When the caller may retry, as Unix seconds. From the limiter's own window when a budget is spent, and an upper bound of one window when the limiter is at capacity."
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "type",
+          "status",
+          "code"
+        ],
+        "title": "RegistrationRateLimitedProblem",
         "description": "An RFC 9457 problem detail."
       },
       "UploadCreateRateLimitedProblem": {

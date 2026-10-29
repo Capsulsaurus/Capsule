@@ -18,7 +18,7 @@ The server can prove "this request is from a session it issued"; it cannot prove
 
 - No display name, username or invitation code — the server stores as little about a person as it can.
 - Password: a 12-character floor, no composition rule (it guards a session, not the master key).
-- A taken address is `409 error.auth.user_already_exists`. This is an account oracle by decision; it is **not** rate-limited yet, because limiting an unauthenticated write needs a trusted client address the server lacks behind an unconfigured proxy chain (same gap as the share and drop source limiters).
+- A taken address is `409 error.auth.user_already_exists`. This is an account oracle by decision, bounded per source: every attempt whose body parses, a refused one included, is charged 10/hour against the resolved client address (IPv6 per /64, through `TRUSTED_PROXIES`/`TRUSTED_PROXY_HOPS`), and a spent budget or a full limiter partition is `429 error.auth.rate_limited` with `Retry-After`. The limiter fails closed: an unreachable counter store is `500`, never an admission. Behind an unconfigured proxy every registrant shares the proxy's budget, as with the share and drop source limiters.
 - A new account has **no device directory and therefore cannot write**: invariant 7's floor is the writing device's `added_at` in the published directory, with no account-creation fallback. The client's first act is publishing a directory.
 - Not provided: token introspection (the session ledger is read on every request, so validation *is* the request) and password reset (the server cannot re-wrap a master key it never saw; recovery is the [escrow blob](/design/backup-recovery/)).
 
