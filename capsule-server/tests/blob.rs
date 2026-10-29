@@ -272,7 +272,7 @@ async fn an_unknown_address_is_indistinguishable_from_a_malformed_one() {
         response.assert_status(StatusCode::NOT_FOUND);
         let problem: serde_json::Value = response.json();
         assert_eq!(problem["code"], "error.blob.not_found");
-        bodies.push(problem);
+        bodies.push(support::without_request_id(problem));
     }
 
     assert_eq!(
@@ -851,7 +851,7 @@ async fn a_strangers_refusal_is_indistinguishable_from_an_unknown_address() {
         .send()
         .await;
     refused.assert_status(StatusCode::NOT_FOUND);
-    let refused: serde_json::Value = refused.json();
+    let refused = support::without_request_id(refused.json());
 
     let unknown = fixture
         .client
@@ -861,7 +861,7 @@ async fn a_strangers_refusal_is_indistinguishable_from_an_unknown_address() {
         .send()
         .await;
     unknown.assert_status(StatusCode::NOT_FOUND);
-    let unknown: serde_json::Value = unknown.json();
+    let unknown = support::without_request_id(unknown.json());
 
     assert_eq!(
         refused, unknown,
@@ -1068,7 +1068,10 @@ async fn a_never_member_is_indistinguishable_from_an_unknown_address_body_and_he
     let unknown = fetch(&fixture, &carol, &support::checksum(b"never existed")).await;
     unknown.assert_status(StatusCode::NOT_FOUND);
 
-    assert_eq!(refused.bytes(), unknown.bytes());
+    assert_eq!(
+        support::masked_request_id(refused.bytes()),
+        support::masked_request_id(unknown.bytes())
+    );
     // Presence first, so the equalities below cannot pass on two absent headers. (The in-process
     // client does not materialise `content-length`, so the media type is the one header a problem
     // body is guaranteed to carry here.)
@@ -1146,8 +1149,8 @@ async fn only_the_owner_fetches_a_backup() {
         let refused = fetch(&fixture, &bob, address.as_str()).await;
         refused.assert_status(StatusCode::NOT_FOUND);
         assert_eq!(
-            refused.bytes(),
-            unknown.bytes(),
+            support::masked_request_id(refused.bytes()),
+            support::masked_request_id(unknown.bytes()),
             "a {role:?}'s backup refusal is byte-identical to an unknown address"
         );
     }

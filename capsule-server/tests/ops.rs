@@ -611,7 +611,8 @@ async fn an_asset_that_is_not_the_callers_is_refused_without_disclosure() {
     .await;
 
     assert_eq!(
-        theirs, absent,
+        support::without_request_id(theirs),
+        support::without_request_id(absent),
         "the asset id is the manifest's own field and therefore client-chosen, so a guess must \
          buy nothing — including the knowledge that it guessed right"
     );
@@ -763,6 +764,11 @@ async fn a_reader_a_former_member_and_a_stranger_cannot_apply_an_op() {
     )
     .await;
 
+    let (reader, former, stranger) = (
+        support::without_request_id(reader),
+        support::without_request_id(former),
+        support::without_request_id(stranger),
+    );
     assert_eq!(reader, former);
     assert_eq!(former, stranger);
     // Nothing reached the owner's feed.

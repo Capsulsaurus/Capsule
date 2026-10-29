@@ -224,6 +224,9 @@ impl<C: Sync> Authenticator<AccessToken, C> for AuthContext {
             session_id = %verified.session,
             "a request presented a valid access token for a live session"
         );
+        // Admitted, so the request span now names who made it: every event after this one,
+        // and the span's completion, carry the account and the session (ids, never the token).
+        crate::request_span::record_session(&verified.user, &verified.session);
         Ok(AuthenticatedSession {
             user: verified.user,
             session: verified.session,

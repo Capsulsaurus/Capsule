@@ -527,7 +527,34 @@ fn fill_binary(schema: &mut Option<Schema>) {
 /// header under one of these names is left exactly as the router emitted it, so this can never
 /// overwrite what Kynos said.
 pub(crate) fn describe_negotiation_headers(document: &mut Document) {
-    let declarations = crate::negotiation::response_header_declarations();
+    declare_on_every_response(
+        document,
+        &crate::negotiation::response_header_declarations(),
+    );
+}
+
+/// Files `X-Request-Id` under every response.
+///
+/// [`crate::request_span::RequestSpan`] is the root router's outermost interceptor and attaches
+/// the header to everything it forwards, so the gap [`describe_negotiation_headers`] closes for
+/// the protocol window is the same gap here: Kynos would declare it on success responses only.
+/// The declaration is [`crate::request_span::response_header_declaration`], the one the
+/// interceptor's own description uses.
+pub(crate) fn describe_request_id_header(document: &mut Document) {
+    declare_on_every_response(
+        document,
+        &[crate::request_span::response_header_declaration()],
+    );
+}
+
+/// Declares each `(name, header)` on every response that does not already declare it.
+///
+/// A response that declares a header under one of these names, in any case, is left exactly as
+/// the router emitted it, so this can never overwrite what Kynos said.
+fn declare_on_every_response(
+    document: &mut Document,
+    declarations: &[(&'static str, kynos::openapi::Header)],
+) {
     for item in document.paths.items.values_mut() {
         let slots: Vec<&mut Option<Box<kynos::openapi::Operation>>> = vec![
             &mut item.get,
@@ -550,7 +577,7 @@ pub(crate) fn describe_negotiation_headers(document: &mut Document) {
                 let kynos::openapi::RefOr::Item(response) = response else {
                     continue;
                 };
-                for (name, header) in &declarations {
+                for (name, header) in declarations {
                     let declared = response
                         .headers
                         .keys()
@@ -721,6 +748,21 @@ fn extended(base: &Schema, title: &str, members: &[Member]) -> Schema {
     {
         required.push(crate::problem::CODE_MEMBER.to_owned());
     }
+
+    // Declared on every problem and **not** required: the server stamps it on every one it
+    // sends, but a native client must stay lenient toward a server that predates it, and a
+    // required member a generated decoder cannot find would discard the `code` with it.
+    object.properties.insert(
+        crate::problem::REQUEST_ID_MEMBER.to_owned(),
+        member_schema(
+            // No `format: uuid`, for the reason `request_span`'s header schema gives.
+            "string",
+            None,
+            false,
+            "The UUIDv7 this server minted for the request, as the `X-Request-Id` header \
+             carries it. Quote it when reporting the failure: it names the request's log lines.",
+        ),
+    );
 
     for member in members {
         object.properties.insert(

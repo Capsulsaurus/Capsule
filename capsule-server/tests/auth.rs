@@ -189,7 +189,7 @@ async fn a_wrong_password_and_an_unknown_account_are_the_same_answer() {
     // tell them apart even in principle.
     let fixture = Fixture::working();
 
-    let wrong: serde_json::Value = post_json!(
+    let mut wrong: serde_json::Value = post_json!(
         fixture.client,
         "/v1/auth/login",
         json!({ "email": EMAIL, "password": "not the password" })
@@ -197,7 +197,7 @@ async fn a_wrong_password_and_an_unknown_account_are_the_same_answer() {
     .assert_status(StatusCode::UNAUTHORIZED)
     .json();
 
-    let unknown: serde_json::Value = post_json!(
+    let mut unknown: serde_json::Value = post_json!(
         fixture.client,
         "/v1/auth/login",
         json!({ "email": "nobody@example.test", "password": PASSWORD })
@@ -205,6 +205,14 @@ async fn a_wrong_password_and_an_unknown_account_are_the_same_answer() {
     .assert_status(StatusCode::UNAUTHORIZED)
     .json();
 
+    // Every problem names its own request, so the two ids differ by construction and say
+    // nothing about the account. Everything else must be identical.
+    for body in [&mut wrong, &mut unknown] {
+        body.as_object_mut()
+            .expect("a problem is an object")
+            .remove(capsule_server::problem::REQUEST_ID_MEMBER)
+            .expect("and names its request");
+    }
     assert_eq!(
         wrong, unknown,
         "the endpoint must not be an enumeration oracle"

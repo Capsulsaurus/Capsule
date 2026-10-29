@@ -90,6 +90,7 @@ mod openapi;
 pub mod postgres;
 pub mod problem;
 pub mod quota;
+pub mod request_span;
 pub mod routes;
 pub mod scrub;
 pub mod serve;
@@ -118,7 +119,12 @@ pub use self::app::App;
 /// description is a property of the types, not of a running deployment.
 pub fn router() -> Router<App, Propagate, ServerInterceptors, impl Sized> {
     Router::<App>::new()
-        // **Outermost.** Kynos runs a chain head-first, so this sees every problem the rest of
+        // **Outermost of all.** One span per request, with the request id this server mints,
+        // around everything below — so every event the chain emits carries the id and, once the
+        // bearer scheme admits the request, the session — and the id stamped on the final
+        // problem body and on every response's `X-Request-Id`. See [`request_span`].
+        .intercept(request_span::RequestSpan::new())
+        // **Outermost of the rewriters.** Kynos runs a chain head-first, so this sees every problem the rest of
         // the chain produces — the body-size `413` below it, an extractor's `400`/`415`/`422`,
         // and the bearer scheme's `401`/`403` — and fills in the `error.*` code none of those
         // framework-owned types has a seam to carry. See [`problem`].
@@ -361,8 +367,13 @@ pub fn router() -> Router<App, Propagate, ServerInterceptors, impl Sized> {
 /// own interceptors, the stack Kynos also runs around every fallback (an unrouted `404`, a
 /// `405`). The body-size cap is not in it: each group carries its own (see [`router`] and
 /// [`limits`]), and the groups' stacks are the opaque last parameter of [`router`]'s type.
-pub type ServerInterceptors =
-    Cons<problem::RetryAfter, Cons<negotiation::Negotiation, Cons<problem::CodedProblems, ()>>>;
+pub type ServerInterceptors = Cons<
+    problem::RetryAfter,
+    Cons<
+        negotiation::Negotiation,
+        Cons<problem::CodedProblems, Cons<request_span::RequestSpan, ()>>,
+    >,
+>;
 
 /// Builds the service the server and the in-process tests both drive.
 ///
@@ -436,6 +447,9 @@ pub fn openapi() -> kynos::Result<kynos::openapi::Document> {
     // included. The walk files the same three declarations under every other response, so the
     // document promises exactly what the wire carries.
     openapi::describe_negotiation_headers(&mut document);
+    // The same gap for [`request_span::RequestSpan`]'s `X-Request-Id`, which rides every
+    // response the router sends, problems and fallbacks included.
+    openapi::describe_request_id_header(&mut document);
     // `Retry-After` is attached to a problem that names a retry instant and to nothing else, so
     // it is declared there and taken off the success responses Kynos files an interceptor's
     // headers under.
