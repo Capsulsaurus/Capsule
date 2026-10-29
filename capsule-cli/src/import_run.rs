@@ -10,7 +10,8 @@ use std::path::PathBuf;
 
 use capsule_core::domain::ImportMode;
 use capsule_library::import::{
-    CancellationToken, DefaultAlbumContext, ImportConfig, execute_with_source_metadata, plan,
+    CancellationToken, DefaultAlbumContext, ImportConfig, ScanResult, SourceMetadataIndex,
+    execute_with_source_metadata, plan,
 };
 use capsule_library::lifecycle::Workspace;
 use eyre::{Result, eyre};
@@ -35,6 +36,21 @@ pub(crate) fn import_sources(
 ) -> Result<ImportReport> {
     tracing::info!(sources = paths.len(), ?provider, "import: starting");
     let (scan_result, source_metadata) = crate::read_import_source(provider, paths, false)?;
+    import_scanned(workspace, &scan_result, &source_metadata)
+}
+
+/// Plan and execute an already-read source into `workspace`, copying every source: the half of
+/// [`import_sources`] after the source read, shared with `capsule camera import`, whose source is
+/// the camera adapter's staged objects.
+///
+/// # Errors
+///
+/// The scan could not be planned or executed.
+pub(crate) fn import_scanned(
+    workspace: &mut Workspace,
+    scan_result: &ScanResult,
+    source_metadata: &SourceMetadataIndex,
+) -> Result<ImportReport> {
     let (candidates, files) = (scan_result.candidates.len(), scan_result.total_files());
     let config = ImportConfig {
         import_mode: ImportMode::Copy,
@@ -42,7 +58,7 @@ pub(crate) fn import_sources(
         album: DefaultAlbumContext::derived(workspace.default_album_id()),
         ..Default::default()
     };
-    let plan_result = plan(&scan_result, workspace.db(), &config)
+    let plan_result = plan(scan_result, workspace.db(), &config)
         .map_err(|e| eyre!("Planning the import failed: {e}"))?;
     let counts = &plan_result.counts;
     tracing::debug!(
@@ -61,7 +77,7 @@ pub(crate) fn import_sources(
             &plan_result,
             workspace,
             &config,
-            &source_metadata,
+            source_metadata,
             |_| {},
             &CancellationToken::new(),
         )

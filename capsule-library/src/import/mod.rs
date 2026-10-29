@@ -14,7 +14,7 @@ pub(crate) mod streaming;
 
 pub use camera::{
     CameraAdapter, CameraDevice, CameraError, CameraObject, CameraReceipt, ObjectFailure,
-    PtpCamera, ReceivedObject, StorageFailure,
+    PtpCamera, ReceivedObject, StorageFailure, safe_file_name,
 };
 pub use capsule_core::import::*;
 pub use enrichment::{CAPTION_MAX_BYTES, FAVORITE_RATING, SourceMetadataIndex, sidecar_enrichment};

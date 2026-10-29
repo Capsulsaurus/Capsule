@@ -22,9 +22,9 @@ use capsule_library::library::{Library, LibraryError, init_library, open_library
 use capsule_library::lifecycle::{DerivativeStatus, Workspace, unanchored_sidecars};
 use capsule_sdk::cache_budget::DesktopConnectionClass;
 use cli::{
-    AuthCommands, CacheCommands, Cli, Commands, EditCommands, EditLibraryArgs, ImportProviderArg,
-    LabelArgs, LabelCommands, LibraryCommands, PeerCommands, RegionCommands, RepairCommands,
-    ShareCommands, SyncCommands, TrashCommands,
+    AuthCommands, CacheCommands, CameraCommands, Cli, Commands, EditCommands, EditLibraryArgs,
+    ImportProviderArg, LabelArgs, LabelCommands, LibraryCommands, PeerCommands, RegionCommands,
+    RepairCommands, ShareCommands, SyncCommands, TrashCommands,
 };
 use colored::*;
 use dialoguer::{Confirm, Input, Password};
@@ -36,6 +36,8 @@ use crate::utils::directories::{
 };
 
 pub mod cache;
+pub mod camera_import;
+pub mod camera_pairing;
 pub mod cli;
 pub mod cull;
 pub mod db;
@@ -538,6 +540,9 @@ async fn dispatch(command: Commands) -> Result<()> {
                 }
             }
         }
+
+        // ── Camera ────────────────────────────────────────────────────────
+        Commands::Camera { command } => camera_command(command)?,
 
         // ── Push ──────────────────────────────────────────────────────────
         Commands::Push {
@@ -1873,6 +1878,108 @@ fn edit_library(
         Ok(report) if args.json => println!("{}", serde_json::to_string_pretty(&report)?),
         Ok(report) => println!("{}", edit::summary(&report).green()),
         Err(error) => return Err(eyre!("Edit failed: {}", edit::describe_error(&error))),
+    }
+    Ok(())
+}
+
+/// The client-local camera pairing state, under the CLI's config directory.
+fn camera_pairing_store() -> Result<camera_pairing::PairingStore> {
+    let dir = get_config_dir().ok_or_else(|| eyre!("Failed to resolve config directory"))?;
+    Ok(camera_pairing::PairingStore::new(
+        dir.join(camera_pairing::PAIRING_FILE),
+    ))
+}
+
+/// `capsule camera import` and `capsule camera identity`.
+fn camera_command(command: CameraCommands) -> Result<()> {
+    let store = camera_pairing_store()?;
+    let default_name = || camera_pairing::default_name(sysinfo::System::host_name().as_deref());
+    match command {
+        CameraCommands::Identity { name, json } => {
+            let (pairing, created) = match name {
+                Some(name) => store.rename(&name)?,
+                None => store.load_or_create(default_name)?,
+            };
+            if json {
+                let document = serde_json::json!({
+                    "guid": pairing.guid,
+                    "name": pairing.name,
+                    "created": created,
+                });
+                println!("{}", serde_json::to_string_pretty(&document)?);
+            } else {
+                println!("Camera identity: {} ({})", pairing.name, pairing.guid);
+                if created {
+                    println!(
+                        "{}",
+                        "Created now; a camera that pairs with it will recognise this client \
+                         from here on."
+                            .cyan()
+                    );
+                }
+            }
+        }
+        CameraCommands::Import {
+            address,
+            library,
+            passphrase_stdin,
+            json,
+        } => {
+            let human = !json;
+            let address = camera_import::parse_address(&address)?;
+            let mut ws = open_workspace(&library, passphrase_stdin)?;
+            let (pairing, created) = store.load_or_create(default_name)?;
+            if human {
+                if created {
+                    println!(
+                        "{}",
+                        format!(
+                            "Created this client's camera identity, {} ({}).",
+                            pairing.name, pairing.guid
+                        )
+                        .cyan()
+                    );
+                }
+                println!(
+                    "{}",
+                    format!("Connecting to the camera at {address} as {}…", pairing.name).green()
+                );
+            }
+            let report = camera_import::run(&mut ws, address, &pairing, |camera| {
+                if human {
+                    println!(
+                        "{}",
+                        format!(
+                            "Connected to {} {}. Receiving every object…",
+                            camera.manufacturer, camera.model
+                        )
+                        .cyan()
+                    );
+                }
+            })?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                for outcome in &report.import.outcomes {
+                    if outcome.status != import_report::FileImportStatus::Imported {
+                        let line = format!(
+                            "  {} ({:?}{})",
+                            outcome.path,
+                            outcome.status,
+                            outcome
+                                .error
+                                .as_deref()
+                                .map(|e| format!(": {e}"))
+                                .unwrap_or_default()
+                        );
+                        println!("{}", line.yellow());
+                    }
+                }
+                for line in camera_import::summary_lines(&report) {
+                    println!("{}", line.green());
+                }
+            }
+        }
     }
     Ok(())
 }

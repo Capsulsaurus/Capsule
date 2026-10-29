@@ -14,7 +14,8 @@
 //! exactly the length `StartData` declared, and streams data to a caller-supplied sink so an
 //! object of any size is held in memory only one packet at a time.
 
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use crate::dataset::{DeviceInfo, ObjectInfo};
@@ -406,6 +407,113 @@ impl<C: Read + Write, E: Read + Write> Session<C, E> {
                 Some(sink),
             )?
             .data_len)
+    }
+}
+
+/// One asynchronous event the responder sent on the event channel.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Event {
+    /// The PTP event code.
+    pub code: u16,
+    /// The transaction it relates to, or zero.
+    pub transaction: u32,
+    /// Up to three parameters.
+    pub params: Vec<u32>,
+}
+
+/// What [`serve_events`] handled before it stopped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct EventsServed {
+    /// `Event` packets delivered to the caller.
+    pub events: u64,
+    /// `ProbeRequest` packets answered with a `ProbeResponse`.
+    pub probes: u64,
+}
+
+/// Service an event channel until it closes or `stop` is set: answer every `ProbeRequest` with a
+/// `ProbeResponse`, so a responder that probes a quiet initiator does not drop it during a long
+/// transfer, and hand every `Event` to `on_event`.
+///
+/// Built to run on its own thread over a second handle to the event channel (for TCP,
+/// [`TcpStream::try_clone`](std::net::TcpStream::try_clone) of
+/// [`Session::event_channel`]): the session itself never reads that channel once it is attached.
+/// A read that times out before the first byte of a packet is idleness, not an error: `stop` is
+/// checked and the wait goes on, so a channel with a read timeout stops within one timeout of
+/// `stop` being set. A clean end of the channel (the caller shut it down, or the responder closed
+/// it) between packets returns the tally.
+///
+/// # Errors
+///
+/// The channel failed mid-packet, or the responder sent a packet the event channel does not carry.
+/// Either way the channel can no longer be trusted; the command channel is unaffected.
+pub fn serve_events<E: Read + Write>(
+    mut event: E,
+    stop: &AtomicBool,
+    mut on_event: impl FnMut(Event),
+) -> Result<EventsServed, Error> {
+    let mut served = EventsServed::default();
+    tracing::debug!("ptpip: event channel reader started");
+    loop {
+        if stop.load(Ordering::Relaxed) {
+            tracing::debug!(?served, "ptpip: event channel reader stopped");
+            return Ok(served);
+        }
+        let mut first = [0u8; 1];
+        match event.read(&mut first) {
+            Ok(0) => {
+                tracing::debug!(?served, "ptpip: event channel closed");
+                return Ok(served);
+            }
+            Ok(_) => {}
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::WouldBlock
+                        | io::ErrorKind::TimedOut
+                        | io::ErrorKind::Interrupted
+                ) =>
+            {
+                tracing::trace!("ptpip: event channel idle");
+                continue;
+            }
+            Err(error) => return Err(Error::Io(error)),
+        }
+        match read_packet(&mut (&first[..]).chain(&mut event))? {
+            Packet::ProbeRequest => {
+                write_packet(&mut event, &Packet::ProbeResponse)?;
+                served.probes += 1;
+                tracing::trace!(
+                    probes = served.probes,
+                    "ptpip: answered event-channel probe"
+                );
+            }
+            Packet::Event {
+                code,
+                transaction,
+                params,
+            } => {
+                served.events += 1;
+                tracing::debug!(
+                    code = format_args!("{code:#06x}"),
+                    transaction,
+                    ?params,
+                    "ptpip: event"
+                );
+                on_event(Event {
+                    code,
+                    transaction,
+                    params,
+                });
+            }
+            // An answer to a probe the initiator never sends here; harmless.
+            Packet::ProbeResponse => {}
+            other => {
+                return Err(Error::UnexpectedPacket {
+                    expected: "Event or ProbeRequest",
+                    received: other.kind(),
+                });
+            }
+        }
     }
 }
 

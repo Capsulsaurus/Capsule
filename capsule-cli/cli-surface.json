@@ -272,6 +272,87 @@
       ]
     },
     {
+      "about": "Import straight from a camera over PTP/IP, and manage the identity cameras pair with",
+      "name": "camera",
+      "subcommands": [
+        {
+          "about": "Show the identity this client presents to cameras, creating it on first use. A camera that pairs remembers it, so it stays the same across runs",
+          "args": [
+            {
+              "help": "Rename the identity; the camera-facing GUID is kept, so paired cameras still recognise this client",
+              "id": "name",
+              "long": "name",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": true,
+              "value_names": [
+                "NAME"
+              ]
+            },
+            {
+              "help": "Print the identity as one JSON document on stdout: its GUID and name, and whether this run created it",
+              "id": "json",
+              "long": "json",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            }
+          ],
+          "name": "identity"
+        },
+        {
+          "about": "Copy every object off a camera into the library: each is received and hash-checked into a staging area under the library, then imported like a card reader's files. Nothing on the camera is changed, and an interrupted run resumes where it stopped",
+          "args": [
+            {
+              "help": "The camera's address on the network, as HOST or HOST:PORT (port 15740 when omitted); the camera shows it on its Wi-Fi or \"Remote/PC connection\" screen",
+              "id": "address",
+              "long": "address",
+              "positional": false,
+              "repeatable": false,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "HOST[:PORT]"
+              ]
+            },
+            {
+              "help": "Path to the Capsule library",
+              "id": "library",
+              "long": "library",
+              "positional": false,
+              "repeatable": false,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "PATH"
+              ]
+            },
+            {
+              "help": "Read the library passphrase from stdin instead of prompting, so imports work in scripts and CI where there is no terminal",
+              "id": "passphrase_stdin",
+              "long": "passphrase-stdin",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            },
+            {
+              "help": "Print the run as one JSON document on stdout: the camera, the identity presented to it, every object received or left on the camera and why, and the import's report",
+              "id": "json",
+              "long": "json",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            }
+          ],
+          "name": "import"
+        }
+      ]
+    },
+    {
       "about": "Review a local library: flag assets, filter by flag, sweep rejects to trash",
       "args": [
         {

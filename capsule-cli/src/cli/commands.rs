@@ -84,6 +84,11 @@ pub(crate) enum Commands {
         #[arg(long, conflicts_with = "push")]
         json: bool,
     },
+    /// Import straight from a camera over PTP/IP, and manage the identity cameras pair with
+    Camera {
+        #[command(subcommand)]
+        command: CameraCommands,
+    },
     /// Upload a local Capsule library to the server. An asset handed to another device with
     /// `capsule peer delegate` is left to that device while its hand-off is open
     Push {
@@ -384,6 +389,42 @@ pub(crate) enum SyncCommands {
         dry_run: bool,
         /// Print the run as one JSON document on stdout: the totals and each asset's answer
         /// (restored, already indexed, missing blobs, refused, or planned on a dry run)
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum CameraCommands {
+    /// Copy every object off a camera into the library: each is received and hash-checked into
+    /// a staging area under the library, then imported like a card reader's files. Nothing on
+    /// the camera is changed, and an interrupted run resumes where it stopped
+    Import {
+        /// The camera's address on the network, as HOST or HOST:PORT (port 15740 when omitted);
+        /// the camera shows it on its Wi-Fi or "Remote/PC connection" screen
+        #[arg(long, value_name = "HOST[:PORT]")]
+        address: String,
+        /// Path to the Capsule library
+        #[arg(long, value_name = "PATH")]
+        library: PathBuf,
+        /// Read the library passphrase from stdin instead of prompting, so imports
+        /// work in scripts and CI where there is no terminal.
+        #[arg(long)]
+        passphrase_stdin: bool,
+        /// Print the run as one JSON document on stdout: the camera, the identity presented to
+        /// it, every object received or left on the camera and why, and the import's report
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show the identity this client presents to cameras, creating it on first use. A camera
+    /// that pairs remembers it, so it stays the same across runs
+    Identity {
+        /// Rename the identity; the camera-facing GUID is kept, so paired cameras still
+        /// recognise this client
+        #[arg(long, value_name = "NAME")]
+        name: Option<String>,
+        /// Print the identity as one JSON document on stdout: its GUID and name, and whether
+        /// this run created it
         #[arg(long)]
         json: bool,
     },
