@@ -1602,6 +1602,45 @@ async fn the_receivers_offer_crosses_the_channel_before_the_listing() {
     );
 }
 
+/// Once an opening went — an offer, or that the receiver offers nothing (as an offer over the
+/// page ceiling degrades to) — the client waits for the listing past its I/O timeout, by
+/// [`LISTING_BUILD_ALLOWANCE`], while the serving side builds its artifact.
+#[tokio::test]
+async fn a_listing_built_after_the_opening_is_awaited_past_the_io_timeout() {
+    const IO_TIMEOUT: Duration = Duration::from_millis(50);
+    const BUILD: Duration = Duration::from_millis(250);
+    let fx = Fx::new();
+    for offer in [Some(offer_of(3)), None] {
+        let (mut origin, receiver) = channel_pair(&fx).await;
+        let receiver = receiver.with_io_timeout(IO_TIMEOUT);
+        let serving = async {
+            let read = origin.receive_offer().await.expect("the opening reads");
+            tokio::time::sleep(BUILD).await;
+            origin
+                .send(&Message::Listing {
+                    artifacts: Vec::new(),
+                })
+                .await
+                .expect("lists");
+            read
+        };
+        let opening = async {
+            match &offer {
+                Some(offer) => PeerClient::open_offering(receiver, offer).await,
+                None => PeerClient::open(receiver).await,
+            }
+        };
+        let (read, client) = tokio::join!(serving, opening);
+        assert_eq!(read, offer);
+        assert!(
+            client
+                .expect("the listing is awaited past the I/O timeout")
+                .listing()
+                .is_empty()
+        );
+    }
+}
+
 /// A pair that negotiated below [`OFFER_EXCHANGE_PROTOCOL`] exchanges no opening: the server
 /// reads no offer, the client sends none, and the next frame is the client's first request.
 #[tokio::test]

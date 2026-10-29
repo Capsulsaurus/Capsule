@@ -114,9 +114,10 @@ pub const PEERING_PROTOCOL_MIN: &str = "2026-10-23";
 /// rest of the exchange unchanged.
 pub const OFFER_EXCHANGE_PROTOCOL: &str = "2026-10-29";
 
-/// How long a [`PeerClient`] that sent an offer waits for the listing: the serving side cuts
-/// and seals its artifact from the offer before it lists, which can take far longer than one
-/// frame's I/O timeout. Added to that timeout.
+/// How long a [`PeerClient`] that sent an opening waits for the listing: the serving side cuts
+/// and seals its artifact once it has read the opening (an offer, or that the receiver offers
+/// nothing) and only then lists, which can take far longer than one frame's I/O timeout. Added
+/// to that timeout.
 pub const LISTING_BUILD_ALLOWANCE: Duration = Duration::from_mins(10);
 
 /// The bound on the whole handshake: TLS, both hellos and the hybrid check. A peer that stalls
@@ -938,7 +939,10 @@ impl PeerChannel {
     }
 
     /// The pulling side: send the opening — `offer`'s pages, or that it offers nothing — when
-    /// the pair's protocol carries one and it has not been sent. Returns whether an offer went.
+    /// the pair's protocol carries one and it has not been sent. Returns whether an opening
+    /// went: the serving side builds its listing only once it has read one, whether it offers
+    /// pages or nothing (an offer over the page ceiling degrades to nothing), so the caller
+    /// waits for the listing with [`LISTING_BUILD_ALLOWANCE`] in either case.
     async fn send_opening(&mut self, offer: Option<&Offer>) -> Result<bool, PeeringError> {
         if self.opened {
             return Ok(false);
@@ -966,7 +970,7 @@ impl PeerChannel {
             self.send_data(page).await?;
         }
         tracing::debug!(pages = pages.len(), "peering: opening sent");
-        Ok(!pages.is_empty())
+        Ok(true)
     }
 
     /// The peer the handshake verified. Every authorization on this channel is decided against
@@ -1513,8 +1517,10 @@ impl PeerClient {
     /// As [`open`](Self::open), first sending `offer` — what this device holds and its cursor —
     /// so the serving side lists an artifact cut to what this device is missing. On a channel
     /// negotiated below [`OFFER_EXCHANGE_PROTOCOL`] nothing is sent, and the peer lists what it
-    /// would have without an offer. Once an offer is sent, the listing is awaited for the I/O
-    /// timeout plus [`LISTING_BUILD_ALLOWANCE`], while the peer cuts and seals its artifact.
+    /// would have without an offer. Once an opening is sent — this offer, or nothing where the
+    /// offer exceeds [`MAX_OFFER_PAGES`] — the listing is awaited for the I/O timeout plus
+    /// [`LISTING_BUILD_ALLOWANCE`], while the peer cuts and seals its artifact; so is the
+    /// listing [`open`](Self::open) awaits on a channel that carries an opening.
     ///
     /// # Errors
     ///

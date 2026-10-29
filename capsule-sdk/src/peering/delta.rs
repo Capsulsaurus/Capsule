@@ -1,11 +1,11 @@
 //! Determining the delta: what each side is missing.
 //!
 //! Before building an artifact the two devices must agree on what to move. Peering **reuses the
-//! sync-cursor model** rather than inventing a diff: each side offers its set of held
-//! [ciphertext content addresses](capsule_core::crypto::hash::Hash32) and its cursor, and the
-//! delta is the *complement*. "What changed" is already defined by the sync feed — peering
-//! borrows that definition wholesale. Because every blob is content-addressed, dedup is free:
-//! the complement already excludes anything the receiver holds.
+//! sync-cursor model** rather than inventing a diff: each side offers the set of
+//! [addresses](capsule_core::crypto::hash::Hash32) it holds and its cursor, and the delta is
+//! the *complement*. "What changed" is already defined by the sync feed — peering borrows that
+//! definition wholesale. Because every address names an exact state, dedup is free: the
+//! complement already excludes anything the receiver holds.
 //!
 //! The addresses a sync offer carries are the **head record hashes** of the assets a device
 //! holds ([`record_hash`] of each chain's last record): an asset whose head the
@@ -62,12 +62,12 @@ pub struct OfferPage {
     pub addresses: Vec<Hash32>,
 }
 
-/// One side's offer in the delta negotiation: the content addresses it currently holds and its
-/// sync cursor high-water mark. The cursor is carried for parity with server sync (a peer only
+/// One side's offer in the delta negotiation: the addresses it currently holds and its sync
+/// cursor high-water mark. The cursor is carried for parity with server sync (a peer only
 /// offers state it has itself reconciled up to); the set is what the complement is computed over.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Offer {
-    /// The ciphertext content addresses this device holds.
+    /// The head record hashes ([`head_address`]) of the assets this device holds.
     pub addresses: BTreeSet<Hash32>,
     /// This device's sync-cursor high-water mark.
     pub cursor: u64,
