@@ -39,14 +39,15 @@ public struct CompositeCaptionStore: CaptionStore {
 
 // MARK: - ManagedCaptionStore
 
-/// The managed store's answer to captions: it has none yet.
+/// The managed store's captions: the catalog's caption register, mirrored into
+/// the asset's sidecar.
 ///
-/// The managed catalog row has no caption register, so an import has no caption
-/// to read and nowhere to write one. Reads answer `nil`, which is true. Writes
-/// throw ``CaptionStoreError/unsupported`` instead of succeeding into nothing.
-/// What this type is for is ownership: it claims imported assets, so
-/// ``CompositeCaptionStore`` never sends their captions to a store that does not
-/// hold them.
+/// It claims imported assets, so ``CompositeCaptionStore`` never sends their
+/// captions to a store that does not hold them, and writes through
+/// ``ManagedProvider/setCaption(_:for:)``. A catalog with no caption register
+/// (the core-backed one) refuses the write, and the refusal is thrown to the
+/// caller rather than swallowed, so a caption typed on such an asset is never
+/// reported saved and then lost.
 public struct ManagedCaptionStore: CaptionStore, AssetOwning {
     private let provider: ManagedProvider
 
@@ -58,14 +59,18 @@ public struct ManagedCaptionStore: CaptionStore, AssetOwning {
         await provider.owns(id)
     }
 
-    public func caption(for _: AssetID) async -> String? {
-        nil
+    public func caption(for id: AssetID) async -> String? {
+        await provider.caption(for: id)
     }
 
-    public func setCaption(_: String?, for id: AssetID) async throws {
-        CapsuleLog.assetKit.notice(
-            "caption refused for managed asset \(String(describing: id), privacy: .private): no caption register"
-        )
-        throw CaptionStoreError.unsupported
+    public func setCaption(_ caption: String?, for id: AssetID) async throws {
+        do {
+            try await provider.setCaption(caption, for: id)
+        } catch {
+            CapsuleLog.assetKit.notice(
+                "caption refused for managed asset \(String(describing: id), privacy: .private): \(String(describing: error), privacy: .public)"
+            )
+            throw error
+        }
     }
 }

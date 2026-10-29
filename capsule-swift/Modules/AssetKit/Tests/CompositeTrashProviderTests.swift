@@ -104,10 +104,98 @@ struct CompositeCaptionStoreTests {
         #expect(await store.caption(for: .managed(uuid: "import")) == "beach")
     }
 
-    @Test("the managed store refuses a caption rather than dropping it")
-    func managedRefusesWrites() async throws {
+    private static let layout = ManagedLibraryLayout(root: URL(filePath: "/capsule/Library"))
+    private static let coder = JSONSidecarCoder()
+
+    /// A managed provider over one catalogued import, with its sidecar on disk
+    /// unless `withSidecar` is false.
+    private static func makeManaged(
+        withSidecar: Bool = true
+    ) async throws -> (ManagedProvider, MockCatalog, MockFileStore, URL) {
         let catalog = MockCatalog()
-        try await catalog.insertAsset(Fixtures.catalogAsset(id: "import"))
+        let fileStore = MockFileStore()
+        let asset = Fixtures.catalogAsset(id: "import")
+        try await catalog.insertAsset(asset)
+        let captureDate = Date(timeIntervalSince1970: TimeInterval(asset.captureTimestamp))
+        let sidecarURL = layout.sidecarFile(uuid: "import", captureDate: captureDate)
+        if withSidecar {
+            let sidecar = CatalogSidecar(
+                version: 1,
+                uuid: "import",
+                assetType: "photo",
+                originalFilename: "import.jpg",
+                importTimestamp: 1,
+                modifiedTimestamp: 1,
+                hashSHA256: asset.hashSHA256,
+                fileSize: 5,
+                importerVersion: "test",
+                rawshiftVersion: "0.0.0"
+            )
+            try await fileStore.write(coder.encode(sidecar), to: sidecarURL)
+        }
+        let provider = ManagedProvider(
+            library: ManagedLibrary(layout: layout, fileStore: fileStore, catalog: catalog),
+            authGate: MockLocalAuthGate(),
+            sidecarCoder: coder
+        )
+        return (provider, catalog, fileStore, sidecarURL)
+    }
+
+    @Test("an import's caption is kept in the catalog register and its sidecar, not the primary")
+    func managedKeepsCaption() async throws {
+        let (provider, catalog, fileStore, sidecarURL) = try await Self.makeManaged()
+        let primary = FakeCaptions(owned: [])
+        let store = CompositeCaptionStore(primary: primary, secondaries: [ManagedCaptionStore(provider: provider)])
+
+        try await store.setCaption("beach", for: .managed(uuid: "import"))
+
+        #expect(await primary.captions.isEmpty)
+        #expect(await store.caption(for: .managed(uuid: "import")) == "beach")
+        #expect(await catalog.asset(id: "import")?.caption == "beach")
+        let bytes = try #require(await fileStore.data(at: sidecarURL))
+        #expect(try Self.coder.decode(bytes).caption == "beach")
+    }
+
+    @Test("clearing an import's caption clears both the register and the sidecar")
+    func managedClearsCaption() async throws {
+        let (provider, catalog, fileStore, sidecarURL) = try await Self.makeManaged()
+        let store = ManagedCaptionStore(provider: provider)
+
+        try await store.setCaption("beach", for: .managed(uuid: "import"))
+        try await store.setCaption("", for: .managed(uuid: "import"))
+
+        #expect(await store.caption(for: .managed(uuid: "import")) == nil)
+        #expect(await catalog.asset(id: "import")?.caption == nil)
+        let bytes = try #require(await fileStore.data(at: sidecarURL))
+        #expect(try Self.coder.decode(bytes).caption == nil)
+    }
+
+    @Test("a caption whose sidecar cannot be rewritten is refused, and the register is put back")
+    func managedRefusesWithoutSidecar() async throws {
+        let (provider, catalog, _, _) = try await Self.makeManaged(withSidecar: false)
+        let store = ManagedCaptionStore(provider: provider)
+
+        await #expect(throws: CatalogError.sidecar(message: "no sidecar for import")) {
+            try await store.setCaption("beach", for: .managed(uuid: "import"))
+        }
+        #expect(await catalog.asset(id: "import")?.caption == nil)
+        #expect(await store.caption(for: .managed(uuid: "import")) == nil)
+    }
+}
+
+@Suite("ManagedProvider locations")
+struct ManagedProviderLocationTests {
+    @Test("an import's GPS fix is its location; an import without one, or another store's asset, is omitted")
+    func locationsFromCatalogRows() async throws {
+        let catalog = MockCatalog()
+        var located = Fixtures.catalogAsset(id: "located")
+        located.latitude = 48.8584
+        located.longitude = 2.2945
+        var halfLocated = Fixtures.catalogAsset(id: "half")
+        halfLocated.latitude = 10
+        try await catalog.insertAsset(located)
+        try await catalog.insertAsset(halfLocated)
+        try await catalog.insertAsset(Fixtures.catalogAsset(id: "unlocated"))
         let provider = ManagedProvider(
             library: ManagedLibrary(
                 layout: ManagedLibraryLayout(root: URL(filePath: "/capsule/Library")),
@@ -116,14 +204,16 @@ struct CompositeCaptionStoreTests {
             ),
             authGate: MockLocalAuthGate()
         )
-        let primary = FakeCaptions(owned: [])
-        let store = CompositeCaptionStore(primary: primary, secondaries: [ManagedCaptionStore(provider: provider)])
 
-        await #expect(throws: CaptionStoreError.unsupported) {
-            try await store.setCaption("beach", for: .managed(uuid: "import"))
-        }
-        #expect(await primary.captions.isEmpty)
-        #expect(await store.caption(for: .managed(uuid: "import")) == nil)
+        let locations = await provider.locations(for: [
+            .managed(uuid: "located"),
+            .managed(uuid: "half"),
+            .managed(uuid: "unlocated"),
+            .managed(uuid: "not-mine"),
+            .photoKit(localIdentifier: "elsewhere"),
+        ])
+
+        #expect(locations == [.managed(uuid: "located"): AssetCoordinate(latitude: 48.8584, longitude: 2.2945)])
     }
 }
 

@@ -16,15 +16,25 @@ public actor ManagedProvider: AssetProvider, TrashProvider, AssetOwning {
 
     private let library: ManagedLibrary
     private let authGate: any LocalAuthGate
+    private let sidecarCoder: any SidecarCoding
     private var observers: [UUID: AsyncStream<AssetChange>.Continuation] = [:]
 
     /// - Parameter authGate: the SR1 fresh-local-auth adapter used to open the
     ///   Recently Deleted view. Defaults to the real `LAContext` gate; tests and
     ///   previews inject a scripted one, since no test can answer a Face ID
     ///   sheet.
-    public init(library: ManagedLibrary, authGate: any LocalAuthGate = LocalAuthenticationGate()) {
+    /// - Parameter sidecarCoder: the format a caption edit rewrites the sidecar
+    ///   in — the one the importer wrote it in. Defaults to the mock lane's
+    ///   `JSONSidecarCoder`; a catalog with no caption register refuses the edit
+    ///   before the sidecar is touched, so no other lane reaches it.
+    public init(
+        library: ManagedLibrary,
+        authGate: any LocalAuthGate = LocalAuthenticationGate(),
+        sidecarCoder: any SidecarCoding = JSONSidecarCoder()
+    ) {
         self.library = library
         self.authGate = authGate
+        self.sidecarCoder = sidecarCoder
     }
 
     public func authorizationStatus() -> AssetAuthorizationStatus {
@@ -80,6 +90,93 @@ public actor ManagedProvider: AssetProvider, TrashProvider, AssetOwning {
     /// Re-publish the timeline — called once an import has added assets.
     public func refresh() async {
         await emitReload()
+    }
+
+    /// Capture coordinates from each import's catalog row, which the importer
+    /// fills from the original's EXIF. An import with no GPS fix, or with only
+    /// half of one, is omitted.
+    public func locations(for ids: [AssetID]) async -> [AssetID: AssetCoordinate] {
+        let catalog: any AssetCatalog
+        do {
+            catalog = try await library.catalog()
+        } catch {
+            CapsuleLog.assetKit.error("managed locations unavailable: \(String(describing: error), privacy: .public)")
+            return [:]
+        }
+        var coordinates: [AssetID: AssetCoordinate] = [:]
+        for id in ids {
+            guard case let .managed(uuid) = id else { continue }
+            do {
+                guard let row = try await catalog.asset(id: uuid),
+                      let latitude = row.latitude, let longitude = row.longitude
+                else { continue }
+                coordinates[id] = AssetCoordinate(latitude: latitude, longitude: longitude)
+            } catch {
+                CapsuleLog.assetKit.error(
+                    "managed location read failed for \(uuid, privacy: .private): \(String(describing: error), privacy: .public)"
+                )
+            }
+        }
+        CapsuleLog.assetKit.trace("managed locations: \(coordinates.count) of \(ids.count) located")
+        return coordinates
+    }
+
+    // MARK: Captions
+
+    /// The caption the catalog holds for an import, or `nil` when it has none
+    /// or the asset is not this store's.
+    public func caption(for id: AssetID) async -> String? {
+        guard case let .managed(uuid) = id else { return nil }
+        do {
+            return try await library.catalog().asset(id: uuid)?.caption
+        } catch {
+            CapsuleLog.assetKit.error(
+                "managed caption read failed for \(uuid, privacy: .private): \(String(describing: error), privacy: .public)"
+            )
+            return nil
+        }
+    }
+
+    /// Set, or with `nil` (or an empty string) clear, an import's caption.
+    ///
+    /// The catalog register is written first and the sidecar second, so a
+    /// catalog that has no caption register refuses before anything is written.
+    /// When the sidecar rewrite then fails, the register is put back to what it
+    /// held, so the index never claims a caption the sidecar does not carry.
+    ///
+    /// - Throws: ``CatalogError/invalidArgument(message:)`` for an asset this
+    ///   store does not hold; the catalog's refusal; the sidecar rewrite's error.
+    public func setCaption(_ caption: String?, for id: AssetID) async throws {
+        guard case let .managed(uuid) = id else {
+            throw CatalogError.invalidArgument(message: "not a managed asset")
+        }
+        let catalog = try await library.catalog()
+        guard let row = try await catalog.asset(id: uuid) else {
+            throw CatalogError.invalidArgument(message: "no asset: \(uuid)")
+        }
+        let value = caption?.isEmpty == false ? caption : nil
+        try await catalog.setCaption(value, assetID: uuid)
+        let captureDate = Date(timeIntervalSince1970: TimeInterval(row.captureTimestamp))
+        let modified = Int64(Date().timeIntervalSince1970)
+        do {
+            try await library.updateSidecar(uuid: uuid, captureDate: captureDate, coder: sidecarCoder) {
+                $0.caption = value
+                $0.modifiedTimestamp = modified
+            }
+        } catch {
+            CapsuleLog.assetKit.error(
+                "caption sidecar write failed for \(uuid, privacy: .private), restoring the register: \(String(describing: error), privacy: .public)"
+            )
+            do {
+                try await catalog.setCaption(row.caption, assetID: uuid)
+            } catch let restoreError {
+                CapsuleLog.assetKit.fault(
+                    "caption register restore failed for \(uuid, privacy: .private): \(String(describing: restoreError), privacy: .public)"
+                )
+            }
+            throw error
+        }
+        CapsuleLog.assetKit.debug("caption \(value == nil ? "cleared" : "set") for \(uuid, privacy: .private)")
     }
 
     // MARK: TrashProvider
