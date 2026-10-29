@@ -54,7 +54,7 @@ All endpoints require a bearer token and the [protocol handshake](/design/threat
 | `POST /v1/upload` | Create a session for a declared ciphertext `size` and `hash`. Reserves the pending asset; returns `201` with `Location` and a suggested chunk size, or `200` with the current offset for an active duplicate. |
 | `HEAD /v1/upload/{id}` | Authoritative offset, declared length and status. The resumption primitive. |
 | `PATCH /v1/upload/{id}` | Append one chunk at `X-Capsule-Offset`; `204` with the new offset. |
-| `DELETE /v1/upload/{id}` | Cancel; removes the staged file, session and pending reservation. `409` while finalizing. |
+| `DELETE /v1/upload/{id}` | Cancel; removes the staged file, session and pending reservation. `409 error.upload.session_not_active` while finalizing or once terminal. |
 | `GET /v1/upload/sessions` | The **uploader's** live sessions, for resume. An unknown `?status=` is `400 error.upload.invalid_status_filter`, never ignored. |
 | `GET /v1/upload/{id}/receipt` | The session's [custody receipt](/design/transfer/durability/#custody-receipts) once `Completed`. |
 
@@ -228,7 +228,7 @@ T0 is exactly the visibility gate, so a staged asset is visible to other devices
 
 - A staged asset pins its local original until T2 is [custody-confirmed](/design/transfer/durability/#verify-before-destroy).
 - Staged and [streaming import](/design/import/pipeline/#import-upload-streaming-mode) are mutually exclusive per import; the planner rejects the combination.
-- Each tier's sessions are charged at their own creation. Deleting an awaiting-original asset cancels its pending tiers ([redaction](/design/organization/#deletion-state-machine)).
+- Each tier's sessions are charged at their own creation. Deleting an asset whose upload has not finished, an awaiting-original one included, [redacts](/design/organization/#deletion-state-machine) it before its `delete` is sent. Every open session `GET /v1/upload/sessions` lists for the asset's `asset_id` is cancelled with `DELETE /v1/upload/{id}`, and no pending tier of a trashed asset is opened. A session already finalizing answers `409 error.upload.session_not_active`. That is not a failure: its blob lands, and the `delete` sent after it supersedes the create it completes.
 - Resume re-derives the tier queue from server truth: held roles on the feed entry plus `GET /v1/upload/sessions`.
 
 Streaming import uses these same sessions unchanged, one bounded window at a time; only the drive pattern differs.

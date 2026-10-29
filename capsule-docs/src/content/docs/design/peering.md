@@ -116,7 +116,8 @@ which device to update. Artifact formats are versioned by
 3. **Ingest** through the backup restore path, **all-or-nothing per asset**: an asset applies
    only with its manifest, metadata and every blob its scope requires. A manifest behind the
    local chain head is quarantined as "peer sent stale state". **A purged asset is never
-   resurrected**: the device keeps a tombstone for every asset it has purged, and ingest
+   resurrected**: the device keeps a tombstone for every asset it has purged, its
+   [kept provenance chain](/design/filesystem/client/#desktop-library-layout), and ingest
    refuses any asset it has a tombstone for. A device that cannot read its tombstones refuses
    the ingest before it opens a session, never running it against an empty set. A deleted asset in
    [trash](/design/organization/#recycling) is not a tombstone, since a `trash-restore`

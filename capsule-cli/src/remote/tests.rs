@@ -1545,3 +1545,200 @@ async fn a_server_fault_is_a_transient_failure() {
     assert!(!error.permanent);
     assert_eq!(error.retention_until, None);
 }
+
+// ── Redaction (#994) ────────────────────────────────────────────────────
+
+/// A server holding three upload sessions — two of `asset`'s, one of another asset's — whose
+/// cancel answers `204` for `s-open` and `409 session_not_active` for `s-final`, and which
+/// applies every lifecycle op.
+async fn redaction_mock(asset: Uuid) -> (RemoteConfig, Session, Seen) {
+    let seen = Seen::default();
+    let sink = seen.clone();
+    let answer = move |line: &str| {
+        sink.lock().unwrap().push(line.to_owned());
+        let session = |id: &str, asset_id: &str, status: &str| {
+            serde_json::json!({
+                "id": id, "asset_id": asset_id, "album_id": null, "blob_role": "original",
+                "status": status, "received_bytes": 4096, "total_size": 8192,
+                "created_at": "2026-10-01T00:00:00Z", "last_progress_at": "2026-10-01T00:00:00Z",
+            })
+        };
+        match line {
+            "GET /v1/upload/sessions" => {
+                let body = serde_json::json!({ "sessions": [
+                    session("s-open", &asset.to_string(), "uploading"),
+                    session("s-elsewhere", &Uuid::now_v7().to_string(), "uploading"),
+                    session("s-final", &asset.to_string(), "waiting_for_processing"),
+                ]});
+                (200, "application/json", body.to_string())
+            }
+            "DELETE /v1/upload/s-open" => (204, "application/json", String::new()),
+            "DELETE /v1/upload/s-final" => {
+                let problem = serde_json::json!({
+                    "type": "about:blank", "status": 409, "detail": "Session not active",
+                    "code": "error.upload.session_not_active",
+                });
+                (409, "application/problem+json", problem.to_string())
+            }
+            line if line.starts_with("POST /v1/albums/") => {
+                let applied = serde_json::json!({
+                    "asset_id": asset.to_string(), "sync_seq": 9, "action": "delete",
+                    "replayed": false,
+                });
+                (200, "application/json", applied.to_string())
+            }
+            _ => (501, "application/problem+json", "{}".to_owned()),
+        }
+    };
+    let (remote, session) = remote_at(&serve_mock(answer).await);
+    (remote, session, seen)
+}
+
+/// **A delete redacts the asset's in-flight upload before the delete is sent.** Each of the
+/// asset's open sessions is cancelled, another asset's is not touched, and a session that was
+/// already finalizing (`409`) is reported as such rather than failing the delete, which is
+/// sent after it so it supersedes the create that session completes.
+#[tokio::test]
+async fn a_delete_aborts_the_assets_open_upload_sessions_before_sending_the_delete() {
+    let scratch = Scratch::new();
+    let (mut ws, asset) = trash_library(&scratch);
+    let (remote, session, seen) = redaction_mock(asset).await;
+
+    let summary = trash_with(
+        &remote,
+        &mut ws,
+        session,
+        &request(TrashAction::Delete, asset),
+    )
+    .await;
+
+    assert_eq!((summary.applied, summary.failed), (1, 0), "{summary:#?}");
+    assert_eq!(
+        summary.outcomes[0].redaction,
+        Some(TrashRedaction {
+            cancelled: 1,
+            finalizing: 1,
+            error: None,
+        })
+    );
+    let album = ws.asset(&asset).expect("held").album_id;
+    assert_eq!(
+        *seen.lock().unwrap(),
+        vec![
+            "GET /v1/upload/sessions".to_owned(),
+            "DELETE /v1/upload/s-open".to_owned(),
+            "DELETE /v1/upload/s-final".to_owned(),
+            format!("POST /v1/albums/{album}/ops"),
+        ],
+        "the sessions are aborted first, then the delete is sent once"
+    );
+    let json = serde_json::to_value(&summary).expect("serializes");
+    assert_eq!(json["outcomes"][0]["redaction"]["cancelled"], 1);
+    assert_eq!(json["outcomes"][0]["redaction"]["finalizing"], 1);
+}
+
+/// A redaction that cannot reach the session listing is reported, and the delete is still
+/// sent: this device uploads nothing more of a trashed asset either way. A restore redacts
+/// nothing.
+#[tokio::test]
+async fn a_failed_redaction_is_reported_and_the_delete_still_sent() {
+    let scratch = Scratch::new();
+    let (mut ws, asset) = trash_library(&scratch);
+    let (remote, session, seen) = ops_mock(
+        200,
+        serde_json::json!({
+            "asset_id": asset.to_string(),
+            "sync_seq": 7,
+            "action": "delete",
+            "replayed": false,
+        }),
+    )
+    .await;
+
+    let summary = trash_with(
+        &remote,
+        &mut ws,
+        session.clone(),
+        &request(TrashAction::Delete, asset),
+    )
+    .await;
+    assert_eq!(summary.outcomes[0].status, TrashStatus::Applied);
+    let redaction = summary.outcomes[0].redaction.as_ref().expect("a redaction");
+    assert!(redaction.error.is_some(), "{redaction:?}");
+    assert_eq!((redaction.cancelled, redaction.finalizing), (0, 0));
+    assert!(
+        seen.lock()
+            .unwrap()
+            .last()
+            .is_some_and(|line| line.starts_with("POST /v1/albums/")),
+        "the delete was sent"
+    );
+
+    let restored = trash_with(
+        &remote,
+        &mut ws,
+        session,
+        &request(TrashAction::TrashRestore, asset),
+    )
+    .await;
+    assert_eq!(
+        restored.outcomes[0].redaction, None,
+        "a restore redacts nothing"
+    );
+}
+
+/// **A push skips a trashed asset.** Its upload is redacted: nothing of it is planned or sent,
+/// it has no outcome, and the summary counts it apart. A dry run reports it the same way.
+#[tokio::test]
+async fn a_trashed_asset_is_skipped_by_a_push() {
+    for dry_run in [false, true] {
+        let EscrowRun {
+            _scratch,
+            mut ws,
+            other_album,
+            held_back,
+            other,
+            mock,
+            remote,
+            session,
+            ..
+        } = escrow_run().await;
+        ws.soft_delete(&other, 30).expect("deletes");
+
+        let summary = push_with(
+            &remote,
+            &mut ws,
+            session,
+            PushOptions {
+                dry_run,
+                ..PushOptions::default()
+            },
+            PushRun::default(),
+        )
+        .await
+        .expect("the run reaches its assets");
+
+        assert_eq!(summary.trashed_assets, 1, "{summary:#?}");
+        assert_eq!(summary.assets, 2);
+        let ids: Vec<&str> = summary
+            .outcomes
+            .iter()
+            .map(|o| o.asset_id.as_str())
+            .collect();
+        assert_eq!(ids, vec![held_back.to_string()], "dry run: {dry_run}");
+        let json = serde_json::to_value(&summary).expect("serializes");
+        assert_eq!(json["trashed_assets"], 1);
+        assert!(
+            custody_line(&summary).contains("Skipped 1 in the trash"),
+            "{}",
+            custody_line(&summary)
+        );
+        assert!(
+            !mock.seen.lock().unwrap().iter().any(|line| {
+                (line.contains(&other_album.to_string()) || line.contains(&other.to_string()))
+                    && !line.contains("/escrow/")
+            }),
+            "nothing of the trashed asset was sent (dry run: {dry_run})"
+        );
+    }
+}
