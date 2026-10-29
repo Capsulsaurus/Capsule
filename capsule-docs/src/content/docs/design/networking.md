@@ -40,3 +40,7 @@ Hostile paths (captive portals, congested carriers, the Great Firewall) MUST deg
 - Under `adverse`, fetches use bounded `Range` windows and uploads the minimum chunk tier.
 - Racing happens only at dial (Happy Eyeballs v2).
 - Persistent bad WAN: [delegation](/design/peering/#delegation) hands originals to a better-connected device of the same user; the remedy is in-region self-hosting, not circumvention.
+
+## Packet Marking
+
+Capsule sets no DSCP value or IP traffic class on its own sockets. No correctness or throughput property depends on marking: most access networks strip or rewrite the field, so it carries no meaning end to end. Where a LAN or Wi-Fi network does honour it, it can only lower the priority of bulk transfers relative to other traffic, not speed them up.

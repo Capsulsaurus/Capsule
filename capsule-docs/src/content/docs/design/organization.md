@@ -57,6 +57,14 @@ Scope {
 
 v1 ships only explicit pick → pointer → derived album; the override and default rows are deferred with the library-settings document.
 
+### Album Order and Recency
+
+Every client lists albums in one order. The order is computed once, in Rust, and no client sorts albums on its own. The default is **most recent asset first**: an album ranks by the latest [effective](/design/metadata/#as-imported-and-user-values) capture time among its assets that are neither hidden nor trashed. An album with no such asset ranks by its own creation time. Ties are broken by ascending `album_id`.
+
+- **Derived, never stored.** Recency is a query over the [local index](/design/filesystem/client/#local-index-staleness), so imports, moves, deletes, restores and capture-date edits change it with nothing extra to keep in step.
+- **Not on the server.** Capture times are inside the encrypted metadata, so the server cannot compute album recency and is never asked to.
+- **No viewing history.** Albums record no viewing or opening time, synced or on the server, because that would put viewing habits into metadata that leaves the device. Any state a later "recently viewed" view needs is per-device and local only.
+
 ### System & Smart Albums (Views)
 
 Views are computed client-side from the [local index](/design/filesystem/client/#local-index-staleness). A view is **not** an MLS group, holds **no** AMK, owns no assets and is **not** a sharing boundary. The [aggregated federated album](/design/federation/#federated-shared-albums-aggregated-albums) is a view.
@@ -179,6 +187,14 @@ A **trinary flag per asset** — `pick | neutral | reject` — in the sidecar's 
 - **Groups.** A stack has no flag of its own; its state is **derived** from members (all-rejected, any-pick, else mixed). Flagging a collapsed stack writes each member atomically like any [stack edit](#asset-stacking).
 - **Sync.** Converges like every LWW field ([grouping convergence](/design/metadata/#grouping-convergence-requirement)).
 
+### Culling UI
+
+Culling is a high-volume, repetitive pass, so every native client's culling surface is built for speed without a pointer and for use without sight:
+
+- **Keyboard first.** With a hardware keyboard attached, the whole pass works without a pointer: one key each for pick, neutral and reject, next and previous asset, expand and collapse a stack, and the reject sweep. A verdict advances to the next asset. Bindings are discoverable in the platform's usual way (the menu bar and the ⌘ overlay on Apple platforms, the keyboard shortcuts helper on Android).
+- **Accessible.** Each verdict is also an accessibility action on the focused asset (VoiceOver and TalkBack custom actions), with no gesture as its only path. The asset's current flag and its position in the pass are announced. Flag state is never shown by colour alone.
+- **Audited before it ships.** A culling surface passes each platform's full automated accessibility audit with no exclusions: `performAccessibilityAudit(for: .all)` on Apple platforms, and the Compose UI accessibility checks on Android.
+
 ## Hidden Assets
 
 A `hidden` asset (sidecar LWW, wire-absent = visible) is excluded from default views — timeline, search, system views — and appears only in the Hidden view behind the fresh-local-auth gate ([Local Gallery — SR1](/design/local-gallery/)). Hiding is view-layer only — not deletion, not access control; the asset keeps its album and keeps syncing.
@@ -186,6 +202,21 @@ A `hidden` asset (sidecar LWW, wire-absent = visible) is excluded from default v
 ## Recycling
 
 Delete defaults to trash (a soft delete, synced as a metadata change). A hard delete happens only when the user empties trash, retention expires, or the user requests immediate deletion. Deletion is a lifecycle action like any other ([Provenance](/design/cryptography/provenance/#provenance-of-library-modifications), [The Closed Action Set](/design/authorization/#the-closed-action-set)).
+
+### Deletion State Machine
+
+Deletion is owned entirely by `capsule-library`'s `Workspace` and reaches the apps through the FFI as verbs: delete, restore, purge and list trash. An app holds no deletion or retention logic of its own, and never writes the index row directly. Live and Trashed are derived from the asset's signed chain, never stored on their own, so rebuilding the index reproduces them. Purged is the absence of the asset's bytes, with its chain kept.
+
+```text
+Live ──delete──▶ Trashed ──restore (before retention_until)──▶ Live
+                    │
+                    └──purge (emptied, expired, or immediate)──▶ Purged
+```
+
+- **Delete** appends a signed `delete` record carrying `retention_until`, then updates the index from it. A delete that writes only the index is not a delete: it never syncs, and a rebuild brings the asset back.
+- **Expiry** is judged by the signed `retention_until`, on the device as on the server, never by when the local row changed. The device judges by its own clock, floored as in [Peering — Sync](/design/peering/#sync).
+- **Purge** before `retention_until` (emptying the trash, or immediate deletion) first appends the signed shorter-retention re-issue the [retention window](#retention-window) requires, so the chain and the server agree that the purge is due. Purge then removes the original, every derivative and cache entry, and the index row. The provenance file stays as the tombstone ([Filesystem — Client](/design/filesystem/client/)).
+- **An upload in flight is redacted.** Deleting an asset whose upload has not finished aborts its open upload sessions, drops its pending [tiers](/design/transfer/upload/#upload-tiering-staged-uploads), and removes it from the upload queue, so this device sends no further byte of it. The `delete` record still syncs like any other delete. If the asset's create reaches the server anyway, because it had already finalized, or because a [delegate](/design/peering/#delegation) or another peer holding the bundle uploads it, the delete supersedes it there. A delete held for a delegated create is sent once the create lands. Redaction never discards the local original before the delete's own retention runs out.
 
 ### Retention Window
 

@@ -17,6 +17,17 @@ Each asset has a ladder of representations, cheapest first:
 
 The per-library [synchronization scope](/design/sync/#synchronization-scope) sets which tiers are fetched eagerly; anything above it is fetched lazily. The original is never fetched speculatively. The client looks up its cache by content hash before any request, so a representation shared between assets is fetched once.
 
+### Render Ladder
+
+What a client *shows* follows the same ladder, extended with what is already on the device. The order is computed once, in Rust, and reaches every app through the FFI; apps render the representation it names and keep no ladder of their own. From least to most faithful:
+
+1. **LQIP** from the metadata blob, or its dominant colour when the LQIP cannot be decoded ([LQIP](/design/thumbnails/#lqip)).
+2. **Thumbnail**: the encoded tier, or an [embedded preview](/design/thumbnails/#embedded-previews) of at least thumbnail size.
+3. **Preview**: the encoded tier, or an embedded preview of at least Preview size on the device that holds the original, until an encoded Preview exists.
+4. **Original**, decoded.
+
+A surface asks for the rung its intent needs (the grid asks for Thumbnail, the single-asset view for Preview) and is shown the best rung held at or below it at once. The view then **upgrades in place** as a better rung arrives, whether it is generated on the device or fetched from the server, and never shows a blank while it waits. It never downgrades a rung it has already shown, except through the [fallback ladder](#fallback-ladder).
+
 ## Blob Access
 
 `GET /v1/blob/{hash}` is **membership-scoped** (`capsule-server::serve::authority`):

@@ -226,7 +226,18 @@ T0 is exactly the visibility gate, so a staged asset is visible to other devices
 
 - A staged asset pins its local original until T2 is [custody-confirmed](/design/transfer/durability/#verify-before-destroy).
 - Staged and [streaming import](/design/import/pipeline/#import-upload-streaming-mode) are mutually exclusive per import; the planner rejects the combination.
-- Each tier's sessions are charged at their own creation. Deleting an awaiting-original asset cancels its pending tiers.
+- Each tier's sessions are charged at their own creation. Deleting an awaiting-original asset cancels its pending tiers ([redaction](/design/organization/#deletion-state-machine)).
 - Resume re-derives the tier queue from server truth: held roles on the feed entry plus `GET /v1/upload/sessions`.
 
 Streaming import uses these same sessions unchanged, one bounded window at a time; only the drive pattern differs.
+
+## Queueing Across Servers
+
+The upload queue holds a device's data-heavy work (originals, video, derivatives). It is the client's queue, not the server's. When a device is signed in to more than one server (for example, two accounts on different self-hosted servers), the queue holds work for each of them and keeps four properties:
+
+- **Per-server lanes.** The queue is keyed by server. Each lane has its own sessions, backoff, negotiated [protocol window](/design/versioning/#update-policy) and `Retry-After` state, so a `429`, an outage or a stall at one server never delays work bound for another.
+- **One shared, bounded memory budget.** All lanes draw on one device-wide byte budget, and each open session holds at most one chunk window. Adding a server divides the budget and never multiplies it. A lane that makes no progress gives up its share, rather than holding buffers it cannot send.
+- **Fair, preemptible scheduling.** Lanes are served round-robin, and within a lane the [tier order](#upload-tiering-staged-uploads) holds. One lane's T0 work is never starved by another lane's T2 originals.
+- **Rebuildable state.** Each lane re-derives what remains from its own server's truth on resume, as a single-server queue does. Losing the queue loses no work.
+
+A [delegation](/design/peering/#delegation) hand-off is not a lane: the delegate pulls the bundle over the peer channel and uploads it from its own queue. Every album has one home server ([Federation](/design/federation/)), so an asset is only ever queued for the server of the account that owns it.
