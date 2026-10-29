@@ -1437,6 +1437,30 @@ async fn an_applied_delete_reports_its_feed_position() {
     );
 }
 
+/// Held bytes no resend can fix — not an op, or an op naming no album — are refused for good
+/// before anything is sent.
+#[tokio::test]
+async fn bytes_that_are_not_a_sendable_op_are_refused_for_good() {
+    let scratch = Scratch::new();
+    let (mut ws, asset) = trash_library(&scratch);
+    ws.soft_delete(&asset, 30).expect("deleted");
+    let op = delete_op(&ws, &asset).expect("encodes").expect("a delete");
+    let mut request: capsule_sdk::rest::types::OpRequest =
+        serde_json::from_slice(&op).expect("an op");
+    request.manifest_envelope.album_id = None;
+    let albumless = serde_json::to_vec(&request).expect("encodes");
+    let (remote, session, seen) = ops_mock(500, serde_json::json!({})).await;
+
+    for bytes in [b"not an op".to_vec(), albumless] {
+        let failure = send_op(&remote, session.clone(), &bytes)
+            .await
+            .expect_err("refused");
+        assert_eq!(failure.kind, "not_an_op");
+        assert!(failure.permanent);
+    }
+    assert!(seen.lock().unwrap().is_empty(), "nothing was sent");
+}
+
 /// A server fault is not a judgement of the op: it fails the asset without being permanent,
 /// so a re-run resends the same head.
 #[tokio::test]

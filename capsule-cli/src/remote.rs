@@ -2195,13 +2195,18 @@ pub(crate) async fn send_op(
     session: Session,
     op: &[u8],
 ) -> Result<OpApplied, OpFailure> {
-    let request: capsule_sdk::rest::types::OpRequest =
-        serde_json::from_slice(op).map_err(|error| OpFailure {
-            kind: "not_an_op",
-            code: None,
-            message: format!("the held op does not parse: {error}"),
-            permanent: true,
-        })?;
+    let not_an_op = |message: String| OpFailure {
+        kind: "not_an_op",
+        code: None,
+        message,
+        permanent: true,
+    };
+    let request: capsule_sdk::rest::types::OpRequest = serde_json::from_slice(op)
+        .map_err(|error| not_an_op(format!("the held op does not parse: {error}")))?;
+    // Checked here as well as in the SDK so that bytes no resend can fix stay permanent.
+    if request.manifest_envelope.album_id.is_none() {
+        return Err(not_an_op("the held op names no album".to_owned()));
+    }
     let client = AlbumClient::new(AlbumTransport::with_session(
         session,
         remote.albums_endpoint.clone(),
