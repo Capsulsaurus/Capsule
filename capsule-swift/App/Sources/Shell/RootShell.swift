@@ -55,6 +55,10 @@ struct RootShell: View {
             }
         }
         .environment(router)
+        // Every tap in the scene's window opens an `inputToFrame` signpost interval that closes
+        // once its answering frame is drawn; the parity benchmark reads it. Signposts cost
+        // nothing unless a trace is recording, so the probe is installed in every build.
+        .background { InputToFrameProbe().accessibilityHidden(true) }
         // One tint for the whole scene. Set here rather than per screen because
         // an accent is a property of the app, and thirty screens each choosing
         // their own is how an app ends up with three blues.
