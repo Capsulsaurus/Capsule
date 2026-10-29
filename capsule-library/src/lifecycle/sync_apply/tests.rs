@@ -719,3 +719,63 @@ fn a_head_hashed_from_a_stream_applies_as_the_entry_does() {
         ))
     );
 }
+
+/// A purge's tombstone refuses every later feed entry for the asset — its original `create`
+/// and the purge's own `delete` alike — before and after a reopen, while an entry for an asset
+/// that was not purged still applies. The tombstone itself is left as it was, so the `delete`
+/// the purge signed can still be resent.
+#[test]
+fn a_purged_asset_refuses_every_feed_entry_across_a_reopen() {
+    let lib = TempDir::new().unwrap();
+    let src = TempDir::new().unwrap();
+    let (mut ws, album, gone, gone_create) = seeded(&lib, &src);
+    let other = src.path().join("other.jpg");
+    std::fs::write(&other, b"\xFF\xD8\xFF another asset").unwrap();
+    let kept = ws.import_asset(album, &other).unwrap();
+    let bundle = ws.upload_bundle(&kept).unwrap();
+    let kept_create = Wire {
+        manifest_cbor: bundle.provenance_blob.clone(),
+        metadata_blob: bundle.metadata_blob.clone(),
+        ciphertext: bundle.original.to_vec().unwrap(),
+    };
+
+    ws.soft_delete(&gone, 30).unwrap();
+    let reissue = ws
+        .purge(&gone)
+        .unwrap()
+        .reissue
+        .expect("an early purge re-signs its delete");
+    let gone_delete = Wire {
+        manifest_cbor: cbor::to_canonical_vec(&reissue).unwrap(),
+        metadata_blob: Vec::new(),
+        ciphertext: gone_create.ciphertext.clone(),
+    };
+
+    let check = |ws: &Workspace| {
+        for (wire, head) in [
+            (&gone_create, None),
+            (&gone_delete, reissue.prior_provenance_hash),
+        ] {
+            assert_eq!(
+                ws.apply_remote_entry(entry(album, wire, head)).unwrap(),
+                SyncApplyOutcome::Quarantined(QuarantineReason::Purged(gone)),
+                "a purged asset's tombstone refuses the entry"
+            );
+        }
+        let outcome = ws
+            .apply_remote_entry(entry(album, &kept_create, None))
+            .unwrap();
+        assert_eq!(
+            outcome.facts().map(|facts| facts.asset_id),
+            Some(kept),
+            "an asset that was not purged still applies"
+        );
+        assert_eq!(ws.tombstones(), std::collections::BTreeSet::from([gone]));
+        assert_eq!(ws.purge_record(&gone), Some(&reissue));
+    };
+    check(&ws);
+    drop(ws);
+
+    let ws = Workspace::open(lib.path(), b"passphrase", crate::lifecycle::FAST_PARAMS).unwrap();
+    check(&ws);
+}

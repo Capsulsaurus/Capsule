@@ -2327,6 +2327,33 @@ fn ffi_trash_verbs_delete_restore_and_purge_through_signed_records() {
     );
 }
 
+/// A feed entry for an asset this device purged is refused with the stable `Purged` code and
+/// the asset id as its detail, so a catalog never upserts a purged asset back.
+#[test]
+fn ffi_sync_apply_refuses_an_asset_this_device_purged() {
+    let lib = tempfile::TempDir::new().unwrap();
+    let blobs = tempfile::TempDir::new().unwrap();
+    let workspace = enroll(lib.path());
+    let album = workspace.create_album("Trip".into()).unwrap();
+    let synced = synced_original(&workspace, &album, original_plaintext(1024), blobs.path());
+    let apply = || {
+        workspace
+            .apply_sync_entry_from_file(synced.head.clone(), path_string(&synced.ciphertext_path))
+            .unwrap()
+    };
+    assert!(matches!(apply(), FfiSyncApplyOutcome::Applied { .. }));
+
+    workspace.delete_asset(synced.asset.clone(), 30).unwrap();
+    workspace.purge_asset(synced.asset.clone()).unwrap();
+    match apply() {
+        FfiSyncApplyOutcome::Quarantined { reason, detail } => {
+            assert_eq!(reason, "Purged");
+            assert_eq!(detail, Some(synced.asset.clone()));
+        }
+        other => panic!("expected the tombstone to refuse the entry, got {other:?}"),
+    }
+}
+
 /// A delete whose window has already closed is expired, refuses a restore with the server's
 /// own code and floor, and purges without a re-issue.
 #[test]

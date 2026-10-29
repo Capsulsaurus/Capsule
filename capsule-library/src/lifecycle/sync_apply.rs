@@ -14,7 +14,8 @@
 //!
 //! 1. decode the **provenance record** from the opaque canonical CBOR the feed carries
 //!    verbatim (never re-encoded — re-encoding would detach the manifest inside it from its
-//!    signatures), and check the record's `prior_provenance_hash` against the manifest's;
+//!    signatures), check the record's `prior_provenance_hash` against the manifest's, and
+//!    refuse an asset this workspace purged (its tombstone, [`Workspace::tombstones`]);
 //! 2. run [`verify_asset`] against this workspace's device directory, the album's attested
 //!    authority, and the caller's local provenance head;
 //! 3. bind the sealed metadata blob to the manifest (content address, then AEAD open under the
@@ -263,6 +264,11 @@ pub enum QuarantineReason {
     /// identity key — the metadata was authored by something that does not hold this account's
     /// IK.
     SidecarSignature,
+    /// This workspace purged the asset: its tombstone ([`Workspace::tombstones`]) refuses every
+    /// later entry for it, whatever the entry says, so a feed cannot revive a purged asset. Not a
+    /// verdict on the entry's authenticity — nothing past the record's decode was checked. The
+    /// purge's own `delete` ([`Workspace::purge_record`]) is unaffected and can still be sent.
+    Purged(Uuid),
 }
 
 /// The verified facts one remote entry contributes to the receiving catalog.
@@ -362,7 +368,7 @@ impl Workspace {
     #[tracing::instrument(skip_all, fields(album_id = %entry.album_id))]
     pub fn apply_remote_head(&self, entry: RemoteHead<'_>) -> Result<SyncApplyOutcome> {
         use QuarantineReason::{
-            Binding, LegacyInheritedDevice, MalformedManifest, MalformedSidecar, Rejected,
+            Binding, LegacyInheritedDevice, MalformedManifest, MalformedSidecar, Purged, Rejected,
             SidecarSignature, UnknownAlbum, UnsupportedRecordVersion,
         };
 
@@ -412,6 +418,16 @@ impl Workspace {
                 "record names asset {} but its manifest names {}",
                 record.asset_id, record.manifest.core.file_id
             ))));
+        }
+        // A purged asset's tombstone outranks anything a feed says about it: checked before the
+        // album or the chokepoint, so no later entry, however well signed, revives it.
+        if self.purged.contains_key(&record.asset_id) {
+            tracing::warn!(
+                asset_id = %record.asset_id,
+                action = ?record.manifest.core.action,
+                "sync-apply: the asset was purged here; its tombstone refuses the entry"
+            );
+            return Ok(SyncApplyOutcome::Quarantined(Purged(record.asset_id)));
         }
         let manifest: AssetManifest = record.manifest;
         let core = manifest.core.clone();

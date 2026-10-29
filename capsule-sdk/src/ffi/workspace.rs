@@ -607,9 +607,10 @@ pub enum FfiSyncApplyOutcome {
     Quarantined {
         /// A stable code, dotted where a sub-reason applies — e.g. `Rejected.ForgedChain`,
         /// `Binding.BlobHashMismatch`, `SidecarSignature`, `LegacyInheritedDevice` (a pre-fix
-        /// continuation attributed to the wrong device of the same account; not a forgery).
+        /// continuation attributed to the wrong device of the same account; not a forgery),
+        /// `Purged` (this device purged the asset; its tombstone refuses every later entry).
         reason: String,
-        /// English detail, when the refusal carries one (a parse message, an album id).
+        /// English detail, when the refusal carries one (a parse message, an album or asset id).
         detail: Option<String>,
     },
 }
@@ -654,6 +655,9 @@ impl From<SyncApplyOutcome> for FfiSyncApplyOutcome {
                         ("MalformedSidecar".to_string(), Some(detail))
                     }
                     QuarantineReason::SidecarSignature => ("SidecarSignature".to_string(), None),
+                    QuarantineReason::Purged(asset) => {
+                        ("Purged".to_string(), Some(asset.to_string()))
+                    }
                 };
                 Self::Quarantined { reason, detail }
             }
