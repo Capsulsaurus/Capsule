@@ -384,6 +384,27 @@ fn rep(uuid: &str, tier: &str, bytes: i64, last: i64) -> CachedRepresentationRow
     }
 }
 
+#[test]
+fn purge_asset_drops_the_row_its_tags_and_its_cache_rows_only() {
+    let db = DatabaseDriver::open_in_memory().unwrap();
+    for (uuid, hash) in [("gone", "a"), ("kept", "b")] {
+        db.insert_asset(&make_asset(uuid, &hash.repeat(64)))
+            .unwrap();
+        db.replace_asset_tags(uuid, &["beach".to_string()]).unwrap();
+        db.upsert_representation(&rep(uuid, "thumbnail", 100, 10))
+            .unwrap();
+    }
+
+    db.purge_asset("gone").unwrap();
+
+    assert!(db.find_by_uuid("gone").unwrap().is_none());
+    assert!(db.tags_for("gone").unwrap().is_empty());
+    assert!(db.representations_for("gone").unwrap().is_empty());
+    assert!(db.find_by_uuid("kept").unwrap().is_some());
+    assert_eq!(db.tags_for("kept").unwrap(), vec!["beach".to_string()]);
+    assert_eq!(db.representations_for("kept").unwrap().len(), 1);
+}
+
 fn evicted_ids(rows: &[CachedRepresentationRow]) -> Vec<&str> {
     rows.iter().map(|r| r.uuid.as_str()).collect()
 }

@@ -10,8 +10,10 @@
 //!   the signed [`SidecarV1`], and gate on `verify_asset == Accept`.
 //! - [`tag_add`](Workspace::tag_add) / [`set_caption`](Workspace::set_caption) — CRDT edits
 //!   emitting a `metadata-update` provenance record.
-//! - [`soft_delete`](Workspace::soft_delete) / [`restore`](Workspace::restore) — `delete`
-//!   (with a signed retention window) and `trash-restore` lifecycle records.
+//! - [`soft_delete`](Workspace::soft_delete) / [`restore`](Workspace::restore) /
+//!   [`purge`](Workspace::purge) — `delete` (with a signed retention window) and
+//!   `trash-restore` lifecycle records, and the hard delete, each judged by the signed
+//!   `retention_until`.
 //! - [`export_backup`](Workspace::export_backup) / [`import_backup`](Workspace::import_backup)
 //!   — the portable artifact round-trip; the client stores plaintext, so ciphertext is
 //!   regenerated deterministically from the manifest's recorded nonce prefix.
@@ -75,6 +77,7 @@ pub use self::enrollment::{
     EnrollmentPayloadError, InitiatorKeys, MAX_ENROLLMENT_PAYLOAD_CHARS, enrollment_safety_code,
 };
 pub use self::open::HardwareDekBinding;
+pub use self::organize::{PurgeOutcome, TrashEntry};
 pub use self::reseal::{ResealOutcome, ResealRefusal};
 pub use self::sync_apply::{
     QuarantineReason, RemoteAssetFacts, RemoteEntry, RemoteHead, RemoteOriginal, SyncApplyOutcome,
@@ -97,6 +100,18 @@ pub enum LifecycleError {
     /// Unknown album / asset id.
     #[error("not found: {0}")]
     NotFound(String),
+    /// A restore or purge named an asset that is not in the trash. Nothing was written.
+    #[error("asset {0} is not in the trash")]
+    NotInTrash(Uuid),
+    /// A `trash-restore` at or after the signed `retention_until` of the asset's `delete`
+    /// record. Nothing was written; the asset stays in the trash until it is purged.
+    #[error("asset {asset_id}'s retention window closed at {retention_until}")]
+    RetentionElapsed {
+        /// The asset the restore was asked for.
+        asset_id: Uuid,
+        /// The signed retention floor the restore came too late for (RFC 3339).
+        retention_until: String,
+    },
     /// An asset failed its own `verify_asset` self-check (a bug — should never happen).
     #[error("verify_asset self-check failed: {0:?}")]
     SelfVerify(VerifyOutcome),

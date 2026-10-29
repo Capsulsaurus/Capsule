@@ -406,11 +406,18 @@ impl DatabaseDriver {
         Ok(changed > 0)
     }
 
-    /// Permanently remove an asset row. The on-disk file is the caller's concern.
+    /// Permanently remove an asset's rows — its `assets` row, its indexed tags and its cached
+    /// representations — in one transaction. The on-disk files are the caller's concern
+    /// (`Workspace::purge` removes them first).
     pub fn purge_asset(&self, uuid: &str) -> Result<(), rusqlite::Error> {
-        self.conn
-            .execute("DELETE FROM assets WHERE uuid = ?1", params![uuid])?;
-        Ok(())
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute("DELETE FROM asset_tags WHERE uuid = ?1", params![uuid])?;
+        tx.execute(
+            "DELETE FROM cached_representations WHERE uuid = ?1",
+            params![uuid],
+        )?;
+        tx.execute("DELETE FROM assets WHERE uuid = ?1", params![uuid])?;
+        tx.commit()
     }
 
     // ── Albums ───────────────────────────────────────────────────────────────

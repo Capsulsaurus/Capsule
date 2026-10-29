@@ -727,6 +727,7 @@ impl Workspace {
         }
         let mut restored = 0usize;
         let mut skipped = 0usize;
+        let mut purged = 0usize;
         for entry in WalkDir::new(&media)
             .into_iter()
             .filter_map(std::result::Result::ok)
@@ -745,6 +746,13 @@ impl Workspace {
                     tracing::trace!(asset_id = %asset.asset_id, album_id = %asset.album_id, "asset restored");
                     self.assets.insert(asset.asset_id, asset);
                 }
+                // A purge keeps the chain and removes the sidecar and the original
+                // (`Workspace::purge`): a chain with no sidecar beside it is that record, not
+                // damage.
+                Err(_) if !path.with_file_name(format!("{stem}.cbor")).exists() => {
+                    purged += 1;
+                    tracing::trace!(provenance = %path.display(), "workspace open: purged asset; only its provenance chain is kept");
+                }
                 Err(e) => {
                     skipped += 1;
                     tracing::warn!(
@@ -758,6 +766,7 @@ impl Workspace {
         tracing::info!(
             restored,
             skipped,
+            purged,
             "workspace open: assets restored from disk"
         );
 
