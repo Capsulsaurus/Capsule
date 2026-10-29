@@ -1,14 +1,15 @@
 use std::collections::VecDeque;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use jiff::SignedDuration;
 
 use super::*;
-use crate::counter::{CounterStore, InMemoryCounters, budgets};
+use crate::counter::{Budget, CounterStore, InMemoryCounters, budgets};
 use crate::federation::pull::{BACKOFF_FLOOR, InMemoryPullJobs, PULL_INTERVAL};
 use crate::federation::{InMemoryPeers, PeerId};
-use crate::store::AlbumId;
 use crate::store::memory::ManualClock;
+use crate::store::{AlbumId, StoreError};
 
 /// Jitter that always draws the top of its bound, so every interval is its ceiling.
 #[derive(Debug)]
@@ -17,6 +18,74 @@ struct Highest;
 impl Jitter for Highest {
     fn below(&self, bound: u64) -> u64 {
         bound.saturating_sub(1)
+    }
+}
+
+/// Jitter that always draws zero, so a failed job is due again at once.
+#[derive(Debug)]
+struct Lowest;
+
+impl Jitter for Lowest {
+    fn below(&self, _bound: u64) -> u64 {
+        0
+    }
+}
+
+/// The in-memory counters, with the CPU budget's charges, or its reads once it has been charged,
+/// failing on demand. Every other key passes through untouched.
+#[derive(Debug, Default)]
+struct Faulty {
+    inner: InMemoryCounters,
+    fail_cpu_charges: AtomicBool,
+    fail_cpu_peeks_after_charge: AtomicBool,
+    cpu_charged: AtomicBool,
+}
+
+impl Faulty {
+    fn unavailable<'a>() -> StoreFuture<'a, Verdict> {
+        Box::pin(async {
+            Err(StoreError::Unavailable {
+                store: "counter",
+                detail: "a scripted outage".to_owned(),
+            })
+        })
+    }
+}
+
+impl CounterStore for Faulty {
+    fn charge<'a>(
+        &'a self,
+        key: &'a CounterKey,
+        units: u32,
+        budget: Budget,
+        at: Timestamp,
+    ) -> StoreFuture<'a, Verdict> {
+        if matches!(key, CounterKey::PeerPullCpu(_)) {
+            if self.fail_cpu_charges.load(Ordering::SeqCst) {
+                return Self::unavailable();
+            }
+            self.cpu_charged.store(true, Ordering::SeqCst);
+        }
+        self.inner.charge(key, units, budget, at)
+    }
+
+    fn peek<'a>(
+        &'a self,
+        key: &'a CounterKey,
+        budget: Budget,
+        at: Timestamp,
+    ) -> StoreFuture<'a, Verdict> {
+        if matches!(key, CounterKey::PeerPullCpu(_))
+            && self.fail_cpu_peeks_after_charge.load(Ordering::SeqCst)
+            && self.cpu_charged.load(Ordering::SeqCst)
+        {
+            return Self::unavailable();
+        }
+        self.inner.peek(key, budget, at)
+    }
+
+    fn reset<'a>(&'a self, key: &'a CounterKey) -> StoreFuture<'a, ()> {
+        self.inner.reset(key)
     }
 }
 
@@ -96,7 +165,7 @@ struct Rig {
     clock: ManualClock,
     jobs: Arc<InMemoryPullJobs>,
     peers: Arc<InMemoryPeers>,
-    counters: Arc<InMemoryCounters>,
+    counters: Arc<Faulty>,
     puller: Arc<Scripted>,
     worker: PullWorker,
     job: JobKey,
@@ -108,11 +177,15 @@ fn start() -> Timestamp {
 
 impl Rig {
     fn new() -> Self {
+        Self::with_jitter(Arc::new(Highest))
+    }
+
+    fn with_jitter(jitter: Arc<dyn Jitter>) -> Self {
         let clock = ManualClock::new(start());
         let shared: Arc<dyn Clock> = Arc::new(clock.clone());
         let jobs = Arc::new(InMemoryPullJobs::new());
         let peers = Arc::new(InMemoryPeers::new());
-        let counters = Arc::new(InMemoryCounters::new());
+        let counters = Arc::new(Faulty::default());
         let puller = Arc::new(Scripted::default());
         let job = JobKey::new(PeerId::new(PEER), AlbumId::new("album-1"));
         let worker = PullWorker::with_holder(
@@ -123,7 +196,7 @@ impl Rig {
                 peers: peers.clone(),
                 counters: CounterContext::new(counters.clone(), shared.clone()),
                 clock: shared,
-                jitter: Arc::new(Highest),
+                jitter,
             },
             "replica-a",
         );
@@ -394,6 +467,81 @@ async fn a_sub_millisecond_validation_still_costs_a_millisecond() {
         Verdict::Admitted {
             remaining: budget.limit - 1
         }
+    );
+}
+
+#[tokio::test]
+async fn a_pull_that_overruns_a_partly_used_cpu_window_spends_the_rest_of_it() {
+    let rig = Rig::new();
+    let cpu = CounterKey::PeerPullCpu(PEER.to_owned());
+    let budget = budgets::PEER_PULL_CPU_MILLIS_PROBATION;
+    rig.counters
+        .charge(&cpu, budget.limit / 2, budget, start())
+        .await
+        .expect("charged");
+    let window_end = plus(start(), budget.window);
+
+    rig.puller.then(ok(u64::from(budget.limit)));
+    assert_eq!(
+        rig.round().await,
+        JobOutcome::Pulled { next: window_end },
+        "the overrunning pull waits out the window"
+    );
+    assert!(
+        !rig.counters
+            .peek(&cpu, budget, start())
+            .await
+            .expect("peeked")
+            .admits(),
+        "the overrun spent what was left of the window"
+    );
+
+    let sibling = JobKey::new(PeerId::new(PEER), AlbumId::new("album-2"));
+    assert_eq!(
+        rig.worker.run_job(&sibling).await,
+        JobOutcome::Deferred { until: window_end },
+        "the peer's other jobs read the budget as spent"
+    );
+    assert_eq!(rig.puller.calls().len(), 1, "the sibling was not pulled");
+}
+
+#[tokio::test]
+async fn a_cpu_charge_the_counter_cannot_answer_defers_the_job() {
+    let rig = Rig::with_jitter(Arc::new(Lowest));
+    rig.counters.fail_cpu_charges.store(true, Ordering::SeqCst);
+    rig.puller.then(malformed());
+    assert_eq!(
+        rig.round().await,
+        JobOutcome::Failed {
+            kind: "validation",
+            failures: 1,
+            next: plus(start(), BACKOFF_FLOOR),
+            circuit: None,
+        },
+        "a failed charge is a refusal: the job waits as a failed pre-pull read would make it"
+    );
+}
+
+#[tokio::test]
+async fn a_spent_cpu_budget_the_counter_cannot_read_back_defers_the_job() {
+    let rig = Rig::with_jitter(Arc::new(Lowest));
+    rig.counters
+        .fail_cpu_peeks_after_charge
+        .store(true, Ordering::SeqCst);
+    let budget = budgets::PEER_PULL_CPU_MILLIS_PROBATION;
+    rig.puller.then(PullReport {
+        validation: Duration::from_millis(u64::from(budget.limit)),
+        ..malformed()
+    });
+    assert_eq!(
+        rig.round().await,
+        JobOutcome::Failed {
+            kind: "validation",
+            failures: 1,
+            next: plus(start(), BACKOFF_FLOOR),
+            circuit: None,
+        },
+        "the window's end could not be read, so the job is deferred rather than due at once"
     );
 }
 

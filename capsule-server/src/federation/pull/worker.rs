@@ -9,9 +9,13 @@
 //! 4. **The CPU budget.** A peer whose validation-time budget is spent has its job queued to the
 //!    window's end: deferred, not failed, and its back-off untouched.
 //! 5. **The pull**, through the [`Puller`], bounded by [`PULL_DEADLINE`]: a pull past it is a
-//!    transport failure, so a hung peer cannot hold the lease past [`super::PULL_LEASE`].
+//!    transport failure, so a hung peer cannot hold the lease past [`super::PULL_LEASE`]. The
+//!    abandoned pull is cancelled and charges no CPU, because its report is lost with it; the
+//!    back-off it earns, doubling to six hours, bounds how often a peer can cost a deadline's
+//!    worth.
 //! 6. **The meter.** The validation time the pull reports is charged to the CPU budget in one
-//!    weighted call.
+//!    weighted call. A pull that would take the open window past its budget charges what is left
+//!    of it instead, so the peer's other jobs read it as spent.
 //! 7. **The schedule.** A success is next due on the jittered interval and clears the failure
 //!    count. A transport failure backs off. A validation failure backs off **and** spends the
 //!    peer's error budget, and a spent budget opens the peer's circuit for the back-off it
@@ -22,7 +26,8 @@
 //!
 //! A peer store that cannot answer runs nothing for that peer. An error budget the counter
 //! store cannot charge is read as spent, so a counter outage opens circuits rather than letting
-//! a misbehaving peer's failures go uncounted. A CPU budget it cannot read defers the job.
+//! a misbehaving peer's failures go uncounted. A CPU budget it cannot read or charge, before or
+//! after the pull, defers the job.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -343,7 +348,7 @@ impl PullWorker {
         };
         let ended = self.clock.now();
 
-        let cpu_queue = self.meter(&cpu, cpu_budget, report.validation).await;
+        let cpu_queue = self.meter(&cpu, cpu_budget, report.validation, ended).await;
 
         match report.result {
             Ok(()) => {
@@ -372,38 +377,70 @@ impl PullWorker {
     }
 
     /// Charge `validation` to the CPU budget, answering the window's end when it is spent.
+    ///
+    /// A counter that cannot answer defers the job by [`super::BACKOFF_FLOOR`] from `ended`, as
+    /// the pre-pull read does: an error is a refusal, never an admission.
     async fn meter(
         &self,
         key: &CounterKey,
         budget: crate::counter::Budget,
         validation: Duration,
+        ended: Timestamp,
     ) -> Option<Timestamp> {
         if validation.is_zero() {
             return None;
         }
+        let unavailable = deadline(ended, super::BACKOFF_FLOOR);
         // Any validation at all costs at least a millisecond, so a peer cannot have its input
         // validated in sub-millisecond pulls for free.
         let millis = u32::try_from(validation.as_millis().max(1)).unwrap_or(u32::MAX);
         match self.counters.charge(key, millis, budget).await {
             Ok(Verdict::Admitted { remaining: 0 }) => {
                 tracing::info!(millis, "the peer's CPU budget is now spent");
-                self.counters
-                    .peek(key, budget)
-                    .await
-                    .ok()
-                    .and_then(|verdict| match verdict {
-                        Verdict::Limited { retry_after } => Some(retry_after),
-                        Verdict::Admitted { .. } => None,
-                    })
+                match self.counters.peek(key, budget).await {
+                    Ok(Verdict::Limited { retry_after }) => Some(retry_after),
+                    Ok(Verdict::Admitted { .. }) => None,
+                    Err(error) => {
+                        tracing::error!(%error, "the spent CPU budget could not be read; the job is deferred");
+                        Some(unavailable)
+                    }
+                }
             }
             Ok(Verdict::Admitted { .. }) => None,
             Ok(Verdict::Limited { retry_after }) => {
                 tracing::info!(millis, %retry_after, "the peer's CPU budget was overrun");
+                self.spend_remainder(key, budget).await;
                 Some(retry_after)
             }
             Err(error) => {
-                tracing::error!(%error, millis, "the CPU budget could not be charged");
-                None
+                tracing::error!(%error, millis, "the CPU budget could not be charged; the job is deferred");
+                Some(unavailable)
+            }
+        }
+    }
+
+    /// Charge what is left of the open CPU window, so the peer's other jobs read it as spent.
+    ///
+    /// The counter's charge is all-or-nothing, so a pull that overran the window charged nothing;
+    /// without this, every other job of the same peer would still pass its pre-pull read.
+    async fn spend_remainder(&self, key: &CounterKey, budget: crate::counter::Budget) {
+        let remaining = match self.counters.peek(key, budget).await {
+            Ok(Verdict::Admitted { remaining }) => remaining,
+            Ok(Verdict::Limited { .. }) => return,
+            Err(error) => {
+                tracing::error!(%error, "the overrun CPU budget could not be read; its remainder is not charged");
+                return;
+            }
+        };
+        match self.counters.charge(key, remaining, budget).await {
+            Ok(Verdict::Admitted { .. }) => {
+                tracing::info!(remaining, "the rest of the peer's CPU budget was charged");
+            }
+            Ok(Verdict::Limited { .. }) => {
+                tracing::debug!("another pull charged the CPU budget first; it is spent");
+            }
+            Err(error) => {
+                tracing::error!(%error, remaining, "the rest of the peer's CPU budget could not be charged");
             }
         }
     }
