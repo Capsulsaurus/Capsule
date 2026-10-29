@@ -36,6 +36,7 @@ use crate::utils::directories::{
 };
 
 pub mod cache;
+pub mod camera_discovery;
 pub mod camera_import;
 pub mod camera_pairing;
 pub mod cli;
@@ -1890,11 +1891,28 @@ fn camera_pairing_store() -> Result<camera_pairing::PairingStore> {
     ))
 }
 
-/// `capsule camera import` and `capsule camera identity`.
+/// `capsule camera discover`, `capsule camera import` and `capsule camera identity`.
 fn camera_command(command: CameraCommands) -> Result<()> {
     let store = camera_pairing_store()?;
     let default_name = || camera_pairing::default_name(sysinfo::System::host_name().as_deref());
     match command {
+        CameraCommands::Discover { timeout, json } => {
+            let window = std::time::Duration::from_secs(timeout);
+            if !json {
+                println!(
+                    "{}",
+                    format!("Looking for cameras on the network for {timeout} s…").cyan()
+                );
+            }
+            let report = camera_discovery::discover(window)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                for line in camera_discovery::summary_lines(&report) {
+                    println!("{}", line.green());
+                }
+            }
+        }
         CameraCommands::Identity { name, json } => {
             let (pairing, created) = match name {
                 Some(name) => store.rename(&name)?,
@@ -1926,8 +1944,36 @@ fn camera_command(command: CameraCommands) -> Result<()> {
             json,
         } => {
             let human = !json;
-            let address = camera_import::parse_address(&address)?;
+            let given = address
+                .as_deref()
+                .map(camera_import::parse_address)
+                .transpose()?;
             let mut ws = open_workspace(&library, passphrase_stdin)?;
+            let (address, discovered) = if let Some(address) = given {
+                (address, None)
+            } else {
+                let window = std::time::Duration::from_secs(camera_discovery::DEFAULT_WINDOW_SECS);
+                if human {
+                    println!(
+                        "{}",
+                        format!(
+                            "No --address given; looking for a camera on the network for \
+                             {} s…",
+                            window.as_secs()
+                        )
+                        .cyan()
+                    );
+                }
+                let report = camera_discovery::discover(window)?;
+                let camera = camera_discovery::choose(report.cameras, window)?;
+                if human {
+                    println!(
+                        "{}",
+                        format!("Found {} at {}.", camera.name, camera.socket_addr()).cyan()
+                    );
+                }
+                (camera.socket_addr(), Some(camera))
+            };
             let (pairing, created) = store.load_or_create(default_name)?;
             if human {
                 if created {
@@ -1945,7 +1991,7 @@ fn camera_command(command: CameraCommands) -> Result<()> {
                     format!("Connecting to the camera at {address} as {}…", pairing.name).green()
                 );
             }
-            let report = camera_import::run(&mut ws, address, &pairing, |camera| {
+            let report = camera_import::run(&mut ws, address, discovered, &pairing, |camera| {
                 if human {
                     println!(
                         "{}",

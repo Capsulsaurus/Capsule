@@ -272,9 +272,39 @@
       ]
     },
     {
-      "about": "Import straight from a camera over PTP/IP, and manage the identity cameras pair with",
+      "about": "Find cameras on the network, import straight from one over PTP/IP, and manage the identity cameras pair with",
       "name": "camera",
       "subcommands": [
+        {
+          "about": "List the cameras on the local network that offer PTP/IP, by browsing DNS-SD `_ptp._tcp` for a bounded window",
+          "args": [
+            {
+              "default_values": [
+                "3"
+              ],
+              "help": "How long to listen for cameras, in seconds",
+              "id": "timeout",
+              "long": "timeout",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": true,
+              "value_names": [
+                "SECONDS"
+              ]
+            },
+            {
+              "help": "Print what answered as one JSON document on stdout: the service type browsed, the window, and each camera's name, host, address and port",
+              "id": "json",
+              "long": "json",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            }
+          ],
+          "name": "discover"
+        },
         {
           "about": "Show the identity this client presents to cameras, creating it on first use. A camera that pairs remembers it, so it stays the same across runs",
           "args": [
@@ -306,12 +336,12 @@
           "about": "Copy every object off a camera into the library: each is received and hash-checked into a staging area under the library, then imported like a card reader's files. Nothing on the camera is changed, and an interrupted run resumes where it stopped",
           "args": [
             {
-              "help": "The camera's address on the network, as HOST or HOST:PORT (port 15740 when omitted); the camera shows it on its Wi-Fi or \"Remote/PC connection\" screen",
+              "help": "The camera's address on the network, as HOST or HOST:PORT (port 15740 when omitted); the camera shows it on its Wi-Fi or \"Remote/PC connection\" screen. Without it, the one camera `capsule camera discover` finds is used, and none or several refuse the run",
               "id": "address",
               "long": "address",
               "positional": false,
               "repeatable": false,
-              "required": true,
+              "required": false,
               "takes_value": true,
               "value_names": [
                 "HOST[:PORT]"
