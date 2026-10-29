@@ -28,14 +28,46 @@ private final class ScriptedSource: FFITransferEventSource, @unchecked Sendable 
     }
 }
 
-/// A subscription whose pull waits until its task is cancelled, as a quiet
-/// session's does.
-private struct QuietSource: FFITransferEventSource {
+/// A quiet session's subscription as uniffi 0.31 really presents it: a pull
+/// that ignores task cancellation and returns only when the test releases it,
+/// the way the generated `uniffiRustCallAsync` returns only when its Rust
+/// future does.
+private final class CancellationDeafSource: FFITransferEventSource, @unchecked Sendable {
+    private let lock = NSLock()
+    private var waiting: CheckedContinuation<FfiTransferFeedItem?, Never>?
+    private var pending: FfiTransferFeedItem??
+    private let pulledContinuation: AsyncStream<Void>.Continuation
+
+    /// Yields once each time a pull starts waiting.
+    let pulled: AsyncStream<Void>
+
+    init() {
+        (pulled, pulledContinuation) = AsyncStream.makeStream()
+    }
+
     func next() async -> FfiTransferFeedItem? {
-        while !Task.isCancelled {
-            await Task.yield()
+        await withCheckedContinuation { continuation in
+            lock.lock()
+            if let item = pending {
+                pending = nil
+                lock.unlock()
+                continuation.resume(returning: item)
+                return
+            }
+            waiting = continuation
+            lock.unlock()
+            pulledContinuation.yield()
         }
-        return nil
+    }
+
+    /// Answer the waiting pull with `item`, as an event or the session's end would.
+    func release(_ item: FfiTransferFeedItem?) {
+        lock.lock()
+        let continuation = waiting
+        waiting = nil
+        if continuation == nil { pending = .some(item) }
+        lock.unlock()
+        continuation?.resume(returning: item)
     }
 }
 
@@ -209,15 +241,54 @@ struct FFITransferEventFeedTests {
         #expect(source.pulls == 1)
     }
 
-    @Test("cancelling the consumer ends a pull that is waiting on a quiet session")
+    @Test("cancelling the consumer ends a pull waiting on a quiet session that ignores cancellation")
     func cancellationEndsTheWait() async {
-        let feed = FFITransferEventFeed { QuietSource() }
+        let source = CancellationDeafSource()
+        let feed = FFITransferEventFeed { source }
         let consumer = Task { await collect(feed.events()) }
+        var pulls = source.pulled.makeAsyncIterator()
+        _ = await pulls.next()
 
         consumer.cancel()
         let items = await consumer.value
 
         #expect(items.isEmpty)
+        // The abandoned pull answers late; its item reaches nobody.
+        source.release(.lagged(missed: 1))
+    }
+
+    @Test("a consumer cancelled before it pulls ends without starting a pull")
+    func cancelledBeforePull() async {
+        let source = ScriptedSource([.lagged(missed: 1)])
+        let item = await Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return await FFITransferEventFeed.pull(source)
+        }.value
+
+        #expect(item == nil)
+        #expect(source.pulls == 0)
+    }
+
+    @Test("a stream opened after a cancelled one is served by its own subscription")
+    func resubscribesAfterCancellation() async {
+        let quiet = CancellationDeafSource()
+        let counter = OpenCounter()
+        let feed = FFITransferEventFeed {
+            counter.increment()
+            let source: any FFITransferEventSource = counter.value == 1 ? quiet : ScriptedSource([.lagged(missed: 7)])
+            return source
+        }
+        let first = Task { await collect(feed.events()) }
+        var pulls = quiet.pulled.makeAsyncIterator()
+        _ = await pulls.next()
+        first.cancel()
+        _ = await first.value
+
+        let second = await collect(feed.events())
+
+        #expect(second == [.lagged(7)])
+        #expect(counter.value == 2)
+        quiet.release(nil)
     }
 }
 
