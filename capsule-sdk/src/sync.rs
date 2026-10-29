@@ -475,7 +475,8 @@ enum SyncAuth {
     },
 }
 
-/// The path the feed is signed over: the operation's own, whatever prefix the base URL has.
+/// The path the feed is signed over: the operation's own, whatever prefix the base URL has,
+/// because the issuer verifies against the path it routes (design/federation.md, `path`).
 const FEED_PATH: &str = "/v1/sync";
 
 /// The sync consumer, over the **generated REST client**.

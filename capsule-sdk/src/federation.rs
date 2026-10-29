@@ -61,7 +61,8 @@ const BEARER_SCHEME: &str = "bearer";
 /// The domain separator a request signature's claim opens with (design/federation.md).
 pub const REQUEST_CONTEXT: &str = "capsule-federation-request-v1";
 
-/// The path the capability refresh is signed over.
+/// The path the capability refresh is signed over: the operation's own, whatever prefix the
+/// base URL has (design/federation.md, `path`).
 const REFRESH_PATH: &str = "/v1/federation/capabilities/refresh";
 
 /// What signs a puller's capability presentations: its operational Ed25519 key, the one the
