@@ -21,6 +21,46 @@ never decodes media; clients do all processing and encryption.
   disabled (`nolock`) lets them interleave unless both run on the same host.
 - **A TLS-terminating reverse proxy** in front of the server.
 
+## Hardware
+
+For one node running the server, PostgreSQL and Valkey together. These figures are sizing
+guidance taken from what the server does, not benchmarks.
+
+The server's work is light. It hashes each chunk with SHA-256 as it arrives, re-hashes at
+finalize and during `scrub --deep`, verifies the client's hybrid signature (Ed25519 and
+ML-DSA-65) at finalize, signs receipts the same way, and runs Argon2id once per password login
+(about 19 MiB each). It never decodes, resizes or transcodes media, never encrypts or decrypts,
+and leaves TLS to the reverse proxy. An upload's body is never buffered beyond one chunk, so
+memory does not grow with file size. Most of the hardware budget should therefore go to
+**storage**.
+
+| | Minimum | Recommended |
+| --- | --- | --- |
+| **CPU** | 2 cores, x86_64 or arm64 | 4 cores. SHA-2 instructions (SHA-NI on x86_64, the Armv8 crypto extensions) speed up hashing |
+| **RAM** | 2 GB | 4 to 8 GB. More helps PostgreSQL's cache on a large library, but storage pays back first |
+| **System storage** | SSD, 10 GB free | SSD or NVMe for PostgreSQL and Valkey's persistence |
+| **Blob storage** | Your library's size, plus room for uploads in flight | Redundant disks (mirror, RAID or ZFS) sized for several years of growth. Spinning disks are fine |
+| **Network** | 10 Mbit/s upstream | Gigabit on the LAN, and 50 Mbit/s or more upstream if devices sync from outside it |
+| **Power** | — | A UPS, so a power cut does not interrupt PostgreSQL or Valkey mid-write |
+
+- **`BLOB_ROOT` stays on one filesystem.** `incoming/` included, the whole tree must be one
+  filesystem, so it cannot be split across an SSD and a disk array (or across two ZFS datasets).
+  Put it all on the array.
+- **Size Valkey's memory for the host.** `compose.yaml` caps Valkey at 4 GB, which suits a
+  development machine. What Valkey holds (sessions, upload sessions and counters) is small, so on
+  a 2 GB host set `--maxmemory` lower. Under `noeviction`, a full Valkey refuses writes rather than
+  evicting state.
+- **Upstream bandwidth is the limit for remote devices.** A phone uploading from outside your
+  network uploads at your connection's *download* speed, but every fetch of a preview or original
+  leaves at your *upstream* speed. By default a chunk has 120 s to arrive. A client uploading a
+  large file sends chunks of at least 4 MiB, which needs about 280 kbit/s sustained from the device
+  to the server. On a slower link a large file's chunks time out, and the client does not yet retry
+  them smaller.
+- **Size the disks for originals, not derivatives.** Derivatives are a small fraction of a
+  library of RAW files and video. The server keeps each blob once, as the client encrypted it.
+- **Users add bandwidth, not compute.** Search, thumbnails and organization run on the clients.
+  More people browsing means more bytes served, but little more CPU or RAM.
+
 `capsule-server/compose.yaml` runs Postgres and Valkey with the right settings for local use
 (`mise run serve-deps`). Its credentials are for development only.
 

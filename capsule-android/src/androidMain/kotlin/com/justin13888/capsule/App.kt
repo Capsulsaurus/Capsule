@@ -26,6 +26,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -47,6 +48,9 @@ import com.justin13888.capsule.screens.mock.MockEnvironment
 import com.justin13888.capsule.screens.transfer.FfiTransferEventPort
 import com.justin13888.capsule.screens.transfer.TransferBoardScreen
 import com.justin13888.capsule.screens.transfer.TransferBoardViewModel
+import com.justin13888.capsule.workspace.ServerSessions
+import com.justin13888.capsule.workspace.SignInScreen
+import com.justin13888.capsule.workspace.SignInViewModel
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.serialization.Serializable
 import uniffi.capsule_sdk.FfiSessionInterface
@@ -69,6 +73,10 @@ object TransferBoardDestination
 data class AssetViewerDestination(
     val assetId: String,
 )
+
+/** Sign in to a server for the session the transfer view follows. */
+@Serializable
+object SignInDestination
 
 /** The label editor of a stack or an album: exactly one of the two ids is set. */
 @Serializable
@@ -125,11 +133,16 @@ class ScreenPorts(
 private val mockPorts by lazy { ScreenPorts.mock() }
 
 /**
- * The app. [ports] is the mock world until the app opens a workspace and a session of
- * its own, which then pass [ScreenPorts.rustBacked] here.
+ * The app over [ports]: the mock world by default, or [ScreenPorts.rustBacked] over the
+ * device's library. [sessions] is the server session the app signs in to; while nothing is
+ * signed in, the home menu offers sign-in, and without it (the mock world) it offers none.
  */
 @Composable
-fun App(ports: ScreenPorts = mockPorts) {
+fun App(
+    ports: ScreenPorts = mockPorts,
+    sessions: ServerSessions? = null,
+) {
+    val signedIn = sessions?.current?.collectAsStateWithLifecycle()?.value != null
     MaterialTheme(
         colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme(),
     ) {
@@ -139,6 +152,7 @@ fun App(ports: ScreenPorts = mockPorts) {
                 composable<ListDestination> {
                     HomeShell(
                         openTransfers = { navController.navigate(TransferBoardDestination) },
+                        openSignIn = sessions?.takeIf { !signedIn }?.let { { navController.navigate(SignInDestination) } },
                         openSampleAsset = ports.sampleAsset?.let { { navController.navigate(AssetViewerDestination(it.value)) } },
                         openStackLabels =
                             ports.sampleStack?.let { { navController.navigate(CollectionLabelsDestination(stackId = it.value)) } },
@@ -163,6 +177,12 @@ fun App(ports: ScreenPorts = mockPorts) {
                         viewModel { TransferBoardViewModel(ports.transferEvents, SystemClock::elapsedRealtime) }
                     TransferBoardScreen(boardViewModel, navigateBack = { navController.popBackStack() })
                 }
+                if (sessions != null) {
+                    composable<SignInDestination> {
+                        val signIn = viewModel { SignInViewModel(sessions) }
+                        SignInScreen(signIn, navigateBack = { navController.popBackStack() })
+                    }
+                }
                 composable<AssetViewerDestination> { backStackEntry ->
                     val asset = AssetId(backStackEntry.toRoute<AssetViewerDestination>().assetId)
                     val editor = viewModel { LabelEditorViewModel(LabelSubject.Asset(asset), ports.labels) }
@@ -181,11 +201,12 @@ fun App(ports: ScreenPorts = mockPorts) {
     }
 }
 
-/** The home screen's app bar: an overflow menu into the transfer view and the label editors. */
+/** The home screen's app bar: an overflow menu into sign-in, the transfer view and the label editors. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun HomeShell(
     openTransfers: () -> Unit,
+    openSignIn: (() -> Unit)?,
     openSampleAsset: (() -> Unit)?,
     openStackLabels: (() -> Unit)?,
     openAlbumLabels: (() -> Unit)?,
@@ -205,6 +226,12 @@ private fun HomeShell(
                         Icon(Icons.Filled.MoreVert, stringResource(R.string.app_home_menu_more))
                     }
                     DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        openSignIn?.let { open ->
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.app_auth_welcome_server_action)) },
+                                onClick = { choose(open) },
+                            )
+                        }
                         DropdownMenuItem(
                             text = { Text(stringResource(R.string.app_transfer_board_title)) },
                             onClick = { choose(openTransfers) },

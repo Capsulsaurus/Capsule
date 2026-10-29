@@ -30,7 +30,7 @@ Every Rust version is pinned once in the root `[workspace.dependencies]`; member
 | LAN service discovery | mocked seam (`capsule-sdk::peering::Discovery`) | A live responder (`mdns-sd`) gets its own row when added. |
 | Identifiers | `uuid`, **UUIDv7 for every new identifier** | UUIDv4 where creation time must not leak (e.g. `device_id`); capability ids are not UUIDs. |
 | Async runtime | `tokio` | — |
-| HTTP server | Kynos `0.1.0` from crates.io, feature `openapi32` | The document is pinned to 3.2 with `openapi_as(SpecVersion::V3_2)`; the feature alone does not select it. No secondary public transport. |
+| HTTP server | Kynos `0.4.0` from crates.io, feature `openapi32` | The document is pinned to 3.2 with `openapi_as(SpecVersion::V3_2)`; the feature alone does not select it. No secondary public transport. |
 | HTTP body | `http-body-util` | Only the server's coded-problem interceptor; already transitive. |
 | HTTP types | `http` | Only the SDK's refresh-on-401 layer; already transitive. |
 | HTTP client | `reqwest` (`default-features = false`, `rustls-tls`, `json`) | `capsule-sdk`, and the server's OIDC relying party as its only egress. |

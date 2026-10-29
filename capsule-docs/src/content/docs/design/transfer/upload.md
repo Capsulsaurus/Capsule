@@ -226,19 +226,20 @@ T0 is exactly the visibility gate, so a staged asset is visible to other devices
 
 - A staged asset pins its local original until T2 is [custody-confirmed](/design/transfer/durability/#verify-before-destroy).
 - Staged and [streaming import](/design/import/pipeline/#import-upload-streaming-mode) are mutually exclusive per import; the planner rejects the combination.
-- Each tier's sessions are charged at their own creation. Deleting an awaiting-original asset cancels its pending tiers.
+- Each tier's sessions are charged at their own creation. Deleting an awaiting-original asset cancels its pending tiers ([redaction](/design/organization/#deletion-state-machine)).
 - Resume re-derives the tier queue from server truth: held roles on the feed entry plus `GET /v1/upload/sessions`.
 
 Streaming import uses these same sessions unchanged, one bounded window at a time; only the drive pattern differs.
 
 ## Queueing Across Servers
 
-A client signed in to more than one server keeps one upload **lane** per server, keyed by the server's canonical origin. Scheduler: `capsule-sdk::upload::queue`.
+The upload queue holds every tier a device uploads, from T0 records to the data-heavy originals, video and derivatives. It is the client's queue, not the server's. When a device is signed in to more than one server (for example, two accounts on different self-hosted servers), the queue keeps one **lane** per server, keyed by the server's canonical origin, and keeps four properties. Scheduler: `capsule-sdk::upload::queue`.
 
-- **Lanes own their pacing.** Each lane holds its own sessions, backoff, protocol window (the transfers it may hold in flight) and `Retry-After` deadline. One server's refusal or wait never pauses another's lane.
-- **One shared byte budget.** Every transfer in flight reserves its size against a single device-wide bound, so the bytes buffered stay bounded however many servers there are. A transfer larger than the whole budget runs alone once the budget is free.
-- **A stalled lane gives its budget up.** A lane whose transfers report no progress for the stall bound has its reservations revoked; its work returns to the front of its queue, and the lane is not served again for one more stall bound.
-- **Round-robin, tier order inside.** Lanes are served in turn, and a lane always serves its lowest tier first and never skips its own head, so the [tier ladder](#upload-tiering-staged-uploads) holds per server.
-- **Resume per server.** Each lane rebuilds from its own server's truth (held roles on its feed plus its `GET /v1/upload/sessions`); no lane's queue is derived from another server's.
+- **Per-server lanes.** Each lane has its own sessions, backoff, negotiated [protocol window](/design/versioning/#update-policy) (the transfers it may hold in flight) and `Retry-After` deadline, so a `429`, an outage or a stall at one server never delays work bound for another.
+- **One shared, bounded memory budget.** Every transfer in flight reserves its size against one device-wide byte budget, so adding a server divides the budget and never multiplies it. A transfer larger than the whole budget runs alone once the budget is free. A lane whose transfers report no progress for the stall bound has its reservations revoked: its work returns to the front of its queue, and the lane is not served again for one more stall bound, rather than holding buffers it cannot send.
+- **Fair scheduling.** Lanes are served round-robin, and a lane always serves its lowest tier first and never skips its own head, so the [tier order](#upload-tiering-staged-uploads) holds per server. One lane's T0 work is never starved by another lane's T2 originals.
+- **Rebuildable state.** On resume, each lane re-derives what remains from the local index (the Live assets that should reach that server; this device's own upload of a trashed asset stays [redacted](/design/organization/#deletion-state-machine)) and from its own server's truth (held roles on its feed plus its `GET /v1/upload/sessions`), as a single-server queue does. No lane's queue is derived from another server's, and losing the queue loses no work.
 
 With one server the queue is one lane with a window of one: the single-server push, one asset at a time.
+
+A [delegation](/design/peering/#delegation) hand-off is not a lane: the delegate pulls the bundle over the peer channel and uploads it from its own queue. Every album has exactly one home server, which takes every write to it, and multi-writer albums across servers are not part of v1 ([Federation](/design/federation/)). An asset is therefore only ever queued for its album's home server.

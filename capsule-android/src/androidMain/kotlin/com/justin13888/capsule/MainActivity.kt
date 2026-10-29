@@ -30,12 +30,15 @@ import com.justin13888.capsule.i18n.LanguagePickerButton
 import com.justin13888.capsule.i18n.LocalesConfig
 import com.justin13888.capsule.perf.FrameMonitor
 import com.justin13888.capsule.perf.InputToFrameTracer
+import com.justin13888.capsule.workspace.LibraryHost
 import java.util.logging.Logger
 
 // AppCompatActivity, because below Android 13 AppCompat applies the in-app language only to
 // its own activities.
 class MainActivity : AppCompatActivity() {
     private val alerts by lazy { (application as CapsuleApp).alerts }
+
+    private val workspace by lazy { (application as CapsuleApp).workspace }
 
     // A language change renames the alerts channel at once, rather than at the next alert.
     private val languageStore by lazy { AppCompatLanguageStore(this, onApplied = AlertNotifications::ensureChannel) }
@@ -65,7 +68,9 @@ class MainActivity : AppCompatActivity() {
             LaunchedEffect(isSystemInDarkTheme()) {
                 enableEdgeToEdge()
             }
-            App()
+            // The screens run on this device's library, opened (or created on first launch)
+            // by the workspace graph, and on the server session it signs in to.
+            LibraryHost(workspace)
             if (AppLanguagePicker.isNeeded(Build.VERSION.SDK_INT)) {
                 LanguageEntry()
             }
