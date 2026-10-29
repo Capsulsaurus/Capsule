@@ -1,11 +1,13 @@
+import CapsuleDomain
 import FeatureImport
 import FeatureSettings
 import FeatureSharing
+import FeatureViewer
 import SwiftUI
 
 // Projections of ports that already live on the composition root.
 //
-// Three feature modules gather the ports they need into one value at their own
+// Four feature modules gather the ports they need into one value at their own
 // boundary — eleven arguments threaded through a root view that renders none of
 // them is noise. Those values are *derived*, so they are computed here rather
 // than stored on ``AppEnvironment``: storing them would create a second place
@@ -39,6 +41,16 @@ extension AppEnvironment {
     /// stay distinguishable.
     var sharingConnectivity: SharingConnectivity {
         SharingConnectivity(sync: sync)
+    }
+
+    /// The label and region editor's ports: the label port, and the stack an
+    /// asset belongs to as the library records it, so the editor offers the
+    /// stack's labels beside the asset's regions.
+    var labelEditing: LabelEditing {
+        let library = library
+        return LabelEditing(port: labels) { assetID in
+            try? await library.asset(for: assetID)?.stackMembership?.stackID
+        }
     }
 
     /// Every port the import pipeline needs.

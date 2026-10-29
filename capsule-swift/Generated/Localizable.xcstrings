@@ -45129,6 +45129,326 @@
         }
       }
     },
+    "app.labels.add": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add"
+          }
+        }
+      }
+    },
+    "app.labels.add.placeholder": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add a label"
+          }
+        }
+      }
+    },
+    "app.labels.album.title": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Album Labels"
+          }
+        }
+      }
+    },
+    "app.labels.draft.hint": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Drag to move it and pinch to resize it."
+          }
+        }
+      }
+    },
+    "app.labels.draft.label": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New region"
+          }
+        }
+      }
+    },
+    "app.labels.draft.move_down": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Move down"
+          }
+        }
+      }
+    },
+    "app.labels.draft.move_left": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Move left"
+          }
+        }
+      }
+    },
+    "app.labels.draft.move_right": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Move right"
+          }
+        }
+      }
+    },
+    "app.labels.draft.move_up": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Move up"
+          }
+        }
+      }
+    },
+    "app.labels.empty": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No labels yet"
+          }
+        }
+      }
+    },
+    "app.labels.failure.empty": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A label needs at least one character."
+          }
+        }
+      }
+    },
+    "app.labels.failure.not_found": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This item no longer exists."
+          }
+        }
+      }
+    },
+    "app.labels.failure.shape": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "That region does not fit inside the photo."
+          }
+        }
+      }
+    },
+    "app.labels.failure.too_long": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "That label is too long."
+          }
+        }
+      }
+    },
+    "app.labels.failure.unavailable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The change could not be saved. Try again."
+          }
+        }
+      }
+    },
+    "app.labels.open": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Regions and Labels"
+          }
+        }
+      }
+    },
+    "app.labels.preview.unavailable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Preview unavailable"
+          }
+        }
+      }
+    },
+    "app.labels.region.delete": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete Region"
+          }
+        }
+      }
+    },
+    "app.labels.region.delete.confirm": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete this region and its labels on every device?"
+          }
+        }
+      }
+    },
+    "app.labels.region.draw_circle": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Draw Circle"
+          }
+        }
+      }
+    },
+    "app.labels.region.draw_rect": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Draw Rectangle"
+          }
+        }
+      }
+    },
+    "app.labels.region.empty": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No regions yet. Draw one to label part of this photo."
+          }
+        }
+      }
+    },
+    "app.labels.region.first_label": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "First label (optional)"
+          }
+        }
+      }
+    },
+    "app.labels.region.none_selected": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Select a region to see its labels."
+          }
+        }
+      }
+    },
+    "app.labels.region.save": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Save Region"
+          }
+        }
+      }
+    },
+    "app.labels.region.title": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Regions"
+          }
+        }
+      }
+    },
+    "app.labels.region.unlabelled": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unlabelled region"
+          }
+        }
+      }
+    },
+    "app.labels.remove": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remove label"
+          }
+        }
+      }
+    },
+    "app.labels.section": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Labels"
+          }
+        }
+      }
+    },
+    "app.labels.stack.open": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stack Labels"
+          }
+        }
+      }
+    },
+    "app.labels.stack.title": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stack Labels"
+          }
+        }
+      }
+    },
+    "app.labels.title": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Regions and Labels"
+          }
+        }
+      }
+    },
     "app.media.live_photo": {
       "localizations": {
         "ar": {

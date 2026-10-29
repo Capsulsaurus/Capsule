@@ -18,7 +18,11 @@ public struct AssetViewerView: View {
     private let captionStore: (any CaptionStore)?
     private let placeNames: any PlaceNameResolver
     @Environment(\.dismiss) private var dismiss
+    /// The label editor's ports; its entry is shown only where they are.
+    @Environment(\.labelEditing) private var labelEditing
     @State private var isAddToAlbumPresented = false
+    /// The asset the label and region editor is open on.
+    @State private var labelEditorAsset: Asset?
     /// Ties the bottom bar's glass groups together so they morph as one.
     @Namespace private var barNamespace
     /// Whether the info panel should open expanded.
@@ -68,6 +72,16 @@ public struct AssetViewerView: View {
                     captionStore: captionStore,
                     startsExpanded: infoPanelStartsExpanded,
                     placeNames: placeNames
+                )
+            }
+        }
+        .sheet(item: $labelEditorAsset) { asset in
+            if let labelEditing {
+                LabelEditorSheet(
+                    subject: .asset(asset.id),
+                    editing: labelEditing,
+                    asset: asset,
+                    mediaLoader: mediaLoader
                 )
             }
         }
@@ -177,6 +191,16 @@ public struct AssetViewerView: View {
                 } label: {
                     Label("app.add_to_album.title", systemImage: "rectangle.stack.badge.plus")
                 }
+            }
+            // Regions are drawn over a still frame, so a video has none to
+            // label.
+            if labelEditing != nil, let asset = model.currentAsset, asset.mediaType != .video {
+                Button {
+                    labelEditorAsset = asset
+                } label: {
+                    Label("app.labels.open", systemImage: "tag")
+                }
+                .accessibilityIdentifier("viewer.labels")
             }
         } label: {
             Image(systemName: "ellipsis")
