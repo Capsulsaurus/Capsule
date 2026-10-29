@@ -91,7 +91,7 @@ fn every_plural_renders_in_every_locale() {
         let bundle = Bundle::for_locale(locale);
         // A key the locale has not translated resolves through the source catalog, so the
         // reader still gets an English plural — under *their* language's rules. That path
-        // is live (`app.places.preview.accessibility` is `en`-only), so the matrix covers
+        // is live whenever a new key lands before its translations, so the matrix covers
         // the union rather than only what the locale itself carries.
         let mut messages = source_messages.clone();
         messages.extend(bundle_messages(locale));
