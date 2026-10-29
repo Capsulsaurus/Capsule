@@ -79,7 +79,12 @@ case "$platform" in
         echo "bench-apps: running ParityBenchmarkTests on $destination" >&2
         (
             cd "$root/capsule-swift"
-            TEST_RUNNER_PLATFORM_VIEWER_ID="${BENCH_PLATFORM_VIEWER_ID:-}" xcodebuild test \
+            # Exported only when set, as the Android selectors are: the Photos viewer test
+            # skips without it rather than searching for an empty identifier.
+            if [ -n "${BENCH_PLATFORM_VIEWER_ID:-}" ]; then
+                export TEST_RUNNER_PLATFORM_VIEWER_ID="$BENCH_PLATFORM_VIEWER_ID"
+            fi
+            xcodebuild test \
                 -workspace Capsule.xcworkspace \
                 -scheme CapsuleParityBenchmark \
                 -destination "$destination" \

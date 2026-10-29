@@ -20,7 +20,7 @@ import XCTest
 ///
 /// Photos' element identifiers are private and change between releases, so the viewer anchor
 /// is supplied with the device: `TEST_RUNNER_PLATFORM_VIEWER_ID` (xcodebuild hands it to this
-/// process as `PLATFORM_VIEWER_ID`). A Photos test that needs it is skipped without it.
+/// process as `PLATFORM_VIEWER_ID`). A Photos test that needs it is skipped when it is unset or empty.
 final class ParityBenchmarkTests: CapsuleUITestCase {
     private static let photosBundle = "com.apple.mobileslideshow"
     private static let iterations = 5
@@ -53,7 +53,7 @@ final class ParityBenchmarkTests: CapsuleUITestCase {
     }
 
     func testPlatformAppFullResolutionOpen() throws {
-        guard let identifier = ProcessInfo.processInfo.environment["PLATFORM_VIEWER_ID"] else {
+        guard let identifier = ProcessInfo.processInfo.environment["PLATFORM_VIEWER_ID"], !identifier.isEmpty else {
             throw XCTSkip("set TEST_RUNNER_PLATFORM_VIEWER_ID to Photos' viewer element for this device")
         }
         fullResolutionOpen(photos(), thumbnail: photosTile) { app in
