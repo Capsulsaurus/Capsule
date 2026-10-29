@@ -139,6 +139,34 @@ fn the_timeline_leaves_out_trash_hidden_and_non_primary_stack_members() {
 }
 
 #[test]
+fn stacks_follow_their_newest_member_whichever_role_it_holds() {
+    let mut fx = Fixture::with_assets(4);
+    let order: Vec<Uuid> = collect(&fx.ws)
+        .assets()
+        .iter()
+        .map(|a| a.asset_id)
+        .collect();
+    // `newer` holds the newest asset but the oldest primary, so ordering by the primary's
+    // capture would list `older` first.
+    let (newer, older) = (Uuid::now_v7(), Uuid::now_v7());
+    fx.stack(newer, order[0], StackRole::Member);
+    fx.stack(older, order[1], StackRole::Member);
+    fx.stack(older, order[2], StackRole::Primary);
+    fx.stack(newer, order[3], StackRole::Primary);
+
+    let catalogue = collect(&fx.ws);
+    let stacks: Vec<Uuid> = catalogue.stacks().iter().map(|s| s.stack_id).collect();
+    assert_eq!(stacks, vec![newer, older]);
+    assert_eq!(
+        catalogue.stack(newer).expect("listed").members,
+        vec![
+            (order[3], StackRole::Primary),
+            (order[0], StackRole::Member)
+        ]
+    );
+}
+
+#[test]
 fn album_and_stack_labels_are_read() {
     let mut fx = Fixture::with_assets(2);
     let stack_id = Uuid::now_v7();

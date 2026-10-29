@@ -39,7 +39,8 @@ pub struct Catalogue {
     assets: Vec<AssetEntry>,
     /// Every album the workspace holds keys for, by name then id.
     albums: Vec<AlbumEntry>,
-    /// Every stack an asset is a member of, newest first by its primary's capture.
+    /// Every stack an asset is a member of, newest first by its newest member's capture (where
+    /// that member falls in `assets`), whichever role that member holds.
     stacks: Vec<StackEntry>,
     /// The origin ledger's line for each asset handed to another device whose custody is not
     /// confirmed yet ([`crate::peer::delegation_lines`]); a released one has none.
@@ -294,7 +295,8 @@ impl Catalogue {
         &self.albums
     }
 
-    /// Every stack, newest first by its primary's capture.
+    /// Every stack, newest first by its newest member's capture (where that member falls in
+    /// [`assets`](Self::assets)), whichever role that member holds.
     #[must_use]
     pub fn stacks(&self) -> &[StackEntry] {
         &self.stacks
@@ -425,7 +427,8 @@ pub enum Listing {
     },
     /// The stacks.
     Stacks {
-        /// Every stack, newest first by its primary's capture.
+        /// Every stack, newest first by its newest member's capture (ties by that
+        /// member's id), whichever role that member holds.
         stacks: Vec<ListedStack>,
     },
 }
