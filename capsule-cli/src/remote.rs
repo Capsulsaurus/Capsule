@@ -1249,6 +1249,9 @@ pub struct PushSummary {
     /// Assets skipped because another device of the account holds an open hand-off for them
     /// ([`AssetPushStatus::Delegated`]).
     pub delegated_assets: usize,
+    /// Assets skipped because they are in the trash: a deleted asset's upload is redacted, so
+    /// nothing of it is planned or sent and it has no entry in `outcomes`.
+    pub trashed_assets: usize,
     /// Verified custody receipts persisted to the library this run.
     pub receipts: usize,
     /// Blobs transferred to completion.
@@ -1601,6 +1604,16 @@ async fn push_with(
         dry_run: options.dry_run,
         ..Default::default()
     };
+    // A trashed asset's upload is redacted (Organization — Deletion State Machine): this device
+    // sends no further byte of it, so none of its tiers is planned, deferred or opened. Its
+    // `delete` reaches the server as a lifecycle op (`capsule trash`), never as an upload.
+    let (trashed, asset_ids): (Vec<Uuid>, Vec<Uuid>) = asset_ids
+        .into_iter()
+        .partition(|asset_id| workspace.is_trashed(asset_id));
+    summary.trashed_assets = trashed.len();
+    for asset_id in &trashed {
+        tracing::info!(%asset_id, "push: skipped; the asset is in the trash, so its upload is redacted");
+    }
     // The album keys go first (#741): an asset on the server whose album key the server does not
     // also hold, sealed under the master key, is one a recovered device could never open. So a
     // refused escrow fails the run before any byte of any asset is sent — and it runs even with
@@ -1963,6 +1976,7 @@ impl PushSummary {
             verified_assets = self.verified_assets,
             failed_assets = self.failed_assets,
             delegated_assets = self.delegated_assets,
+            trashed_assets = self.trashed_assets,
             receipts = self.receipts,
             uploaded = self.uploaded_blobs,
             merged = self.merged_blobs,
@@ -1988,6 +2002,13 @@ pub fn custody_line(summary: &PushSummary) -> String {
             line,
             " Skipped {} handed to another device; `capsule peer status` follows them.",
             summary.delegated_assets
+        );
+    }
+    if summary.trashed_assets > 0 {
+        let _ = write!(
+            line,
+            " Skipped {} in the trash; nothing of a deleted asset is uploaded.",
+            summary.trashed_assets
         );
     }
     line
@@ -2339,6 +2360,24 @@ pub struct TrashOutcome {
     /// --sweep` signed) has that record resent with the window it was signed with, so this can
     /// differ from what `--retain-days` asked for. `None` for a restore.
     pub retention_until: Option<String>,
+    /// For a delete the library signed, what aborting the asset's open upload sessions did.
+    /// `None` for a restore, and for an asset whose delete was not signed.
+    pub redaction: Option<TrashRedaction>,
+}
+
+/// What a delete did to its asset's in-flight upload — the redaction the deletion state
+/// machine requires before the `delete` op is sent.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct TrashRedaction {
+    /// Open upload sessions of the asset the server cancelled.
+    pub cancelled: usize,
+    /// Sessions whose finalization was already running, so the server would not cancel them
+    /// (`409`). Their blob lands, and the `delete` sent after supersedes the create.
+    pub finalizing: usize,
+    /// Why the sessions could not be listed or cancelled, when they could not. The delete is
+    /// still sent: this device uploads nothing more of a trashed asset either way, and a
+    /// session nobody drives is evicted by the server.
+    pub error: Option<String>,
 }
 
 /// The outcome of a `capsule trash` run.
@@ -2370,6 +2409,12 @@ impl TrashSummary {
 /// would sign (a run whose send did not land) has that head resent rather than a second record
 /// signed, and the server answers a replay as a success. No op is retried within the run, and
 /// a [`permanent`](TrashFailure::permanent) failure is one a re-run only repeats.
+///
+/// **A delete redacts the asset's in-flight upload first** ([`push::redact_asset`]): every open
+/// upload session the server lists for it is cancelled before the `delete` op is sent, and a
+/// session whose finalization was already running is left to land, so the `delete` supersedes
+/// the create it completes. `capsule push` then skips the trashed asset, so no pending tier of
+/// it is ever opened; a restore returns it to Live and so to the next push.
 ///
 /// A restore whose signed retention floor has passed by this device's clock is refused before
 /// anything is signed (`retention_elapsed`), so the library never holds a restore it knows the
@@ -2408,6 +2453,11 @@ async fn trash_with(
         failed: 0,
         outcomes: Vec::new(),
     };
+    let upload = UploadClient::new(UploadTransport::with_session(
+        session.clone(),
+        &remote.upload_endpoint,
+        &remote.protocol_version,
+    ));
     for asset_id in distinct(request.assets.clone()) {
         let outcome = match prepare_trash_op(workspace, &asset_id, request, jiff::Timestamp::now())
         {
@@ -2418,6 +2468,13 @@ async fn trash_with(
                 let sent_until = (request.action == TrashAction::Delete)
                     .then(|| prepared.retention_until.clone())
                     .flatten();
+                // Redaction first: no further byte of a deleted asset leaves this device, and a
+                // session already finalizing lands before the delete that supersedes it.
+                let redaction = if request.action == TrashAction::Delete {
+                    Some(redact_upload(&upload, asset_id).await)
+                } else {
+                    None
+                };
                 match send_op(remote, session.clone(), &prepared.op).await {
                     Ok(applied) => {
                         tracing::info!(%asset_id, sync_seq = applied.sync_seq, replayed = applied.replayed, retention_until = ?sent_until, "trash: op applied");
@@ -2428,6 +2485,7 @@ async fn trash_with(
                             replayed: applied.replayed,
                             error: None,
                             retention_until: sent_until,
+                            redaction,
                         }
                     }
                     Err(failure) => {
@@ -2437,6 +2495,7 @@ async fn trash_with(
                             .flatten();
                         TrashOutcome {
                             retention_until: sent_until,
+                            redaction,
                             ..failed_trash(
                                 asset_id,
                                 TrashFailure {
@@ -2474,6 +2533,27 @@ fn failed_trash(asset_id: Uuid, failure: TrashFailure) -> TrashOutcome {
         replayed: false,
         error: Some(failure),
         retention_until: None,
+        redaction: None,
+    }
+}
+
+/// Abort `asset_id`'s open upload sessions before its `delete` is sent, so this device sends no
+/// further byte of it. Best-effort: a failure is reported in the outcome, never a reason to
+/// withhold the delete.
+async fn redact_upload(upload: &UploadClient, asset_id: Uuid) -> TrashRedaction {
+    match push::redact_asset(upload, &asset_id.to_string()).await {
+        Ok(redaction) => TrashRedaction {
+            cancelled: redaction.cancelled.len(),
+            finalizing: redaction.finalizing.len(),
+            error: None,
+        },
+        Err(error) => {
+            tracing::warn!(%asset_id, %error, "trash: the asset's open upload sessions could not be aborted; sending the delete anyway");
+            TrashRedaction {
+                error: Some(error.to_string()),
+                ..TrashRedaction::default()
+            }
+        }
     }
 }
 

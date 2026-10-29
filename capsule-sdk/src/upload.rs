@@ -584,6 +584,10 @@ pub struct HeadInfo {
 pub struct SessionSummary {
     /// Upload session ID.
     pub id: String,
+    /// The asset the session's blob belongs to, so a client can find every session of one
+    /// asset (the redaction a delete makes). Empty when the server named none.
+    #[serde(default)]
+    pub asset_id: String,
     /// Bytes the server has received so far.
     pub received_bytes: u64,
     /// Declared total size.
@@ -1132,7 +1136,10 @@ impl UploadClient {
 
     /// Cancel a session (`DELETE /upload/{id}`). Idempotent for the caller: a
     /// `404` (already gone) resolves as `Ok(())`; a `409` (finalization running,
-    /// not interruptible) surfaces as [`UploadError::Rejected`].
+    /// not interruptible, or the session already finished) surfaces as
+    /// [`UploadError::Rejected`] with `error.upload.session_not_active`.
+    /// [`push::redact_asset`](crate::push::redact_asset) reads that answer as a
+    /// session that finalized during the abort.
     #[tracing::instrument(level = "debug", skip(self))]
     pub async fn delete(&self, session_id: &str) -> Result<(), UploadError> {
         let resp = self
