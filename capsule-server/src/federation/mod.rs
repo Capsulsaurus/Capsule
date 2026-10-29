@@ -23,6 +23,8 @@
 //! - [`peers`] — [`PeerStore`], the peers whose signing keys an operator has pinned and the
 //!   blocklist, which is a column on the same row; and [`PeerAdministration`], the operator's
 //!   `capsule-server peer …` acts on it, a block's cascade over the issued grants included.
+//! - [`pull`] — the egress pull worker's engine: each job's schedule, the lease that keeps two
+//!   replicas off one job, the per-peer circuit, and the failure policy that drives them.
 //! - [`memory`] — the deterministic doubles; [`conformance`] — the suite every adapter passes.
 //!
 //! # A peer is not an account
@@ -40,6 +42,7 @@ pub mod conformance;
 pub mod memory;
 pub mod peers;
 pub mod postgres;
+pub mod pull;
 pub mod report;
 pub mod scheme;
 pub mod store;
@@ -333,6 +336,31 @@ impl PeerTier {
             Self::Probation => budgets::PEER_KIBIBYTES_PROBATION,
             Self::Established => budgets::PEER_KIBIBYTES,
         }
+    }
+
+    /// The egress pull worker's error budget for a source peer in this tier (#964).
+    pub fn pull_errors(self) -> crate::counter::Budget {
+        match self {
+            Self::Probation => budgets::PEER_PULL_ERRORS_PROBATION,
+            Self::Established => budgets::PEER_PULL_ERRORS,
+        }
+    }
+
+    /// The egress pull worker's validation-time budget, in milliseconds, for a source peer in
+    /// this tier (#964).
+    pub fn pull_cpu_millis(self) -> crate::counter::Budget {
+        match self {
+            Self::Probation => budgets::PEER_PULL_CPU_MILLIS_PROBATION,
+            Self::Established => budgets::PEER_PULL_CPU_MILLIS,
+        }
+    }
+
+    /// Whether a hint from a peer in this tier may move a pull earlier.
+    ///
+    /// A peer on probation has its hints ignored (design/federation.md, Per-Peer
+    /// Compartmentalization): its jobs run on the schedule alone.
+    pub fn honours_hints(self) -> bool {
+        matches!(self, Self::Established)
     }
 
     /// The name this tier travels under, for a log field.

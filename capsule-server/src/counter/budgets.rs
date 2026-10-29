@@ -234,6 +234,30 @@ pub const PEER_REQUESTS_PROBATION: Budget = Budget::new(1_000, SignedDuration::f
 pub const PEER_KIBIBYTES_PROBATION: Budget =
     Budget::new(1024 * 1024, SignedDuration::from_hours(1));
 
+/// Pulls from one source peer whose input failed validation, before its circuit opens (#964).
+///
+/// Ten an hour — the egress pull worker's **error budget** (design/federation.md, Egress Pull
+/// Worker). Every job of a peer pulls every fifteen minutes, so an honest peer with a dozen
+/// subscribed albums and one bad manifest spends a unit an hour; a peer whose every page is
+/// malformed spends the budget inside its first few rounds and has its circuit opened.
+/// Transport failures are never charged here.
+pub const PEER_PULL_ERRORS: Budget = Budget::new(10, SignedDuration::from_hours(1));
+
+/// [`PEER_PULL_ERRORS`] for a peer on probation: three an hour.
+pub const PEER_PULL_ERRORS_PROBATION: Budget = Budget::new(3, SignedDuration::from_hours(1));
+
+/// Validation time this server spends on one source peer's pulled input, in milliseconds (#964).
+///
+/// One CPU-minute an hour — the receiving half of invariant 21's CPU-per-hour budget. Validating
+/// a page of manifests is signature checks and a strict CBOR parse, microseconds to a few
+/// milliseconds per asset, so a minute is tens of thousands of assets an hour; a peer that makes
+/// this server spend more has its jobs queued until the window turns rather than failed.
+pub const PEER_PULL_CPU_MILLIS: Budget = Budget::new(60_000, SignedDuration::from_hours(1));
+
+/// [`PEER_PULL_CPU_MILLIS`] for a peer on probation: a tenth, six CPU-seconds an hour.
+pub const PEER_PULL_CPU_MILLIS_PROBATION: Budget =
+    Budget::new(6_000, SignedDuration::from_hours(1));
+
 /// Federated moderation reports from one peer against one account (invariant 24).
 ///
 /// Twenty an hour per `(reporting_server, reported_user)`. A real report is one message; a
