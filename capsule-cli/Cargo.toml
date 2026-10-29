@@ -115,3 +115,14 @@ tokio = { workspace = true, features = ["test-util"] }
 # through `CARGO_BIN_EXE_capsule`, per the test-runner row of the dependencies doc. The TUI's
 # render tests snapshot `TestBackend` frames as plain text the same way (`src/tui/view/`).
 insta = { workspace = true }
+# `tests/escrow_publishes_directory.rs` drives `register`, `login`, `library init`, `auth escrow`,
+# `import` and `push` as spawned binaries against a server: `capsule-e2e`'s `Server` boots the
+# composition root `serve --memory` runs on an ephemeral port, in-process. Its own
+# dev-dependency on this crate is a test-only edge, not a build cycle.
+capsule-e2e = { path = "../capsule-e2e" }
+
+# `auth escrow` confirms its secret on an interactive prompt that refuses anything but a
+# terminal, so the escrow test hands the spawned binary a pseudo-terminal from `openpty`. Already
+# in the graph through tokio and others; unix only, as the PTY calls are.
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2.186"
