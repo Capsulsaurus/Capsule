@@ -1172,7 +1172,10 @@ async fn a_capability_for_another_album_gets_the_answer_an_unknown_address_gets(
     .await;
     unknown.assert_status(StatusCode::NOT_FOUND);
     let unknown: Value = unknown.json();
-    assert_eq!(refused, unknown);
+    assert_eq!(
+        support::without_request_id(refused),
+        support::without_request_id(unknown)
+    );
 }
 
 #[tokio::test]

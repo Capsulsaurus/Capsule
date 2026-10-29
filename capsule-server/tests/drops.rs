@@ -451,8 +451,12 @@ async fn a_held_opaque_id_cannot_be_reprovisioned_and_the_refusal_is_one_answer(
 
     let mut takeover = link_body(&id, json!({}));
     takeover["drop_pubkey"] = json!(BASE64.encode([0xEE_u8; 32]));
-    let from_stranger = provision(&fixture, &stranger, &takeover, StatusCode::BAD_REQUEST).await;
-    let from_owner = provision(&fixture, &bearer, &takeover, StatusCode::BAD_REQUEST).await;
+    let from_stranger = support::without_request_id(
+        provision(&fixture, &stranger, &takeover, StatusCode::BAD_REQUEST).await,
+    );
+    let from_owner = support::without_request_id(
+        provision(&fixture, &bearer, &takeover, StatusCode::BAD_REQUEST).await,
+    );
     assert_eq!(
         from_stranger, from_owner,
         "the refusal must not say whose the id is"
@@ -546,7 +550,9 @@ async fn an_unknown_expired_revoked_or_spent_link_is_one_answer() {
         spent,
         "not-an-opaque-id".to_owned(),
     ] {
-        bodies.push(create_drop(&fixture, &id, &bytes, StatusCode::NOT_FOUND).await);
+        bodies.push(support::without_request_id(
+            create_drop(&fixture, &id, &bytes, StatusCode::NOT_FOUND).await,
+        ));
     }
     for body in &bodies[1..] {
         assert_eq!(body, &bodies[0], "these must be byte-identical: {body}");
