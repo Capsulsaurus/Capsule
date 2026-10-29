@@ -54,7 +54,7 @@ The account master key ([Keys](/design/cryptography/keys/)) is escrowed server-s
 - A shorter PIN is permitted **only** behind an attested enclave that rate-limits unwraps (Signal SVR pattern). Never a short numeric code otherwise.
 - One active escrow per account; replacing it deletes the old blob.
 
-CLI (`capsule auth escrow` / `capsule auth recover`): setup binds the library to the signed-in account and refuses a library that already holds assets (its manifests name its own id); it shows a fresh 256-bit secret once behind a type-back gate; it refuses to replace an existing escrow without `--replace`. Every refusal writes nothing.
+CLI (`capsule auth escrow` / `capsule auth recover`): setup binds the library to the signed-in account and refuses a library that already holds assets (its manifests name its own id); it shows a fresh 256-bit secret once behind a type-back gate; it refuses to replace an existing escrow without `--replace`. Every refusal writes nothing. Once the library is bound, setup makes its device a member of the account's published device directory (publishing the library's own when the account has none), as recovery does for a recovered device, so the server accepts what the device uploads.
 
 ### Album Key Escrow
 

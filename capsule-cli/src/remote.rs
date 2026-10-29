@@ -552,8 +552,12 @@ async fn recover_with(
 /// published, the device is appended with `Workspace::extend_account_directory` and the result
 /// is published at the stored version + 1, keeping every device already listed. A directory
 /// that already lists the device under its key is adopted unchanged and nothing is published.
-/// With none published ([`DirectoryError::NotPublished`]), the workspace's own directory —
-/// this device alone, at version 1 — is the account's first.
+/// With none published ([`DirectoryError::NotPublished`]), the workspace's own directory — for
+/// a recovered library this device alone at version 1, for an escrowed one every device it
+/// lists at the version its account bind signed — is the account's first.
+///
+/// Both [`auth_recover`] and [`auth_escrow`] join through here, so a library either command
+/// leaves behind can author uploads the server accepts.
 async fn join_account_directory(
     directory: &DirectoryClient,
     workspace: &mut Workspace,
@@ -567,13 +571,13 @@ async fn join_account_directory(
                 %user_id,
                 directory_version = stored,
                 devices = published.core.devices.len(),
-                "recover: the account's directory fetched and verified"
+                "directory: the account's directory fetched and verified"
             );
             let Some(extended) = workspace.extend_account_directory(&published)? else {
                 tracing::info!(
                     %user_id,
                     directory_version = stored,
-                    "recover: the account's directory already lists this device"
+                    "directory: the account's directory already lists this device"
                 );
                 return Ok(stored);
             };
@@ -582,7 +586,7 @@ async fn join_account_directory(
         Err(DirectoryError::NotPublished) => {
             tracing::info!(
                 %user_id,
-                "recover: the account has no directory yet; publishing this device's own"
+                "directory: the account has no directory yet; publishing this device's own"
             );
             workspace.device_directory().clone()
         }
@@ -760,21 +764,29 @@ pub struct EscrowSetup {
 ///    type-back gate; `false` is [`RemoteError::RecoverySecretNotConfirmed`];
 /// 4. bind the library to the server's id (`Workspace::bind_account_id`), which keeps its own
 ///    [`LifecycleError::AccountRebind`] refusal as the authority behind step 1's early one;
-/// 5. wrap the master key under the secret at `tier` and store it (`PUT /v1/auth/escrow`),
+/// 5. make this device a member of the account's published device directory (#920), the way
+///    [`auth_recover`] does: extend the directory step 1 verified, adopt it unchanged when it
+///    already lists this device, or publish the library's own as the account's first. Without
+///    it the server refuses every upload this device authored
+///    (`error.upload.device_not_authorized`), so `capsule push` would back nothing up;
+/// 6. wrap the master key under the secret at `tier` and store it (`PUT /v1/auth/escrow`),
 ///    then store the sealed identity beside it (`PUT /v1/auth/escrow/identity`) and each
 ///    album's key escrow the server does not hold current (`PUT /v1/auth/escrow/albums/{id}`,
 ///    #741), so a recovery from this escrow opens the library's albums.
 ///
 /// Every refusal before step 4 writes nothing, locally or on the server. A failure after it
-/// leaves the library bound, which a rerun treats as already done.
+/// leaves the library bound, which a rerun treats as already done. The directory is joined
+/// before the escrow is stored so that a rerun after any later failure finds no escrow in its
+/// way and the directory already listing this device, which it adopts without publishing.
 ///
 /// # Errors
 ///
 /// [`RemoteError::NotAuthenticated`] with no stored session; [`RemoteError::Profile`] when the
 /// account id cannot be read; the refusals above; [`RemoteError::Directory`] when the account's
 /// directory does not verify under the library's identity key (code
-/// `error.directory.untrusted_signature`) or cannot be fetched; [`RemoteError::Lifecycle`] for
-/// the bind or the wrap; [`RemoteError::Recovery`] for an escrow or sealed-identity call.
+/// `error.directory.untrusted_signature`), cannot be fetched, or its publish is refused;
+/// [`RemoteError::Lifecycle`] for the bind, the directory extend or the wrap;
+/// [`RemoteError::Recovery`] for an escrow or sealed-identity call.
 #[instrument(skip_all, fields(library_user = %workspace.user_id(), replace = replace))]
 pub async fn auth_escrow(
     remote: &RemoteConfig,
@@ -842,6 +854,13 @@ async fn escrow_with(
 
     workspace.bind_account_id(user_id)?;
     tracing::info!(%user_id, "escrow: the library is bound to the server's account id");
+    let directory_version = join_account_directory(&directory, workspace).await?;
+    tracing::info!(
+        %user_id,
+        device = %workspace.device_id(),
+        directory_version,
+        "escrow: this device is listed in the account's directory"
+    );
 
     let blob = workspace.escrow_master_key(secret.as_bytes(), tier)?;
     let stored = recovery.store_escrow(&blob).await?;
@@ -867,8 +886,8 @@ async fn escrow_with(
 /// device directory is signed under.
 ///
 /// The directory is fetched under `workspace`'s identity key: a document that verifies, or none
-/// published at all ([`DirectoryError::NotPublished`], so the first recovery publishes the
-/// account's first directory), passes. A document that does not verify
+/// published at all ([`DirectoryError::NotPublished`], so this escrow publishes the account's
+/// first directory once the library is bound), passes. A document that does not verify
 /// ([`DirectoryError::UntrustedSignature`]) means another library of the account anchored its
 /// own key: a recovery from this library's escrow could never join that directory (#625), so
 /// the escrow is refused before a secret is minted. Any other failure is returned as is, since
