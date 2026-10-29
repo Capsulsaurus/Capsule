@@ -117,7 +117,7 @@ pub const OFFER_EXCHANGE_PROTOCOL: &str = "2026-10-29";
 /// How long a [`PeerClient`] that sent an offer waits for the listing: the serving side cuts
 /// and seals its artifact from the offer before it lists, which can take far longer than one
 /// frame's I/O timeout. Added to that timeout.
-pub const LISTING_BUILD_ALLOWANCE: Duration = Duration::from_secs(10 * 60);
+pub const LISTING_BUILD_ALLOWANCE: Duration = Duration::from_mins(10);
 
 /// The bound on the whole handshake: TLS, both hellos and the hybrid check. A peer that stalls
 /// it is dropped.
