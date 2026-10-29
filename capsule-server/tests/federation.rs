@@ -1113,6 +1113,46 @@ async fn a_peer_on_probation_is_held_to_the_smaller_events_budget() {
 }
 
 #[tokio::test]
+async fn a_probation_peer_refused_for_its_budget_spends_no_nonce() {
+    // The authenticator foresees the `429` under the probation budget `admit` charges. Read
+    // under the established budget, the spent probation window would look open, the nonce
+    // would be spent, and the same signature would be a replay once the window resets.
+    let (fixture, _) = shared().await;
+    let newcomer = "probation-nonce.test";
+    support::pin_request_key_now(&fixture, newcomer).await;
+    let (bearer, _) =
+        unpinned_capability(&fixture, &fixture.codec, newcomer, &album(), Scope::Read, 1).await;
+    let path = format!("/v1/sync?{}", album_query());
+    let key = CounterKey::PeerRequests(newcomer.to_owned());
+    for _ in 0..budgets::PEER_REQUESTS_PROBATION.limit {
+        fixture
+            .counters
+            .hit(&key, budgets::PEER_REQUESTS_PROBATION, fixture.clock.now())
+            .await
+            .expect("the counter answers");
+    }
+    const {
+        assert!(
+            budgets::PEER_REQUESTS_PROBATION.limit < budgets::PEER_REQUESTS.limit,
+            "the established budget must still have room for this case to tell the tiers apart"
+        );
+    }
+
+    let signature = support::request_signature(&fixture, "GET", &path, &bearer);
+    page_signed(&fixture, &bearer, &path, Some(&signature))
+        .await
+        .assert_status(StatusCode::TOO_MANY_REQUESTS);
+    fixture
+        .counters
+        .reset(&key)
+        .await
+        .expect("the counter resets");
+    page_signed(&fixture, &bearer, &path, Some(&signature))
+        .await
+        .assert_status(StatusCode::OK);
+}
+
+#[tokio::test]
 async fn a_capability_for_another_album_gets_the_answer_an_unknown_address_gets() {
     // The disclosure boundary: a `403` would confirm the address is referenced by somebody, so
     // a peer outside the album is told exactly what a stranger naming a random hash is told —
