@@ -155,7 +155,9 @@ public actor ImportService {
             width: metadata.pixelWidth.flatMap { UInt32(exactly: $0) },
             height: metadata.pixelHeight.flatMap { UInt32(exactly: $0) },
             cameraMake: metadata.cameraMake,
-            cameraModel: metadata.cameraModel
+            cameraModel: metadata.cameraModel,
+            gpsLatitude: metadata.latitude,
+            gpsLongitude: metadata.longitude
         )
     }
 
@@ -172,7 +174,9 @@ public actor ImportService {
             importTimestamp: Int64(Date().timeIntervalSince1970),
             hashSHA256: hash,
             width: metadata.pixelWidth.map(Int64.init),
-            height: metadata.pixelHeight.map(Int64.init)
+            height: metadata.pixelHeight.map(Int64.init),
+            latitude: metadata.latitude,
+            longitude: metadata.longitude
         )
     }
 }

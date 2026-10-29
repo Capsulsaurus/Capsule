@@ -136427,6 +136427,16 @@
         }
       }
     },
+    "app.viewer.info.caption.save_failed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This caption couldn't be saved. Edit it again to retry."
+          }
+        }
+      }
+    },
     "app.viewer.info.caption_placeholder": {
       "localizations": {
         "ar": {

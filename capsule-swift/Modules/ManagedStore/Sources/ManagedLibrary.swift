@@ -82,6 +82,34 @@ public actor ManagedLibrary {
         }
     }
 
+    /// Rewrite an asset's sidecar: decode it through `coder`, apply `change`, and
+    /// write the result back in place.
+    ///
+    /// Read, change and write all happen here so the fields the change does not
+    /// touch — ``CatalogSidecar/unknownFieldsCBOR`` included — survive verbatim.
+    ///
+    /// - Parameter captureDate: the asset's capture instant, which decides its
+    ///   `media/{YYYY}/{YYYY-MM}` partition.
+    /// - Throws: ``CatalogError/sidecar(message:)`` when the asset has no sidecar
+    ///   on disk or it does not decode; the file store's error when the read or
+    ///   the write fails. Nothing is written unless the whole change is.
+    public func updateSidecar(
+        uuid: String,
+        captureDate: Date,
+        coder: any SidecarCoding,
+        _ change: @Sendable (inout CatalogSidecar) -> Void
+    ) async throws {
+        let url = layout.sidecarFile(uuid: uuid, captureDate: captureDate)
+        guard await fileStore.fileExists(at: url) else {
+            CapsuleLog.managedStore.error("sidecar update failed for \(uuid, privacy: .public): no sidecar on disk")
+            throw CatalogError.sidecar(message: "no sidecar for \(uuid)")
+        }
+        var sidecar = try await coder.decode(fileStore.read(at: url))
+        change(&sidecar)
+        try await fileStore.write(coder.encode(sidecar), to: url)
+        CapsuleLog.managedStore.debug("sidecar updated for \(uuid, privacy: .public)")
+    }
+
     /// The extension every sidecar is written under; see ``ManagedLibraryLayout``.
     private static let sidecarExtension = "cbor"
 

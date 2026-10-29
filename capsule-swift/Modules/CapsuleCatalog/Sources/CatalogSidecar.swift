@@ -75,6 +75,9 @@ public struct CatalogSidecar: Sendable, Equatable, Codable {
     public var gpsLatitude: Double?
     /// GPS longitude in decimal degrees, from EXIF.
     public var gpsLongitude: Double?
+    /// The user's caption, or `nil` for none. Optional so a sidecar written
+    /// before this field existed still decodes, with no caption.
+    public var caption: String?
     /// Opaque CBOR of sidecar fields this build does not recognise. Empty when
     /// there are none; never inspected, only round-tripped.
     public var unknownFieldsCBOR: Data
@@ -109,6 +112,7 @@ public struct CatalogSidecar: Sendable, Equatable, Codable {
         cameraModel: String? = nil,
         gpsLatitude: Double? = nil,
         gpsLongitude: Double? = nil,
+        caption: String? = nil,
         unknownFieldsCBOR: Data = Data()
     ) {
         self.version = version
@@ -140,6 +144,7 @@ public struct CatalogSidecar: Sendable, Equatable, Codable {
         self.cameraModel = cameraModel
         self.gpsLatitude = gpsLatitude
         self.gpsLongitude = gpsLongitude
+        self.caption = caption
         self.unknownFieldsCBOR = unknownFieldsCBOR
     }
 }

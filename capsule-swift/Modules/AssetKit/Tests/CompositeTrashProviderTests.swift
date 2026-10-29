@@ -104,10 +104,62 @@ struct CompositeCaptionStoreTests {
         #expect(await store.caption(for: .managed(uuid: "import")) == "beach")
     }
 
-    @Test("the managed store refuses a caption rather than dropping it")
-    func managedRefusesWrites() async throws {
+    @Test("an import's caption is kept in the catalog register and its sidecar, not the primary")
+    func managedKeepsCaption() async throws {
+        let fixture = try await ManagedCaptionFixture()
+        let primary = FakeCaptions(owned: [])
+        let store = CompositeCaptionStore(
+            primary: primary,
+            secondaries: [ManagedCaptionStore(provider: fixture.provider)]
+        )
+
+        try await store.setCaption("beach", for: .managed(uuid: "import"))
+
+        #expect(await primary.captions.isEmpty)
+        #expect(await store.caption(for: .managed(uuid: "import")) == "beach")
+        #expect(await fixture.catalog.asset(id: "import")?.caption == "beach")
+        #expect(try await fixture.sidecarCaption() == "beach")
+    }
+
+    @Test("clearing an import's caption clears both the register and the sidecar")
+    func managedClearsCaption() async throws {
+        let fixture = try await ManagedCaptionFixture()
+        let store = ManagedCaptionStore(provider: fixture.provider)
+
+        try await store.setCaption("beach", for: .managed(uuid: "import"))
+        try await store.setCaption("", for: .managed(uuid: "import"))
+
+        #expect(await store.caption(for: .managed(uuid: "import")) == nil)
+        #expect(await fixture.catalog.asset(id: "import")?.caption == nil)
+        #expect(try await fixture.sidecarCaption() == nil)
+    }
+
+    @Test("a caption whose sidecar cannot be rewritten is refused, and the register is put back")
+    func managedRefusesWithoutSidecar() async throws {
+        let fixture = try await ManagedCaptionFixture(withSidecar: false)
+        let store = ManagedCaptionStore(provider: fixture.provider)
+
+        await #expect(throws: CatalogError.sidecar(message: "no sidecar for import")) {
+            try await store.setCaption("beach", for: .managed(uuid: "import"))
+        }
+        #expect(await fixture.catalog.asset(id: "import")?.caption == nil)
+        #expect(await store.caption(for: .managed(uuid: "import")) == nil)
+    }
+}
+
+@Suite("ManagedProvider locations")
+struct ManagedProviderLocationTests {
+    @Test("an import's GPS fix is its location; an import without one, or another store's asset, is omitted")
+    func locationsFromCatalogRows() async throws {
         let catalog = MockCatalog()
-        try await catalog.insertAsset(Fixtures.catalogAsset(id: "import"))
+        var located = Fixtures.catalogAsset(id: "located")
+        located.latitude = 48.8584
+        located.longitude = 2.2945
+        var halfLocated = Fixtures.catalogAsset(id: "half")
+        halfLocated.latitude = 10
+        try await catalog.insertAsset(located)
+        try await catalog.insertAsset(halfLocated)
+        try await catalog.insertAsset(Fixtures.catalogAsset(id: "unlocated"))
         let provider = ManagedProvider(
             library: ManagedLibrary(
                 layout: ManagedLibraryLayout(root: URL(filePath: "/capsule/Library")),
@@ -116,14 +168,16 @@ struct CompositeCaptionStoreTests {
             ),
             authGate: MockLocalAuthGate()
         )
-        let primary = FakeCaptions(owned: [])
-        let store = CompositeCaptionStore(primary: primary, secondaries: [ManagedCaptionStore(provider: provider)])
 
-        await #expect(throws: CaptionStoreError.unsupported) {
-            try await store.setCaption("beach", for: .managed(uuid: "import"))
-        }
-        #expect(await primary.captions.isEmpty)
-        #expect(await store.caption(for: .managed(uuid: "import")) == nil)
+        let locations = await provider.locations(for: [
+            .managed(uuid: "located"),
+            .managed(uuid: "half"),
+            .managed(uuid: "unlocated"),
+            .managed(uuid: "not-mine"),
+            .photoKit(localIdentifier: "elsewhere"),
+        ])
+
+        #expect(locations == [.managed(uuid: "located"): AssetCoordinate(latitude: 48.8584, longitude: 2.2945)])
     }
 }
 

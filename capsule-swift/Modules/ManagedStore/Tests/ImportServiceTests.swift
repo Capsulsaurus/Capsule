@@ -102,6 +102,37 @@ struct ImportServiceTests {
         #expect(result.importedCount == 1)
         #expect(result.duplicateCount == 1)
     }
+
+    @Test("an import's GPS fix lands in both its sidecar and its catalog row")
+    func recordsGPS() async throws {
+        let catalog = MockCatalog()
+        let fileStore = MockFileStore()
+        let source = URL(filePath: "/tmp/import/located.jpg")
+        await fileStore.seedFile(Data("located".utf8), at: source)
+        let service = ImportService(
+            library: ManagedLibrary(layout: layout, fileStore: fileStore, catalog: catalog),
+            fileStore: fileStore,
+            hasher: MockContentHasher(),
+            metadataExtractor: MockMetadataExtractor(template: MediaMetadata(
+                captureTimestamp: Fixtures.referenceTimestamp,
+                latitude: -33.8568,
+                longitude: 151.2153
+            )),
+            sidecarCoder: JSONSidecarCoder()
+        )
+
+        let result = await service.importAssets(from: [ImportSource(url: source, originalFilename: "located.jpg")])
+
+        let uuid = try #require(result.importedAssetIDs.first)
+        let row = try #require(await catalog.asset(id: uuid))
+        #expect(row.latitude == -33.8568)
+        #expect(row.longitude == 151.2153)
+        let captureDate = Date(timeIntervalSince1970: TimeInterval(row.captureTimestamp))
+        let bytes = try #require(await fileStore.data(at: layout.sidecarFile(uuid: uuid, captureDate: captureDate)))
+        let sidecar = try JSONSidecarCoder().decode(bytes)
+        #expect(sidecar.gpsLatitude == -33.8568)
+        #expect(sidecar.gpsLongitude == 151.2153)
+    }
 }
 
 @Suite("ImageIOMetadataExtractor EXIF parsing")

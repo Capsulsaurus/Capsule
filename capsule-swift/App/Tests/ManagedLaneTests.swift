@@ -235,22 +235,34 @@ struct ManagedLaneTests {
         #expect(facts == AssetExifMetadata())
     }
 
-    @Test("an import's caption is refused by its owner instead of landing in the mock library")
+    @Test("an import's caption is kept by its owner instead of landing in the mock library")
     func importedCaptionIsRouted() async throws {
         let root = Self.temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let mock = MockEnvironment(scenario: .emptyLibrary)
+        let libraryCaptions = PortBackedCaptionStore(library: mock.library, organize: mock.organize)
         let lane = AppEnvironment.makeManagedLane(root: root.appending(path: "Library", directoryHint: .isDirectory))
-        let captions = AppEnvironment.composeCaptions(
-            library: PortBackedCaptionStore(library: mock.library, organize: mock.organize),
-            managed: lane
-        )
+        let captions = AppEnvironment.composeCaptions(library: libraryCaptions, managed: lane)
         let imported = try await Self.importPhoto(through: lane, in: root).id
 
-        await #expect(throws: CaptionStoreError.unsupported) {
-            try await captions.setCaption("harbour", for: imported)
-        }
-        #expect(await captions.caption(for: imported) == nil)
+        try await captions.setCaption("harbour", for: imported)
+
+        #expect(await captions.caption(for: imported) == "harbour")
+        #expect(await libraryCaptions.caption(for: imported) == nil)
+    }
+
+    @Test("an import's GPS fix reaches the composed timeline's locations, which map screens read")
+    func importedLocationReachesTimeline() async throws {
+        let root = Self.temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let mock = MockEnvironment(scenario: .emptyLibrary)
+        let library = PortBackedAssetProvider(library: mock.library, organize: mock.organize)
+        let lane = AppEnvironment.makeManagedLane(root: root.appending(path: "Library", directoryHint: .isDirectory))
+        let timeline = AppEnvironment.composeTimeline(library: library, managed: lane.provider)
+        let imported = try await Self.importPhoto(through: lane, in: root).id
+
+        let coordinate = try #require(await timeline.locations(for: [imported])[imported])
+        #expect(abs(coordinate.latitude - Self.fixtureLatitude) < 0.001)
     }
 
     // MARK: - Fixtures

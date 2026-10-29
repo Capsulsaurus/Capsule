@@ -61,6 +61,17 @@ struct CapsuleCatalogTests {
         }
     }
 
+    @Test("a caption write is refused, not dropped: the core catalog has no caption register")
+    func captionWriteIsRefused() async throws {
+        let catalog = try FFIAssetCatalog.inMemory()
+        try await catalog.insertAsset(makeAsset(id: "captioned"))
+
+        await #expect(throws: CapsuleCatalog.CatalogError.self) {
+            try await catalog.setCaption("harbour", assetID: "captioned")
+        }
+        #expect(try await catalog.asset(id: "captioned")?.caption == nil)
+    }
+
     @Test("the timeline is ordered by capture time, newest first")
     func timelineOrdering() async throws {
         let catalog = try FFIAssetCatalog.inMemory()

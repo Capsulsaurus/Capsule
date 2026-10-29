@@ -1646,6 +1646,7 @@
   "app.viewer.info.aperture": "Aperture",
   "app.viewer.info.camera": "Camera",
   "app.viewer.info.caption.accessibility": "Caption",
+  "app.viewer.info.caption.save_failed": "This caption couldn't be saved. Edit it again to retry.",
   "app.viewer.info.caption_placeholder": "Add a Caption",
   "app.viewer.info.capture": "Capture",
   "app.viewer.info.date": "Date",
