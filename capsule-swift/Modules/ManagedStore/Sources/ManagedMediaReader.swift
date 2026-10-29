@@ -189,42 +189,21 @@ public final class ManagedMediaReader: Sendable {
         return CGImageSourceCreateThumbnailAtIndex(source, 0, options)
     }
 
-    /// Container properties only — never a pixel decode.
+    /// Container properties only — never a pixel decode. The field parse is
+    /// ``ContainerExif``'s, shared with the viewer's PhotoKit loader.
     static func facts(of data: Data, fileExtension: String) -> ManagedMediaFacts {
         var facts = ManagedMediaFacts(fileExtension: fileExtension, byteCount: Int64(data.count))
-        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
-              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
-        else { return facts }
-        if let tiff = properties[kCGImagePropertyTIFFDictionary] as? [CFString: Any] {
-            facts.cameraMake = tiff[kCGImagePropertyTIFFMake] as? String
-            facts.cameraModel = tiff[kCGImagePropertyTIFFModel] as? String
-        }
-        if let exif = properties[kCGImagePropertyExifDictionary] as? [CFString: Any] {
-            facts.lensModel = exif[kCGImagePropertyExifLensModel] as? String
-            facts.isoSpeed = (exif[kCGImagePropertyExifISOSpeedRatings] as? [Int])?.first
-            facts.aperture = exif[kCGImagePropertyExifFNumber] as? Double
-            facts.shutterSpeed = exif[kCGImagePropertyExifExposureTime] as? Double
-            facts.focalLength = exif[kCGImagePropertyExifFocalLength] as? Double
-        }
-        if let gps = properties[kCGImagePropertyGPSDictionary] as? [CFString: Any] {
-            facts.latitude = signedDegrees(
-                gps[kCGImagePropertyGPSLatitude] as? Double,
-                reference: gps[kCGImagePropertyGPSLatitudeRef] as? String,
-                negative: "S"
-            )
-            facts.longitude = signedDegrees(
-                gps[kCGImagePropertyGPSLongitude] as? Double,
-                reference: gps[kCGImagePropertyGPSLongitudeRef] as? String,
-                negative: "W"
-            )
-        }
+        let exif = ContainerExif.parse(data)
+        facts.cameraMake = exif.cameraMake
+        facts.cameraModel = exif.cameraModel
+        facts.lensModel = exif.lensModel
+        facts.isoSpeed = exif.isoSpeed
+        facts.aperture = exif.aperture
+        facts.shutterSpeed = exif.shutterSpeed
+        facts.focalLength = exif.focalLength
+        facts.latitude = exif.latitude
+        facts.longitude = exif.longitude
         return facts
-    }
-
-    /// EXIF stores GPS as an unsigned magnitude plus a hemisphere letter.
-    private static func signedDegrees(_ magnitude: Double?, reference: String?, negative: String) -> Double? {
-        guard let magnitude else { return nil }
-        return reference?.uppercased() == negative ? -abs(magnitude) : abs(magnitude)
     }
 }
 
