@@ -316,8 +316,11 @@ private let moduleTargets: [Target] =
             .target(name: "CapsuleUI"),
             .target(name: "AssetKit"),
             .target(name: "ImagePipeline"),
+            // The label and region editor reads and writes through `LabelPort`.
+            .target(name: "CapsuleDomain"),
+            .target(name: "CapsulePorts"),
         ],
-        testDependencies: [supportDependency]
+        testDependencies: [supportDependency, .target(name: "CapsuleMock")]
     )
     + module(
         "FeatureAlbums",
