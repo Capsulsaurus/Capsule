@@ -53,8 +53,20 @@ jobs:
           distribution: temurin
           java-version: "21"
 
+      # `mise run bench-apps` needs mise on PATH, and the `-Pcapsule.wireFfi` staging shells
+      # out to `mise run gen-bindings` - but install nothing implicitly, as build-android.yml.
+      - name: Set up mise (exec shim)
+        uses: jdx/mise-action@v2
+        with:
+          install: false
+
+      # `-Pcapsule.wireFfi` builds the per-ABI libcapsule_sdk.so through cargo-ndk, so every
+      # Android target build-android.yml adds is needed here too. The NDK and cargo-ndk come
+      # from the bench runner.
       - name: Install Rust toolchain
-        run: rustup toolchain install
+        run: |
+          rustup toolchain install
+          rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android i686-linux-android
 
       - name: Run the benchmark and compare with the baseline
         # Through the environment, never interpolated into the script.
