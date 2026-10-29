@@ -8,16 +8,22 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.os.Build
+import android.os.LocaleList
 import com.justin13888.capsule.MainActivity
 import com.justin13888.capsule.R
+import com.justin13888.capsule.i18n.AppCompatLanguageStore
+import com.justin13888.capsule.i18n.AppLanguagePicker
+import java.util.logging.Logger
 
 /**
  * Posting an alert as a system notification, through `NotificationManager` directly.
  *
  * The words are resolved here, when the alarm fires, from the app's own
- * `notification.*` resources - so they follow the device language at that moment, and
- * no server can supply or influence them.
+ * `notification.*` resources - so they follow the app language at that moment, and
+ * no server can supply or influence them. Below Android 13 the in-app language reaches
+ * only AppCompat activities, so the strings are resolved through [localized].
  */
 object AlertNotifications {
     const val CHANNEL_ID = "capsule.alerts"
@@ -25,15 +31,43 @@ object AlertNotifications {
     /** The intent extra carrying a tapped alert's [AlertDestination] name. */
     const val EXTRA_DESTINATION = "com.justin13888.capsule.alerts.DESTINATION"
 
-    /** Create the alerts channel; idempotent. */
+    private val log = Logger.getLogger("capsule.alerts")
+
+    /**
+     * Create the alerts channel, named in the app language; idempotent. Calling it again
+     * after the language changes renames the existing channel.
+     */
     fun ensureChannel(context: Context) {
+        val words = localized(context)
         val channel =
             NotificationChannel(
                 CHANNEL_ID,
-                context.getString(R.string.notification_channel_name),
+                words.getString(R.string.notification_channel_name),
                 NotificationManager.IMPORTANCE_DEFAULT,
-            ).apply { description = context.getString(R.string.notification_channel_description) }
+            ).apply { description = words.getString(R.string.notification_channel_description) }
         context.getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+    }
+
+    /**
+     * [context], or below Android 13 with an in-app language chosen, a context configured
+     * with that language, so its resources resolve in it.
+     */
+    fun localized(context: Context): Context {
+        // Android 13+ already carries the per-app language; skip the LocaleManager round trip.
+        if (!AppLanguagePicker.isNeeded(Build.VERSION.SDK_INT)) return context
+        val system = context.resources.configuration.locales
+        val tags =
+            AlertNotificationLocale.select(
+                sdkInt = Build.VERSION.SDK_INT,
+                chosen = AppCompatLanguageStore.notificationLanguage(context),
+                system = (0 until system.size()).map { system[it].toLanguageTag() },
+            ) ?: return context
+        log.fine { "notification language: locales=${tags.joinToString(",")}" }
+        val configuration =
+            Configuration(context.resources.configuration).apply {
+                setLocales(LocaleList.forLanguageTags(tags.joinToString(",")))
+            }
+        return context.createConfigurationContext(configuration)
     }
 
     /** Whether a notification posted now would be shown. */
@@ -80,12 +114,15 @@ object AlertNotifications {
         context.getSystemService(NotificationManager::class.java).notify(alert.alertClass.ordinal, notification)
     }
 
-    /** The title and body for [copy], from the generated `notification_*` resources. */
+    /**
+     * The title and body for [copy], from the generated `notification_*` resources, in the
+     * app language ([localized]).
+     */
     fun text(
         context: Context,
         copy: AlertCopy,
     ): Pair<String, String> {
-        val resources = context.resources
+        val resources = localized(context).resources
         val count = copy.count ?: 0
         return when (copy.stem) {
             "notification.sync_stale" ->
@@ -113,5 +150,25 @@ object AlertNotifications {
                 resources.getString(R.string.notification_drop_pending_title) to
                     resources.getQuantityString(R.plurals.notification_drop_pending_body, count, count)
         }
+    }
+}
+
+/** Which locales a notification is rendered in. */
+object AlertNotificationLocale {
+    /**
+     * The locale list (BCP 47 tags) to configure a notification context with, or null to
+     * use the context as it is.
+     *
+     * Android 13+ gives every context the per-app language, so nothing is configured there.
+     * Below it, a [chosen] in-app language comes first and the [system] locales follow as
+     * fallbacks, without repeating the chosen one, as AppCompat orders an activity's list.
+     */
+    fun select(
+        sdkInt: Int,
+        chosen: String?,
+        system: List<String>,
+    ): List<String>? {
+        if (!AppLanguagePicker.isNeeded(sdkInt) || chosen.isNullOrBlank()) return null
+        return listOf(chosen) + system.filterNot { it.equals(chosen, ignoreCase = true) }
     }
 }

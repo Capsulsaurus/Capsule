@@ -34,7 +34,10 @@ import java.util.logging.Logger
 class MainActivity : AppCompatActivity() {
     private val alerts by lazy { (application as CapsuleApp).alerts }
 
-    private val languagePicker by lazy { AppLanguagePicker(AppCompatLanguageStore, LocalesConfig.tags(this)) }
+    // A language change renames the alerts channel at once, rather than at the next alert.
+    private val languageStore by lazy { AppCompatLanguageStore(this, onApplied = AlertNotifications::ensureChannel) }
+
+    private val languagePicker by lazy { AppLanguagePicker(languageStore, LocalesConfig.tags(this)) }
 
     // The answer, either way, is just another state change: refresh, and the loop arms
     // the alarms or degrades every class to its badge.
@@ -45,6 +48,11 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         handleAlertTap(intent)
+        if (AppLanguagePicker.isNeeded(Build.VERSION.SDK_INT)) {
+            // AppCompat has loaded its stored choice by now; reading it keeps the mirror that
+            // alert notifications read from outside an activity level with it.
+            languageStore.applied()
+        }
         setContent {
             // Remove when https://issuetracker.google.com/issues/364713509 is fixed
             LaunchedEffect(isSystemInDarkTheme()) {
