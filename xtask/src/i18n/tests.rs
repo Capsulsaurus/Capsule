@@ -696,6 +696,168 @@ fn every_emitted_quantity_is_selectable_in_its_locale() {
     }
 }
 
+// ── Translation contract: placeholder parity and provenance ───────────────
+//
+//  1. a translation carrying the source's arguments, reordered, passes
+//  2. a dropped `{name}` fails, as does an added one
+//  3. a plural flattened to text fails, as does text turned into a plural
+//  4. a plural on a different selector fails
+//  5. a plural whose arms differ from the source's still passes: arms are per-locale
+//  6. a translation of a key the source lacks fails, and every violation is reported
+//  7. a translation must record `origin`, from the closed set; the source must not
+//  8. end to end: every committed translation passes both
+
+/// The error from [`placeholder_parity`], or `None` when it passes.
+fn parity(source: &str, translation: &str) -> Option<String> {
+    placeholder_parity(source, translation)
+        .err()
+        .map(|e| format!("{e:#}"))
+}
+
+#[test]
+fn a_translation_may_reorder_the_source_arguments() {
+    assert_eq!(parity("{a} then {b}", "{b} avant {a}"), None);
+    assert_eq!(parity("No arguments", "Aucun argument"), None);
+}
+
+#[test]
+fn a_dropped_or_added_argument_fails_parity() {
+    let dropped = parity("Hello, {name}!", "Bonjour !").expect("dropped `{name}` must fail");
+    assert!(dropped.contains("{name}"), "{dropped}");
+    let added = parity("Hello!", "Bonjour, {name} !").expect("added `{name}` must fail");
+    assert!(added.contains("{name}"), "{added}");
+    assert!(parity("{a} and {b}", "{a} et {c}").is_some());
+}
+
+#[test]
+fn a_plural_must_stay_a_plural_and_text_must_stay_text() {
+    let source = "{count, plural, one {# item} other {# items}}";
+    let flattened = parity(source, "{count} éléments").expect("a flattened plural must fail");
+    assert!(flattened.contains("plural"), "{flattened}");
+    assert!(parity("{count} items", "{count, plural, other {# 件}}").is_some());
+}
+
+#[test]
+fn a_plural_on_another_selector_fails_parity() {
+    assert!(
+        parity(
+            "{count, plural, one {# item} other {# items}}",
+            "{n, plural, other {# 件}}"
+        )
+        .is_some()
+    );
+}
+
+#[test]
+fn plural_arms_are_the_locales_own() {
+    // Russian selects `few` and `many`, Japanese only `other`: the arm set is the target
+    // language's, so parity compares arguments, never categories.
+    let source = "{count, plural, one {# photo of {album}} other {# photos of {album}}}";
+    assert_eq!(
+        parity(
+            source,
+            "{count, plural, one {# фото из {album}} few {# фото из {album}} \
+             many {# фото из {album}} other {# фото из {album}}}"
+        ),
+        None
+    );
+    assert_eq!(
+        parity(source, "{count, plural, other {{album} の写真 # 枚}}"),
+        None
+    );
+    assert!(parity(source, "{count, plural, other {# 枚}}").is_some());
+}
+
+#[test]
+fn every_parity_violation_is_reported_at_once() {
+    let mut messages = BTreeMap::new();
+    messages.insert(
+        "en".to_string(),
+        BTreeMap::from([("greet".to_string(), "Hello, {name}!".to_string())]),
+    );
+    messages.insert(
+        "fr".to_string(),
+        BTreeMap::from([
+            ("greet".to_string(), "Bonjour !".to_string()),
+            ("orphan".to_string(), "Orphelin".to_string()),
+        ]),
+    );
+    let catalogs = Catalogs {
+        source: "en".to_string(),
+        supported: vec!["en".to_string(), "fr".to_string()],
+        messages,
+    };
+    let err = format!(
+        "{:#}",
+        catalogs
+            .check_placeholder_parity()
+            .expect_err("both violations must fail")
+    );
+    assert!(err.contains("fr: key `greet`"), "{err}");
+    assert!(
+        err.contains("fr: key `orphan` is not in the en catalog"),
+        "{err}"
+    );
+}
+
+#[test]
+fn a_key_the_source_lacks_has_no_argument_plan() {
+    let mut messages = BTreeMap::new();
+    messages.insert("en".to_string(), BTreeMap::new());
+    messages.insert(
+        "fr".to_string(),
+        BTreeMap::from([("orphan".to_string(), "Orphelin".to_string())]),
+    );
+    let catalogs = Catalogs {
+        source: "en".to_string(),
+        supported: vec!["en".to_string(), "fr".to_string()],
+        messages,
+    };
+    let err = format!(
+        "{:#}",
+        catalogs
+            .plan_for("orphan")
+            .expect_err("no source message, no plan")
+    );
+    assert!(
+        err.contains("key `orphan` is not in the en catalog"),
+        "{err}"
+    );
+}
+
+#[test]
+fn a_translation_records_its_origin_from_the_closed_set() {
+    let entry = |origin: Option<&str>| match origin {
+        Some(o) => serde_json::json!({ "message": "m", "origin": o }),
+        None => serde_json::json!({ "message": "m" }),
+    };
+    assert!(check_origin(&entry(Some("machine")), false).is_ok());
+    assert!(check_origin(&entry(Some("human")), false).is_ok());
+    assert!(check_origin(&entry(None), false).is_err());
+    assert!(check_origin(&entry(Some("reviewed")), false).is_err());
+    assert!(check_origin(&serde_json::json!({ "message": "m", "origin": 1 }), false).is_err());
+}
+
+#[test]
+fn the_source_catalog_carries_no_origin() {
+    assert!(check_origin(&serde_json::json!({ "message": "m" }), true).is_ok());
+    assert!(
+        check_origin(
+            &serde_json::json!({ "message": "m", "origin": "human" }),
+            true
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn every_committed_translation_matches_its_source_arguments() {
+    let catalogs = Catalogs::load(&repo_root()).expect("the real catalogs load");
+    catalogs
+        .check_placeholder_parity()
+        .expect("every committed translation carries its source's arguments");
+}
+
 #[test]
 fn every_info_plist_key_is_namespaced_so_it_stays_out_of_localizable() {
     for (catalog_key, _) in INFO_PLIST_KEYS {

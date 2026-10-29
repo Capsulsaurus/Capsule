@@ -38,6 +38,7 @@ use serde_json::{Map, Value};
 /// committed files match (failing if any drifted).
 pub(crate) fn run(root: &Path, check: bool) -> Result<()> {
     let catalogs = Catalogs::load(root)?;
+    catalogs.check_placeholder_parity()?;
     let outputs = catalogs.render()?;
     if check {
         check_outputs(root, &outputs)
@@ -98,6 +99,8 @@ impl Catalogs {
                             path.display()
                         )
                     })?;
+                check_origin(entry, locale == &source)
+                    .with_context(|| format!("{}: key `{key}`", path.display()))?;
                 map.insert(key.clone(), message.to_string());
             }
             messages.insert(locale.clone(), map);
@@ -107,6 +110,50 @@ impl Catalogs {
             supported,
             messages,
         })
+    }
+
+    /// Verify every translation against its source message, reporting every violation
+    /// at once rather than the first.
+    ///
+    /// A translation must name a key the source defines, and must carry exactly the
+    /// source's arguments with the same kinds: the same `{name}` set, and a
+    /// whole-message plural exactly where the source has one, on the same selector.
+    /// The renderers already refuse an argument the source lacks, but nothing refused
+    /// one *dropped* — a translation that silently loses `{name}` renders without the
+    /// value the call site supplied, and a plural flattened into plain text shows the
+    /// same sentence for every count. Arguments may be reordered; only the set counts.
+    fn check_placeholder_parity(&self) -> Result<()> {
+        let source = self
+            .messages
+            .get(&self.source)
+            .with_context(|| format!("source locale `{}` has no catalog", self.source))?;
+        let mut problems = Vec::new();
+        for (locale, map) in &self.messages {
+            if locale == &self.source {
+                continue;
+            }
+            for (key, message) in map {
+                let Some(source_message) = source.get(key) else {
+                    problems.push(format!(
+                        "{locale}: key `{key}` is not in the {} catalog",
+                        self.source
+                    ));
+                    continue;
+                };
+                if let Err(problem) = placeholder_parity(source_message, message) {
+                    problems.push(format!("{locale}: key `{key}`: {problem:#}"));
+                }
+            }
+        }
+        if problems.is_empty() {
+            Ok(())
+        } else {
+            bail!(
+                "locales/: {} translation(s) do not match their source message:\n  {}",
+                problems.len(),
+                problems.join("\n  ")
+            );
+        }
     }
 
     /// Build the `(relative path, content)` list for every generated file.
@@ -292,15 +339,15 @@ impl Catalogs {
     ///
     /// Every platform numbers its specifiers from the source message, so a translation
     /// that reorders its arguments still addresses them by the positions the call site
-    /// passes.
+    /// passes. A key the source does not define has no plan and is an error;
+    /// [`Self::check_placeholder_parity`] reports every such key before rendering.
     fn plan_for(&self, key: &str) -> Result<ArgPlan> {
-        match self.messages.get(&self.source).and_then(|m| m.get(key)) {
-            Some(source_message) => ArgPlan::of(source_message)
-                .with_context(|| format!("key `{key}` ({} locale)", self.source)),
-            // A key absent from the source locale has no plan to inherit; treat every
-            // argument as text, which is the only safe default.
-            None => Ok(ArgPlan::default()),
-        }
+        let source_message = self
+            .messages
+            .get(&self.source)
+            .and_then(|m| m.get(key))
+            .with_context(|| format!("key `{key}` is not in the {} catalog", self.source))?;
+        ArgPlan::of(source_message).with_context(|| format!("key `{key}` ({} locale)", self.source))
     }
 
     /// The app's Apple String Catalog: every key except the `app.infoplist.*` namespace,
@@ -387,6 +434,66 @@ impl Catalogs {
             .cloned()
             .collect()
     }
+}
+
+/// The values a translation's `origin` may take: who produced the message.
+///
+/// `machine` is a machine translation no fluent reader has reviewed; `human` is one a
+/// fluent reader wrote or reviewed. The contributor and the date are not stored here:
+/// the commit that last changed the entry records both, and a second copy in the catalog
+/// would drift from it.
+const ORIGINS: &[&str] = &["machine", "human"];
+
+/// Check one catalog entry's `origin` provenance field.
+///
+/// Every translation records its origin, so a reader can always tell a reviewed string
+/// from one awaiting review. The source catalog has no origin to record — it is authored,
+/// not translated — and carrying one there is a misplaced edit.
+fn check_origin(entry: &Value, is_source: bool) -> Result<()> {
+    match (entry.get("origin"), is_source) {
+        (None, true) => Ok(()),
+        (Some(_), true) => bail!("the source catalog does not carry `origin`"),
+        (None, false) => bail!("missing `origin` (one of {ORIGINS:?})"),
+        (Some(origin), false) => match origin.as_str() {
+            Some(value) if ORIGINS.contains(&value) => Ok(()),
+            _ => bail!("`origin` is {origin}, not one of {ORIGINS:?}"),
+        },
+    }
+}
+
+/// Verify that `translation` carries exactly the arguments of `source`, with the same
+/// kinds: the same `{name}` set, and a whole-message plural on the same selector exactly
+/// where the source has one. Order is free — a translation may reorder its arguments.
+fn placeholder_parity(source: &str, translation: &str) -> Result<()> {
+    let expected = ArgPlan::of(source).context("the source message does not parse")?;
+    let actual = ArgPlan::of(translation)?;
+    let kinds = |plan: &ArgPlan| -> BTreeMap<String, ArgKind> {
+        plan.args
+            .iter()
+            .map(|(name, spec)| (name.clone(), spec.kind))
+            .collect()
+    };
+    let (expected, actual) = (kinds(&expected), kinds(&actual));
+    if expected == actual {
+        return Ok(());
+    }
+    let describe = |args: &BTreeMap<String, ArgKind>| -> String {
+        if args.is_empty() {
+            return "no arguments".to_string();
+        }
+        args.iter()
+            .map(|(name, kind)| match kind {
+                ArgKind::Text => format!("{{{name}}}"),
+                ArgKind::Number => format!("{{{name}, plural}}"),
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    bail!(
+        "carries {} where the source carries {}",
+        describe(&actual),
+        describe(&expected)
+    )
 }
 
 /// The catalog namespace whose keys localize `Info.plist` entries rather than app UI.

@@ -16,6 +16,10 @@
             "context": {
                 "type": "string",
                 "description": "A note for translators describing where and how the message is used."
+            },
+            "origin": {
+                "enum": ["machine", "human"],
+                "description": "Translation catalogs only, where it is required: who produced the message. `machine` is a machine translation no fluent reader has reviewed; `human` is one a fluent reader wrote or reviewed. The contributor and date are the git history of the entry. The source catalog never carries it."
             }
         }
     }
