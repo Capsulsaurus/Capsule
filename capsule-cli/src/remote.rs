@@ -2101,6 +2101,24 @@ fn encode_op(
         .map_err(|e| LifecycleError::Cbor(format!("encoding the lifecycle op: {e}")))
 }
 
+/// The hash of the provenance record a lifecycle op ([`lifecycle_ops_after`]'s shape) carries,
+/// or `None` for bytes that are not such an op.
+///
+/// This is the op's identity: the same record encodes to different bytes once a later edit
+/// supersedes the metadata blob it binds (the blob is then left out), so held ops are told
+/// apart by it rather than by their bytes.
+#[must_use]
+pub fn op_record_hash(op: &[u8]) -> Option<capsule_core::crypto::hash::Hash32> {
+    use base64::Engine as _;
+    let request: capsule_sdk::rest::types::OpRequest = serde_json::from_slice(op).ok()?;
+    let manifest = base64::engine::general_purpose::STANDARD
+        .decode(request.manifest_cbor)
+        .ok()?;
+    let record: capsule_core::crypto::provenance::ProvenanceRecord =
+        capsule_core::cbor::from_slice(&manifest).ok()?;
+    Some(record.record_hash())
+}
+
 /// The server-visible projection of a lifecycle manifest: every field verbatim, naming the
 /// original's ciphertext, and no derivative (the server refuses the pair on a lifecycle write).
 fn op_envelope(

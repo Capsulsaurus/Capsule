@@ -1881,8 +1881,8 @@ pub struct DeleteView {
 /// Route every delete the library made after a hand-off through the ledger: for each
 /// delegation whose custody is not confirmed and whose chain after the sealed head holds a
 /// `delete`, hold every signed record of that stretch, in chain order
-/// ([`remote::lifecycle_ops_after`], [`OriginLedger::hold_delete`]), except those held
-/// already. The delete then chains onto what the server holds: an edit or a restore made
+/// ([`remote::lifecycle_ops_after`], [`OriginLedger::hold_delete`]), except those whose record
+/// is held already ([`remote::op_record_hash`]). The delete then chains onto what the server holds: an edit or a restore made
 /// between the hand-off and the delete is sent before it. Returns the assets with a newly
 /// held op.
 ///
@@ -1901,10 +1901,19 @@ pub fn hold_deletes(
         let ops =
             remote::lifecycle_ops_after(workspace, &delegation.asset_id, sealed_head(delegation))
                 .map_err(|error| PeerError::State(format!("a delete record: {error}")))?;
-        for op in ops
-            .into_iter()
-            .filter(|op| !delegation.held_deletes.contains(op))
-        {
+        // A record's bytes change once a later edit supersedes the blob it binds, so an op is
+        // held already when its record is, whatever its bytes now.
+        let held: BTreeSet<_> = delegation
+            .held_deletes
+            .iter()
+            .filter_map(|op| remote::op_record_hash(op))
+            .collect();
+        for op in ops.into_iter().filter(|op| {
+            remote::op_record_hash(op).map_or_else(
+                || !delegation.held_deletes.contains(op),
+                |hash| !held.contains(&hash),
+            )
+        }) {
             candidates.push((delegation.asset_id, op));
         }
     }

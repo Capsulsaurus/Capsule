@@ -1131,6 +1131,57 @@ fn a_delete_after_an_edit_or_a_restore_is_held_with_every_record_since_the_hand_
     );
 }
 
+/// An edit held with a delete is not held a second time once a later edit supersedes the blob
+/// it binds: it then encodes without that blob, to bytes the ledger does not hold, but it is
+/// the same record, and the copy the server would refuse is never queued.
+#[test]
+fn an_edit_held_before_a_later_edit_is_not_held_twice() {
+    let scratch = Scratch::new();
+    let (mut ws, asset, _) = two_assets(&scratch);
+    let sealed = ws.asset(&asset).expect("held").chain.records()[0].record_hash();
+    let mut ledger = ledger_of(vec![sealed_delegation(asset, sealed)]);
+
+    ws.set_caption(&asset, "an edit after the hand-off")
+        .expect("edits");
+    ws.soft_delete(&asset, 30).expect("deletes");
+    assert_eq!(hold_deletes(&mut ledger, &ws).expect("routes"), vec![asset]);
+    let first_edit = ledger.get(&asset).expect("held").held_deletes[0].clone();
+
+    ws.restore(&asset).expect("restores");
+    ws.set_caption(&asset, "a later edit").expect("edits again");
+    ws.soft_delete(&asset, 30).expect("deletes again");
+    let reencoded = remote::lifecycle_ops_after(&ws, &asset, Some(sealed)).expect("encodes");
+    assert_ne!(
+        reencoded[0], first_edit,
+        "the earlier edit now encodes without its superseded blob"
+    );
+    assert_eq!(
+        remote::op_record_hash(&reencoded[0]),
+        remote::op_record_hash(&first_edit),
+        "but it is the same record"
+    );
+
+    assert_eq!(hold_deletes(&mut ledger, &ws).expect("routes"), vec![asset]);
+    let held = &ledger.get(&asset).expect("held").held_deletes;
+    let actions: Vec<Option<String>> = held.iter().map(|op| op_action(op)).collect();
+    assert_eq!(
+        actions,
+        [
+            "metadata-update",
+            "delete",
+            "trash-restore",
+            "metadata-update",
+            "delete"
+        ]
+        .map(|a| Some(a.to_owned()))
+        .to_vec(),
+        "each record is held once, in chain order"
+    );
+    assert_eq!(held[0], first_edit, "the copy carrying its blob is kept");
+    let hashes: BTreeSet<_> = held.iter().map(|op| remote::op_record_hash(op)).collect();
+    assert_eq!(hashes.len(), held.len(), "no record is held twice");
+}
+
 /// A held op the server could not be reached for is kept, with every later op of its asset,
 /// which is not sent this run: each op chains onto the one before it.
 #[tokio::test]
