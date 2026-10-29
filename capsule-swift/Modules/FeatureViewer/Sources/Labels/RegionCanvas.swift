@@ -20,8 +20,9 @@ struct RegionCanvas: View {
     let mediaLoader: ViewerMediaLoader?
     let model: LabelEditorModel
     @State private var image: PlatformImage?
-    /// The draft as it was when the current drag or pinch began.
-    @State private var gestureBase: RegionDraft?
+    /// The running drag and pinch, composed from the draft as it was when
+    /// the first of them began.
+    @State private var gesture: RegionGesture?
 
     var body: some View {
         GeometryReader { geometry in
@@ -130,22 +131,32 @@ struct RegionCanvas: View {
     private func drag(in imageFrame: CGRect) -> some Gesture {
         DragGesture()
             .onChanged { value in
-                let base = gestureBase ?? model.draft
-                gestureBase = base
                 let step = RegionGeometry.fractions(of: value.translation, in: imageFrame)
-                model.draft = base?.moved(dx: step.dx, dy: step.dy)
+                edit { $0.drag(dx: step.dx, dy: step.dy) }
             }
-            .onEnded { _ in gestureBase = nil }
+            .onEnded { _ in finish { $0.endDrag() } }
     }
 
     private var pinch: some Gesture {
         MagnifyGesture()
-            .onChanged { value in
-                let base = gestureBase ?? model.draft
-                gestureBase = base
-                model.draft = base?.scaled(by: value.magnification)
-            }
-            .onEnded { _ in gestureBase = nil }
+            .onChanged { value in edit { $0.pinch(by: value.magnification) } }
+            .onEnded { _ in finish { $0.endPinch() } }
+    }
+
+    /// Apply a gesture's change, starting the interaction from the current
+    /// draft when neither gesture is running.
+    private func edit(_ change: (inout RegionGesture) -> Void) {
+        guard var current = gesture ?? model.draft.map({ RegionGesture(base: $0) }) else { return }
+        change(&current)
+        gesture = current
+        model.draft = current.draft
+    }
+
+    /// End one gesture, and the interaction once the other has ended too.
+    private func finish(_ end: (inout RegionGesture) -> Void) {
+        guard var current = gesture else { return }
+        end(&current)
+        gesture = current.isActive ? current : nil
     }
 
     private func outline(for isCircle: Bool) -> AnyShape {
