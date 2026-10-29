@@ -89,8 +89,10 @@ public final class LabelEditorModel {
         }
     }
 
-    /// Show and edit the labels of `regionID`.
+    /// Show and edit the labels of `regionID`. Refused while a request is in
+    /// flight, so its answer lands on the region it was asked about.
     public func selectRegion(_ regionID: RegionID?) {
+        guard !isWriting else { return }
         select(regionID.flatMap { id in regions.first { $0.id == id } })
     }
 
@@ -100,8 +102,8 @@ public final class LabelEditorModel {
     public func addLabel(_ text: String) async {
         guard let target = labelTarget else { return }
         await perform {
-            labels = try await port.addLabel(text, to: target)
-            storeRegionLabels(target)
+            let answer = try await port.addLabel(text, to: target)
+            store(answer, on: target)
         }
     }
 
@@ -109,16 +111,17 @@ public final class LabelEditorModel {
     public func removeLabel(_ text: String) async {
         guard let target = labelTarget else { return }
         await perform {
-            labels = try await port.removeLabel(text, from: target)
-            storeRegionLabels(target)
+            let answer = try await port.removeLabel(text, from: target)
+            store(answer, on: target)
         }
     }
 
     // MARK: Regions
 
-    /// Start drawing a new region of `kind`, replacing any draft.
+    /// Start drawing a new region of `kind`, replacing any draft. Refused
+    /// while a request is in flight.
     public func startDrawing(_ kind: RegionDraft.Kind) {
-        guard case .asset = subject else { return }
+        guard !isWriting, case .asset = subject else { return }
         draft = RegionDraft(kind)
         failure = nil
     }
@@ -134,7 +137,7 @@ public final class LabelEditorModel {
         await perform {
             let region = try await port.addRegion(pending.shape, labels: initial, to: assetID)
             regions.append(region)
-            draft = nil
+            if draft == pending { draft = nil }
             select(region)
         }
     }
@@ -156,11 +159,14 @@ public final class LabelEditorModel {
         if case .asset = subject { labels = region?.labels ?? [] }
     }
 
-    private func storeRegionLabels(_ target: LabelTarget) {
+    /// Keep the port's answer for `target`, and show it only while `target`
+    /// is still the one being edited.
+    private func store(_ answer: [String], on target: LabelTarget) {
+        if target == labelTarget { labels = answer }
         guard case let .region(_, regionID) = target,
               let index = regions.firstIndex(where: { $0.id == regionID })
         else { return }
-        regions[index].labels = labels
+        regions[index].labels = answer
     }
 
     private func perform(_ work: () async throws -> Void) async {

@@ -113,10 +113,116 @@ struct LabelEditorModelTests {
         #expect(LabelEditorModel.failure(for: CancellationError()) == .unavailable)
     }
 
+    @Test("While a label write is in flight, selection and drawing are refused and the answer lands on its region")
+    func selectionHeldWhileWriting() async throws {
+        let store = port()
+        let first = try await store.addRegion(.rect(left: 0, top: 0, width: 0.5, height: 0.5), labels: ["a"], to: asset)
+        let second = try await store.addRegion(.rect(left: 0.5, top: 0.5, width: 0.5, height: 0.5), labels: ["b"], to: asset)
+        let gate = Gate()
+        let model = LabelEditorModel(subject: .asset(asset), port: GatedLabelPort(inner: store, gate: gate))
+        await model.load()
+        #expect(model.selectedRegionID == first.id)
+        let write = Task { await model.addLabel("x") }
+        await gate.waitUntilEntered()
+        model.selectRegion(second.id)
+        model.startDrawing(.rect)
+        #expect(model.selectedRegionID == first.id)
+        #expect(model.draft == nil)
+        await gate.open()
+        await write.value
+        #expect(model.selectedRegionID == first.id)
+        #expect(model.labels == ["a", "x"])
+        #expect(model.regions.map(\.labels) == [["a", "x"], ["b"]])
+        model.selectRegion(second.id)
+        #expect(model.labels == ["b"])
+    }
+
+    @Test("Finishing a region keeps a draft that replaced it during the write")
+    func finishKeepsNewerDraft() async throws {
+        let gate = Gate()
+        let model = LabelEditorModel(subject: .asset(asset), port: GatedLabelPort(inner: port(), gate: gate))
+        await model.load()
+        model.startDrawing(.rect)
+        let write = Task { await model.finishDrawing(labels: ["face"]) }
+        await gate.waitUntilEntered()
+        let newer = RegionDraft(.circle)
+        model.draft = newer
+        await gate.open()
+        await write.value
+        #expect(model.regions.count == 1)
+        #expect(model.draft == newer)
+    }
+
     @Test("A stack or album has no regions to draw")
     func noDrawingOffAsset() {
         let model = LabelEditorModel(subject: .stack(stack), port: port())
         model.startDrawing(.rect)
         #expect(model.draft == nil)
+    }
+}
+
+// MARK: - Gate
+
+/// Holds the first write that reaches it until the test opens it, so the test
+/// can act while that write is in flight.
+private actor Gate {
+    private var hasEntered = false
+    private var isOpen = false
+    private var entered: CheckedContinuation<Void, Never>?
+    private var held: CheckedContinuation<Void, Never>?
+
+    func pass() async {
+        hasEntered = true
+        entered?.resume()
+        entered = nil
+        guard !isOpen else { return }
+        await withCheckedContinuation { held = $0 }
+    }
+
+    func waitUntilEntered() async {
+        guard !hasEntered else { return }
+        await withCheckedContinuation { entered = $0 }
+    }
+
+    func open() {
+        isOpen = true
+        held?.resume()
+        held = nil
+    }
+}
+
+// MARK: - GatedLabelPort
+
+/// Forwards to a mock store, holding each write at the gate first.
+private struct GatedLabelPort: LabelPort {
+    let inner: MockLabelStore
+    let gate: Gate
+
+    func labels(on target: LabelTarget) async throws -> [String] {
+        try await inner.labels(on: target)
+    }
+
+    func addLabel(_ label: String, to target: LabelTarget) async throws -> [String] {
+        await gate.pass()
+        return try await inner.addLabel(label, to: target)
+    }
+
+    func removeLabel(_ label: String, from target: LabelTarget) async throws -> [String] {
+        await gate.pass()
+        return try await inner.removeLabel(label, from: target)
+    }
+
+    func regions(of assetID: AssetID) async throws -> [AssetRegion] {
+        try await inner.regions(of: assetID)
+    }
+
+    func addRegion(_ shape: RegionShape, labels: [String], to assetID: AssetID) async throws -> AssetRegion {
+        await gate.pass()
+        return try await inner.addRegion(shape, labels: labels, to: assetID)
+    }
+
+    func deleteRegion(_ regionID: RegionID, on assetID: AssetID) async throws {
+        await gate.pass()
+        try await inner.deleteRegion(regionID, on: assetID)
     }
 }
