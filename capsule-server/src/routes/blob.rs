@@ -52,6 +52,7 @@ use kynos::prelude::*;
 use kynos::response::range::served::{Conditions, Delivery, Served};
 
 use crate::counter::CounterContext;
+use crate::federation::scheme::RequestSignatureHeader;
 use crate::federation::{
     self, FederationContext, Principal, ReadBearer, Refusal, VerifiedCapability,
 };
@@ -275,6 +276,8 @@ pub async fn get_blob(
     Inject(federation): Inject<FederationContext>,
     Inject(counters): Inject<CounterContext>,
     Path(path): Path<BlobPath>,
+    // Declared for the contract; `ReadBearer` has already verified it (see its module docs).
+    Headers(_signature): Headers<RequestSignatureHeader>,
     conditions: Conditions,
 ) -> Result<Delivery<OctetStream>, BlobRejection> {
     // Who is asking, in the shape the read authority decides from. A peer is *admitted* before

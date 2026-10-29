@@ -221,6 +221,14 @@ pub const FEDERATED_INTAKE: Budget = Budget::new(300, SignedDuration::from_hours
 /// second report carrying a nonce inside the span its first could still be fresh in is a replay.
 pub const FEDERATED_REPORT_NONCE: Budget = Budget::new(1, crate::federation::REPORT_NONCE_WINDOW);
 
+/// One use of one request-signature nonce, per verified peer (#949).
+///
+/// A limit of one over [`REQUEST_NONCE_WINDOW`](crate::federation::scheme::REQUEST_NONCE_WINDOW):
+/// the second capability presentation carrying a nonce inside the span its first signature could
+/// still be fresh in is a replay.
+pub const FEDERATED_REQUEST_NONCE: Budget =
+    Budget::new(1, crate::federation::scheme::REQUEST_NONCE_WINDOW);
+
 /// Capability mints per account (#529).
 ///
 /// Sixty an hour. An owner sharing an album mints one grant per peer; sixty is an owner sharing

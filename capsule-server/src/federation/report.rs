@@ -54,12 +54,21 @@ pub const REPORT_NONCE_WINDOW: SignedDuration = SignedDuration::from_mins(10);
 /// Symmetric, so a peer whose clock runs a little fast is not refused, and one whose clock runs
 /// far fast cannot pre-sign reports to be replayed later.
 pub fn is_fresh(reported_at: Timestamp, now: Timestamp) -> bool {
-    let skew = if reported_at > now {
-        reported_at.duration_since(now)
+    is_within(reported_at, now, REPORT_FRESHNESS)
+}
+
+/// Whether `signed_at` sits within `tolerance` of `now`, either way.
+///
+/// The one freshness rule every signed server-to-server message is held to: this report, and
+/// the request signature a capability is presented with
+/// ([`RequestSignature::is_fresh`](super::scheme::RequestSignature::is_fresh)).
+pub fn is_within(signed_at: Timestamp, now: Timestamp, tolerance: SignedDuration) -> bool {
+    let skew = if signed_at > now {
+        signed_at.duration_since(now)
     } else {
-        now.duration_since(reported_at)
+        now.duration_since(signed_at)
     };
-    skew <= REPORT_FRESHNESS
+    skew <= tolerance
 }
 
 /// The report's signed payload: every field except the signature.

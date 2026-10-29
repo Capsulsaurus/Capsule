@@ -11,8 +11,11 @@
 //! first federated report from a new peer the thing that decides whether it is trusted.
 //!
 //! **Minting needs no peer key.** A capability is signed with this server's own key, and the
-//! peer verifies it against `server-info`. The pinned key serves exactly one thing: verifying
-//! the signature on a federated moderation report.
+//! peer verifies it against `server-info`. The pinned key serves two things, both of them
+//! "did this peer say so": the request signature every capability presentation carries
+//! ([`ReadBearer`](super::ReadBearer)), which is what makes a leaked capability useless to
+//! anyone but its peer, and the signature on a federated moderation report. A peer with no
+//! pinned key can therefore pull nothing, whatever capability it holds.
 //!
 //! # The blocklist is a column
 //!

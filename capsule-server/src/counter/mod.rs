@@ -292,6 +292,15 @@ pub enum CounterKey {
     /// window", so the counter port is the replay cache and no second store exists for it. Charged
     /// after the signature verifies, so a third party cannot burn a peer's nonces.
     FederatedReportNonce(String),
+    /// One request-signature nonce from one peer, keyed on `"{peer}:{nonce}"` (#949).
+    ///
+    /// The replay memory of the signature every capability presentation carries
+    /// ([`ReadBearer`](crate::federation::ReadBearer)), for the reason
+    /// [`Self::FederatedReportNonce`] is the report's: a one-hit budget whose window starts at
+    /// the first hit is "seen inside this window". Charged only once the signature has verified
+    /// under the peer's pinned key, and not for a peer that is blocked or over its events budget,
+    /// so the key space is what pinned peers' admitted requests make it.
+    FederatedRequestNonce(String),
     /// Capability mints by one account (#529).
     ///
     /// Keyed on the authenticated owner: every mint writes a capability row, and nothing else
@@ -355,6 +364,7 @@ impl CounterKey {
             Self::PeerReports(_) => "peer_reports",
             Self::FederatedIntake(_) => "federated_intake",
             Self::FederatedReportNonce(_) => "federated_report_nonce",
+            Self::FederatedRequestNonce(_) => "federated_request_nonce",
             Self::CapabilityMints(_) => "capability_mints",
         }
     }
@@ -389,6 +399,7 @@ impl CounterKey {
             Self::PeerReports(_) => Slot::PeerReports,
             Self::FederatedIntake(_) => Slot::FederatedIntake,
             Self::FederatedReportNonce(_) => Slot::FederatedReportNonce,
+            Self::FederatedRequestNonce(_) => Slot::FederatedRequestNonce,
             Self::CapabilityMints(_) => Slot::CapabilityMints,
         }
     }
@@ -424,6 +435,7 @@ impl CounterKey {
             Self::FederatedReports(_) => ceilings::FEDERATED_REPORTS,
             Self::FederatedIntake(_) => ceilings::FEDERATED_INTAKE,
             Self::FederatedReportNonce(_) => ceilings::FEDERATED_REPORT_NONCE,
+            Self::FederatedRequestNonce(_) => ceilings::FEDERATED_REQUEST_NONCE,
             Self::CapabilityMints(_) => ceilings::CAPABILITY_MINTS,
         }
     }
@@ -451,6 +463,7 @@ impl CounterKey {
             | Self::PeerReports(scope)
             | Self::FederatedIntake(scope)
             | Self::FederatedReportNonce(scope)
+            | Self::FederatedRequestNonce(scope)
             | Self::RegistrationSource(scope) => scope,
             // The two unit variants are each **one** global bucket by construction — that is why
             // they are unit variants rather than a scoped one carrying a sentinel string (see
@@ -714,6 +727,17 @@ pub mod ceilings {
     /// that at once.
     pub const FEDERATED_REPORT_NONCE: usize = 20_000;
 
+    /// [`CounterKey::FederatedRequestNonce`](super::CounterKey::FederatedRequestNonce) —
+    /// 10-minute window, keyed on a verified peer and a nonce it chose.
+    ///
+    /// A nonce is spent only for a request a pinned peer signed while inside
+    /// [`budgets::PEER_REQUESTS`](super::budgets::PEER_REQUESTS), which is ten thousand an hour
+    /// in a fixed window — so one peer holds at most twenty thousand live windows here, its whole
+    /// budget at the end of one hour and again at the start of the next. Two hundred thousand is
+    /// ten peers doing that at once. Full, the partition refuses every capability presentation
+    /// closed until windows lapse, which is the cost of a replay memory that never fails open.
+    pub const FEDERATED_REQUEST_NONCE: usize = 200_000;
+
     /// [`CounterKey::CapabilityMints`](super::CounterKey::CapabilityMints) — 1-hour window, keyed
     /// on an authenticated account. Bounded by the directory, as `LOGIN_ATTEMPTS` is.
     pub const CAPABILITY_MINTS: usize = 10_000;
@@ -791,6 +815,7 @@ partition_slots!(
     PeerReports,
     FederatedIntake,
     FederatedReportNonce,
+    FederatedRequestNonce,
     CapabilityMints,
 );
 
