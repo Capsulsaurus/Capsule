@@ -207,7 +207,9 @@ The client's library owns the whole machine. An app calls its verbs and keeps no
 | trashed | purge | purged | before `retention_until`, a signed shorter-retention `delete` re-issue first | the asset is not trashed: a purge never skips the trash |
 
 - **Judged by the signed window.** Every expiry and restore decision reads the `retention_until` of the asset's latest `delete` record, never how long ago the delete happened. A `delete` with no readable window never expires.
-- **Purge.** Removes the original, every derivative and local cache entry, the sidecar, and the index row. The provenance chain stays as the record of the deletion, so a reopen or rebuild never brings the asset back.
+- **Expiry sweep.** A retention sweep judges deadlines only after a sync has drained the feed to its head, by the device clock floored by the latest server `changed_at` the drain saw ([Peering](/design/peering/)). A device with no drained feed, including one that never signed in, purges nothing on expiry; its trash empties only when the user purges.
+- **Purge.** Removes the original, every derivative and local cache entry, the sidecar, and the index row, including its stack memberships. The provenance chain stays as the record of the deletion, headed by the `delete` that ended it, so a reopen or rebuild never brings the asset back.
+- **Tombstone.** A kept chain headed by a `delete` with no sidecar beside it is the library's peering tombstone: the workspace reads it back on open, holds the asset at that head, and refuses any backup or peer copy of it. Its head is also the re-issue an early purge must deliver, so a failed delivery is resent from it. A chain with a lost sidecar and any other head is damage, not a purge.
 - **Index.** The trash columns are a projection of the chain, rebuilt from it.
 
 ## Validation
