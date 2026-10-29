@@ -130851,6 +130851,346 @@
         }
       }
     },
+    "app.transfer.live.custody.durable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Durable"
+          }
+        }
+      }
+    },
+    "app.transfer.live.custody.not_durable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not yet durable"
+          }
+        }
+      }
+    },
+    "app.transfer.live.custody.receipts": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Receipts verified"
+          }
+        }
+      }
+    },
+    "app.transfer.live.custody.title": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Custody"
+          }
+        }
+      }
+    },
+    "app.transfer.live.detail.chunk_history": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Earlier chunk sizes"
+          }
+        }
+      }
+    },
+    "app.transfer.live.detail.chunk_size": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chunk size"
+          }
+        }
+      }
+    },
+    "app.transfer.live.detail.progress": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Done"
+          }
+        }
+      }
+    },
+    "app.transfer.live.detail.progress.value": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%%1$@ of %%2$@"
+          }
+        }
+      }
+    },
+    "app.transfer.live.detail.receipt": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Receipt"
+          }
+        }
+      }
+    },
+    "app.transfer.live.detail.rejects": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Checksum refusals"
+          }
+        }
+      }
+    },
+    "app.transfer.live.detail.resumed_at": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Resumed at"
+          }
+        }
+      }
+    },
+    "app.transfer.live.detail.retries": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Retries"
+          }
+        }
+      }
+    },
+    "app.transfer.live.detail.sessions": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sessions"
+          }
+        }
+      }
+    },
+    "app.transfer.live.direction.fetch": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Download"
+          }
+        }
+      }
+    },
+    "app.transfer.live.direction.upload": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Upload"
+          }
+        }
+      }
+    },
+    "app.transfer.live.empty.description": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uploads and downloads appear here piece by piece while they run."
+          }
+        }
+      }
+    },
+    "app.transfer.live.empty.title": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nothing Moving"
+          }
+        }
+      }
+    },
+    "app.transfer.live.link.description": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Every piece of every upload and download, as it moves"
+          }
+        }
+      }
+    },
+    "app.transfer.live.phase.active": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Moving"
+          }
+        }
+      }
+    },
+    "app.transfer.live.phase.finalizing": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Finalizing"
+          }
+        }
+      }
+    },
+    "app.transfer.live.phase.integrity_rejected": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Failed Its Check"
+          }
+        }
+      }
+    },
+    "app.transfer.live.phase.merged": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Already Stored"
+          }
+        }
+      }
+    },
+    "app.transfer.live.phase.verified": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verified"
+          }
+        }
+      }
+    },
+    "app.transfer.live.retry.fetch_empty": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nothing arrived, so the download paused and tried again"
+          }
+        }
+      }
+    },
+    "app.transfer.live.retry.fetch_stalled": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The download stalled, so it paused and tried again"
+          }
+        }
+      }
+    },
+    "app.transfer.live.retry.offset_realign": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The server asked to continue from a different point"
+          }
+        }
+      }
+    },
+    "app.transfer.live.retry.server_wait": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The server asked to wait, then the upload continued"
+          }
+        }
+      }
+    },
+    "app.transfer.live.retry.session_lost": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The server lost the upload, so a new one was started"
+          }
+        }
+      }
+    },
+    "app.transfer.live.retry.transport_reset": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The connection dropped, so the piece was sent again"
+          }
+        }
+      }
+    },
+    "app.transfer.live.strip": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Transfer map"
+          }
+        }
+      }
+    },
+    "app.transfer.live.summary.active": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Active"
+          }
+        }
+      }
+    },
+    "app.transfer.live.summary.missed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Steps not shown"
+          }
+        }
+      }
+    },
+    "app.transfer.live.title": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Live Transfers"
+          }
+        }
+      }
+    },
+    "app.transfer.live.transfers": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Transfers"
+          }
+        }
+      }
+    },
     "app.transfer.policy.staged": {
       "localizations": {
         "ar": {

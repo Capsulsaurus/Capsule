@@ -6315,6 +6315,142 @@
     "message": "Nothing to Transfer",
     "context": "Empty-state title on the transfers screen when everything is up to date."
   },
+  "app.transfer.live.custody.durable": {
+    "message": "Durable",
+    "context": "VoiceOver label on the live transfers screen for how many photos the server confirmed it holds safely. The spoken value is a number."
+  },
+  "app.transfer.live.custody.not_durable": {
+    "message": "Not yet durable",
+    "context": "VoiceOver label on the live transfers screen for how many photos the server says it does not yet hold safely. The spoken value is a number."
+  },
+  "app.transfer.live.custody.receipts": {
+    "message": "Receipts verified",
+    "context": "VoiceOver label on the live transfers screen for how many signed delivery receipts were checked. The spoken value is a number."
+  },
+  "app.transfer.live.custody.title": {
+    "message": "Custody",
+    "context": "Row label on the live transfers screen for the server's answers about whether it holds the uploaded photos safely."
+  },
+  "app.transfer.live.detail.chunk_history": {
+    "message": "Earlier chunk sizes",
+    "context": "Label on one live transfer for the piece sizes used before the current one, as the app adapted to the connection. The value is a list of data amounts."
+  },
+  "app.transfer.live.detail.chunk_size": {
+    "message": "Chunk size",
+    "context": "Label on one live transfer for the size of the pieces it is sent in right now. The value is a data amount."
+  },
+  "app.transfer.live.detail.progress": {
+    "message": "Done",
+    "context": "Label on one live transfer for how much of it has moved. The value is a data amount, or 'amount of total'."
+  },
+  "app.transfer.live.detail.progress.value": {
+    "message": "%1$@ of %2$@",
+    "context": "How much of one live transfer has moved: the amount done, then the total. Both values arrive already formatted, such as '3 MB'."
+  },
+  "app.transfer.live.detail.receipt": {
+    "message": "Receipt",
+    "context": "Label on one live transfer for the number of the signed delivery receipt that verified it. The value is a number."
+  },
+  "app.transfer.live.detail.rejects": {
+    "message": "Checksum refusals",
+    "context": "Label on one live transfer for how many times the server refused a damaged piece. The value is a number."
+  },
+  "app.transfer.live.detail.resumed_at": {
+    "message": "Resumed at",
+    "context": "Label on one live transfer for where it picked up after an interruption. The value is a data amount."
+  },
+  "app.transfer.live.detail.retries": {
+    "message": "Retries",
+    "context": "Label on one live transfer for how many times a piece had to be sent again. The value is a number."
+  },
+  "app.transfer.live.detail.sessions": {
+    "message": "Sessions",
+    "context": "Label on one live transfer for how many upload sessions it took, more than one after the server lost one. The value is a number."
+  },
+  "app.transfer.live.direction.fetch": {
+    "message": "Download",
+    "context": "VoiceOver label for the arrow marking a live transfer that comes from the server."
+  },
+  "app.transfer.live.direction.upload": {
+    "message": "Upload",
+    "context": "VoiceOver label for the arrow marking a live transfer that goes to the server."
+  },
+  "app.transfer.live.empty.description": {
+    "message": "Uploads and downloads appear here piece by piece while they run.",
+    "context": "Empty-state description on the live transfers screen."
+  },
+  "app.transfer.live.empty.title": {
+    "message": "Nothing Moving",
+    "context": "Empty-state title on the live transfers screen when no upload or download is running."
+  },
+  "app.transfer.live.link.description": {
+    "message": "Every piece of every upload and download, as it moves",
+    "context": "Subtitle of the link from the transfers screen to the live transfers screen."
+  },
+  "app.transfer.live.phase.active": {
+    "message": "Moving",
+    "context": "Status of a live transfer whose data is being sent or received."
+  },
+  "app.transfer.live.phase.finalizing": {
+    "message": "Finalizing",
+    "context": "Status of a live upload whose data has all reached the server, which is finishing it."
+  },
+  "app.transfer.live.phase.integrity_rejected": {
+    "message": "Failed Its Check",
+    "context": "Status of a live download whose data did not match what was asked for and was thrown away."
+  },
+  "app.transfer.live.phase.merged": {
+    "message": "Already Stored",
+    "context": "Status of a live upload the server already had, so nothing was sent."
+  },
+  "app.transfer.live.phase.verified": {
+    "message": "Verified",
+    "context": "Status of a live transfer that finished and was checked."
+  },
+  "app.transfer.live.retry.fetch_empty": {
+    "message": "Nothing arrived, so the download paused and tried again",
+    "context": "Why a live download was retried: a request brought no data."
+  },
+  "app.transfer.live.retry.fetch_stalled": {
+    "message": "The download stalled, so it paused and tried again",
+    "context": "Why a live download was retried: no data arrived for too long."
+  },
+  "app.transfer.live.retry.offset_realign": {
+    "message": "The server asked to continue from a different point",
+    "context": "Why a live upload was retried: the server reported a different position than expected."
+  },
+  "app.transfer.live.retry.server_wait": {
+    "message": "The server asked to wait, then the upload continued",
+    "context": "Why a live upload was retried: the server was busy or full and asked for a pause."
+  },
+  "app.transfer.live.retry.session_lost": {
+    "message": "The server lost the upload, so a new one was started",
+    "context": "Why a live upload was retried: its server session was gone and a new one was opened."
+  },
+  "app.transfer.live.retry.transport_reset": {
+    "message": "The connection dropped, so the piece was sent again",
+    "context": "Why a live upload was retried: the connection reset or a request was lost."
+  },
+  "app.transfer.live.strip": {
+    "message": "Transfer map",
+    "context": "VoiceOver label for the strip of coloured cells showing which parts of one transfer have moved. The spoken value is a percentage."
+  },
+  "app.transfer.live.summary.active": {
+    "message": "Active",
+    "context": "Row label on the live transfers screen for how many transfers are running. The value is a number."
+  },
+  "app.transfer.live.summary.missed": {
+    "message": "Steps not shown",
+    "context": "Row label on the live transfers screen for how many progress updates the screen fell too far behind to show. The transfers themselves were not affected. The value is a number."
+  },
+  "app.transfer.live.title": {
+    "message": "Live Transfers",
+    "context": "Title of the screen that shows every upload and download piece by piece as it moves, and of the link to it."
+  },
+  "app.transfer.live.transfers": {
+    "message": "Transfers",
+    "context": "Section header over the list of uploads and downloads on the live transfers screen."
+  },
   "app.transfer.policy.staged": {
     "message": "Full-size photos are uploaded after the details and previews.",
     "context": "Note shown when this device uploads in stages rather than all at once."

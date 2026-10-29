@@ -136,8 +136,14 @@ struct AppEnvironment {
     var places: any PlacesPort { mock.places }
     var search: any SearchPort { mock.search }
 
+    /// Labels on regions, stacks and albums, and the regions themselves.
+    var labels: any LabelPort { mock.labels }
+
     var importing: any ImportPort { mock.importing }
     var uploads: any UploadPort { mock.uploads }
+    /// The step-by-step transfer event stream the real-time transfer view
+    /// draws.
+    var transferEvents: any TransferEventPort { mock.transferEvents }
     var sync: any SyncPort { mock.sync }
     var storage: any StoragePort { mock.storage }
     var quota: any QuotaPort { mock.quota }

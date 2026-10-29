@@ -12,7 +12,8 @@ import SwiftUI
 ///
 /// Route entry point. Ports required: ``UploadPort``, ``SyncPort``,
 /// ``LibraryPort`` (capture dates and LQIP colours for the rows — the transfer
-/// ports carry no display metadata, by design).
+/// ports carry no display metadata, by design). With a ``TransferEventPort``
+/// it links the real-time transfer view (``LiveTransferView``).
 ///
 /// Adaptive layout: the per-asset detail opens in an `.inspector`, which is a
 /// trailing column on iPad and Mac and a sheet on iPhone, so the same code is
@@ -23,6 +24,7 @@ public struct TransferCenterView: View {
     private let uploads: any UploadPort
     private let sync: any SyncPort
     private let storage: any StoragePort
+    private let transferEvents: (any TransferEventPort)?
     private let clock: TransferClock
 
     public init(
@@ -30,6 +32,7 @@ public struct TransferCenterView: View {
         sync: any SyncPort,
         library: any LibraryPort,
         storage: any StoragePort,
+        transferEvents: (any TransferEventPort)? = nil,
         clock: TransferClock = .system
     ) {
         _model = State(wrappedValue: TransferCenterModel(
@@ -41,6 +44,7 @@ public struct TransferCenterView: View {
         self.uploads = uploads
         self.sync = sync
         self.storage = storage
+        self.transferEvents = transferEvents
         self.clock = clock
     }
 
@@ -99,6 +103,7 @@ public struct TransferCenterView: View {
                 TierRingView(progress: model.tierProgress, isGated: model.isGated)
                     .padding(.vertical, CapsuleTheme.Spacing.small)
             }
+            liveSection
             Section {
                 Picker(selection: $model.segment) {
                     ForEach(TransferSegment.allCases) { segment in
@@ -115,6 +120,30 @@ public struct TransferCenterView: View {
         .listStyle(.inset)
         .refreshable { await model.reload() }
         .overlay { placeholder }
+    }
+
+    /// The door to the chunk-by-chunk view, when the stream is wired.
+    @ViewBuilder
+    private var liveSection: some View {
+        if let transferEvents {
+            Section {
+                NavigationLink {
+                    LiveTransferView(transferEvents: transferEvents)
+                } label: {
+                    Label {
+                        VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.xxSmall) {
+                            Text("app.transfer.live.title")
+                            Text("app.transfer.live.link.description")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                    } icon: {
+                        Image(systemName: "waveform.path.ecg")
+                    }
+                }
+                .accessibilityIdentifier("transfer.live")
+            }
+        }
     }
 
     @ViewBuilder
@@ -224,6 +253,7 @@ struct DownloadsSection: View {
         sync: environment.sync,
         library: environment.library,
         storage: environment.storage,
+        transferEvents: environment.transferEvents,
         clock: .fixed(environment.configuration.clock.now)
     )
 }
