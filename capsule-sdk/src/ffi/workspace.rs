@@ -1,6 +1,7 @@
 //! The **workspace verbs** of the `capsule_sdk` uniffi namespace — enroll,
 //! create an album, seal + import an asset, verify, sync-apply, mint an escrow, publish a
-//! directory, label regions, stacks and albums — over `capsule-core`'s [`Workspace`].
+//! directory, label regions, stacks and albums, move assets through the trash — over
+//! `capsule-core`'s [`Workspace`].
 //!
 //! # What this layer is, and is not
 //!
@@ -47,9 +48,10 @@ use capsule_core::sidecar::{
     LabelError, Region, RegionError, RegionShape, SidecarV1, normalize_label,
 };
 use capsule_library::lifecycle::{
-    LifecycleError, QuarantineReason, RemoteAssetFacts, RemoteEntry, RemoteHead, RemoteOriginal,
-    SyncApplyOutcome, UploadBundle, Workspace, hash_ciphertext_from,
+    FeedDrain, LifecycleError, QuarantineReason, RemoteAssetFacts, RemoteEntry, RemoteHead,
+    RemoteOriginal, SyncApplyOutcome, TrashEntry, UploadBundle, Workspace, hash_ciphertext_from,
 };
+use jiff::Timestamp;
 use uuid::Uuid;
 
 use super::{FfiError, FfiUploadRequest};
@@ -853,6 +855,108 @@ fn asset_regions(ws: &Workspace, asset_id: Uuid) -> Result<Vec<FfiRegion>, Lifec
         .collect())
 }
 
+// ─── Trash ───────────────────────────────────────────────────────────────────
+
+/// One asset in the trash, as its latest signed `delete` record describes it.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct FfiTrashEntry {
+    /// The trashed asset (UUID string).
+    pub asset_id: String,
+    /// When the `delete` was signed (RFC 3339, UTC).
+    pub deleted_at: String,
+    /// The signed retention floor (RFC 3339, UTC): a restore is refused at or after it. `None`
+    /// for a `delete` that carries no readable window, which never expires.
+    pub retention_until: Option<String>,
+    /// Whether a restore is accepted now, by this device's clock. Computed by the workspace so
+    /// no app re-implements the window; the server judges the same floor by its own clock.
+    pub restorable: bool,
+}
+
+impl FfiTrashEntry {
+    fn new(entry: &TrashEntry, now: Timestamp) -> Self {
+        Self {
+            asset_id: entry.asset_id.to_string(),
+            deleted_at: entry.deleted_at.to_string(),
+            retention_until: entry.retention_until.map(|until| until.to_string()),
+            restorable: entry.is_restorable_at(now),
+        }
+    }
+}
+
+/// What a [`FfiWorkspace::purge_asset`] did.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct FfiPurgeOutcome {
+    /// The purged asset (UUID string).
+    pub asset_id: String,
+    /// The signed shorter-retention `delete` an early purge appended, as the opaque canonical
+    /// CBOR provenance record [`FfiWorkspace::provenance_head`] would have returned. Send it to
+    /// the album's ops surface so the server may purge too; when that delivery fails,
+    /// [`FfiWorkspace::purged_record`] hands the same record back from the kept chain. `None`
+    /// when the window had closed.
+    pub reissue_record: Option<Vec<u8>>,
+}
+
+/// A sync that drained the feed to its head, the evidence [`FfiWorkspace::expired_trash`]
+/// needs before it judges a retention deadline.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct FfiFeedDrain {
+    /// The latest server `changed_at` the drain saw (RFC 3339), or `None` for a drain that saw
+    /// no entry. It floors this device's clock, so a slow clock cannot hold open a window the
+    /// server has closed.
+    pub latest_changed_at: Option<String>,
+}
+
+impl FfiFeedDrain {
+    fn parse(&self) -> Result<FeedDrain, FfiError> {
+        let latest_changed_at = self
+            .latest_changed_at
+            .as_deref()
+            .map(str::parse::<Timestamp>)
+            .transpose()
+            .map_err(|e| FfiError::InvalidArgument {
+                detail: format!("latest_changed_at: not an RFC 3339 timestamp ({e})"),
+            })?;
+        Ok(FeedDrain { latest_changed_at })
+    }
+}
+
+/// Why a trash verb was refused ([`FfiError::Trash`]). Nothing was written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum FfiTrashRefusal {
+    /// The workspace holds no such asset.
+    NotFound,
+    /// The asset is not in the trash: a restore has nothing to undo, and a purge never skips
+    /// the trash.
+    NotInTrash,
+    /// The signed retention window has closed, so the asset can no longer be restored. It
+    /// stays in the trash until it is purged.
+    RetentionElapsed,
+}
+
+/// A trash verb's failure: the refusals a trash view names as [`FfiError::Trash`], everything
+/// else as the workspace failure it is.
+fn trash_error(error: LifecycleError) -> FfiError {
+    let (refusal, code, retention_until) = match &error {
+        LifecycleError::NotFound(_) => (FfiTrashRefusal::NotFound, None, None),
+        LifecycleError::NotInTrash(_) => (FfiTrashRefusal::NotInTrash, None, None),
+        LifecycleError::RetentionElapsed {
+            retention_until, ..
+        } => (
+            FfiTrashRefusal::RetentionElapsed,
+            Some(capsule_i18n::error_codes::UPLOAD_RETENTION_ELAPSED.to_owned()),
+            Some(retention_until.clone()),
+        ),
+        _ => return error.into(),
+    };
+    tracing::debug!(?refusal, %error, "ffi: trash verb refused");
+    FfiError::Trash {
+        refusal,
+        code,
+        retention_until,
+        detail: error.to_string(),
+    }
+}
+
 // ─── The workspace object ────────────────────────────────────────────────────
 
 /// A Capsule workspace, callable from Swift/Kotlin: the durable library at a filesystem root
@@ -1638,6 +1742,135 @@ impl FfiWorkspace {
                 .map_err(label_error)?;
             tracing::info!(%asset_id, %region_id, "ffi: region deleted");
             Ok(())
+        })
+    }
+
+    // ── Trash ────────────────────────────────────────────────────────────────
+    //
+    // The whole deletion state machine is the workspace's: every transition is a signed
+    // provenance record, so it syncs and survives an index rebuild, and every judgement of the
+    // retention window reads the `retention_until` signed into the `delete` record. An app
+    // calls these and keeps no retention logic of its own. A refusal is [`FfiError::Trash`].
+
+    /// Move an asset to the trash: sign a `delete` whose retention window is `retain_days` days
+    /// from now, and return its trash entry. An asset already in the trash keeps the window it
+    /// was deleted with and signs nothing, so a retried delete never extends it.
+    pub fn delete_asset(
+        &self,
+        asset_id: String,
+        retain_days: u32,
+    ) -> Result<FfiTrashEntry, FfiError> {
+        let asset_id = parse_uuid("asset_id", &asset_id)?;
+        self.with(|ws| {
+            if let Some(entry) = ws.trash_entry(&asset_id) {
+                tracing::debug!(%asset_id, "ffi: delete of an asset already in the trash; nothing signed");
+                return Ok(FfiTrashEntry::new(&entry, Timestamp::now()));
+            }
+            ws.soft_delete(&asset_id, i64::from(retain_days))
+                .map_err(trash_error)?;
+            tracing::info!(%asset_id, retain_days, "ffi: asset moved to the trash");
+            let entry = ws.trash_entry(&asset_id).ok_or_else(|| FfiError::Workspace {
+                detail: format!("asset {asset_id} was deleted and is not in the trash"),
+            })?;
+            Ok(FfiTrashEntry::new(&entry, Timestamp::now()))
+        })
+    }
+
+    /// Restore an asset from the trash: sign a `trash-restore`. Refused with
+    /// [`FfiTrashRefusal::RetentionElapsed`] (and the `error.upload.retention_elapsed` code) at
+    /// or after the signed `retention_until`, and with [`FfiTrashRefusal::NotInTrash`] for an
+    /// asset that is not in the trash.
+    pub fn restore_asset(&self, asset_id: String) -> Result<(), FfiError> {
+        let asset_id = parse_uuid("asset_id", &asset_id)?;
+        self.with(|ws| {
+            ws.restore(&asset_id).map_err(trash_error)?;
+            tracing::info!(%asset_id, "ffi: asset restored from the trash");
+            Ok(())
+        })
+    }
+
+    /// Permanently delete a trashed asset: its original, every derivative and local cache
+    /// entry, its sidecar and its index row. The provenance chain is kept as the record of the
+    /// deletion. Before `retention_until` a signed shorter-retention `delete` is appended first
+    /// and handed back in [`FfiPurgeOutcome::reissue_record`] to send to the server.
+    pub fn purge_asset(&self, asset_id: String) -> Result<FfiPurgeOutcome, FfiError> {
+        let asset_id = parse_uuid("asset_id", &asset_id)?;
+        self.with(|ws| {
+            let outcome = ws.purge(&asset_id).map_err(trash_error)?;
+            let reissue_record = outcome
+                .reissue
+                .as_ref()
+                .map(capsule_core::cbor::to_canonical_vec)
+                .transpose()
+                .map_err(|e| FfiError::Workspace {
+                    detail: format!("encoding the re-issued delete of {asset_id}: {e}"),
+                })?;
+            tracing::info!(%asset_id, removed_files = outcome.removed_files, reissued = reissue_record.is_some(), "ffi: asset purged");
+            Ok(FfiPurgeOutcome {
+                asset_id: asset_id.to_string(),
+                reissue_record,
+            })
+        })
+    }
+
+    /// Every asset in the trash with its signed retention window, most recently deleted first.
+    ///
+    /// This is the retention data, not the Recently Deleted *view*: a surface that shows the
+    /// trash still opens it behind the SR1 fresh-local-auth gate, as `Catalog::query_trash`
+    /// does.
+    pub fn trash(&self) -> Result<Vec<FfiTrashEntry>, FfiError> {
+        let now = Timestamp::now();
+        self.with(|ws| {
+            Ok(ws
+                .trash()
+                .iter()
+                .map(|entry| FfiTrashEntry::new(entry, now))
+                .collect())
+        })
+    }
+
+    /// The trash entries whose signed retention window has closed: the retention sweep's
+    /// input, each one ready for [`purge_asset`](Self::purge_asset).
+    ///
+    /// A deadline is judged only after a sync drained the feed to its head, so a restore on a
+    /// later page lands first: pass that drain as `drain`. The deadline is judged by this
+    /// device's clock floored by the drain's latest server `changed_at`. With no drain (`None`:
+    /// the sync failed, or this device has no server) nothing has expired, and the trash keeps
+    /// every asset until the user empties it.
+    ///
+    /// # Errors
+    ///
+    /// [`FfiError::InvalidArgument`] for a `latest_changed_at` that is not RFC 3339.
+    pub fn expired_trash(
+        &self,
+        drain: Option<FfiFeedDrain>,
+    ) -> Result<Vec<FfiTrashEntry>, FfiError> {
+        let drain = drain.as_ref().map(FfiFeedDrain::parse).transpose()?;
+        let clock = Timestamp::now();
+        let judged_at = drain.map_or(clock, |drain| drain.judged_at(clock));
+        self.with(|ws| {
+            Ok(ws
+                .expired_trash_after_drain(clock, drain)
+                .iter()
+                .map(|entry| FfiTrashEntry::new(entry, judged_at))
+                .collect())
+        })
+    }
+
+    /// The signed `delete` that ended a purged asset, the head of its kept provenance chain, as
+    /// the opaque canonical CBOR record [`FfiPurgeOutcome::reissue_record`] carries. After an
+    /// early purge it is that same re-issue, so a delivery to the album's ops surface that
+    /// failed can be resent from here, also after a reopen. `None` for an asset this workspace
+    /// has not purged.
+    pub fn purged_record(&self, asset_id: String) -> Result<Option<Vec<u8>>, FfiError> {
+        let asset_id = parse_uuid("asset_id", &asset_id)?;
+        self.with(|ws| {
+            ws.purge_record(&asset_id)
+                .map(capsule_core::cbor::to_canonical_vec)
+                .transpose()
+                .map_err(|e| FfiError::Workspace {
+                    detail: format!("encoding the purge record of {asset_id}: {e}"),
+                })
         })
     }
 }

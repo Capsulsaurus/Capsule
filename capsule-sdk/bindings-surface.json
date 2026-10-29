@@ -313,6 +313,13 @@
             },
             {
               "kind": "func",
+              "name": "deleteAsset",
+              "signature": "func deleteAsset(assetId: String, retainDays: UInt32) throws -> FfiTrashEntry",
+              "doc": "Move an asset to the trash: sign a `delete` whose retention window is `retain_days` days\nfrom now, and return its trash entry. An asset already in the trash keeps the window it\nwas deleted with and signs nothing, so a retried delete never extends it.",
+              "members": []
+            },
+            {
+              "kind": "func",
               "name": "deleteRegion",
               "signature": "func deleteRegion(assetId: String, regionId: String) throws",
               "doc": "Delete a region. **Final**: a concurrent or later edit of it on another device does not\nbring it back once the two merge, and its id is never live again.",
@@ -341,6 +348,13 @@
             },
             {
               "kind": "func",
+              "name": "expiredTrash",
+              "signature": "func expiredTrash(drain: FfiFeedDrain?) throws -> [FfiTrashEntry]",
+              "doc": "The trash entries whose signed retention window has closed: the retention sweep's\ninput, each one ready for [`purge_asset`](Self::purge_asset).\n\nA deadline is judged only after a sync drained the feed to its head, so a restore on a\nlater page lands first: pass that drain as `drain`. The deadline is judged by this\ndevice's clock floored by the drain's latest server `changed_at`. With no drain (`None`:\nthe sync failed, or this device has no server) nothing has expired, and the trash keeps\nevery asset until the user empties it.\n\n# Errors\n\n[`FfiError::InvalidArgument`] for a `latest_changed_at` that is not RFC 3339.",
+              "members": []
+            },
+            {
+              "kind": "func",
               "name": "labels",
               "signature": "func labels(target: FfiLabelTarget) throws -> [String]",
               "doc": "The labels `target` carries, sorted. An unknown target is [`FfiError::Label`] with\n[`FfiLabelRefusal::NotFound`].",
@@ -358,6 +372,20 @@
               "name": "provenanceHead",
               "signature": "func provenanceHead(assetId: String) throws -> Data",
               "doc": "The asset's **head provenance record** as opaque canonical CBOR — the exact bytes the\n`provenance` blob carries, the feed serves back as `manifest_cbor`, and a receiving\ndevice runs through [`apply_sync_entry`](Self::apply_sync_entry).\n\nThe record wraps the head signed manifest with its chain position. That wrapper is not\noptional: the server's chain head is the SHA-256 of these bytes while a client's next\n`prior_provenance_hash` is the record's own hash, so the bare manifest is the one\nencoding under which no lifecycle op can ever chain. Canonical CBOR is deterministic, so\nthe manifest inside is byte-identical to its own signed bytes — nothing is re-authored\nand the two signatures still verify over exactly what they covered.\n\nUse [`signed_manifest`](Self::signed_manifest) when the *manifest* is what is wanted.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "purgeAsset",
+              "signature": "func purgeAsset(assetId: String) throws -> FfiPurgeOutcome",
+              "doc": "Permanently delete a trashed asset: its original, every derivative and local cache\nentry, its sidecar and its index row. The provenance chain is kept as the record of the\ndeletion. Before `retention_until` a signed shorter-retention `delete` is appended first\nand handed back in [`FfiPurgeOutcome::reissue_record`] to send to the server.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "purgedRecord",
+              "signature": "func purgedRecord(assetId: String) throws -> Data?",
+              "doc": "The signed `delete` that ended a purged asset, the head of its kept provenance chain, as\nthe opaque canonical CBOR record [`FfiPurgeOutcome::reissue_record`] carries. After an\nearly purge it is that same re-issue, so a delivery to the album's ops surface that\nfailed can be resent from here, also after a reopen. `None` for an asset this workspace\nhas not purged.",
               "members": []
             },
             {
@@ -383,6 +411,13 @@
             },
             {
               "kind": "func",
+              "name": "restoreAsset",
+              "signature": "func restoreAsset(assetId: String) throws",
+              "doc": "Restore an asset from the trash: sign a `trash-restore`. Refused with\n[`FfiTrashRefusal::RetentionElapsed`] (and the `error.upload.retention_elapsed` code) at\nor after the signed `retention_until`, and with [`FfiTrashRefusal::NotInTrash`] for an\nasset that is not in the trash.",
+              "members": []
+            },
+            {
+              "kind": "func",
               "name": "sealAsset",
               "signature": "func sealAsset(albumId: String, fileName: String, bytes: Data) throws -> String",
               "doc": "**Seal + import**: take bytes the app already holds (a PhotoKit / MediaStore export),\nderive the file key, STREAM-encrypt, author and sign the create manifest, seal the\nsigned sidecar into its metadata blob, append the provenance chain, and self-verify\nthrough the `verify_asset` chokepoint. Returns the asset id.\n\n`file_name` is consulted for its extension and nothing else. One call, one core call:\nthe whole sealing order is `capsule-core`'s.",
@@ -400,6 +435,13 @@
               "name": "signedManifest",
               "signature": "func signedManifest(assetId: String) throws -> Data",
               "doc": "The asset's **head signed manifest** as opaque canonical CBOR.\n\nThis is a serialization of an already-signed structure, not a re-authoring: the two\nsignatures the manifest carries are covered by these bytes, which is why they travel\nverbatim and are never re-modeled on any wire.\n\n**Not what the sync feed carries** — that is\n[`provenance_head`](Self::provenance_head), the record that wraps this manifest with its\nchain position. Handing these bytes to\n[`apply_sync_entry`](Self::apply_sync_entry) is refused as malformed.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "trash",
+              "signature": "func trash() throws -> [FfiTrashEntry]",
+              "doc": "Every asset in the trash with its signed retention window, most recently deleted first.\n\nThis is the retention data, not the Recently Deleted *view*: a surface that shows the\ntrash still opens it behind the SR1 fresh-local-auth gate, as `Catalog::query_trash`\ndoes.",
               "members": []
             },
             {
@@ -779,6 +821,21 @@
         },
         {
           "kind": "struct",
+          "name": "FfiFeedDrain",
+          "signature": "public struct FfiFeedDrain: Equatable, Hashable",
+          "doc": "A sync that drained the feed to its head, the evidence [`FfiWorkspace::expired_trash`]\nneeds before it judges a retention deadline.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "latestChangedAt",
+              "signature": "public var latestChangedAt: String?",
+              "doc": "The latest server `changed_at` the drain saw (RFC 3339), or `None` for a drain that saw\nno entry. It floors this device's clock, so a slow clock cannot hold open a window the\nserver has closed.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "struct",
           "name": "FfiFeedEntry",
           "signature": "public struct FfiFeedEntry: Equatable, Hashable",
           "doc": "FFI mirror of [`FeedEntry`] — one decoded sync feed entry. Ids/manifest/metadata\ncross as opaque bytes.",
@@ -1083,6 +1140,28 @@
         },
         {
           "kind": "struct",
+          "name": "FfiPurgeOutcome",
+          "signature": "public struct FfiPurgeOutcome: Equatable, Hashable",
+          "doc": "What a [`FfiWorkspace::purge_asset`] did.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "assetId",
+              "signature": "public var assetId: String",
+              "doc": "The purged asset (UUID string).",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "reissueRecord",
+              "signature": "public var reissueRecord: Data?",
+              "doc": "The signed shorter-retention `delete` an early purge appended, as the opaque canonical\nCBOR provenance record [`FfiWorkspace::provenance_head`] would have returned. Send it to\nthe album's ops surface so the server may purge too; when that delivery fails,\n[`FfiWorkspace::purged_record`] hands the same record back from the kept chain. `None`\nwhen the window had closed.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "struct",
           "name": "FfiPushReport",
           "signature": "public struct FfiPushReport: Equatable, Hashable",
           "doc": "What [`FfiSession::push_asset`] did — FFI mirror of [`AssetPushReport`].",
@@ -1294,6 +1373,42 @@
               "name": "hasMore",
               "signature": "public var hasMore: Bool",
               "doc": "Whether the server holds changes beyond this page.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "struct",
+          "name": "FfiTrashEntry",
+          "signature": "public struct FfiTrashEntry: Equatable, Hashable",
+          "doc": "One asset in the trash, as its latest signed `delete` record describes it.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "assetId",
+              "signature": "public var assetId: String",
+              "doc": "The trashed asset (UUID string).",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "deletedAt",
+              "signature": "public var deletedAt: String",
+              "doc": "When the `delete` was signed (RFC 3339, UTC).",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "retentionUntil",
+              "signature": "public var retentionUntil: String?",
+              "doc": "The signed retention floor (RFC 3339, UTC): a restore is refused at or after it. `None`\nfor a `delete` that carries no readable window, which never expires.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "restorable",
+              "signature": "public var restorable: Bool",
+              "doc": "Whether a restore is accepted now, by this device's clock. Computed by the workspace so\nno app re-implements the window; the server judges the same floor by its own clock.",
               "members": []
             }
           ]
@@ -1660,6 +1775,13 @@
               "name": "Label",
               "signature": "case Label",
               "doc": "A label or region edit was refused before anything was written: its target does not\nexist, the label rule refused the label, or the shape broke the normalized-coordinate\ncontract. `refusal` says which, so an editor shows the reason rather than parsing\n`detail`.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "Trash",
+              "signature": "case Trash",
+              "doc": "A trash verb (delete, restore, purge) was refused before anything was written: the asset\nis unknown, not in the trash, or past its signed retention window. `refusal` says which.",
               "members": []
             },
             {
@@ -2139,6 +2261,35 @@
         },
         {
           "kind": "enum",
+          "name": "FfiTrashRefusal",
+          "signature": "public enum FfiTrashRefusal: Equatable, Hashable",
+          "doc": "Why a trash verb was refused ([`FfiError::Trash`]). Nothing was written.",
+          "members": [
+            {
+              "kind": "case",
+              "name": "notFound",
+              "signature": "case notFound",
+              "doc": "The workspace holds no such asset.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "notInTrash",
+              "signature": "case notInTrash",
+              "doc": "The asset is not in the trash: a restore has nothing to undo, and a purge never skips\nthe trash.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "retentionElapsed",
+              "signature": "case retentionElapsed",
+              "doc": "The signed retention window has closed, so the asset can no longer be restored. It\nstays in the trash until it is purged.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum",
           "name": "FfiUploadOutcome",
           "signature": "public enum FfiUploadOutcome: Equatable, Hashable",
           "doc": "FFI mirror of [`UploadOutcome`] — how a full upload resolved.",
@@ -2528,6 +2679,13 @@
             },
             {
               "kind": "fun",
+              "name": "deleteAsset",
+              "signature": "fun deleteAsset(assetId: kotlin.String, retainDays: kotlin.UInt): FfiTrashEntry",
+              "doc": "Move an asset to the trash: sign a `delete` whose retention window is `retain_days` days\nfrom now, and return its trash entry. An asset already in the trash keeps the window it\nwas deleted with and signs nothing, so a retried delete never extends it.",
+              "members": []
+            },
+            {
+              "kind": "fun",
               "name": "deleteRegion",
               "signature": "fun deleteRegion(assetId: kotlin.String, regionId: kotlin.String)",
               "doc": "Delete a region. **Final**: a concurrent or later edit of it on another device does not\nbring it back once the two merge, and its id is never live again.",
@@ -2556,6 +2714,13 @@
             },
             {
               "kind": "fun",
+              "name": "expiredTrash",
+              "signature": "fun expiredTrash(drain: FfiFeedDrain?): List<FfiTrashEntry>",
+              "doc": "The trash entries whose signed retention window has closed: the retention sweep's\ninput, each one ready for [`purge_asset`](Self::purge_asset).\n\nA deadline is judged only after a sync drained the feed to its head, so a restore on a\nlater page lands first: pass that drain as `drain`. The deadline is judged by this\ndevice's clock floored by the drain's latest server `changed_at`. With no drain (`None`:\nthe sync failed, or this device has no server) nothing has expired, and the trash keeps\nevery asset until the user empties it.\n\n# Errors\n\n[`FfiError::InvalidArgument`] for a `latest_changed_at` that is not RFC 3339.",
+              "members": []
+            },
+            {
+              "kind": "fun",
               "name": "labels",
               "signature": "fun labels(target: FfiLabelTarget): List<kotlin.String>",
               "doc": "The labels `target` carries, sorted. An unknown target is [`FfiError::Label`] with\n[`FfiLabelRefusal::NotFound`].",
@@ -2573,6 +2738,20 @@
               "name": "provenanceHead",
               "signature": "fun provenanceHead(assetId: kotlin.String): kotlin.ByteArray",
               "doc": "The asset's **head provenance record** as opaque canonical CBOR — the exact bytes the\n`provenance` blob carries, the feed serves back as `manifest_cbor`, and a receiving\ndevice runs through [`apply_sync_entry`](Self::apply_sync_entry).\n\nThe record wraps the head signed manifest with its chain position. That wrapper is not\noptional: the server's chain head is the SHA-256 of these bytes while a client's next\n`prior_provenance_hash` is the record's own hash, so the bare manifest is the one\nencoding under which no lifecycle op can ever chain. Canonical CBOR is deterministic, so\nthe manifest inside is byte-identical to its own signed bytes — nothing is re-authored\nand the two signatures still verify over exactly what they covered.\n\nUse [`signed_manifest`](Self::signed_manifest) when the *manifest* is what is wanted.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "purgeAsset",
+              "signature": "fun purgeAsset(assetId: kotlin.String): FfiPurgeOutcome",
+              "doc": "Permanently delete a trashed asset: its original, every derivative and local cache\nentry, its sidecar and its index row. The provenance chain is kept as the record of the\ndeletion. Before `retention_until` a signed shorter-retention `delete` is appended first\nand handed back in [`FfiPurgeOutcome::reissue_record`] to send to the server.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "purgedRecord",
+              "signature": "fun purgedRecord(assetId: kotlin.String): kotlin.ByteArray?",
+              "doc": "The signed `delete` that ended a purged asset, the head of its kept provenance chain, as\nthe opaque canonical CBOR record [`FfiPurgeOutcome::reissue_record`] carries. After an\nearly purge it is that same re-issue, so a delivery to the album's ops surface that\nfailed can be resent from here, also after a reopen. `None` for an asset this workspace\nhas not purged.",
               "members": []
             },
             {
@@ -2598,6 +2777,13 @@
             },
             {
               "kind": "fun",
+              "name": "restoreAsset",
+              "signature": "fun restoreAsset(assetId: kotlin.String)",
+              "doc": "Restore an asset from the trash: sign a `trash-restore`. Refused with\n[`FfiTrashRefusal::RetentionElapsed`] (and the `error.upload.retention_elapsed` code) at\nor after the signed `retention_until`, and with [`FfiTrashRefusal::NotInTrash`] for an\nasset that is not in the trash.",
+              "members": []
+            },
+            {
+              "kind": "fun",
               "name": "sealAsset",
               "signature": "fun sealAsset(albumId: kotlin.String, fileName: kotlin.String, bytes: kotlin.ByteArray): kotlin.String",
               "doc": "**Seal + import**: take bytes the app already holds (a PhotoKit / MediaStore export),\nderive the file key, STREAM-encrypt, author and sign the create manifest, seal the\nsigned sidecar into its metadata blob, append the provenance chain, and self-verify\nthrough the `verify_asset` chokepoint. Returns the asset id.\n\n`file_name` is consulted for its extension and nothing else. One call, one core call:\nthe whole sealing order is `capsule-core`'s.",
@@ -2615,6 +2801,13 @@
               "name": "signedManifest",
               "signature": "fun signedManifest(assetId: kotlin.String): kotlin.ByteArray",
               "doc": "The asset's **head signed manifest** as opaque canonical CBOR.\n\nThis is a serialization of an already-signed structure, not a re-authoring: the two\nsignatures the manifest carries are covered by these bytes, which is why they travel\nverbatim and are never re-modeled on any wire.\n\n**Not what the sync feed carries** — that is\n[`provenance_head`](Self::provenance_head), the record that wraps this manifest with its\nchain position. Handing these bytes to\n[`apply_sync_entry`](Self::apply_sync_entry) is refused as malformed.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "trash",
+              "signature": "fun trash(): List<FfiTrashEntry>",
+              "doc": "Every asset in the trash with its signed retention window, most recently deleted first.\n\nThis is the retention data, not the Recently Deleted *view*: a surface that shows the\ntrash still opens it behind the SR1 fresh-local-auth gate, as `Catalog::query_trash`\ndoes.",
               "members": []
             },
             {
@@ -2994,6 +3187,21 @@
         },
         {
           "kind": "data class",
+          "name": "FfiFeedDrain",
+          "signature": "data class FfiFeedDrain",
+          "doc": "A sync that drained the feed to its head, the evidence [`FfiWorkspace::expired_trash`]\nneeds before it judges a retention deadline.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "latestChangedAt",
+              "signature": "var latestChangedAt: kotlin.String?",
+              "doc": "The latest server `changed_at` the drain saw (RFC 3339), or `None` for a drain that saw\nno entry. It floors this device's clock, so a slow clock cannot hold open a window the\nserver has closed.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "data class",
           "name": "FfiFeedEntry",
           "signature": "data class FfiFeedEntry",
           "doc": "FFI mirror of [`FeedEntry`] — one decoded sync feed entry. Ids/manifest/metadata\ncross as opaque bytes.",
@@ -3298,6 +3506,28 @@
         },
         {
           "kind": "data class",
+          "name": "FfiPurgeOutcome",
+          "signature": "data class FfiPurgeOutcome",
+          "doc": "What a [`FfiWorkspace::purge_asset`] did.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "assetId",
+              "signature": "var assetId: kotlin.String",
+              "doc": "The purged asset (UUID string).",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "reissueRecord",
+              "signature": "var reissueRecord: kotlin.ByteArray?",
+              "doc": "The signed shorter-retention `delete` an early purge appended, as the opaque canonical\nCBOR provenance record [`FfiWorkspace::provenance_head`] would have returned. Send it to\nthe album's ops surface so the server may purge too; when that delivery fails,\n[`FfiWorkspace::purged_record`] hands the same record back from the kept chain. `None`\nwhen the window had closed.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "data class",
           "name": "FfiPushReport",
           "signature": "data class FfiPushReport",
           "doc": "What [`FfiSession::push_asset`] did — FFI mirror of [`AssetPushReport`].",
@@ -3509,6 +3739,42 @@
               "name": "hasMore",
               "signature": "var hasMore: kotlin.Boolean",
               "doc": "Whether the server holds changes beyond this page.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "data class",
+          "name": "FfiTrashEntry",
+          "signature": "data class FfiTrashEntry",
+          "doc": "One asset in the trash, as its latest signed `delete` record describes it.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "assetId",
+              "signature": "var assetId: kotlin.String",
+              "doc": "The trashed asset (UUID string).",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "deletedAt",
+              "signature": "var deletedAt: kotlin.String",
+              "doc": "When the `delete` was signed (RFC 3339, UTC).",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "retentionUntil",
+              "signature": "var retentionUntil: kotlin.String?",
+              "doc": "The signed retention floor (RFC 3339, UTC): a restore is refused at or after it. `None`\nfor a `delete` that carries no readable window, which never expires.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "restorable",
+              "signature": "var restorable: kotlin.Boolean",
+              "doc": "Whether a restore is accepted now, by this device's clock. Computed by the workspace so\nno app re-implements the window; the server judges the same floor by its own clock.",
               "members": []
             }
           ]
@@ -3875,6 +4141,13 @@
               "name": "Label",
               "signature": "class Label",
               "doc": "A label or region edit was refused before anything was written: its target does not\nexist, the label rule refused the label, or the shape broke the normalized-coordinate\ncontract. `refusal` says which, so an editor shows the reason rather than parsing\n`detail`.",
+              "members": []
+            },
+            {
+              "kind": "variant",
+              "name": "Trash",
+              "signature": "class Trash",
+              "doc": "A trash verb (delete, restore, purge) was refused before anything was written: the asset\nis unknown, not in the trash, or past its signed retention window. `refusal` says which.",
               "members": []
             },
             {
@@ -4348,6 +4621,35 @@
               "name": "Lagged",
               "signature": "data class Lagged",
               "doc": "The subscriber fell behind and this many events never arrived. The transfers carried\non; only their progress went unseen.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum class",
+          "name": "FfiTrashRefusal",
+          "signature": "enum class FfiTrashRefusal",
+          "doc": "Why a trash verb was refused ([`FfiError::Trash`]). Nothing was written.",
+          "members": [
+            {
+              "kind": "entry",
+              "name": "NOT_FOUND",
+              "signature": "NOT_FOUND,",
+              "doc": "The workspace holds no such asset.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "NOT_IN_TRASH",
+              "signature": "NOT_IN_TRASH,",
+              "doc": "The asset is not in the trash: a restore has nothing to undo, and a purge never skips\nthe trash.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "RETENTION_ELAPSED",
+              "signature": "RETENTION_ELAPSED;",
+              "doc": "The signed retention window has closed, so the asset can no longer be restored. It\nstays in the trash until it is purged.",
               "members": []
             }
           ]
