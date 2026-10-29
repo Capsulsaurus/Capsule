@@ -17,7 +17,7 @@
 //! | --- | --- |
 //! | register `201` | **`200` here.** Kynos's `Created` requires a `Location`, and this server exposes no URL for an account — see [`register_user`] |
 //! | register `400` / `409` / `500` | kept, and now coded (`error.auth.registration_invalid`, `error.auth.user_already_exists`, `error.auth.unavailable`) |
-//! | register `429` | **added** — the source address's registration budget is spent, or its limiter partition is full (`error.auth.rate_limited`, with `Retry-After`) |
+//! | register `429` | **added** — the source address's registration budget is spent (`error.auth.rate_limited`), or its limiter partition is full (`error.auth.registration_at_capacity`); both with `Retry-After` |
 //! | login `200` | kept — [`TokenResponse`] |
 //! | login `202` | **added**. The account has a confirmed second factor, so the credentials were accepted and the sign-in is not finished. Salvo had the TOTP operations and never issued a challenge |
 //! | login `400` "Bad request" | **deleted as unreachable.** `LoginResponses::BadRequest` was never constructed; the 400 a malformed body actually produces comes from the `Json` extractor, and Kynos declares it |
@@ -149,9 +149,10 @@ pub enum RegisterRejection {
     /// Too many registrations from this source address, **or** the limiter is holding as many
     /// distinct sources as it will hold (#1001).
     ///
-    /// Both causes carry `error.auth.rate_limited` and one retry instant, because the caller's
-    /// remedy is the same — wait out `Retry-After` — and the catalog has no registration
-    /// at-capacity code yet. The detail names no budget, so it is true of either cause.
+    /// Both causes carry one retry instant, because the caller's remedy is the same — wait out
+    /// `Retry-After` — but each has its own code: a spent budget is `error.auth.rate_limited`, a
+    /// full partition is `error.auth.registration_at_capacity`. The detail names no budget, so it
+    /// is true of either cause.
     #[error("too many registration attempts; try again later")]
     #[problem(status = 429, title = "Too many requests")]
     RateLimited {
@@ -189,10 +190,18 @@ impl RegisterRejection {
         }
     }
 
-    /// The source's budget is spent, or its partition is full, until `retry_after`.
+    /// The source's budget is spent until `retry_after`.
     fn rate_limited(retry_after: jiff::Timestamp) -> Self {
         Self::RateLimited {
             code: error_codes::AUTH_RATE_LIMITED,
+            retry_after: unix_seconds(retry_after),
+        }
+    }
+
+    /// The limiter's source-address partition is full until, at the latest, `retry_after`.
+    fn at_capacity(retry_after: jiff::Timestamp) -> Self {
+        Self::RateLimited {
+            code: error_codes::AUTH_REGISTRATION_AT_CAPACITY,
             retry_after: unix_seconds(retry_after),
         }
     }
@@ -213,7 +222,7 @@ async fn charge_registration_source(
     let verdict = counters.hit(&key, budget).await.map_err(|error| {
         if let Some(retry_after) = counters.capacity_refusal(&error, budget) {
             tracing::warn!(%error, limiter = key.as_str(), "the registration limiter is at capacity");
-            RegisterRejection::rate_limited(retry_after)
+            RegisterRejection::at_capacity(retry_after)
         } else {
             tracing::error!(%error, limiter = key.as_str(), "the registration limiter could not be reached");
             RegisterRejection::unavailable()
@@ -521,9 +530,9 @@ impl LogoutRejection {
 /// trusted client address **before** the address and password are validated or the registry is
 /// asked anything: probing costs the prober whatever the answer. A body the `Json` extractor
 /// refuses (`400`/`415`/`422`) never reaches the handler and is not charged; it learns nothing
-/// about any account. A spent budget, or a full limiter partition, is
-/// `429 error.auth.rate_limited` with `Retry-After`; a counter store that cannot answer is `500`,
-/// never an admission.
+/// about any account. A spent budget is `429 error.auth.rate_limited` and a full limiter
+/// partition `429 error.auth.registration_at_capacity`, both with `Retry-After`; a counter store
+/// that cannot answer is `500`, never an admission.
 ///
 /// # `200`, where Salvo answered `201`
 ///
