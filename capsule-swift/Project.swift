@@ -83,8 +83,14 @@ private let frameworkSettings: Settings = .settings(
 )
 
 /// App settings: a Release build merges its mergeable framework dependencies.
+///
+/// The FFI lane also sets `CAPSULE_FFI`, the one compilation condition the
+/// composition root's Rust-backed half is fenced by: without it the app target
+/// does not depend on `CapsuleCatalogFFI`, so nothing may import it.
 private let appSettings: Settings = .settings(
-    base: baseSettings,
+    base: ffiEnabled
+        ? baseSettings.merging(["SWIFT_ACTIVE_COMPILATION_CONDITIONS": "$(inherited) CAPSULE_FFI"]) { _, new in new }
+        : baseSettings,
     configurations: [
         .debug(name: "Debug"),
         .release(name: "Release", settings: ["MERGED_BINARY_TYPE": "automatic"]),
@@ -216,9 +222,10 @@ private let moduleTargets: [Target] =
 
     // Catalog (FFI) — the Rust-backed half: the generated uniffi glue for
     // both namespaces (the `capsule_core_ffi` catalog and `capsule-sdk`'s
-    // `capsule_sdk` user flows), the record conversions, and the
-    // error mapping onto the FFI-free `CatalogError`. Present only when
-    // `TUIST_FFI=1`; nothing above it names a generated type.
+    // `capsule_sdk` user flows), the record conversions, the
+    // error mapping onto the FFI-free `CatalogError`, and the port adapters
+    // (labels, the transfer event stream) over the `capsule_sdk` objects.
+    // Present only when `TUIST_FFI=1`; nothing above it names a generated type.
     + (ffiEnabled
         ? module(
             "CapsuleCatalogFFI",
@@ -230,6 +237,8 @@ private let moduleTargets: [Target] =
             dependencies: [
                 .target(name: "CapsuleFoundation"),
                 .target(name: "CapsuleCatalog"),
+                .target(name: "CapsuleDomain"),
+                .target(name: "CapsulePorts"),
                 .xcframework(path: ".ffi/CapsuleCoreFFI.xcframework"),
             ],
             testDependencies: []
