@@ -287,6 +287,33 @@ fn each_camera_stages_under_its_own_portable_directory() {
 }
 
 #[test]
+fn a_camera_named_like_a_windows_device_stages_under_a_repaired_name() {
+    let named = |manufacturer: &str, model: &str| DeviceInfo {
+        manufacturer: manufacturer.into(),
+        model: model.into(),
+        ..DeviceInfo::default()
+    };
+    assert_eq!(camera_key(&named("CON", "")), "_CON");
+    assert_eq!(camera_key(&named(" nul ", "")), "_nul", "case-insensitive");
+    assert_eq!(
+        camera_key(&named("aux.", "")),
+        "_aux",
+        "a trailing dot is trimmed first"
+    );
+    assert_eq!(camera_key(&named("COM1", "")), "_COM1");
+    assert_eq!(
+        camera_key(&named("PRN.cam", "")),
+        "_PRN.cam",
+        "with an extension"
+    );
+    assert_eq!(
+        camera_key(&named("CON", "X1")),
+        "CON-X1",
+        "only a whole device name is reserved"
+    );
+}
+
+#[test]
 fn the_summary_names_every_object_left_on_the_camera() {
     let report = CameraImportReport {
         camera: CameraSummary {

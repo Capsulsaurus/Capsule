@@ -45,6 +45,7 @@ use std::time::Instant;
 use capsule_core::crypto::hash::{Hash32, Sha256Hasher};
 use jiff::civil::DateTime;
 pub use ptp_device::PtpCamera;
+pub use staging::safe_file_name;
 use thiserror::Error;
 
 use crate::import::importers::{

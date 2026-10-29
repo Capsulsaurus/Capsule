@@ -29,6 +29,7 @@ use std::time::Instant;
 
 use capsule_library::import::{
     CameraAdapter, CameraDevice, CameraReceipt, PtpCamera, SourceAdapter, SourceMetadataIndex,
+    safe_file_name,
 };
 use capsule_library::lifecycle::Workspace;
 use eyre::{Result, WrapErr, eyre};
@@ -197,7 +198,8 @@ pub fn parse_address(address: &str) -> Result<SocketAddr> {
 }
 
 /// The per-camera staging directory name: manufacturer, model and serial number, reduced to
-/// characters valid in a file name on every supported platform.
+/// characters valid in a file name on every supported platform, and never a name Windows
+/// reserves for a device.
 #[must_use]
 pub fn camera_key(device: &DeviceInfo) -> String {
     let raw = [
@@ -228,10 +230,11 @@ pub fn camera_key(device: &DeviceInfo) -> String {
         .take(MAX_CAMERA_KEY)
         .collect();
     if key.is_empty() {
-        "camera".to_owned()
-    } else {
-        key
+        return "camera".to_owned();
     }
+    // The key holds only ASCII letters, digits, `-`, `.` and `_` and no trailing dot, so what is
+    // left to repair is a Windows device name (`CON`, `NUL.x`, `COM1`), which gains a leading `_`.
+    safe_file_name(&key).map_or_else(|| "camera".to_owned(), std::borrow::Cow::into_owned)
 }
 
 /// The staging root for the camera `device` describes, under the library at `library_root`.
