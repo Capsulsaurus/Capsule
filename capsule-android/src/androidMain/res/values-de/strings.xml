@@ -1857,6 +1857,7 @@
     <string name="error_federation_capability_revoked">Der Zugriff auf dieses geteilte Album wurde widerrufen.</string>
     <string name="error_federation_circuit_open">Diese Quelle wird nach wiederholten Fehlern vorübergehend zurückgestellt.</string>
     <string name="error_federation_member_not_on_roster">Diese Person steht nicht auf der Mitgliederliste dieses Albums.</string>
+    <string name="error_federation_mint_at_capacity">Dieser Server verarbeitet gerade zu viele Zugriffsberechtigungen. Bitte versuche es in Kürze erneut.</string>
     <string name="error_federation_not_configured">Dieser Server teilt keine Alben mit anderen Servern.</string>
     <string name="error_federation_peer_unknown">Dieser Server ist diesem Server nicht bekannt.</string>
     <string name="error_federation_rate_budget_exceeded">Diese Quelle hat ihr Anfragelimit erreicht. Bitte warten Sie und versuchen Sie es erneut.</string>
@@ -1864,6 +1865,7 @@
     <string name="error_federation_scope_insufficient">Diese Zugriffsberechtigung deckt den angeforderten Inhalt nicht ab.</string>
     <string name="error_federation_unavailable">Capsule konnte die Föderationsdaten nicht erreichen. Bitte versuche es erneut.</string>
     <string name="error_moderation_account_suspended">Ihr Konto ist gesperrt. Sie können nichts hochladen oder teilen, bis es wiederhergestellt ist.</string>
+    <string name="error_moderation_report_at_capacity">Dieser Server verarbeitet gerade zu viele Meldungen. Bitte warten Sie und versuchen Sie es erneut.</string>
     <string name="error_moderation_report_malformed">Diese Meldung ist ungültig.</string>
     <string name="error_moderation_report_rate_limited">Zu viele Meldungen von dieser Quelle. Bitte warten Sie und versuchen Sie es erneut.</string>
     <string name="error_moderation_report_unsigned">Die Moderationsmeldung konnte nicht überprüft werden.</string>

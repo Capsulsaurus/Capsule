@@ -1857,6 +1857,7 @@
     <string name="error_federation_capability_revoked">تم إلغاء الوصول إلى هذا الألبوم المشترك.</string>
     <string name="error_federation_circuit_open">تم إيقاف هذا المصدر مؤقتًا بعد أخطاء متكررة.</string>
     <string name="error_federation_member_not_on_roster">هذا الشخص ليس ضمن قائمة أعضاء هذا الألبوم.</string>
+    <string name="error_federation_mint_at_capacity">يتعامل هذا الخادم مع عدد كبير جدًا من منح الوصول حاليًا. يُرجى المحاولة مرة أخرى بعد قليل.</string>
     <string name="error_federation_not_configured">لا يشارك هذا الخادم الألبومات مع خوادم أخرى.</string>
     <string name="error_federation_peer_unknown">هذا الخادم ليس من الخوادم التي يعرفها هذا الخادم.</string>
     <string name="error_federation_rate_budget_exceeded">بلغ هذا المصدر حدّ الطلبات. يُرجى الانتظار ثم المحاولة مرة أخرى.</string>
@@ -1864,6 +1865,7 @@
     <string name="error_federation_scope_insufficient">لا يشمل منح الوصول هذا المحتوى المطلوب.</string>
     <string name="error_federation_unavailable">تعذّر على Capsule الوصول إلى سجلات الاتحاد. يُرجى المحاولة مرة أخرى.</string>
     <string name="error_moderation_account_suspended">حسابك موقوف. لا يمكنك الرفع أو المشاركة حتى تتم إعادته.</string>
+    <string name="error_moderation_report_at_capacity">يتعامل هذا الخادم مع عدد كبير جدًا من البلاغات حاليًا. يُرجى الانتظار ثم المحاولة مرة أخرى.</string>
     <string name="error_moderation_report_malformed">هذا البلاغ غير صالح.</string>
     <string name="error_moderation_report_rate_limited">بلاغات كثيرة جدًا من هذا المصدر. يُرجى الانتظار ثم المحاولة مرة أخرى.</string>
     <string name="error_moderation_report_unsigned">تعذّر التحقق من بلاغ الإشراف.</string>

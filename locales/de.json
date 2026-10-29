@@ -7467,6 +7467,10 @@
     "message": "Diese Person steht nicht auf der Mitgliederliste dieses Albums.",
     "origin": "machine"
   },
+  "error.federation.mint_at_capacity": {
+    "message": "Dieser Server verarbeitet gerade zu viele Zugriffsberechtigungen. Bitte versuche es in Kürze erneut.",
+    "origin": "machine"
+  },
   "error.federation.not_configured": {
     "message": "Dieser Server teilt keine Alben mit anderen Servern.",
     "origin": "machine"
@@ -7493,6 +7497,10 @@
   },
   "error.moderation.account_suspended": {
     "message": "Ihr Konto ist gesperrt. Sie können nichts hochladen oder teilen, bis es wiederhergestellt ist.",
+    "origin": "machine"
+  },
+  "error.moderation.report_at_capacity": {
+    "message": "Dieser Server verarbeitet gerade zu viele Meldungen. Bitte warten Sie und versuchen Sie es erneut.",
     "origin": "machine"
   },
   "error.moderation.report_malformed": {

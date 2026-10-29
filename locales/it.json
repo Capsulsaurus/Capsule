@@ -7467,6 +7467,10 @@
     "message": "Questa persona non è nell'elenco dei membri dell'album.",
     "origin": "machine"
   },
+  "error.federation.mint_at_capacity": {
+    "message": "Al momento questo server sta gestendo troppe autorizzazioni di accesso. Riprova tra poco.",
+    "origin": "machine"
+  },
   "error.federation.not_configured": {
     "message": "Questo server non condivide album con altri server.",
     "origin": "machine"
@@ -7493,6 +7497,10 @@
   },
   "error.moderation.account_suspended": {
     "message": "Il tuo account è sospeso. Non puoi caricare né condividere finché non viene ripristinato.",
+    "origin": "machine"
+  },
+  "error.moderation.report_at_capacity": {
+    "message": "Al momento questo server sta gestendo troppe segnalazioni. Attendi e riprova.",
     "origin": "machine"
   },
   "error.moderation.report_malformed": {

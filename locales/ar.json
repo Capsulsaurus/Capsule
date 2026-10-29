@@ -7467,6 +7467,10 @@
     "message": "هذا الشخص ليس ضمن قائمة أعضاء هذا الألبوم.",
     "origin": "machine"
   },
+  "error.federation.mint_at_capacity": {
+    "message": "يتعامل هذا الخادم مع عدد كبير جدًا من منح الوصول حاليًا. يُرجى المحاولة مرة أخرى بعد قليل.",
+    "origin": "machine"
+  },
   "error.federation.not_configured": {
     "message": "لا يشارك هذا الخادم الألبومات مع خوادم أخرى.",
     "origin": "machine"
@@ -7493,6 +7497,10 @@
   },
   "error.moderation.account_suspended": {
     "message": "حسابك موقوف. لا يمكنك الرفع أو المشاركة حتى تتم إعادته.",
+    "origin": "machine"
+  },
+  "error.moderation.report_at_capacity": {
+    "message": "يتعامل هذا الخادم مع عدد كبير جدًا من البلاغات حاليًا. يُرجى الانتظار ثم المحاولة مرة أخرى.",
     "origin": "machine"
   },
   "error.moderation.report_malformed": {

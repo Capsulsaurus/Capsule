@@ -7467,6 +7467,10 @@
     "message": "वह व्यक्ति इस एल्बम की सदस्य सूची में नहीं है।",
     "origin": "machine"
   },
+  "error.federation.mint_at_capacity": {
+    "message": "यह सर्वर अभी बहुत अधिक पहुँच अनुमतियाँ संभाल रहा है। कृपया थोड़ी देर बाद फिर से प्रयास करें।",
+    "origin": "machine"
+  },
   "error.federation.not_configured": {
     "message": "यह सर्वर दूसरे सर्वरों के साथ एल्बम साझा नहीं करता।",
     "origin": "machine"
@@ -7493,6 +7497,10 @@
   },
   "error.moderation.account_suspended": {
     "message": "आपका खाता निलंबित है। बहाल होने तक आप अपलोड या साझा नहीं कर सकते।",
+    "origin": "machine"
+  },
+  "error.moderation.report_at_capacity": {
+    "message": "यह सर्वर अभी बहुत अधिक रिपोर्ट संभाल रहा है। कृपया प्रतीक्षा करें और फिर से प्रयास करें।",
     "origin": "machine"
   },
   "error.moderation.report_malformed": {

@@ -7467,6 +7467,10 @@
     "message": "Essa pessoa não está na lista de membros deste álbum.",
     "origin": "machine"
   },
+  "error.federation.mint_at_capacity": {
+    "message": "Este servidor está lidando com muitas concessões de acesso no momento. Tente novamente em breve.",
+    "origin": "machine"
+  },
   "error.federation.not_configured": {
     "message": "Este servidor não compartilha álbuns com outros servidores.",
     "origin": "machine"
@@ -7493,6 +7497,10 @@
   },
   "error.moderation.account_suspended": {
     "message": "Sua conta está suspensa. Você não pode enviar nem compartilhar até que ela seja restabelecida.",
+    "origin": "machine"
+  },
+  "error.moderation.report_at_capacity": {
+    "message": "Este servidor está lidando com muitas denúncias no momento. Aguarde e tente novamente.",
     "origin": "machine"
   },
   "error.moderation.report_malformed": {

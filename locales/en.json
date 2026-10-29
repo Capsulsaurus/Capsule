@@ -7967,6 +7967,10 @@
     "message": "That person isn't on this album's member list.",
     "context": "HTTP 409 on POST /v1/albums/{album_id}/capabilities: the account the capability would carry is not on the album's current roster, so there is no membership to grant a peer access for. A stale-state class: the owner publishes the roster that lists them first, then mints."
   },
+  "error.federation.mint_at_capacity": {
+    "message": "This server is handling too many access grants right now. Please try again shortly.",
+    "context": "HTTP 429 on POST /v1/albums/{album_id}/capabilities: the per-account mint rate-limit store is holding as many distinct accounts as it will hold, so this account could not be given a window of its own. Saturated by design rather than broken - distinct from error.federation.rate_budget_exceeded, which is this account's own mint budget being spent, and from error.federation.unavailable, which is a 500 meaning a store could not answer at all. It clears within the limiter window, after which a lapsed window frees room."
+  },
   "error.federation.not_configured": {
     "message": "This server doesn't share albums with other servers.",
     "context": "HTTP 404 on all four federation operations — minting, revoking or refreshing a capability, and federated report intake: this deployment has FEDERATION_ENABLED off, which is the default, so it does not federate. While it is off no capability is honoured, including one minted while it was on."
@@ -7994,6 +7998,10 @@
   "error.moderation.account_suspended": {
     "message": "Your account is suspended. You can't upload or share until it's reinstated.",
     "context": "HTTP 403 at POST /upload session creation: the account carries an admin/billing suspension flag. Distinct from quota and permission rejections so the client surfaces the right remediation. Suspension is an access-level action — the user's data is untouched and the block is reversible."
+  },
+  "error.moderation.report_at_capacity": {
+    "message": "This server is handling too many reports right now. Please wait and try again.",
+    "context": "HTTP 429 on POST /v1/federation/reports: one of the report rate-limit stores (verified intake per reporting server, reports per reporting server, reports per reporting server and reported account, or the one-use report nonces) is holding as many distinct keys as it will hold, so this report could not be given a window of its own. Saturated by design rather than broken - distinct from error.moderation.report_rate_limited, which is this source's own report budget being spent, and from error.moderation.unavailable, which is a 500 meaning a store could not answer at all. Nothing is filed; it clears within the limiter window."
   },
   "error.moderation.report_malformed": {
     "message": "That report isn't valid.",

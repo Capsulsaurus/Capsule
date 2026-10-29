@@ -7467,6 +7467,10 @@
     "message": "此人不在该相册的成员名单中。",
     "origin": "machine"
   },
+  "error.federation.mint_at_capacity": {
+    "message": "此服务器当前正在处理过多访问授权。请稍后再试。",
+    "origin": "machine"
+  },
   "error.federation.not_configured": {
     "message": "此服务器不与其他服务器共享相册。",
     "origin": "machine"
@@ -7493,6 +7497,10 @@
   },
   "error.moderation.account_suspended": {
     "message": "您的账户已被停用。在恢复之前，您无法上传或分享。",
+    "origin": "machine"
+  },
+  "error.moderation.report_at_capacity": {
+    "message": "此服务器当前正在处理过多举报。请稍候再试。",
     "origin": "machine"
   },
   "error.moderation.report_malformed": {

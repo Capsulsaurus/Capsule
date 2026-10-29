@@ -1857,6 +1857,7 @@
     <string name="error_federation_capability_revoked">इस साझा एल्बम की पहुँच रद्द कर दी गई है।</string>
     <string name="error_federation_circuit_open">बार-बार त्रुटियों के बाद इस स्रोत को अस्थायी रूप से रोक दिया गया है।</string>
     <string name="error_federation_member_not_on_roster">वह व्यक्ति इस एल्बम की सदस्य सूची में नहीं है।</string>
+    <string name="error_federation_mint_at_capacity">यह सर्वर अभी बहुत अधिक पहुँच अनुमतियाँ संभाल रहा है। कृपया थोड़ी देर बाद फिर से प्रयास करें।</string>
     <string name="error_federation_not_configured">यह सर्वर दूसरे सर्वरों के साथ एल्बम साझा नहीं करता।</string>
     <string name="error_federation_peer_unknown">यह सर्वर उस सर्वर को नहीं जानता।</string>
     <string name="error_federation_rate_budget_exceeded">इस स्रोत ने अपनी अनुरोध सीमा पूरी कर ली है। कृपया प्रतीक्षा करें और फिर से प्रयास करें।</string>
@@ -1864,6 +1865,7 @@
     <string name="error_federation_scope_insufficient">यह पहुँच अनुमति अनुरोधित सामग्री को कवर नहीं करती।</string>
     <string name="error_federation_unavailable">Capsule फ़ेडरेशन रिकॉर्ड तक नहीं पहुँच सका। कृपया फिर से प्रयास करें।</string>
     <string name="error_moderation_account_suspended">आपका खाता निलंबित है। बहाल होने तक आप अपलोड या साझा नहीं कर सकते।</string>
+    <string name="error_moderation_report_at_capacity">यह सर्वर अभी बहुत अधिक रिपोर्ट संभाल रहा है। कृपया प्रतीक्षा करें और फिर से प्रयास करें।</string>
     <string name="error_moderation_report_malformed">वह रिपोर्ट मान्य नहीं है।</string>
     <string name="error_moderation_report_rate_limited">इस स्रोत से बहुत अधिक रिपोर्ट। कृपया प्रतीक्षा करें और फिर से प्रयास करें।</string>
     <string name="error_moderation_report_unsigned">मॉडरेशन रिपोर्ट सत्यापित नहीं की जा सकी।</string>
