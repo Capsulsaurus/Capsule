@@ -6551,6 +6551,238 @@
     "message": "No uploads in progress.",
     "context": "Shown in place of the upload list when nothing is uploading."
   },
+  "app.transfer.board.title": {
+    "message": "Live Transfers",
+    "context": "Title of the real-time transfer view, which shows every upload and download piece by piece as it moves."
+  },
+  "app.transfer.board.empty.title": {
+    "message": "Nothing Moving",
+    "context": "Real-time transfer view heading when no upload or download is in progress."
+  },
+  "app.transfer.board.empty.description": {
+    "message": "Uploads and downloads appear here the moment they start.",
+    "context": "Real-time transfer view body text when no upload or download is in progress."
+  },
+  "app.transfer.board.direction.upload": {
+    "message": "Upload",
+    "context": "Real-time transfer view: labels a transfer that sends a file to the user's server."
+  },
+  "app.transfer.board.direction.fetch": {
+    "message": "Download",
+    "context": "Real-time transfer view: labels a transfer that brings a file from the user's server to this device."
+  },
+  "app.transfer.board.phase.active": {
+    "message": "In Progress",
+    "context": "Real-time transfer view: the transfer is still moving bytes."
+  },
+  "app.transfer.board.phase.finalizing": {
+    "message": "Finishing on the Server",
+    "context": "Real-time transfer view: every byte of an upload arrived and the server is finishing it."
+  },
+  "app.transfer.board.phase.verified": {
+    "message": "Verified",
+    "context": "Real-time transfer view: the server proved it holds the upload, or a download matched its fingerprint."
+  },
+  "app.transfer.board.phase.merged": {
+    "message": "Already on the Server",
+    "context": "Real-time transfer view: the server already had this exact file, so nothing was sent."
+  },
+  "app.transfer.board.phase.integrity_rejected": {
+    "message": "Failed Its Integrity Check",
+    "context": "Real-time transfer view: a downloaded file did not match its fingerprint and was thrown away."
+  },
+  "app.transfer.board.progress": {
+    "message": "{done} of {size}",
+    "context": "Real-time transfer view progress. {done} and {size} are already-formatted amounts of data, such as '3 MB' and '12 MB'."
+  },
+  "app.transfer.board.progress_unknown": {
+    "message": "{done} so far",
+    "context": "Real-time transfer view progress while the total size is not known yet. {done} is an already-formatted amount of data."
+  },
+  "app.transfer.board.held": {
+    "message": "{held} was already on the server",
+    "context": "Real-time transfer view: how much of a resumed upload the server kept from an earlier attempt. {held} is an already-formatted amount of data."
+  },
+  "app.transfer.board.speed": {
+    "message": "{rate}/s",
+    "context": "Real-time transfer view speed. {rate} is an already-formatted amount of data, such as '1.2 MB'; translate the per-second part."
+  },
+  "app.transfer.board.total_speed": {
+    "message": "Total speed {rate}/s",
+    "context": "Real-time transfer view header: the combined speed of every transfer. {rate} is an already-formatted amount of data."
+  },
+  "app.transfer.board.chunk_size": {
+    "message": "Piece size {size}",
+    "context": "Real-time transfer view: the size of each piece an upload is split into. {size} is an already-formatted amount of data."
+  },
+  "app.transfer.board.resizes": {
+    "message": "{count, plural, one {Resized # time} other {Resized # times}}",
+    "context": "Real-time transfer view: how many times Capsule changed the piece size to suit the connection."
+  },
+  "app.transfer.board.retries": {
+    "message": "{count, plural, one {# retry} other {# retries}}",
+    "context": "Real-time transfer view: how many times a piece had to be sent or requested again."
+  },
+  "app.transfer.board.rejects": {
+    "message": "{count, plural, one {# piece refused} other {# pieces refused}}",
+    "context": "Real-time transfer view: how many pieces arrived damaged and were refused."
+  },
+  "app.transfer.board.active": {
+    "message": "{count, plural, one {# active} other {# active}}",
+    "context": "Real-time transfer view header: how many transfers are still moving."
+  },
+  "app.transfer.board.missed": {
+    "message": "{count, plural, one {# update was missed while the view caught up} other {# updates were missed while the view caught up}}",
+    "context": "Real-time transfer view: the view fell behind and skipped some progress updates. The transfers themselves are unaffected."
+  },
+  "app.transfer.board.custody": {
+    "message": "Saved on server: {durable} · Not yet: {not_durable} · Receipts: {receipts}",
+    "context": "Real-time transfer view footer. Each placeholder is an already-formatted count of photos or receipts the server confirmed."
+  },
+  "app.transfer.board.retry.transport_reset": {
+    "message": "Connection dropped; sending that piece again",
+    "context": "Real-time transfer view: why the last piece was retried."
+  },
+  "app.transfer.board.retry.offset_realign": {
+    "message": "Continuing from the server's position",
+    "context": "Real-time transfer view: the server reported a different position and the upload continues from there."
+  },
+  "app.transfer.board.retry.session_lost": {
+    "message": "The server lost the upload; starting a fresh one",
+    "context": "Real-time transfer view: why the last piece was retried."
+  },
+  "app.transfer.board.retry.server_wait": {
+    "message": "The server asked Capsule to wait",
+    "context": "Real-time transfer view: the server is busy or full and asked the upload to pause."
+  },
+  "app.transfer.board.retry.fetch_stalled": {
+    "message": "Download stalled; trying again",
+    "context": "Real-time transfer view: a download made no progress for too long and is retried."
+  },
+  "app.transfer.board.retry.fetch_empty": {
+    "message": "Nothing arrived; trying again",
+    "context": "Real-time transfer view: a download request brought no data and is retried."
+  },
+  "app.labels.title.regions": {
+    "message": "Regions",
+    "context": "Title of the editor for labelled areas drawn on a photo."
+  },
+  "app.labels.title.stack": {
+    "message": "Stack Labels",
+    "context": "Title of the editor for the labels on a stack (a group of photos shown as one)."
+  },
+  "app.labels.title.album": {
+    "message": "Album Labels",
+    "context": "Title of the editor for the labels on an album."
+  },
+  "app.labels.field": {
+    "message": "Add a label",
+    "context": "Placeholder of the text field that adds a label."
+  },
+  "app.labels.add": {
+    "message": "Add",
+    "context": "Button that adds the typed label."
+  },
+  "app.labels.remove": {
+    "message": "Remove {label}",
+    "context": "Accessibility label of the button that removes one label. {label} is the label's text."
+  },
+  "app.labels.empty": {
+    "message": "No labels yet.",
+    "context": "Shown in the label editor when the item has no labels."
+  },
+  "app.labels.regions.empty": {
+    "message": "Draw a region to label part of this photo.",
+    "context": "Shown in the region editor when the photo has no labelled regions."
+  },
+  "app.labels.regions.item": {
+    "message": "Region {number}",
+    "context": "Name of one labelled region of a photo, numbered in the order they were drawn. {number} is an already-formatted number."
+  },
+  "app.labels.regions.draft": {
+    "message": "New region",
+    "context": "Accessibility label of the region being drawn on a photo."
+  },
+  "app.labels.regions.draw_circle": {
+    "message": "Circle",
+    "context": "Button that starts drawing a round region on a photo."
+  },
+  "app.labels.regions.draw_rect": {
+    "message": "Rectangle",
+    "context": "Button that starts drawing a rectangular region on a photo."
+  },
+  "app.labels.regions.first_label": {
+    "message": "First label (optional)",
+    "context": "Placeholder of the text field for the label a new region is saved with."
+  },
+  "app.labels.regions.save": {
+    "message": "Save Region",
+    "context": "Button that saves the region being drawn."
+  },
+  "app.labels.regions.cancel": {
+    "message": "Cancel",
+    "context": "Button that discards the region being drawn."
+  },
+  "app.labels.regions.delete": {
+    "message": "Delete Region",
+    "context": "Button that permanently deletes the selected region and its labels."
+  },
+  "app.labels.regions.adjust.move_left": {
+    "message": "Move left",
+    "context": "Screen-reader action that moves the region being drawn a small step left."
+  },
+  "app.labels.regions.adjust.move_right": {
+    "message": "Move right",
+    "context": "Screen-reader action that moves the region being drawn a small step right."
+  },
+  "app.labels.regions.adjust.move_up": {
+    "message": "Move up",
+    "context": "Screen-reader action that moves the region being drawn a small step up."
+  },
+  "app.labels.regions.adjust.move_down": {
+    "message": "Move down",
+    "context": "Screen-reader action that moves the region being drawn a small step down."
+  },
+  "app.labels.regions.adjust.grow": {
+    "message": "Make larger",
+    "context": "Screen-reader action that enlarges the region being drawn a small step."
+  },
+  "app.labels.regions.adjust.shrink": {
+    "message": "Make smaller",
+    "context": "Screen-reader action that shrinks the region being drawn a small step."
+  },
+  "app.labels.failure.not_found": {
+    "message": "This item no longer exists.",
+    "context": "Label editor error: the photo, region, stack or album was deleted."
+  },
+  "app.labels.failure.label_empty": {
+    "message": "A label can't be empty.",
+    "context": "Label editor error: the typed label was only spaces."
+  },
+  "app.labels.failure.label_too_long": {
+    "message": "That label is too long: {bytes} bytes, and the limit is {max}.",
+    "context": "Label editor error. {bytes} and {max} are already-formatted numbers of bytes of text."
+  },
+  "app.labels.failure.shape_refused": {
+    "message": "That region doesn't fit inside the photo.",
+    "context": "Label editor error: the drawn region extends past the photo's edge or has no size."
+  },
+  "app.labels.failure.unavailable": {
+    "message": "Couldn't save the change. Try again.",
+    "context": "Label editor error for any failure the editor cannot name more precisely."
+  },
+  "app.viewer.sample.title": {
+    "message": "Sample Photo",
+    "context": "Title of the stand-in photo the Android app opens to draw regions on before a library is connected."
+  },
+  "app.viewer.sample.description": {
+    "message": "A stand-in photo for drawing regions",
+    "context": "Accessibility description of the stand-in photo the region editor draws on."
+  },
+  "app.home.menu.more": {
+    "message": "More options",
+    "context": "Accessibility label of the home screen's overflow menu button."
+  },
   "app.viewer.delete": {
     "message": "Delete",
     "context": "Accessibility label for the delete button in the photo viewer."

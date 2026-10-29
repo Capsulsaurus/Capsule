@@ -410,6 +410,7 @@
     <string name="app_hidden_title">Hidden</string>
     <string name="app_hidden_unhide">Unhide</string>
     <string name="app_hidden_unlock">Unlock</string>
+    <string name="app_home_menu_more">More options</string>
     <string name="app_import_conflict_destructive_note">This replaces the copy already in your library</string>
     <string name="app_import_conflict_kind_destination_differs">Already in your library, in a different album</string>
     <string name="app_import_conflict_kind_duplicate_with_new_metadata">Already in your library, with details this copy doesn\'t have</string>
@@ -549,6 +550,33 @@
     <string name="app_imports_title">Imports</string>
     <string name="app_infoplist_face_id_usage">Capsule uses Face ID to unlock your Hidden and Recently Deleted photos.</string>
     <string name="app_infoplist_photo_library_usage">Capsule shows and organizes the photos and videos in your library.</string>
+    <string name="app_labels_add">Add</string>
+    <string name="app_labels_empty">No labels yet.</string>
+    <string name="app_labels_failure_label_empty">A label can\'t be empty.</string>
+    <string name="app_labels_failure_label_too_long">That label is too long: %1$s bytes, and the limit is %2$s.</string>
+    <string name="app_labels_failure_not_found">This item no longer exists.</string>
+    <string name="app_labels_failure_shape_refused">That region doesn\'t fit inside the photo.</string>
+    <string name="app_labels_failure_unavailable">Couldn\'t save the change. Try again.</string>
+    <string name="app_labels_field">Add a label</string>
+    <string name="app_labels_regions_adjust_grow">Make larger</string>
+    <string name="app_labels_regions_adjust_move_down">Move down</string>
+    <string name="app_labels_regions_adjust_move_left">Move left</string>
+    <string name="app_labels_regions_adjust_move_right">Move right</string>
+    <string name="app_labels_regions_adjust_move_up">Move up</string>
+    <string name="app_labels_regions_adjust_shrink">Make smaller</string>
+    <string name="app_labels_regions_cancel">Cancel</string>
+    <string name="app_labels_regions_delete">Delete Region</string>
+    <string name="app_labels_regions_draft">New region</string>
+    <string name="app_labels_regions_draw_circle">Circle</string>
+    <string name="app_labels_regions_draw_rect">Rectangle</string>
+    <string name="app_labels_regions_empty">Draw a region to label part of this photo.</string>
+    <string name="app_labels_regions_first_label">First label (optional)</string>
+    <string name="app_labels_regions_item">Region %s</string>
+    <string name="app_labels_regions_save">Save Region</string>
+    <string name="app_labels_remove">Remove %s</string>
+    <string name="app_labels_title_album">Album Labels</string>
+    <string name="app_labels_title_regions">Regions</string>
+    <string name="app_labels_title_stack">Stack Labels</string>
     <string name="app_media_live_photo">Live Photo</string>
     <string name="app_media_photo">Photo</string>
     <string name="app_media_video">Video</string>
@@ -1532,6 +1560,29 @@
     <string name="app_transfer_action_force_now">Upload Now</string>
     <string name="app_transfer_action_retry">Try Again</string>
     <string name="app_transfer_activity_empty">No recent transfers.</string>
+    <string name="app_transfer_board_chunk_size">Piece size %s</string>
+    <string name="app_transfer_board_custody">Saved on server: %1$s · Not yet: %2$s · Receipts: %3$s</string>
+    <string name="app_transfer_board_direction_fetch">Download</string>
+    <string name="app_transfer_board_direction_upload">Upload</string>
+    <string name="app_transfer_board_empty_description">Uploads and downloads appear here the moment they start.</string>
+    <string name="app_transfer_board_empty_title">Nothing Moving</string>
+    <string name="app_transfer_board_held">%s was already on the server</string>
+    <string name="app_transfer_board_phase_active">In Progress</string>
+    <string name="app_transfer_board_phase_finalizing">Finishing on the Server</string>
+    <string name="app_transfer_board_phase_integrity_rejected">Failed Its Integrity Check</string>
+    <string name="app_transfer_board_phase_merged">Already on the Server</string>
+    <string name="app_transfer_board_phase_verified">Verified</string>
+    <string name="app_transfer_board_progress">%1$s of %2$s</string>
+    <string name="app_transfer_board_progress_unknown">%s so far</string>
+    <string name="app_transfer_board_retry_fetch_empty">Nothing arrived; trying again</string>
+    <string name="app_transfer_board_retry_fetch_stalled">Download stalled; trying again</string>
+    <string name="app_transfer_board_retry_offset_realign">Continuing from the server\'s position</string>
+    <string name="app_transfer_board_retry_server_wait">The server asked Capsule to wait</string>
+    <string name="app_transfer_board_retry_session_lost">The server lost the upload; starting a fresh one</string>
+    <string name="app_transfer_board_retry_transport_reset">Connection dropped; sending that piece again</string>
+    <string name="app_transfer_board_speed">%s/s</string>
+    <string name="app_transfer_board_title">Live Transfers</string>
+    <string name="app_transfer_board_total_speed">Total speed %s/s</string>
     <string name="app_transfer_chunk_bounds">Allowed Range</string>
     <string name="app_transfer_chunk_bounds_range">%1$@ – %2$@</string>
     <string name="app_transfer_chunk_current">Current Piece Size</string>
@@ -1663,6 +1714,8 @@
     <string name="app_viewer_play">Play</string>
     <string name="app_viewer_play_slideshow">Play Slideshow</string>
     <string name="app_viewer_previous_photo">Previous Photo</string>
+    <string name="app_viewer_sample_description">A stand-in photo for drawing regions</string>
+    <string name="app_viewer_sample_title">Sample Photo</string>
     <string name="app_name">Capsule App</string>
     <string name="apple_menu_close_window">Close Window</string>
     <string name="apple_menu_culling_review">Culling Review</string>
@@ -2148,6 +2201,26 @@
     <plurals name="app_timeline_selection_count">
         <item quantity="one">%d Selected</item>
         <item quantity="other">%d Selected</item>
+    </plurals>
+    <plurals name="app_transfer_board_active">
+        <item quantity="one">%d active</item>
+        <item quantity="other">%d active</item>
+    </plurals>
+    <plurals name="app_transfer_board_missed">
+        <item quantity="one">%d update was missed while the view caught up</item>
+        <item quantity="other">%d updates were missed while the view caught up</item>
+    </plurals>
+    <plurals name="app_transfer_board_rejects">
+        <item quantity="one">%d piece refused</item>
+        <item quantity="other">%d pieces refused</item>
+    </plurals>
+    <plurals name="app_transfer_board_resizes">
+        <item quantity="one">Resized %d time</item>
+        <item quantity="other">Resized %d times</item>
+    </plurals>
+    <plurals name="app_transfer_board_retries">
+        <item quantity="one">%d retry</item>
+        <item quantity="other">%d retries</item>
     </plurals>
     <plurals name="common_item_count">
         <item quantity="one">%d item</item>
