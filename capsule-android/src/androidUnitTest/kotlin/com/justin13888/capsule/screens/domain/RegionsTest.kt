@@ -24,6 +24,14 @@ class RegionsTest {
     }
 
     @Test
+    fun aLabelIsTrimmedByTheUnicodeWhiteSpaceSetAsTheCoreTrimsIt() {
+        // U+0085, U+00A0, U+202F and U+3000 are White_Space; U+001C to U+001F are not.
+        assertEquals("tag", UserLabel.normalize("\u0085 tag 　"))
+        assertEquals("\u001Ctag\u001F", UserLabel.normalize(" \u001Ctag\u001F "))
+        assertFailsWith<LabelRefusal.Empty> { UserLabel.normalize("\u0085  ") }
+    }
+
+    @Test
     fun aLabelIsBoundedInUtf8BytesNotCharacters() {
         val atBound = "a".repeat(UserLabel.MAX_BYTES)
         assertEquals(atBound, UserLabel.normalize(atBound))

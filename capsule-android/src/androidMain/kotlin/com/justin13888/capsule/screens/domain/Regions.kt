@@ -23,12 +23,24 @@ object UserLabel {
      * @throws LabelRefusal.TooLong when the normalized label is past [MAX_BYTES].
      */
     fun normalize(raw: String): String {
-        val trimmed = Normalizer.normalize(raw, Normalizer.Form.NFC).trim()
+        val trimmed = Normalizer.normalize(raw, Normalizer.Form.NFC).trim(::isUnicodeWhiteSpace)
         if (trimmed.isEmpty()) throw LabelRefusal.Empty()
         val bytes = trimmed.toByteArray(Charsets.UTF_8).size
         if (bytes > MAX_BYTES) throw LabelRefusal.TooLong(bytes)
         return trimmed
     }
+
+    /**
+     * The Unicode `White_Space` property, which Rust's `str::trim` trims by. Kotlin's
+     * own `trim()` differs: it also trims U+001C to U+001F and keeps U+0085.
+     */
+    internal fun isUnicodeWhiteSpace(char: Char): Boolean =
+        when (char) {
+            in '\u0009'..'\u000D', ' ', '\u0085', '\u00A0', '\u1680', in '\u2000'..'\u200A',
+            '\u2028', '\u2029', '\u202F', '\u205F', '\u3000',
+            -> true
+            else -> false
+        }
 }
 
 /** Why a label was refused. Equal by kind and content, so tests and editors compare them. */
