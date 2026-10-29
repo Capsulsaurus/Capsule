@@ -339,15 +339,15 @@ impl Catalogs {
     ///
     /// Every platform numbers its specifiers from the source message, so a translation
     /// that reorders its arguments still addresses them by the positions the call site
-    /// passes.
+    /// passes. A key the source does not define has no plan and is an error;
+    /// [`Self::check_placeholder_parity`] reports every such key before rendering.
     fn plan_for(&self, key: &str) -> Result<ArgPlan> {
-        match self.messages.get(&self.source).and_then(|m| m.get(key)) {
-            Some(source_message) => ArgPlan::of(source_message)
-                .with_context(|| format!("key `{key}` ({} locale)", self.source)),
-            // A key absent from the source locale has no plan to inherit; treat every
-            // argument as text, which is the only safe default.
-            None => Ok(ArgPlan::default()),
-        }
+        let source_message = self
+            .messages
+            .get(&self.source)
+            .and_then(|m| m.get(key))
+            .with_context(|| format!("key `{key}` is not in the {} catalog", self.source))?;
+        ArgPlan::of(source_message).with_context(|| format!("key `{key}` ({} locale)", self.source))
     }
 
     /// The app's Apple String Catalog: every key except the `app.infoplist.*` namespace,

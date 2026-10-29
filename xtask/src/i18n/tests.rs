@@ -801,6 +801,31 @@ fn every_parity_violation_is_reported_at_once() {
 }
 
 #[test]
+fn a_key_the_source_lacks_has_no_argument_plan() {
+    let mut messages = BTreeMap::new();
+    messages.insert("en".to_string(), BTreeMap::new());
+    messages.insert(
+        "fr".to_string(),
+        BTreeMap::from([("orphan".to_string(), "Orphelin".to_string())]),
+    );
+    let catalogs = Catalogs {
+        source: "en".to_string(),
+        supported: vec!["en".to_string(), "fr".to_string()],
+        messages,
+    };
+    let err = format!(
+        "{:#}",
+        catalogs
+            .plan_for("orphan")
+            .expect_err("no source message, no plan")
+    );
+    assert!(
+        err.contains("key `orphan` is not in the en catalog"),
+        "{err}"
+    );
+}
+
+#[test]
 fn a_translation_records_its_origin_from_the_closed_set() {
     let entry = |origin: Option<&str>| match origin {
         Some(o) => serde_json::json!({ "message": "m", "origin": o }),
