@@ -170,7 +170,21 @@ async fn blocking_cuts_every_live_grant_the_peer_holds_and_no_other_peers() {
         "another peer's grant is not this peer's block"
     );
 
-    // A repeat block is not a new fact, and still runs the cascade, which has nothing left.
+    // A repeat block is not a new fact, and still runs the cascade: a grant the first cascade
+    // left live (here, one issued after it, standing in for a cascade that failed part-way)
+    // is revoked by the second, which is how an operator finishes publication.
+    let straggler = grant(&harness, &peer(), "01937b7c-0000-7000-8000-0000000000a4").await;
+    assert_eq!(
+        harness.admin.block(&peer(), None).await.expect("blocks"),
+        Blocked {
+            outcome: BlockOutcome::AlreadyBlocked,
+            revoked: 1
+        }
+    );
+    assert!(
+        revoked(&harness, &straggler).await,
+        "the straggler is revoked"
+    );
     assert_eq!(
         harness.admin.block(&peer(), None).await.expect("blocks"),
         Blocked {
