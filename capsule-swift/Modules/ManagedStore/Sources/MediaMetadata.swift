@@ -18,6 +18,10 @@ public struct MediaMetadata: Sendable, Equatable {
     public var cameraModel: String?
     /// The file size in bytes.
     public var fileSize: Int64
+    /// GPS latitude in signed decimal degrees, from EXIF.
+    public var latitude: Double?
+    /// GPS longitude in signed decimal degrees, from EXIF.
+    public var longitude: Double?
 
     public init(
         assetType: String = "photo",
@@ -26,7 +30,9 @@ public struct MediaMetadata: Sendable, Equatable {
         captureTimestamp: Int64? = nil,
         cameraMake: String? = nil,
         cameraModel: String? = nil,
-        fileSize: Int64 = 0
+        fileSize: Int64 = 0,
+        latitude: Double? = nil,
+        longitude: Double? = nil
     ) {
         self.assetType = assetType
         self.pixelWidth = pixelWidth
@@ -35,6 +41,8 @@ public struct MediaMetadata: Sendable, Equatable {
         self.cameraMake = cameraMake
         self.cameraModel = cameraModel
         self.fileSize = fileSize
+        self.latitude = latitude
+        self.longitude = longitude
     }
 }
 
@@ -60,10 +68,11 @@ public struct ImageIOMetadataExtractor: MediaMetadataExtracting {
         }
         metadata.pixelWidth = properties[kCGImagePropertyPixelWidth] as? Int
         metadata.pixelHeight = properties[kCGImagePropertyPixelHeight] as? Int
-        if let tiff = properties[kCGImagePropertyTIFFDictionary] as? [CFString: Any] {
-            metadata.cameraMake = tiff[kCGImagePropertyTIFFMake] as? String
-            metadata.cameraModel = tiff[kCGImagePropertyTIFFModel] as? String
-        }
+        let container = ContainerExif.parse(properties: properties)
+        metadata.cameraMake = container.cameraMake
+        metadata.cameraModel = container.cameraModel
+        metadata.latitude = container.latitude
+        metadata.longitude = container.longitude
         if let exif = properties[kCGImagePropertyExifDictionary] as? [CFString: Any],
            let dateString = exif[kCGImagePropertyExifDateTimeOriginal] as? String {
             metadata.captureTimestamp = Self.parseExifDate(dateString)

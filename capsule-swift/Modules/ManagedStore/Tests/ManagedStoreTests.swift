@@ -2,6 +2,7 @@ import CryptoKit
 import Foundation
 import Testing
 
+import CapsuleCatalog
 import CapsuleTestSupport
 import ManagedStore
 
@@ -193,6 +194,60 @@ struct ManagedLibraryPurgeTests {
         // A partition that was never written at all is not an error either.
         try await library.removeAssetFiles(uuid: "never-imported", captureDate: Date(timeIntervalSince1970: 0))
 
+        #expect(await store.fileCount == 0)
+    }
+}
+
+@Suite("ManagedLibrary.updateSidecar")
+struct ManagedLibrarySidecarTests {
+    private let layout = ManagedLibraryLayout(root: URL(filePath: "/capsule/Library"))
+    private let captureDate = Date(timeIntervalSince1970: 1720000000)
+    private let coder = JSONSidecarCoder()
+
+    private func sidecar() -> CatalogSidecar {
+        CatalogSidecar(
+            version: 1,
+            uuid: "asset-1",
+            assetType: "photo",
+            originalFilename: "a.jpg",
+            importTimestamp: 1,
+            modifiedTimestamp: 1,
+            hashSHA256: String(repeating: "0", count: 64),
+            fileSize: 5,
+            importerVersion: "test",
+            rawshiftVersion: "0.0.0",
+            gpsLatitude: 48.8584,
+            unknownFieldsCBOR: Data([0xA1, 0x01, 0x02])
+        )
+    }
+
+    @Test("applies the change and keeps every field it does not touch")
+    func appliesChangeAndKeepsTheRest() async throws {
+        let store = MockFileStore()
+        let url = layout.sidecarFile(uuid: "asset-1", captureDate: captureDate)
+        try await store.write(coder.encode(sidecar()), to: url)
+        let library = ManagedLibrary(layout: layout, fileStore: store, catalog: MockCatalog())
+
+        try await library.updateSidecar(uuid: "asset-1", captureDate: captureDate, coder: coder) {
+            $0.caption = "harbour"
+        }
+
+        var expected = sidecar()
+        expected.caption = "harbour"
+        let written = try #require(await store.data(at: url))
+        #expect(try coder.decode(written) == expected)
+    }
+
+    @Test("an asset with no sidecar on disk is refused, and nothing is written")
+    func missingSidecarIsRefused() async {
+        let store = MockFileStore()
+        let library = ManagedLibrary(layout: layout, fileStore: store, catalog: MockCatalog())
+
+        await #expect(throws: CatalogError.sidecar(message: "no sidecar for asset-1")) {
+            try await library.updateSidecar(uuid: "asset-1", captureDate: captureDate, coder: coder) {
+                $0.caption = "harbour"
+            }
+        }
         #expect(await store.fileCount == 0)
     }
 }
