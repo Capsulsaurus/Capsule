@@ -95,6 +95,23 @@ impl Metric {
             _ => Better::Lower,
         }
     }
+
+    /// The least worsening, in the metric's own unit, any baseline tolerates.
+    ///
+    /// A percentage of the baseline grants nothing when the baseline is zero or near it (no
+    /// dropped frames, a frame overrun at the deadline), so a single dropped frame would fail
+    /// the gate. The floor is the noise one run shows on an unchanged build: the slack a metric
+    /// gets is the larger of this and its percentage.
+    pub(crate) fn min_slack(self) -> f64 {
+        match self {
+            Metric::ColdStartFirstThumbnailMs | Metric::FullResolutionOpenMs => 10.0,
+            Metric::ScrollFrameRateFps => 1.0,
+            // Percentage points: one or two frames of a short fling.
+            Metric::ScrollDroppedFramesPct => 2.0,
+            Metric::ScrollFrameOverrunP95Ms => 1.0,
+            Metric::InputToFrameMs => 4.0,
+        }
+    }
 }
 
 /// Who was measured.
@@ -193,7 +210,7 @@ pub(crate) struct Baseline {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub(crate) struct BaselineEntry {
     pub(crate) value: f64,
-    /// Allowed worsening, as a percentage of `value`.
+    /// Allowed worsening, as a percentage of `value`; never less than [`Metric::min_slack`].
     pub(crate) tolerance_pct: f64,
 }
 
@@ -291,9 +308,10 @@ impl Verdict {
     }
 }
 
-/// The worst value `entry` tolerates for `metric`.
+/// The worst value `entry` tolerates for `metric`: its percentage of the baseline, but never
+/// less than the metric's [`Metric::min_slack`].
 fn limit(metric: Metric, entry: BaselineEntry) -> f64 {
-    let slack = entry.value.abs() * entry.tolerance_pct / 100.0;
+    let slack = (entry.value.abs() * entry.tolerance_pct / 100.0).max(metric.min_slack());
     match metric.better() {
         Better::Lower => entry.value + slack,
         Better::Higher => entry.value - slack,

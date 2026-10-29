@@ -117,6 +117,77 @@ fn a_negative_baseline_widens_its_limit_in_the_worse_direction() {
 }
 
 #[test]
+fn a_zero_baseline_still_tolerates_the_metrics_absolute_floor() {
+    // 10% of nothing is nothing: without a floor one dropped frame would fail the gate.
+    let baseline = baseline(&[
+        (Metric::ScrollDroppedFramesPct, 0.0, 10.0),
+        (Metric::ScrollFrameOverrunP95Ms, 0.0, 10.0),
+    ]);
+    let one_frame = compare(
+        &baseline,
+        &results(
+            &[
+                (Metric::ScrollDroppedFramesPct, 0.8),
+                (Metric::ScrollFrameOverrunP95Ms, 0.5),
+            ],
+            &[],
+        ),
+    )
+    .expect("comparable");
+    assert!(one_frame.passed(), "{one_frame:?}");
+
+    let past_floor = compare(
+        &baseline,
+        &results(
+            &[
+                (Metric::ScrollDroppedFramesPct, 2.5),
+                (Metric::ScrollFrameOverrunP95Ms, 1.5),
+            ],
+            &[],
+        ),
+    )
+    .expect("comparable");
+    let limits: Vec<_> = past_floor
+        .regressions
+        .iter()
+        .map(|r| (r.metric, r.limit))
+        .collect();
+    assert_eq!(
+        limits,
+        vec![
+            (
+                Metric::ScrollDroppedFramesPct,
+                Metric::ScrollDroppedFramesPct.min_slack()
+            ),
+            (
+                Metric::ScrollFrameOverrunP95Ms,
+                Metric::ScrollFrameOverrunP95Ms.min_slack()
+            ),
+        ]
+    );
+}
+
+#[test]
+fn the_percentage_wins_once_it_exceeds_the_floor() {
+    let entry = BaselineEntry {
+        value: 800.0,
+        tolerance_pct: 10.0,
+    };
+    assert_eq!(limit(Metric::ColdStartFirstThumbnailMs, entry), 880.0);
+    let tight = BaselineEntry {
+        value: 800.0,
+        tolerance_pct: 0.0,
+    };
+    assert_eq!(
+        limit(Metric::ColdStartFirstThumbnailMs, tight),
+        800.0 + Metric::ColdStartFirstThumbnailMs.min_slack()
+    );
+    for metric in Metric::ALL {
+        assert!(metric.min_slack() > 0.0, "{}", metric.key());
+    }
+}
+
+#[test]
 fn a_baselined_metric_that_disappears_fails_the_gate() {
     let baseline = baseline(&[
         (Metric::ColdStartFirstThumbnailMs, 800.0, 10.0),
