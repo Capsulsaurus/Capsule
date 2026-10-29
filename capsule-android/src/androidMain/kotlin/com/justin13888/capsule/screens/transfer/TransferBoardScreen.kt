@@ -113,7 +113,9 @@ private fun TransferBoardContent(
                 )
             }
         }
-        items(board.transfers, key = { "${it.direction}:${it.blob.value}:${it.startedMilliseconds}" }) { transfer ->
+        // No stable key: two transfers of one blob can start in the same millisecond (a
+        // re-upload right after a finalize), and a duplicate key crashes the list.
+        items(board.transfers) { transfer ->
             TransferCard(transfer, board.nowMilliseconds)
         }
         item {
