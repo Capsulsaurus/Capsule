@@ -141951,6 +141951,16 @@
         }
       }
     },
+    "auth.login.or": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "or"
+          }
+        }
+      }
+    },
     "auth.login.title": {
       "localizations": {
         "ar": {
@@ -142193,6 +142203,46 @@
           "stringUnit": {
             "state": "translated",
             "value": "還沒有帳號？"
+          }
+        }
+      }
+    },
+    "auth.oidc.ceremony_lost": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This sign-in was started in another tab, or too long ago. Start again from the login page."
+          }
+        }
+      }
+    },
+    "auth.oidc.completing": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Finishing sign-in…"
+          }
+        }
+      }
+    },
+    "auth.oidc.failed_title": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign-in Not Completed"
+          }
+        }
+      }
+    },
+    "auth.oidc.not_completed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your identity provider did not complete the sign-in."
           }
         }
       }

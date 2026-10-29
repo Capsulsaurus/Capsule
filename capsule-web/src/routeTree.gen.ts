@@ -26,6 +26,9 @@ const DashboardLazyRouteImport = createFileRoute('/dashboard')()
 const IndexLazyRouteImport = createFileRoute('/')()
 const SettingsSecurityLazyRouteImport = createFileRoute('/settings/security')()
 const SettingsLanguageLazyRouteImport = createFileRoute('/settings/language')()
+const LoginOidcCallbackLazyRouteImport = createFileRoute(
+  '/login_/oidc-callback',
+)()
 const LibraryTrashLazyRouteImport = createFileRoute('/library/trash')()
 const LibraryFavoritesLazyRouteImport = createFileRoute('/library/favorites')()
 const LibraryArchiveLazyRouteImport = createFileRoute('/library/archive')()
@@ -89,6 +92,13 @@ const SettingsLanguageLazyRoute = SettingsLanguageLazyRouteImport.update({
 } as any).lazy(() =>
   import('./routes/settings/language.lazy').then((d) => d.Route),
 )
+const LoginOidcCallbackLazyRoute = LoginOidcCallbackLazyRouteImport.update({
+  id: '/login_/oidc-callback',
+  path: '/login/oidc-callback',
+  getParentRoute: () => rootRouteImport,
+} as any).lazy(() =>
+  import('./routes/login_.oidc-callback.lazy').then((d) => d.Route),
+)
 const LibraryTrashLazyRoute = LibraryTrashLazyRouteImport.update({
   id: '/library/trash',
   path: '/library/trash',
@@ -139,6 +149,7 @@ export interface FileRoutesByFullPath {
   '/library/archive': typeof LibraryArchiveLazyRoute
   '/library/favorites': typeof LibraryFavoritesLazyRoute
   '/library/trash': typeof LibraryTrashLazyRoute
+  '/login/oidc-callback': typeof LoginOidcCallbackLazyRoute
   '/settings/language': typeof SettingsLanguageLazyRoute
   '/settings/security': typeof SettingsSecurityLazyRoute
   '/albums/': typeof AlbumsIndexRoute
@@ -158,6 +169,7 @@ export interface FileRoutesByTo {
   '/library/archive': typeof LibraryArchiveLazyRoute
   '/library/favorites': typeof LibraryFavoritesLazyRoute
   '/library/trash': typeof LibraryTrashLazyRoute
+  '/login/oidc-callback': typeof LoginOidcCallbackLazyRoute
   '/settings/language': typeof SettingsLanguageLazyRoute
   '/settings/security': typeof SettingsSecurityLazyRoute
   '/albums': typeof AlbumsIndexRoute
@@ -178,6 +190,7 @@ export interface FileRoutesById {
   '/library/archive': typeof LibraryArchiveLazyRoute
   '/library/favorites': typeof LibraryFavoritesLazyRoute
   '/library/trash': typeof LibraryTrashLazyRoute
+  '/login_/oidc-callback': typeof LoginOidcCallbackLazyRoute
   '/settings/language': typeof SettingsLanguageLazyRoute
   '/settings/security': typeof SettingsSecurityLazyRoute
   '/albums/': typeof AlbumsIndexRoute
@@ -199,6 +212,7 @@ export interface FileRouteTypes {
     | '/library/archive'
     | '/library/favorites'
     | '/library/trash'
+    | '/login/oidc-callback'
     | '/settings/language'
     | '/settings/security'
     | '/albums/'
@@ -218,6 +232,7 @@ export interface FileRouteTypes {
     | '/library/archive'
     | '/library/favorites'
     | '/library/trash'
+    | '/login/oidc-callback'
     | '/settings/language'
     | '/settings/security'
     | '/albums'
@@ -237,6 +252,7 @@ export interface FileRouteTypes {
     | '/library/archive'
     | '/library/favorites'
     | '/library/trash'
+    | '/login_/oidc-callback'
     | '/settings/language'
     | '/settings/security'
     | '/albums/'
@@ -257,6 +273,7 @@ export interface RootRouteChildren {
   LibraryArchiveLazyRoute: typeof LibraryArchiveLazyRoute
   LibraryFavoritesLazyRoute: typeof LibraryFavoritesLazyRoute
   LibraryTrashLazyRoute: typeof LibraryTrashLazyRoute
+  LoginOidcCallbackLazyRoute: typeof LoginOidcCallbackLazyRoute
   AlbumsIndexRoute: typeof AlbumsIndexRoute
 }
 
@@ -339,6 +356,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsLanguageLazyRouteImport
       parentRoute: typeof SettingsLazyRoute
     }
+    '/login_/oidc-callback': {
+      id: '/login_/oidc-callback'
+      path: '/login/oidc-callback'
+      fullPath: '/login/oidc-callback'
+      preLoaderRoute: typeof LoginOidcCallbackLazyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/library/trash': {
       id: '/library/trash'
       path: '/library/trash'
@@ -413,6 +437,7 @@ const rootRouteChildren: RootRouteChildren = {
   LibraryArchiveLazyRoute: LibraryArchiveLazyRoute,
   LibraryFavoritesLazyRoute: LibraryFavoritesLazyRoute,
   LibraryTrashLazyRoute: LibraryTrashLazyRoute,
+  LoginOidcCallbackLazyRoute: LoginOidcCallbackLazyRoute,
   AlbumsIndexRoute: AlbumsIndexRoute,
 }
 export const routeTree = rootRouteImport

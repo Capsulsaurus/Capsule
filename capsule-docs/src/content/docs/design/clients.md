@@ -76,6 +76,8 @@ The TUI follows the same frame bound for input response
 
 **Permanently read-only**: authenticated viewing, public [share links](/design/share-links/), and guest [upload links](/design/web-upload/). It never writes library state or enrolls a device — a browser holds neither hardware-bound device keys nor write-tier keys ([key hierarchy](/design/cryptography/keys/)). Guest drops are keyless and sealed to the recipient, so need no write authority; that path is owned by [Web Upload](/design/web-upload/).
 
+A web session opens through either door the server offers: a password, or — where `server-info` publishes `auth.oidc` — the identity provider's authorization-code flow. The browser binds itself to that ceremony with an S256 `binding_challenge` whose secret stays in the tab's `sessionStorage` until the provider redirects back to `/login/oidc-callback`, which the deployment registers as its `OIDC_REDIRECT_URL`. Either door ends in the same session and the same second-factor step, and neither grants anything a read-only client lacks.
+
 It is **server-owned** (shipped and updated with the server) and **version-locked** to it — the one client allowed to assume its peer's exact version. Native clients MUST stay lenient across server versions, which is why [protocol evolution is additive](/design/versioning/).
 
 A **progressive web app is out of scope, permanently**: no web app manifest, service worker,

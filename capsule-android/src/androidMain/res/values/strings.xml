@@ -1806,9 +1806,14 @@
     <string name="auth_forgot_sending">Sending…</string>
     <string name="auth_forgot_title">Forgot Password</string>
     <string name="auth_login_description">Enter your email below to login to your account.</string>
+    <string name="auth_login_or">or</string>
     <string name="auth_login_title">Login</string>
     <string name="auth_new_password">New Password</string>
     <string name="auth_no_account">Don\'t have an account?</string>
+    <string name="auth_oidc_ceremony_lost">This sign-in was started in another tab, or too long ago. Start again from the login page.</string>
+    <string name="auth_oidc_completing">Finishing sign-in…</string>
+    <string name="auth_oidc_failed_title">Sign-in Not Completed</string>
+    <string name="auth_oidc_not_completed">Your identity provider did not complete the sign-in.</string>
     <string name="auth_sign_up">Sign up</string>
     <string name="auth_signing_in">Signing in…</string>
     <string name="auth_totp_code_label">Authenticator Code</string>
