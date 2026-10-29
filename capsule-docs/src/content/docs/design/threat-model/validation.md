@@ -124,7 +124,7 @@ Duplicates are no-ops; same key, different content is corruption. An unlisted su
 
 | Surface                          | Key                                              | Duplicate                                                  |
 | -------------------------------- | ------------------------------------------------ | ---------------------------------------------------------- |
-| Upload chunk                     | `(upload_id, byte range)`                        | Wholly committed → the session's state, nothing written; partial overlap → `409 error.upload.range_conflict` |
+| Upload chunk                     | `(upload_id, byte range)`                        | Wholly committed → the session's state, nothing written, bytes not compared (different bytes are stopped by the client's [chunk-tag guard](/design/cryptography/encryption/#encryption-workflow) and the finalize re-hash); partial overlap → `409 error.upload.range_conflict` |
 | Session creation                 | `(owner_id, hash, album_id)`                     | Active session returned; finalized → `409 error.upload.duplicate_blob` + existing asset |
 | Lifecycle manifest               | `(asset_id, prior_provenance_hash, manifest_hash)` | Chain advances once                                      |
 | Metadata update                  | op id + `(asset_id, prior_provenance_hash)`      | Structurally identical                                     |

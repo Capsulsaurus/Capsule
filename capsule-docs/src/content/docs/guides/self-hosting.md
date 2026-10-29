@@ -23,7 +23,7 @@ never decodes media; clients do all processing and encryption.
   - accept request bodies of at least 16 MiB, the largest upload chunk;
   - stream request bodies to the server rather than buffering them;
   - disable TLS early data (0-RTT), or forward it with the `Early-Data: 1` header so the server can refuse a write;
-  - apply no total-duration timeout to a request body, and an idle timeout no shorter than a minute, so a slow but steady chunk is never cut.
+  - apply no total-duration timeout to a request body, and an idle timeout longer than the server's stall bound, so a slow but steady chunk is never cut.
   HTTP/2 and HTTP/3 on the client side of the proxy are optional; clients fall back to HTTP/1.1.
 
 ## Hardware
@@ -57,11 +57,10 @@ memory does not grow with file size. Most of the hardware budget should therefor
   evicting state.
 - **Upstream bandwidth is the limit for remote devices.** A phone uploading from outside your
   network uploads at your connection's *download* speed, but every fetch of a preview or original
-  leaves at your *upstream* speed. By default a chunk has 120 s to arrive. A client uploading a
-  large file starts with 4 MiB chunks, which need about 280 kbit/s sustained from the device to the
-  server. On a slower link a chunk times out, and the client sends it again at half the size, down
-  to 4 KiB, so the upload still progresses. Each timeout costs the full 120 s, so a slow link
-  uploads well below its own rate until the chunks are small enough.
+  leaves at your *upstream* speed. A chunk is cut only when it stops arriving, never for taking
+  long, and a client sizes its chunks to finish in a short target time at the speed it measures,
+  so a slow link uploads at its own rate. Keep the server's stall bound below your proxy's idle
+  timeout, so a stalled chunk is answered by the server rather than cut by the proxy.
 - **Size the disks for originals, not derivatives.** Derivatives are a small fraction of a
   library of RAW files and video. The server keeps each blob once, as the client encrypted it.
 - **Users add bandwidth, not compute.** Search, thumbnails and organization run on the clients.

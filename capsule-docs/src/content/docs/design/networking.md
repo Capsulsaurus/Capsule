@@ -40,7 +40,7 @@ Each platform shell observes its operating system and pushes one normalized **pa
 | cost | unmetered, metered, constrained | `NWPath` `isExpensive` / `isConstrained`; Android `NET_CAPABILITY_NOT_METERED` and Data Saver; desktop OS metered flag; CLI flag |
 | reachability | satisfied, unsatisfied | OS path status |
 | interface | Wi-Fi, cellular, wired, other | OS path |
-| path generation | a counter | incremented by the core on every path change |
+| path generation | a counter | incremented by the core when reachability, interface or cost changes |
 | power | normal, saver | Low Power Mode; Android battery saver |
 | thermal | nominal, elevated, critical | `ProcessInfo.thermalState`; Android thermal status |
 | execution | foreground, or background with a deadline | the OS's execution grant |

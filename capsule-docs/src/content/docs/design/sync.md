@@ -62,7 +62,7 @@ Auto sync is offered only on platforms that expose what it needs (e.g. metered-c
 
 Background and OS-scheduled transfer are post-v1 ([Clients — Platform Limitations](/design/clients/#platform-limitations)); v1 transfers run while the app is in the foreground. Any background transfer is held to:
 
-- **Requests are self-contained.** Every chunk `PATCH` and `Range` `GET` is complete in its URL, headers and a body that is a slice of a file. An OS transfer daemon can therefore run it while the Rust core is suspended, and the core reconciles from server truth when it wakes.
+- **Requests are self-contained.** Every chunk `PATCH` and `Range` `GET` is complete in its URL, headers and a body the core has written to a file before queuing it. An OS transfer daemon can therefore run it while the Rust core is suspended, and the core reconciles from server truth when it wakes.
 - **Queued requests outlive the access token.** A request the OS queues may run after the access token has expired, so no queued request may depend on one; the credential that replaces it is specified with background transfer in [Authentication](/design/authentication/).
 
 - **iOS.** Small work rides `BGAppRefreshTask`; large work requests `BGProcessingTask` with network (and power for very large batches).
