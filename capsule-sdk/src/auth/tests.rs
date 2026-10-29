@@ -627,9 +627,60 @@ async fn login_rate_limited_maps_retry_after() {
     assert!(matches!(
         error,
         AuthError::RateLimited {
-            retry_after_secs: 42
+            retry_after_secs: 42,
+            ..
         }
     ));
+    assert_eq!(error.error_code(), Some(error_codes::AUTH_RATE_LIMITED));
+}
+
+/// A registration `429` keeps the server's code: a full limiter is
+/// `error.auth.registration_at_capacity`, not the spent-budget code, so the client renders
+/// the message the server chose.
+#[tokio::test]
+async fn a_full_registration_limiter_keeps_its_at_capacity_code() {
+    let handler: Handler = Arc::new(move |req| {
+        Box::pin(async move {
+            match req.path.as_str() {
+                "/register" => MockResponse::json(
+                    429,
+                    r#"{"error":"Too many registrations","code":"error.auth.registration_at_capacity"}"#,
+                )
+                .header("retry-after", "7"),
+                _ => MockResponse::json(404, r#"{"error":"x"}"#),
+            }
+        })
+    });
+
+    let server = start_mock(handler).await;
+    let client = AuthClient::new(&server.base_url).unwrap();
+    let error = client
+        .register("a@example.com", "pw")
+        .await
+        .err()
+        .expect("refused");
+
+    assert!(matches!(
+        error,
+        AuthError::RateLimited {
+            retry_after_secs: 7,
+            ..
+        }
+    ));
+    assert_eq!(
+        error.error_code(),
+        Some(error_codes::AUTH_REGISTRATION_AT_CAPACITY)
+    );
+}
+
+/// A `429` without a code still names the spent-budget code, so a client always has one to
+/// render.
+#[test]
+fn an_uncoded_429_falls_back_to_the_rate_limited_code() {
+    let error = AuthError::RateLimited {
+        retry_after_secs: 1,
+        code: None,
+    };
     assert_eq!(error.error_code(), Some(error_codes::AUTH_RATE_LIMITED));
 }
 
