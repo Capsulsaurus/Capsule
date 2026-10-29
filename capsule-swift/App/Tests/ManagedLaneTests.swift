@@ -214,6 +214,27 @@ struct ManagedLaneTests {
         #expect(await metadata.metadata(for: first) != nil)
     }
 
+    @Test("an import whose original is gone shows empty facts, never the mock's fabricated ones")
+    func importWithMissingOriginalIsNotFabricated() async throws {
+        let root = Self.temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let mock = MockEnvironment(scenario: .healthy)
+        let library = PortBackedAssetProvider(library: mock.library, organize: mock.organize)
+        let lane = AppEnvironment.makeManagedLane(root: root.appending(path: "Library", directoryHint: .isDirectory))
+        let metadata = AppEnvironment.composeMetadata(locations: library, managed: lane)
+        let imported = try await Self.importPhoto(through: lane, in: root)
+        guard case let .managed(uuid) = imported.id else {
+            Issue.record("an import is a managed asset")
+            return
+        }
+        let original = try #require(await lane.reader.mediaFile(uuid: uuid))
+        try FileManager.default.removeItem(at: original)
+
+        let facts = try #require(await metadata.metadata(for: imported))
+
+        #expect(facts == AssetExifMetadata())
+    }
+
     @Test("an import's caption is refused by its owner instead of landing in the mock library")
     func importedCaptionIsRouted() async throws {
         let root = Self.temporaryRoot()

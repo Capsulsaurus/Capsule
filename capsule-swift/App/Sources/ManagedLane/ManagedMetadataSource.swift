@@ -21,11 +21,18 @@ struct ManagedMetadataSource: AssetMetadataSource {
         self.reader = reader
     }
 
+    /// An import whose original is missing or unreadable still belongs to the
+    /// managed catalog, so it answers empty metadata rather than `nil`: `nil`
+    /// would hand it to the mock source, which fabricates a camera and an
+    /// exposure for any identifier it is asked about.
     func metadata(for asset: Asset) async -> AssetExifMetadata? {
-        guard case let .managed(uuid) = asset.id, let facts = await reader.facts(uuid: uuid) else {
-            return nil
+        guard case let .managed(uuid) = asset.id else { return nil }
+        if let facts = await reader.facts(uuid: uuid) {
+            return Self.metadata(from: facts)
         }
-        return Self.metadata(from: facts)
+        guard await reader.owns(uuid: uuid) else { return nil }
+        CapsuleLog.app.debug("no readable original for import \(uuid, privacy: .public); showing file-less facts")
+        return AssetExifMetadata()
     }
 
     /// The projection, separate so it is testable without a file on disk.
