@@ -669,6 +669,87 @@ fn an_operator_suspends_and_unsuspends_an_accounts_quota() {
     assert_eq!(stdout.trim(), "quota was not suspended: user-1");
 }
 
+/// `<args…>` over `root`, in the development profile, holding no key material.
+fn operator_act(args: &[&str], root: &std::path::Path) -> Command {
+    let root = root.display().to_string();
+    let mut argv = args.to_vec();
+    argv.extend(["--memory", "--blob-root", &root]);
+    let mut command = server(&argv);
+    command.env_remove("JWT_ED25519_DER");
+    command
+}
+
+#[test]
+fn an_operator_pins_blocks_unblocks_and_shows_a_peer() {
+    // Each invocation is its own process on the in-memory adapters, so each starts from a peer
+    // nobody recorded; the durable peer store keeps them across processes, which
+    // `federation::postgres` asserts. What this pins is the command surface: the parse, the
+    // assembly without key material, and the line each act prints.
+    let root = tempfile::tempdir().expect("a scratch directory");
+    let key = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+    for (args, expected) in [
+        (
+            vec!["peer", "pin", "Other.Test.", key],
+            "peer key pinned: other.test",
+        ),
+        (
+            vec!["peer", "block", "other.test", "--note", "spam"],
+            "peer blocked: other.test (0 live grants revoked)",
+        ),
+        (
+            vec!["peer", "unblock", "other.test"],
+            "peer was not blocked: other.test",
+        ),
+        (
+            vec!["peer", "show", "other.test"],
+            "peer not recorded: other.test",
+        ),
+    ] {
+        let (code, stdout, stderr) = run(&mut operator_act(&args, root.path()));
+        assert_eq!(
+            code,
+            Some(0),
+            "{args:?}: stdout: {stdout}\nstderr: {stderr}"
+        );
+        assert_eq!(stdout.trim(), expected, "{args:?}");
+        assert!(
+            !stderr.contains("JWT_ED25519_DER"),
+            "{args:?}: an operator's peer act needs no key material: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn a_malformed_peer_or_key_is_refused_before_anything_is_written() {
+    let root = tempfile::tempdir().expect("a scratch directory");
+    for args in [
+        vec![
+            "peer",
+            "pin",
+            "https://other.test",
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        ],
+        vec!["peer", "pin", "other.test", "not-a-key"],
+        vec!["peer", "block", "other.test:443"],
+    ] {
+        let (code, stdout, stderr) = run(&mut operator_act(&args, root.path()));
+        assert_ne!(code, Some(0), "{args:?}: {stdout}");
+        assert!(stdout.is_empty(), "{args:?}: {stdout}");
+        assert!(
+            stderr.contains("host name") || stderr.contains("signing key"),
+            "{args:?}: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn an_operator_reads_the_moderation_queue() {
+    let root = tempfile::tempdir().expect("a scratch directory");
+    let (code, stdout, stderr) = run(&mut operator_act(&["moderation", "reports"], root.path()));
+    assert_eq!(code, Some(0), "stdout: {stdout}\nstderr: {stderr}");
+    assert_eq!(stdout.trim(), "federated reports (0 on file)");
+}
+
 #[test]
 fn a_quota_act_without_memory_is_told_about_the_database() {
     let root = tempfile::tempdir().expect("a scratch directory");

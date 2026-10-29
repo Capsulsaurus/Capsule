@@ -1,9 +1,203 @@
 use clap::{CommandFactory as _, Parser as _};
 
 use super::{
-    Cli, CollectionReport, Command, Mode, PurgeReport, QuotaAction, RebuildReport, ScrubReport,
-    mode, render_collection, render_purge, render_rebuild, render_scrub,
+    Cli, CollectionReport, Command, Mode, ModerationCommand, PeerAction, PurgeReport, QuotaAction,
+    RebuildReport, ScrubReport, mode, render_block, render_collection, render_peer, render_pin,
+    render_purge, render_rebuild, render_reports, render_scrub,
 };
+use crate::federation::{BlockOutcome, Blocked, PeerId, PeerRecord, PinOutcome};
+
+#[test]
+fn the_peer_and_moderation_acts_are_maintenance_commands_that_carry_their_backend() {
+    let backend = ["--memory", "--blob-root", "/var/lib/capsule/blobs"];
+    let argvs: [&[&str]; 5] = [
+        &["peer", "pin", "other.test", "AAAA"],
+        &["peer", "block", "other.test", "--note", "spam"],
+        &["peer", "unblock", "other.test"],
+        &["peer", "show", "other.test"],
+        &["moderation", "reports"],
+    ];
+    for argv in argvs {
+        let cli = Cli::parse_from(
+            std::iter::once("capsule-server")
+                .chain(argv.iter().copied())
+                .chain(backend),
+        );
+        assert_eq!(
+            cli.command.demands(),
+            crate::config::Demands::Maintenance,
+            "{argv:?}: an operator's act needs no key material"
+        );
+        let overrides = cli.command.overrides(None);
+        assert!(overrides.memory, "{argv:?}");
+        assert_eq!(
+            overrides.blob_root.as_deref(),
+            Some(std::path::Path::new("/var/lib/capsule/blobs")),
+            "{argv:?}"
+        );
+        match cli.command {
+            Command::Peer { action } => assert_eq!(action.peer(), "other.test", "{argv:?}"),
+            Command::Moderation {
+                action: ModerationCommand::Reports { .. },
+            } => {}
+            other => panic!("{argv:?} parsed as {other:?}"),
+        }
+    }
+    let cli = Cli::parse_from([
+        "capsule-server",
+        "peer",
+        "block",
+        "other.test",
+        "--note",
+        "spam",
+    ]);
+    let Command::Peer {
+        action: PeerAction::Block { note, .. },
+    } = cli.command
+    else {
+        panic!("that is the subcommand that was parsed")
+    };
+    assert_eq!(note.as_deref(), Some("spam"));
+}
+
+#[test]
+fn a_peer_act_says_what_changed() {
+    let peer = PeerId::new("other.test");
+    assert_eq!(
+        render_pin(&peer, PinOutcome::Pinned),
+        "peer key pinned: other.test"
+    );
+    assert_eq!(
+        render_pin(&peer, PinOutcome::Rotated),
+        "peer key replaced: other.test"
+    );
+    assert_eq!(
+        render_pin(&peer, PinOutcome::Unchanged),
+        "peer key already pinned: other.test"
+    );
+    assert_eq!(
+        render_block(
+            &peer,
+            Blocked {
+                outcome: BlockOutcome::Blocked,
+                revoked: 3
+            }
+        ),
+        "peer blocked: other.test (3 live grants revoked)"
+    );
+    assert_eq!(
+        render_block(
+            &peer,
+            Blocked {
+                outcome: BlockOutcome::AlreadyBlocked,
+                revoked: 0
+            }
+        ),
+        "peer already blocked: other.test (0 live grants revoked)"
+    );
+}
+
+#[test]
+fn a_peer_record_shows_its_key_tier_and_block_with_free_text_escaped() {
+    let peer = PeerId::new("other.test");
+    let now = jiff::Timestamp::UNIX_EPOCH;
+    assert_eq!(
+        render_peer(&peer, None, now).to_string(),
+        "peer not recorded: other.test\n"
+    );
+
+    let record = PeerRecord {
+        server_id: peer.clone(),
+        signing_key: Some([0; 32]),
+        first_seen_at: now,
+        blocked_at: Some(now),
+        note: Some("line\u{1b}[2Jbreak".to_owned()),
+    };
+    let shown = render_peer(&peer, Some(&record), now).to_string();
+    assert!(
+        shown.contains("signing key: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="),
+        "{shown}"
+    );
+    assert!(shown.contains("tier: probation"), "{shown}");
+    assert!(shown.contains("blocked since:"), "{shown}");
+    assert!(
+        !shown.contains('\u{1b}'),
+        "a control character in the note reaches the terminal escaped: {shown}"
+    );
+
+    let unblocked = PeerRecord {
+        signing_key: None,
+        blocked_at: None,
+        note: None,
+        ..record
+    };
+    let later = crate::store::deadline(now, crate::counter::budgets::PEER_PROBATION);
+    let shown = render_peer(&peer, Some(&unblocked), later).to_string();
+    assert!(shown.contains("signing key: none pinned"), "{shown}");
+    assert!(shown.contains("tier: established"), "{shown}");
+    assert!(shown.contains("blocked: no"), "{shown}");
+}
+
+#[test]
+fn the_report_queue_lists_every_report_with_the_peers_reason_escaped() {
+    assert_eq!(
+        render_reports(&[]).to_string(),
+        "federated reports (0 on file)\n"
+    );
+    let at = jiff::Timestamp::UNIX_EPOCH;
+    let report = crate::moderation::FederatedReport {
+        report_id: "01937b7c-0000-7000-8000-0000000000r1".to_owned(),
+        reporting_server: "other.test".to_owned(),
+        reported_user: crate::store::UserId::new("bob"),
+        asset_hash: "ab".repeat(32),
+        album_id: crate::store::AlbumId::new("album-1"),
+        reason: Some("spam\u{7}".to_owned()),
+        reported_at: at,
+        received_at: at,
+        signature: Vec::new(),
+        signed: Vec::new(),
+    };
+    let shown = render_reports(std::slice::from_ref(&report)).to_string();
+    assert!(
+        shown.starts_with("federated reports (1 on file)\n"),
+        "{shown}"
+    );
+    for fact in [
+        "report 01937b7c-0000-7000-8000-0000000000r1",
+        "from: other.test",
+        "against: bob",
+        "in album \"album-1\"",
+        "reason: \"spam\\u{7}\"",
+    ] {
+        assert!(shown.contains(fact), "{fact}: {shown}");
+    }
+}
+
+#[test]
+fn the_report_queue_escapes_a_peers_asset_hash_and_album_id() {
+    // Intake trims and length-caps these and nothing more, so a pinned peer chooses them: an
+    // ANSI erase or an OSC 52 clipboard write must reach the operator's terminal escaped.
+    let at = jiff::Timestamp::UNIX_EPOCH;
+    let report = crate::moderation::FederatedReport {
+        report_id: "01937b7c-0000-7000-8000-0000000000r2".to_owned(),
+        reporting_server: "other.test".to_owned(),
+        reported_user: crate::store::UserId::new("bob"),
+        asset_hash: "\u{1b}[2J".to_owned(),
+        album_id: crate::store::AlbumId::new("\u{1b}]52;c;cHduZWQ=\u{7}"),
+        reason: None,
+        reported_at: at,
+        received_at: at,
+        signature: Vec::new(),
+        signed: Vec::new(),
+    };
+    let shown = render_reports(std::slice::from_ref(&report)).to_string();
+    assert!(!shown.contains('\u{1b}'), "{shown:?}");
+    assert!(!shown.contains('\u{7}'), "{shown:?}");
+    assert!(
+        shown.contains("asset: \"\\u{1b}[2J\" in album \"\\u{1b}]52;c;cHduZWQ=\\u{7}\""),
+        "{shown}"
+    );
+}
 
 #[test]
 fn the_command_line_is_well_formed() {

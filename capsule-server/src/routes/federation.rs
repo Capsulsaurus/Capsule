@@ -1163,19 +1163,11 @@ impl ReportRejection {
 /// `FEDERATION_ENABLED` is off, which is the default — before the body is read, a budget is
 /// charged or a store is touched.
 ///
-/// # Its only reachable answer today is `403`, where federation is on
+/// # Only a pinned peer can file
 ///
-/// A report is verified against the peer's **operator-pinned** key, and nothing can pin one:
-/// [`boot::assemble`](crate::boot::assemble) refuses the durable backend until #403 lands its
-/// adapters, so an operator command that pinned a peer could only run against `serve --memory`
-/// and would forget the moment it exited. The command is owed with #476. Until it lands this
-/// operation answers `403 error.federation.peer_unknown` to every real peer.
-///
-/// It is mounted anyway, deliberately: a peer implementing against the published contract needs
-/// the operation to exist and to answer honestly, and what is missing is the command, not the
-/// surface. What is *not* acceptable is a route that reads as protection it cannot provide —
-/// hence this paragraph, and the matching "Open: #476" notes in design/moderation.md and
-/// design/federation.md (Status).
+/// A report is verified against the peer's **operator-pinned** key, which an operator writes
+/// with `capsule-server peer pin`. A peer nobody pinned is answered
+/// `403 error.federation.peer_unknown`, whatever it signed.
 ///
 /// # No bearer, and why that is not "unauthenticated"
 ///

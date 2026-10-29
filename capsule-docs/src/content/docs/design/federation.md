@@ -10,7 +10,7 @@ Federation lets an album owned on one Capsule server be shared with users whose 
 
 Federation is deferred. Every federation operation answers `404 error.federation.not_configured` unless the deployment sets `FEDERATION_ENABLED=true` **and** `FEDERATION_URL` (`serve` refuses to start with the switch on and no URL). Off, the read primitives honour no capability and `server-info` publishes no `federation_url`; the routes stay in the OpenAPI document either way.
 
-Shipped: minting, refresh, revocation, the capability arm of the pull path, request signatures, signed report intake, the server-level blocklist and the events/hour budget. Open: [#476](https://github.com/Capsulsaurus/Capsule/issues/476) — the egress pull worker and everything downstream of it (re-validation of pulled data, the receiving-user quota, the breadcrumb index, the rejected-hash table, hints), the weighted budgets (bytes, CPU, error budget, circuit breaker, probation), and the operator command that pins or blocks a peer. Until that command exists, no peer key is pinned, so every capability presentation is refused `401` for want of a key to verify its request signature, report intake answers `403 error.federation.peer_unknown`, and the blocklist is empty.
+Shipped: minting, refresh, revocation, the capability arm of the pull path, request signatures, signed report intake, the server-level blocklist, the events/hour and bytes/hour budgets with the serving-side probation tier, and the operator commands that pin, block, unblock and show a peer (`capsule-server peer …`). Open: [#964](https://github.com/Capsulsaurus/Capsule/issues/964) — the [egress pull worker](#egress-pull-worker) and everything downstream of it (re-validation of pulled data, the receiving-user quota, the breadcrumb index, the rejected-hash table, hints, the error budget and circuit breaker, CPU/hour, receiving-side probation). A peer whose key no operator has pinned can present no capability (`401`) and file no report (`403 error.federation.peer_unknown`).
 
 **Before federation is enabled in a real deployment**, every MUST in this document holds, including re-validation of pulled data at the [boundary](#validation-at-the-boundary) and the [per-peer limits](#per-peer-compartmentalization).
 
@@ -151,9 +151,19 @@ Every federated write is checked against [Server-Side Validation Invariants](/de
 Each peer is its own blast radius:
 
 - **Transfer budgets** per peer: events, bytes and CPU per hour; excess is queued or dropped.
+  - Serving: every capability presentation charges the events budget, and every `GET /v1/blob/{hash}` that carries bytes (`200`, `206`) charges the blob's whole size against the bytes budget in one atomic weighted charge before the body is sent. A delivery that does not fit what is left of the window is refused whole, `429 error.federation.rate_budget_exceeded`; a revalidation (`304`) is not charged. Defaults: 10,000 events and 20 GiB per hour, fixed windows keyed on the peer's origin.
+  - Receiving: CPU per hour is the [pull worker's](#egress-pull-worker) validation time per source peer, the one per-peer CPU this server spends that it can meter.
 - **Storage:** cached blobs are charged to the **receiving user's** [quota](/design/quota/#accounting-model), deduped, under a per-`(receiving_user, source_peer)` cap.
 - **Error budget and circuit breaker:** malformed input trips exponential back-off (`error.federation.circuit_open`).
-- **Probation:** a new peer gets tighter quotas, stricter validation and no hints until it has behaved.
+- **Probation:** a new peer gets tighter quotas, stricter validation and no hints until it has behaved. A peer is on probation for **7 days** from when this server first recorded it (a pin or a block; a key rotation does not restart it). Serving, it is held to 1,000 events and 1 GiB per hour.
+
+## Egress Pull Worker
+
+The receiving half of [pull-only federation](#pull-only-federation): what fetches from a peer, when, and what happens when it fails.
+
+- **Ownership.** A task of `serve`, started only when the deployment federates. It drives the same orchestration the SDK's client-side pull performs (sync pages, then blobs, then validation), over the server's rustls HTTP client, signing each presentation as [request signatures](#request-signatures) require. The unit of work is a **job**: one local album subscription and its source peer. A job is claimed under a lease held in volatile state, so two replicas never pull one job and a replica that dies releases its jobs when the lease lapses.
+- **Schedule.** Every job is pulled every **15 minutes**, jittered ±20%, matching the revocation list's cache bound. A [hint](#pull-only-federation) moves a job's next pull earlier, but never sooner than **1 minute** after its previous pull, so a burst of hints is one pull. A peer on [probation](#per-peer-compartmentalization) has its hints ignored.
+- **Failure policy.** A failed pull backs off exponentially per job, from 1 minute doubling to a 6-hour cap, with full jitter. A transport failure (unreachable peer, timeout, `5xx`) only backs off. A validation failure also spends the source peer's **error budget**; a spent budget opens the peer's **circuit breaker** (`error.federation.circuit_open`) for the backoff interval, during which none of its jobs runs. Nothing that fails validation is written ([soft-fail](#soft-fail-semantics)), and a failure never removes an index entry ([connectivity loss](#robustness-against-connectivity-loss)).
 
 ## Stale-Revival Defense
 
@@ -187,7 +197,7 @@ Federation supplies the transport for federated reports and the untrusted-server
 ## Server Identity and Key Rotation
 
 - Two keys, both at the well-known path: the **operational key** (Ed25519) signs server-to-server traffic and capabilities; the **attestation key** (hybrid Ed25519 + ML-DSA-65) signs [custody receipts](/design/transfer/durability/#custody-receipts) and keeps an **append-only history** so old receipts still verify.
-- Peer keys are pinned on first contact. A rotation is accepted only after **at least two** independent vantage points (trusted peers or a configured notary) agree **unanimously**; a failed corroboration is surfaced. Today peer keys are operator-pinned only.
+- Peer keys are pinned on first contact. A rotation is accepted only after **at least two** independent vantage points (trusted peers or a configured notary) agree **unanimously**; a failed corroboration is surfaced. Today peer keys are operator-pinned only: `capsule-server peer pin ORIGIN KEY` takes the `signing_key` field of the peer's `server-info`, read out of band, and replaces any key already pinned. `peer block` refuses the peer at every boundary and revokes and publishes every live grant it holds; `peer unblock` keeps the key and restores no grant.
 
 ## Validation
 
@@ -197,5 +207,6 @@ Federation supplies the transport for federated reports and the untrusted-server
 - **Refresh chain (conformance):** revoking the original `jti` revokes every successor.
 - **Pull boundary (unit):** each malformed envelope is refused at its invariant.
 - **Budgets and circuit breaker (smoke):** exhaustion gives `429`; malformed floods open the breaker.
+- **Weighted charge (conformance):** a charge that overruns an open window is refused whole; racing charges admit exactly what fits.
 - **Soft-fail (unit):** the rejected-hash table evicts at its cap.
 - **Cross-server pull (E2E):** one case in [Module Map](/design/module-map/#e2e-test-surface).

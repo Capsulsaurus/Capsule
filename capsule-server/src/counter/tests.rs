@@ -49,12 +49,21 @@ conformance_cases! {
     a_reset_ends_the_run,
     peeking_charges_nothing_and_answers_a_verdict,
     no_sequence_of_calls_admits_more_than_the_budget,
+    a_weighted_charge_is_all_or_nothing,
+    a_fresh_window_admits_a_charge_larger_than_its_limit,
+    a_zero_charge_writes_nothing,
 }
 
 /// The one case that races, on the runtime that lets it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_hits_admit_exactly_the_budget() {
     conformance::concurrent_hits_admit_exactly_the_budget(counters()).await;
+}
+
+/// The weighted race, on the same runtime.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_charges_admit_exactly_what_fits() {
+    conformance::concurrent_charges_admit_exactly_what_fits(counters()).await;
 }
 
 /// The ceiling case, on a store whose every partition is bounded at the suite's own number.
@@ -563,6 +572,7 @@ fn one_key_per_variant() -> Vec<CounterKey> {
         CounterKey::FederatedIntake(String::new()),
         CounterKey::FederatedReportNonce(String::new()),
         CounterKey::FederatedRequestNonce(String::new()),
+        CounterKey::PeerBytes(String::new()),
         CounterKey::CapabilityMints(UserId::new("u")),
     ]
 }

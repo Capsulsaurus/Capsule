@@ -17,8 +17,8 @@ use capsule_server::blob::{BlobStore, ContentAddress};
 use capsule_server::counter::{CounterKey, CounterStore as _, budgets};
 use capsule_server::federation::scheme::REQUEST_FRESHNESS;
 use capsule_server::federation::{
-    CapabilityCodec, CapabilityRecord, CapabilityStore as _, FederationCollaborators,
-    FederationContext, MintRequest, PeerId, PeerStore as _, Scope,
+    CapabilityCodec, CapabilityRecord, CapabilityStore as _, MintRequest, PeerAdministration,
+    PeerId, PeerStore as _, Scope,
 };
 use capsule_server::index::{AssetIndex, BlobRecord, PendingAsset, ServingHold};
 use capsule_server::membership::{MemberRole, MembershipStore as _, RosterRecord};
@@ -1039,6 +1039,120 @@ async fn a_peer_fetches_the_albums_blobs_and_a_derivative_only_grant_is_refused_
 }
 
 #[tokio::test]
+async fn a_peers_bytes_budget_refuses_a_delivery_that_does_not_fit_and_charges_no_revalidation() {
+    // Invariant 21's bytes half (#476). The budget is spent through the counter port up to its
+    // last kibibyte, and the refusal is the route's: a blob that does not fit what is left is a
+    // `429` in place of its body.
+    let (fixture, _) = shared().await;
+    let (original, _) = two_roles(&fixture, "shared-bytes", &album()).await;
+    let (bearer, _) = capability(&fixture, PEER, Scope::Read, 1).await;
+    let key = CounterKey::PeerBytes(PEER.to_owned());
+    fixture
+        .counters
+        .charge(
+            &key,
+            budgets::PEER_KIBIBYTES.limit,
+            budgets::PEER_KIBIBYTES,
+            fixture.clock.now(),
+        )
+        .await
+        .expect("the counter answers");
+
+    let refused = fetch(&fixture, &bearer, &original).await;
+    refused.assert_status(StatusCode::TOO_MANY_REQUESTS);
+    let refused: Value = refused.json();
+    assert_eq!(refused["code"], "error.federation.rate_budget_exceeded");
+
+    // A revalidation sends none of the blob, so a spent bytes budget does not refuse it.
+    let path = format!("/v1/blob/{original}");
+    let signature = support::request_signature(&fixture, "GET", &path, &bearer);
+    fixture
+        .client
+        .get(&path)
+        .header("authorization", &bearer)
+        .header(SIGNATURE, &signature)
+        .header("if-none-match", &format!("\"{original}\""))
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_MODIFIED);
+
+    // Another peer is its own boundary, and the window turning gives the bytes back.
+    let (other, _) = capability(&fixture, "third.test", Scope::Read, 1).await;
+    fetch(&fixture, &other, &original)
+        .await
+        .assert_status(StatusCode::OK);
+    fixture.clock.advance(budgets::PEER_KIBIBYTES.window);
+    fetch(&fixture, &bearer, &original)
+        .await
+        .assert_status(StatusCode::OK);
+}
+
+#[tokio::test]
+async fn a_peer_on_probation_is_held_to_the_smaller_events_budget() {
+    // A peer the operator pinned just now is on probation (#476): its events budget is the
+    // probation one, spent here through the counter port up to its last hit.
+    let (fixture, _) = shared().await;
+    let newcomer = "newcomer.test";
+    support::pin_request_key_now(&fixture, newcomer).await;
+    let (bearer, _) =
+        unpinned_capability(&fixture, &fixture.codec, newcomer, &album(), Scope::Read, 1).await;
+    let key = CounterKey::PeerRequests(newcomer.to_owned());
+    for _ in 1..budgets::PEER_REQUESTS_PROBATION.limit {
+        fixture
+            .counters
+            .hit(&key, budgets::PEER_REQUESTS_PROBATION, fixture.clock.now())
+            .await
+            .expect("the counter answers");
+    }
+    page(&fixture, &bearer, &album_query())
+        .await
+        .assert_status(StatusCode::OK);
+    page(&fixture, &bearer, &album_query())
+        .await
+        .assert_status(StatusCode::TOO_MANY_REQUESTS);
+}
+
+#[tokio::test]
+async fn a_probation_peer_refused_for_its_budget_spends_no_nonce() {
+    // The authenticator foresees the `429` under the probation budget `admit` charges. Read
+    // under the established budget, the spent probation window would look open, the nonce
+    // would be spent, and the same signature would be a replay once the window resets.
+    let (fixture, _) = shared().await;
+    let newcomer = "probation-nonce.test";
+    support::pin_request_key_now(&fixture, newcomer).await;
+    let (bearer, _) =
+        unpinned_capability(&fixture, &fixture.codec, newcomer, &album(), Scope::Read, 1).await;
+    let path = format!("/v1/sync?{}", album_query());
+    let key = CounterKey::PeerRequests(newcomer.to_owned());
+    for _ in 0..budgets::PEER_REQUESTS_PROBATION.limit {
+        fixture
+            .counters
+            .hit(&key, budgets::PEER_REQUESTS_PROBATION, fixture.clock.now())
+            .await
+            .expect("the counter answers");
+    }
+    const {
+        assert!(
+            budgets::PEER_REQUESTS_PROBATION.limit < budgets::PEER_REQUESTS.limit,
+            "the established budget must still have room for this case to tell the tiers apart"
+        );
+    }
+
+    let signature = support::request_signature(&fixture, "GET", &path, &bearer);
+    page_signed(&fixture, &bearer, &path, Some(&signature))
+        .await
+        .assert_status(StatusCode::TOO_MANY_REQUESTS);
+    fixture
+        .counters
+        .reset(&key)
+        .await
+        .expect("the counter resets");
+    page_signed(&fixture, &bearer, &path, Some(&signature))
+        .await
+        .assert_status(StatusCode::OK);
+}
+
+#[tokio::test]
 async fn a_capability_for_another_album_gets_the_answer_an_unknown_address_gets() {
     // The disclosure boundary: a `403` would confirm the address is referenced by somebody, so
     // a peer outside the album is told exactly what a stranger naming a random hash is told —
@@ -2044,24 +2158,18 @@ async fn blocking_a_peer_cuts_and_publishes_every_grant_it_holds() {
     let (_, second_jti) = capability(&fixture, PEER, Scope::ReadDerivativeOnly, 1).await;
     let (other, other_jti) = capability(&fixture, "third.test", Scope::Read, 1).await;
 
-    fixture
-        .peers
-        .block(&PeerId::new(PEER), fixture.clock.now(), None)
+    // The operator's act, over the *same* stores the server holds, so what the cascade writes
+    // is what the published list and the next presentation read.
+    let admin = PeerAdministration::new(
+        fixture.peers.clone(),
+        fixture.revocations.clone(),
+        fixture.clock.clone(),
+    );
+    let blocked = admin
+        .block(&PeerId::new(PEER), None)
         .await
-        .expect("blocks");
-    // Over the *same* stores the server holds, so what the cascade writes is what the
-    // published list and the next presentation read.
-    let federation = FederationContext::new(FederationCollaborators {
-        codec: fixture.codec.clone(),
-        capabilities: fixture.revocations.clone(),
-        peers: fixture.peers.clone(),
-        clock: fixture.clock.clone(),
-        enabled: std::sync::Arc::new(true),
-    });
-    let cut = capsule_server::federation::on_peer_blocked(&federation, &PeerId::new(PEER))
-        .await
-        .expect("the cascade runs");
-    assert_eq!(cut, 2);
+        .expect("the block and its cascade run");
+    assert_eq!(blocked.revoked, 2);
 
     let list: Value = fixture
         .client

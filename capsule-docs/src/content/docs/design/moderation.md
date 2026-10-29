@@ -12,7 +12,7 @@ Capsule is end-to-end encrypted, so the server **cannot** scan content, and no s
 - **No retroactive takedown.** Ciphertext a peer already fetched cannot be recalled; takedown governs future serving.
 - **No silent operations.** Every action affecting user data MUST produce a [provenance record](/design/cryptography/provenance/#provenance-of-library-modifications) visible in the user's audit log.
 
-Moderation *actions* have **no wire surface**: there is no admin authentication model yet, so actions run through an operator-driven port. The user reads their own record at `GET /v1/moderation/record`.
+Moderation *actions* have **no wire surface**: there is no admin authentication model over HTTP, so the admin is the **operator on the host**, authenticated by holding the deployment's database credentials, and actions run through operator commands. The admin reads the federated report queue with `capsule-server moderation reports`. The user reads their own record at `GET /v1/moderation/record`.
 
 ## What Moderation Can Do (Operational Hooks)
 
@@ -28,11 +28,11 @@ A report against `alice@other.tld` goes to her home server, the only party that 
 - **Content.** A report carries a content hash and album pointer, **never plaintext or key material**. An admin without album access sees only identifiers; a report never widens who can read content.
 - Accepting a report never changes the reported account's standing.
 
-Open: [#476](https://github.com/Capsulsaurus/Capsule/issues/476) — no operator command can pin a peer yet, so intake answers `403 error.federation.peer_unknown`; the admin report queue waits on admin authentication.
+Intake verifies against the key an operator pinned with `capsule-server peer pin`; a peer with none answers `403 error.federation.peer_unknown`. The queue is read with `capsule-server moderation reports`, oldest first, every peer-supplied reason escaped.
 
 ### Blocklists
 
-- **Server-level blocklist.** Peers this server refuses, enforced at the [capability](/design/federation/#federation-capabilities) layer: mint, presentation, refresh and report intake all consult it, and blocking cuts and publishes every live grant the peer holds. Open: [#476](https://github.com/Capsulsaurus/Capsule/issues/476) — no operator command writes it yet, so it is empty in real deployments.
+- **Server-level blocklist.** Peers this server refuses, enforced at the [capability](/design/federation/#federation-capabilities) layer: mint, presentation, refresh and report intake all consult it, and blocking cuts and publishes every live grant the peer holds. The operator writes it with `capsule-server peer block|unblock`.
 - **Per-user block.** Enforced by the blocker's home server: the blocked user is removed from albums shared with the blocker (one MLS `Remove` of all their devices, one epoch bump) and cannot share new albums with them. Epochs already held are not clawed back ([removal semantics](/design/cryptography/mls/#remove-user-charlie)). A per-user block MUST NOT propagate as a server-level block, so users cannot weaponize blocks against a whole peer.
 - **Blocklist exchange (v2).** Signed, versioned server-level lists an admin **opts into** from trusted peers; never auto-applied, never including per-user blocks.
 

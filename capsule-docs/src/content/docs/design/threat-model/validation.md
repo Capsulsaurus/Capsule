@@ -45,8 +45,8 @@ Enforced inside the critical section that mints the sequence number, for [lifecy
 ### On federation pull (server-to-server)
 
 - **19.** Capability verifies, unexpired, `jti` unrevoked (≤ 15 min cache), and recorded here for the member's grant epoch → else `401`/`403`.
-- **20.** 1–18 re-applied; federation never loosens rules. Open: #476 (no inbound federated writes yet).
-- **21.** Per-peer budgets (events, bytes, CPU per hour), keyed on peer origin not token → else `429`. Open: #476 (bytes and CPU unmetered).
+- **20.** 1–18 re-applied; federation never loosens rules. Open: #964 (no inbound federated writes yet).
+- **21.** Per-peer budgets (events, bytes, CPU per hour), keyed on peer origin not token → else `429`. Open: #964 (CPU unmetered; it is the pull worker's).
 
 ### On the sync feed, directory publish, and federated reports
 
