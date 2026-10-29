@@ -230,3 +230,15 @@ T0 is exactly the visibility gate, so a staged asset is visible to other devices
 - Resume re-derives the tier queue from server truth: held roles on the feed entry plus `GET /v1/upload/sessions`.
 
 Streaming import uses these same sessions unchanged, one bounded window at a time; only the drive pattern differs.
+
+## Queueing Across Servers
+
+A client signed in to more than one server keeps one upload **lane** per server, keyed by the server's canonical origin. Scheduler: `capsule-sdk::upload::queue`.
+
+- **Lanes own their pacing.** Each lane holds its own sessions, backoff, protocol window (the transfers it may hold in flight) and `Retry-After` deadline. One server's refusal or wait never pauses another's lane.
+- **One shared byte budget.** Every transfer in flight reserves its size against a single device-wide bound, so the bytes buffered stay bounded however many servers there are. A transfer larger than the whole budget runs alone once the budget is free.
+- **A stalled lane gives its budget up.** A lane whose transfers report no progress for the stall bound has its reservations revoked; its work returns to the front of its queue, and the lane is not served again for one more stall bound.
+- **Round-robin, tier order inside.** Lanes are served in turn, and a lane always serves its lowest tier first and never skips its own head, so the [tier ladder](#upload-tiering-staged-uploads) holds per server.
+- **Resume per server.** Each lane rebuilds from its own server's truth (held roles on its feed plus its `GET /v1/upload/sessions`); no lane's queue is derived from another server's.
+
+With one server the queue is one lane with a window of one: the single-server push, one asset at a time.
