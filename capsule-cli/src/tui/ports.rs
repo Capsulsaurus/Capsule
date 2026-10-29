@@ -28,6 +28,7 @@ use super::share::{CreateLinkRequest, IssuedLink, ShareAction, ShareEffect};
 use super::state::{Action, Effect, SessionSummary};
 use super::sync::{SyncAction, SyncEffect};
 use crate::import_report::ImportReport;
+use crate::printable;
 use crate::remote::{self, PushSummary, RemoteConfig, SyncSummary};
 use crate::restore::RestoreSummary;
 use crate::session::SessionStore;
@@ -629,12 +630,6 @@ fn joined(error: &tokio::task::JoinError) -> String {
         tracing::error!(target: "capsule_cli::tui", %error, "identity-provider sign-in task panicked");
         "the sign-in task panicked; see the TUI log".to_owned()
     }
-}
-
-/// Provider-authored text with its control characters dropped, so a provider cannot write
-/// escape sequences into the terminal.
-fn printable(text: &str) -> String {
-    text.chars().filter(|c| !c.is_control()).collect()
 }
 
 /// A settled identity-provider sign-in as the account screen takes it.

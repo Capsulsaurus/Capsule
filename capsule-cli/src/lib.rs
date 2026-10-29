@@ -1242,6 +1242,32 @@ async fn finish_second_factor(
     Ok(true)
 }
 
+/// Provider-authored text with its control characters dropped, so a provider cannot write
+/// escape sequences into the terminal: the one filter the CLI's prints and the TUI's account
+/// screen both pass that text through.
+pub(crate) fn printable(text: &str) -> String {
+    text.chars().filter(|c| !c.is_control()).collect()
+}
+
+/// The line a browser sign-in prints above the authorization address.
+pub(crate) const OIDC_OPEN_ADDRESS: &str = "To sign in, open this address in a browser:";
+
+/// The line a browser sign-in prints when no browser could be opened for it.
+pub(crate) const OIDC_NO_BROWSER: &str =
+    "No browser could be opened from here. Open the address above in any browser.";
+
+/// The line a device sign-in prints above the verification address.
+pub(crate) const DEVICE_OPEN_ADDRESS: &str = "On any device with a browser, open this address:";
+
+/// The line a device sign-in prints above the address that already carries the code.
+pub(crate) const DEVICE_OPEN_COMPLETE: &str =
+    "Or open this address, which already carries the code:";
+
+/// The line a device sign-in prints carrying the code to enter.
+pub(crate) fn device_code_line(user_code: &str) -> String {
+    format!("and enter this code: {user_code}")
+}
+
 /// The line a browser sign-in prints while it waits, in whole minutes rounded up.
 pub(crate) fn oidc_waiting_line(waited: std::time::Duration) -> String {
     match waited.as_secs().div_ceil(60) {
@@ -1322,14 +1348,10 @@ async fn auth_login_oidc(no_browser: bool, json: bool) -> Result<()> {
         "Signing in to Capsule through your identity provider…".green(),
     );
     let show = |authorization_url: &str, waited: std::time::Duration| {
-        progress(json, "To sign in, open this address in a browser:");
+        progress(json, OIDC_OPEN_ADDRESS);
         progress(json, authorization_url);
         if !no_browser && !oidc::open_in_browser(authorization_url) {
-            progress(
-                json,
-                "No browser could be opened from here. Open the address above in any browser."
-                    .yellow(),
-            );
+            progress(json, OIDC_NO_BROWSER.yellow());
         }
         progress(json, oidc_waiting_line(waited));
     };
@@ -1365,18 +1387,14 @@ async fn auth_login_oidc_device(json: bool) -> Result<()> {
                 waited: std::time::Duration| {
         // Provider-authored, printed to a terminal: control characters are dropped, as the
         // server already refused any code carrying one.
-        let printable = |text: &str| text.chars().filter(|c| !c.is_control()).collect::<String>();
-        progress(json, "On any device with a browser, open this address:");
+        progress(json, DEVICE_OPEN_ADDRESS);
         progress(json, printable(&pending.verification_uri));
         progress(
             json,
-            format!("and enter this code: {}", printable(&pending.user_code)).bold(),
+            device_code_line(&printable(&pending.user_code)).bold(),
         );
         if let Some(complete) = &pending.verification_uri_complete {
-            progress(
-                json,
-                "Or open this address, which already carries the code:",
-            );
+            progress(json, DEVICE_OPEN_COMPLETE);
             progress(json, printable(complete));
         }
         progress(json, device_waiting_line(waited));
@@ -1420,8 +1438,6 @@ pub(crate) fn describe_oidc_error(error: &oidc::OidcLoginError) -> String {
         oidc::OidcLoginError::Denied { error, description } => {
             // Provider-authored text, printed to a terminal: control characters are dropped so
             // a provider cannot write escape sequences into it.
-            let printable =
-                |text: &str| text.chars().filter(|c| !c.is_control()).collect::<String>();
             let error = printable(error);
             match description {
                 Some(description) => format!(

@@ -591,14 +591,11 @@ fn prompt_lines(prompt: &ProviderPrompt) -> Vec<Line<'static>> {
             wait_secs,
         } => {
             let mut lines = vec![
-                Line::from("To sign in, open this address in a browser:"),
+                Line::from(crate::OIDC_OPEN_ADDRESS),
                 Line::from(authorization_url.expose().to_owned().fg(Color::Cyan)),
             ];
             if !opened {
-                lines.push(Line::from(
-                    "No browser could be opened from here. Open the address above in any browser."
-                        .fg(Color::Yellow),
-                ));
+                lines.push(Line::from(crate::OIDC_NO_BROWSER.fg(Color::Yellow)));
             }
             lines.push(Line::from(crate::oidc_waiting_line(
                 std::time::Duration::from_secs(*wait_secs),
@@ -612,14 +609,12 @@ fn prompt_lines(prompt: &ProviderPrompt) -> Vec<Line<'static>> {
             wait_secs,
         } => {
             let mut lines = vec![
-                Line::from("On any device with a browser, open this address:"),
+                Line::from(crate::DEVICE_OPEN_ADDRESS),
                 Line::from(verification_uri.clone().fg(Color::Cyan)),
-                Line::from(format!("and enter this code: {}", user_code.expose()).bold()),
+                Line::from(crate::device_code_line(user_code.expose()).bold()),
             ];
             if let Some(complete) = verification_uri_complete {
-                lines.push(Line::from(
-                    "Or open this address, which already carries the code:",
-                ));
+                lines.push(Line::from(crate::DEVICE_OPEN_COMPLETE));
                 lines.push(Line::from(complete.expose().to_owned().fg(Color::Cyan)));
             }
             lines.push(Line::from(crate::device_waiting_line(
