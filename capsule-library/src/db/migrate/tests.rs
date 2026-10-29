@@ -20,6 +20,7 @@
 //!   - `v2_lifecycle_dialect_gains_albums` / `v2_ios_dialect_gains_cached_representations`
 //!     — the two colliding v2 stamps.
 //!   - `v3_rows_default_to_not_hidden`
+//!   - `v4_rows_gain_no_caption_and_no_location`
 //!   - `an_unstamped_catalog_is_adopted_at_the_baseline_version`
 //!
 //! Acceptance (the "done when")
@@ -201,6 +202,15 @@ CREATE INDEX IF NOT EXISTS idx_embeddings_asset ON embeddings(asset_id);
 CREATE INDEX IF NOT EXISTS idx_embeddings_task  ON embeddings(task, platform, model_version);
 ";
 
+/// The v4 additions over v3: `assets.is_hidden`, its index, and the widened timeline index
+/// (`5d3ef26`). Applied on top of the v3 shape, as the v4 step itself does.
+const HIDDEN_BLOCK_V4: &str = "
+ALTER TABLE assets ADD COLUMN is_hidden INTEGER NOT NULL DEFAULT 0;
+CREATE INDEX IF NOT EXISTS idx_assets_hidden     ON assets(is_hidden);
+DROP INDEX IF EXISTS idx_assets_timeline;
+CREATE INDEX IF NOT EXISTS idx_assets_timeline   ON assets(is_deleted, is_stack_hidden, is_hidden, capture_utc, capture_timestamp);
+";
+
 /// A historical catalog shape: the DDL a build of that era created, and the stamp it wrote.
 #[derive(Clone, Copy)]
 struct Fixture {
@@ -237,6 +247,11 @@ const FIXTURES: &[Fixture] = &[
         stamp: 3,
         hash_column: "hash_sha256",
     },
+    Fixture {
+        label: "v4",
+        stamp: 4,
+        hash_column: "hash_sha256",
+    },
 ];
 
 fn fixture_ddl(f: &Fixture) -> String {
@@ -253,6 +268,9 @@ fn fixture_ddl(f: &Fixture) -> String {
         ("v2 (ios dialect: albums, no cache)", _) => {
             format!("{ASSETS_V1_SHA256}{CORE_TABLES_V1}{INDEXES_V1_SHA256}{ALBUMS_BLOCK}")
         }
+        ("v4", _) => format!(
+            "{ASSETS_V1_SHA256}{CORE_TABLES_V1}{INDEXES_V1_SHA256}{CACHE_BLOCK}{ALBUMS_BLOCK}{EMBEDDINGS_BLOCK}{HIDDEN_BLOCK_V4}"
+        ),
         _ => format!(
             "{ASSETS_V1_SHA256}{CORE_TABLES_V1}{INDEXES_V1_SHA256}{CACHE_BLOCK}{ALBUMS_BLOCK}{EMBEDDINGS_BLOCK}"
         ),
@@ -591,6 +609,36 @@ fn v3_rows_default_to_not_hidden() {
     assert_eq!(hidden, 0);
 }
 
+/// A catalog whose rows predate the caption and location projections reads as "no caption,
+/// no location" — `NULL`, which the row mapper reads back as `None` — and keeps its `hidden`
+/// projection across the step.
+#[test]
+fn v4_rows_gain_no_caption_and_no_location() {
+    let f = FIXTURES[5];
+    let conn = historical_conn(&f);
+    insert_historical_asset(&conn, &f, "uuid-1", &"e".repeat(64), None);
+    conn.execute_batch("UPDATE assets SET is_hidden = 1 WHERE uuid = 'uuid-1';")
+        .unwrap();
+    let outcome = migrate(&conn).unwrap();
+    assert_eq!(
+        outcome.applied,
+        vec![Applied {
+            from: 4,
+            to: 5,
+            name: "v4_to_v5_caption_and_location"
+        }]
+    );
+    let (caption, lat, lon, hidden): (Option<String>, Option<f64>, Option<f64>, i64) = conn
+        .query_row(
+            "SELECT caption, latitude, longitude, is_hidden FROM assets WHERE uuid = 'uuid-1'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!((caption, lat, lon), (None, None, None));
+    assert_eq!(hidden, 1, "the step must not touch an existing projection");
+}
+
 #[test]
 fn an_unstamped_catalog_is_adopted_at_the_baseline_version() {
     let f = FIXTURES[0];
@@ -652,8 +700,25 @@ fn each_historical_library_opens_with_correct_default_and_gated_projections() {
         assert_eq!(db.query_timeline(0, 100).unwrap().len(), 2, "{}", f.label);
         assert!(db.query_hidden(0, 100).unwrap().is_empty(), "{}", f.label);
 
-        // The write path added at v4 works against the migrated column.
+        // Pre-migration rows carry no caption and no location.
+        assert_eq!(visible.caption, None, "{}", f.label);
+        assert_eq!(
+            (visible.latitude, visible.longitude),
+            (None, None),
+            "{}",
+            f.label
+        );
+
+        // The write paths added at v4 and v5 work against the migrated columns.
         db.update_asset_hidden("uuid-hidden", true).unwrap();
+        assert!(
+            db.update_asset_caption("uuid-visible", Some("kept"))
+                .unwrap(),
+            "{}",
+            f.label
+        );
+        let captioned = db.find_by_uuid("uuid-visible").unwrap().unwrap();
+        assert_eq!(captioned.caption.as_deref(), Some("kept"), "{}", f.label);
 
         let timeline = db.query_timeline(0, 100).unwrap();
         assert_eq!(timeline.len(), 1, "{}: default timeline", f.label);

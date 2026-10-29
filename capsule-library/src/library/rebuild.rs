@@ -325,6 +325,11 @@ fn signed_asset_row(s: &SidecarV1, facts: &ChainFacts, prior: Option<&AssetRow>)
         // The register this rebuild exists for: a never-written
         // register means visible, the wire-absent default.
         is_hidden: s.hidden.get().copied().unwrap_or(false),
+        // The caption register and the effective location (the user's edit over the
+        // as-imported fix), projected as the write path projects them.
+        caption: s.caption.get().filter(|c| !c.is_empty()).cloned(),
+        latitude: s.effective_gps().map(|g| g.lat),
+        longitude: s.effective_gps().map(|g| g.lon),
     }
 }
 

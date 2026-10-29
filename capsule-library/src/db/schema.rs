@@ -18,10 +18,13 @@
 ///     LWW register. Hidden assets are excluded from every default view and are reachable
 ///     only through the gated Hidden view (SSoT: design/organization § Hidden Assets).
 ///     Distinct from `is_stack_hidden`, which suppresses non-primary stack members.
+/// v5: added `assets.caption`, `assets.latitude` and `assets.longitude` — the index
+///     projections of the sidecar `caption` LWW register and its effective location
+///     (`gps_user` over the as-imported `gps`). All three are nullable: `NULL` is "none".
 ///
 /// **Bumping this constant requires appending a step to `db::migrate::STEPS`** —
 /// `steps_form_a_contiguous_chain` fails otherwise. Never edit a step that has shipped.
-pub(crate) const SCHEMA_VERSION: u32 = 4;
+pub(crate) const SCHEMA_VERSION: u32 = 5;
 
 pub(crate) const DDL: &str = r"
 PRAGMA journal_mode = WAL;
@@ -47,7 +50,14 @@ CREATE TABLE IF NOT EXISTS assets (
     deleted_at        INTEGER,
     -- Projection of the sidecar `hidden` LWW register: excluded from default views,
     -- served only by the gated Hidden view. Not `is_stack_hidden` (stack suppression).
-    is_hidden         INTEGER NOT NULL DEFAULT 0
+    is_hidden         INTEGER NOT NULL DEFAULT 0,
+    -- Projection of the sidecar `caption` LWW register; NULL is no caption (an empty
+    -- caption is never stored).
+    caption           TEXT,
+    -- Projection of the sidecar's effective location (`gps_user` over `gps`), verbatim in
+    -- the sidecar's datum; both NULL when the asset has no location.
+    latitude          REAL,
+    longitude         REAL
 );
 
 CREATE TABLE IF NOT EXISTS asset_stacks (

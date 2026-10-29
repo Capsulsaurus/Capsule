@@ -58,6 +58,9 @@ fn asset(uuid: &str, hash: &str) -> AssetRecord {
         is_deleted: false,
         deleted_at: None,
         is_hidden: false,
+        caption: None,
+        latitude: None,
+        longitude: None,
     }
 }
 
@@ -361,4 +364,46 @@ fn retention_sweep_stays_ungated() {
     assert!(!cat.is_view_unlocked(GatedView::RecentlyDeleted));
     // Deleted long before the cutoff, so the sweep sees it without any grant.
     assert_eq!(cat.query_expired_trash(30 * 86_400).unwrap().len(), 1);
+}
+
+/// An import's caption and GPS fix cross the boundary on the record and read back intact.
+#[test]
+fn caption_and_location_round_trip_on_the_record() {
+    let cat = Catalog::open_in_memory().unwrap();
+    let mut rec = asset("u1", &"a".repeat(64));
+    rec.caption = Some("harbour".to_string());
+    rec.latitude = Some(-33.8568);
+    rec.longitude = Some(151.2153);
+    cat.insert_asset(rec.clone()).unwrap();
+    assert_eq!(cat.find_by_uuid("u1".to_string()).unwrap(), Some(rec));
+}
+
+/// `set_caption` sets and clears the caption, and refuses an unknown asset with
+/// `InvalidArgument` rather than reporting a caption saved that nothing holds.
+#[test]
+fn set_caption_sets_clears_and_refuses_an_unknown_asset() {
+    let cat = Catalog::open_in_memory().unwrap();
+    cat.insert_asset(asset("u1", &"a".repeat(64))).unwrap();
+    let caption = |cat: &Catalog| cat.find_by_uuid("u1".to_string()).unwrap().unwrap().caption;
+
+    cat.set_caption("u1".to_string(), Some("on the pier".to_string()))
+        .unwrap();
+    assert_eq!(caption(&cat).as_deref(), Some("on the pier"));
+
+    cat.set_caption("u1".to_string(), None).unwrap();
+    assert_eq!(caption(&cat), None);
+
+    cat.set_caption("u1".to_string(), Some("x".to_string()))
+        .unwrap();
+    cat.set_caption("u1".to_string(), Some(String::new()))
+        .unwrap();
+    assert_eq!(caption(&cat), None, "an empty caption is no caption");
+
+    let err = cat
+        .set_caption("missing".to_string(), Some("x".to_string()))
+        .unwrap_err();
+    assert!(
+        matches!(err, CatalogError::InvalidArgument { .. }),
+        "{err:?}"
+    );
 }

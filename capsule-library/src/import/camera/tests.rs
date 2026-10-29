@@ -908,6 +908,9 @@ fn reimporting_a_camera_is_deduplicated_by_content() {
         is_deleted: false,
         deleted_at: None,
         is_hidden: false,
+        caption: None,
+        latitude: None,
+        longitude: None,
     })
     .unwrap();
 

@@ -424,6 +424,16 @@ fn asset_row_from_state(asset: &AssetState) -> AssetRow {
         // Projection of the sidecar `hidden` LWW register: a never-written register
         // means visible, the wire-absent default.
         is_hidden: asset.sidecar.hidden.get().copied().unwrap_or(false),
+        // Projections of the `caption` register and the effective location — the same rule
+        // `library::rebuild::signed_asset_row` applies, so a rebuild agrees with this row.
+        caption: asset
+            .sidecar
+            .caption
+            .get()
+            .filter(|c| !c.is_empty())
+            .cloned(),
+        latitude: asset.sidecar.effective_gps().map(|g| g.lat),
+        longitude: asset.sidecar.effective_gps().map(|g| g.lon),
     }
 }
 
