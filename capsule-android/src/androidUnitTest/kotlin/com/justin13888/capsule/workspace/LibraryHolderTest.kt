@@ -59,7 +59,7 @@ class LibraryHolderTest {
     @Test
     fun aFailureThatIsNotALockCanBeRetried() {
         // A root that is a file: the core cannot make a library there.
-        val root = File(dir, "library").apply { writeText("not a directory") }
+        val root = File(dir, "library").apply { writeBytes(byteArrayOf(0)) }
         val holder = holder(root = root)
         val failed = holder.state.value
         assertIs<LibraryState.Failed>(failed)
