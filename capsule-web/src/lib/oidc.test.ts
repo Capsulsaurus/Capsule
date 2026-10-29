@@ -84,45 +84,50 @@ describe('the callback address', () => {
 });
 
 describe('the pending ceremony', () => {
-    const ceremony = { state: 'state-1', verifier: 'secret', expiresBy: 1000 };
+    const ceremony = { state: 'state-1', verifier: 'secret' };
 
     test('hands its secret to the callback for its own state', () => {
         const storage = new MemoryStorage();
         saveCeremony(storage, ceremony);
-        expect(takeCeremony(storage, 'state-1', 999)).toBe('secret');
+        expect(takeCeremony(storage, 'state-1')).toBe('secret');
     });
 
     test('is single-use', () => {
         const storage = new MemoryStorage();
         saveCeremony(storage, ceremony);
-        takeCeremony(storage, 'state-1', 999);
+        takeCeremony(storage, 'state-1');
         expect(storage.getItem(CEREMONY_KEY)).toBeNull();
-        expect(takeCeremony(storage, 'state-1', 999)).toBeNull();
+        expect(takeCeremony(storage, 'state-1')).toBeNull();
     });
 
     test('refuses another state, and is spent by it', () => {
         const storage = new MemoryStorage();
         saveCeremony(storage, ceremony);
-        expect(takeCeremony(storage, 'state-2', 999)).toBeNull();
+        expect(takeCeremony(storage, 'state-2')).toBeNull();
         expect(storage.getItem(CEREMONY_KEY)).toBeNull();
     });
 
-    test('refuses once expired', () => {
+    test('leaves expiry to the server, whatever the browser clock says', () => {
+        // A record carrying a long-past expiry still redeems: a fast browser clock must not
+        // refuse a ceremony the server would accept, and a stale one is the server's to refuse.
         const storage = new MemoryStorage();
-        saveCeremony(storage, ceremony);
-        expect(takeCeremony(storage, 'state-1', 1000)).toBeNull();
+        storage.setItem(
+            CEREMONY_KEY,
+            JSON.stringify({ ...ceremony, expiresBy: 0 }),
+        );
+        expect(takeCeremony(storage, 'state-1')).toBe('secret');
     });
 
     test('is absent in a tab that began none', () => {
-        expect(takeCeremony(new MemoryStorage(), 'state-1', 0)).toBeNull();
+        expect(takeCeremony(new MemoryStorage(), 'state-1')).toBeNull();
     });
 
     test('ignores a corrupt or foreign record', () => {
         const storage = new MemoryStorage();
         storage.setItem(CEREMONY_KEY, '{not json');
-        expect(takeCeremony(storage, 'state-1', 0)).toBeNull();
+        expect(takeCeremony(storage, 'state-1')).toBeNull();
         storage.setItem(CEREMONY_KEY, JSON.stringify({ state: 'state-1' }));
-        expect(takeCeremony(storage, 'state-1', 0)).toBeNull();
+        expect(takeCeremony(storage, 'state-1')).toBeNull();
         expect(storage.getItem(CEREMONY_KEY)).toBeNull();
     });
 
@@ -130,7 +135,7 @@ describe('the pending ceremony', () => {
         const storage = new MemoryStorage();
         saveCeremony(storage, ceremony);
         saveCeremony(storage, { ...ceremony, state: 'state-2' });
-        expect(takeCeremony(storage, 'state-2', 999)).toBe('secret');
+        expect(takeCeremony(storage, 'state-2')).toBe('secret');
     });
 });
 

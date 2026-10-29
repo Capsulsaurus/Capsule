@@ -31,8 +31,6 @@ export interface PendingCeremony {
     state: string;
     /** The binding secret whose S256 hash the authorize carried. */
     verifier: string;
-    /** Absolute Unix seconds after which the server will not redeem the `state`. */
-    expiresBy: number;
 }
 
 /** Unpadded base64url (RFC 4648 §5), the encoding the server's S256 check reads. */
@@ -78,14 +76,12 @@ export function saveCeremony(
  * Take the binding secret for `state`, single-use: the stored ceremony is removed whatever the
  * outcome, so a reloaded or replayed callback finds nothing.
  *
- * `null` when this tab began no ceremony, began a different one, or began it so long ago the
- * server would refuse it anyway.
+ * `null` when this tab began no ceremony or began a different one. Expiry is not judged here: the
+ * browser's clock may be wrong, so a stale `state` is the server's to refuse
+ * (`error.auth.oidc_state_invalid`), not a local guess that would fail every sign-in on a
+ * fast clock.
  */
-export function takeCeremony(
-    storage: Storage,
-    state: string,
-    nowSecs: number,
-): string | null {
+export function takeCeremony(storage: Storage, state: string): string | null {
     const raw = storage.getItem(CEREMONY_KEY);
     storage.removeItem(CEREMONY_KEY);
     if (!raw) return null;
@@ -97,12 +93,11 @@ export function takeCeremony(
     }
     if (
         typeof ceremony.state !== 'string' ||
-        typeof ceremony.verifier !== 'string' ||
-        typeof ceremony.expiresBy !== 'number'
+        typeof ceremony.verifier !== 'string'
     ) {
         return null;
     }
-    if (ceremony.state !== state || nowSecs >= ceremony.expiresBy) return null;
+    if (ceremony.state !== state) return null;
     return ceremony.verifier;
 }
 

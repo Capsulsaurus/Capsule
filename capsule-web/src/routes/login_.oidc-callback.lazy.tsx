@@ -66,11 +66,7 @@ function OidcCallback() {
             });
             return;
         }
-        const verifier = takeCeremony(
-            sessionStorage,
-            params.state,
-            Date.now() / 1000,
-        );
+        const verifier = takeCeremony(sessionStorage, params.state);
         if (!verifier) {
             setStep({
                 kind: 'failed',

@@ -110,7 +110,6 @@ function Login() {
             saveCeremony(sessionStorage, {
                 state: ceremony.state,
                 verifier,
-                expiresBy: ceremony.expires_by,
             });
             window.location.assign(ceremony.authorization_url);
         } catch (err) {
