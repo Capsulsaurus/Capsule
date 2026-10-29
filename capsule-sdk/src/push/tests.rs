@@ -1271,6 +1271,40 @@ async fn an_unexpected_cancel_refusal_fails_the_redaction() {
     );
 }
 
+/// **A settled session is not cancelled.** The listing keeps `completed` and
+/// `failed_processing` records until their lifetime cap; deleting an asset whose upload already
+/// settled sends no `DELETE` for them and reports none of them as finalizing.
+#[tokio::test]
+async fn a_terminal_session_is_skipped_not_cancelled_or_finalizing() {
+    static SESSIONS: &[ListedSession] = &[
+        ("s-done", "asset-a", "completed"),
+        ("s-failed", "asset-a", "failed_processing"),
+        ("s-open", "asset-a", "waiting_for_processing"),
+    ];
+    let (server, seen) = session_server(SESSIONS, |id| {
+        if id == "s-open" {
+            MockResponse::new(204, "No Content")
+        } else {
+            MockResponse::new(500, "a settled session was cancelled")
+        }
+    })
+    .await;
+    let client = server.client("2026-01-01");
+
+    let redaction = redact_asset(&client, "asset-a").await.expect("redacts");
+
+    assert_eq!(redaction.cancelled, vec!["s-open"]);
+    assert!(redaction.finalizing.is_empty(), "{redaction:?}");
+    let deletes: Vec<String> = seen
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|line| line.starts_with("DELETE"))
+        .cloned()
+        .collect();
+    assert_eq!(deletes.len(), 1, "{deletes:?}");
+}
+
 /// An asset with no open session costs one listing and no cancel.
 #[tokio::test]
 async fn an_asset_with_no_open_session_redacts_to_nothing() {

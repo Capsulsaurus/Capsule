@@ -699,8 +699,9 @@ pub struct Redaction {
 ///
 /// The sessions come from `GET /upload/sessions`, filtered by the asset each names, so a
 /// session a previous run left behind (a staged tier that never finished, a push killed
-/// mid-ladder) is found without any client-side state. Each is cancelled with
-/// `DELETE /upload/{id}`:
+/// mid-ladder) is found without any client-side state. A session the listing names as terminal
+/// (`completed`, `failed_processing`) is skipped: its outcome is decided and it is neither
+/// cancelled nor finalizing. Each other session is cancelled with `DELETE /upload/{id}`:
 ///
 /// - `204` or `404` is a cancelled session: its staged bytes and quota reservation are released.
 /// - `409 error.upload.session_not_active` is the race with a finalization that started before
@@ -718,7 +719,13 @@ pub struct Redaction {
 pub async fn redact_asset(client: &UploadClient, asset_id: &str) -> Result<Redaction, UploadError> {
     let sessions = client.list_sessions().await?;
     let mut redaction = Redaction::default();
+    let mut settled = 0_usize;
     for session in sessions.iter().filter(|s| s.asset_id == asset_id) {
+        if is_settled(&session.status) {
+            tracing::debug!(session_id = %session.id, status = %session.status, "redact: the session already settled; nothing to cancel");
+            settled += 1;
+            continue;
+        }
         match client.delete(&session.id).await {
             Ok(()) => {
                 tracing::info!(session_id = %session.id, status = %session.status, received = session.received_bytes, "redact: upload session cancelled");
@@ -740,11 +747,20 @@ pub async fn redact_asset(client: &UploadClient, asset_id: &str) -> Result<Redac
     }
     tracing::info!(
         listed = sessions.len(),
+        settled,
         cancelled = redaction.cancelled.len(),
         finalizing = redaction.finalizing.len(),
         "redact: the asset's open upload sessions are aborted"
     );
     Ok(redaction)
+}
+
+/// Whether a listed session status is terminal (`completed`, `failed_processing`): the server
+/// keeps such a record until its lifetime cap, but there is nothing left to cancel and its
+/// outcome is already decided. Any other status, including one this client does not know, is
+/// treated as open, so a newer server's state is still cancelled rather than silently kept.
+fn is_settled(status: &str) -> bool {
+    matches!(status, "completed" | "failed_processing")
 }
 
 // ─── Confirming custody ───────────────────────────────────────────────────────
