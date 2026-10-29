@@ -880,32 +880,41 @@ fn redial_backoff(redial: u32) -> Duration {
 /// beside the new session. A dial that fails the way a sever does (I/O or a timeout) is retried
 /// while `redials` is under [`MAX_REDIALS`]; any other failure, or the last allowed one, is
 /// returned.
-async fn redial<S, T, F, Fut>(redials: &mut u32, severed: S, mut dial: F) -> Result<T, PeeringError>
+///
+/// The channel is dropped before the returned future is built, so the future does not carry
+/// it: the delegate's future stays as small as it was before the re-dial took the channel.
+fn redial<S, T, F, Fut>(
+    redials: &mut u32,
+    severed: S,
+    mut dial: F,
+) -> impl Future<Output = Result<T, PeeringError>>
 where
     F: FnMut() -> Fut,
     Fut: Future<Output = Result<T, PeeringError>>,
 {
     drop(severed);
-    loop {
-        *redials += 1;
-        let wait = redial_backoff(*redials);
-        tracing::debug!(
-            redials = *redials,
-            wait_ms = wait.as_millis(),
-            "peer delegate: waiting before dialing again"
-        );
-        tokio::time::sleep(wait).await;
-        match dial().await {
-            Ok(channel) => {
-                tracing::info!(redials = *redials, "peer delegate: dialed again");
-                return Ok(channel);
+    async move {
+        loop {
+            *redials += 1;
+            let wait = redial_backoff(*redials);
+            tracing::debug!(
+                redials = *redials,
+                wait_ms = wait.as_millis(),
+                "peer delegate: waiting before dialing again"
+            );
+            tokio::time::sleep(wait).await;
+            match dial().await {
+                Ok(channel) => {
+                    tracing::info!(redials = *redials, "peer delegate: dialed again");
+                    return Ok(channel);
+                }
+                Err(error @ (PeeringError::Io(_) | PeeringError::Timeout(_)))
+                    if *redials < MAX_REDIALS =>
+                {
+                    tracing::warn!(%error, redials = *redials, "peer delegate: dialing again failed; retrying");
+                }
+                Err(error) => return Err(error),
             }
-            Err(error @ (PeeringError::Io(_) | PeeringError::Timeout(_)))
-                if *redials < MAX_REDIALS =>
-            {
-                tracing::warn!(%error, redials = *redials, "peer delegate: dialing again failed; retrying");
-            }
-            Err(error) => return Err(error),
         }
     }
 }
