@@ -29269,6 +29269,13 @@
               "null"
             ],
             "description": "The manifest hash the asset's chain is actually at. Absent when the conflict is not a chain conflict, which is why it is nullable."
+          },
+          "retention_until": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "On `error.upload.retention_elapsed`, the signed retention floor (RFC 3339) the trash-restore came too late for. Absent on every other conflict, which is why it is nullable."
           }
         },
         "additionalProperties": true,
