@@ -238,7 +238,7 @@ struct AppEnvironment {
         // this provider's `AssetLocationSource` conformance, which the erased
         // `any AssetProvider` the rest of the app sees does not carry.
         let library = PortBackedAssetProvider(library: mock.library, organize: mock.organize)
-        let managed = Self.makeManagedLane(root: Self.libraryRoot())
+        let managed = Self.makeManagedLane(root: Self.libraryRoot(), openLibrary: lane.openManagedLibrary)
         assetProvider = Self.composeTimeline(library: library, managed: managed.provider)
         captionStore = Self.composeCaptions(
             library: PortBackedCaptionStore(library: mock.library, organize: mock.organize),
@@ -315,16 +315,20 @@ struct AppEnvironment {
     /// authorization. The one `ManagedProvider` built here is shared by the
     /// importer and, through ``composeTimeline(library:managed:)``, the
     /// timeline, which is what makes an import visible once it completes.
-    static func makeManagedLane(root: URL) -> ManagedLane {
+    ///
+    /// - Parameter openLibrary: the lane's store over the layout. The FFI lane
+    ///   supplies one whose writes are the Rust workspace's verbs; with none,
+    ///   there is no Rust core, so the store is an in-memory catalog written
+    ///   through a `LocalManagedWorkspace`.
+    static func makeManagedLane(
+        root: URL,
+        openLibrary: (@Sendable (ManagedLibraryLayout) -> ManagedLibrary)? = nil
+    ) -> ManagedLane {
         let layout = ManagedLibraryLayout(root: root)
-        let library = ManagedLibrary(layout: layout, catalogOpener: InMemoryCatalogOpener())
-        let importService = ImportService(
-            library: library,
-            fileStore: SystemFileStore(),
-            hasher: CryptoKitHasher(),
-            metadataExtractor: ImageIOMetadataExtractor(),
-            sidecarCoder: JSONSidecarCoder()
-        )
+        let fileStore = SystemFileStore()
+        let library = openLibrary?(layout)
+            ?? ManagedLibrary(layout: layout, fileStore: fileStore, catalog: InMemoryAssetCatalog())
+        let importService = ImportService(library: library, fileStore: fileStore, hasher: CryptoKitHasher())
         let trashGate = SecondaryTrashGate()
         let provider = ManagedProvider(library: library, authGate: trashGate)
         CapsuleLog.app.debug("managed lane composed at \(root.path, privacy: .private)")
@@ -337,7 +341,7 @@ struct AppEnvironment {
     }
 
     /// Recently Deleted over both stores: the composite timeline's `delete`
-    /// soft-deletes an import in the managed catalog, and this is where it can
+    /// moves an import to the managed store's trash, and this is where it can
     /// then be listed, restored and purged.
     static func composeTrash(library: any TrashProvider, managed: ManagedLane) -> any TrashProvider {
         CompositeTrashProvider(

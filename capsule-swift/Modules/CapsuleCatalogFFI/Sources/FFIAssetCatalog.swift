@@ -112,46 +112,11 @@ public actor FFIAssetCatalog: AssetCatalog {
         }
     }
 
-    public func softDeleteAsset(id: String, deletedAt: Int64) throws {
-        do {
-            CapsuleLog.catalog.debug("softDeleteAsset id=\(id, privacy: .public)")
-            try catalog.softDelete(uuid: id, deletedAt: deletedAt)
-        } catch {
-            throw nativeCatalogError(error)
-        }
-    }
-
-    public func restoreAsset(id: String) throws {
-        do {
-            CapsuleLog.catalog.debug("restoreAsset id=\(id, privacy: .public)")
-            try catalog.restoreAsset(uuid: id)
-        } catch {
-            throw nativeCatalogError(error)
-        }
-    }
-
-    public func expiredTrash(olderThanSeconds: Int64) throws -> [CatalogAsset] {
-        do {
-            return try catalog.queryExpiredTrash(olderThanSecs: olderThanSeconds).map(CatalogAsset.init)
-        } catch {
-            throw nativeCatalogError(error)
-        }
-    }
-
     public func trash(offset: Int, limit: Int) throws -> [CatalogAsset] {
         do {
             CapsuleLog.catalog.trace("trash offset=\(offset) limit=\(limit)")
             return try catalog.queryTrash(offset: pageValue(offset), limit: pageValue(limit))
                 .map(CatalogAsset.init)
-        } catch {
-            throw nativeCatalogError(error)
-        }
-    }
-
-    public func purgeAsset(id: String) throws {
-        do {
-            CapsuleLog.catalog.debug("purgeAsset id=\(id, privacy: .public)")
-            try catalog.purgeAsset(uuid: id)
         } catch {
             throw nativeCatalogError(error)
         }

@@ -12,8 +12,8 @@ import Foundation
 /// ## Why the listing does not come from `trashEntries`
 ///
 /// ``OrganizePort/trashEntries(offset:limit:)`` is the natural-looking source,
-/// but a ``TrashEntry`` carries only `(assetID, deletedAt, retentionUntil)` —
-/// no media type, no dimensions, no capture date — so turning a page of them
+/// but a ``TrashEntry`` carries only its id, its delete instant and its
+/// retention window — no media type, no dimensions, no capture date — so turning a page of them
 /// into `[Asset]` would mean a second per-asset read anyway. Reading the trash
 /// **slice** of the timeline instead (``VisibilitySlice/trash``) returns whole
 /// ``LibraryAsset`` rows in one window, already ordered, and goes through the

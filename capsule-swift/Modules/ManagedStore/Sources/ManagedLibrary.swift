@@ -13,35 +13,77 @@ import Foundation
 /// hard-wired: a build that links the Rust core passes an opener over
 /// `FFIAssetCatalog`, while the mock lane, previews, and unit tests pass an
 /// in-memory one. This module therefore compiles with no Rust core present.
+///
+/// The catalog only reads. Every write — an import, a delete, a restore, a
+/// purge — goes through ``workspace``: on the FFI lane that is the Rust
+/// workspace over the same root, whose signed records the catalog's rows
+/// project; elsewhere it is a ``LocalManagedWorkspace`` over an in-memory
+/// catalog.
 public actor ManagedLibrary {
     /// The library's on-disk layout.
     public let layout: ManagedLibraryLayout
+
+    /// The library's writes: sealing an import and every trash transition.
+    public nonisolated let workspace: any ManagedWorkspace
 
     private let fileStore: any FileStore
     private let catalogOpener: any CatalogOpening
     private var openedCatalog: (any AssetCatalog)?
 
+    /// A library whose catalog is opened lazily by `catalogOpener` and whose
+    /// writes go through `workspace` — the FFI lane, where both sit over the
+    /// same root.
     public init(
         layout: ManagedLibraryLayout,
         fileStore: any FileStore = SystemFileStore(),
-        catalogOpener: any CatalogOpening
+        catalogOpener: any CatalogOpening,
+        workspace: any ManagedWorkspace
     ) {
         self.layout = layout
         self.fileStore = fileStore
         self.catalogOpener = catalogOpener
+        self.workspace = workspace
     }
 
-    /// Create a library over an already-open catalog, skipping the lazy open —
-    /// for tests and previews.
+    /// A library over an in-memory catalog, written through a
+    /// ``LocalManagedWorkspace`` built over the same catalog and file store —
+    /// the mock lane, previews and tests. The catalog is already open, so the
+    /// lazy open is skipped.
     public init(
         layout: ManagedLibraryLayout,
         fileStore: any FileStore,
-        catalog: any AssetCatalog
+        catalog: InMemoryAssetCatalog,
+        hasher: any ContentHasher = CryptoKitHasher(),
+        metadataExtractor: any MediaMetadataExtracting = ImageIOMetadataExtractor(),
+        sidecarCoder: any SidecarCoding = JSONSidecarCoder()
     ) {
         self.layout = layout
         self.fileStore = fileStore
         catalogOpener = PreopenedCatalogOpener(catalog: catalog)
         openedCatalog = catalog
+        workspace = LocalManagedWorkspace(
+            layout: layout,
+            fileStore: fileStore,
+            catalog: catalog,
+            hasher: hasher,
+            metadataExtractor: metadataExtractor,
+            sidecarCoder: sidecarCoder
+        )
+    }
+
+    /// A library over an already-open catalog and an injected workspace —
+    /// for tests that observe what reaches the workspace.
+    public init(
+        layout: ManagedLibraryLayout,
+        fileStore: any FileStore,
+        catalog: any AssetCatalog,
+        workspace: any ManagedWorkspace
+    ) {
+        self.layout = layout
+        self.fileStore = fileStore
+        catalogOpener = PreopenedCatalogOpener(catalog: catalog)
+        openedCatalog = catalog
+        self.workspace = workspace
     }
 
     /// The catalog, opening it (and creating the directory skeleton) on first
@@ -66,8 +108,7 @@ public actor ManagedLibrary {
 
     /// The media file an asset's bytes live in, or `nil` when none is on disk.
     ///
-    /// Found by stem for the same reason ``removeAssetFiles(uuid:captureDate:)``
-    /// sweeps by stem: the catalog does not record the extension the importer
+    /// Found by stem: the catalog does not record the extension the importer
     /// derived. The paired `.cbor` sidecar shares the stem and is skipped, so the
     /// answer is always the original, never its record.
     ///
@@ -112,27 +153,4 @@ public actor ManagedLibrary {
 
     /// The extension every sidecar is written under; see ``ManagedLibraryLayout``.
     private static let sidecarExtension = "cbor"
-
-    /// Remove an asset's bytes — its media file and paired sidecar — from the store.
-    ///
-    /// Addressed by *stem* rather than by an exact path because the catalog does
-    /// not record a file extension: ``ImportService`` derives one from the source
-    /// filename, so `{uuid}.*` inside the capture-date partition is the only thing
-    /// both sides agree on. That also sweeps the `.cbor` sidecar without naming it.
-    ///
-    /// A missing file is not an error. A purge that runs twice, or after a partial
-    /// import, must still converge on "the bytes are gone".
-    ///
-    /// - Parameter captureDate: the asset's capture instant, which is what decides
-    ///   its `media/{YYYY}/{YYYY-MM}` partition. Read it from the catalog row
-    ///   *before* deleting that row, or the directory is no longer derivable.
-    public func removeAssetFiles(uuid: String, captureDate: Date) async throws {
-        let directory = layout.mediaDirectory(forCaptureDate: captureDate)
-        guard await fileStore.fileExists(at: directory) else { return }
-        for entry in try await fileStore.contentsOfDirectory(at: directory)
-            where entry.deletingPathExtension().lastPathComponent == uuid {
-            try await fileStore.removeItem(at: entry)
-            CapsuleLog.managedStore.debug("purged \(entry.lastPathComponent, privacy: .public)")
-        }
-    }
 }

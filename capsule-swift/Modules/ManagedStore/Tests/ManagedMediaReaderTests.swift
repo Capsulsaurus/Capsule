@@ -97,7 +97,7 @@ struct ManagedMediaReaderTests {
         let reader = ManagedMediaReader(library: library, fileStore: fileStore)
         _ = try #require(await reader.image(uuid: "a", maxPixelEdge: 32))
 
-        await catalog.purgeAsset(id: "a")
+        await catalog.removeAsset(id: "a")
 
         #expect(await reader.image(uuid: "a", maxPixelEdge: 32) == nil)
     }

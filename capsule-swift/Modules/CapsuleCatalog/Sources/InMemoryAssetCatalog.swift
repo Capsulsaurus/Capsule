@@ -26,7 +26,7 @@ public actor InMemoryAssetCatalog: AssetCatalog {
     private var grants: [GatedView: Int64] = [:]
     private let schemaVersionValue: UInt32
 
-    /// The current wall-clock, overridable so trash-expiry tests are deterministic.
+    /// The current wall-clock, overridable so grace-window tests are deterministic.
     public var now = Int64(Date().timeIntervalSince1970)
 
     /// When `true`, ``insertAsset(_:)`` throws — to exercise import rollback.
@@ -36,7 +36,7 @@ public actor InMemoryAssetCatalog: AssetCatalog {
         schemaVersionValue = schemaVersion
     }
 
-    /// Pin the mock's notion of "now" — used by ``expiredTrash(olderThanSeconds:)``.
+    /// Pin the mock's notion of "now" — the clock the SR1 grace window runs on.
     public func setNow(_ value: Int64) {
         now = value
     }
@@ -84,23 +84,6 @@ public actor InMemoryAssetCatalog: AssetCatalog {
         return Self.page(Self.timelineSorted(visible), offset: offset, limit: limit)
     }
 
-    public func softDeleteAsset(id: String, deletedAt: Int64) {
-        assets[id]?.isDeleted = true
-        assets[id]?.deletedAt = deletedAt
-    }
-
-    public func restoreAsset(id: String) {
-        assets[id]?.isDeleted = false
-        assets[id]?.deletedAt = nil
-    }
-
-    public func expiredTrash(olderThanSeconds: Int64) -> [CatalogAsset] {
-        let threshold = now - olderThanSeconds
-        return assets.values
-            .filter { $0.isDeleted && ($0.deletedAt ?? 0) < threshold }
-            .sorted { ($0.deletedAt ?? 0) < ($1.deletedAt ?? 0) }
-    }
-
     public func trash(offset: Int, limit: Int) throws -> [CatalogAsset] {
         guard isViewUnlocked(.recentlyDeleted) else { throw CatalogError.viewLocked }
         let deleted = assets.values
@@ -109,7 +92,10 @@ public actor InMemoryAssetCatalog: AssetCatalog {
         return Self.page(deleted, offset: offset, limit: limit)
     }
 
-    public func purgeAsset(id: String) {
+    /// Drop an asset's row. Not an ``AssetCatalog`` requirement: it is the
+    /// in-memory store's half of `LocalManagedWorkspace`'s purge, which removes
+    /// the files first. A real catalog's row leaves only through the workspace.
+    public func removeAsset(id: String) {
         assets[id] = nil
     }
 

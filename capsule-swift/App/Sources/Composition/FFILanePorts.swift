@@ -4,6 +4,7 @@
     import CapsuleFoundation
     import CapsuleMock
     import CapsulePorts
+    import ManagedStore
 
     // The FFI lane's half of the composition root: the Rust-backed adapters
     // chosen over an opened workspace and, once signed in, its session. Fenced by
@@ -17,6 +18,10 @@
         /// signed out. Transfer events come from a session; with none there is
         /// nothing in flight, and the stream finishes at once rather than
         /// showing the mock world's transfers.
+        ///
+        /// The managed store's writes are the workspace's verbs, and its
+        /// catalog is the workspace's own index under the same root, so
+        /// `workspace` must have been opened at the managed library's root.
         static func ffi(workspace: FfiWorkspace, session: FfiSession?) -> LanePorts {
             let transferEvents: any TransferEventPort = if let session {
                 FFITransferEventFeed(session: session)
@@ -24,7 +29,14 @@
                 IdleTransferEventFeed()
             }
             CapsuleLog.app.info("ffi lane ports composed, session=\(session != nil, privacy: .public)")
-            return LanePorts(labels: FFILabelPort(workspace: workspace), transferEvents: transferEvents)
+            let managedWorkspace = FFIManagedWorkspace(workspace: workspace)
+            return LanePorts(
+                labels: FFILabelPort(workspace: workspace),
+                transferEvents: transferEvents,
+                openManagedLibrary: { layout in
+                    ManagedLibrary(layout: layout, catalogOpener: FFICatalogOpener(), workspace: managedWorkspace)
+                }
+            )
         }
     }
 

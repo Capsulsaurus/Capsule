@@ -1,4 +1,5 @@
 import CapsuleCatalog
+import CapsuleDomain
 import CapsuleFoundation
 import Foundation
 import ManagedStore
@@ -6,10 +7,12 @@ import ManagedStore
 /// The ``AssetProvider`` over the Capsule-managed library.
 ///
 /// Reads its timeline from the catalog and maps each ``CatalogAsset`` to the
-/// source-agnostic ``Asset``. Mutations (favourite, delete) write straight to
-/// the catalog; deletion is a soft delete, leaving the file in place. The
-/// import flow calls ``refresh()`` once an import completes so the timeline
-/// picks up the new assets.
+/// source-agnostic ``Asset``. Delete, restore and purge go through the
+/// library's ``ManagedWorkspace``, which owns the trash state machine and its
+/// retention window, so on the FFI lane each is a signed record that syncs and
+/// survives an index rebuild; the catalog only reads the result. The import
+/// flow calls ``refresh()`` once an import completes so the timeline picks up
+/// the new assets.
 public actor ManagedProvider: AssetProvider, TrashProvider, AssetOwning {
     /// Upper bound on the managed timeline window for the prototype.
     private static let timelineLimit = 10000
@@ -87,12 +90,14 @@ public actor ManagedProvider: AssetProvider, TrashProvider, AssetOwning {
         try await catalog.upsertAsset(asset)
     }
 
+    /// Move each managed asset to the trash with the default retention window.
+    /// A retried delete keeps the window the first one opened.
     public func delete(_ ids: [AssetID]) async throws {
-        let catalog = try await library.catalog()
-        let deletedAt = Int64(Date().timeIntervalSince1970)
+        let retainDays = UInt32(TrashEntry.defaultRetentionDays)
         for id in ids {
             guard case let .managed(uuid) = id else { continue }
-            try await catalog.softDeleteAsset(id: uuid, deletedAt: deletedAt)
+            try await library.workspace.deleteAsset(id: uuid, retainDays: retainDays)
+            CapsuleLog.assetKit.debug("managed delete of \(uuid, privacy: .private)")
         }
         await emitReload()
     }
@@ -219,34 +224,38 @@ public actor ManagedProvider: AssetProvider, TrashProvider, AssetOwning {
         return await catalog.isViewUnlocked(.recentlyDeleted)
     }
 
+    /// Restore a trashed asset. The workspace refuses it once the retention
+    /// window has closed (``TrashRefusal/retentionElapsed(retentionUntil:)``),
+    /// and the asset stays in Recently Deleted.
     public func restore(_ id: AssetID) async throws {
         guard case let .managed(uuid) = id else { return }
-        let catalog = try await library.catalog()
-        try await catalog.restoreAsset(id: uuid)
+        try await library.workspace.restoreAsset(id: uuid)
         await emitReload()
     }
 
-    /// Permanently remove an asset: its bytes first, then its catalog row.
+    /// Permanently remove a trashed asset through the workspace, which removes
+    /// the original, its derivatives and cache entries and its sidecar before
+    /// the row, and throws — leaving the asset in Recently Deleted for a retry —
+    /// when a file cannot be removed.
     ///
-    /// Bytes first is the load-bearing part. This is the operation a user reaches
-    /// for when they want a photograph *gone*, so a failure to delete the file has
-    /// to surface as a failure — not as a vanished row over bytes still on disk,
-    /// which would report success while leaving the thing the user was trying to
-    /// destroy. Throwing here leaves the asset in Recently Deleted, where it can be
-    /// tried again.
-    ///
-    /// The reverse order's failure — a row pointing at bytes that are gone — is a
-    /// broken thumbnail. This one's is a privacy hole, and they are not comparable.
+    /// An asset the workspace no longer holds is already gone, which is what a
+    /// purge asks for, so that refusal is not an error. An early purge hands
+    /// back a signed shorter-retention `delete` for the album's ops surface; the
+    /// workspace keeps it on the asset's chain until something delivers it.
     public func purge(_ id: AssetID) async throws {
         guard case let .managed(uuid) = id else { return }
-        let catalog = try await library.catalog()
-        // Read the row before dropping it: the media partition is derived from the
-        // capture timestamp, so once the row is gone the directory is unknowable.
-        if let asset = try await catalog.asset(id: uuid) {
-            let captureDate = Date(timeIntervalSince1970: TimeInterval(asset.captureTimestamp))
-            try await library.removeAssetFiles(uuid: uuid, captureDate: captureDate)
+        do {
+            let outcome = try await library.workspace.purgeAsset(id: uuid)
+            if let record = outcome.reissueRecord {
+                CapsuleLog.assetKit.info(
+                    "managed purge of \(uuid, privacy: .private) re-issued a \(record.count)-byte delete, kept on its chain"
+                )
+            } else {
+                CapsuleLog.assetKit.debug("managed purge of \(uuid, privacy: .private)")
+            }
+        } catch TrashRefusal.notFound {
+            CapsuleLog.assetKit.debug("managed purge of \(uuid, privacy: .private): already gone")
         }
-        try await catalog.purgeAsset(id: uuid)
         await emitReload()
     }
 
