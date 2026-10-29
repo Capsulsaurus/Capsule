@@ -33895,6 +33895,16 @@
         }
       }
     },
+    "app.home.menu.more": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "More options"
+          }
+        }
+      }
+    },
     "app.import.conflict.destructive.note": {
       "localizations": {
         "ar": {
@@ -45224,7 +45234,7 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "No labels yet"
+            "value": "No labels yet."
           }
         }
       }
@@ -45235,6 +45245,26 @@
           "stringUnit": {
             "state": "translated",
             "value": "A label needs at least one character."
+          }
+        }
+      }
+    },
+    "app.labels.failure.label_empty": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A label can't be empty."
+          }
+        }
+      }
+    },
+    "app.labels.failure.label_too_long": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "That label is too long: %1$@ bytes, and the limit is %2$@."
           }
         }
       }
@@ -45259,6 +45289,16 @@
         }
       }
     },
+    "app.labels.failure.shape_refused": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "That region doesn't fit inside the photo."
+          }
+        }
+      }
+    },
     "app.labels.failure.too_long": {
       "localizations": {
         "en": {
@@ -45274,7 +45314,17 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "The change could not be saved. Try again."
+            "value": "Couldn't save the change. Try again."
+          }
+        }
+      }
+    },
+    "app.labels.field": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add a label"
           }
         }
       }
@@ -45399,12 +45449,162 @@
         }
       }
     },
+    "app.labels.regions.adjust.grow": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Make larger"
+          }
+        }
+      }
+    },
+    "app.labels.regions.adjust.move_down": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Move down"
+          }
+        }
+      }
+    },
+    "app.labels.regions.adjust.move_left": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Move left"
+          }
+        }
+      }
+    },
+    "app.labels.regions.adjust.move_right": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Move right"
+          }
+        }
+      }
+    },
+    "app.labels.regions.adjust.move_up": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Move up"
+          }
+        }
+      }
+    },
+    "app.labels.regions.adjust.shrink": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Make smaller"
+          }
+        }
+      }
+    },
+    "app.labels.regions.cancel": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cancel"
+          }
+        }
+      }
+    },
+    "app.labels.regions.delete": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete Region"
+          }
+        }
+      }
+    },
+    "app.labels.regions.draft": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New region"
+          }
+        }
+      }
+    },
+    "app.labels.regions.draw_circle": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Circle"
+          }
+        }
+      }
+    },
+    "app.labels.regions.draw_rect": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rectangle"
+          }
+        }
+      }
+    },
+    "app.labels.regions.empty": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Draw a region to label part of this photo."
+          }
+        }
+      }
+    },
+    "app.labels.regions.first_label": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "First label (optional)"
+          }
+        }
+      }
+    },
+    "app.labels.regions.item": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Region %@"
+          }
+        }
+      }
+    },
+    "app.labels.regions.save": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Save Region"
+          }
+        }
+      }
+    },
     "app.labels.remove": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Remove label"
+            "value": "Remove %@"
           }
         }
       }
@@ -45445,6 +45645,36 @@
           "stringUnit": {
             "state": "translated",
             "value": "Regions and Labels"
+          }
+        }
+      }
+    },
+    "app.labels.title.album": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Album Labels"
+          }
+        }
+      }
+    },
+    "app.labels.title.regions": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Regions"
+          }
+        }
+      }
+    },
+    "app.labels.title.stack": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stack Labels"
           }
         }
       }
@@ -127973,6 +128203,346 @@
         }
       }
     },
+    "app.transfer.board.active": {
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld active"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld active"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "app.transfer.board.chunk_size": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Piece size %@"
+          }
+        }
+      }
+    },
+    "app.transfer.board.custody": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saved on server: %1$@ · Not yet: %2$@ · Receipts: %3$@"
+          }
+        }
+      }
+    },
+    "app.transfer.board.direction.fetch": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Download"
+          }
+        }
+      }
+    },
+    "app.transfer.board.direction.upload": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Upload"
+          }
+        }
+      }
+    },
+    "app.transfer.board.empty.description": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uploads and downloads appear here the moment they start."
+          }
+        }
+      }
+    },
+    "app.transfer.board.empty.title": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nothing Moving"
+          }
+        }
+      }
+    },
+    "app.transfer.board.held": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ was already on the server"
+          }
+        }
+      }
+    },
+    "app.transfer.board.missed": {
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld update was missed while the view caught up"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld updates were missed while the view caught up"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "app.transfer.board.phase.active": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In Progress"
+          }
+        }
+      }
+    },
+    "app.transfer.board.phase.finalizing": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Finishing on the Server"
+          }
+        }
+      }
+    },
+    "app.transfer.board.phase.integrity_rejected": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Failed Its Integrity Check"
+          }
+        }
+      }
+    },
+    "app.transfer.board.phase.merged": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Already on the Server"
+          }
+        }
+      }
+    },
+    "app.transfer.board.phase.verified": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verified"
+          }
+        }
+      }
+    },
+    "app.transfer.board.progress": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ of %2$@"
+          }
+        }
+      }
+    },
+    "app.transfer.board.progress_unknown": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ so far"
+          }
+        }
+      }
+    },
+    "app.transfer.board.rejects": {
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld piece refused"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld pieces refused"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "app.transfer.board.resizes": {
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Resized %lld time"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Resized %lld times"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "app.transfer.board.retries": {
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld retry"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld retries"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "app.transfer.board.retry.fetch_empty": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nothing arrived; trying again"
+          }
+        }
+      }
+    },
+    "app.transfer.board.retry.fetch_stalled": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Download stalled; trying again"
+          }
+        }
+      }
+    },
+    "app.transfer.board.retry.offset_realign": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Continuing from the server's position"
+          }
+        }
+      }
+    },
+    "app.transfer.board.retry.server_wait": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The server asked Capsule to wait"
+          }
+        }
+      }
+    },
+    "app.transfer.board.retry.session_lost": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The server lost the upload; starting a fresh one"
+          }
+        }
+      }
+    },
+    "app.transfer.board.retry.transport_reset": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connection dropped; sending that piece again"
+          }
+        }
+      }
+    },
+    "app.transfer.board.speed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@/s"
+          }
+        }
+      }
+    },
+    "app.transfer.board.title": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Live Transfers"
+          }
+        }
+      }
+    },
+    "app.transfer.board.total_speed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Total speed %@/s"
+          }
+        }
+      }
+    },
     "app.transfer.chunk.bounds": {
       "localizations": {
         "ar": {
@@ -138979,6 +139549,26 @@
           "stringUnit": {
             "state": "translated",
             "value": "上一張照片"
+          }
+        }
+      }
+    },
+    "app.viewer.sample.description": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A stand-in photo for drawing regions"
+          }
+        }
+      }
+    },
+    "app.viewer.sample.title": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sample Photo"
           }
         }
       }
