@@ -172,8 +172,8 @@ fn malformed_input_is_invalid_argument() {
         let err = evaluate_alerts(input.clone(), now.clone())
             .expect_err("malformed input must not be accepted");
         match &err {
-            FfiError::InvalidArgument { message } => {
-                assert!(message.contains(needle), "{message} does not name {needle}");
+            FfiError::InvalidArgument { detail } => {
+                assert!(detail.contains(needle), "{detail} does not name {needle}");
             }
             other => panic!("expected InvalidArgument, got {other:?}"),
         }

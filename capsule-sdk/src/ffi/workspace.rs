@@ -221,7 +221,7 @@ impl HardwareKeyAgreement for ForeignKeyAgreement {
 /// typed error rather than a panic at the boundary.
 fn parse_ml_seed(bytes: &[u8]) -> Result<[u8; 32], FfiError> {
     bytes.try_into().map_err(|_| FfiError::InvalidArgument {
-        message: "ml_seed must be exactly 32 bytes".into(),
+        detail: "ml_seed must be exactly 32 bytes".into(),
     })
 }
 
@@ -244,10 +244,10 @@ pub fn p256_hardware_dek_round_trip(
     let seed = parse_ml_seed(&ml_seed)?;
     let dek = P256HybridDek::enroll(Arc::new(ForeignKeyAgreement(hardware)), key_alias, &seed)
         .map_err(|e| FfiError::Workspace {
-            message: format!("hardware P-256 DEK enrollment failed: {e}"),
+            detail: format!("hardware P-256 DEK enrollment failed: {e}"),
         })?;
     let workspace_error = |e: capsule_core::crypto::CryptoError| FfiError::Workspace {
-        message: e.to_string(),
+        detail: e.to_string(),
     };
     let (ciphertext, sender_secret) =
         encapsulate_to_p256_public(&dek.public_bytes()).map_err(workspace_error)?;
@@ -677,7 +677,7 @@ impl FfiWorkspace {
         f: impl FnOnce(&mut Workspace) -> Result<T, FfiError>,
     ) -> Result<T, FfiError> {
         let mut guard = self.inner.lock().map_err(|_| FfiError::Workspace {
-            message: "workspace lock poisoned".into(),
+            detail: "workspace lock poisoned".into(),
         })?;
         f(&mut guard)
     }
@@ -724,7 +724,7 @@ impl FfiWorkspace {
                 };
                 Err(FfiError::Upload {
                     code,
-                    message: format!("the server refused this create ({refused}); {error}"),
+                    detail: format!("the server refused this create ({refused}); {error}"),
                 })
             }
         })
@@ -734,14 +734,14 @@ impl FfiWorkspace {
 /// Parse a UUID from foreign code into a typed error rather than panicking at the boundary.
 fn parse_uuid(field: &str, value: &str) -> Result<Uuid, FfiError> {
     Uuid::parse_str(value).map_err(|e| FfiError::InvalidArgument {
-        message: format!("{field}: {value:?} is not a UUID ({e})"),
+        detail: format!("{field}: {value:?} is not a UUID ({e})"),
     })
 }
 
 /// Parse the feed's 16-byte UUID form.
 fn uuid_from_bytes(field: &str, bytes: &[u8]) -> Result<Uuid, FfiError> {
     Uuid::from_slice(bytes).map_err(|e| FfiError::InvalidArgument {
-        message: format!("{field}: expected 16 UUID bytes ({e})"),
+        detail: format!("{field}: expected 16 UUID bytes ({e})"),
     })
 }
 
@@ -751,7 +751,7 @@ fn chain_head(head: Option<&[u8]>) -> Result<Option<Hash32>, FfiError> {
         <[u8; 32]>::try_from(head)
             .map(Hash32::from_bytes)
             .map_err(|_| FfiError::InvalidArgument {
-                message: "local_chain_head must be exactly 32 bytes".into(),
+                detail: "local_chain_head must be exactly 32 bytes".into(),
             })
     })
     .transpose()
@@ -760,7 +760,7 @@ fn chain_head(head: Option<&[u8]>) -> Result<Option<Hash32>, FfiError> {
 /// A local file failure, as the workspace error it is.
 fn local_io(action: &str, path: &Path, error: &std::io::Error) -> FfiError {
     FfiError::Workspace {
-        message: format!("{action} {}: {error}", path.display()),
+        detail: format!("{action} {}: {error}", path.display()),
     }
 }
 
@@ -770,7 +770,7 @@ fn staging_path(destination: &Path) -> Result<PathBuf, FfiError> {
     let name = destination
         .file_name()
         .ok_or_else(|| FfiError::InvalidArgument {
-            message: format!("destination_path: {} names no file", destination.display()),
+            detail: format!("destination_path: {} names no file", destination.display()),
         })?;
     let mut staged = std::ffi::OsString::from(".");
     staged.push(name);
@@ -883,7 +883,7 @@ impl FfiWorkspace {
             &seed,
         )
         .map_err(|e| FfiError::Workspace {
-            message: format!("hardware Ed25519 key enrollment failed: {e}"),
+            detail: format!("hardware Ed25519 key enrollment failed: {e}"),
         })?;
         let workspace = Workspace::create_with_hardware_signer(
             &PathBuf::from(root),
@@ -926,7 +926,7 @@ impl FfiWorkspace {
             &seed,
         )
         .map_err(|e| FfiError::Workspace {
-            message: format!("hardware P-256 key enrollment failed: {e}"),
+            detail: format!("hardware P-256 key enrollment failed: {e}"),
         })?;
         let workspace = Workspace::create_with_hardware_signer(
             &PathBuf::from(root),
@@ -1054,7 +1054,7 @@ impl FfiWorkspace {
                     // The FFI hands each blob across as one buffer, so the original is
                     // materialised here; the SDK's own push streams it instead.
                     let bytes = blob.bytes.to_vec().map_err(|e| FfiError::Workspace {
-                        message: format!("reading the original of {asset_id}: {e}"),
+                        detail: format!("reading the original of {asset_id}: {e}"),
                     })?;
                     Ok(FfiUploadBlob {
                         tier: tier_name(blob.tier),
@@ -1106,7 +1106,7 @@ impl FfiWorkspace {
             Ok(ws
                 .upload_bundle(&asset_id)
                 .map_err(|e| FfiError::Workspace {
-                    message: format!("reading the provenance head of {asset_id}: {e}"),
+                    detail: format!("reading the provenance head of {asset_id}: {e}"),
                 })?
                 .provenance_blob)
         })
@@ -1126,17 +1126,17 @@ impl FfiWorkspace {
         let asset_id = parse_uuid("asset_id", &asset_id)?;
         self.with(|ws| {
             let asset = ws.asset(&asset_id).ok_or_else(|| FfiError::Workspace {
-                message: format!("asset {asset_id} is not managed by this workspace"),
+                detail: format!("asset {asset_id} is not managed by this workspace"),
             })?;
             let head = asset
                 .chain
                 .records()
                 .last()
                 .ok_or_else(|| FfiError::Workspace {
-                    message: format!("asset {asset_id} has an empty provenance chain"),
+                    detail: format!("asset {asset_id} has an empty provenance chain"),
                 })?;
             capsule_core::cbor::to_canonical_vec(&head.manifest).map_err(|e| FfiError::Workspace {
-                message: format!("encoding the signed manifest failed: {e}"),
+                detail: format!("encoding the signed manifest failed: {e}"),
             })
         })
     }
@@ -1284,7 +1284,7 @@ impl FfiWorkspace {
         self.with(|ws| {
             let blob = ws.escrow_master_key(&recovery_secret, tier.into())?;
             capsule_core::cbor::to_canonical_vec(&blob).map_err(|e| FfiError::Workspace {
-                message: format!("encoding the escrow blob failed: {e}"),
+                detail: format!("encoding the escrow blob failed: {e}"),
             })
         })
     }
@@ -1303,7 +1303,7 @@ impl FfiWorkspace {
     ) -> Result<bool, FfiError> {
         let blob =
             capsule_core::cbor::from_slice(&blob).map_err(|e| FfiError::InvalidArgument {
-                message: format!("escrow blob is not a canonical WrappedSecret: {e}"),
+                detail: format!("escrow blob is not a canonical WrappedSecret: {e}"),
             })?;
         self.with(|ws| {
             Ok(ws.verify_escrow(&blob, &recovery_secret)
@@ -1319,7 +1319,7 @@ impl FfiWorkspace {
         self.with(|ws| {
             capsule_core::cbor::to_canonical_vec(ws.device_directory()).map_err(|e| {
                 FfiError::Workspace {
-                    message: format!("encoding the device directory failed: {e}"),
+                    detail: format!("encoding the device directory failed: {e}"),
                 }
             })
         })
