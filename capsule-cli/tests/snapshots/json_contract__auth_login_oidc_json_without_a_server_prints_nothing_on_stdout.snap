@@ -1,0 +1,11 @@
+---
+source: capsule-cli/tests/json_contract.rs
+expression: "run(&scratch, &[\"auth\", \"login\", \"--oidc\", \"--no-browser\", \"--json\"])"
+---
+status: 1
+--- stdout ---
+
+--- stderr ---
+Signing in to Capsule through your identity provider…
+Error: 
+   0: Login failed: could not reach oidc/authorize: request construction failed

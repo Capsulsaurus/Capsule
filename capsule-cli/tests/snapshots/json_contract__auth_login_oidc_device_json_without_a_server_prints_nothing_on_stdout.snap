@@ -1,0 +1,11 @@
+---
+source: capsule-cli/tests/json_contract.rs
+expression: "run(&scratch, &[\"auth\", \"login\", \"--oidc\", \"--device\", \"--json\"])"
+---
+status: 1
+--- stdout ---
+
+--- stderr ---
+Signing in to Capsule through your identity provider, from another device…
+Error: 
+   0: Login failed: could not reach oidc/device: request construction failed

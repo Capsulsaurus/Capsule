@@ -91,6 +91,19 @@ impl<P: Ports> Driver<P> {
         }
     }
 
+    /// Perform only the oldest pending effect, apply its outcome and draw; whatever the outcome
+    /// asks for stays pending. Returns whether there was one. A test steps a two-effect flow
+    /// with it, asserting the frame between the steps.
+    pub async fn settle_one(&mut self) -> bool {
+        let Some(effect) = self.pending.pop_front() else {
+            return false;
+        };
+        let action = perform(&self.ports, effect).await;
+        self.apply(action);
+        self.draw();
+        true
+    }
+
     /// The last drawn frame as plain text: one line per row, trailing blanks trimmed.
     #[must_use]
     pub fn frame(&self) -> String {

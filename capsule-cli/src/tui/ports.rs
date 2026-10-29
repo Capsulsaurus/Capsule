@@ -13,7 +13,7 @@ use capsule_sdk::events::{TransferEvent, TransferEvents};
 use ratatui_image::picker::Picker;
 use tokio::sync::{Mutex, broadcast, mpsc, oneshot};
 
-use super::auth::{AuthAction, AuthEffect, LoginResult};
+use super::auth::{AuthAction, AuthEffect, LoginResult, ProviderFlow, ProviderPrompt};
 use super::form::Secret;
 use super::import::{ImportAction, ImportEffect, ImportRequest};
 use super::label_editor::{EditRequest, Edited, LabelAction, LabelEffect, REGION_PREVIEW_EDGE};
@@ -28,6 +28,7 @@ use super::share::{CreateLinkRequest, IssuedLink, ShareAction, ShareEffect};
 use super::state::{Action, Effect, SessionSummary};
 use super::sync::{SyncAction, SyncEffect};
 use crate::import_report::ImportReport;
+use crate::printable;
 use crate::remote::{self, PushSummary, RemoteConfig, SyncSummary};
 use crate::restore::RestoreSummary;
 use crate::session::SessionStore;
@@ -79,6 +80,35 @@ pub trait Ports: Send + Sync + 'static {
     /// Sign out, as `capsule auth logout` does: whether a session was signed out.
     fn logout(&self) -> impl Future<Output = Result<bool, String>> + Send {
         async { Err(NOT_OFFERED.to_owned()) }
+    }
+
+    /// Begin an identity-provider sign-in as `capsule auth login --oidc [--device]` does, and
+    /// answer what to show the person as soon as there is something. The begun sign-in keeps
+    /// waiting, as `attempt`, for [`await_provider`](Self::await_provider); beginning another
+    /// stops it.
+    fn begin_provider(
+        &self,
+        attempt: u64,
+        flow: ProviderFlow,
+    ) -> impl Future<Output = Result<ProviderPrompt, String>> + Send {
+        let _ = (attempt, flow);
+        async { Err(NOT_OFFERED.to_owned()) }
+    }
+
+    /// Wait for sign-in `attempt` to finish, storing the session as a password sign-in does.
+    fn await_provider(
+        &self,
+        attempt: u64,
+    ) -> impl Future<Output = Result<LoginResult, String>> + Send {
+        let _ = attempt;
+        async { Err(NOT_OFFERED.to_owned()) }
+    }
+
+    /// Stop sign-in `attempt`'s wait, if it is still the one waiting. Nothing is sent to the
+    /// server: it expires the ceremony on its own.
+    fn cancel_provider(&self, attempt: u64) -> impl Future<Output = ()> + Send {
+        let _ = attempt;
+        async {}
     }
 
     /// Drain the sync feed into the local store, as `capsule sync [--force]` does.
@@ -217,6 +247,22 @@ pub async fn perform<P: Ports>(ports: &P, effect: Effect) -> Action {
         Effect::Auth(AuthEffect::Logout) => {
             Action::Auth(AuthAction::SignOutFinished(ports.logout().await))
         }
+        Effect::Auth(AuthEffect::BeginProvider { attempt, flow }) => {
+            Action::Auth(AuthAction::ProviderBegun {
+                attempt,
+                result: ports.begin_provider(attempt, flow).await,
+            })
+        }
+        Effect::Auth(AuthEffect::AwaitProvider { attempt }) => {
+            Action::Auth(AuthAction::ProviderFinished {
+                attempt,
+                result: ports.await_provider(attempt).await,
+            })
+        }
+        Effect::Auth(AuthEffect::CancelProvider { attempt }) => {
+            ports.cancel_provider(attempt).await;
+            Action::Auth(AuthAction::ProviderCancelled { attempt })
+        }
         Effect::Sync(SyncEffect::Run { from_start }) => {
             Action::Sync(SyncAction::Finished(ports.sync(from_start).await))
         }
@@ -280,6 +326,7 @@ pub async fn perform<P: Ports>(ports: &P, effect: Effect) -> Action {
 #[derive(Debug, Clone)]
 pub struct LocalPorts {
     push_progress: Arc<ProgressChannel>,
+    provider: Arc<ProviderSlot>,
     session_path: Option<PathBuf>,
     remote: RemoteConfig,
     transfer_events: TransferEvents,
@@ -294,6 +341,7 @@ impl LocalPorts {
     pub fn new(session_path: Option<PathBuf>) -> Self {
         Self {
             push_progress: Arc::new(ProgressChannel::new()),
+            provider: Arc::new(ProviderSlot::default()),
             session_path,
             remote: RemoteConfig::from_env(),
             transfer_events: TransferEvents::default_channel(),
@@ -443,6 +491,208 @@ fn relay(
     tx.send(progress).is_ok()
 }
 
+/// The reason [`ProviderSlot::wait`] gives for a sign-in stopped before it finished.
+pub const PROVIDER_CANCELLED: &str = "the sign-in was cancelled";
+
+/// The reason [`ProviderSlot::wait`] gives when the attempt asked for is not the one waiting.
+pub const NO_PROVIDER_WAIT: &str = "no sign-in is waiting";
+
+/// Where a begun identity-provider sign-in waits between [`Ports::begin_provider`] and
+/// [`Ports::await_provider`]: one at a time, on a task of its own.
+///
+/// The wait outlives the effect that began it, which is what lets the begin effect answer with
+/// the prompt while the ceremony keeps listening or polling. Beginning another attempt, or
+/// cancelling this one, aborts the task: its loopback listener closes and its polling stops.
+/// Nothing is sent to the server; it expires an abandoned ceremony on its own.
+#[derive(Debug, Default)]
+pub struct ProviderSlot {
+    waiting: std::sync::Mutex<Option<Waiting>>,
+}
+
+/// The sign-in a [`ProviderSlot`] holds.
+#[derive(Debug)]
+struct Waiting {
+    attempt: u64,
+    abort: tokio::task::AbortHandle,
+    /// The task's outcome, until [`ProviderSlot::wait`] takes it.
+    outcome: Option<tokio::task::JoinHandle<Result<LoginResult, String>>>,
+}
+
+impl ProviderSlot {
+    fn lock(&self) -> std::sync::MutexGuard<'_, Option<Waiting>> {
+        // A panic while holding it cannot leave the slot half-written: every write is one
+        // assignment.
+        self.waiting
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Start `run` as attempt `attempt`, replacing (and aborting) whatever waited before, and
+    /// answer the prompt it sends on the sender it is handed. `run` sends the prompt before it
+    /// starts waiting; a run that ends without sending one answers its own failure.
+    pub async fn begin<F, Fut>(&self, attempt: u64, run: F) -> Result<ProviderPrompt, String>
+    where
+        F: FnOnce(oneshot::Sender<ProviderPrompt>) -> Fut,
+        Fut: Future<Output = Result<LoginResult, String>> + Send + 'static,
+    {
+        let (prompt_tx, prompt_rx) = oneshot::channel();
+        let task = tokio::spawn(run(prompt_tx));
+        let previous = self.lock().replace(Waiting {
+            attempt,
+            abort: task.abort_handle(),
+            outcome: None,
+        });
+        if let Some(previous) = previous {
+            tracing::info!(target: "capsule_cli::tui", attempt = previous.attempt, "a new identity-provider sign-in replaces the waiting one");
+            previous.abort.abort();
+        }
+        if let Ok(prompt) = prompt_rx.await {
+            let mut waiting = self.lock();
+            match waiting.as_mut() {
+                Some(current) if current.attempt == attempt => {
+                    current.outcome = Some(task);
+                    drop(waiting);
+                    tracing::info!(target: "capsule_cli::tui", attempt, "identity-provider sign-in begun; waiting");
+                    Ok(prompt)
+                }
+                // Cancelled or replaced while it began.
+                _ => {
+                    drop(waiting);
+                    task.abort();
+                    Err(PROVIDER_CANCELLED.to_owned())
+                }
+            }
+        } else {
+            // It ended before it had anything to show: the begin leg failed.
+            self.clear(attempt);
+            let reason = match task.await {
+                Ok(Err(reason)) => reason,
+                Ok(Ok(_)) => "the sign-in ended before it showed anything".to_owned(),
+                Err(e) => joined(&e),
+            };
+            tracing::warn!(target: "capsule_cli::tui", attempt, %reason, "identity-provider sign-in did not begin");
+            Err(reason)
+        }
+    }
+
+    /// Wait for attempt `attempt` to finish. Answers [`NO_PROVIDER_WAIT`] when it is not the
+    /// one waiting, and [`PROVIDER_CANCELLED`] when it is stopped before it finishes.
+    pub async fn wait(&self, attempt: u64) -> Result<LoginResult, String> {
+        let task = self
+            .lock()
+            .as_mut()
+            .filter(|waiting| waiting.attempt == attempt)
+            .and_then(|waiting| waiting.outcome.take());
+        let Some(task) = task else {
+            return Err(NO_PROVIDER_WAIT.to_owned());
+        };
+        let outcome = match task.await {
+            Ok(outcome) => outcome,
+            Err(e) => Err(joined(&e)),
+        };
+        self.clear(attempt);
+        tracing::info!(target: "capsule_cli::tui", attempt, ok = outcome.is_ok(), "identity-provider sign-in finished");
+        outcome
+    }
+
+    /// Stop attempt `attempt`, if it is the one waiting.
+    pub fn cancel(&self, attempt: u64) {
+        let stopped = {
+            let mut waiting = self.lock();
+            match waiting.as_ref() {
+                Some(current) if current.attempt == attempt => waiting.take(),
+                _ => None,
+            }
+        };
+        if let Some(stopped) = stopped {
+            stopped.abort.abort();
+            tracing::info!(target: "capsule_cli::tui", attempt, "identity-provider sign-in stopped");
+        }
+    }
+
+    /// Forget attempt `attempt`, if it is the one held.
+    fn clear(&self, attempt: u64) {
+        let mut waiting = self.lock();
+        if waiting
+            .as_ref()
+            .is_some_and(|current| current.attempt == attempt)
+        {
+            *waiting = None;
+        }
+    }
+}
+
+/// The reason for a sign-in task that did not return.
+fn joined(error: &tokio::task::JoinError) -> String {
+    if error.is_cancelled() {
+        PROVIDER_CANCELLED.to_owned()
+    } else {
+        tracing::error!(target: "capsule_cli::tui", %error, "identity-provider sign-in task panicked");
+        "the sign-in task panicked; see the TUI log".to_owned()
+    }
+}
+
+/// A settled identity-provider sign-in as the account screen takes it.
+fn login_result(step: remote::LoginStep) -> LoginResult {
+    match step {
+        remote::LoginStep::Complete => LoginResult::SignedIn,
+        remote::LoginStep::SecondFactorRequired { mfa_token } => {
+            use secrecy::ExposeSecret as _;
+            LoginResult::SecondFactor {
+                mfa_token: Secret::new(mfa_token.expose_secret()),
+            }
+        }
+    }
+}
+
+/// `capsule auth login --oidc --device` for the TUI: begin over `ceremony`, send the code and
+/// where to enter it on `prompt`, and poll for up to `ceiling` ([`crate::oidc::login_device`]).
+pub async fn device_sign_in<C: crate::oidc::DeviceCeremony>(
+    ceremony: &C,
+    prompt: oneshot::Sender<ProviderPrompt>,
+    ceiling: std::time::Duration,
+) -> Result<LoginResult, String> {
+    let show = |pending: &capsule_sdk::auth::OidcDeviceAuthorization,
+                waited: std::time::Duration| {
+        let _ = prompt.send(ProviderPrompt::Device {
+            verification_uri: printable(&pending.verification_uri),
+            user_code: Secret::new(printable(&pending.user_code)),
+            verification_uri_complete: pending
+                .verification_uri_complete
+                .as_deref()
+                .map(|complete| Secret::new(printable(complete))),
+            wait_secs: waited.as_secs(),
+        });
+    };
+    crate::oidc::login_device(ceremony, show, ceiling)
+        .await
+        .map(login_result)
+        .map_err(|error| crate::describe_oidc_error(&error))
+}
+
+/// `capsule auth login --oidc` for the TUI: begin over `ceremony` on a loopback listener, hand
+/// the authorization address to `open` and send it on `prompt`, and wait for up to `ceiling`
+/// for the redirect ([`crate::oidc::login`]).
+pub async fn browser_sign_in<C: crate::oidc::Ceremony>(
+    ceremony: &C,
+    prompt: oneshot::Sender<ProviderPrompt>,
+    ceiling: std::time::Duration,
+    open: impl FnOnce(&str) -> bool,
+) -> Result<LoginResult, String> {
+    let show = |authorization_url: &str, waited: std::time::Duration| {
+        let opened = open(authorization_url);
+        let _ = prompt.send(ProviderPrompt::Browser {
+            authorization_url: Secret::new(printable(authorization_url)),
+            opened,
+            wait_secs: waited.as_secs(),
+        });
+    };
+    crate::oidc::login(ceremony, show, &crate::oidc_callback_pages(), ceiling)
+        .await
+        .map(login_result)
+        .map_err(|error| crate::describe_oidc_error(&error))
+}
+
 /// The library browser's snapshot of `workspace`, with the origin ledger's line beside each
 /// asset handed to another device and not yet held by the server.
 fn snapshot(workspace: &capsule_library::lifecycle::Workspace) -> Catalogue {
@@ -533,6 +783,42 @@ impl Ports for LocalPorts {
                 .map_err(|error| remote_reason(&error))
         })
         .await
+    }
+
+    async fn begin_provider(
+        &self,
+        attempt: u64,
+        flow: ProviderFlow,
+    ) -> Result<ProviderPrompt, String> {
+        let (remote, store) = (self.remote.clone(), self.store()?);
+        self.provider
+            .begin(attempt, move |prompt| async move {
+                let ceremony = crate::oidc::SdkCeremony::new(&remote, &store)
+                    .map_err(|error| remote_reason(&error))?;
+                match flow {
+                    ProviderFlow::Device => {
+                        device_sign_in(&ceremony, prompt, crate::oidc::DEVICE_TIMEOUT).await
+                    }
+                    ProviderFlow::Browser => {
+                        browser_sign_in(
+                            &ceremony,
+                            prompt,
+                            crate::oidc::LISTENER_TIMEOUT,
+                            crate::oidc::open_in_browser,
+                        )
+                        .await
+                    }
+                }
+            })
+            .await
+    }
+
+    async fn await_provider(&self, attempt: u64) -> Result<LoginResult, String> {
+        self.provider.wait(attempt).await
+    }
+
+    async fn cancel_provider(&self, attempt: u64) {
+        self.provider.cancel(attempt);
     }
 
     async fn sync(&self, from_start: bool) -> Result<SyncSummary, String> {

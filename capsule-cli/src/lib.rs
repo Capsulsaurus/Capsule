@@ -244,13 +244,15 @@ async fn dispatch(command: Commands) -> Result<()> {
             AuthCommands::Login {
                 oidc: true,
                 device: true,
+                json,
                 ..
-            } => auth_login_oidc_device().await?,
+            } => auth_login_oidc_device(json).await?,
             AuthCommands::Login {
                 oidc: true,
                 no_browser,
+                json,
                 ..
-            } => auth_login_oidc(no_browser).await?,
+            } => auth_login_oidc(no_browser, json).await?,
             AuthCommands::Login {
                 email,
                 password_stdin,
@@ -1240,8 +1242,34 @@ async fn finish_second_factor(
     Ok(true)
 }
 
+/// Provider-authored text with its control characters dropped, so a provider cannot write
+/// escape sequences into the terminal: the one filter the CLI's prints and the TUI's account
+/// screen both pass that text through.
+pub(crate) fn printable(text: &str) -> String {
+    text.chars().filter(|c| !c.is_control()).collect()
+}
+
+/// The line a browser sign-in prints above the authorization address.
+pub(crate) const OIDC_OPEN_ADDRESS: &str = "To sign in, open this address in a browser:";
+
+/// The line a browser sign-in prints when no browser could be opened for it.
+pub(crate) const OIDC_NO_BROWSER: &str =
+    "No browser could be opened from here. Open the address above in any browser.";
+
+/// The line a device sign-in prints above the verification address.
+pub(crate) const DEVICE_OPEN_ADDRESS: &str = "On any device with a browser, open this address:";
+
+/// The line a device sign-in prints above the address that already carries the code.
+pub(crate) const DEVICE_OPEN_COMPLETE: &str =
+    "Or open this address, which already carries the code:";
+
+/// The line a device sign-in prints carrying the code to enter.
+pub(crate) fn device_code_line(user_code: &str) -> String {
+    format!("and enter this code: {user_code}")
+}
+
 /// The line a browser sign-in prints while it waits, in whole minutes rounded up.
-fn oidc_waiting_line(waited: std::time::Duration) -> String {
+pub(crate) fn oidc_waiting_line(waited: std::time::Duration) -> String {
     match waited.as_secs().div_ceil(60) {
         1 => "Waiting up to 1 minute for the sign-in to finish…".to_owned(),
         count => format!("Waiting up to {count} minutes for the sign-in to finish…"),
@@ -1249,7 +1277,7 @@ fn oidc_waiting_line(waited: std::time::Duration) -> String {
 }
 
 /// The line a device sign-in prints while it waits, in whole minutes rounded up.
-fn device_waiting_line(waited: std::time::Duration) -> String {
+pub(crate) fn device_waiting_line(waited: std::time::Duration) -> String {
     match waited.as_secs().div_ceil(60) {
         1 => "Waiting up to 1 minute for you to approve the sign-in…".to_owned(),
         count => format!("Waiting up to {count} minutes for you to approve the sign-in…"),
@@ -1259,82 +1287,123 @@ fn device_waiting_line(waited: std::time::Duration) -> String {
 /// The line an identity-provider sign-in prints when it succeeds.
 const OIDC_SUCCESS: &str = "Signed in through your identity provider.";
 
-/// `capsule auth login --oidc`: sign in through the server's identity provider in a browser,
-/// over a loopback listener, and persist the session ([`oidc`] owns the flow).
-async fn auth_login_oidc(no_browser: bool) -> Result<()> {
-    let remote = remote::RemoteConfig::from_env();
-    let store = session_store()?;
-    let ceremony = oidc::SdkCeremony::new(&remote, &store)
-        .map_err(|error| login_failed(&describe_remote_error(&error)))?;
-    let pages = oidc::CallbackPages {
+/// The pages the loopback listener shows the browser: shared by `capsule auth login --oidc` and
+/// the TUI's account screen, both of which finish the sign-in in the terminal.
+pub(crate) fn oidc_callback_pages() -> oidc::CallbackPages {
+    oidc::CallbackPages {
         received: "Capsule received your sign-in. Return to the terminal, which finishes signing \
                    you in."
             .to_owned(),
         refused: "The sign-in did not complete. Return to the terminal to see why.".to_owned(),
-    };
+    }
+}
 
-    println!(
-        "{}",
-        "Signing in to Capsule through your identity provider…".green()
+/// What `capsule auth login --oidc [--device] --json` prints once the session is stored.
+#[derive(Debug, serde::Serialize)]
+struct OidcLoginReport {
+    /// Always true: a sign-in that did not finish exits non-zero and prints no document.
+    signed_in: bool,
+    /// How the identity provider was reached: `browser` (`--oidc`) or `device` (`--device`).
+    flow: &'static str,
+    /// Whether the sign-in asked for an authenticator code.
+    second_factor: bool,
+}
+
+/// Finish an identity-provider sign-in that settled as `step`: the second factor, then the
+/// success line, or under `json` the one [`OidcLoginReport`] on stdout.
+async fn finish_oidc_login(
+    remote: &remote::RemoteConfig,
+    store: &session::SessionStore,
+    step: remote::LoginStep,
+    flow: &'static str,
+    json: bool,
+) -> Result<()> {
+    let second_factor = finish_second_factor(remote, store, step, json).await?;
+    if json {
+        let report = OidcLoginReport {
+            signed_in: true,
+            flow,
+            second_factor,
+        };
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!("{}", OIDC_SUCCESS.green());
+    }
+    Ok(())
+}
+
+/// `capsule auth login --oidc`: sign in through the server's identity provider in a browser,
+/// over a loopback listener, and persist the session ([`oidc`] owns the flow).
+///
+/// With `json`, the address and the progress lines go to stderr and stdout carries exactly one
+/// document, [`OidcLoginReport`].
+async fn auth_login_oidc(no_browser: bool, json: bool) -> Result<()> {
+    let remote = remote::RemoteConfig::from_env();
+    let store = session_store()?;
+    let ceremony = oidc::SdkCeremony::new(&remote, &store)
+        .map_err(|error| login_failed(&describe_remote_error(&error)))?;
+
+    progress(
+        json,
+        "Signing in to Capsule through your identity provider…".green(),
     );
     let show = |authorization_url: &str, waited: std::time::Duration| {
-        println!("To sign in, open this address in a browser:");
-        println!("{authorization_url}");
+        progress(json, OIDC_OPEN_ADDRESS);
+        progress(json, authorization_url);
         if !no_browser && !oidc::open_in_browser(authorization_url) {
-            println!(
-                "{}",
-                "No browser could be opened from here. Open the address above in any browser."
-                    .yellow()
-            );
+            progress(json, OIDC_NO_BROWSER.yellow());
         }
-        println!("{}", oidc_waiting_line(waited));
+        progress(json, oidc_waiting_line(waited));
     };
-    let step = oidc::login(&ceremony, show, &pages, oidc::LISTENER_TIMEOUT)
-        .await
-        .map_err(|error| login_failed(&describe_oidc_error(&error)))?;
+    let step = oidc::login(
+        &ceremony,
+        show,
+        &oidc_callback_pages(),
+        oidc::LISTENER_TIMEOUT,
+    )
+    .await
+    .map_err(|error| login_failed(&describe_oidc_error(&error)))?;
 
-    finish_second_factor(&remote, &store, step, false).await?;
-    println!("{}", OIDC_SUCCESS.green());
-    Ok(())
+    finish_oidc_login(&remote, &store, step, "browser", json).await
 }
 
 /// `capsule auth login --oidc --device`: sign in through the server's identity provider from
 /// another device (RFC 8628, issue #635) — print the address and the code, poll until the person
 /// approves, and persist the session ([`oidc::login_device`] owns the flow).
-async fn auth_login_oidc_device() -> Result<()> {
+///
+/// With `json`, the address, the code and the progress lines go to stderr and stdout carries
+/// exactly one document, [`OidcLoginReport`].
+async fn auth_login_oidc_device(json: bool) -> Result<()> {
     let remote = remote::RemoteConfig::from_env();
     let store = session_store()?;
     let ceremony = oidc::SdkCeremony::new(&remote, &store)
         .map_err(|error| login_failed(&describe_remote_error(&error)))?;
 
-    println!(
-        "{}",
-        "Signing in to Capsule through your identity provider, from another device…".green()
+    progress(
+        json,
+        "Signing in to Capsule through your identity provider, from another device…".green(),
     );
     let show = |pending: &capsule_sdk::auth::OidcDeviceAuthorization,
                 waited: std::time::Duration| {
         // Provider-authored, printed to a terminal: control characters are dropped, as the
         // server already refused any code carrying one.
-        let printable = |text: &str| text.chars().filter(|c| !c.is_control()).collect::<String>();
-        println!("On any device with a browser, open this address:");
-        println!("{}", printable(&pending.verification_uri));
-        println!(
-            "{}",
-            format!("and enter this code: {}", printable(&pending.user_code)).bold()
+        progress(json, DEVICE_OPEN_ADDRESS);
+        progress(json, printable(&pending.verification_uri));
+        progress(
+            json,
+            device_code_line(&printable(&pending.user_code)).bold(),
         );
         if let Some(complete) = &pending.verification_uri_complete {
-            println!("Or open this address, which already carries the code:");
-            println!("{}", printable(complete));
+            progress(json, DEVICE_OPEN_COMPLETE);
+            progress(json, printable(complete));
         }
-        println!("{}", device_waiting_line(waited));
+        progress(json, device_waiting_line(waited));
     };
     let step = oidc::login_device(&ceremony, show, oidc::DEVICE_TIMEOUT)
         .await
         .map_err(|error| login_failed(&describe_oidc_error(&error)))?;
 
-    finish_second_factor(&remote, &store, step, false).await?;
-    println!("{}", OIDC_SUCCESS.green());
-    Ok(())
+    finish_oidc_login(&remote, &store, step, "device", json).await
 }
 
 /// The `capsule auth login` failure line, carrying `reason`.
@@ -1347,7 +1416,7 @@ fn login_failed(reason: &str) -> eyre::Report {
 /// A refused loopback redirect gets the remedy rather than only the code: the server's operator
 /// has to set `OIDC_ALLOW_LOOPBACK_REDIRECT=true`, which is off by default, and nothing the person
 /// at the terminal does will change that.
-fn describe_oidc_error(error: &oidc::OidcLoginError) -> String {
+pub(crate) fn describe_oidc_error(error: &oidc::OidcLoginError) -> String {
     match error {
         oidc::OidcLoginError::Remote(remote::RemoteError::Auth(
             capsule_sdk::auth::AuthError::OidcRedirectInvalid,
@@ -1369,8 +1438,6 @@ fn describe_oidc_error(error: &oidc::OidcLoginError) -> String {
         oidc::OidcLoginError::Denied { error, description } => {
             // Provider-authored text, printed to a terminal: control characters are dropped so
             // a provider cannot write escape sequences into it.
-            let printable =
-                |text: &str| text.chars().filter(|c| !c.is_control()).collect::<String>();
             let error = printable(error);
             match description {
                 Some(description) => format!(
