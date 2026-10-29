@@ -7,8 +7,9 @@ import java.util.Locale
  * and numbers are written.
  *
  * Language and region are two settings. The language is the per-app language the user
- * picked in system settings (Android 13+, declared through `localeConfig`), or the system
- * language when they picked none; it decides which strings are shown. The region is always
+ * picked in system settings (Android 13+, declared through `localeConfig`) or in the app's
+ * own picker ([AppLanguagePicker], below Android 13), or the system language when they
+ * picked none; it decides which strings are shown. The region is always
  * the system's, and it decides how dates, times and numbers are written.
  *
  * Where the platform has formatting data for the app language in the system's region, the
