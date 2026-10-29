@@ -128,13 +128,19 @@ which device to update. Artifact formats are versioned by
    passed can no longer be [restored](/design/organization/#retention-window), so it is
    purged. The device judges the deadline only once a sync has drained the feed to its head,
    so a restore on a later page is applied first and takes the asset out of the reckoning. It
-   judges by its own clock, floored by the latest server `changed_at` the drain saw. A delete
-   served with no record (after the purge, or from an older server) is no evidence of a purge,
-   and records nothing.
+   judges by the server's clock as the drain saw it, the latest `changed_at`, never by its own:
+   a clock running ahead would tombstone the asset early and then refuse a restore the server
+   accepted in time. An asset whose delete is still held (the server has not indexed it) has no
+   window running on the server and is never purged on expiry
+   ([Organization — Deletion State Machine](/design/organization/#deletion-state-machine)). A
+   delete served with no record (after the purge, or from an older server) is no evidence of a
+   purge, and records nothing.
 4. **Reconcile.** Assets a device learned by peering are not uploaded again if the server
    holds them; [dedup and merge](/design/transfer/upload/#deduplication-and-merge) resolve
    them. An asset no device has uploaded is uploaded by whichever device holds it first, under
-   the rules for delegation below.
+   the rules for delegation below, unless it is in the trash: a device that learns of a delete
+   over peering uploads no create for it, and holds the delete until another upload of the create
+   is indexed.
 
 ## Delegation
 
@@ -172,14 +178,15 @@ Edge cases:
 
 | Case | Rule |
 | --- | --- |
-| Delegate dies, loses the bundle or withholds it | The origin sets a **monotonic** deadline at hand-off. On expiry, or when the delegate is revoked, it re-queues the upload itself or delegates again. |
+| Delegate dies, loses the bundle or withholds it | The origin sets a **monotonic** deadline at hand-off. On expiry, or when the delegate is revoked, it re-queues the upload itself or delegates again, unless the asset is in the trash: no asset is uploaded only so that its delete can follow. The hand-off is not withdrawn, and a restore returns the asset to the queue. |
 | Both devices upload | Dedup resolves it; the receipt names the content hash, so either upload's receipt releases the original. |
-| Origin deletes the asset after hand-off | The origin holds the signed delete locally until the create's receipt exists, then sends it; the server never sees a delete for an asset it has not indexed. |
+| Origin deletes the asset after hand-off | The origin holds the signed delete locally until the create's receipt exists, then sends it; the server never sees a delete for an asset it has not indexed. The delegate does not drop its copy on learning of the delete: it never deletes a copy the server has not taken custody of, and the held delete supersedes the create once it lands. |
+| Delegate uploads after the origin purged | The held delete outlives the purge in the origin's tombstone, headed by the shorter-retention re-issue the purge appended, and is sent from it once the create is indexed; the server then purges by that window. |
 | Origin edits metadata after hand-off | The edit is a new manifest the origin uploads itself; the delegated create stays valid. |
 | Partial hand-off | Per asset, all or nothing: a delegate never uploads an incomplete bundle. |
 | Delegate tampers with bytes | Hashes and the manifest signature fail at the server and at the origin's verify. |
 | Delegate on an older protocol | It must speak the bundle's `protocol_version`; otherwise it refuses the hand-off and the origin keeps the upload. |
-| Held hand-off permanently refused | The delegate never deletes a copy the server has not taken custody of. When a held hand-off can never succeed it is **quarantined**: the copy is kept byte for byte, no later run retries it, the delegate reports it once with a stable reason, and only the user deletes it. A revoked origin is often a lost device, so the delegate's copy may be the only one left. Never succeeds: the origin is revoked or gone from the directory after acceptance; the held bytes no longer verify; or the server refuses with `error.upload.envelope_rejected`, `envelope_mismatch` or `stale_revival` (a conflicting provenance), or at creation with `timestamp_out_of_range`, `album_access_denied` or `device_not_authorized`, which are the same conditions met one step earlier. `envelope_rejected` covers a manifest under a stale album epoch, a signer that is revoked, of another account or not verifying, a role conflict, a timestamp out of range, the album closed or the uploader's write access withdrawn since creation, and a signing device no longer authorized. The delegate cannot change a request the origin signed, so retrying cannot help. Any other failure (network, outage, quota, rate limit, this device's own directory state, a newer format) keeps the copy for the next run. Separately, the origin keeps its own original pinned and re-queues the upload at its deadline. |
+| Held hand-off permanently refused | The delegate never deletes a copy the server has not taken custody of. When a held hand-off can never succeed it is **quarantined**: the copy is kept byte for byte, no later run retries it, the delegate reports it once with a stable reason, and only the user deletes it. A revoked origin is often a lost device, so the delegate's copy may be the only one left. Never succeeds: the origin is revoked or gone from the directory after acceptance; the held bytes no longer verify; or the server refuses with `error.upload.envelope_rejected`, `envelope_mismatch` or `stale_revival` (a conflicting provenance), or at creation with `timestamp_out_of_range`, `album_access_denied` or `device_not_authorized`, which are the same conditions met one step earlier. `envelope_rejected` covers a manifest under a stale album epoch, a signer that is revoked, of another account or not verifying, a role conflict, a timestamp out of range, the album closed or the uploader's write access withdrawn since creation, and a signing device no longer authorized. The delegate cannot change a request the origin signed, so retrying cannot help. Any other failure (network, outage, quota, rate limit, this device's own directory state, a newer format) keeps the copy for the next run. Separately, the origin keeps its own original pinned and re-queues the upload at its deadline, unless the asset is in the trash. |
 | Delegate compromised | It learns what the server learns (ciphertext, sizes, timing), plus the origin's hand-off schedule. It cannot read or forge assets. |
 
 The delegate follows the same battery, metering and scheduling policy as its own uploads
