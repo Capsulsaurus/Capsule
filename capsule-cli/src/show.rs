@@ -30,15 +30,23 @@
 //! The capture time and fix printed are the **effective** ones — a user's correction when one
 //! is recorded. A corrected asset also prints the as-imported value on the row after it, so
 //! what the original said stays visible beside what the user chose.
+//!
+//! With `--json` the same view prints as one [`ShowReport`] document, an absent value as
+//! `null`, together with the provenance chain record by record ([`history`]) where the text
+//! rows print only its length. The library browser's history pane lists the same entries.
 
 use std::fmt::Write as _;
 
+use capsule_core::crypto::provenance::Action as ProvenanceAction;
 use capsule_core::domain::GpsDatum;
 use capsule_core::sidecar::{CullFlag, Gps, GpsSource, StackRole};
 use capsule_library::lifecycle::{AssetState, Workspace};
 use colored::Colorize as _;
+use serde::Serialize;
 use thiserror::Error;
 use uuid::Uuid;
+
+use crate::edit::FixReport;
 
 /// The shortest hash prefix the selector accepts. Eight hex digits is 32 bits — ample against
 /// a personal library, and short enough to type from a `shasum` listing.
@@ -256,6 +264,178 @@ pub fn collect(ws: &Workspace, asset_id: &Uuid) -> Option<AssetView> {
     })
 }
 
+/// One signed record of an asset's provenance chain, as `capsule show --json` and the library
+/// browser's history pane list it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct HistoryEntry {
+    /// The record's self-asserted write time, RFC 3339 as signed.
+    pub timestamp: String,
+    /// The lifecycle action, as the manifest spells it (`create`, `metadata-update`, …).
+    pub action: &'static str,
+    /// The device that signed the record.
+    pub device: Uuid,
+    /// The client that wrote it.
+    pub client_version: String,
+    /// The trash deadline a `delete` record sets.
+    pub retention_until: Option<String>,
+}
+
+/// The manifest's spelling of a provenance action.
+#[must_use]
+pub const fn action_name(action: ProvenanceAction) -> &'static str {
+    match action {
+        ProvenanceAction::Create => "create",
+        ProvenanceAction::Replace => "replace",
+        ProvenanceAction::Delete => "delete",
+        ProvenanceAction::MetadataUpdate => "metadata-update",
+        ProvenanceAction::DerivativeAdd => "derivative-add",
+        ProvenanceAction::DerivativeReplace => "derivative-replace",
+        ProvenanceAction::TrashRestore => "trash-restore",
+    }
+}
+
+/// An asset's provenance chain, oldest record first.
+#[must_use]
+pub fn history(asset: &AssetState) -> Vec<HistoryEntry> {
+    asset
+        .chain
+        .records()
+        .iter()
+        .map(|record| {
+            let core = &record.manifest.core;
+            HistoryEntry {
+                timestamp: core.timestamp.clone(),
+                action: action_name(core.action),
+                device: core.created_by_device,
+                client_version: core.client_version.clone(),
+                retention_until: core.retention_until.clone(),
+            }
+        })
+        .collect()
+}
+
+/// Pixel dimensions as `--json` prints them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct DimensionsReport {
+    /// Width in pixels.
+    pub width: u32,
+    /// Height in pixels.
+    pub height: u32,
+}
+
+/// A stack placement as `--json` prints it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct StackReport {
+    /// The stack id.
+    pub stack_id: Uuid,
+    /// `primary`, `member` or `proxy`.
+    pub role: &'static str,
+}
+
+impl From<(Uuid, StackRole)> for StackReport {
+    fn from((stack_id, role): (Uuid, StackRole)) -> Self {
+        Self {
+            stack_id,
+            role: stack_role_name(role),
+        }
+    }
+}
+
+/// What `capsule show --json` prints: every [`AssetView`] field, with an absent value as `null`
+/// rather than left out (the same reason [`render`] spells it unset), and the provenance chain
+/// record by record.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ShowReport {
+    /// The asset id.
+    pub asset_id: Uuid,
+    /// The owning album.
+    pub album_id: Uuid,
+    /// The content-type string.
+    pub content_type: String,
+    /// The plaintext SHA-256, lowercase hex.
+    pub hash: String,
+    /// Pixel dimensions, when EXIF carried them.
+    pub dimensions: Option<DimensionsReport>,
+    /// The effective capture instant, RFC 3339.
+    pub capture_timestamp: String,
+    /// The as-imported capture instant, beside a user correction only.
+    pub capture_timestamp_imported: Option<String>,
+    /// The signed import instant, RFC 3339.
+    pub import_timestamp: String,
+    /// The caption.
+    pub caption: Option<String>,
+    /// The rating (0–5).
+    pub rating: Option<u8>,
+    /// User tags, sorted.
+    pub tags_user: Vec<String>,
+    /// AI tag texts, sorted and deduplicated.
+    pub tags_ai: Vec<String>,
+    /// The effective location.
+    pub location: Option<FixReport>,
+    /// Whether a user location edit is recorded.
+    pub location_edited: bool,
+    /// The as-imported location, which an edit never overwrites.
+    pub location_imported: Option<FixReport>,
+    /// `pick`, `neutral` or `reject`.
+    pub cull: &'static str,
+    /// Hidden from default views.
+    pub hidden: bool,
+    /// Currently in trash.
+    pub in_trash: bool,
+    /// The stack placement, when the asset is a stack member.
+    pub stack: Option<StackReport>,
+    /// Whether a display placeholder is stored.
+    pub lqip: bool,
+    /// The provenance chain, oldest record first: one entry per signed record.
+    pub history: Vec<HistoryEntry>,
+}
+
+impl ShowReport {
+    /// The report for `view`, with `history` as its provenance chain.
+    #[must_use]
+    pub fn new(view: &AssetView, history: Vec<HistoryEntry>) -> Self {
+        Self {
+            asset_id: view.asset_id,
+            album_id: view.album_id,
+            content_type: view.content_type.clone(),
+            hash: view.hash.clone(),
+            dimensions: view
+                .dimensions
+                .map(|(width, height)| DimensionsReport { width, height }),
+            capture_timestamp: view.capture_timestamp.clone(),
+            capture_timestamp_imported: view.capture_timestamp_imported.clone(),
+            import_timestamp: view.import_timestamp.clone(),
+            caption: view.caption.clone(),
+            rating: view.rating,
+            tags_user: view.tags_user.clone(),
+            tags_ai: view.tags_ai.clone(),
+            location: view.gps.map(FixReport::from),
+            location_edited: view.location_edited,
+            location_imported: view.gps_imported.map(FixReport::from),
+            cull: cull_name(view.cull),
+            hidden: view.hidden,
+            in_trash: view.in_trash,
+            stack: view.stack.map(StackReport::from),
+            lqip: view.lqip,
+            history,
+        }
+    }
+}
+
+/// The `--json` report for `asset_id` in `ws`: its view and its provenance chain. `None` for an
+/// id the workspace does not manage.
+#[must_use]
+pub fn report(ws: &Workspace, asset_id: &Uuid) -> Option<ShowReport> {
+    let view = collect(ws, asset_id)?;
+    let history = history(ws.asset(asset_id)?);
+    tracing::debug!(
+        asset_id = %asset_id,
+        records = history.len(),
+        "show: report collected"
+    );
+    Some(ShowReport::new(&view, history))
+}
+
 /// A human-readable reason for a [`ShowError`], for the failure line.
 pub fn describe_error(error: &ShowError) -> String {
     match error {
@@ -287,7 +467,7 @@ pub(crate) const fn gps_datum_name(datum: GpsDatum) -> &'static str {
     }
 }
 
-const fn stack_role_name(role: StackRole) -> &'static str {
+pub(crate) const fn stack_role_name(role: StackRole) -> &'static str {
     match role {
         StackRole::Primary => "primary",
         StackRole::Member => "member",
