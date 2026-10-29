@@ -11,7 +11,8 @@
 //! The `--json` subcommands today are `import`, `push`, `restore`, `verify`, `cache budget`,
 //! `cache sweep`, `sync`, `sync reannounce`, `share create`, `share revoke`, `auth login`,
 //! `auth logout`, `auth status`, `label add`, `label remove`, `region add`, `region delete`,
-//! `edit capture-time`, `edit location`, `show` and `library list`; each has its offline cases
+//! `edit capture-time`, `edit location`, `show`, `library list`, `camera import` and
+//! `camera identity`; each has its offline cases
 //! here, and every `--json`
 //! subcommand that lands joins this file the same way.
 //! What needs a live server (a push or restore that reaches its assets) is the end-to-end
@@ -102,6 +103,12 @@
 //!   its members, the primary first; the timeline lists only the primary.
 //! - `library_list_json_without_a_library_is_a_usage_error` — the parser's exit status 2.
 //! - `library_list_json_of_an_unknown_view_is_a_usage_error` — the parser's exit status 2.
+//! - `camera_identity_json_reports_a_renamed_identity_and_keeps_it` — exit 0, one JSON
+//!   document: the GUID (redacted) and the name, identical on a second run.
+//! - `camera_import_json_with_a_blank_address_prints_nothing_on_stdout` — a run-level failure
+//!   before any library or camera is opened.
+//! - `camera_import_json_without_an_address_is_a_usage_error` — the parser's exit status 2. A
+//!   run that reaches a camera is `tests/camera_import.rs`'s, against a scripted responder.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -1211,5 +1218,56 @@ fn library_list_json_of_an_unknown_view_is_a_usage_error() {
             "faces",
             "--json"
         ],
+    ));
+}
+
+/// `text` with the value of every `"guid"` line replaced: a camera identity's GUID is minted
+/// fresh, so it is not part of the contract.
+fn redact_guids(text: &str) -> String {
+    text.lines()
+        .map(|line| match line.split_once("\"guid\": \"") {
+            Some((head, _)) => format!("{head}\"guid\": \"[GUID]\","),
+            None => line.to_owned(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn camera_identity_json_reports_a_renamed_identity_and_keeps_it() {
+    let scratch = Scratch::new();
+    let named = run(
+        &scratch,
+        &["camera", "identity", "--name", "Contract", "--json"],
+    );
+    let again = run(&scratch, &["camera", "identity", "--json"]);
+    assert_eq!(named, again, "the identity persists between runs");
+    insta::assert_snapshot!(redact_guids(&again));
+}
+
+#[test]
+fn camera_import_json_with_a_blank_address_prints_nothing_on_stdout() {
+    let scratch = Scratch::new();
+    insta::assert_snapshot!(run(
+        &scratch,
+        &[
+            "camera",
+            "import",
+            "--address",
+            " ",
+            "--library",
+            "lib",
+            "--passphrase-stdin",
+            "--json"
+        ],
+    ));
+}
+
+#[test]
+fn camera_import_json_without_an_address_is_a_usage_error() {
+    let scratch = Scratch::new();
+    insta::assert_snapshot!(run(
+        &scratch,
+        &["camera", "import", "--library", "lib", "--json"],
     ));
 }
