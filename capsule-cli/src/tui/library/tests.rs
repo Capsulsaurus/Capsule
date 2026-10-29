@@ -755,6 +755,57 @@ fn library_with_no_assets() {
     insta::assert_snapshot!(draw(&state));
 }
 
+/// A delegated asset shows the origin ledger's line in the detail pane, and is marked in its
+/// row, while its custody is unconfirmed; once the ledger releases it both are gone.
+#[test]
+fn a_delegated_asset_shows_its_ledger_line_until_it_is_released() {
+    const DELEGATE: Uuid = Uuid::from_u128(0x0192_f1a0_0000_7000_8000_0000_0000_00d2);
+    let handed = "handed to device 000000d2, awaiting server";
+    let ledger = |state: &str| -> capsule_sdk::peering::OriginLedger {
+        serde_json::from_value(serde_json::json!({
+            "delegations": {
+                asset_id(1).to_string(): {
+                    "asset_id": asset_id(1),
+                    "delegate": DELEGATE,
+                    "hand_off": "b3-handoff",
+                    "own": [],
+                    "release": [],
+                    "clock_epoch": "boot",
+                    "deadline_ms": 60_000,
+                    "state": state,
+                    "requeued_because": null,
+                    "held_deletes": [],
+                }
+            }
+        }))
+        .expect("a ledger")
+    };
+    let open_with = |state: &str| {
+        let mut app = browsing();
+        let lines = crate::peer::delegation_lines(&ledger(state), crate::peer::short_delegate_name);
+        let catalogue = catalogue().with_delegations(lines);
+        library_action(&mut app, LibraryAction::Opened(Ok(catalogue)));
+        draw(&app)
+    };
+
+    for state in ["handed_off", "acknowledged"] {
+        let frame = open_with(state);
+        assert!(
+            frame.contains(&format!("Upload:          {handed}")),
+            "the detail pane carries the ledger's line:\n{frame}"
+        );
+        assert!(
+            frame.contains("2024-06-01 10:00  jpg  delegated"),
+            "the row marks the asset:\n{frame}"
+        );
+    }
+    let frame = open_with("released");
+    assert!(
+        !frame.contains("handed to") && !frame.contains("delegated"),
+        "a released asset shows nothing:\n{frame}"
+    );
+}
+
 #[test]
 fn a_canvas_with_a_protocol_draws_the_image_instead_of_text() {
     let mut state = browsing();

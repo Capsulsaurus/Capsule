@@ -2,15 +2,35 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Local alerts: requested the first time a class has something to arm (API 33+). -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- AlarmManager forgets armed alerts at reboot; AlertBootReceiver re-arms them. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <application
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
+        android:localeConfig="@xml/locales_config"
         android:name=".CapsuleApp"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
-        android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        android:theme="@style/Theme.AppCompat.Light.NoActionBar">
+        <!-- Lets the shell record a trace of a non-debuggable build (API 29+), which the parity
+             benchmark and field profiling need. It grants no access beyond what adb already has. -->
+        <profileable android:shell="true" />
+        <!-- Below Android 13 the in-app language picker's choice is kept by AppCompat in this
+             device's app storage; on Android 13+ AppCompat hands it to the system per-app
+             language, so an upgraded device keeps it. -->
+        <service
+            android:name="androidx.appcompat.app.AppLocalesMetadataHolderService"
+            android:enabled="false"
+            android:exported="false">
+            <meta-data
+                android:name="autoStoreLocales"
+                android:value="true" />
+        </service>
+
         <activity
             android:exported="true"
             android:windowSoftInputMode="adjustResize"
@@ -22,6 +42,17 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <receiver
+            android:name=".alerts.AlertAlarmReceiver"
+            android:exported="false" />
+        <receiver
+            android:name=".alerts.AlertBootReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
     </application>
 
 </manifest>

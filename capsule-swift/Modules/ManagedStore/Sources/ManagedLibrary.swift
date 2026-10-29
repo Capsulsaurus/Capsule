@@ -64,6 +64,55 @@ public actor ManagedLibrary {
         return catalog
     }
 
+    /// The media file an asset's bytes live in, or `nil` when none is on disk.
+    ///
+    /// Found by stem for the same reason ``removeAssetFiles(uuid:captureDate:)``
+    /// sweeps by stem: the catalog does not record the extension the importer
+    /// derived. The paired `.cbor` sidecar shares the stem and is skipped, so the
+    /// answer is always the original, never its record.
+    ///
+    /// - Parameter captureDate: the asset's capture instant, which decides its
+    ///   `media/{YYYY}/{YYYY-MM}` partition.
+    public func mediaFile(uuid: String, captureDate: Date) async throws -> URL? {
+        let directory = layout.mediaDirectory(forCaptureDate: captureDate)
+        guard await fileStore.fileExists(at: directory) else { return nil }
+        return try await fileStore.contentsOfDirectory(at: directory).first { entry in
+            entry.deletingPathExtension().lastPathComponent == uuid
+                && entry.pathExtension.lowercased() != Self.sidecarExtension
+        }
+    }
+
+    /// Rewrite an asset's sidecar: decode it through `coder`, apply `change`, and
+    /// write the result back in place.
+    ///
+    /// Read, change and write all happen here so the fields the change does not
+    /// touch — ``CatalogSidecar/unknownFieldsCBOR`` included — survive verbatim.
+    ///
+    /// - Parameter captureDate: the asset's capture instant, which decides its
+    ///   `media/{YYYY}/{YYYY-MM}` partition.
+    /// - Throws: ``CatalogError/sidecar(message:)`` when the asset has no sidecar
+    ///   on disk or it does not decode; the file store's error when the read or
+    ///   the write fails. Nothing is written unless the whole change is.
+    public func updateSidecar(
+        uuid: String,
+        captureDate: Date,
+        coder: any SidecarCoding,
+        _ change: @Sendable (inout CatalogSidecar) -> Void
+    ) async throws {
+        let url = layout.sidecarFile(uuid: uuid, captureDate: captureDate)
+        guard await fileStore.fileExists(at: url) else {
+            CapsuleLog.managedStore.error("sidecar update failed for \(uuid, privacy: .public): no sidecar on disk")
+            throw CatalogError.sidecar(message: "no sidecar for \(uuid)")
+        }
+        var sidecar = try await coder.decode(fileStore.read(at: url))
+        change(&sidecar)
+        try await fileStore.write(coder.encode(sidecar), to: url)
+        CapsuleLog.managedStore.debug("sidecar updated for \(uuid, privacy: .public)")
+    }
+
+    /// The extension every sidecar is written under; see ``ManagedLibraryLayout``.
+    private static let sidecarExtension = "cbor"
+
     /// Remove an asset's bytes — its media file and paired sidecar — from the store.
     ///
     /// Addressed by *stem* rather than by an exact path because the catalog does

@@ -11,8 +11,8 @@ Capsule · Account · Signed out
 │This account has two-factor authentication switched on. Enter the code your   │
 │authenticator app shows.                                                      │
 │                                                                              │
-│Identity provider: `capsule auth login --oidc` (add `--device` to approve on  │
-│another device). New account: `capsule auth register`. Scriptable: `capsule   │
-│auth status --json`.                                                          │
+│Identity provider: w signs in with a browser here, d on another device        │
+│(scriptable: `capsule auth login --oidc [--device] --json`). New account:     │
+│`capsule auth register`.                                                      │
 └──────────────────────────────────────────────────────────────────────────────┘
 Enter Submit  Tab Next field  Esc Stop editing

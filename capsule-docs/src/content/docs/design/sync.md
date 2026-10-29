@@ -20,7 +20,9 @@ Each entry carries:
 
 Never original or derivative bytes. The client decrypts metadata, then decides what to [fetch](/design/transfer/download/).
 
-A delete carries only its signed manifest, the `delete` record whose `retention_until` closes the asset's [retention window](/design/organization/#retention-window): no metadata, no blob manifest and no derivative manifest, since none is needed to apply a deletion and a blob reference would invite a fetch of collected bytes. A purge drops the record with the rest of the asset's references, so the delete entry of a purged asset carries no manifest at all.
+A delete carries only its signed manifest, the `delete` record whose `retention_until` closes the asset's [retention window](/design/organization/#retention-window): no metadata, no blob manifest and no derivative manifest, since none is needed to apply a deletion and a blob reference would invite a fetch of collected bytes. A purge drops the record with the rest of the asset's references, so the delete entry of a purged asset carries no manifest at all, and carries `purged: true` instead. The purge mints no new position: the flag rides the tombstone's existing entry, so a client that read the entry before the purge judges the window from the record it already holds.
+
+`purged` is the only evidence of a purge a client acts on. A client records a peering tombstone for a delete whose window it has seen close, or whose entry is `purged`; a delete entry with neither stays in trash. An absent manifest is never read as a purge: the server also omits it when the store cannot produce the blob, and a server that predates the record or the flag omits them on every tombstone, and a tombstone recorded on that reading would be permanent for an asset only moved to trash. The flag is additive and optional; its absence reads as `false`.
 
 ### Cursor Authenticity and Anti-Rewind
 

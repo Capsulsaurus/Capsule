@@ -1,0 +1,19 @@
+[package]
+name = "ptpip-rs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# Capsule's in-house PTP/IP (ISO 15740) initiator: the packet codec, the PTP datasets an importer
+# reads, a blocking session over any `Read + Write` channel pair, and the vendor-extension seam
+# (Sony first). Pure Rust and std-only networking so it builds for every client target, mobile
+# included — libgphoto2 is LGPL and not portable to the apps (Import — Camera Import).
+
+[lib]
+name = "ptpip"
+
+[dependencies]
+jiff = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }

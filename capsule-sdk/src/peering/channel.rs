@@ -45,6 +45,12 @@
 //! ([`MAX_FRAME`], [`MAX_DATA_FRAME`], [`MAX_RANGE`]), and every read and write is bounded in
 //! time, so a peer can neither make this device allocate without bound nor hold it forever.
 //!
+//! From [`OFFER_EXCHANGE_PROTOCOL`] the pulling side **opens** with its offer
+//! ([`PeerClient::open_offering`], read by [`PeerChannel::receive_offer`]): the padded, capped
+//! [offer pages](super::delta) of what it holds, or a frame saying it offers nothing. A pair
+//! below that version skips the opening, and the serving side lists what it would have offered
+//! without one.
+//!
 //! One side **serves** ([`serve`]): it lists the artifacts it offers ([`Offering`]), then
 //! answers ranged pulls of exactly those and takes acknowledgements, authorizing **each
 //! request** against the trust its [`TrustSource`] pins now ([`PeerSession::authorize`]), so a
@@ -84,6 +90,7 @@ use uuid::Uuid;
 
 use super::PeeringError;
 use super::delegation::{DelegationError, HandOffAck};
+use super::delta::{MAX_OFFER_PAGE_BYTES, MAX_OFFER_PAGES, Offer, decode_offer_page};
 use super::session::{DirectoryVersions, HandshakeLimiter, PeerSession, TrustSource};
 use crate::net::negotiation::is_protocol_date;
 
@@ -91,13 +98,27 @@ use crate::net::negotiation::is_protocol_date;
 /// [`VersionWindow`]. Date-based (`YYYY-MM-DD`), it shares the date grammar with the
 /// client-server protocol but is its **own version space**: peering values compare only against
 /// peering values, and the transport revs independently of the server protocol.
-pub const PEERING_PROTOCOL: &str = "2026-10-23";
+pub const PEERING_PROTOCOL: &str = OFFER_EXCHANGE_PROTOCOL;
 
 /// The oldest peering transport protocol version this build still speaks — the bottom of its
 /// [`VersionWindow`]. `2026-10-23` added the framed exchange after the hello ([`Message`]); a
 /// peer older than that closes the channel after its hello and carries no payload, so it is
 /// outside the window and the pair is told which device to update.
 pub const PEERING_PROTOCOL_MIN: &str = "2026-10-23";
+
+/// The peering protocol version that added the **opening offer** ([`Message::Offer`]): on a
+/// channel negotiated at or above it, the pulling side opens with its offer (or says it offers
+/// nothing) before the serving side lists, so a sync artifact is cut to what the receiver is
+/// missing. A pair that negotiates below it exchanges no opening, and the serving side lists
+/// what it would have offered without one. The addition is additive: either version speaks the
+/// rest of the exchange unchanged.
+pub const OFFER_EXCHANGE_PROTOCOL: &str = "2026-10-29";
+
+/// How long a [`PeerClient`] that sent an opening waits for the listing: the serving side cuts
+/// and seals its artifact once it has read the opening (an offer, or that the receiver offers
+/// nothing) and only then lists, which can take far longer than one frame's I/O timeout. Added
+/// to that timeout.
+pub const LISTING_BUILD_ALLOWANCE: Duration = Duration::from_mins(10);
 
 /// The bound on the whole handshake: TLS, both hellos and the hybrid check. A peer that stalls
 /// it is dropped.
@@ -112,6 +133,13 @@ pub const DEFAULT_IO_TIMEOUT: Duration = Duration::from_secs(30);
 /// `len` divided by this rate, so a peer that trickles frames just inside the per-frame timeout
 /// cannot hold the pulling side indefinitely.
 pub const MIN_PULL_RATE: u64 = 64 * 1024;
+
+/// The slowest rate, in bytes per second, at which a serving session expects its peer to verify
+/// and durably persist an artifact it pulled. While an offered artifact is unacknowledged, the
+/// session waits for the peer's next request for the channel's I/O timeout plus the largest such
+/// artifact's length at this rate ([`serve`]), so a large hand-off on slow storage is still
+/// acknowledged over the channel instead of timing out before its acknowledgement arrives.
+pub const MIN_PERSIST_RATE: u64 = 1024 * 1024;
 
 /// The largest data frame. A ranged answer is cut into frames of at most this many bytes.
 pub const MAX_DATA_FRAME: usize = 1024 * 1024;
@@ -814,6 +842,8 @@ pub struct PeerChannel {
     stream: TlsStream<TcpStream>,
     peer: VerifiedPeer,
     io_timeout: Duration,
+    /// Whether the opening offer has been sent or read, or the protocol has none.
+    opened: bool,
 }
 
 impl fmt::Debug for PeerChannel {
@@ -829,11 +859,118 @@ impl fmt::Debug for PeerChannel {
 impl PeerChannel {
     fn new(stream: TlsStream<TcpStream>, peer: VerifiedPeer) -> Self {
         tracing::debug!(peer = %peer.device_id, protocol = %peer.protocol, "peering channel established");
+        let opened = !speaks_offers(&peer.protocol);
         Self {
             stream,
             peer,
             io_timeout: DEFAULT_IO_TIMEOUT,
+            opened,
         }
+    }
+
+    /// Test-only: speak `protocol` as if the pair had negotiated it, to stand in for an older
+    /// peer on a real channel.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn speaking(mut self, protocol: &str) -> Self {
+        self.peer.protocol = protocol.to_owned();
+        self.opened = !speaks_offers(protocol);
+        self
+    }
+
+    /// The serving side: read the pulling side's opening offer, before anything is listed.
+    ///
+    /// `None` when the pair negotiated a protocol below [`OFFER_EXCHANGE_PROTOCOL`] (an older
+    /// peer sends no opening, and nothing is read), or when the peer said it offers nothing. An
+    /// offer is at most [`MAX_OFFER_PAGES`] pages, each a data frame decoded by
+    /// [`decode_offer_page`], and all of them must carry the same cursor.
+    ///
+    /// # Errors
+    ///
+    /// [`PeeringError::Codec`] for an opening read twice, a frame that is not an offer, too
+    /// many pages, or a malformed page; [`PeeringError::PeerRefused`] when the peer refused the
+    /// session; or the channel's I/O or timeout failure.
+    #[instrument(skip_all, fields(peer = %self.peer.device_id))]
+    pub async fn receive_offer(&mut self) -> Result<Option<Offer>, PeeringError> {
+        if !speaks_offers(&self.peer.protocol) {
+            tracing::debug!(protocol = %self.peer.protocol, "peering: the peer's protocol carries no offer");
+            return Ok(None);
+        }
+        if self.opened {
+            return Err(PeeringError::Codec(
+                "the opening offer was already exchanged".into(),
+            ));
+        }
+        self.opened = true;
+        let pages = match self.recv().await? {
+            Message::Offer { pages } => pages as usize,
+            Message::Refused { kind, message } => {
+                return Err(PeeringError::PeerRefused { kind, message });
+            }
+            other => {
+                return Err(PeeringError::Codec(format!(
+                    "expected an offer, the peer sent {}",
+                    other.name()
+                )));
+            }
+        };
+        if pages == 0 {
+            tracing::debug!("peering: the peer offers nothing");
+            return Ok(None);
+        }
+        if pages > MAX_OFFER_PAGES {
+            return Err(PeeringError::Codec(format!(
+                "an offer of {pages} pages exceeds the {MAX_OFFER_PAGES}-page ceiling"
+            )));
+        }
+        let mut decoded = Vec::with_capacity(pages);
+        for _ in 0..pages {
+            let page = self.recv_data(MAX_OFFER_PAGE_BYTES).await?;
+            decoded.push(decode_offer_page(&page)?);
+        }
+        let offer = Offer::from_pages(&decoded)?;
+        tracing::info!(
+            pages,
+            addresses = offer.addresses.len(),
+            cursor = offer.cursor,
+            "peering: the peer's offer received"
+        );
+        Ok(Some(offer))
+    }
+
+    /// The pulling side: send the opening — `offer`'s pages, or that it offers nothing — when
+    /// the pair's protocol carries one and it has not been sent. Returns whether an opening
+    /// went: the serving side builds its listing only once it has read one, whether it offers
+    /// pages or nothing (an offer over the page ceiling degrades to nothing), so the caller
+    /// waits for the listing with [`LISTING_BUILD_ALLOWANCE`] in either case.
+    async fn send_opening(&mut self, offer: Option<&Offer>) -> Result<bool, PeeringError> {
+        if self.opened {
+            return Ok(false);
+        }
+        self.opened = true;
+        let pages = match offer.map(Offer::encode_pages) {
+            Some(pages) if pages.len() > MAX_OFFER_PAGES => {
+                // A whole-library listing is still correct (ingest makes a held asset a no-op),
+                // so an offer too large to carry degrades to none rather than ending the session.
+                tracing::warn!(
+                    pages = pages.len(),
+                    "peering: the offer exceeds the page ceiling; offering nothing"
+                );
+                Vec::new()
+            }
+            Some(pages) => pages,
+            None => Vec::new(),
+        };
+        // `pages.len() <= MAX_OFFER_PAGES`, which fits a u32.
+        self.send(&Message::Offer {
+            pages: pages.len() as u32,
+        })
+        .await?;
+        for page in &pages {
+            self.send_data(page).await?;
+        }
+        tracing::debug!(pages = pages.len(), "peering: opening sent");
+        Ok(true)
     }
 
     /// The peer the handshake verified. Every authorization on this channel is decided against
@@ -871,7 +1008,13 @@ impl PeerChannel {
 
     /// Receive one control message.
     pub(crate) async fn recv(&mut self) -> Result<Message, PeeringError> {
-        let payload = self.read_tagged(TAG_CONTROL, MAX_FRAME).await?;
+        self.recv_within(self.io_timeout).await
+    }
+
+    /// Receive one control message, waiting at most `limit` for the whole frame rather than the
+    /// channel's I/O timeout.
+    pub(crate) async fn recv_within(&mut self, limit: Duration) -> Result<Message, PeeringError> {
+        let payload = self.read_tagged(TAG_CONTROL, MAX_FRAME, limit).await?;
         let message: Message =
             serde_json::from_slice(&payload).map_err(|e| PeeringError::Codec(e.to_string()))?;
         tracing::trace!(peer = %self.peer.device_id, kind = message.name(), "peering: received");
@@ -888,7 +1031,7 @@ impl PeerChannel {
 
     /// Receive one data frame of at most `at_most` bytes.
     pub(crate) async fn recv_data(&mut self, at_most: usize) -> Result<Vec<u8>, PeeringError> {
-        self.read_tagged(TAG_DATA, at_most.min(MAX_DATA_FRAME))
+        self.read_tagged(TAG_DATA, at_most.min(MAX_DATA_FRAME), self.io_timeout)
             .await
     }
 
@@ -912,11 +1055,16 @@ impl PeerChannel {
         .await
     }
 
-    /// Read one frame, which must carry `tag` and at most `max` bytes. The length is checked
-    /// before any of the payload is read or allocated.
-    async fn read_tagged(&mut self, tag: u8, max: usize) -> Result<Vec<u8>, PeeringError> {
+    /// Read one frame within `limit`, which must carry `tag` and at most `max` bytes. The length
+    /// is checked before any of the payload is read or allocated.
+    async fn read_tagged(
+        &mut self,
+        tag: u8,
+        max: usize,
+        limit: Duration,
+    ) -> Result<Vec<u8>, PeeringError> {
         let stream = &mut self.stream;
-        within(self.io_timeout, "reading a frame", async {
+        within(limit, "reading a frame", async {
             let found = stream.read_u8().await.map_err(io_err)?;
             if found != tag {
                 return Err(PeeringError::Codec(format!(
@@ -947,12 +1095,20 @@ pub struct Offered {
     pub len: u64,
 }
 
-/// The control messages the channel carries after the handshake. The serving side sends
-/// [`Listing`](Self::Listing) first; the pulling side then sends requests, each answered before
-/// the next is sent.
+/// The control messages the channel carries after the handshake. From
+/// [`OFFER_EXCHANGE_PROTOCOL`] the pulling side opens with [`Offer`](Self::Offer); the serving
+/// side then sends [`Listing`](Self::Listing); the pulling side then sends requests, each
+/// answered before the next is sent.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Message {
+    /// Client → server, first, from [`OFFER_EXCHANGE_PROTOCOL`]: the pulling side's offer
+    /// follows in `pages` data frames, each one padded page ([`Offer::encode_pages`]). `0`
+    /// says it offers nothing, and takes whatever is listed.
+    Offer {
+        /// How many page frames follow, at most [`MAX_OFFER_PAGES`].
+        pages: u32,
+    },
     /// Server → client: the artifacts this session serves. Nothing else is served.
     Listing {
         /// The offered artifacts.
@@ -995,6 +1151,7 @@ impl Message {
     /// The message's type, for logs.
     fn name(&self) -> &'static str {
         match self {
+            Self::Offer { .. } => "offer",
             Self::Listing { .. } => "listing",
             Self::Range { .. } => "range",
             Self::RangeReply { .. } => "range_reply",
@@ -1004,6 +1161,12 @@ impl Message {
             Self::Done => "done",
         }
     }
+}
+
+/// Whether a channel negotiated at `protocol` carries the opening offer. Dates in `YYYY-MM-DD`
+/// order lexically.
+fn speaks_offers(protocol: &str) -> bool {
+    protocol >= OFFER_EXCHANGE_PROTOCOL
 }
 
 /// Whether `address` is a SHA-256 content address in its canonical spelling.
@@ -1087,6 +1250,23 @@ impl Offering {
             })
             .collect()
     }
+
+    /// How long a serving session waits for the peer's next request once `acks` are taken:
+    /// `io_timeout`, plus the largest offered artifact no acknowledgement names yet at
+    /// [`MIN_PERSIST_RATE`] — the peer may be verifying and persisting it before it asks again.
+    /// Once every artifact is acknowledged, the wait is `io_timeout` alone.
+    pub(crate) fn request_budget(&self, io_timeout: Duration, acks: &[HandOffAck]) -> Duration {
+        let pending = self
+            .artifacts
+            .iter()
+            .filter(|(address, _)| !acks.iter().any(|ack| &ack.hand_off == *address))
+            .map(|(_, bytes)| bytes.len() as u64)
+            .max()
+            .unwrap_or(0);
+        io_timeout.saturating_add(Duration::from_millis(
+            pending.saturating_mul(1000) / MIN_PERSIST_RATE,
+        ))
+    }
 }
 
 /// One ranged answer a serving session sent.
@@ -1111,7 +1291,8 @@ pub struct ServeReport {
 
 /// Serve `offering` to the channel's verified peer until it says it is done.
 ///
-/// Sends the listing, then answers each request in turn:
+/// Reads the peer's opening offer first when the caller has not ([`PeerChannel::receive_offer`])
+/// and sets it aside, then sends the listing, then answers each request in turn:
 ///
 /// - **Every request is authorized first** against the trust `trust` pins now
 ///   ([`PeerSession::authorize`]): a peer revoked, or gone from the directory, since the
@@ -1122,6 +1303,10 @@ pub struct ServeReport {
 /// - **An acknowledgement** is taken only when it names the verified peer as the delegate and an
 ///   offered address; then `on_ack` decides it. Its refusal is reported to the peer and the
 ///   session goes on.
+/// - **The wait for each request** is the channel's I/O timeout plus the largest
+///   unacknowledged offered artifact at [`MIN_PERSIST_RATE`]: the peer verifies and persists a
+///   pulled artifact before it acknowledges it, and that takes longer than one frame's timeout
+///   for a large artifact on slow storage.
 ///
 /// # Errors
 ///
@@ -1143,13 +1328,24 @@ where
     let mut report = ServeReport::default();
     #[cfg(test)]
     let mut sent_data: u64 = 0;
+    if !channel.opened {
+        // The caller cut its offering without the peer's offer (a delegation does), so the
+        // opening is read and set aside: the offering is what this session serves either way.
+        let offer = channel.receive_offer().await?;
+        tracing::debug!(
+            offered = offer.as_ref().map(|offer| offer.addresses.len()),
+            "peering: an opening offer set aside"
+        );
+    }
     channel
         .send(&Message::Listing {
             artifacts: offering.listing(),
         })
         .await?;
     loop {
-        let request = channel.recv().await?;
+        let budget = offering.request_budget(channel.io_timeout, &report.acks);
+        tracing::trace!(?budget, "peering: awaiting the next request");
+        let request = channel.recv_within(budget).await?;
         if request == Message::Done {
             tracing::info!(
                 served = report.served.len(),
@@ -1305,16 +1501,46 @@ impl fmt::Debug for PeerClient {
 }
 
 impl PeerClient {
-    /// Read the serving peer's listing. A listing with more than [`MAX_LISTING`] artifacts, an
-    /// address that is not a content address, or an artifact longer than [`MAX_ARTIFACT_LEN`]
-    /// is refused whole.
+    /// Read the serving peer's listing, first saying this device offers nothing where the
+    /// pair's protocol carries an opening offer. A listing with more than [`MAX_LISTING`]
+    /// artifacts, an address that is not a content address, or an artifact longer than
+    /// [`MAX_ARTIFACT_LEN`] is refused whole.
     ///
     /// # Errors
     ///
     /// [`PeeringError::Codec`] for a malformed listing, [`PeeringError::PeerRefused`] when the
     /// peer refused the session, or the channel's I/O or timeout failure.
-    pub async fn open(mut channel: PeerChannel) -> Result<Self, PeeringError> {
-        let listing = match channel.recv().await? {
+    pub async fn open(channel: PeerChannel) -> Result<Self, PeeringError> {
+        Self::open_with(channel, None).await
+    }
+
+    /// As [`open`](Self::open), first sending `offer` — what this device holds and its cursor —
+    /// so the serving side lists an artifact cut to what this device is missing. On a channel
+    /// negotiated below [`OFFER_EXCHANGE_PROTOCOL`] nothing is sent, and the peer lists what it
+    /// would have without an offer. Once an opening is sent — this offer, or nothing where the
+    /// offer exceeds [`MAX_OFFER_PAGES`] — the listing is awaited for the I/O timeout plus
+    /// [`LISTING_BUILD_ALLOWANCE`], while the peer cuts and seals its artifact; so is the
+    /// listing [`open`](Self::open) awaits on a channel that carries an opening.
+    ///
+    /// # Errors
+    ///
+    /// As [`open`](Self::open), and the channel's failure while sending the offer.
+    pub async fn open_offering(channel: PeerChannel, offer: &Offer) -> Result<Self, PeeringError> {
+        Self::open_with(channel, Some(offer)).await
+    }
+
+    #[instrument(skip_all, fields(peer = %channel.peer.device_id, offering = offer.is_some()))]
+    async fn open_with(
+        mut channel: PeerChannel,
+        offer: Option<&Offer>,
+    ) -> Result<Self, PeeringError> {
+        let offered = channel.send_opening(offer).await?;
+        let wait = if offered {
+            channel.io_timeout.saturating_add(LISTING_BUILD_ALLOWANCE)
+        } else {
+            channel.io_timeout
+        };
+        let listing = match channel.recv_within(wait).await? {
             Message::Listing { artifacts } => artifacts,
             Message::Refused { kind, message } => {
                 return Err(PeeringError::PeerRefused { kind, message });

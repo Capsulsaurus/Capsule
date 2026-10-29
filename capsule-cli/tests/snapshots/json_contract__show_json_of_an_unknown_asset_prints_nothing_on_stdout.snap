@@ -1,0 +1,10 @@
+---
+source: capsule-cli/tests/json_contract.rs
+expression: "run(&scratch,\n&[\"show\", \"0192f1a0-0000-7000-8000-000000000009\", \"--library\",\npath(&scratch.library()), \"--passphrase-stdin\", \"--json\",],)"
+---
+status: 1
+--- stdout ---
+
+--- stderr ---
+Error: 
+   0: Show failed: No asset in this library matches 0192f1a0-0000-7000-8000-000000000009.

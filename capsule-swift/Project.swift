@@ -183,6 +183,20 @@ private let moduleTargets: [Target] =
         testDependencies: []
     )
 
+    // Alerts — the client half of local alerts: the per-class arm / re-arm /
+    // cancel loop over `UNUserNotificationCenter`, permission at first use,
+    // and the bounded snooze. The predicate itself is a port; its tests run
+    // over the mock lane's in-memory adapters.
+    + module(
+        "CapsuleAlerts",
+        dependencies: [
+            .target(name: "CapsuleFoundation"),
+            .target(name: "CapsuleDomain"),
+            .target(name: "CapsulePorts"),
+        ],
+        testDependencies: [.target(name: "CapsuleMock")]
+    )
+
     // Diagnostics — MetricKit crash/perf collection, consent, breadcrumbs,
     // redacted bug-report bundles, and an opt-in self-hosted uploader.
     + module(
@@ -262,6 +276,8 @@ private let moduleTargets: [Target] =
     + module("ImagePipeline", dependencies: [
         .target(name: "CapsuleFoundation"),
         .target(name: "AssetKit"),
+        // `ContainerExif`, the one ImageIO EXIF parser the viewer shares.
+        .target(name: "ManagedStore"),
     ])
 
     // Design system + shared UI components: the virtualized timeline geometry,
@@ -300,8 +316,11 @@ private let moduleTargets: [Target] =
             .target(name: "CapsuleUI"),
             .target(name: "AssetKit"),
             .target(name: "ImagePipeline"),
+            // The label and region editor reads and writes through `LabelPort`.
+            .target(name: "CapsuleDomain"),
+            .target(name: "CapsulePorts"),
         ],
-        testDependencies: [supportDependency]
+        testDependencies: [supportDependency, .target(name: "CapsuleMock")]
     )
     + module(
         "FeatureAlbums",
@@ -510,6 +529,7 @@ private let appTarget: Target = .target(
         .target(name: "ImagePipeline"),
         .target(name: "AssetKit"),
         .target(name: "CapsuleDiagnostics"),
+        .target(name: "CapsuleAlerts"),
         .target(name: "CapsuleFoundation"),
         .target(name: "CapsuleCatalog"),
         .target(name: "CapsuleDomain"),
@@ -564,6 +584,7 @@ private let testTargetNames: [TestableTarget] = (ffiEnabled ? ["CapsuleCatalogFF
     "CapsulePortsTests",
     "CapsuleNavigationTests",
     "CapsuleMockTests",
+    "CapsuleAlertsTests",
     "CapsuleUITests",
     "ManagedStoreTests",
     "AssetKitTests",
@@ -601,6 +622,17 @@ let project = Project(
             buildAction: .buildAction(targets: ["Capsule", "CapsuleAppUITests"]),
             testAction: .targets(["CapsuleAppUITests"]),
             runAction: .runAction(executable: "Capsule")
+        ),
+        // The responsiveness parity benchmark (`ParityBenchmarkTests`), on a physical device via
+        // `mise run bench-apps apple <device>`. Release, because a Debug build times unoptimized
+        // code and would regress against nothing a user runs; the same bundle as the UI
+        // automation, which is the one place XCTest is sanctioned.
+        .scheme(
+            name: "CapsuleParityBenchmark",
+            shared: true,
+            buildAction: .buildAction(targets: ["Capsule", "CapsuleAppUITests"]),
+            testAction: .targets(["CapsuleAppUITests"], configuration: .release),
+            runAction: .runAction(configuration: .release, executable: "Capsule")
         ),
     ]
 )

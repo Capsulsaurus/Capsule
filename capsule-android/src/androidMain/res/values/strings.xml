@@ -897,6 +897,14 @@
     <string name="app_settings_account_type_label">Account Type</string>
     <string name="app_settings_account_type_registered">Registered</string>
     <string name="app_settings_account_type_sponsored">Sponsored</string>
+    <string name="app_settings_advanced_empty_description">This build has no developer options.</string>
+    <string name="app_settings_advanced_empty_title">Nothing to Adjust</string>
+    <string name="app_settings_advanced_scenario_active">Running Now</string>
+    <string name="app_settings_advanced_scenario_clear">Use Launch Default</string>
+    <string name="app_settings_advanced_scenario_footer">The scenario is chosen when the app starts. A -mock-scenario launch argument takes precedence over the choice made here.</string>
+    <string name="app_settings_advanced_scenario_header">Mock Scenario</string>
+    <string name="app_settings_advanced_scenario_next_launch">Takes effect the next time Capsule launches.</string>
+    <string name="app_settings_advanced_scenario_picker">Next Launch</string>
     <string name="app_settings_ai_download">Download</string>
     <string name="app_settings_ai_empty_description">This device can\'t run Capsule\'s on-device models.</string>
     <string name="app_settings_ai_empty_title">Not Available Here</string>
@@ -1631,6 +1639,7 @@
     <string name="app_viewer_info_aperture">Aperture</string>
     <string name="app_viewer_info_camera">Camera</string>
     <string name="app_viewer_info_caption_accessibility">Caption</string>
+    <string name="app_viewer_info_caption_save_failed">This caption couldn\'t be saved. Edit it again to retry.</string>
     <string name="app_viewer_info_caption_placeholder">Add a Caption</string>
     <string name="app_viewer_info_capture">Capture</string>
     <string name="app_viewer_info_date">Date</string>
@@ -1989,6 +1998,21 @@
     <string name="nav_storage_usage">15 GB used of 2 TB</string>
     <string name="nav_trash">Trash</string>
     <string name="no_data_available">No data available</string>
+    <string name="notification_channel_description">Reminders about your library that need your attention, such as a sync that has fallen behind or a recovery check that is due.</string>
+    <string name="notification_channel_name">Library alerts</string>
+    <string name="notification_drop_pending_title">Drops to review</string>
+    <string name="notification_quarantine_pending_title">Items need your review</string>
+    <string name="notification_quota_grace_expiring_counting_body">Your storage is full, so new uploads are paused. Free up space before the grace period ends to keep editing.</string>
+    <string name="notification_quota_grace_expiring_counting_title">Storage full</string>
+    <string name="notification_quota_grace_expiring_expired_body">The storage grace period has ended. Uploads and edits that add data are paused until you free up space.</string>
+    <string name="notification_quota_grace_expiring_expired_title">Storage grace period ended</string>
+    <string name="notification_quota_soft_body">You are close to your storage limit. Uploads still work for now.</string>
+    <string name="notification_quota_soft_title">Storage almost full</string>
+    <string name="notification_recovery_check_due_check_body">Confirm you can still recover your library if you lose this device.</string>
+    <string name="notification_recovery_check_due_check_title">Time to check your recovery secret</string>
+    <string name="notification_recovery_check_due_rewrap_body">Your recovery secret could not be confirmed. Set up a new one so you can still recover your library.</string>
+    <string name="notification_recovery_check_due_rewrap_title">Replace your recovery secret</string>
+    <string name="notification_sync_stale_title">Not synced for %s days</string>
     <string name="security_added">Added: %s</string>
     <string name="security_deleting">Deleting…</string>
     <string name="security_last_active">Last active: %s</string>
@@ -2013,6 +2037,14 @@
     <string name="security_unknown_device">Unknown device</string>
     <string name="settings_confirm_new_password">Confirm New Password</string>
     <string name="settings_current_password">Current Password</string>
+    <string name="settings_language_description">Language picks the words on screen. Region picks how dates, times and numbers are written. Both follow your system until you change them, and stay on this device.</string>
+    <string name="settings_language_language_label">Language</string>
+    <string name="settings_language_profile_link">← Profile settings</string>
+    <string name="settings_language_region_label">Region</string>
+    <string name="settings_language_system_default">System default (%s)</string>
+    <string name="settings_language_system_unknown">System default</string>
+    <string name="settings_language_title">Language &amp; Region</string>
+    <string name="settings_language_link">Language &amp; region →</string>
     <string name="settings_password_description">Enter your current password to set a new one.</string>
     <string name="settings_password_title">Change Password</string>
     <string name="settings_password_mismatch">New passwords do not match.</string>
@@ -2124,6 +2156,18 @@
     <plurals name="drop_upload_button">
         <item quantity="one">Upload %d file</item>
         <item quantity="other">Upload %d files</item>
+    </plurals>
+    <plurals name="notification_drop_pending_body">
+        <item quantity="one">%d guest drop is waiting for you to review it.</item>
+        <item quantity="other">%d guest drops are waiting for you to review them.</item>
+    </plurals>
+    <plurals name="notification_quarantine_pending_body">
+        <item quantity="one">%d item is waiting for your decision.</item>
+        <item quantity="other">%d items are waiting for your decision.</item>
+    </plurals>
+    <plurals name="notification_sync_stale_body">
+        <item quantity="one">%d change has not reached your server yet. Open Capsule to sync.</item>
+        <item quantity="other">%d changes have not reached your server yet. Open Capsule to sync.</item>
     </plurals>
     <plurals name="share_items">
         <item quantity="one">%d item</item>

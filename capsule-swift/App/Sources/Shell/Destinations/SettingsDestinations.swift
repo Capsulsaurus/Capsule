@@ -124,9 +124,9 @@ func settingsScreen(_ section: SettingsSection, _ environment: AppEnvironment) -
             consentStore: environment.consentStore,
             diagnostics: environment.diagnostics
         )
-    // Peer budgets and breakers, the escape hatches, and the acknowledgements
-    // have no screen yet.
-    case .federation, .advanced, .about:
+    case .advanced: AdvancedSettingsView(environment: environment.settingsEnvironment)
+    // Peer budgets and breakers, and the acknowledgements, have no screen yet.
+    case .federation, .about:
         RouteScaffold(
             titleKey: section.titleKey,
             systemImage: SettingsRootCatalog.symbol(for: section)

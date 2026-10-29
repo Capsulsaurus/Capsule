@@ -8,7 +8,8 @@
 //! the SDK's, not re-implemented here. These functions are the testable core the
 //! binary's command arms call and the E2E round-trip drives directly.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::fmt::Write as _;
 use std::path::PathBuf;
 
 use capsule_core::crypto::keys::{HybridVerifyingKey, MasterKey};
@@ -19,7 +20,7 @@ use capsule_library::library::{
     pin_attestation_keys,
 };
 use capsule_library::lifecycle::{LifecycleError, ResealRefusal, Workspace};
-use capsule_sdk::albums::{AlbumClient, AlbumTransport};
+use capsule_sdk::albums::{AlbumClient, AlbumTransport, LifecycleOpError};
 use capsule_sdk::auth::{AuthClient, AuthError, LoginOutcome, Session};
 use capsule_sdk::client::AuthenticatedClient;
 use capsule_sdk::directory::{DirectoryClient, DirectoryError};
@@ -551,8 +552,12 @@ async fn recover_with(
 /// published, the device is appended with `Workspace::extend_account_directory` and the result
 /// is published at the stored version + 1, keeping every device already listed. A directory
 /// that already lists the device under its key is adopted unchanged and nothing is published.
-/// With none published ([`DirectoryError::NotPublished`]), the workspace's own directory —
-/// this device alone, at version 1 — is the account's first.
+/// With none published ([`DirectoryError::NotPublished`]), the workspace's own directory — for
+/// a recovered library this device alone at version 1, for an escrowed one every device it
+/// lists at the version its account bind signed — is the account's first.
+///
+/// Both [`auth_recover`] and [`auth_escrow`] join through here, so a library either command
+/// leaves behind can author uploads the server accepts.
 async fn join_account_directory(
     directory: &DirectoryClient,
     workspace: &mut Workspace,
@@ -566,13 +571,13 @@ async fn join_account_directory(
                 %user_id,
                 directory_version = stored,
                 devices = published.core.devices.len(),
-                "recover: the account's directory fetched and verified"
+                "directory: the account's directory fetched and verified"
             );
             let Some(extended) = workspace.extend_account_directory(&published)? else {
                 tracing::info!(
                     %user_id,
                     directory_version = stored,
-                    "recover: the account's directory already lists this device"
+                    "directory: the account's directory already lists this device"
                 );
                 return Ok(stored);
             };
@@ -581,7 +586,7 @@ async fn join_account_directory(
         Err(DirectoryError::NotPublished) => {
             tracing::info!(
                 %user_id,
-                "recover: the account has no directory yet; publishing this device's own"
+                "directory: the account has no directory yet; publishing this device's own"
             );
             workspace.device_directory().clone()
         }
@@ -759,21 +764,29 @@ pub struct EscrowSetup {
 ///    type-back gate; `false` is [`RemoteError::RecoverySecretNotConfirmed`];
 /// 4. bind the library to the server's id (`Workspace::bind_account_id`), which keeps its own
 ///    [`LifecycleError::AccountRebind`] refusal as the authority behind step 1's early one;
-/// 5. wrap the master key under the secret at `tier` and store it (`PUT /v1/auth/escrow`),
+/// 5. make this device a member of the account's published device directory (#920), the way
+///    [`auth_recover`] does: extend the directory step 1 verified, adopt it unchanged when it
+///    already lists this device, or publish the library's own as the account's first. Without
+///    it the server refuses every upload this device authored
+///    (`error.upload.device_not_authorized`), so `capsule push` would back nothing up;
+/// 6. wrap the master key under the secret at `tier` and store it (`PUT /v1/auth/escrow`),
 ///    then store the sealed identity beside it (`PUT /v1/auth/escrow/identity`) and each
 ///    album's key escrow the server does not hold current (`PUT /v1/auth/escrow/albums/{id}`,
 ///    #741), so a recovery from this escrow opens the library's albums.
 ///
 /// Every refusal before step 4 writes nothing, locally or on the server. A failure after it
-/// leaves the library bound, which a rerun treats as already done.
+/// leaves the library bound, which a rerun treats as already done. The directory is joined
+/// before the escrow is stored so that a rerun after any later failure finds no escrow in its
+/// way and the directory already listing this device, which it adopts without publishing.
 ///
 /// # Errors
 ///
 /// [`RemoteError::NotAuthenticated`] with no stored session; [`RemoteError::Profile`] when the
 /// account id cannot be read; the refusals above; [`RemoteError::Directory`] when the account's
 /// directory does not verify under the library's identity key (code
-/// `error.directory.untrusted_signature`) or cannot be fetched; [`RemoteError::Lifecycle`] for
-/// the bind or the wrap; [`RemoteError::Recovery`] for an escrow or sealed-identity call.
+/// `error.directory.untrusted_signature`), cannot be fetched, or its publish is refused;
+/// [`RemoteError::Lifecycle`] for the bind, the directory extend or the wrap;
+/// [`RemoteError::Recovery`] for an escrow or sealed-identity call.
 #[instrument(skip_all, fields(library_user = %workspace.user_id(), replace = replace))]
 pub async fn auth_escrow(
     remote: &RemoteConfig,
@@ -841,6 +854,13 @@ async fn escrow_with(
 
     workspace.bind_account_id(user_id)?;
     tracing::info!(%user_id, "escrow: the library is bound to the server's account id");
+    let directory_version = join_account_directory(&directory, workspace).await?;
+    tracing::info!(
+        %user_id,
+        device = %workspace.device_id(),
+        directory_version,
+        "escrow: this device is listed in the account's directory"
+    );
 
     let blob = workspace.escrow_master_key(secret.as_bytes(), tier)?;
     let stored = recovery.store_escrow(&blob).await?;
@@ -866,8 +886,8 @@ async fn escrow_with(
 /// device directory is signed under.
 ///
 /// The directory is fetched under `workspace`'s identity key: a document that verifies, or none
-/// published at all ([`DirectoryError::NotPublished`], so the first recovery publishes the
-/// account's first directory), passes. A document that does not verify
+/// published at all ([`DirectoryError::NotPublished`], so this escrow publishes the account's
+/// first directory once the library is bound), passes. A document that does not verify
 /// ([`DirectoryError::UntrustedSignature`]) means another library of the account anchored its
 /// own key: a recovery from this library's escrow could never join that directory (#625), so
 /// the escrow is refused before a secret is minted. Any other failure is returned as is, since
@@ -1089,6 +1109,10 @@ pub enum AssetPushStatus {
     Verified,
     /// The asset did not reach verified custody; `error` says where it stopped.
     Failed,
+    /// Skipped: the asset is handed to another device of the account and its delegation is
+    /// still inside its deadline ([`PushRun::delegated`]), so that device uploads it. Not a
+    /// failure; a re-queued delegation is pushed like any other asset.
+    Delegated,
 }
 
 /// Why an asset failed, in the shape `--json` reports it.
@@ -1222,6 +1246,9 @@ pub struct PushSummary {
     pub verified_assets: usize,
     /// Assets that did not; each is in `outcomes` with its error.
     pub failed_assets: usize,
+    /// Assets skipped because another device of the account holds an open hand-off for them
+    /// ([`AssetPushStatus::Delegated`]).
+    pub delegated_assets: usize,
     /// Verified custody receipts persisted to the library this run.
     pub receipts: usize,
     /// Blobs transferred to completion.
@@ -1523,12 +1550,19 @@ pub struct PushRun<'a> {
     pub events: TransferEvents,
     /// Told when each asset starts and finishes.
     pub observer: Option<&'a mut dyn FnMut(AssetProgress)>,
+    /// Assets handed to another device whose delegation is still open and inside its deadline
+    /// ([`crate::peer::open_delegations`]): each is reported [`AssetPushStatus::Delegated`] and
+    /// nothing of it is sent, so the push does not spend the bandwidth the hand-off saves.
+    /// Deduplication would make sending it safe; skipping it is only the cheaper of two correct
+    /// runs.
+    pub delegated: BTreeSet<Uuid>,
 }
 
 impl std::fmt::Debug for PushRun<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PushRun")
             .field("assets", &self.assets)
+            .field("delegated", &self.delegated)
             .field("events", &self.events)
             .field("observed", &self.observer.is_some())
             .finish()
@@ -1615,7 +1649,11 @@ async fn push_with(
 
     if options.dry_run {
         for asset_id in asset_ids {
-            let outcome = plan_asset(workspace, &scheduler, &held, options.force, asset_id);
+            let outcome = if run.delegated.contains(&asset_id) {
+                delegated(asset_id)
+            } else {
+                plan_asset(workspace, &scheduler, &held, options.force, asset_id)
+            };
             run.tell(|| AssetProgress::Finished(outcome.clone()));
             summary.record(outcome);
         }
@@ -1641,6 +1679,12 @@ async fn push_with(
         uncovered,
     };
     for asset_id in asset_ids {
+        if run.delegated.contains(&asset_id) {
+            let outcome = delegated(asset_id);
+            run.tell(|| AssetProgress::Finished(outcome.clone()));
+            summary.record(outcome);
+            continue;
+        }
         let mut outcome = AssetPushOutcome::new(asset_id, AssetPushStatus::Verified);
         if let Err(error) = pusher
             .push(asset_id, &mut outcome, &mut summary, &mut run)
@@ -1728,6 +1772,16 @@ fn plan_asset<H: std::hash::BuildHasher>(
         }
     }
     outcome
+}
+
+/// The outcome of an asset skipped because another device holds its open hand-off: nothing of
+/// it was read or sent.
+fn delegated(asset_id: Uuid) -> AssetPushOutcome {
+    tracing::info!(
+        %asset_id,
+        "push: skipped; handed to another device and still inside its deadline"
+    );
+    AssetPushOutcome::new(asset_id, AssetPushStatus::Delegated)
 }
 
 /// Everything a run shares across its assets.
@@ -1892,6 +1946,7 @@ impl PushSummary {
         match outcome.status {
             AssetPushStatus::Verified => self.verified_assets += 1,
             AssetPushStatus::Failed => self.failed_assets += 1,
+            AssetPushStatus::Delegated => self.delegated_assets += 1,
             AssetPushStatus::Planned => {}
         }
         self.outcomes.push(outcome);
@@ -1907,6 +1962,7 @@ impl PushSummary {
             pushed_assets = self.pushed_assets,
             verified_assets = self.verified_assets,
             failed_assets = self.failed_assets,
+            delegated_assets = self.delegated_assets,
             receipts = self.receipts,
             uploaded = self.uploaded_blobs,
             merged = self.merged_blobs,
@@ -1923,10 +1979,18 @@ impl PushSummary {
 /// receipts the run stored. English inline, as every CLI line is going to be (issue #680).
 #[must_use]
 pub fn custody_line(summary: &PushSummary) -> String {
-    format!(
+    let mut line = format!(
         "Custody verified for {} of {} assets; {} receipts stored in the library.",
         summary.verified_assets, summary.assets, summary.receipts
-    )
+    );
+    if summary.delegated_assets > 0 {
+        let _ = write!(
+            line,
+            " Skipped {} handed to another device; `capsule peer status` follows them.",
+            summary.delegated_assets
+        );
+    }
+    line
 }
 
 /// One failed asset, as the line the human output prints for it.
@@ -1948,6 +2012,610 @@ pub fn failed_run_reason(summary: &PushSummary) -> Option<String> {
             summary.failed_assets, summary.assets
         )
     })
+}
+
+// ─── Lifecycle ops ───────────────────────────────────────────────────────────
+
+/// The `POST /v1/albums/{album}/ops` body for `asset_id`'s chain head when that head is a
+/// `delete`, encoded as the JSON the request carries: the signed delete a delegated asset's
+/// origin ledger holds until the create's custody exists
+/// ([`OriginLedger::hold_delete`](capsule_sdk::peering::OriginLedger::hold_delete)).
+///
+/// Self-contained, so a held delete is sent later without the library: the manifest's
+/// canonical CBOR (the server's new chain head is its hash), the envelope projected from it,
+/// and the sealed metadata blob whenever the manifest binds one. `None` for an asset whose head
+/// is not a delete, or one the library does not hold.
+///
+/// # Errors
+///
+/// [`LifecycleError::Cbor`] when the record does not encode, which is a corrupt library.
+pub fn delete_op(
+    workspace: &Workspace,
+    asset_id: &Uuid,
+) -> Result<Option<Vec<u8>>, LifecycleError> {
+    let Some(asset) = workspace.asset(asset_id) else {
+        return Ok(None);
+    };
+    let Some(head) = asset.chain.records().last() else {
+        return Ok(None);
+    };
+    if head.manifest.core.action != capsule_core::crypto::provenance::Action::Delete {
+        return Ok(None);
+    }
+    encode_op(asset, head).map(Some)
+}
+
+/// The `POST /v1/albums/{album}/ops` bodies that carry `asset_id`'s chain from the record whose
+/// hash is `after` up to the library's head, in chain order, when that stretch holds a
+/// `delete`: what a delegated asset's origin ledger holds until the create's custody exists.
+///
+/// The server's chain head once the delegate uploads is the record the hand-off sealed
+/// (`after`), and invariant 17 refuses an op that does not chain onto it. So a delete made
+/// after an edit, or after a restore of an earlier delete, is sent with every record between
+/// the sealed head and it, each chaining onto the one before, rather than alone. With `after`
+/// unknown or not in the chain, only a head `delete` is returned (as [`delete_op`]).
+///
+/// Each op is [`delete_op`]'s shape. A record that binds a metadata blob carries the library's
+/// blob only when it is the one the record commits to: the library keeps the latest blob, so an
+/// edit superseded by a later edit goes without it, and the server refuses that op for good.
+///
+/// # Errors
+///
+/// [`LifecycleError::Cbor`] when a record does not encode, which is a corrupt library.
+pub fn lifecycle_ops_after(
+    workspace: &Workspace,
+    asset_id: &Uuid,
+    after: Option<capsule_core::crypto::hash::Hash32>,
+) -> Result<Vec<Vec<u8>>, LifecycleError> {
+    use capsule_core::crypto::provenance::Action;
+    let Some(asset) = workspace.asset(asset_id) else {
+        return Ok(Vec::new());
+    };
+    let records = asset.chain.records();
+    let sealed = after.and_then(|hash| records.iter().position(|r| r.record_hash() == hash));
+    let start = if let Some(index) = sealed {
+        index + 1
+    } else {
+        tracing::debug!(%asset_id, "lifecycle ops: the sealed head is not in the chain; the head alone");
+        records.len().saturating_sub(1)
+    };
+    let tail = records.get(start..).unwrap_or_default();
+    if !tail
+        .iter()
+        .any(|r| r.manifest.core.action == Action::Delete)
+    {
+        return Ok(Vec::new());
+    }
+    tracing::debug!(%asset_id, records = tail.len(), "lifecycle ops: the stretch after the sealed head");
+    tail.iter().map(|record| encode_op(asset, record)).collect()
+}
+
+/// One provenance record of `asset` as the JSON body of a lifecycle op.
+fn encode_op(
+    asset: &capsule_library::lifecycle::AssetState,
+    record: &capsule_core::crypto::provenance::ProvenanceRecord,
+) -> Result<Vec<u8>, LifecycleError> {
+    use base64::Engine as _;
+    let core = &record.manifest.core;
+    let manifest = capsule_core::cbor::to_canonical_vec(record)
+        .map_err(|e| LifecycleError::Cbor(format!("encoding the provenance record: {e}")))?;
+    let base64 = base64::engine::general_purpose::STANDARD;
+    let blob = core.metadata_blob_hash.and_then(|hash| {
+        let held = capsule_core::crypto::encryption::blob_ciphertext_hash(&asset.metadata_blob);
+        if held != hash {
+            tracing::warn!(
+                asset_id = %asset.asset_id,
+                action = ?core.action,
+                "lifecycle op: the metadata blob this record binds was superseded; sent without it"
+            );
+        }
+        (held == hash).then(|| base64.encode(&asset.metadata_blob))
+    });
+    let request = capsule_sdk::rest::types::OpRequest {
+        manifest_envelope: op_envelope(core),
+        manifest_cbor: base64.encode(&manifest),
+        metadata_blob: blob,
+    };
+    serde_json::to_vec(&request)
+        .map_err(|e| LifecycleError::Cbor(format!("encoding the lifecycle op: {e}")))
+}
+
+/// The hash of the provenance record a lifecycle op ([`lifecycle_ops_after`]'s shape) carries,
+/// or `None` for bytes that are not such an op.
+///
+/// This is the op's identity: the same record encodes to different bytes once a later edit
+/// supersedes the metadata blob it binds (the blob is then left out), so held ops are told
+/// apart by it rather than by their bytes.
+#[must_use]
+pub fn op_record_hash(op: &[u8]) -> Option<capsule_core::crypto::hash::Hash32> {
+    use base64::Engine as _;
+    let request: capsule_sdk::rest::types::OpRequest = serde_json::from_slice(op).ok()?;
+    let manifest = base64::engine::general_purpose::STANDARD
+        .decode(request.manifest_cbor)
+        .ok()?;
+    let record: capsule_core::crypto::provenance::ProvenanceRecord =
+        capsule_core::cbor::from_slice(&manifest).ok()?;
+    Some(record.record_hash())
+}
+
+/// The server-visible projection of a lifecycle manifest: every field verbatim, naming the
+/// original's ciphertext, and no derivative (the server refuses the pair on a lifecycle write).
+fn op_envelope(
+    core: &capsule_core::crypto::provenance::ManifestCore,
+) -> capsule_sdk::rest::types::ManifestEnvelope {
+    let wire = |value: serde_json::Result<serde_json::Value>| {
+        value
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_owned))
+            .unwrap_or_default()
+    };
+    capsule_sdk::rest::types::ManifestEnvelope {
+        crypto_suite_id: i64::from(core.crypto_suite_id),
+        protocol_version: core.protocol_version.clone(),
+        album_id: Some(core.album_id.to_string()),
+        file_id: core.file_id.to_string(),
+        amk_version: i64::from(core.amk_version.0),
+        ciphertext_hash: core.ciphertext_hash.to_hex(),
+        plaintext_size: i64::try_from(core.plaintext_size).unwrap_or(i64::MAX),
+        chunk_size: i64::from(core.chunk_size),
+        key_mode: wire(serde_json::to_value(core.key_mode)),
+        metadata_blob_hash: core.metadata_blob_hash.map(|h| h.to_hex()),
+        original_blob_hash: None,
+        derivative_role: None,
+        derivative_format: None,
+        created_by_user: core.created_by_user.to_string(),
+        created_by_device: core.created_by_device.to_string(),
+        client_version: core.client_version.clone(),
+        timestamp: core.timestamp.clone(),
+        action: wire(serde_json::to_value(core.action)),
+        prior_provenance_hash: core.prior_provenance_hash.map(|h| h.to_hex()),
+        retention_until: core.retention_until.clone(),
+    }
+}
+
+/// What the server did with one lifecycle op.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct OpApplied {
+    /// The action it applied.
+    pub action: String,
+    /// The feed position it occupies.
+    pub sync_seq: u64,
+    /// Whether the server had applied it already (a replay is not an error).
+    pub replayed: bool,
+}
+
+/// Why a lifecycle op was not applied.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct OpFailure {
+    /// A stable name for why: one of [`LifecycleOpError::kind`]'s (`retention_elapsed`,
+    /// `stale_revival`, `refused`, `forbidden`, `unauthenticated`, `upgrade_required`,
+    /// `unavailable`, `malformed`), or `not_an_op` for held bytes that do not parse as one.
+    pub kind: &'static str,
+    /// The server's stable `error.*` code, when it gave one.
+    pub code: Option<String>,
+    /// The English detail.
+    pub message: String,
+    /// Whether sending the same bytes again can only be refused again: the server judged the op
+    /// itself (`400`, `409`, `413`, `415`, `422` — a stale chain, a regressed epoch, a closed
+    /// retention window, a malformed op), or the held bytes are not an op. An unreachable server,
+    /// a session it did not accept, an upgrade it asked for and a server fault are not.
+    pub permanent: bool,
+}
+
+/// Send one lifecycle op [`delete_op`] encoded, under `session`.
+///
+/// # Errors
+///
+/// [`OpFailure`] when the bytes are not a lifecycle op, or the server refused or could not be
+/// reached.
+#[instrument(skip_all)]
+pub(crate) async fn send_op(
+    remote: &RemoteConfig,
+    session: Session,
+    op: &[u8],
+) -> Result<OpApplied, OpFailure> {
+    let not_an_op = |message: String| OpFailure {
+        kind: "not_an_op",
+        code: None,
+        message,
+        permanent: true,
+    };
+    let request: capsule_sdk::rest::types::OpRequest = serde_json::from_slice(op)
+        .map_err(|error| not_an_op(format!("the held op does not parse: {error}")))?;
+    // Checked here as well as in the SDK so that bytes no resend can fix stay permanent.
+    if request.manifest_envelope.album_id.is_none() {
+        return Err(not_an_op("the held op names no album".to_owned()));
+    }
+    let client = AlbumClient::new(AlbumTransport::with_session(
+        session,
+        remote.albums_endpoint.clone(),
+    ));
+    let applied = client
+        .apply_op(&request)
+        .await
+        .map_err(|error| op_failure(&error))?;
+    Ok(OpApplied {
+        action: applied.action,
+        sync_seq: applied.sync_seq,
+        replayed: applied.replayed,
+    })
+}
+
+/// A refused or undelivered lifecycle op, as the CLI reports it.
+fn op_failure(error: &LifecycleOpError) -> OpFailure {
+    OpFailure {
+        kind: error.kind(),
+        code: error.error_code().map(str::to_owned),
+        message: error.to_string(),
+        permanent: error.is_permanent(),
+    }
+}
+
+// ─── Trash (`capsule trash delete|restore`) ─────────────────────────────────
+
+/// Which way a `capsule trash` run moves its assets. Serialized as the lifecycle action the
+/// run signs and sends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TrashAction {
+    /// Move each asset to the trash: a signed `delete` carrying its retention floor.
+    Delete,
+    /// Bring each asset back out of the trash: a signed `trash-restore`.
+    TrashRestore,
+}
+
+impl TrashAction {
+    /// The provenance action this run's records carry.
+    fn action(self) -> capsule_core::crypto::provenance::Action {
+        match self {
+            Self::Delete => capsule_core::crypto::provenance::Action::Delete,
+            Self::TrashRestore => capsule_core::crypto::provenance::Action::TrashRestore,
+        }
+    }
+}
+
+/// One `capsule trash` run's inputs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrashRequest {
+    /// Which lifecycle op every asset gets.
+    pub action: TrashAction,
+    /// The assets, in the order given; repeats are dropped.
+    pub assets: Vec<Uuid>,
+    /// The retention window, in days, a fresh delete signs. Unused by a restore, and by an
+    /// asset whose latest record already is a delete: that record is resent with its own
+    /// window, which the outcome's `retention_until` reports.
+    pub retain_days: i64,
+}
+
+/// Where one asset ended up after a `capsule trash` run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TrashStatus {
+    /// The server applied the op (or had applied it already: see `replayed`).
+    Applied,
+    /// The op was not applied; `error` says why.
+    Failed,
+}
+
+/// Why one asset's op was not applied, in the shape `--json` reports it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TrashFailure {
+    /// A stable name for why. The server's: `retention_elapsed`, `stale_revival`, `refused`,
+    /// `forbidden`, `unauthenticated`, `upgrade_required`, `unavailable`, `malformed`
+    /// ([`LifecycleOpError::kind`]). The library's: `not_found` (the library holds no such
+    /// asset), `not_in_trash` (a restore of an asset that is not in the trash), `library` (the
+    /// record could not be signed or written).
+    pub kind: &'static str,
+    /// The stable `error.*` code, when there is one: the server's, or
+    /// `error.upload.retention_elapsed` when the library already knew the window had closed.
+    pub code: Option<String>,
+    /// The English detail.
+    pub message: String,
+    /// Whether running the same command again can only fail the same way. A permanent failure
+    /// is not retried; a `retention_elapsed` one is final for the asset, which stays in the
+    /// trash on the server until the purge removes it.
+    pub permanent: bool,
+    /// On a `retention_elapsed` failure, the signed retention floor the restore came too late
+    /// for (RFC 3339): the one the delete it would undo carries, which is the one the server
+    /// judges.
+    pub retention_until: Option<String>,
+}
+
+/// What a `capsule trash` run did for one asset — one line of the `--json` report.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TrashOutcome {
+    /// The asset id.
+    pub asset_id: String,
+    /// Where the asset ended up.
+    pub status: TrashStatus,
+    /// The feed position the applied op occupies.
+    pub sync_seq: Option<u64>,
+    /// Whether the server had applied this op already (a resend after a lost answer).
+    pub replayed: bool,
+    /// Why the op was not applied, for a [`TrashStatus::Failed`] asset only.
+    pub error: Option<TrashFailure>,
+    /// For a delete, the signed retention floor (RFC 3339) of the delete record that was sent.
+    /// An asset whose latest record already is a delete (a rerun, or a delete `capsule cull
+    /// --sweep` signed) has that record resent with the window it was signed with, so this can
+    /// differ from what `--retain-days` asked for. `None` for a restore.
+    pub retention_until: Option<String>,
+}
+
+/// The outcome of a `capsule trash` run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TrashSummary {
+    /// The lifecycle op every asset was sent.
+    pub action: TrashAction,
+    /// Assets whose op the server applied.
+    pub applied: usize,
+    /// Assets whose op was not applied; each is in `outcomes` with its error.
+    pub failed: usize,
+    /// One entry per asset, in the order given.
+    pub outcomes: Vec<TrashOutcome>,
+}
+
+impl TrashSummary {
+    /// The assets whose op was not applied.
+    pub fn failures(&self) -> impl Iterator<Item = &TrashOutcome> {
+        self.outcomes
+            .iter()
+            .filter(|outcome| outcome.status == TrashStatus::Failed)
+    }
+}
+
+/// Move `request.assets` to the trash, or restore them from it, in the library and on the
+/// server: sign the lifecycle record locally, then send it to `POST /v1/albums/{album}/ops`.
+///
+/// Each asset is one op, sent once. An asset whose chain head already is the record this run
+/// would sign (a run whose send did not land) has that head resent rather than a second record
+/// signed, and the server answers a replay as a success. No op is retried within the run, and
+/// a [`permanent`](TrashFailure::permanent) failure is one a re-run only repeats.
+///
+/// A restore whose signed retention floor has passed by this device's clock is refused before
+/// anything is signed (`retention_elapsed`), so the library never holds a restore it knows the
+/// server will refuse. The server's clock is the one that decides, so a restore this device
+/// still thought was in time can be refused the same way; the library then keeps its signed
+/// restore (nothing is lost, and the original stays in the library), while the server keeps the
+/// asset in the trash.
+///
+/// # Errors
+///
+/// [`RemoteError::NotAuthenticated`] with no stored session. Every per-asset failure is an
+/// outcome in the summary, not an error.
+#[instrument(skip(store, workspace), fields(action = ?request.action, assets = request.assets.len()))]
+pub async fn trash(
+    remote: &RemoteConfig,
+    store: &SessionStore,
+    workspace: &mut Workspace,
+    request: &TrashRequest,
+) -> Result<TrashSummary, RemoteError> {
+    let session = resume_session(remote, store).await?;
+    let summary = trash_with(remote, workspace, session.clone(), request).await;
+    checkpoint(store, &session).await;
+    Ok(summary)
+}
+
+/// The trash run itself, over a session somebody else is responsible for persisting.
+async fn trash_with(
+    remote: &RemoteConfig,
+    workspace: &mut Workspace,
+    session: Session,
+    request: &TrashRequest,
+) -> TrashSummary {
+    let mut summary = TrashSummary {
+        action: request.action,
+        applied: 0,
+        failed: 0,
+        outcomes: Vec::new(),
+    };
+    for asset_id in distinct(request.assets.clone()) {
+        let outcome = match prepare_trash_op(workspace, &asset_id, request, jiff::Timestamp::now())
+        {
+            Err(failure) => failed_trash(asset_id, failure),
+            Ok(prepared) => {
+                // The window a delete actually carries: the sent record's, which a resend
+                // keeps whatever `--retain-days` says.
+                let sent_until = (request.action == TrashAction::Delete)
+                    .then(|| prepared.retention_until.clone())
+                    .flatten();
+                match send_op(remote, session.clone(), &prepared.op).await {
+                    Ok(applied) => {
+                        tracing::info!(%asset_id, sync_seq = applied.sync_seq, replayed = applied.replayed, retention_until = ?sent_until, "trash: op applied");
+                        TrashOutcome {
+                            asset_id: asset_id.to_string(),
+                            status: TrashStatus::Applied,
+                            sync_seq: Some(applied.sync_seq),
+                            replayed: applied.replayed,
+                            error: None,
+                            retention_until: sent_until,
+                        }
+                    }
+                    Err(failure) => {
+                        tracing::warn!(%asset_id, kind = failure.kind, code = ?failure.code, permanent = failure.permanent, error = %failure.message, "trash: op not applied");
+                        let retention_until = (failure.kind == "retention_elapsed")
+                            .then_some(prepared.retention_until)
+                            .flatten();
+                        TrashOutcome {
+                            retention_until: sent_until,
+                            ..failed_trash(
+                                asset_id,
+                                TrashFailure {
+                                    kind: failure.kind,
+                                    code: failure.code,
+                                    message: failure.message,
+                                    permanent: failure.permanent,
+                                    retention_until,
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+        };
+        match outcome.status {
+            TrashStatus::Applied => summary.applied += 1,
+            TrashStatus::Failed => summary.failed += 1,
+        }
+        summary.outcomes.push(outcome);
+    }
+    tracing::info!(
+        applied = summary.applied,
+        failed = summary.failed,
+        "trash: run finished"
+    );
+    summary
+}
+
+fn failed_trash(asset_id: Uuid, failure: TrashFailure) -> TrashOutcome {
+    TrashOutcome {
+        asset_id: asset_id.to_string(),
+        status: TrashStatus::Failed,
+        sync_seq: None,
+        replayed: false,
+        error: Some(failure),
+        retention_until: None,
+    }
+}
+
+/// One asset's op, ready to send.
+#[derive(Debug)]
+struct PreparedTrashOp {
+    /// The `POST /v1/albums/{album}/ops` body for the asset's new chain head.
+    op: Vec<u8>,
+    /// The signed retention floor of the delete the asset is in the trash under, when it is.
+    retention_until: Option<String>,
+}
+
+/// Sign `request.action` for `asset_id` in the library, unless its chain head already is such
+/// a record, and encode the head as the op to send. `now` is this device's clock, against which
+/// a restore's retention floor is checked before anything is signed.
+fn prepare_trash_op(
+    workspace: &mut Workspace,
+    asset_id: &Uuid,
+    request: &TrashRequest,
+    now: jiff::Timestamp,
+) -> Result<PreparedTrashOp, TrashFailure> {
+    use capsule_core::crypto::provenance::Action;
+    let local = |kind: &'static str, message: String| TrashFailure {
+        kind,
+        code: None,
+        message,
+        permanent: true,
+        retention_until: None,
+    };
+    let Some(asset) = workspace.asset(asset_id) else {
+        return Err(local(
+            "not_found",
+            format!("the library holds no asset {asset_id}"),
+        ));
+    };
+    let head = asset
+        .chain
+        .records()
+        .last()
+        .map(|record| record.manifest.core.action);
+    let retention_until = trashed_until(asset);
+    let wanted = request.action.action();
+    if head == Some(wanted) {
+        // A delete head keeps the window it was signed with: `retain_days` signs only a fresh
+        // delete, and a second delete over the first would not chain onto the server's head.
+        tracing::debug!(%asset_id, action = ?wanted, retention_until = ?retention_until, "trash: the head already is this record; resending it");
+    } else {
+        let signed = match request.action {
+            TrashAction::Delete => workspace.soft_delete(asset_id, request.retain_days),
+            TrashAction::TrashRestore => {
+                if head != Some(Action::Delete) {
+                    return Err(local(
+                        "not_in_trash",
+                        format!("asset {asset_id} is not in the trash"),
+                    ));
+                }
+                let elapsed = retention_until
+                    .as_deref()
+                    .and_then(|until| until.parse::<jiff::Timestamp>().ok())
+                    .is_some_and(|until| now >= until);
+                if elapsed {
+                    let until = retention_until.unwrap_or_default();
+                    tracing::warn!(%asset_id, retention_until = %until, "trash: the retention window has closed; nothing signed or sent");
+                    return Err(TrashFailure {
+                        kind: "retention_elapsed",
+                        code: Some(capsule_i18n::error_codes::UPLOAD_RETENTION_ELAPSED.to_owned()),
+                        message: format!(
+                            "asset {asset_id}'s retention window closed at {until}, so it can no \
+                             longer be restored"
+                        ),
+                        permanent: true,
+                        retention_until: Some(until),
+                    });
+                }
+                workspace.restore(asset_id)
+            }
+        };
+        signed.map_err(|error| local("library", error.to_string()))?;
+        tracing::info!(%asset_id, action = ?wanted, "trash: signed the record in the library");
+    }
+    let asset = workspace.asset(asset_id).ok_or_else(|| {
+        local(
+            "not_found",
+            format!("the library holds no asset {asset_id}"),
+        )
+    })?;
+    let head = asset
+        .chain
+        .records()
+        .last()
+        .ok_or_else(|| local("library", format!("asset {asset_id} has no provenance")))?;
+    let op = encode_op(asset, head).map_err(|error| local("library", error.to_string()))?;
+    Ok(PreparedTrashOp {
+        op,
+        retention_until: trashed_until(asset),
+    })
+}
+
+/// The signed retention floor of the latest `delete` in `asset`'s chain: the one a restore
+/// undoes, and so the one the server judges it against.
+fn trashed_until(asset: &capsule_library::lifecycle::AssetState) -> Option<String> {
+    asset
+        .chain
+        .records()
+        .iter()
+        .rev()
+        .find(|record| {
+            record.manifest.core.action == capsule_core::crypto::provenance::Action::Delete
+        })
+        .and_then(|record| record.manifest.core.retention_until.clone())
+}
+
+/// The one-line human summary of a `capsule trash` run.
+#[must_use]
+pub fn trash_line(summary: &TrashSummary) -> String {
+    let verb = match summary.action {
+        TrashAction::Delete => "moved to the trash",
+        TrashAction::TrashRestore => "restored from the trash",
+    };
+    let noun = if summary.applied == 1 {
+        "asset"
+    } else {
+        "assets"
+    };
+    let mut line = format!("{} {noun} {verb} on the server", summary.applied);
+    if summary.failed > 0 {
+        let _ = write!(line, ", {} failed", summary.failed);
+    }
+    line
+}
+
+/// The human line for one asset whose op was not applied.
+#[must_use]
+pub fn trash_failure_line(outcome: &TrashOutcome) -> String {
+    let Some(error) = &outcome.error else {
+        return format!("{}: failed", outcome.asset_id);
+    };
+    let mut line = format!("{}: {} ({})", outcome.asset_id, error.message, error.kind);
+    if error.permanent {
+        line.push_str("; not retried");
+    }
+    line
 }
 
 // ─── Move release (#671) ─────────────────────────────────────────────────────

@@ -391,3 +391,85 @@ fn a_swept_asset_shows_in_trash() {
     let page = render(&view);
     assert!(page.contains("  In trash:        yes\n"), "{page}");
 }
+
+#[test]
+fn every_action_has_its_manifest_spelling() {
+    let cases = [
+        (ProvenanceAction::Create, "create"),
+        (ProvenanceAction::Replace, "replace"),
+        (ProvenanceAction::Delete, "delete"),
+        (ProvenanceAction::MetadataUpdate, "metadata-update"),
+        (ProvenanceAction::DerivativeAdd, "derivative-add"),
+        (ProvenanceAction::DerivativeReplace, "derivative-replace"),
+        (ProvenanceAction::TrashRestore, "trash-restore"),
+    ];
+    for (action, name) in cases {
+        assert_eq!(action_name(action), name);
+        // The same spelling the signed manifest serialises.
+        let json = serde_json::to_string(&action).expect("serialise");
+        assert_eq!(json, format!("\"{name}\""));
+    }
+}
+
+/// The report lists the chain record by record, oldest first, and a sweep's `delete` record
+/// carries its retention deadline.
+#[test]
+fn report_lists_the_provenance_history_record_by_record() {
+    let mut fx = Fixture::with_assets(1);
+    let id = fx.ids[0];
+    fx.ws.set_cull(&id, CullFlag::Reject).expect("cull");
+    fx.ws.reject_sweep(30).expect("sweep");
+    let shown = report(&fx.ws, &id).expect("managed");
+    let actions: Vec<&str> = shown.history.iter().map(|h| h.action).collect();
+    assert_eq!(actions, ["create", "metadata-update", "delete"]);
+    let chain = fx.ws.asset(&id).expect("asset").chain.records();
+    for (entry, record) in shown.history.iter().zip(chain) {
+        let core = &record.manifest.core;
+        assert_eq!(entry.timestamp, core.timestamp);
+        assert_eq!(entry.device, core.created_by_device);
+        assert_eq!(entry.client_version, core.client_version);
+        assert_eq!(entry.retention_until, core.retention_until);
+    }
+    assert!(shown.history[0].retention_until.is_none());
+    assert!(shown.history[2].retention_until.is_some());
+    assert!(shown.in_trash);
+    assert_eq!(shown.cull, "reject");
+    assert!(report(&fx.ws, &Uuid::now_v7()).is_none());
+}
+
+/// Every view field is in the document, an absent one as `null` rather than left out.
+#[test]
+fn the_report_spells_absent_values_as_null() {
+    let mut view = sample_view();
+    view.caption = None;
+    view.dimensions = None;
+    view.gps = None;
+    view.stack = Some((Uuid::nil(), StackRole::Proxy));
+    let json = serde_json::to_value(ShowReport::new(&view, Vec::new())).expect("serialise");
+    for key in [
+        "caption",
+        "dimensions",
+        "location",
+        "capture_timestamp_imported",
+    ] {
+        assert_eq!(json.get(key), Some(&serde_json::Value::Null), "{key}");
+    }
+    assert_eq!(json["rating"], 5);
+    assert_eq!(json["cull"], "neutral");
+    assert_eq!(json["stack"]["role"], "proxy");
+    assert_eq!(json["location_imported"]["datum"], "WGS-84");
+    assert_eq!(json["location_imported"]["source"], "EXIF");
+    assert_eq!(
+        json["tags_user"],
+        serde_json::json!(["Vacation 2021", "beach"])
+    );
+    assert_eq!(json["history"], serde_json::json!([]));
+
+    let mut view = sample_view();
+    view.dimensions = Some((640, 480));
+    let json = serde_json::to_value(ShowReport::new(&view, Vec::new())).expect("serialise");
+    assert_eq!(
+        json["dimensions"],
+        serde_json::json!({"width": 640, "height": 480})
+    );
+}

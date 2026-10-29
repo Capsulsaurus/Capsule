@@ -51,9 +51,21 @@ Gallery or Google Photos app on Android) on the same device, at every library si
 - **Main thread is for drawing.** Decoding, hashing, crypto and database queries run off the UI
   thread; a frame never waits on them.
 - **Measured, not asserted.** A parity benchmark runs each tier-1 client and the platform photo
-  app on a 100,000-asset library on the same device: cold start to first thumbnail, scroll frame
-  rate and dropped frames, full-resolution open time. A regression past the recorded baseline
-  fails CI.
+  app on a 100,000-asset library on the same physical device: cold start to first thumbnail,
+  scroll frame rate and dropped frames, full-resolution open time, and input-to-frame latency.
+  Both apps are timed by the same harness calls, so its overhead cancels out of the comparison.
+  Each device has a recorded baseline of the client's own numbers; a regression past it fails
+  the run, and a baselined measure that stops being reported counts as a regression. Parity with
+  the platform app is reported beside it rather than gating, because the platform app changes
+  under the device's own updates while the baseline changes only when it is re-recorded.
+  Results recorded on another device, platform or library size are refused, not compared.
+  Emulators and simulators never stand in for a bench device.
+
+  The harnesses are Macrobenchmark on Android and XCTest metrics on Apple, both driven by
+  `mise run bench-apps`. They need a prepared device, so the run is a manual workflow on
+  self-hosted bench runners (`bench-apps.yml`) rather than a gate on every pull request. In
+  production, the Android client logs JankStats frame summaries, so the field reports the same
+  jank signal the bench measures.
 
 The TUI follows the same frame bound for input response
 ([Testing](/development/testing/)).

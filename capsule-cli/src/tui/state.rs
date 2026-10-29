@@ -15,6 +15,13 @@
 //!   [`Action`] variant carrying its outcome back.
 //! - An action that starts an effect also changes state the next frame shows (a loading marker,
 //!   a pending row), so no input waits on the effect for a visible response.
+//! - Every effect is answered by exactly one action. Work that must show something before it
+//!   finishes is two effects: one that starts it and answers with what to show while the work
+//!   keeps running on a task the port holds, and one that waits for that task and answers with
+//!   the outcome. Both carry an attempt number the screen hands out, so an answer for work it
+//!   has since cancelled is told apart and dropped (the account screen's identity-provider
+//!   sign-in, [`super::auth`]). A stream of progress is instead a watch effect the screen asks
+//!   for again after each batch (the push screen's, [`super::push`]).
 //! - A feature screen lives in its own module (its state, its actions and effects, its reducer
 //!   and its render), and the root holds one variant per screen in each enum, delegating to it.
 //! - A screen that takes text exposes it as a [`Form`](super::form::Form); while one is being

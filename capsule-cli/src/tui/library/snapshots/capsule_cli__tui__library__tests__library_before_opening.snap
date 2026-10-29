@@ -10,8 +10,8 @@ Capsule · Library · Signed in
 │  Library                                                                                         │
 │  Library passphrase                                                                              │
 │                                                                                                  │
-│Scriptable: `capsule show ASSET --library PATH` prints one asset's record.                        │
-│                                                                                                  │
+│Scriptable: `capsule library list --library PATH [--view albums|stacks] --json`; `capsule show    │
+│ASSET --library PATH --json` prints one asset's record.                                           │
 │                                                                                                  │
 │                                                                                                  │
 │                                                                                                  │

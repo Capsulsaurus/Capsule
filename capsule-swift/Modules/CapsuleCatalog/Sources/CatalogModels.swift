@@ -53,6 +53,15 @@ public struct CatalogAsset: Sendable, Equatable, Identifiable {
     /// Hidden assets are excluded from the timeline and album listings and are
     /// served only by the gated Hidden view (Local Gallery — SR1).
     public var isHidden: Bool
+    /// The user's caption — the index's projection of the sidecar `caption`
+    /// register. `nil` means none; an empty caption is never stored.
+    /// Written through ``AssetCatalog/setCaption(_:assetID:)``, which a catalog
+    /// with no caption column refuses rather than dropping.
+    public var caption: String?
+    /// GPS latitude in signed decimal degrees, from the original's EXIF.
+    public var latitude: Double?
+    /// GPS longitude in signed decimal degrees, from the original's EXIF.
+    public var longitude: Double?
 
     public init(
         id: String,
@@ -73,7 +82,10 @@ public struct CatalogAsset: Sendable, Equatable, Identifiable {
         rating: Int64 = 0,
         isDeleted: Bool = false,
         deletedAt: Int64? = nil,
-        isHidden: Bool = false
+        isHidden: Bool = false,
+        caption: String? = nil,
+        latitude: Double? = nil,
+        longitude: Double? = nil
     ) {
         self.id = id
         self.assetType = assetType
@@ -94,6 +106,9 @@ public struct CatalogAsset: Sendable, Equatable, Identifiable {
         self.isDeleted = isDeleted
         self.deletedAt = deletedAt
         self.isHidden = isHidden
+        self.caption = caption
+        self.latitude = latitude
+        self.longitude = longitude
     }
 
     /// The canonical timeline axis: the UTC capture instant when known, else

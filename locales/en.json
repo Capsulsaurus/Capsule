@@ -3595,6 +3595,38 @@
     "message": "Sponsored",
     "context": "Account type: an account someone else on this server vouches for. Recovery runs through the sponsor."
   },
+  "app.settings.advanced.empty.description": {
+    "message": "This build has no developer options.",
+    "context": "Empty-state description on the Advanced settings screen, shown in a build not running against simulated data."
+  },
+  "app.settings.advanced.empty.title": {
+    "message": "Nothing to Adjust",
+    "context": "Empty-state title on the Advanced settings screen."
+  },
+  "app.settings.advanced.scenario.active": {
+    "message": "Running Now",
+    "context": "Row label on the Advanced settings screen; the value is the name of the simulated-data scenario this launch is running."
+  },
+  "app.settings.advanced.scenario.clear": {
+    "message": "Use Launch Default",
+    "context": "Button on the Advanced settings screen that forgets the scenario chosen for the next launch."
+  },
+  "app.settings.advanced.scenario.footer": {
+    "message": "The scenario is chosen when the app starts. A -mock-scenario launch argument takes precedence over the choice made here.",
+    "context": "Footer under the mock-scenario switcher on the Advanced settings screen. Keep '-mock-scenario' untranslated: it is a command-line argument."
+  },
+  "app.settings.advanced.scenario.header": {
+    "message": "Mock Scenario",
+    "context": "Section header on the Advanced settings screen for switching between simulated-data scenarios."
+  },
+  "app.settings.advanced.scenario.next_launch": {
+    "message": "Takes effect the next time Capsule launches.",
+    "context": "Notice shown on the Advanced settings screen after choosing a different simulated-data scenario."
+  },
+  "app.settings.advanced.scenario.picker": {
+    "message": "Next Launch",
+    "context": "Picker label on the Advanced settings screen; picks the simulated-data scenario for the next launch."
+  },
   "app.settings.ai.download": {
     "message": "Download",
     "context": "Button that fetches a model."
@@ -6555,6 +6587,10 @@
     "message": "Caption",
     "context": "iOS asset info: VoiceOver label for the editable caption field."
   },
+  "app.viewer.info.caption.save_failed": {
+    "message": "This caption couldn't be saved. Edit it again to retry.",
+    "context": "iOS asset info: shown under the caption field when the store refused the last save; the typed text is kept in the field."
+  },
   "app.viewer.info.caption_placeholder": {
     "message": "Add a Caption",
     "context": "iOS asset info: placeholder in the editable caption field at the top of the info panel."
@@ -7995,6 +8031,78 @@
     "message": "No data available",
     "context": "Empty-state message when a view has nothing to show."
   },
+  "notification.channel.description": {
+    "message": "Reminders about your library that need your attention, such as a sync that has fallen behind or a recovery check that is due.",
+    "context": "Android notification-channel description shown in the system notification settings for Capsule's local alerts."
+  },
+  "notification.channel.name": {
+    "message": "Library alerts",
+    "context": "Android notification-channel name shown in the system notification settings for Capsule's local alerts."
+  },
+  "notification.drop_pending.body": {
+    "message": "{count, plural, one {# guest drop is waiting for you to review it.} other {# guest drops are waiting for you to review them.}}",
+    "context": "Local alert body when guest uploads (drops) await review and adoption. {count} is the number of pending drops."
+  },
+  "notification.drop_pending.title": {
+    "message": "Drops to review",
+    "context": "Local alert title when guest uploads (drops) await review and adoption."
+  },
+  "notification.quarantine_pending.body": {
+    "message": "{count, plural, one {# item is waiting for your decision.} other {# items are waiting for your decision.}}",
+    "context": "Local alert body when items sit on a quarantine surface awaiting a human. {count} is the number of held items."
+  },
+  "notification.quarantine_pending.title": {
+    "message": "Items need your review",
+    "context": "Local alert title when items sit on a quarantine surface awaiting a human."
+  },
+  "notification.quota_grace_expiring.counting.body": {
+    "message": "Your storage is full, so new uploads are paused. Free up space before the grace period ends to keep editing.",
+    "context": "Local alert body when storage is over the hard limit and the grace window is still counting (grace = counting)."
+  },
+  "notification.quota_grace_expiring.counting.title": {
+    "message": "Storage full",
+    "context": "Local alert title when storage is over the hard limit and the grace window is still counting (grace = counting)."
+  },
+  "notification.quota_grace_expiring.expired.body": {
+    "message": "The storage grace period has ended. Uploads and edits that add data are paused until you free up space.",
+    "context": "Local alert body when storage has been over the hard limit for longer than the grace window (grace = expired)."
+  },
+  "notification.quota_grace_expiring.expired.title": {
+    "message": "Storage grace period ended",
+    "context": "Local alert title when storage has been over the hard limit for longer than the grace window (grace = expired)."
+  },
+  "notification.quota_soft.body": {
+    "message": "You are close to your storage limit. Uploads still work for now.",
+    "context": "Local alert body when storage crossed the soft limit but is below the hard limit."
+  },
+  "notification.quota_soft.title": {
+    "message": "Storage almost full",
+    "context": "Local alert title when storage crossed the soft limit but is below the hard limit."
+  },
+  "notification.recovery_check_due.check.body": {
+    "message": "Confirm you can still recover your library if you lose this device.",
+    "context": "Local alert body for the routine recovery-secret verification check (recovery = check)."
+  },
+  "notification.recovery_check_due.check.title": {
+    "message": "Time to check your recovery secret",
+    "context": "Local alert title for the routine recovery-secret verification check (recovery = check)."
+  },
+  "notification.recovery_check_due.rewrap.body": {
+    "message": "Your recovery secret could not be confirmed. Set up a new one so you can still recover your library.",
+    "context": "Local alert body when the recovery secret has failed verification repeatedly or was declared lost, and the guided re-wrap is due (recovery = rewrap). Opening it leads to replacing the secret, not to a routine check."
+  },
+  "notification.recovery_check_due.rewrap.title": {
+    "message": "Replace your recovery secret",
+    "context": "Local alert title when the guided recovery re-wrap is due (recovery = rewrap)."
+  },
+  "notification.sync_stale.body": {
+    "message": "{count, plural, one {# change has not reached your server yet. Open Capsule to sync.} other {# changes have not reached your server yet. Open Capsule to sync.}}",
+    "context": "Local alert body when the library has gone two weeks without a completed sync while changes remain un-synced. {count} is the number of un-synced changes."
+  },
+  "notification.sync_stale.title": {
+    "message": "Not synced for {days_behind} days",
+    "context": "Local alert title when the library has gone two weeks without a completed sync while changes remain un-synced. {days_behind} is the whole number of days since the last completed sync, always 14 or more."
+  },
   "security.added": {
     "message": "Added: {date}",
     "context": "Passkey added-on timestamp line."
@@ -8090,6 +8198,38 @@
   "settings.current_password": {
     "message": "Current Password",
     "context": "Settings current-password input label."
+  },
+  "settings.language.description": {
+    "message": "Language picks the words on screen. Region picks how dates, times and numbers are written. Both follow your system until you change them, and stay on this device.",
+    "context": "Language and region settings page description."
+  },
+  "settings.language.language_label": {
+    "message": "Language",
+    "context": "Label of the picker for the interface language."
+  },
+  "settings.language.profile_link": {
+    "message": "← Profile settings",
+    "context": "Link from language and region settings back to profile settings."
+  },
+  "settings.language.region_label": {
+    "message": "Region",
+    "context": "Label of the picker for the formatting region (dates, times, numbers)."
+  },
+  "settings.language.system_default": {
+    "message": "System default ({name})",
+    "context": "Picker option that follows the operating system. The value is the language or region name the system currently selects."
+  },
+  "settings.language.system_unknown": {
+    "message": "System default",
+    "context": "Picker option that follows the operating system, when the system reports no region."
+  },
+  "settings.language.title": {
+    "message": "Language & Region",
+    "context": "Language and region settings page heading."
+  },
+  "settings.language_link": {
+    "message": "Language & region →",
+    "context": "Link from profile settings to language and region settings."
   },
   "settings.password.description": {
     "message": "Enter your current password to set a new one.",

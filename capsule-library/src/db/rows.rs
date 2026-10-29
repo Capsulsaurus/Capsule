@@ -23,6 +23,14 @@ pub struct AssetRow {
     /// Hidden view. Distinct from `is_stack_hidden`, which suppresses non-primary
     /// members of a collapsed stack.
     pub is_hidden: bool,
+    /// Projection of the sidecar `caption` LWW register. `None` is no caption; an empty
+    /// caption is stored as `None`.
+    pub caption: Option<String>,
+    /// Latitude of the sidecar's effective location (`gps_user` over the as-imported `gps`),
+    /// in signed decimal degrees, verbatim in the sidecar's datum.
+    pub latitude: Option<f64>,
+    /// Longitude of the same effective location; `None` exactly when `latitude` is.
+    pub longitude: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

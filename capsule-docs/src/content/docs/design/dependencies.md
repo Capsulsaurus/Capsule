@@ -56,7 +56,7 @@ Every Rust version is pinned once in the root `[workspace.dependencies]`; member
 | Terminal UI | `ratatui` **0.30** (`default-features = false`, `crossterm_0_29`, `layout-cache`) + `crossterm` **0.29** (`event-stream`) | `capsule-cli` only. `crossterm` is pinned to the backend version `ratatui` is built against, so the graph holds one copy. No `widget-calendar`: it pulls the `time` crate (Datetime row). |
 | Terminal image preview | `ratatui-image` **11.1** (`default-features = false`) | `capsule-cli` only: the TUI library browser's inline preview over Kitty, Sixel or iTerm2 graphics, with a text fallback where the terminal answers with none of them. No `chafa-dyn` (it loads the LGPL libchafa). Pixels come from `capsule-core::media`; the crate only fits them to the pane and encodes them for the terminal. |
 | Tooling image processing | `image` (`jpeg`, `png`) | xtask screenshot tooling only; no product crate may depend on it for codecs. The one exception is `capsule-cli` naming `image` with no features for the `DynamicImage` buffer `ratatui-image` takes; decoding stays with Rawshift. |
-| Test runner | `cargo-nextest`; `testcontainers` for backing services | Binary smokes use `CARGO_BIN_EXE_<name>`; no `assert_cmd`. |
+| Test runner | `cargo-nextest`; `testcontainers` for backing services | Binary smokes use `CARGO_BIN_EXE_<name>`; no `assert_cmd`. A smoke that must answer a terminal-only prompt gets a pseudo-terminal from `libc::openpty` (a unix-only dev-dependency), not an `expect`-style crate. |
 | Property tests | `proptest` (dev-dependency, `std` only) | CRDT merge laws, canonical codecs and SDK fault schedules, per the [testing plan](/development/testing/). Seeded and printed; `PROPTEST_RNG_SEED` replays. |
 | Snapshot tests | `insta` (dev-dependency, no default features) | The CLI `--json` and exit-code contract; plain-string snapshots under `tests/snapshots/`. TUI frames rendered on ratatui's `TestBackend`, snapshotted as plain text beside their unit tests. |
 | Fuzzing and mutation testing | `cargo-fuzz` (`libfuzzer-sys`), `cargo-mutants` | Tools, not dependencies of any shipped crate: the fuzz harness is its own workspace under `capsule-core/fuzz`. |
@@ -90,6 +90,10 @@ Bindings come from the single uniffi version; Tuist, SwiftLint and SwiftFormat a
 ## Kotlin
 
 Bindings ride the same uniffi version, loaded through JNA. JUnit 5 is the test harness.
+
+| Domain | Canonical choice | Notes |
+| --- | --- | --- |
+| In-app language (Android 8 to 12) | `androidx.appcompat` **1.7.0** (`AppCompatDelegate.setApplicationLocales`, `autoStoreLocales`) | Only the per-app language below Android 13, where the system has no per-app setting; Android 13+ uses the system's. The choice stays on the device and is never synced; region stays the system's. |
 
 ## Validation
 

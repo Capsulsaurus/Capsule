@@ -139,6 +139,34 @@ fn the_timeline_leaves_out_trash_hidden_and_non_primary_stack_members() {
 }
 
 #[test]
+fn stacks_follow_their_newest_member_whichever_role_it_holds() {
+    let mut fx = Fixture::with_assets(4);
+    let order: Vec<Uuid> = collect(&fx.ws)
+        .assets()
+        .iter()
+        .map(|a| a.asset_id)
+        .collect();
+    // `newer` holds the newest asset but the oldest primary, so ordering by the primary's
+    // capture would list `older` first.
+    let (newer, older) = (Uuid::now_v7(), Uuid::now_v7());
+    fx.stack(newer, order[0], StackRole::Member);
+    fx.stack(older, order[1], StackRole::Member);
+    fx.stack(older, order[2], StackRole::Primary);
+    fx.stack(newer, order[3], StackRole::Primary);
+
+    let catalogue = collect(&fx.ws);
+    let stacks: Vec<Uuid> = catalogue.stacks().iter().map(|s| s.stack_id).collect();
+    assert_eq!(stacks, vec![newer, older]);
+    assert_eq!(
+        catalogue.stack(newer).expect("listed").members,
+        vec![
+            (order[3], StackRole::Primary),
+            (order[0], StackRole::Member)
+        ]
+    );
+}
+
+#[test]
 fn album_and_stack_labels_are_read() {
     let mut fx = Fixture::with_assets(2);
     let stack_id = Uuid::now_v7();
@@ -260,7 +288,10 @@ fn outlines_and_places_compare_by_kind_and_bits() {
 fn debug_prints_counts_not_rows() {
     let fx = Fixture::with_assets(2);
     let printed = format!("{:?}", collect(&fx.ws));
-    assert_eq!(printed, "Catalogue { assets: 2, albums: 1, stacks: 0, .. }");
+    assert_eq!(
+        printed,
+        "Catalogue { assets: 2, albums: 1, stacks: 0, delegations: 0, .. }"
+    );
 }
 
 fn bare(asset_id: Uuid, album_id: Uuid, in_trash: bool) -> AssetEntry {
@@ -315,21 +346,175 @@ fn the_index_answers_by_id_in_list_order() {
     assert_eq!(catalogue, catalogue.clone());
 }
 
+/// The timeline listing is [`Catalogue::timeline`] in its order, each asset with its labels and
+/// stack placement.
 #[test]
-fn every_action_has_its_manifest_spelling() {
-    let cases = [
-        (ProvenanceAction::Create, "create"),
-        (ProvenanceAction::Replace, "replace"),
-        (ProvenanceAction::Delete, "delete"),
-        (ProvenanceAction::MetadataUpdate, "metadata-update"),
-        (ProvenanceAction::DerivativeAdd, "derivative-add"),
-        (ProvenanceAction::DerivativeReplace, "derivative-replace"),
-        (ProvenanceAction::TrashRestore, "trash-restore"),
-    ];
-    for (action, name) in cases {
-        assert_eq!(action_name(action), name);
-        // The same spelling the signed manifest serialises.
-        let json = serde_json::to_string(&action).expect("serialise");
-        assert_eq!(json, format!("\"{name}\""));
+fn the_timeline_listing_follows_the_timeline() {
+    let mut fx = Fixture::with_assets(3);
+    let stack_id = Uuid::now_v7();
+    fx.stack(stack_id, fx.ids[0], StackRole::Primary);
+    fx.stack(stack_id, fx.ids[1], StackRole::Member);
+    fx.ws.tag_add(&fx.ids[2], "beach").expect("label");
+
+    let catalogue = collect(&fx.ws);
+    let Listing::Timeline { assets } = listing(&catalogue, ListView::Timeline) else {
+        panic!("a timeline listing");
+    };
+    let ids: Vec<Uuid> = assets.iter().map(|a| a.asset_id).collect();
+    assert_eq!(ids, catalogue.timeline());
+    let primary = assets
+        .iter()
+        .find(|a| a.asset_id == fx.ids[0])
+        .expect("listed");
+    assert_eq!(
+        primary.stack,
+        Some(StackReport {
+            stack_id,
+            role: "primary"
+        })
+    );
+    let labelled = assets
+        .iter()
+        .find(|a| a.asset_id == fx.ids[2])
+        .expect("listed");
+    assert_eq!(labelled.labels, ["beach"]);
+    assert_eq!(labelled.album_id, fx.album);
+    assert_eq!(labelled.ext, "jpg");
+    let entry = catalogue.asset(fx.ids[2]).expect("listed");
+    assert_eq!(labelled.capture_timestamp, entry.capture_text);
+}
+
+#[test]
+fn the_albums_and_stacks_listings_carry_labels_and_contents() {
+    let mut fx = Fixture::with_assets(2);
+    let stack_id = Uuid::now_v7();
+    fx.stack(stack_id, fx.ids[1], StackRole::Member);
+    fx.stack(stack_id, fx.ids[0], StackRole::Primary);
+    fx.ws.add_album_label(fx.album, "trips").expect("label");
+    fx.ws.add_stack_label(stack_id, "best").expect("label");
+    let catalogue = collect(&fx.ws);
+
+    let Listing::Albums { albums } = listing(&catalogue, ListView::Albums) else {
+        panic!("an albums listing");
+    };
+    assert_eq!(albums.len(), 1);
+    assert_eq!(albums[0].album_id, fx.album);
+    assert_eq!(albums[0].name, "Imports");
+    assert_eq!(albums[0].labels, Some(vec!["trips".to_owned()]));
+    assert_eq!(albums[0].labels_error, None);
+    assert_eq!(albums[0].assets, catalogue.album_assets(fx.album));
+
+    let Listing::Stacks { stacks } = listing(&catalogue, ListView::Stacks) else {
+        panic!("a stacks listing");
+    };
+    assert_eq!(stacks.len(), 1);
+    assert_eq!(stacks[0].stack_id, stack_id);
+    assert_eq!(stacks[0].labels, Some(vec!["best".to_owned()]));
+    assert_eq!(
+        stacks[0].members,
+        [
+            ListedMember {
+                asset_id: fx.ids[0],
+                role: "primary"
+            },
+            ListedMember {
+                asset_id: fx.ids[1],
+                role: "member"
+            },
+        ],
+        "the primary first"
+    );
+}
+
+/// An unreadable label record lists as `null` labels beside the reason, never as no labels.
+#[test]
+fn an_unreadable_label_record_lists_its_reason() {
+    let album = Uuid::from_u128(7);
+    let stack = Uuid::from_u128(8);
+    let catalogue = Catalogue::new(
+        Vec::new(),
+        vec![AlbumEntry {
+            album_id: album,
+            name: "A".to_owned(),
+            labels: Err("unreadable".to_owned()),
+        }],
+        vec![StackEntry {
+            stack_id: stack,
+            members: Vec::new(),
+            labels: Err("torn".to_owned()),
+        }],
+    );
+    let Listing::Albums { albums } = listing(&catalogue, ListView::Albums) else {
+        panic!("an albums listing");
+    };
+    assert_eq!(albums[0].labels, None);
+    assert_eq!(albums[0].labels_error.as_deref(), Some("unreadable"));
+    let Listing::Stacks { stacks } = listing(&catalogue, ListView::Stacks) else {
+        panic!("a stacks listing");
+    };
+    assert_eq!(stacks[0].labels, None);
+    assert_eq!(stacks[0].labels_error.as_deref(), Some("torn"));
+    let json = serde_json::to_value(listing(&catalogue, ListView::Stacks)).expect("serialise");
+    assert_eq!(json["view"], "stacks");
+    assert_eq!(json["stacks"][0]["labels"], serde_json::Value::Null);
+    assert_eq!(json["stacks"][0]["labels_error"], "torn");
+}
+
+#[test]
+fn the_text_listing_prints_one_line_per_entry() {
+    let stack = Uuid::from_u128(8);
+    let member = Uuid::from_u128(1);
+    let album = Uuid::from_u128(7);
+    let timeline = Listing::Timeline {
+        assets: vec![ListedAsset {
+            asset_id: member,
+            album_id: album,
+            capture_timestamp: "2020-01-02T03:04:05Z".to_owned(),
+            ext: "jpg".to_owned(),
+            labels: vec!["a".to_owned(), "b".to_owned()],
+            stack: None,
+        }],
+    };
+    assert_eq!(
+        render_listing(&timeline),
+        format!("{member}  2020-01-02T03:04:05Z  jpg  a, b\n")
+    );
+    let albums = Listing::Albums {
+        albums: vec![ListedAlbum {
+            album_id: album,
+            name: "Trips".to_owned(),
+            labels: None,
+            labels_error: Some("torn".to_owned()),
+            assets: vec![member],
+        }],
+    };
+    assert_eq!(
+        render_listing(&albums),
+        format!("{album}  Trips  1 asset(s)  labels unreadable: torn\n")
+    );
+    let stacks = Listing::Stacks {
+        stacks: vec![ListedStack {
+            stack_id: stack,
+            labels: Some(Vec::new()),
+            labels_error: None,
+            members: vec![ListedMember {
+                asset_id: member,
+                role: "primary",
+            }],
+        }],
+    };
+    assert_eq!(
+        render_listing(&stacks),
+        format!("{stack}  1 member(s)  -\n  {member} (primary)\n")
+    );
+    for (empty, line) in [
+        (
+            Listing::Timeline { assets: Vec::new() },
+            "The timeline is empty.\n",
+        ),
+        (Listing::Albums { albums: Vec::new() }, "No albums.\n"),
+        (Listing::Stacks { stacks: Vec::new() }, "No stacks.\n"),
+    ] {
+        assert_eq!(render_listing(&empty), line);
     }
 }

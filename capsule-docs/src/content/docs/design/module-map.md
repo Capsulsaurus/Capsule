@@ -12,7 +12,8 @@ boundaries between crates, and the bounded E2E case list.
 ```text
 capsule-core            (no internal deps)
 capsule-i18n            (no internal deps)
-capsule-library      -> core
+ptpip-rs                (no internal deps)
+capsule-library      -> core, ptpip-rs
 capsule-sdk          -> core, library, i18n
 capsule-wasm         -> core
 capsule-core-ffi     -> core, library, sdk
@@ -26,6 +27,7 @@ xtask                -> core, i18n
 | --- | --- |
 | `capsule-core` | **Stateless**: cryptography and MLS authority, canonical CBOR, sidecar and CRDT logic, validation, import grouping and upload policy, media, LQIP, sharing and drop crypto, enrollment payloads, ML orchestration |
 | `capsule-library` | **All local state**: the SQLite index, the on-disk library and its lock, the `Workspace`, import scanning, planning and execution, sidecar and album-store I/O, backup I/O, file-path EXIF reading, desktop TPM signers |
+| `ptpip-rs` | The in-house PTP/IP (ISO 15740) initiator behind [camera import](/design/import/camera-import/): packet codec, datasets, a blocking session and the vendor-extension seam |
 | `capsule-i18n` | Canonical ICU catalogs and runtime localization ([Internationalization](/design/i18n/)) |
 | `capsule-sdk` | Spargen-generated REST client plus Capsule's orchestration: auth refresh, resumable upload, sync, recovery, version negotiation, LAN peering |
 | `capsule-wasm` | Browser sealing surface (share-link open, guest-drop seal) over `capsule-core` with default features off |

@@ -101,10 +101,14 @@ which device to update. Artifact formats are versioned by
 
 ## Sync
 
-1. **Delta.** Each side offers its held content addresses and
-   [sync cursor](/design/sync/#discovering-what-changed); the delta is the complement, honouring
-   the receiver's [synchronization scope](/design/sync/#synchronization-scope). Offers are padded
-   to a size bucket and capped per request.
+1. **Delta.** The receiver opens the session with its offer: the head record hash of every
+   asset it holds, and its [sync cursor](/design/sync/#discovering-what-changed). The sender
+   cuts its artifact to the complement, honouring the receiver's
+   [synchronization scope](/design/sync/#synchronization-scope), so an asset the receiver holds
+   at the same head is never sent. Offers are padded to a size bucket, capped per page, and
+   capped in pages. The offer is an additive protocol version: a pair that negotiates an older
+   version exchanges none, and the sender sends everything it would have offered, which
+   ingest makes a no-op for each asset the receiver already holds.
 2. **Pull.** The device that is behind pulls the artifact with ranged requests over the
    channel and verifies it against its content address, so a severed transfer resumes on the
    next channel without re-fetching. A peer may send an advisory
@@ -113,7 +117,8 @@ which device to update. Artifact formats are versioned by
    only with its manifest, metadata and every blob its scope requires. A manifest behind the
    local chain head is quarantined as "peer sent stale state". **A purged asset is never
    resurrected**: the device keeps a tombstone for every asset it has purged, and ingest
-   refuses any asset it has a tombstone for. A deleted asset in
+   refuses any asset it has a tombstone for. A device that cannot read its tombstones refuses
+   the ingest before it opens a session, never running it against an empty set. A deleted asset in
    [trash](/design/organization/#recycling) is not a tombstone, since a `trash-restore`
    still recovers it; its delete manifest is the local chain head, so a peer's older copy is
    quarantined as stale. A device learns of a purge from the
@@ -195,6 +200,9 @@ Deadlines use monotonic time, so clock skew between devices changes nothing.
 - **Version window (unit):** overlapping windows pick the highest common version; disjoint
   windows refuse with the typed error.
 - **Delta (unit):** complement of two address sets; offers are padded and capped.
+- **Offer exchange (smoke):** a receiver's offer crosses the channel whole before the
+  listing; a receiver holding every head is sent an artifact with no assets; a receiver that
+  sends no offer, or an older peer, is sent everything.
 - **Ingest (smoke):** an artifact restores fully; a partial asset is not applied; a tombstoned
   asset is not resurrected; a stale chain head quarantines.
 - **Revocation mid-session (smoke):** a peer revoked during a transfer is cut off at its next

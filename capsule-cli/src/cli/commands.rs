@@ -84,7 +84,8 @@ pub(crate) enum Commands {
         #[arg(long, conflicts_with = "push")]
         json: bool,
     },
-    /// Upload a local Capsule library to the server
+    /// Upload a local Capsule library to the server. An asset handed to another device with
+    /// `capsule peer delegate` is left to that device while its hand-off is open
     Push {
         /// Path to the Capsule library to push
         #[arg(long, value_name = "PATH")]
@@ -109,7 +110,8 @@ pub(crate) enum Commands {
         #[arg(long, value_name = "ASSET_ID")]
         asset: Vec<Uuid>,
         /// Print the run as one JSON document on stdout: the totals and each asset's outcome
-        /// (verified, failed with its error, or planned on a dry run)
+        /// (verified, failed with its error, delegated to another device, or planned on a dry
+        /// run)
         #[arg(long)]
         json: bool,
     },
@@ -192,6 +194,11 @@ pub(crate) enum Commands {
         #[arg(long, value_name = "DAYS", default_value_t = crate::cull::DEFAULT_RETAIN_DAYS)]
         retain_days: i64,
     },
+    /// Move assets to the trash or restore them from it, in the library and on the server
+    Trash {
+        #[command(subcommand)]
+        command: TrashCommands,
+    },
     /// Show what an imported asset's signed sidecar records: caption, rating, tags, GPS, timestamps
     Show {
         /// The asset to show: its id, or a prefix of at least 8 hex characters of its SHA-256
@@ -205,6 +212,10 @@ pub(crate) enum Commands {
         /// works in scripts and CI where there is no terminal.
         #[arg(long)]
         passphrase_stdin: bool,
+        /// Print the asset as one JSON document on stdout: every sidecar field, `null` where
+        /// unset, and its provenance history record by record
+        #[arg(long)]
+        json: bool,
     },
     /// Manage the local library
     Library {
@@ -311,6 +322,52 @@ pub(crate) enum Commands {
 }
 
 #[derive(Subcommand, Debug)]
+pub(crate) enum TrashCommands {
+    /// Move assets to the trash: sign a delete carrying a retention window and send it to the
+    /// server. Soft: each asset stays restorable until its window elapses
+    Delete {
+        /// Path to the Capsule library
+        #[arg(long, value_name = "PATH")]
+        library: PathBuf,
+        /// The asset to move to the trash (repeatable)
+        #[arg(long, value_name = "ASSET_ID", required = true)]
+        asset: Vec<Uuid>,
+        /// Retention window, in days, a fresh delete signs. An asset already in the trash
+        /// (for example by `capsule cull --sweep`) is resent with the window it was deleted
+        /// with; `--json` reports that window as `retention_until`.
+        #[arg(long, value_name = "DAYS", default_value_t = crate::cull::DEFAULT_RETAIN_DAYS)]
+        retain_days: i64,
+        /// Read the library passphrase from stdin instead of prompting, so the command
+        /// works in scripts and CI where there is no terminal.
+        #[arg(long)]
+        passphrase_stdin: bool,
+        /// Print the run as one JSON document on stdout: the totals and each asset's outcome
+        /// (applied, or failed with a stable kind and the server's code)
+        #[arg(long)]
+        json: bool,
+    },
+    /// Restore assets from the trash: sign a trash-restore and send it to the server. An asset
+    /// whose retention window has closed cannot be restored, and is not retried
+    Restore {
+        /// Path to the Capsule library
+        #[arg(long, value_name = "PATH")]
+        library: PathBuf,
+        /// The asset to restore (repeatable)
+        #[arg(long, value_name = "ASSET_ID", required = true)]
+        asset: Vec<Uuid>,
+        /// Read the library passphrase from stdin instead of prompting, so the command
+        /// works in scripts and CI where there is no terminal.
+        #[arg(long)]
+        passphrase_stdin: bool,
+        /// Print the run as one JSON document on stdout: the totals and each asset's outcome
+        /// (applied, or failed with a stable kind such as `retention_elapsed`, the server's
+        /// code and the retention floor)
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
 pub(crate) enum SyncCommands {
     /// Give the server back the signed manifests this library holds and its feed no longer
     /// lists, after it rebuilt this library's index. Manifests only: no bytes are uploaded
@@ -352,24 +409,45 @@ pub(crate) enum LibraryCommands {
         /// Path to the library
         path: PathBuf,
     },
-    /// Migrate unsigned sidecars from an older library into signed assets
-    Migrate {
-        /// Path to the library
-        path: PathBuf,
+    /// List a library's timeline, albums or stacks, as the TUI's library browser shows them
+    List {
+        /// Path to the Capsule library
+        #[arg(long, value_name = "PATH")]
+        library: PathBuf,
+        /// Which view to list
+        #[arg(long, value_name = "VIEW", default_value = "timeline")]
+        view: LibraryViewArg,
         /// Read the library passphrase from stdin instead of prompting, so the command
         /// works in scripts and CI where there is no terminal.
         #[arg(long)]
         passphrase_stdin: bool,
-        /// Retention window, in days, for an asset the old library had already deleted:
-        /// it is moved to trash with this much time left before it is purged
-        #[arg(
-            long,
-            value_name = "DAYS",
-            default_value_t = crate::migrate::DEFAULT_RETAIN_DAYS,
-            value_parser = clap::value_parser!(i64).range(0..)
-        )]
-        retain_days: i64,
+        /// Print the view as one JSON document on stdout: the timeline's assets, every album
+        /// with its labels and assets, or every stack with its labels and members
+        #[arg(long)]
+        json: bool,
     },
+}
+
+/// A library browser view as a command-line value (`--view albums`). Maps onto the catalogue's
+/// `ListView`; kept separate so the argument surface owns its own spelling.
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LibraryViewArg {
+    /// The assets in timeline order, newest first: not in trash, not hidden, one per stack.
+    Timeline,
+    /// Every album, with its labels and the assets it lists.
+    Albums,
+    /// Every stack, with its labels and its members.
+    Stacks,
+}
+
+impl From<LibraryViewArg> for crate::tui::library::catalogue::ListView {
+    fn from(view: LibraryViewArg) -> Self {
+        match view {
+            LibraryViewArg::Timeline => Self::Timeline,
+            LibraryViewArg::Albums => Self::Albums,
+            LibraryViewArg::Stacks => Self::Stacks,
+        }
+    }
 }
 
 #[derive(Subcommand, Debug)]
@@ -720,7 +798,8 @@ pub(crate) enum PeerCommands {
     },
     /// Show this device's handed-off assets: take the other device's acknowledgements, take back
     /// uploads that are overdue or whose device was revoked, and release what the server holds.
-    /// Also lists every hand-off this device quarantined
+    /// A delete made after a hand-off is held until the server holds the asset, then sent. Also
+    /// lists every hand-off this device quarantined
     Status {
         /// Path to the Capsule library holding the assets
         #[arg(long, value_name = "PATH")]
@@ -733,9 +812,11 @@ pub(crate) enum PeerCommands {
         #[arg(long)]
         passphrase_stdin: bool,
         /// Print the run as one JSON document on stdout: each delegation with its state, each
-        /// refused acknowledgement with a stable `kind` and the detail, and each quarantined
+        /// refused acknowledgement with a stable `kind` and the detail, each quarantined
         /// hand-off with its file, the stable `kind` of its refusal, the server's `code` when
-        /// it gave one, and the detail
+        /// it gave one, and the detail, and each delete made after a hand-off with the records
+        /// between the hand-off and it (held, sent, failed and kept, or refused and not
+        /// retried)
         #[arg(long)]
         json: bool,
     },
@@ -755,6 +836,66 @@ pub(crate) enum PeerCommands {
         passphrase_stdin: bool,
         /// Print the discarded hand-off as one JSON document on stdout: its content address,
         /// its asset and the `kind` it had been quarantined for
+        #[arg(long)]
+        json: bool,
+    },
+    /// Send this library's assets to another device of this account over the LAN peering
+    /// channel: dial its `capsule peer pull --listen`, verify it over mutual TLS as a device of
+    /// this account, and serve it one backup artifact sealed for that session. The other device
+    /// skips what it already holds and refuses what it has purged
+    Offer {
+        /// Path to the Capsule library holding the assets
+        #[arg(long, value_name = "PATH")]
+        library: PathBuf,
+        /// The other device's `capsule peer pull --listen` address. Only a local-network
+        /// address is dialed
+        #[arg(long, value_name = "HOST:PORT")]
+        peer: String,
+        /// The device the channel must verify; refused if the device at `--peer` is another
+        #[arg(long, value_name = "DEVICE_ID")]
+        to: Option<Uuid>,
+        /// An asset to send (repeatable); without one, every asset in the library is sent
+        #[arg(long, value_name = "ASSET_ID")]
+        asset: Vec<Uuid>,
+        /// Read the library passphrase from stdin instead of prompting, so the command
+        /// works in scripts and CI where there is no terminal.
+        #[arg(long)]
+        passphrase_stdin: bool,
+        /// Print the run as one JSON document on stdout: the device the channel verified, the
+        /// artifact's content address, size and assets, how many bytes the other device pulled,
+        /// and each failure with a stable `kind` and the detail
+        #[arg(long)]
+        json: bool,
+    },
+    /// Take assets another device of this account sends with `capsule peer offer`: listen on
+    /// ADDR, verify the device over mutual TLS, pull its backup artifact and write every asset
+    /// that is new or a forward update. An asset this device has purged is refused, and the run
+    /// is refused before listening if the purge record cannot be read
+    Pull {
+        /// Path to this device's Capsule library
+        #[arg(long, value_name = "PATH")]
+        library: PathBuf,
+        /// The address to listen on (e.g. `0.0.0.0:7420`). Only local-network peers are
+        /// admitted. The address bound is printed on stderr
+        #[arg(long, value_name = "ADDR")]
+        listen: SocketAddr,
+        /// Seconds to wait for a peer to connect and verify; a verified session is not cut by
+        /// it, but runs to its end at a minimum transfer rate
+        #[arg(
+            long,
+            value_name = "SECONDS",
+            default_value_t = 300,
+            value_parser = clap::value_parser!(u64).range(1..)
+        )]
+        listen_timeout: u64,
+        /// Read the library passphrase from stdin instead of prompting, so the command
+        /// works in scripts and CI where there is no terminal.
+        #[arg(long)]
+        passphrase_stdin: bool,
+        /// Print the run as one JSON document on stdout: the peer, each artifact pulled, the
+        /// assets `applied`, `quarantined` (the peer sent stale state), `tombstoned` (purged
+        /// here), `identical` (already held) and `incomplete`, each failure and each refused
+        /// connection with a stable `kind` and the detail
         #[arg(long)]
         json: bool,
     },
@@ -796,9 +937,9 @@ pub(crate) enum AuthCommands {
             conflicts_with_all = ["no_browser", "email", "password_stdin"]
         )]
         device: bool,
-        /// Print the outcome of a password sign-in as one JSON document on stdout; prompts and
-        /// progress go to stderr. Not combined with --oidc, whose address is printed for a person
-        #[arg(long, conflicts_with = "oidc")]
+        /// Print the outcome as one JSON document on stdout; prompts, progress and, with
+        /// --oidc, the sign-in address and code go to stderr
+        #[arg(long)]
         json: bool,
     },
     /// Set up recovery for a library: bind it to the signed-in account and store its recovery

@@ -9,6 +9,7 @@ status: 0
   "pushed_assets": 0,
   "verified_assets": 0,
   "failed_assets": 0,
+  "delegated_assets": 0,
   "receipts": 0,
   "uploaded_blobs": 0,
   "merged_blobs": 0,

@@ -34,13 +34,25 @@ fn oversized() -> u64 {
     capsule_server::limits::MAX_REQUEST_BODY_BYTES + 1
 }
 
+/// The peer the walk's federated report is filed by.
+///
+/// Not `other.test`, the peer the walk pulls as: that one has its request key pinned before the
+/// report section runs, and the report section's first answer is the `403` of a peer nobody
+/// pinned.
+const REPORTING_PEER: &str = "reporter.test";
+
 /// A bearer for the peer `other.test`, over a capability this server minted and recorded for
 /// an album nobody provisioned — enough to reach the route's admission and nothing past it.
+///
+/// Pins the peer's request key, so a presentation signed with `support::request_signature`
+/// reaches the route.
 async fn federated_peer(fixture: &Fixture) -> String {
     use capsule_server::federation::{
         CapabilityRecord, CapabilityStore as _, MintRequest, PeerId, Scope,
     };
     use capsule_server::store::{AlbumId, UserId};
+
+    support::pin_request_key(fixture, "other.test").await;
 
     let album = AlbumId::new("018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5eff");
     let minted = fixture
@@ -1072,6 +1084,10 @@ async fn every_declared_response_is_exercised() {
     client
         .get("/v1/sync?album_id=018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5eff")
         .header("authorization", &peer_bearer)
+        .header(
+            "x-capsule-request-signature",
+            &support::request_signature(&fixture, "GET", "/v1/sync", &peer_bearer),
+        )
         .send()
         .await
         .assert_status(StatusCode::TOO_MANY_REQUESTS);
@@ -1318,6 +1334,15 @@ async fn every_declared_response_is_exercised() {
     client
         .get(&format!("/v1/blob/{address}"))
         .header("authorization", &peer_bearer)
+        .header(
+            "x-capsule-request-signature",
+            &support::request_signature(
+                &fixture,
+                "GET",
+                &format!("/v1/blob/{address}"),
+                &peer_bearer,
+            ),
+        )
         .send()
         .await
         .assert_status(StatusCode::TOO_MANY_REQUESTS);
@@ -1494,6 +1519,29 @@ async fn every_declared_response_is_exercised() {
     .await
     .assert_status(StatusCode::CONFLICT);
 
+    // 429: the account's mint budget is spent — charged before any store is read.
+    let mints = capsule_server::counter::CounterKey::CapabilityMints(support::user());
+    for _ in 0..capsule_server::counter::budgets::CAPABILITY_MINTS.limit {
+        fixture
+            .counters
+            .hit(
+                &mints,
+                capsule_server::counter::budgets::CAPABILITY_MINTS,
+                fixture.clock.now(),
+            )
+            .await
+            .expect("the counter answers");
+    }
+    mint(request.clone())
+        .send()
+        .await
+        .assert_status(StatusCode::TOO_MANY_REQUESTS);
+    fixture
+        .counters
+        .reset(&mints)
+        .await
+        .expect("the counter answers");
+
     // 500: the album store could not answer, which must never look like "not your album".
     fixture.albums.set_unavailable(true);
     mint(request.clone())
@@ -1514,10 +1562,16 @@ async fn every_declared_response_is_exercised() {
     );
 
     // ── POST /v1/federation/capabilities/refresh ───────────────────────────────────────────
+    // Signed as the peer signs: a session bearer ignores the header, and a capability needs it.
     let refresh = |credential: &str| {
+        let path = "/v1/federation/capabilities/refresh";
         client
-            .post("/v1/federation/capabilities/refresh")
+            .post(path)
             .header("authorization", credential)
+            .header(
+                "x-capsule-request-signature",
+                &support::request_signature(&fixture, "POST", path, credential),
+            )
             .header("x-capsule-protocol", PROTOCOL_VERSION)
     };
     refresh(&bearer)
@@ -1662,12 +1716,12 @@ async fn every_declared_response_is_exercised() {
     let signed = |reason: Option<&str>| {
         support::signed_report(
             &peer_signer,
-            "other.test",
+            REPORTING_PEER,
             &reported,
             &checksum(b"reported bytes"),
             &support::album(),
             reason,
-            "2026-09-02T00:00:00Z",
+            support::REPORTED_AT,
         )
     };
     report(signed(Some("csam")))
@@ -1700,7 +1754,7 @@ async fn every_declared_response_is_exercised() {
         fixture
             .peers
             .pin(
-                &capsule_server::federation::PeerId::new("other.test"),
+                &capsule_server::federation::PeerId::new(REPORTING_PEER),
                 peer_public,
                 fixture.clock.now(),
             )
@@ -1712,12 +1766,12 @@ async fn every_declared_response_is_exercised() {
     let (impostor, _) = support::peer_keypair();
     report(support::signed_report(
         &impostor,
-        "other.test",
+        REPORTING_PEER,
         &reported,
         &checksum(b"reported bytes"),
         &support::album(),
         None,
-        "2026-09-02T00:00:00Z",
+        support::REPORTED_AT,
     ))
     .send()
     .await
@@ -1743,7 +1797,7 @@ async fn every_declared_response_is_exercised() {
             .counters
             .hit(
                 &capsule_server::counter::CounterKey::FederatedReports(format!(
-                    "other.test:{reported}"
+                    "{REPORTING_PEER}:{reported}"
                 )),
                 capsule_server::counter::budgets::FEDERATED_REPORTS,
                 fixture.clock.now(),

@@ -29,10 +29,14 @@
 //!   carry every declaration the native clients consume and dumps them into the committed
 //!   `capsule-sdk/bindings-surface.json` (see [`bindings_surface`]). `mise run gen-bindings`
 //!   runs it after generating the sources.
+//! - `bench-apps <import | compare | record>` normalizes the apps' responsiveness parity
+//!   benchmark reports, records per-device baselines and fails on a regression past one (see
+//!   [`bench_apps`]).
 //! - `screenshot-seed` / `screenshot-compose` are the platform-independent halves of the
 //!   README hero screenshot pipeline driven by `mise run screenshot-ios` (see [`screenshot`]).
 
 mod architecture;
+mod bench_apps;
 mod bindings_surface;
 mod drop_kat;
 mod i18n;
@@ -51,7 +55,7 @@ use regex::{Captures, Regex};
 use semver::Version;
 use toml_edit::Item;
 
-const USAGE: &str = "usage: xtask <set-version <X.Y.Z> | i18n [--check] | i18n-guard | translate-readme [--check | --extract] | share-kat [<out-path>] | drop-kat [<out-path>] | wasm-surface [--check] | bindings-surface [--check] | architecture-check | test-layout-check | screenshot-seed [--anchor YYYY-MM-DD] | screenshot-compose --input <png> --output <png>>";
+const USAGE: &str = "usage: xtask <set-version <X.Y.Z> | i18n [--check] | i18n-guard | translate-readme [--check | --extract] | share-kat [<out-path>] | drop-kat [<out-path>] | wasm-surface [--check] | bindings-surface [--check] | architecture-check | test-layout-check | bench-apps <import | compare | record> | screenshot-seed [--anchor YYYY-MM-DD] | screenshot-compose --input <png> --output <png>>";
 
 /// Default output path (repo-relative) for the share-link KAT fixture the bun test consumes.
 const SHARE_KAT_OUT: &str = "capsule-web/src/generated/share-kat.json";
@@ -104,6 +108,7 @@ fn main() -> Result<()> {
         }
         Some("wasm-surface") => wasm_surface::run(&repo_root(), check_flag(args.next())?),
         Some("bindings-surface") => bindings_surface::run(&repo_root(), check_flag(args.next())?),
+        Some("bench-apps") => bench_apps::run(args),
         Some("screenshot-seed") => screenshot::run_seed(&repo_root(), args),
         Some("screenshot-compose") => screenshot::run_compose(args),
         Some(other) => bail!("unknown command `{other}`; {USAGE}"),

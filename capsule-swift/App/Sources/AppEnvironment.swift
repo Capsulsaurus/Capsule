@@ -1,4 +1,5 @@
 import AssetKit
+import CapsuleAlerts
 import CapsuleCatalog
 import CapsuleDiagnostics
 import CapsuleDomain
@@ -6,6 +7,7 @@ import CapsuleFoundation
 import CapsuleMock
 import CapsulePorts
 import FeatureAuth
+import FeatureSettings
 import FeatureSharing
 import FeatureTimeline
 import FeatureViewer
@@ -43,6 +45,13 @@ import ManagedStore
 /// source the timeline is subscribed to. Two instances would be two catalogs'
 /// worth of truth and one of them unseen.
 ///
+/// The timeline is not the only surface an import has to reach. Thumbnails and
+/// viewer pixels, Recently Deleted, captions and the info panel's metadata are
+/// each composed over both stores the same way, managed store first wherever
+/// order decides ownership — see ``composeThumbnails(library:managed:)``,
+/// ``composeTrash(library:managed:)``, ``composeCaptions(library:managed:)``
+/// and ``composeMetadata(locations:managed:)``.
+///
 /// ## Two surfaces, on purpose
 ///
 /// The existing screens consume the older `AssetKit` protocols and are not
@@ -55,7 +64,8 @@ struct AppEnvironment {
 
     /// Every port, wired into one coherent scenario. Read the scenario name
     /// from `-mock-scenario`, so `xcrun simctl launch … -mock-scenario
-    /// quarantine` and an Xcode scheme argument select the same world.
+    /// quarantine` and an Xcode scheme argument select the same world; with no
+    /// such argument, from the override the Advanced settings screen recorded.
     let mock: MockEnvironment
 
     /// Which world this launch is running. Shown in diagnostics.
@@ -96,6 +106,19 @@ struct AppEnvironment {
     /// Wires MetricKit, breadcrumbs, the crash prompt, and bug-report export.
     let diagnostics: DiagnosticsCoordinator
 
+    /// The local-alert loop: per-class arm / re-arm / cancel, permission at
+    /// first use, and the bounded snooze. See ``makeAlerts(mock:)``.
+    let alerts: AlertCoordinator
+    /// The notification-center delegate, held for the app's lifetime so a tap
+    /// — including one that launched the app — reaches the router.
+    ///
+    /// Not installed in the mock lane: nothing there is armed with the OS, so
+    /// there is nothing to tap, and touching `UNUserNotificationCenter` at all
+    /// is what the mock lane avoids. The lane that composes
+    /// `UserNotificationAlertScheduler` calls `install()` beside it, before
+    /// launch finishes.
+    let alertResponder: AlertNotificationResponder
+
     // MARK: Raw ports
 
     // Forwarded rather than stored: `MockEnvironment` already owns the graph,
@@ -122,7 +145,12 @@ struct AppEnvironment {
     var auth: any AuthPort { mock.auth }
     var devices: any DevicePort { mock.devices }
     var enrollment: any EnrollmentPort { mock.enrollment }
-    var recovery: any RecoveryPort { mock.recovery }
+    /// Wrapped so every verify, snooze or rotation refreshes the alerts: the
+    /// port has no change stream for ``runAlertLoop()`` to follow.
+    var recovery: any RecoveryPort {
+        let alerts = alerts
+        return AlertRefreshingRecoveryPort(mock.recovery) { _ = await alerts.refresh() }
+    }
 
     var quarantine: any QuarantinePort { mock.quarantine }
     var maintenance: any MaintenancePort { mock.maintenance }
@@ -162,7 +190,31 @@ struct AppEnvironment {
 
     // MARK: Construction
 
-    init(mock: MockEnvironment = .fromLaunchArguments()) {
+    /// The world this launch runs: see ``launchWorld(_:defaults:)``.
+    init() {
+        self.init(mock: Self.launchWorld())
+    }
+
+    /// Read the scenario at launch.
+    ///
+    /// The command line wins: a launch that passes `-mock-scenario` — every UI
+    /// test, every scheme that sets one — gets that world whatever the device
+    /// has persisted. Only a launch that names none falls back to the
+    /// ``MockScenarioSelection`` the Advanced screen wrote, and then to the
+    /// healthy world. A scenario cannot be swapped under a running graph, which
+    /// is why the screen records a choice and this is where it takes effect.
+    static func launchWorld(
+        _ processInfo: ProcessInfo = .processInfo,
+        defaults: UserDefaults = .standard
+    ) -> MockEnvironment {
+        let persisted = MockScenarioSelection(defaults: defaults).selected()
+        CapsuleLog.app.debug(
+            "persisted mock scenario: \(persisted?.rawValue ?? "none", privacy: .public)"
+        )
+        return .fromLaunchArguments(processInfo, persisted: persisted)
+    }
+
+    init(mock: MockEnvironment) {
         self.mock = mock
         CapsuleLog.app.info("mock scenario: \(mock.scenario.rawValue, privacy: .public)")
 
@@ -172,20 +224,29 @@ struct AppEnvironment {
         let library = PortBackedAssetProvider(library: mock.library, organize: mock.organize)
         let managed = Self.makeManagedLane(root: Self.libraryRoot())
         assetProvider = Self.composeTimeline(library: library, managed: managed.provider)
-        captionStore = PortBackedCaptionStore(library: mock.library, organize: mock.organize)
+        captionStore = Self.composeCaptions(
+            library: PortBackedCaptionStore(library: mock.library, organize: mock.organize),
+            managed: managed
+        )
         albumProvider = PortBackedAlbumProvider(albums: mock.albums, library: mock.library)
         // Constructed here rather than at its own assignment below because the
         // trash adapter holds the SR1 gate and needs the same authenticator the
         // Security screen reports on — two instances would be two gates.
         let authenticator = MockLocalAuthenticator()
         localAuthenticator = authenticator
-        trashProvider = PortBackedTrashProvider(
-            organize: mock.organize,
-            library: mock.library,
-            authenticator: authenticator
+        trashProvider = Self.composeTrash(
+            library: PortBackedTrashProvider(
+                organize: mock.organize,
+                library: mock.library,
+                authenticator: authenticator
+            ),
+            managed: managed
         )
         hiddenStore = HiddenStore()
-        let renderer = PortBackedThumbnailProvider(renderer: mock.thumbnails)
+        let renderer = Self.composeThumbnails(
+            library: PortBackedThumbnailProvider(renderer: mock.thumbnails),
+            managed: managed
+        )
         thumbnails = renderer
         // The viewer's own loader asks PhotoKit first and answers `nil` for
         // anything that is not a system asset — which is everything in this
@@ -193,7 +254,7 @@ struct AppEnvironment {
         // that draws the grid draws the viewer's pixels too.
         mediaLoader = ViewerMediaLoader(
             fallback: renderer,
-            metadataSource: MockMetadataSource(locations: library)
+            metadataSource: Self.composeMetadata(locations: library, managed: managed)
         )
         placeNames = SystemPlaceNameResolver()
         importer = managed.importer
@@ -209,13 +270,24 @@ struct AppEnvironment {
         let consent = ConsentStore()
         consentStore = consent
         diagnostics = DiagnosticsCoordinator(consent: consent)
+
+        alerts = Self.makeAlerts(mock: mock)
+        alertResponder = AlertNotificationResponder()
     }
 
-    /// The on-disk managed store's two faces: the provider the timeline reads
-    /// it through, and the picker-driven importer that writes it.
+    /// The on-disk managed store's faces: the provider the timeline and the
+    /// trash read it through, the picker-driven importer that writes it, the
+    /// reader that decodes its files, and the gate its trash opens through.
     struct ManagedLane {
         let provider: ManagedProvider
         let importer: LibraryImporter
+        let reader: ManagedMediaReader
+        /// The provider's SR1 gate. It challenges nobody: it opens only when
+        /// ``composeTrash(library:managed:)``'s composite admits it after the
+        /// port-backed gate has been answered, so one prompt opens both trashes
+        /// and the managed one never opens on its own — nor through the system
+        /// `LAContext` sheet this lane keeps out.
+        let trashGate: SecondaryTrashGate
     }
 
     /// The picker-driven import flow and the provider that reads what it writes.
@@ -237,12 +309,53 @@ struct AppEnvironment {
             metadataExtractor: ImageIOMetadataExtractor(),
             sidecarCoder: JSONSidecarCoder()
         )
-        let provider = ManagedProvider(library: library)
+        let trashGate = SecondaryTrashGate()
+        let provider = ManagedProvider(library: library, authGate: trashGate)
         CapsuleLog.app.debug("managed lane composed at \(root.path, privacy: .private)")
         return ManagedLane(
             provider: provider,
-            importer: LibraryImporter(importService: importService, managedProvider: provider)
+            importer: LibraryImporter(importService: importService, managedProvider: provider),
+            reader: ManagedMediaReader(library: library),
+            trashGate: trashGate
         )
+    }
+
+    /// Recently Deleted over both stores: the composite timeline's `delete`
+    /// soft-deletes an import in the managed catalog, and this is where it can
+    /// then be listed, restored and purged.
+    static func composeTrash(library: any TrashProvider, managed: ManagedLane) -> any TrashProvider {
+        CompositeTrashProvider(
+            primary: library,
+            secondaries: [managed.provider],
+            secondaryGate: managed.trashGate
+        )
+    }
+
+    /// The grid's and the viewer's pixels over both stores.
+    ///
+    /// The managed provider is asked first: its `nil` is exact (a catalog
+    /// lookup), while the mock renderer paints any identifier whose shape it
+    /// decodes, which a freshly minted import id can happen to match.
+    static func composeThumbnails(library: any ThumbnailProvider, managed: ManagedLane) -> any ThumbnailProvider {
+        CompositeThumbnailProvider(providers: [ManagedThumbnailProvider(reader: managed.reader), library])
+    }
+
+    /// The info panel's metadata over both stores, the managed file's real EXIF
+    /// ahead of the mock's derived fixture for the same ownership reason.
+    static func composeMetadata(
+        locations: any AssetLocationSource,
+        managed: ManagedLane
+    ) -> any AssetMetadataSource {
+        CompositeMetadataSource(sources: [
+            ManagedMetadataSource(reader: managed.reader),
+            MockMetadataSource(locations: locations),
+        ])
+    }
+
+    /// Captions routed to the store that owns the asset, so an import's caption
+    /// is never written into the mock library under an id it does not know.
+    static func composeCaptions(library: any CaptionStore, managed: ManagedLane) -> any CaptionStore {
+        CompositeCaptionStore(primary: library, secondaries: [ManagedCaptionStore(provider: managed.provider)])
     }
 
     /// The timeline every screen reads: the port-backed library and the

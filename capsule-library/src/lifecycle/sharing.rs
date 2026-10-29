@@ -7,6 +7,7 @@ use capsule_core::sharing::{
     ShareLinkRecord, SharePublication, ShareScope, SharedAsset, SharingError, encapsulate_scope,
     generate_opaque_id, publish_share,
 };
+use capsule_core::sidecar::{ExportPrivacy, sidecar_for_export};
 use uuid::Uuid;
 
 use super::{AssetState, Workspace, asset_is_deleted, now_rfc3339};
@@ -84,13 +85,21 @@ impl Workspace {
     /// An asset in trash is not shareable: asset scope refuses it with
     /// [`SharingError::ScopeUnavailable`], and album scope leaves it out.
     ///
+    /// Each record carries the asset's sidecar as it may cross the boundary: the
+    /// [Privacy on Export] strip ([`sidecar_for_export`]) under `privacy`, the per-export
+    /// choice the caller passes for this one link. The workspace never stores it, and its own
+    /// sidecar is untouched.
+    ///
     /// # Errors
     ///
     /// [`SharingError::ScopeUnavailable`] when the scope is not managed by this workspace, or an
     /// asset-scoped asset is in trash.
+    ///
+    /// [Privacy on Export]: https://docs/design/metadata/#privacy-on-export
     pub fn shared_assets(
         &self,
         scope: ShareScope,
+        privacy: ExportPrivacy,
     ) -> std::result::Result<Vec<SharedAsset>, SharingError> {
         let record = |asset: &AssetState, grant: Grant| {
             let head = &asset
@@ -117,6 +126,7 @@ impl Workspace {
                 nonce_prefix: head.nonce_prefix,
                 key_mode,
                 wrapped_file_key,
+                sidecar: Some(sidecar_for_export(&asset.sidecar, privacy).to_canonical_vec()),
             }
         };
         match scope {
@@ -158,15 +168,29 @@ impl Workspace {
     /// two different `metadata_hash`es; publish once per link and register what that call
     /// returned.
     ///
+    /// `privacy` is this export's [Privacy on Export] choice: every covered sidecar is stripped
+    /// under it before the record is sealed, so the blob the server stores is already stripped.
+    /// [`ExportPrivacy::default`] strips every row; an opt-in applies to this link only and is
+    /// never stored.
+    ///
     /// # Errors
     ///
     /// What [`shared_assets`](Self::shared_assets) and [`publish_share`] return.
+    ///
+    /// [Privacy on Export]: https://docs/design/metadata/#privacy-on-export
     #[tracing::instrument(skip(self, link), fields(opaque_id = %link.opaque_id_hex()))]
     pub fn publish_link(
         &self,
         link: &ShareLink,
+        privacy: ExportPrivacy,
     ) -> std::result::Result<SharePublication, SharingError> {
-        let assets = self.shared_assets(link.scope)?;
+        if privacy != ExportPrivacy::default() {
+            tracing::info!(
+                ?privacy,
+                "share link: the issuer opted in to retain metadata"
+            );
+        }
+        let assets = self.shared_assets(link.scope, privacy)?;
         let covered = assets.len();
         let publication = publish_share(
             &link.wrapped_scope,

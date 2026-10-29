@@ -157,6 +157,19 @@ public actor FFIAssetCatalog: AssetCatalog {
         }
     }
 
+    /// Writes the core catalog's `caption` column — the index projection of the
+    /// sidecar's caption register. `nil` or an empty string clears it. An
+    /// unknown `assetID` throws ``CatalogError/invalidArgument(message:)`` and
+    /// nothing is written, so a caption is never reported saved and then lost.
+    public func setCaption(_ caption: String?, assetID: String) throws {
+        do {
+            CapsuleLog.catalog.debug("setCaption id=\(assetID, privacy: .public) cleared=\(caption?.isEmpty ?? true)")
+            try catalog.setCaption(uuid: assetID, caption: caption)
+        } catch {
+            throw nativeCatalogError(error)
+        }
+    }
+
     // MARK: Gated views
 
     // These three are the only `AssetCatalog` requirements whose signatures name a

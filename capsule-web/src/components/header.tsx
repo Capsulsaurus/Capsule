@@ -11,6 +11,7 @@ import {
     DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
+import { profileLabel, profileSubtitle } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { APP_NAME } from '@/lib/constant';
 import { ModeToggle } from './ui/mode-toggle';
@@ -21,10 +22,12 @@ export const Header = () => {
     const navigate = useNavigate();
     const intl = useIntl();
 
-    // The display name if the account set one, else the address it signs in with. There is no
-    // `username` or `name` any more: each was a fact the server stored about a
-    // person, and what is left is what the person chose to be shown as.
-    const label = user ? (user.display_name ?? user.email) : '';
+    // The address the account signs in with, else the display name it set, else the account id: a
+    // federated account may have no address. The display name, when it is not already the label,
+    // goes on the line beneath it. There is no `username` or `name` any more: each was a fact the
+    // server stored about a person, and what is left is what the person chose to be shown as.
+    const label = user ? profileLabel(user) : '';
+    const subtitle = user ? profileSubtitle(user) : null;
     const initials = user
         ? label
               .split(/[\s@.]+/)
@@ -91,9 +94,11 @@ export const Header = () => {
                                         <div className="px-2 py-1.5 text-sm font-medium">
                                             {label}
                                         </div>
-                                        <div className="px-2 pb-1.5 text-xs text-muted-foreground">
-                                            {user.email}
-                                        </div>
+                                        {subtitle && (
+                                            <div className="px-2 pb-1.5 text-xs text-muted-foreground">
+                                                {subtitle}
+                                            </div>
+                                        )}
                                         <DropdownMenuSeparator />
                                     </>
                                 )}

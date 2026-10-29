@@ -1223,6 +1223,7 @@ dependencies = [
  "capsule-cli-entity",
  "capsule-cli-migration",
  "capsule-core",
+ "capsule-e2e",
  "capsule-i18n",
  "capsule-library",
  "capsule-sdk",
@@ -1240,6 +1241,7 @@ dependencies = [
  "indexmap 2.14.0",
  "insta",
  "jiff",
+ "libc",
  "nanoid",
  "ratatui",
  "ratatui-image",
@@ -1391,6 +1393,7 @@ dependencies = [
  "jiff",
  "p256",
  "proptest",
+ "ptpip-rs",
  "rawshift-image",
  "rusqlite",
  "rustix 1.1.4",
@@ -5917,6 +5920,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f94967dc7688f3054c7fac87473ffae4cc4c3904800e2d9f5b857246d8963b0a"
 dependencies = [
  "prost 0.14.4",
+]
+
+[[package]]
+name = "ptpip-rs"
+version = "0.1.0"
+dependencies = [
+ "jiff",
+ "thiserror 2.0.20",
+ "tracing",
 ]
 
 [[package]]

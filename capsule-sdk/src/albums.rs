@@ -16,6 +16,12 @@
 //! **No name crosses the wire.** The request body carries the id and nothing else; album
 //! titles live in the encrypted sidecar and the server is not entitled to them.
 //!
+//! **Lifecycle ops ride here too.** [`AlbumClient::apply_op`] sends one signed `delete`,
+//! `trash-restore` or other bytes-free lifecycle manifest to `POST /v1/albums/{album_id}/ops`
+//! and types the refusal ([`LifecycleOpError`]), so every client tells a closed retention window
+//! (`retention_elapsed`, final for the asset) from a stale chain or a transient fault the same
+//! way.
+//!
 //! [Organization — The Default Album]: https://docs/design/organization/#the-default-album
 //! [invariant 6]: https://docs/design/threat-model/validation/#server-side-validation-invariants
 
@@ -486,6 +492,267 @@ fn publish_refusal(error: crate::rest::Error<crate::rest::PublishAlbumRosterErro
         code,
         current_version,
     }
+}
+
+// ─── Lifecycle ops ────────────────────────────────────────────────────────────
+
+/// What the server did with one lifecycle op (`POST /v1/albums/{album_id}/ops`).
+///
+/// A replay is a success: the server answers a manifest it already applied with the response
+/// it gave the first time, so a client that lost an acknowledgement resends without branching.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppliedOp {
+    /// The asset the op chained onto.
+    pub asset_id: String,
+    /// The action the server applied (`delete`, `trash-restore`, …).
+    pub action: String,
+    /// The feed position the op occupies; on a replay, the one the first application took.
+    pub sync_seq: u64,
+    /// Whether the server had applied this manifest already.
+    pub replayed: bool,
+}
+
+/// Why a lifecycle op was not applied.
+#[derive(Debug, thiserror::Error)]
+pub enum LifecycleOpError {
+    /// The request did not complete: the server could not be reached, the session could not
+    /// authorize it, or the response was not one the contract describes.
+    #[error("lifecycle op transport: {0}")]
+    Transport(String),
+    /// The server refused the op with one of the problems the contract declares.
+    #[error("lifecycle op refused with status {status} ({code})")]
+    Refused {
+        /// The HTTP status code.
+        status: u16,
+        /// The stable `error.*` code the server attached.
+        code: String,
+        /// On a `409 error.upload.stale_revival`, the chain head the manifest must name, so a
+        /// caller can re-read and rebase rather than resend a losing manifest.
+        chain_head: Option<String>,
+        /// On a `409 error.upload.retention_elapsed`, the signed retention floor (RFC 3339) the
+        /// trash-restore came too late for, as the server judged it — so a caller that never
+        /// held the delete can still say when the window closed.
+        retention_until: Option<String>,
+    },
+    /// The response could not be read as the contract describes it.
+    #[error("malformed lifecycle op response: {0}")]
+    Malformed(String),
+    /// The server will not take this client's writes: its `426`, or a window it advertised
+    /// that already refuses this build (issue #674). Update the app.
+    #[error(transparent)]
+    UpgradeRequired(Box<crate::net::negotiation::UpgradeRequired>),
+}
+
+impl LifecycleOpError {
+    /// The stable `error.*` code the server attached to a refusal, when there is one.
+    #[must_use]
+    pub fn error_code(&self) -> Option<&str> {
+        match self {
+            Self::Refused { code, .. } => Some(code),
+            Self::UpgradeRequired(refusal) => Some(refusal.error_code()),
+            Self::Transport(_) | Self::Malformed(_) => None,
+        }
+    }
+
+    /// A stable, machine-readable name for the failure — the `kind` a `--json` report carries.
+    ///
+    /// - `retention_elapsed` — a `trash-restore` after the asset's signed retention floor
+    ///   (`409 error.upload.retention_elapsed`). The asset stays in the trash for good.
+    /// - `stale_revival` — the manifest does not chain onto the asset's stored head (`409`).
+    /// - `refused` — the server judged the op itself malformed (`400`, `413`, `415`, `422`).
+    /// - `forbidden` — the caller may not write this album or asset, or is suspended (`403`).
+    /// - `unauthenticated` — the session was not accepted (`401`).
+    /// - `upgrade_required` — the server will not take this build's writes (`426`).
+    /// - `unavailable` — the server could not answer (`500`) or could not be reached.
+    /// - `malformed` — the response could not be read.
+    #[must_use]
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Refused { code, .. }
+                if code == capsule_i18n::error_codes::UPLOAD_RETENTION_ELAPSED =>
+            {
+                "retention_elapsed"
+            }
+            Self::Refused { status: 409, .. } => "stale_revival",
+            Self::Refused { status: 401, .. } => "unauthenticated",
+            Self::Refused { status: 403, .. } => "forbidden",
+            Self::Refused { status: 500.., .. } | Self::Transport(_) => "unavailable",
+            Self::Refused { .. } => "refused",
+            Self::UpgradeRequired(_) => "upgrade_required",
+            Self::Malformed(_) => "malformed",
+        }
+    }
+
+    /// Whether sending the same op again can only be refused again: the server judged the op
+    /// itself (`400`, `409`, `413`, `415`, `422` — a stale chain, a regressed epoch, a closed
+    /// retention window, a malformed op). An unreachable server, a session it did not accept,
+    /// a permission it did not grant, an upgrade it asked for and a server fault are not: the
+    /// same bytes may be applied once that changes.
+    ///
+    /// A permanent refusal is never retried. A `retention_elapsed` one in particular is final
+    /// for the asset: no rebase or resend reopens a retention window.
+    #[must_use]
+    pub fn is_permanent(&self) -> bool {
+        matches!(
+            self,
+            Self::Refused {
+                status: 400 | 409 | 413 | 415 | 422,
+                ..
+            }
+        )
+    }
+}
+
+impl From<crate::auth::AuthError> for LifecycleOpError {
+    fn from(err: crate::auth::AuthError) -> Self {
+        match err {
+            crate::auth::AuthError::UpgradeRequired(refusal) => Self::UpgradeRequired(refusal),
+            other => Self::Transport(other.to_string()),
+        }
+    }
+}
+
+impl From<AlbumError> for LifecycleOpError {
+    fn from(err: AlbumError) -> Self {
+        match err {
+            AlbumError::UpgradeRequired(refusal) => Self::UpgradeRequired(refusal),
+            other => Self::Transport(other.to_string()),
+        }
+    }
+}
+
+impl AlbumClient {
+    /// Apply one signed lifecycle op to the album its envelope names, through the generated
+    /// `album_lifecycle_op` operation.
+    ///
+    /// Orchestration only, as [`Self::publish_roster`] is: the manifest was signed by the
+    /// library and the request is the generated type, so nothing on this path hand-writes a
+    /// wire shape. Idempotent under the manifest: a replay answers the first application's
+    /// response with `replayed` set.
+    ///
+    /// Under a session, a `401` is refreshed once and replayed. Nothing else is retried here,
+    /// and a [`permanent`](LifecycleOpError::is_permanent) refusal must not be retried by the
+    /// caller either.
+    ///
+    /// # Errors
+    ///
+    /// [`LifecycleOpError::Refused`] with the server's `error.*` code when the server refused
+    /// the op, [`LifecycleOpError::Malformed`] when the envelope names no album or the response
+    /// could not be read, [`LifecycleOpError::Transport`] when the request did not complete, and
+    /// [`LifecycleOpError::UpgradeRequired`] when the server will not take this build's writes.
+    #[instrument(skip_all, fields(asset_id = %request.manifest_envelope.file_id, action = %request.manifest_envelope.action))]
+    pub async fn apply_op(
+        &self,
+        request: &crate::rest::types::OpRequest,
+    ) -> Result<AppliedOp, LifecycleOpError> {
+        let album_id = request
+            .manifest_envelope
+            .album_id
+            .clone()
+            .ok_or_else(|| LifecycleOpError::Malformed("the op names no album".to_owned()))?;
+        let client = self.transport.generated()?;
+        let wire = match apply(&client, &album_id, request).await {
+            Ok(wire) => wire,
+            Err(error) if is_op_unauthenticated(&error) => match &self.transport.auth {
+                AlbumAuth::Session(session) => {
+                    tracing::info!("the lifecycle op answered 401; refreshing once and retrying");
+                    session.refresh().await?;
+                    apply(&client, &album_id, request)
+                        .await
+                        .map_err(op_refusal)?
+                }
+                AlbumAuth::Static { .. } => return Err(op_refusal(error)),
+            },
+            Err(error) => return Err(op_refusal(error)),
+        };
+        let sync_seq = u64::try_from(wire.sync_seq).map_err(|_| {
+            LifecycleOpError::Malformed(format!("sync_seq: {} is negative", wire.sync_seq))
+        })?;
+        tracing::info!(
+            sync_seq,
+            replayed = wire.replayed,
+            applied = %wire.action,
+            "lifecycle op applied"
+        );
+        Ok(AppliedOp {
+            asset_id: wire.asset_id,
+            action: wire.action,
+            sync_seq,
+            replayed: wire.replayed,
+        })
+    }
+}
+
+/// One call of the generated lifecycle operation, at this build's protocol date.
+async fn apply(
+    client: &crate::rest::Client,
+    album_id: &str,
+    body: &crate::rest::types::OpRequest,
+) -> Result<crate::rest::types::OpResponse, crate::rest::Error<crate::rest::AlbumLifecycleOpError>>
+{
+    Ok(client
+        .album_lifecycle_op(
+            album_id.to_owned(),
+            capsule_core::crypto::primitives::PROTOCOL_VERSION,
+            None,
+            body,
+        )
+        .await?
+        .into_inner())
+}
+
+/// Whether the lifecycle op's refusal was the credential's.
+fn is_op_unauthenticated(error: &crate::rest::Error<crate::rest::AlbumLifecycleOpError>) -> bool {
+    matches!(
+        error,
+        crate::rest::Error::Api(response)
+            if matches!(
+                response.inner(),
+                crate::rest::AlbumLifecycleOpError::Status401(_)
+            )
+    )
+}
+
+/// Map the generated lifecycle operation's typed error onto [`LifecycleOpError`].
+fn op_refusal(error: crate::rest::Error<crate::rest::AlbumLifecycleOpError>) -> LifecycleOpError {
+    use crate::rest::AlbumLifecycleOpError as Refusal;
+
+    if let Some(refusal) = crate::client::upgrade_required_of(&error) {
+        tracing::warn!("lifecycle op refused: {refusal}");
+        return LifecycleOpError::UpgradeRequired(Box::new(refusal));
+    }
+    let crate::rest::Error::Api(response) = error else {
+        tracing::warn!(%error, "lifecycle op did not complete");
+        return LifecycleOpError::Transport(error.to_string());
+    };
+    let status = response.status().as_u16();
+    let (code, chain_head, retention_until) = match response.into_inner() {
+        Refusal::Status409(problem) => (problem.code, problem.chain_head, problem.retention_until),
+        Refusal::Status400(problem)
+        | Refusal::Status401(problem)
+        | Refusal::Status403(problem)
+        | Refusal::Status413(problem)
+        | Refusal::Status415(problem)
+        | Refusal::Status422(problem)
+        | Refusal::Status500(problem) => (problem.code, None, None),
+        Refusal::Status426(problem) => (problem.code, None, None),
+    };
+    let logged_until = retention_until.clone();
+    let refusal = LifecycleOpError::Refused {
+        status,
+        code,
+        chain_head,
+        retention_until,
+    };
+    tracing::warn!(
+        status,
+        code = refusal.error_code(),
+        retention_until = ?logged_until,
+        kind = refusal.kind(),
+        permanent = refusal.is_permanent(),
+        "lifecycle op refused"
+    );
+    refusal
 }
 
 /// A counter the document types as a signed integer, as the SDK speaks it.

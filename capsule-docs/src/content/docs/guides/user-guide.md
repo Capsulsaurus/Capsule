@@ -66,6 +66,13 @@ is that context.
 - `capsule cull` flags assets as pick, neutral or reject and filters by flag.
 - `capsule cull --sweep` moves rejects to the trash. Trashed assets stay recoverable for the
   retention window (`--retain-days`) before they are purged.
+- `capsule trash delete --asset <id>` moves an asset to the trash on the server as well as in
+  the library, and `capsule trash restore --asset <id>` brings it back. An asset already in
+  the trash, for example after `capsule cull --sweep`, keeps the retention window it was
+  trashed with: `--retain-days` applies only to a fresh delete, and `--json` reports the
+  window sent as `retention_until`. A restore after the
+  retention window has closed is refused (`retention_elapsed` under `--json`) and is not
+  retried: the asset stays in the trash until it is purged.
 
 ## Share
 

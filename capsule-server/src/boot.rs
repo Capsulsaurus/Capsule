@@ -85,7 +85,7 @@ use crate::escrow::{EscrowContext, EscrowStore, InMemoryEscrow};
 use crate::federation::postgres::{PostgresCapabilities, PostgresPeers};
 use crate::federation::{
     CapabilityCodec, CapabilityStore, FederationCollaborators, FederationContext,
-    InMemoryCapabilities, InMemoryPeers, PeerStore,
+    InMemoryCapabilities, InMemoryPeers, PeerAdministration, PeerStore,
 };
 use crate::gc::memory::InMemoryCollection;
 use crate::gc::postgres::PostgresCollection;
@@ -229,6 +229,11 @@ pub struct Maintenance {
     /// The same ledger the server charges. Its limits are the unlimited default because a
     /// suspension reads none: it is set by an operator, not reached by bytes.
     pub quota: QuotaContext,
+    /// The operator's acts on the peer list (`peer pin`, `peer block`, `peer unblock`,
+    /// `peer show`), over the peer and capability stores the server reads (#476).
+    pub peers: PeerAdministration,
+    /// The moderation store, for the operator's report queue (`moderation reports`, #476).
+    pub moderation: Arc<dyn ModerationStore>,
 }
 
 /// A server, ready to serve.
@@ -452,6 +457,14 @@ struct Stores {
     /// The share links: read by the application, and by the collector, which must not sweep a
     /// blob a live link serves (#653). Here rather than in [`Ports`] so both are one store.
     shares: Arc<dyn ShareStore>,
+    /// The capability store, which **is** the revocation list `revoked-jti` serves: one object,
+    /// handed to discovery as the list, to federation as the store, and to the operator's peer
+    /// commands as what a block cascades over (#476). Here so all three are one store.
+    capabilities: Arc<dyn CapabilityStore>,
+    /// The peers: read by federation at every boundary and written by `capsule-server peer …`.
+    peers: Arc<dyn PeerStore>,
+    /// The moderation store: written by report intake, read by `capsule-server moderation …`.
+    moderation: Arc<dyn ModerationStore>,
 }
 
 impl Stores {
@@ -507,6 +520,12 @@ impl Stores {
                 self.clock.clone(),
                 QuotaLimits::unlimited(),
             ),
+            peers: PeerAdministration::new(
+                self.peers.clone(),
+                self.capabilities.clone(),
+                self.clock.clone(),
+            ),
+            moderation: self.moderation.clone(),
         }
     }
 }
@@ -586,6 +605,9 @@ impl Base {
             marks: Arc::new(InMemoryCollection::new()),
             quotas: Arc::new(InMemoryQuota::new()),
             shares: Arc::new(InMemoryShares::new()),
+            capabilities: Arc::new(InMemoryCapabilities::new(self.clock.clone())),
+            peers: Arc::new(InMemoryPeers::new()),
+            moderation: Arc::new(InMemoryModeration::new()),
             root: self.root,
             clock: self.clock,
             blobs: self.blobs,
@@ -601,6 +623,12 @@ impl Base {
             marks: Arc::new(PostgresCollection::new(connection.clone())),
             quotas: Arc::new(PostgresQuota::new(connection.clone())),
             shares: Arc::new(PostgresShares::new(connection.clone())),
+            capabilities: Arc::new(PostgresCapabilities::new(
+                connection.clone(),
+                self.clock.clone(),
+            )),
+            peers: Arc::new(PostgresPeers::new(connection.clone())),
+            moderation: Arc::new(PostgresModeration::new(connection.clone())),
             root: self.root,
             clock: self.clock,
             blobs: self.blobs,
@@ -700,14 +728,9 @@ struct Ports {
     members: Arc<dyn MembershipStore>,
     directories: Arc<dyn DeviceDirectoryStore>,
     receipts: Arc<dyn ReceiptLog>,
-    /// The capability store **is** the revocation list `revoked-jti` serves: one object, handed
-    /// to discovery as the list and to federation as the store (design/federation.md).
-    capabilities: Arc<dyn CapabilityStore>,
-    peers: Arc<dyn PeerStore>,
     escrow: Arc<dyn EscrowStore>,
     enrollments: Arc<dyn EnrollmentStore>,
     channels: Arc<dyn ChannelStore>,
-    moderation: Arc<dyn ModerationStore>,
     drops: Arc<dyn DropStore>,
     counters: Arc<dyn CounterStore>,
     /// The pending OIDC ceremonies. Built on both arms whether or not `OIDC_ISSUER` is set, and
@@ -751,12 +774,9 @@ fn memory_ports(
         members: Arc::new(InMemoryMembership::new()),
         directories: Arc::new(InMemoryDeviceDirectory::new()),
         receipts,
-        capabilities: Arc::new(InMemoryCapabilities::new(clock.clone())),
-        peers: Arc::new(InMemoryPeers::new()),
         escrow: Arc::new(InMemoryEscrow::new()),
         enrollments: Arc::new(InMemoryEnrollments::with_default_ttl(clock.clone())),
         channels: Arc::new(InMemoryChannels::with_default_ttl(clock.clone())),
-        moderation: Arc::new(InMemoryModeration::new()),
         drops: Arc::new(InMemoryDrops::new()),
         counters: Arc::new(InMemoryCounters::new()),
         oidc_authorizations: Arc::new(InMemoryOidcAuthorizations::with_default_ttl(clock.clone())),
@@ -794,12 +814,9 @@ fn durable_ports(
         members: Arc::new(PostgresMembership::new(db())),
         directories: Arc::new(PostgresDeviceDirectory::new(db())),
         receipts: Arc::new(PostgresReceipts::new(db())),
-        capabilities: Arc::new(PostgresCapabilities::new(db(), clock.clone())),
-        peers: Arc::new(PostgresPeers::new(db())),
         escrow: Arc::new(PostgresEscrow::new(db())),
         enrollments: valkey.enrollments(),
         channels: valkey.channels(),
-        moderation: Arc::new(PostgresModeration::new(db())),
         drops: Arc::new(PostgresDrops::new(db())),
         counters: Arc::new(ValkeyCounters::new(valkey.valkey().clone())),
         oidc_authorizations: valkey.oidc_authorizations(),
@@ -842,6 +859,9 @@ fn compose(
     let marks = stores.marks.clone();
     let quotas = stores.quotas.clone();
     let shares = stores.shares.clone();
+    let issued = stores.capabilities.clone();
+    let peers = stores.peers.clone();
+    let moderation = stores.moderation.clone();
 
     // The signer is built from the private key alone and derives its own public half, which is
     // what lets `ServerInfo` below publish the key tokens actually verify under rather than one
@@ -864,12 +884,9 @@ fn compose(
         members,
         directories,
         receipts,
-        capabilities: issued,
-        peers,
         escrow,
         enrollments,
         channels,
-        moderation,
         drops,
         counters,
         oidc_authorizations,

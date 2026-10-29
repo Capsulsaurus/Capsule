@@ -12,7 +12,7 @@ Capsule is end-to-end encrypted, so the server **cannot** scan content, and no s
 - **No retroactive takedown.** Ciphertext a peer already fetched cannot be recalled; takedown governs future serving.
 - **No silent operations.** Every action affecting user data MUST produce a [provenance record](/design/cryptography/provenance/#provenance-of-library-modifications) visible in the user's audit log.
 
-Moderation *actions* have **no wire surface**: there is no admin authentication model yet, so actions run through an operator-driven port. The user reads their own record at `GET /v1/moderation/record`.
+Moderation *actions* have **no wire surface**: there is no admin authentication model over HTTP, so the admin is the **operator on the host**, authenticated by holding the deployment's database credentials, and actions run through operator commands. The admin reads the federated report queue with `capsule-server moderation reports`. The user reads their own record at `GET /v1/moderation/record`.
 
 ## What Moderation Can Do (Operational Hooks)
 
@@ -21,17 +21,18 @@ Moderation *actions* have **no wire surface**: there is no admin authentication 
 A report against `alice@other.tld` goes to her home server, the only party that can act on her account. Intake: `POST /v1/federation/reports` (gated with the rest of [federation](/design/federation/#status)).
 
 - **Authentication.** A report MUST be signed by the reporting server's [operational key](/design/federation/#server-identity-and-key-rotation) and verified **before** any budget is charged; unsigned or invalid reports are dropped. Peer keys are operator-pinned; the server never fetches a key on first report (TOFU at intake is rejected).
-- **Rate limits.** Per `(reporting_server, reported_user)`, per peer across all accounts (the peer chooses `reported_user`), and per claimed origin before lookup.
+- **Rate limits.** Per `(reporting_server, reported_user)`, per peer across all accounts (the peer chooses `reported_user`), and per peer on total intake. Every one is charged to the verified peer, so nobody can spend a peer's allowance in its name.
+- **Replay.** A report is bound to its recipient, its moment and one use: `recipient_server` must name this server, `reported_at` must be within **5 minutes** of the receiver's clock either way, and the receiver accepts each `nonce` (16 to 64 bytes) once per peer for as long as the report could still be fresh. A replayed nonce is refused before any budget is charged. All three are `401 error.moderation.report_unsigned`; a peer retrying signs again with a fresh nonce.
 - **Unknown accounts** get the same answer as accepted reports and are filed nowhere, so intake is not an account-enumeration oracle; the operator log records them.
-- **Wire form.** JSON: `reporting_server`, `reported_user`, `asset_hash`, `album_id`, `reason` (optional), `reported_at` (RFC 3339), `signature`. The signature is Ed25519 over the **canonical CBOR of the other six**, each whitespace-trimmed and otherwise exactly as sent (no case folding, no re-rendered timestamps). The receiver stores the signed bytes verbatim so the signature can be re-verified.
+- **Wire form.** JSON: `reporting_server` (a host name), `recipient_server`, `nonce`, `reported_user`, `asset_hash`, `album_id`, `reason` (optional), `reported_at` (RFC 3339), `signature`. The signature is Ed25519 over the **canonical CBOR of the other eight**, each whitespace-trimmed, `reason` included, and otherwise exactly as sent (no case folding, no re-rendered timestamps). The receiver stores the signed bytes verbatim so the signature can be re-verified.
 - **Content.** A report carries a content hash and album pointer, **never plaintext or key material**. An admin without album access sees only identifiers; a report never widens who can read content.
 - Accepting a report never changes the reported account's standing.
 
-Open: [#476](https://github.com/Capsulsaurus/Capsule/issues/476) — no operator command can pin a peer yet, so intake answers `403 error.federation.peer_unknown`; the admin report queue waits on admin authentication.
+Intake verifies against the key an operator pinned with `capsule-server peer pin`; a peer with none answers `403 error.federation.peer_unknown`. The queue is read with `capsule-server moderation reports`, oldest first, every peer-supplied reason escaped.
 
 ### Blocklists
 
-- **Server-level blocklist.** Peers this server refuses, enforced at the [capability](/design/federation/#federation-capabilities) layer: mint, presentation, refresh and report intake all consult it, and blocking cuts and publishes every live grant the peer holds. Open: [#476](https://github.com/Capsulsaurus/Capsule/issues/476) — no operator command writes it yet, so it is empty in real deployments.
+- **Server-level blocklist.** Peers this server refuses, enforced at the [capability](/design/federation/#federation-capabilities) layer: mint, presentation, refresh and report intake all consult it, and blocking cuts and publishes every live grant the peer holds. The operator writes it with `capsule-server peer block|unblock`.
 - **Per-user block.** Enforced by the blocker's home server: the blocked user is removed from albums shared with the blocker (one MLS `Remove` of all their devices, one epoch bump) and cannot share new albums with them. Epochs already held are not clawed back ([removal semantics](/design/cryptography/mls/#remove-user-charlie)). A per-user block MUST NOT propagate as a server-level block, so users cannot weaponize blocks against a whole peer.
 - **Blocklist exchange (v2).** Signed, versioned server-level lists an admin **opts into** from trusted peers; never auto-applied, never including per-user blocks.
 

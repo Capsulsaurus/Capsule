@@ -953,7 +953,7 @@ async fn ffi_fetch_blob_to_path_leaves_nothing_on_failure() {
         .fetch_blob_to_path(base.clone(), claimed, blob.len() as u64, target.clone())
         .await
     {
-        Err(FfiError::Fetch { message, .. }) => assert!(message.contains("integrity")),
+        Err(FfiError::Fetch { detail, .. }) => assert!(detail.contains("integrity")),
         other => panic!("expected an integrity failure, got {other:?}"),
     }
     assert!(!path.exists(), "an unverified blob is not left on disk");
@@ -1058,7 +1058,7 @@ async fn ffi_fetch_blob_to_path_keeps_a_failing_refresh_transient() {
         )
         .await
     {
-        Err(FfiError::Fetch { message, .. }) => assert!(message.contains("transient")),
+        Err(FfiError::Fetch { detail, .. }) => assert!(detail.contains("transient")),
         other => panic!("expected a transient fetch error, got {other:?}"),
     }
     assert!(!path.exists());
@@ -1371,7 +1371,7 @@ fn ffi_apply_and_open_from_disk_surface_bad_arguments_as_errors() {
     let ciphertext = path_string(&synced.ciphertext_path);
 
     match workspace.apply_sync_entry_from_file(synced.head.clone(), missing.clone()) {
-        Err(FfiError::Workspace { message }) => assert!(message.contains("missing.blob")),
+        Err(FfiError::Workspace { detail }) => assert!(detail.contains("missing.blob")),
         other => panic!("expected a workspace error, got {other:?}"),
     }
     match workspace.open_synced_original(
@@ -1884,9 +1884,9 @@ fn ffi_p256_hardware_dek_round_trip_tracks_the_element() {
         "device-dek".into(),
         vec![9u8; 32],
     ) {
-        Err(FfiError::Workspace { message }) => assert!(
-            message.contains("hardware P-256 DEK enrollment failed"),
-            "unexpected enrollment error message: {message}"
+        Err(FfiError::Workspace { detail }) => assert!(
+            detail.contains("hardware P-256 DEK enrollment failed"),
+            "unexpected enrollment error detail: {detail}"
         ),
         other => panic!("expected Workspace for a failing element enrollment, got {other:?}"),
     }
@@ -1942,15 +1942,15 @@ fn a_refused_create_with_no_newer_epoch_does_not_claim_a_missing_key() {
     };
 
     match workspace.reseal(&uuid::Uuid::parse_str(&asset).unwrap(), &refused) {
-        Err(FfiError::Upload { code, message }) => {
+        Err(FfiError::Upload { code, detail }) => {
             assert_eq!(code.as_deref(), Some("error.upload.envelope_rejected"));
             assert!(
-                message.contains("no newer epoch to re-seal it at"),
-                "{message}"
+                detail.contains("no newer epoch to re-seal it at"),
+                "{detail}"
             );
             assert!(
-                !message.contains("key"),
-                "the detail must not claim a key is missing: {message}"
+                !detail.contains("key"),
+                "the detail must not claim a key is missing: {detail}"
             );
         }
         other => panic!("expected an Upload refusal, got {other:?}"),

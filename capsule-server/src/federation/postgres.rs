@@ -353,6 +353,22 @@ impl RevocationList for PostgresCapabilities {
                 }
                 .into());
             }
+            // An operator revoking a `jti` this server issued means the **grant**, exactly as an
+            // owner's revoke does: the peer may have refreshed it any number of times, and
+            // publishing only the named link would leave the grant live in its successor.
+            match self.revoke_issued(&token.jti, now).await? {
+                RevokeOutcome::Unknown => {}
+                outcome => {
+                    tracing::info!(
+                        jti = %token.jti,
+                        ?outcome,
+                        "an operator revocation of an issued capability followed its refresh chain"
+                    );
+                    return Ok(());
+                }
+            }
+            // Nothing backs the `jti`, or nothing did when the chain was read: published bare,
+            // and under the record's own expiry should one have been issued since.
             let transaction = begin(&self.connection, CAPABILITIES).await?;
             lock(&transaction, &token.jti, CAPABILITIES).await?;
             // The expiry an entry is published under is the **record's** when one backs it: a

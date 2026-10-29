@@ -11,7 +11,8 @@
 //! 2. **Mint** — `ShareLinkIssuer::create_link` draws the opaque id and the fragment secret and
 //!    encapsulates the scope (under an Argon2id layer for a `--protect` link).
 //! 3. **Publish** — [`Workspace::publish_link`] seals the `share-metadata/v1` record and names
-//!    every address the link may serve.
+//!    every address the link may serve. Every covered sidecar is passed through the strict
+//!    Privacy on Export strip ([`ExportPrivacy::default`]) first; the CLI offers no opt-in.
 //! 4. **Custody check** — every covered ciphertext must already be held by the server, read off
 //!    a fresh feed pull ([`remote::held_blobs`]). The server stores the metadata record from the
 //!    issue request itself (#653), but it does not check the ciphertexts: a link registered over
@@ -32,6 +33,7 @@ use std::collections::HashSet;
 
 use capsule_core::crypto::hash::Hash32;
 use capsule_core::sharing::{OPAQUE_ID_LEN, ShareLinkIssuer as _, ShareScope, SharingError};
+use capsule_core::sidecar::ExportPrivacy;
 use capsule_library::lifecycle::Workspace;
 use capsule_sdk::share::{ShareClient, ShareError, share_url};
 use colored::Colorize as _;
@@ -204,7 +206,9 @@ pub async fn create(
         .as_deref()
         .map(|raw| normalize_expiry(raw, now))
         .transpose()?;
-    let covered = workspace.shared_assets(request.scope)?.len();
+    let covered = workspace
+        .shared_assets(request.scope, ExportPrivacy::default())?
+        .len();
     if covered == 0 {
         tracing::info!("share: the scope covers no asset; nothing is issued");
         return Err(ShareCommandError::EmptyScope);
@@ -237,7 +241,7 @@ async fn create_with(
         expires_at.clone(),
         request.passphrase.as_deref(),
     )?;
-    let publication = workspace.publish_link(&link)?;
+    let publication = workspace.publish_link(&link, ExportPrivacy::default())?;
 
     let held = remote::held_blobs(remote, session.clone(), remote::DEFAULT_SYNC_PAGE_SIZE).await?;
     let missing = missing_ciphertexts(&publication.serves, &held);

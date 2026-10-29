@@ -151,6 +151,8 @@ pub enum Custody {
     Verified,
     /// It did not reach custody; why, as `capsule push` words it.
     Failed(String),
+    /// Skipped: another device of the account holds its open hand-off and uploads it.
+    Delegated,
 }
 
 /// One asset's row.
@@ -287,12 +289,13 @@ impl PushScreen {
         self.lagged
     }
 
-    /// The assets a retry would push: every row that did not reach custody.
+    /// The assets a retry would push: every row that did not reach custody and is not handed
+    /// to another device.
     #[must_use]
     pub fn retryable(&self) -> Vec<&AssetRow> {
         self.rows
             .iter()
-            .filter(|row| row.custody != Custody::Verified)
+            .filter(|row| !matches!(row.custody, Custody::Verified | Custody::Delegated))
             .collect()
     }
 
@@ -580,6 +583,7 @@ impl PushScreen {
             }
             // The screen does not offer a dry run; a planned outcome moves nothing.
             AssetPushStatus::Planned => row.custody = Custody::Waiting,
+            AssetPushStatus::Delegated => row.custody = Custody::Delegated,
         }
     }
 
@@ -606,7 +610,8 @@ fn shown_rows(screen: &PushScreen) -> Vec<&AssetRow> {
         Custody::Sending => 0,
         Custody::Failed(_) => 1,
         Custody::Waiting => 2,
-        Custody::Verified => 3,
+        Custody::Delegated => 3,
+        Custody::Verified => 4,
     };
     let mut rows: Vec<&AssetRow> = screen.rows.iter().collect();
     rows.sort_by_key(|row| rank(row));
@@ -630,6 +635,7 @@ fn row_line(row: &AssetRow, running: bool) -> Line<'static> {
         Custody::Sending => ("sending", Color::Cyan),
         Custody::Verified => ("verified", Color::Green),
         Custody::Failed(_) => ("failed", Color::Red),
+        Custody::Delegated => ("handed off", Color::Magenta),
     };
     Line::from(vec![
         Span::raw(format!(

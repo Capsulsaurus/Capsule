@@ -96,7 +96,7 @@
               "takes_value": false
             },
             {
-              "help": "Print the outcome of a password sign-in as one JSON document on stdout; prompts and progress go to stderr. Not combined with --oidc, whose address is printed for a person",
+              "help": "Print the outcome as one JSON document on stdout; prompts, progress and, with --oidc, the sign-in address and code go to stderr",
               "id": "json",
               "long": "json",
               "positional": false,
@@ -926,17 +926,47 @@
           "name": "init"
         },
         {
-          "about": "Migrate unsigned sidecars from an older library into signed assets",
+          "about": "List a library's timeline, albums or stacks, as the TUI's library browser shows them",
           "args": [
             {
-              "help": "Path to the library",
-              "id": "path",
-              "positional": true,
+              "help": "Path to the Capsule library",
+              "id": "library",
+              "long": "library",
+              "positional": false,
               "repeatable": false,
               "required": true,
               "takes_value": true,
               "value_names": [
                 "PATH"
+              ]
+            },
+            {
+              "default_values": [
+                "timeline"
+              ],
+              "help": "Which view to list",
+              "id": "view",
+              "long": "view",
+              "positional": false,
+              "possible_values": [
+                {
+                  "help": "The assets in timeline order, newest first: not in trash, not hidden, one per stack",
+                  "name": "timeline"
+                },
+                {
+                  "help": "Every album, with its labels and the assets it lists",
+                  "name": "albums"
+                },
+                {
+                  "help": "Every stack, with its labels and its members",
+                  "name": "stacks"
+                }
+              ],
+              "repeatable": false,
+              "required": false,
+              "takes_value": true,
+              "value_names": [
+                "VIEW"
               ]
             },
             {
@@ -949,22 +979,16 @@
               "takes_value": false
             },
             {
-              "default_values": [
-                "30"
-              ],
-              "help": "Retention window, in days, for an asset the old library had already deleted: it is moved to trash with this much time left before it is purged",
-              "id": "retain_days",
-              "long": "retain-days",
+              "help": "Print the view as one JSON document on stdout: the timeline's assets, every album with its labels and assets, or every stack with its labels and members",
+              "id": "json",
+              "long": "json",
               "positional": false,
               "repeatable": false,
               "required": false,
-              "takes_value": true,
-              "value_names": [
-                "DAYS"
-              ]
+              "takes_value": false
             }
           ],
-          "name": "migrate"
+          "name": "list"
         },
         {
           "about": "Rebuild the SQLite index from sidecar files",
@@ -1252,7 +1276,142 @@
           "name": "discard"
         },
         {
-          "about": "Show this device's handed-off assets: take the other device's acknowledgements, take back uploads that are overdue or whose device was revoked, and release what the server holds. Also lists every hand-off this device quarantined",
+          "about": "Send this library's assets to another device of this account over the LAN peering channel: dial its `capsule peer pull --listen`, verify it over mutual TLS as a device of this account, and serve it one backup artifact sealed for that session. The other device skips what it already holds and refuses what it has purged",
+          "args": [
+            {
+              "help": "Path to the Capsule library holding the assets",
+              "id": "library",
+              "long": "library",
+              "positional": false,
+              "repeatable": false,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "PATH"
+              ]
+            },
+            {
+              "help": "The other device's `capsule peer pull --listen` address. Only a local-network address is dialed",
+              "id": "peer",
+              "long": "peer",
+              "positional": false,
+              "repeatable": false,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "HOST:PORT"
+              ]
+            },
+            {
+              "help": "The device the channel must verify; refused if the device at `--peer` is another",
+              "id": "to",
+              "long": "to",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": true,
+              "value_names": [
+                "DEVICE_ID"
+              ]
+            },
+            {
+              "help": "An asset to send (repeatable); without one, every asset in the library is sent",
+              "id": "asset",
+              "long": "asset",
+              "positional": false,
+              "repeatable": true,
+              "required": false,
+              "takes_value": true,
+              "value_names": [
+                "ASSET_ID"
+              ]
+            },
+            {
+              "help": "Read the library passphrase from stdin instead of prompting, so the command works in scripts and CI where there is no terminal",
+              "id": "passphrase_stdin",
+              "long": "passphrase-stdin",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            },
+            {
+              "help": "Print the run as one JSON document on stdout: the device the channel verified, the artifact's content address, size and assets, how many bytes the other device pulled, and each failure with a stable `kind` and the detail",
+              "id": "json",
+              "long": "json",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            }
+          ],
+          "name": "offer"
+        },
+        {
+          "about": "Take assets another device of this account sends with `capsule peer offer`: listen on ADDR, verify the device over mutual TLS, pull its backup artifact and write every asset that is new or a forward update. An asset this device has purged is refused, and the run is refused before listening if the purge record cannot be read",
+          "args": [
+            {
+              "help": "Path to this device's Capsule library",
+              "id": "library",
+              "long": "library",
+              "positional": false,
+              "repeatable": false,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "PATH"
+              ]
+            },
+            {
+              "help": "The address to listen on (e.g. `0.0.0.0:7420`). Only local-network peers are admitted. The address bound is printed on stderr",
+              "id": "listen",
+              "long": "listen",
+              "positional": false,
+              "repeatable": false,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "ADDR"
+              ]
+            },
+            {
+              "default_values": [
+                "300"
+              ],
+              "help": "Seconds to wait for a peer to connect and verify; a verified session is not cut by it, but runs to its end at a minimum transfer rate",
+              "id": "listen_timeout",
+              "long": "listen-timeout",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": true,
+              "value_names": [
+                "SECONDS"
+              ]
+            },
+            {
+              "help": "Read the library passphrase from stdin instead of prompting, so the command works in scripts and CI where there is no terminal",
+              "id": "passphrase_stdin",
+              "long": "passphrase-stdin",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            },
+            {
+              "help": "Print the run as one JSON document on stdout: the peer, each artifact pulled, the assets `applied`, `quarantined` (the peer sent stale state), `tombstoned` (purged here), `identical` (already held) and `incomplete`, each failure and each refused connection with a stable `kind` and the detail",
+              "id": "json",
+              "long": "json",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            }
+          ],
+          "name": "pull"
+        },
+        {
+          "about": "Show this device's handed-off assets: take the other device's acknowledgements, take back uploads that are overdue or whose device was revoked, and release what the server holds. A delete made after a hand-off is held until the server holds the asset, then sent. Also lists every hand-off this device quarantined",
           "args": [
             {
               "help": "Path to the Capsule library holding the assets",
@@ -1288,7 +1447,7 @@
               "takes_value": false
             },
             {
-              "help": "Print the run as one JSON document on stdout: each delegation with its state, each refused acknowledgement with a stable `kind` and the detail, and each quarantined hand-off with its file, the stable `kind` of its refusal, the server's `code` when it gave one, and the detail",
+              "help": "Print the run as one JSON document on stdout: each delegation with its state, each refused acknowledgement with a stable `kind` and the detail, each quarantined hand-off with its file, the stable `kind` of its refusal, the server's `code` when it gave one, and the detail, and each delete made after a hand-off with the records between the hand-off and it (held, sent, failed and kept, or refused and not retried)",
               "id": "json",
               "long": "json",
               "positional": false,
@@ -1302,7 +1461,7 @@
       ]
     },
     {
-      "about": "Upload a local Capsule library to the server",
+      "about": "Upload a local Capsule library to the server. An asset handed to another device with `capsule peer delegate` is left to that device while its hand-off is open",
       "args": [
         {
           "help": "Path to the Capsule library to push",
@@ -1365,7 +1524,7 @@
           ]
         },
         {
-          "help": "Print the run as one JSON document on stdout: the totals and each asset's outcome (verified, failed with its error, or planned on a dry run)",
+          "help": "Print the run as one JSON document on stdout: the totals and each asset's outcome (verified, failed with its error, delegated to another device, or planned on a dry run)",
           "id": "json",
           "long": "json",
           "positional": false,
@@ -1849,6 +2008,15 @@
           "repeatable": false,
           "required": false,
           "takes_value": false
+        },
+        {
+          "help": "Print the asset as one JSON document on stdout: every sidecar field, `null` where unset, and its provenance history record by record",
+          "id": "json",
+          "long": "json",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "takes_value": false
         }
       ],
       "name": "show"
@@ -1955,6 +2123,123 @@
             }
           ],
           "name": "reannounce"
+        }
+      ]
+    },
+    {
+      "about": "Move assets to the trash or restore them from it, in the library and on the server",
+      "name": "trash",
+      "subcommands": [
+        {
+          "about": "Move assets to the trash: sign a delete carrying a retention window and send it to the server. Soft: each asset stays restorable until its window elapses",
+          "args": [
+            {
+              "help": "Path to the Capsule library",
+              "id": "library",
+              "long": "library",
+              "positional": false,
+              "repeatable": false,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "PATH"
+              ]
+            },
+            {
+              "help": "The asset to move to the trash (repeatable)",
+              "id": "asset",
+              "long": "asset",
+              "positional": false,
+              "repeatable": true,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "ASSET_ID"
+              ]
+            },
+            {
+              "default_values": [
+                "30"
+              ],
+              "help": "Retention window, in days, a fresh delete signs. An asset already in the trash (for example by `capsule cull --sweep`) is resent with the window it was deleted with; `--json` reports that window as `retention_until`",
+              "id": "retain_days",
+              "long": "retain-days",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": true,
+              "value_names": [
+                "DAYS"
+              ]
+            },
+            {
+              "help": "Read the library passphrase from stdin instead of prompting, so the command works in scripts and CI where there is no terminal",
+              "id": "passphrase_stdin",
+              "long": "passphrase-stdin",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            },
+            {
+              "help": "Print the run as one JSON document on stdout: the totals and each asset's outcome (applied, or failed with a stable kind and the server's code)",
+              "id": "json",
+              "long": "json",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            }
+          ],
+          "name": "delete"
+        },
+        {
+          "about": "Restore assets from the trash: sign a trash-restore and send it to the server. An asset whose retention window has closed cannot be restored, and is not retried",
+          "args": [
+            {
+              "help": "Path to the Capsule library",
+              "id": "library",
+              "long": "library",
+              "positional": false,
+              "repeatable": false,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "PATH"
+              ]
+            },
+            {
+              "help": "The asset to restore (repeatable)",
+              "id": "asset",
+              "long": "asset",
+              "positional": false,
+              "repeatable": true,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "ASSET_ID"
+              ]
+            },
+            {
+              "help": "Read the library passphrase from stdin instead of prompting, so the command works in scripts and CI where there is no terminal",
+              "id": "passphrase_stdin",
+              "long": "passphrase-stdin",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            },
+            {
+              "help": "Print the run as one JSON document on stdout: the totals and each asset's outcome (applied, or failed with a stable kind such as `retention_elapsed`, the server's code and the retention floor)",
+              "id": "json",
+              "long": "json",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            }
+          ],
+          "name": "restore"
         }
       ]
     },

@@ -14,8 +14,10 @@
 //! encoding comes back to the state; a frame never encodes. Where the terminal answered with
 //! no image protocol, or the encode fails or panics, the pane says so in text.
 //!
-//! The scriptable twin is `capsule show ASSET --library PATH`, which prints the same rows the
-//! detail pane draws.
+//! The scriptable twins are `capsule library list --library PATH [--view timeline|albums|stacks]
+//! --json`, which lists the same views from the same [`catalogue::collect`] snapshot, and
+//! `capsule show ASSET --library PATH [--json]`, which prints the same rows the detail pane
+//! draws and the same provenance history.
 
 pub mod catalogue;
 
@@ -920,6 +922,11 @@ fn row_item(catalogue: &Catalogue, row: Row) -> ListItem<'static> {
             };
             // The id is in the detail pane; the row keeps to what fits beside it.
             let mut text = format!("{}  {}", when(asset), asset.ext);
+            // The ledger's line itself is in the detail pane; the row only marks the asset, first
+            // so a narrow list still shows it.
+            if catalogue.delegation(asset_id).is_some() {
+                text.push_str("  delegated");
+            }
             if let Some((stack_id, StackRole::Primary)) = asset.stack {
                 let count = catalogue.stack(stack_id).map_or(1, |s| s.members.len());
                 let _ = write!(text, "  stack of {count}");
@@ -977,6 +984,9 @@ fn asset_lines(catalogue: &Catalogue, asset: &AssetEntry) -> Vec<Line<'static>> 
     let row = |label: &str, value: String| Line::from(format!("{label:<17}{value}"));
     for (label, value) in &asset.rows {
         lines.push(row(label, value.clone()));
+    }
+    if let Some(line) = catalogue.delegation(asset.asset_id) {
+        lines.push(row("Upload:", line.to_owned()));
     }
     let album = catalogue.album(asset.album_id);
     lines.push(row(
@@ -1084,7 +1094,8 @@ fn render_open(frame: &mut Frame, area: Rect, screen: &LibraryScreen, title: &'s
         }
     }
     lines.push(Line::from(
-        "Scriptable: `capsule show ASSET --library PATH` prints one asset's record."
+        "Scriptable: `capsule library list --library PATH [--view albums|stacks] --json`; \
+         `capsule show ASSET --library PATH --json` prints one asset's record."
             .fg(Color::DarkGray),
     ));
     let block = Block::default().borders(Borders::ALL).title(title);

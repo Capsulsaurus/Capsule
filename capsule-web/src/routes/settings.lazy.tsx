@@ -107,12 +107,20 @@ function Settings() {
                 <h1 className="text-2xl font-bold">
                     <FormattedMessage id="settings.title" />
                 </h1>
-                <Link
-                    to="/settings/security"
-                    className="text-sm underline text-muted-foreground"
-                >
-                    <FormattedMessage id="settings.security_link" />
-                </Link>
+                <div className="flex gap-4">
+                    <Link
+                        to="/settings/language"
+                        className="text-sm underline text-muted-foreground"
+                    >
+                        <FormattedMessage id="settings.language_link" />
+                    </Link>
+                    <Link
+                        to="/settings/security"
+                        className="text-sm underline text-muted-foreground"
+                    >
+                        <FormattedMessage id="settings.security_link" />
+                    </Link>
+                </div>
             </div>
 
             <Card>
@@ -150,7 +158,9 @@ function Settings() {
                             {/* Read-only. Changing a login address needs proof the caller
                                 controls the new one, and this deployment has no way to obtain
                                 it — so the server has no field for it rather than a field it
-                                refuses. */}
+                                refuses. A federated account with no address shows the field
+                                empty: an account id is not an address, so it is not shown
+                                here. */}
                             <Input
                                 id="email"
                                 type="email"

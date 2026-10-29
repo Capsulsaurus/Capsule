@@ -100,6 +100,7 @@ fn fixture_sized(name: &str, count: u8, len: usize) -> Fixture {
             },
             derivative_manifests: bundle.derivative_manifests.clone(),
             original_held: true,
+            purged: false,
             changed_at: "2026-10-21T00:00:00Z".to_owned(),
         });
         blobs.insert(original_hash, bundle.original.to_vec().unwrap());

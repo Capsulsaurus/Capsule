@@ -37,8 +37,40 @@ Each catalog is a flat JSON object mapping a **key** to an entry:
   [ICU MessageFormat](https://unicode-org.github.io/icu/userguide/format_parse/messages/).
   Plain text needs no special syntax.
 - `context` — an optional note for translators describing where the string
-  appears. Only the source catalog (`en.json`) needs `context`; translations may
-  omit it.
+  appears. It belongs in the source catalog (`en.json`); translations omit it.
+- `origin` — **required in every translation, absent from `en.json`**: who
+  produced the message.
+
+A translation entry looks like this:
+
+```json
+{
+    "label_title": {
+        "message": "Titre",
+        "origin": "human"
+    }
+}
+```
+
+### Provenance (`origin`)
+
+| Value | Meaning |
+| --- | --- |
+| `machine` | A machine translation nobody fluent has reviewed yet. |
+| `human` | Written, or reviewed and accepted, by a fluent reader. |
+
+When you review a machine translation and keep or fix it, set its `origin` to
+`human`. You do not record your name or the date: the commit that changes the
+entry records both.
+
+### Placeholders must match the source
+
+Every translation must carry exactly the placeholders of its `en.json` message:
+the same `{name}` arguments (in any order), and a `plural` block exactly where
+the source has one, on the same selector. Plural categories are your language's
+own (Russian uses `one`, `few`, `many` and `other`; Japanese only `other`). A
+dropped or extra placeholder fails `mise run i18n` and `mise run i18n-check`,
+which list every offending key.
 
 ### ICU MessageFormat, briefly
 
@@ -75,7 +107,8 @@ localized high-level message. See the design doc for the full contract.
 1. Add the locale tag to `supportedLocales` in `config.json` (BCP-47, e.g. `fr`,
    `pt-BR`).
 2. Copy `en.json` to `<locale>.json` and translate each `message`. Keep the keys
-   identical — every key in `en.json` must exist in every translation.
+   identical — every key in `en.json` must exist in every translation. Replace
+   each `context` with an `origin` (see [Provenance](#provenance-origin)).
 3. Run `mise run i18n` to regenerate the per-platform files, then
    `mise run i18n-check` to confirm there is no drift.
 4. Open a pull request. See [CONTRIBUTING.md](../CONTRIBUTING.md) for the commit
@@ -94,6 +127,8 @@ localized high-level message. See the design doc for the full contract.
   issue with its BCP-47 tag, script direction, and fallback, or follow
   [Add a language](#add-a-language) above to contribute the catalog directly.
 
-A future translation-management hub (Weblate or Crowdin) will let non-technical
-contributors translate through a web UI backed by these same files; until then,
-the JSON-via-pull-request flow above is the supported path.
+These files are the system of record for translations and their provenance.
+A translation-management hub (Weblate or Crowdin) may later let non-technical
+contributors translate through a web UI, but it would edit these same files
+through pull requests and keep `origin`; until then, the JSON-via-pull-request
+flow above is the supported path.

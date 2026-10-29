@@ -732,6 +732,9 @@ pub struct FeedEntry {
     pub derivative_manifests: Vec<ContentAddress>,
     /// Whether the original has landed — `false` is the derived `awaiting-original` state.
     pub original_held: bool,
+    /// Whether a retention purge has emptied the row ([`is_purged`]), which ends the asset:
+    /// the same fact that refuses a late `trash-restore` ([`restore_refusal`]).
+    pub purged: bool,
     /// When the change happened.
     pub at: Timestamp,
 }
@@ -1161,6 +1164,7 @@ pub(crate) fn entry_for(row: &AssetRow, after: u64) -> Option<FeedEntry> {
             .map(|blob| blob.address.clone())
             .collect(),
         original_held: row.original_held(),
+        purged: is_purged(row),
         at: row.updated_at,
     })
 }

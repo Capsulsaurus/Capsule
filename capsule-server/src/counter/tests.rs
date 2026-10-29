@@ -49,12 +49,21 @@ conformance_cases! {
     a_reset_ends_the_run,
     peeking_charges_nothing_and_answers_a_verdict,
     no_sequence_of_calls_admits_more_than_the_budget,
+    a_weighted_charge_is_all_or_nothing,
+    a_fresh_window_admits_a_charge_larger_than_its_limit,
+    a_zero_charge_writes_nothing,
 }
 
 /// The one case that races, on the runtime that lets it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_hits_admit_exactly_the_budget() {
     conformance::concurrent_hits_admit_exactly_the_budget(counters()).await;
+}
+
+/// The weighted race, on the same runtime.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_charges_admit_exactly_what_fits() {
+    conformance::concurrent_charges_admit_exactly_what_fits(counters()).await;
 }
 
 /// The ceiling case, on a store whose every partition is bounded at the suite's own number.
@@ -535,4 +544,141 @@ async fn capacity_refusal_offers_a_deadline_for_the_ceiling_and_none_for_an_outa
             "{outage:?}"
         );
     }
+}
+
+/// One key of every [`CounterKey`] variant, for the partition-mapping tests.
+fn one_key_per_variant() -> Vec<CounterKey> {
+    vec![
+        CounterKey::LoginAttempts(UserId::new("u")),
+        CounterKey::EnrollmentRedemption(EnrollmentSpelling::Full),
+        CounterKey::EnrollmentRedemptionMalformed,
+        CounterKey::ShareLink(String::new()),
+        CounterKey::ShareSource(String::new()),
+        CounterKey::DropLink(String::new()),
+        CounterKey::DropSource(String::new()),
+        CounterKey::DeepVerify(UserId::new("u")),
+        CounterKey::UploadSessions(UserId::new("u")),
+        CounterKey::UploadChunks(UserId::new("u")),
+        CounterKey::UploadSessionsSource(String::new()),
+        CounterKey::UploadChunksSource(String::new()),
+        CounterKey::SecondFactor(String::new()),
+        CounterKey::RegistrationSource(String::new()),
+        CounterKey::OidcAuthorize(String::new()),
+        CounterKey::OidcAuthorizeRefused,
+        CounterKey::OidcDevice,
+        CounterKey::PeerRequests(String::new()),
+        CounterKey::FederatedReports(String::new()),
+        CounterKey::PeerReports(String::new()),
+        CounterKey::FederatedIntake(String::new()),
+        CounterKey::FederatedReportNonce(String::new()),
+        CounterKey::FederatedRequestNonce(String::new()),
+        CounterKey::PeerBytes(String::new()),
+        CounterKey::CapabilityMints(UserId::new("u")),
+    ]
+}
+
+/// Drive one store future to completion on a runtime of its own, off any test runtime.
+fn block_on<T>(future: impl std::future::Future<Output = T>) -> T {
+    tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("a runtime")
+        .block_on(future)
+}
+
+#[test]
+fn every_variant_has_a_partition_of_its_own() {
+    let keys = one_key_per_variant();
+    // No index can reach past the array: `PARTITION_COUNT` is counted from the `Slot`
+    // declaration whose discriminants the indices are, so this holds for any variant, listed
+    // here or not.
+    let indices: std::collections::BTreeSet<usize> =
+        keys.iter().map(CounterKey::partition_index).collect();
+    assert!(
+        indices.iter().all(|index| *index < PARTITION_COUNT),
+        "{indices:?}"
+    );
+
+    // One slot per variant, no more and no fewer: a spare slot is a variant this list forgot,
+    // and a shared one is two variants sharing a fate.
+    assert_eq!(keys.len(), PARTITION_COUNT);
+    assert_eq!(indices.len(), keys.len(), "two variants share a partition");
+
+    // One name per variant too, so the partition a log line names is the partition it is.
+    let names: std::collections::BTreeSet<&str> = keys.iter().map(CounterKey::as_str).collect();
+    assert_eq!(names.len(), keys.len());
+}
+
+#[test]
+fn a_held_partition_does_not_block_a_hit_on_another() {
+    let counters = Arc::new(InMemoryCounters::new());
+    let flooded = CounterKey::DropLink("held".to_owned());
+    // A window that has lapsed by the time the other partition is hit, so the purge would
+    // collect it if it could.
+    block_on(counters.hit(&flooded, budget(), at(0))).expect("answers");
+
+    let held = lock(&counters.partition(&flooded).windows);
+
+    // Hit another variant from a second thread while the drop partition is held. Under one lock
+    // for every partition this would block until `held` drops, which is never inside the bound.
+    let (sent, received) = std::sync::mpsc::channel();
+    let other = Arc::clone(&counters);
+    let worker = std::thread::spawn(move || {
+        let verdict =
+            block_on(other.hit(&CounterKey::ShareLink("free".to_owned()), budget(), at(11)));
+        sent.send(verdict).expect("the test is listening");
+    });
+    let verdict = received
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("a hit on another partition must not wait on a held one")
+        .expect("answers");
+    assert!(verdict.admits());
+
+    // The held partition was skipped by the purge rather than waited on.
+    assert_eq!(held.len(), 1, "a held partition is skipped, not purged");
+    drop(held);
+    worker.join().expect("the worker finished");
+
+    // And the next write once it is released collects it.
+    block_on(counters.hit(&CounterKey::ShareLink("next".to_owned()), budget(), at(11)))
+        .expect("answers");
+    assert_eq!(counters.len_of(&flooded), 0);
+}
+
+#[test]
+fn a_flood_next_door_takes_no_lock_until_something_lapses() {
+    let counters = Arc::new(InMemoryCounters::new());
+    let quiet = CounterKey::ShareLink("quiet".to_owned());
+    let flood = CounterKey::DropLink("flood".to_owned());
+    block_on(counters.hit(&quiet, budget(), at(0))).expect("answers");
+
+    // While nothing in the share partition has lapsed, a drop flood passes it over on the
+    // lock-free hint: its lock is not taken however many drop hits arrive.
+    for _ in 0..100 {
+        block_on(counters.hit(&flood, budget(), at(5))).expect("answers");
+    }
+    assert_eq!(counters.purge_others(flood.partition_index(), at(5)), 0);
+
+    // Held by a share caller, it is still not waited on once a window there lapses: the drop
+    // hit answers within the bound and leaves the held partition to its holder.
+    let held = lock(&counters.partition(&quiet).windows);
+    let (sent, received) = std::sync::mpsc::channel();
+    let other = Arc::clone(&counters);
+    let worker = std::thread::spawn(move || {
+        let verdict =
+            block_on(other.hit(&CounterKey::DropLink("late".to_owned()), budget(), at(11)));
+        sent.send(verdict).expect("the test is listening");
+    });
+    received
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("a drop hit must not wait on a held share partition")
+        .expect("answers");
+    assert_eq!(held.len(), 1, "a held partition is skipped, not purged");
+    drop(held);
+    worker.join().expect("the worker finished");
+
+    // Released and lapsed, it is swept exactly once: the sweep re-derives the hint, so the
+    // next drop hit passes it over again.
+    assert_eq!(counters.purge_others(flood.partition_index(), at(11)), 1);
+    assert_eq!(counters.len_of(&quiet), 0);
+    assert_eq!(counters.purge_others(flood.partition_index(), at(11)), 0);
 }

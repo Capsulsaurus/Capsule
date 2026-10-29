@@ -47,7 +47,12 @@
 //! It does carry its asset manifest, inline: the signed `delete` record that moved the asset to
 //! trash. That is no byte reference, and it is what tells a client the asset's retention window,
 //! the `retention_until` after which a `trash-restore` is refused and the asset is purged. A
-//! purge drops the provenance blob, so the entry of a purged asset carries none.
+//! purge drops the provenance blob, so the entry of a purged asset carries none, and says
+//! `purged: true` instead (#885). That flag is the positive evidence a client records a peering
+//! tombstone on: a missing manifest alone is not, because the store failing to produce one looks
+//! the same, and a device that first syncs after the purge never saw the record at all. The
+//! purge mints no sequence number, so the flag rides the tombstone's existing position: a client
+//! that read the entry before the purge judges the window from the record it already holds.
 //!
 //! # Base64 is not a re-serialization
 //!
@@ -67,6 +72,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::blob::ContentAddress;
 use crate::counter::CounterContext;
+use crate::federation::scheme::RequestSignatureHeader;
 use crate::federation::{
     self, FederationContext, Principal, ReadBearer, Refusal, VerifiedCapability,
 };
@@ -180,6 +186,14 @@ pub struct SyncEntry {
     pub derivative_manifests: Vec<String>,
     /// Whether the original has landed. `false` is the derived `awaiting-original` state.
     pub original_held: bool,
+    /// Whether the asset has been purged: its retention window closed and the server dropped
+    /// its references, so no `trash-restore` can bring it back (#885).
+    ///
+    /// Only ever `true` on a tombstone. This, not an absent `manifest_cbor`, is a client's
+    /// evidence of a purge: the manifest is also absent when the store cannot produce it. A
+    /// server that predates the field sends no key, which reads as `false`.
+    #[serde(default)]
+    pub purged: bool,
     /// When the change happened, RFC 3339.
     pub changed_at: String,
 }
@@ -371,6 +385,8 @@ pub async fn sync_feed(
     Inject(federation): Inject<FederationContext>,
     Inject(counters): Inject<CounterContext>,
     Query(query): Query<SyncQuery>,
+    // Declared for the contract; `ReadBearer` has already verified it (see its module docs).
+    Headers(_signature): Headers<RequestSignatureHeader>,
 ) -> Result<Json<SyncPageResponse>, SyncRejection> {
     let requested = query.album_id.as_deref().map(AlbumId::new);
 
@@ -688,6 +704,7 @@ async fn render(sync: &SyncContext, entry: FeedEntry) -> SyncEntry {
         },
         derivative_manifests,
         original_held: !deleted && entry.original_held,
+        purged: deleted && entry.purged,
         changed_at: entry.at.to_string(),
     }
 }

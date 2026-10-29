@@ -60,6 +60,9 @@ fn test_duplicate_hash_skipped() {
         is_deleted: false,
         deleted_at: None,
         is_hidden: false,
+        caption: None,
+        latitude: None,
+        longitude: None,
     };
     db.insert_asset(&row).unwrap();
 
@@ -105,6 +108,9 @@ fn total_size_sums_only_imported_candidates() {
         is_deleted: false,
         deleted_at: None,
         is_hidden: false,
+        caption: None,
+        latitude: None,
+        longitude: None,
     };
     db.insert_asset(&row).unwrap();
 
@@ -252,6 +258,9 @@ fn test_force_reimport_duplicates() {
         is_deleted: false,
         deleted_at: None,
         is_hidden: false,
+        caption: None,
+        latitude: None,
+        longitude: None,
     };
     db.insert_asset(&row).unwrap();
 

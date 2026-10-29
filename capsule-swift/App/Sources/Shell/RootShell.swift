@@ -1,7 +1,9 @@
+import CapsuleAlerts
 import CapsuleDiagnostics
 import CapsuleFoundation
 import CapsuleNavigation
 import CapsuleUI
+import FeatureAuth
 import SwiftUI
 
 /// The app's root, and the only place that decides which shell the user sees.
@@ -31,6 +33,9 @@ struct RootShell: View {
     @State private var router = Router()
     @State private var crashReportOffered = false
     @State private var crashReport: DiagnosticsReport?
+    /// A tapped re-wrap alert opens the guided re-wrap directly — never the
+    /// routine verification prompt.
+    @State private var guidedRewrapPresented = false
 
     /// Regular width earns the split view; compact gets the tab bar.
     ///
@@ -86,6 +91,23 @@ struct RootShell: View {
         .task {
             if await environment.diagnostics.shouldOfferCrashReport() {
                 crashReportOffered = true
+            }
+        }
+        // The alert loop lives as long as the scene: a refresh now, then one
+        // after every change to a fact the alerts read.
+        .task { await environment.runAlertLoop() }
+        .task {
+            for await destination in environment.alertResponder.destinations {
+                switch destination.tapAction {
+                case let .navigate(route): router.select(route)
+                case .presentGuidedRewrap: guidedRewrapPresented = true
+                }
+            }
+        }
+        .sheet(isPresented: $guidedRewrapPresented) {
+            RecoveryPassphraseView(recovery: environment.recovery, source: .rotate) {
+                guidedRewrapPresented = false
+                Task { await environment.alerts.refresh() }
             }
         }
         .alert("app.diagnostics.crash_alert.title", isPresented: $crashReportOffered) {

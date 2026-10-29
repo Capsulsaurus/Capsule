@@ -32,13 +32,13 @@ mod enrollment;
 mod groups;
 mod import;
 mod metadata;
-mod migrate_unsigned;
 mod open;
 mod organize;
 mod provenance;
 mod reseal;
 mod sharing;
 mod sync_apply;
+mod unanchored;
 mod upload;
 
 use std::collections::{BTreeMap, HashMap};
@@ -68,14 +68,11 @@ use thiserror::Error;
 use uuid::Uuid;
 
 pub use self::album::{AdoptedAlbumKeys, AlbumKeyEscrowPlan};
+pub use self::backup::PeerExport;
 use self::drops::{InboxEntry, IssuedLink};
 pub use self::enrollment::{
     ENROLLMENT_NONCE_LEN, ENROLLMENT_PAYLOAD_VERSION, EnrolleeKeys, EnrollmentPayload,
     EnrollmentPayloadError, InitiatorKeys, MAX_ENROLLMENT_PAYLOAD_CHARS, enrollment_safety_code,
-};
-pub use self::migrate_unsigned::{
-    LEGACY_FOLD_KEY, MigrationSkip, UnmigratedShape, UnmigratedSidecar, UnsignedMigrationOptions,
-    UnsignedMigrationReport, unmigrated_sidecars,
 };
 pub use self::open::HardwareDekBinding;
 pub use self::reseal::{ResealOutcome, ResealRefusal};
@@ -83,6 +80,7 @@ pub use self::sync_apply::{
     QuarantineReason, RemoteAssetFacts, RemoteEntry, RemoteHead, RemoteOriginal, SyncApplyOutcome,
     hash_ciphertext_from,
 };
+pub use self::unanchored::{UnanchoredShape, UnanchoredSidecar, unanchored_sidecars};
 pub use self::upload::{
     DerivativeBlob, OPAQUE_CONTENT_TYPE, OriginalCiphertext, UploadBundle,
     WIRE_ORIGINAL_CONTENT_TYPES, wire_content_type,
@@ -106,6 +104,11 @@ pub enum LifecycleError {
     /// the sidecar the workspace just wrote does not round-trip to the committed hash).
     #[error("metadata binding self-check failed: {0:?}")]
     MetadataUnbound(MetadataBinding),
+    /// A restored asset's sealed metadata blob (a backup's, or a peer delta's) is not the one
+    /// its chain commits to, or does not open, decode or verify under the account's user IK.
+    /// Nothing of the asset is written.
+    #[error("restored metadata refused: {0}")]
+    RestoredMetadata(String),
     /// Cryptographic error.
     #[error(transparent)]
     Crypto(#[from] CryptoError),
@@ -487,10 +490,9 @@ pub struct Workspace {
     /// a client refills this from it, so there is nothing here to lose.
     inbox: HashMap<DropId, InboxEntry>,
     /// The `{uuid}.cbor` files under `media/` that no provenance chain anchors, found at
-    /// [`open`](Self::open): unsigned pre-signed-path sidecars awaiting
-    /// [`migrate_unsigned_sidecars`](Self::migrate_unsigned_sidecars), or the debris of an
-    /// interrupted run. Recomputed by the verb; empty for a signed-only library.
-    unmigrated: Vec<UnmigratedSidecar>,
+    /// [`open`](Self::open): the debris of an interrupted write, a torn or foreign file, or a
+    /// retired unsigned record. Empty for a library with no debris.
+    unanchored: Vec<UnanchoredSidecar>,
 }
 
 fn now_rfc3339() -> String {

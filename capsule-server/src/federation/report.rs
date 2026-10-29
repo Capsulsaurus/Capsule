@@ -19,11 +19,57 @@
 //! JSON key order or number formatting can change them. Canonical CBOR is the same encoding
 //! every other signed document in Capsule uses, and `capsule-core` owns it.
 //!
-//! Replay is bounded by the `(reporting_server, reported_user)` budget rather than by a nonce:
-//! a replayed report is a duplicate row in an operator's queue, not an action, and a nonce table
-//! would be a second store for a threat whose worst outcome is a duplicate.
+//! # Replay
+//!
+//! A signed report is bound to **one recipient, one moment and one use**. The claim names the
+//! server it is addressed to ([`ReportClaim::recipient_server`]), so a report one peer files with
+//! a third server cannot be re-filed here; it carries the instant it was signed
+//! ([`ReportClaim::reported_at`]), which must sit inside [`REPORT_FRESHNESS`] of this server's
+//! clock either way; and it carries a nonce ([`ReportClaim::nonce`]) that this server accepts
+//! once per peer inside the window a report could still be fresh in ([`REPORT_NONCE_WINDOW`]).
+//! The nonce is remembered through the counter port rather than a table of its own: a one-hit
+//! budget whose window starts at the first hit is exactly "seen inside this window", and it
+//! needs no sweeper because the window lapses on its own.
+//!
+//! A replayed report is not the duplicate row it once was argued to be harmless as: it spends the
+//! real peer's report budgets, and a false-flag campaign is made of repetition.
 
+use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
+
+/// How far a report's `reported_at` may sit from this server's clock, either way.
+///
+/// Five minutes: wide enough for two honest servers' clocks to disagree and a request to sit in a
+/// retry queue, narrow enough that a captured report is useless within minutes.
+pub const REPORT_FRESHNESS: SignedDuration = SignedDuration::from_mins(5);
+
+/// How long a report's nonce is remembered: every instant at which a report could still be fresh.
+///
+/// A report signed at `t` is accepted from `t − REPORT_FRESHNESS` to `t + REPORT_FRESHNESS`, so a
+/// nonce first seen anywhere in that span must still be remembered at its far end.
+pub const REPORT_NONCE_WINDOW: SignedDuration = SignedDuration::from_mins(10);
+
+/// Whether a report signed at `reported_at` is fresh at `now`.
+///
+/// Symmetric, so a peer whose clock runs a little fast is not refused, and one whose clock runs
+/// far fast cannot pre-sign reports to be replayed later.
+pub fn is_fresh(reported_at: Timestamp, now: Timestamp) -> bool {
+    is_within(reported_at, now, REPORT_FRESHNESS)
+}
+
+/// Whether `signed_at` sits within `tolerance` of `now`, either way.
+///
+/// The one freshness rule every signed server-to-server message is held to: this report, and
+/// the request signature a capability is presented with
+/// ([`RequestSignature::is_fresh`](super::scheme::RequestSignature::is_fresh)).
+pub fn is_within(signed_at: Timestamp, now: Timestamp, tolerance: SignedDuration) -> bool {
+    let skew = if signed_at > now {
+        signed_at.duration_since(now)
+    } else {
+        now.duration_since(signed_at)
+    };
+    skew <= tolerance
+}
 
 /// The report's signed payload: every field except the signature.
 ///
@@ -37,15 +83,21 @@ use serde::{Deserialize, Serialize};
 pub struct ReportClaim {
     /// The peer filing the report, as its own `server-info` names it.
     pub reporting_server: String,
+    /// The server the report is addressed to, as its own `server-info` names it.
+    ///
+    /// Signed so a report filed with one server cannot be re-filed with another.
+    pub recipient_server: String,
+    /// A value the peer never signs twice. At least 16 bytes, so it is a nonce and not a counter.
+    pub nonce: String,
     /// The account on the receiving server the report is about.
     pub reported_user: String,
     /// The content address of the asset complained about.
     pub asset_hash: String,
     /// The album it was pulled from.
     pub album_id: String,
-    /// A short reason, where the peer gives one.
+    /// A short reason, where the peer gives one, whitespace-trimmed like every other field.
     pub reason: Option<String>,
-    /// When the peer says it was reported, RFC 3339.
+    /// When the peer signed the report, RFC 3339. Must be inside [`REPORT_FRESHNESS`].
     pub reported_at: String,
 }
 

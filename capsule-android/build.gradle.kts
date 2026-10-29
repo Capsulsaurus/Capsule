@@ -21,11 +21,20 @@ kotlin {
         androidMain.dependencies {
             implementation(libs.androidx.compose.ui.tooling.preview)
             implementation(libs.androidx.activity.compose)
+            // The in-app language picker below Android 13 (AppCompatDelegate.setApplicationLocales).
+            implementation(libs.androidx.appcompat)
             implementation(libs.androidx.viewmodel.compose)
             implementation(libs.androidx.navigation.compose)
             implementation(libs.koin.androidx.compose)
             implementation(libs.coil.compose)
             implementation(libs.coil.network.ktor)
+            // JankStats (field frame telemetry) and the trace sections the parity benchmark reads.
+            implementation(libs.androidx.metrics.performance)
+            implementation(libs.androidx.tracing.ktx)
+        }
+        // Plain JVM unit tests over the alert loop, which touches no Android API.
+        androidUnitTest.dependencies {
+            implementation(kotlin("test"))
         }
         commonMain.dependencies {
             implementation(compose.runtime)
@@ -61,6 +70,15 @@ android {
     buildTypes {
         getByName("release") {
             isMinifyEnabled = false
+        }
+        // What the parity benchmark (`:benchmark`) measures: release code, never debuggable
+        // (a debuggable build runs interpreted and would time the wrong app), signed with the
+        // debug key so a bench device installs it without a release keystore.
+        create("benchmark") {
+            initWith(getByName("release"))
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += listOf("release")
+            isDebuggable = false
         }
     }
     compileOptions {

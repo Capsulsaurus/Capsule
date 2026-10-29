@@ -25,6 +25,7 @@ const ExploreLazyRouteImport = createFileRoute('/explore')()
 const DashboardLazyRouteImport = createFileRoute('/dashboard')()
 const IndexLazyRouteImport = createFileRoute('/')()
 const SettingsSecurityLazyRouteImport = createFileRoute('/settings/security')()
+const SettingsLanguageLazyRouteImport = createFileRoute('/settings/language')()
 const LibraryTrashLazyRouteImport = createFileRoute('/library/trash')()
 const LibraryFavoritesLazyRouteImport = createFileRoute('/library/favorites')()
 const LibraryArchiveLazyRouteImport = createFileRoute('/library/archive')()
@@ -81,6 +82,13 @@ const SettingsSecurityLazyRoute = SettingsSecurityLazyRouteImport.update({
 } as any).lazy(() =>
   import('./routes/settings/security.lazy').then((d) => d.Route),
 )
+const SettingsLanguageLazyRoute = SettingsLanguageLazyRouteImport.update({
+  id: '/language',
+  path: '/language',
+  getParentRoute: () => SettingsLazyRoute,
+} as any).lazy(() =>
+  import('./routes/settings/language.lazy').then((d) => d.Route),
+)
 const LibraryTrashLazyRoute = LibraryTrashLazyRouteImport.update({
   id: '/library/trash',
   path: '/library/trash',
@@ -131,6 +139,7 @@ export interface FileRoutesByFullPath {
   '/library/archive': typeof LibraryArchiveLazyRoute
   '/library/favorites': typeof LibraryFavoritesLazyRoute
   '/library/trash': typeof LibraryTrashLazyRoute
+  '/settings/language': typeof SettingsLanguageLazyRoute
   '/settings/security': typeof SettingsSecurityLazyRoute
   '/albums/': typeof AlbumsIndexRoute
 }
@@ -149,6 +158,7 @@ export interface FileRoutesByTo {
   '/library/archive': typeof LibraryArchiveLazyRoute
   '/library/favorites': typeof LibraryFavoritesLazyRoute
   '/library/trash': typeof LibraryTrashLazyRoute
+  '/settings/language': typeof SettingsLanguageLazyRoute
   '/settings/security': typeof SettingsSecurityLazyRoute
   '/albums': typeof AlbumsIndexRoute
 }
@@ -168,6 +178,7 @@ export interface FileRoutesById {
   '/library/archive': typeof LibraryArchiveLazyRoute
   '/library/favorites': typeof LibraryFavoritesLazyRoute
   '/library/trash': typeof LibraryTrashLazyRoute
+  '/settings/language': typeof SettingsLanguageLazyRoute
   '/settings/security': typeof SettingsSecurityLazyRoute
   '/albums/': typeof AlbumsIndexRoute
 }
@@ -188,6 +199,7 @@ export interface FileRouteTypes {
     | '/library/archive'
     | '/library/favorites'
     | '/library/trash'
+    | '/settings/language'
     | '/settings/security'
     | '/albums/'
   fileRoutesByTo: FileRoutesByTo
@@ -206,6 +218,7 @@ export interface FileRouteTypes {
     | '/library/archive'
     | '/library/favorites'
     | '/library/trash'
+    | '/settings/language'
     | '/settings/security'
     | '/albums'
   id:
@@ -224,6 +237,7 @@ export interface FileRouteTypes {
     | '/library/archive'
     | '/library/favorites'
     | '/library/trash'
+    | '/settings/language'
     | '/settings/security'
     | '/albums/'
   fileRoutesById: FileRoutesById
@@ -318,6 +332,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsSecurityLazyRouteImport
       parentRoute: typeof SettingsLazyRoute
     }
+    '/settings/language': {
+      id: '/settings/language'
+      path: '/language'
+      fullPath: '/settings/language'
+      preLoaderRoute: typeof SettingsLanguageLazyRouteImport
+      parentRoute: typeof SettingsLazyRoute
+    }
     '/library/trash': {
       id: '/library/trash'
       path: '/library/trash'
@@ -364,10 +385,12 @@ declare module '@tanstack/react-router' {
 }
 
 interface SettingsLazyRouteChildren {
+  SettingsLanguageLazyRoute: typeof SettingsLanguageLazyRoute
   SettingsSecurityLazyRoute: typeof SettingsSecurityLazyRoute
 }
 
 const SettingsLazyRouteChildren: SettingsLazyRouteChildren = {
+  SettingsLanguageLazyRoute: SettingsLanguageLazyRoute,
   SettingsSecurityLazyRoute: SettingsSecurityLazyRoute,
 }
 

@@ -54,7 +54,6 @@ struct RouteDestinationTests {
         UnbuiltRoute(.onboarding(.photoAccess), "the access rationale screen is not built"),
         UnbuiltRoute(.onboarding(.finish), "the hand-off into the library is not built"),
         UnbuiltRoute(.settings(.federation), "peer budgets and breakers have no screen"),
-        UnbuiltRoute(.settings(.advanced), "the escape hatches have no screen"),
         UnbuiltRoute(.settings(.about), "version and acknowledgements have no screen"),
     ]
 

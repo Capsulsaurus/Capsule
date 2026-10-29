@@ -52,8 +52,9 @@ use kynos::prelude::*;
 use kynos::response::range::served::{Conditions, Delivery, Served};
 
 use crate::counter::CounterContext;
+use crate::federation::scheme::RequestSignatureHeader;
 use crate::federation::{
-    self, FederationContext, Principal, ReadBearer, Refusal, VerifiedCapability,
+    self, FederationContext, PeerTier, Principal, ReadBearer, Refusal, VerifiedCapability,
 };
 use crate::serve::{BlobSource, ReadPrincipal, ServeContext, ServeResolution};
 
@@ -69,8 +70,9 @@ pub struct MediaTag;
 enum Reader {
     /// An account, through a session access token.
     Account(crate::store::OwnerId),
-    /// A peer server, through an admitted federation capability.
-    Peer(Box<VerifiedCapability>),
+    /// A peer server, through an admitted federation capability, and the tier it was admitted
+    /// under — the one its bytes are charged against.
+    Peer(Box<VerifiedCapability>, PeerTier),
 }
 
 /// The content address in the path.
@@ -275,6 +277,8 @@ pub async fn get_blob(
     Inject(federation): Inject<FederationContext>,
     Inject(counters): Inject<CounterContext>,
     Path(path): Path<BlobPath>,
+    // Declared for the contract; `ReadBearer` has already verified it (see its module docs).
+    Headers(_signature): Headers<RequestSignatureHeader>,
     conditions: Conditions,
 ) -> Result<Delivery<OctetStream>, BlobRejection> {
     // Who is asking, in the shape the read authority decides from. A peer is *admitted* before
@@ -285,19 +289,19 @@ pub async fn get_blob(
             Reader::Account(crate::store::OwnerId::new(credential.user.as_str()))
         }
         Principal::Peer(capability) => {
-            federation::admit(
+            let tier = federation::admit(
                 &federation,
                 &counters,
                 &capability,
                 federation::Presentation::Read,
             )
             .await?;
-            Reader::Peer(capability)
+            Reader::Peer(capability, tier)
         }
     };
     let principal = match &reader {
         Reader::Account(owner) => ReadPrincipal::Account(owner),
-        Reader::Peer(capability) => ReadPrincipal::Peer(capability),
+        Reader::Peer(capability, _) => ReadPrincipal::Peer(capability),
     };
     let resolution = crate::serve::resolve(&serve, principal, &path.hash)
         .await
@@ -316,7 +320,7 @@ pub async fn get_blob(
         ServeResolution::Forbidden => {
             return Err(match &reader {
                 Reader::Account(_) => BlobRejection::forbidden(),
-                Reader::Peer(_) => BlobRejection::from(Refusal::Revoked),
+                Reader::Peer(..) => BlobRejection::from(Refusal::Revoked),
             });
         }
         ServeResolution::ScopeInsufficient => return Err(BlobRejection::scope_insufficient()),
@@ -329,7 +333,7 @@ pub async fn get_blob(
     let etag = ETag::strong(address.as_str());
     let source = BlobSource::new(serve.blob_handle(), address, size);
 
-    Served::<_, OctetStream>::new(source)
+    let delivery = Served::<_, OctetStream>::new(source)
         .etag(etag)
         // Immutable by construction: the bytes at an address cannot change without changing the
         // address, so a client may keep them for as long as it likes. `private` because a blob
@@ -340,5 +344,23 @@ pub async fn get_blob(
         .map_err(|error| {
             tracing::error!(%error, "a blob vanished between resolution and delivery");
             BlobRejection::unavailable()
-        })
+        })?;
+
+    // A peer's bytes budget is charged once the delivery is decided and before a byte of it is
+    // sent, so a spent budget is a `429` in place of the body rather than a body cut short. Only
+    // a delivery that carries the blob is charged: a `304`, `412` or `416` sends none of it.
+    if let Reader::Peer(capability, tier) = &reader
+        && delivers_bytes(delivery.status())
+    {
+        federation::charge_served_bytes(&counters, &capability.record.peer_id, *tier, size).await?;
+    }
+    Ok(delivery)
+}
+
+/// Whether a delivery with `status` carries any of the blob's bytes.
+fn delivers_bytes(status: kynos::http::StatusCode) -> bool {
+    matches!(
+        status,
+        kynos::http::StatusCode::OK | kynos::http::StatusCode::PARTIAL_CONTENT
+    )
 }

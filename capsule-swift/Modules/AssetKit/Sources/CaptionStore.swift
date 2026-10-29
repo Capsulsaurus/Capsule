@@ -24,3 +24,11 @@ public protocol CaptionStore: Sendable {
     /// states.
     func setCaption(_ caption: String?, for id: AssetID) async throws
 }
+
+/// Why a ``CaptionStore`` refused a write.
+public enum CaptionStoreError: Error, Sendable, Equatable {
+    /// The store that owns the asset has nowhere to keep a caption. Thrown
+    /// rather than dropped, so a caption typed on such an asset is never
+    /// reported saved and then lost.
+    case unsupported
+}

@@ -13,8 +13,8 @@ Capsule · Library · Signed in
 │The library did not open.                                                                         │
 │Failed to open signed workspace: wrong passphrase                                                 │
 │                                                                                                  │
-│Scriptable: `capsule show ASSET --library PATH` prints one asset's record.                        │
-│                                                                                                  │
+│Scriptable: `capsule library list --library PATH [--view albums|stacks] --json`; `capsule show    │
+│ASSET --library PATH --json` prints one asset's record.                                           │
 │                                                                                                  │
 │                                                                                                  │
 │                                                                                                  │

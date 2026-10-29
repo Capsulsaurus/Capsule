@@ -100,15 +100,26 @@
 //! keyed on the client address [`crate::client_addr`] resolves through the deployment's trusted
 //! proxies (#704), so one address cannot fill a partition faster than its own budget allows.
 //!
-//! # One lock, and what that does and does not cover
+//! # One lock per partition, and what that does and does not cover
 //!
-//! Every partition lives behind the same [`Mutex`]. Admission is genuinely independent — one
-//! partition's occupancy is invisible to another's ceiling — but *latency* is not: a sustained
-//! flood against one key serialises `hit`, `peek` and `reset` for every other. The critical
-//! section holds no `.await` and does `O(log n)` work over at most [`ceilings::UPLOAD_CHUNKS_SOURCE`] entries a partition, so at
-//! these sizes it is contention rather than denial. Stated because the claim above ("the windows
-//! one surface holds are not the windows another is denied") is about admission and should not be
-//! read as a latency guarantee. Per-partition locking is deferred to issue #477, not overlooked.
+//! Each partition lives behind a [`Mutex`] of its own, in a fixed array built once and read
+//! without a lock. Admission is independent — one partition's occupancy is invisible to
+//! another's ceiling — and so, nearly, is *latency*: a sustained flood against one key
+//! serialises `hit`, `peek` and `reset` for that variant only. A caller charging another variant
+//! never waits on the flood's charges, and the flood's own hits never wait on any other lock.
+//! The atomicity [`CounterStore::hit`] promises survives the split because a key never spans two
+//! partitions, so its charge and its decision are still one critical section.
+//!
+//! The one way another variant's traffic holds a partition's lock is a purge of it. The lapsed
+//! windows of a partition nobody writes to are collected by whoever writes next anywhere, but
+//! only once a lock-free hint says one of them has lapsed, and only through a `try_lock` that
+//! skips a partition someone holds rather than waiting on it. So a caller of one variant can
+//! wait behind another variant's caller only for a sweep of its own partition's lapsed windows,
+//! at most once per lapse there: how often that happens is set by its own partition's traffic,
+//! never by the rate of the flood next door. Within one partition the flood still contends with
+//! itself — the critical section holds no `.await` and its purge is linear in at most that
+//! partition's ceiling — which is contention the flood's own surface pays, bounded by the
+//! ceiling it is filling.
 //!
 //! This is defence in depth, not a licence. Every derived key should still be bounded where it
 //! is built — the OIDC authorize validates the redirect before it charges
@@ -117,6 +128,7 @@
 //! [`CounterKey::EnrollmentRedemptionMalformed`]).
 
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use jiff::{SignedDuration, Timestamp};
@@ -254,8 +266,7 @@ pub enum CounterKey {
     ///
     /// Keyed on the peer's origin, never on the capability: a peer holding ten capabilities is
     /// one blast-radius boundary, and a budget per token would be a budget a peer widens by
-    /// asking for more tokens. Events per hour only; bytes and CPU per hour need a weighted
-    /// counter this port does not have and are post-v1.
+    /// asking for more tokens. Events per hour; bytes per hour is [`Self::PeerBytes`].
     PeerRequests(String),
     /// Federated moderation reports from one peer against one account (invariant
     /// 24), keyed on `"{reporting_server}:{reported_user}"` as the contract bounds them.
@@ -266,16 +277,41 @@ pub enum CounterKey {
     /// chooses, so a peer cycling accounts gets a fresh per-account allowance each time, and
     /// only a key that ignores the account bounds the peer's total volume.
     PeerReports(String),
-    /// Attempts at `POST /v1/federation/reports`, keyed on the **claimed** reporting origin.
+    /// Reports at `POST /v1/federation/reports` from one **verified** reporting peer.
     ///
-    /// Charged before the peer is looked up, which is the only place a bound can sit on this
-    /// route: it is the server's one unauthenticated write, and everything after it — a store
-    /// read and an Ed25519 verification — is work an anonymous caller would otherwise get for
-    /// free. The key is attacker-chosen and that is stated rather than papered over: it bounds
-    /// one claimed origin looping, not a caller cycling origins, and this server has no trusted
-    /// client address to key on instead (see
-    /// [`CounterKey::RegistrationSource`], which waits on the same missing fact).
+    /// Charged only once the report's signature has verified under the peer's pinned key
+    /// (#529). Keyed on a claimed origin before verification, it was a budget anybody could
+    /// spend on a real peer's behalf by sending garbage under its name, silencing it. What an
+    /// anonymous caller can ask for before this is one peer-store read and one Ed25519
+    /// verification — the same work every bearer check costs on any authenticated route.
     FederatedIntake(String),
+    /// One report nonce from one verified peer, keyed on `"{reporting_server}:{nonce}"` (#529).
+    ///
+    /// A one-hit budget whose window starts at the first hit is exactly "seen inside this
+    /// window", so the counter port is the replay cache and no second store exists for it. Charged
+    /// after the signature verifies, so a third party cannot burn a peer's nonces.
+    FederatedReportNonce(String),
+    /// One request-signature nonce from one peer, keyed on `"{peer}:{nonce}"` (#949).
+    ///
+    /// The replay memory of the signature every capability presentation carries
+    /// ([`ReadBearer`](crate::federation::ReadBearer)), for the reason
+    /// [`Self::FederatedReportNonce`] is the report's: a one-hit budget whose window starts at
+    /// the first hit is "seen inside this window". Charged only once the signature has verified
+    /// under the peer's pinned key, and not for a peer that is blocked or over its events budget,
+    /// so the key space is what pinned peers' admitted requests make it.
+    FederatedRequestNonce(String),
+    /// Ciphertext served to one federated peer at `GET /v1/blob/{hash}`, in kibibytes (#476).
+    ///
+    /// The bytes-per-hour half of invariant 21's transfer budget, keyed on the peer's origin for
+    /// the reason [`Self::PeerRequests`] is. Charged with [`CounterStore::charge`], one weighted
+    /// call per delivery, and never as a loop of hits: kibibytes rather than bytes so a `u32`
+    /// budget reaches terabytes an hour.
+    PeerBytes(String),
+    /// Capability mints by one account (#529).
+    ///
+    /// Keyed on the authenticated owner: every mint writes a capability row, and nothing else
+    /// bounds how many an account can write.
+    CapabilityMints(UserId),
 }
 
 /// Which of the two spellings an enrollment code was presented in.
@@ -333,7 +369,52 @@ impl CounterKey {
             Self::FederatedReports(_) => "federated_reports",
             Self::PeerReports(_) => "peer_reports",
             Self::FederatedIntake(_) => "federated_intake",
+            Self::FederatedReportNonce(_) => "federated_report_nonce",
+            Self::FederatedRequestNonce(_) => "federated_request_nonce",
+            Self::PeerBytes(_) => "peer_bytes",
+            Self::CapabilityMints(_) => "capability_mints",
         }
+    }
+
+    /// Which of [`InMemoryCounters`]' [`PARTITION_COUNT`] partitions this key lives in.
+    ///
+    /// One slot per variant, exactly as [`Self::as_str`] is one name per variant, so a key
+    /// never spans two partitions and its charge-and-decide stays under one lock. An exhaustive
+    /// match rather than a lookup by name, so a new variant cannot compile without a partition,
+    /// and a [`Slot`] rather than a number, so it cannot name a partition the store lacks.
+    fn partition_slot(&self) -> Slot {
+        match self {
+            Self::LoginAttempts(_) => Slot::LoginAttempts,
+            Self::EnrollmentRedemption(_) => Slot::EnrollmentRedemption,
+            Self::EnrollmentRedemptionMalformed => Slot::EnrollmentRedemptionMalformed,
+            Self::ShareLink(_) => Slot::ShareLink,
+            Self::ShareSource(_) => Slot::ShareSource,
+            Self::DropLink(_) => Slot::DropLink,
+            Self::DropSource(_) => Slot::DropSource,
+            Self::DeepVerify(_) => Slot::DeepVerify,
+            Self::UploadSessions(_) => Slot::UploadSessions,
+            Self::UploadChunks(_) => Slot::UploadChunks,
+            Self::UploadSessionsSource(_) => Slot::UploadSessionsSource,
+            Self::UploadChunksSource(_) => Slot::UploadChunksSource,
+            Self::SecondFactor(_) => Slot::SecondFactor,
+            Self::RegistrationSource(_) => Slot::RegistrationSource,
+            Self::OidcAuthorize(_) => Slot::OidcAuthorize,
+            Self::OidcAuthorizeRefused => Slot::OidcAuthorizeRefused,
+            Self::OidcDevice => Slot::OidcDevice,
+            Self::PeerRequests(_) => Slot::PeerRequests,
+            Self::FederatedReports(_) => Slot::FederatedReports,
+            Self::PeerReports(_) => Slot::PeerReports,
+            Self::FederatedIntake(_) => Slot::FederatedIntake,
+            Self::FederatedReportNonce(_) => Slot::FederatedReportNonce,
+            Self::FederatedRequestNonce(_) => Slot::FederatedRequestNonce,
+            Self::PeerBytes(_) => Slot::PeerBytes,
+            Self::CapabilityMints(_) => Slot::CapabilityMints,
+        }
+    }
+
+    /// The array index of [`Self::partition_slot`], below [`PARTITION_COUNT`] by construction.
+    fn partition_index(&self) -> usize {
+        self.partition_slot() as usize
     }
 
     /// How many simultaneously live windows this variant's partition may hold.
@@ -358,9 +439,14 @@ impl CounterKey {
             Self::OidcAuthorize(_) => ceilings::OIDC_AUTHORIZE,
             Self::OidcAuthorizeRefused => ceilings::OIDC_AUTHORIZE_REFUSED,
             Self::OidcDevice => ceilings::OIDC_DEVICE,
-            Self::PeerRequests(_) | Self::PeerReports(_) => ceilings::PEER_ORIGIN,
+            Self::PeerRequests(_) | Self::PeerReports(_) | Self::PeerBytes(_) => {
+                ceilings::PEER_ORIGIN
+            }
             Self::FederatedReports(_) => ceilings::FEDERATED_REPORTS,
             Self::FederatedIntake(_) => ceilings::FEDERATED_INTAKE,
+            Self::FederatedReportNonce(_) => ceilings::FEDERATED_REPORT_NONCE,
+            Self::FederatedRequestNonce(_) => ceilings::FEDERATED_REQUEST_NONCE,
+            Self::CapabilityMints(_) => ceilings::CAPABILITY_MINTS,
         }
     }
 
@@ -371,7 +457,8 @@ impl CounterKey {
             Self::LoginAttempts(user)
             | Self::DeepVerify(user)
             | Self::UploadSessions(user)
-            | Self::UploadChunks(user) => user.as_str(),
+            | Self::UploadChunks(user)
+            | Self::CapabilityMints(user) => user.as_str(),
             Self::EnrollmentRedemption(spelling) => spelling.as_str(),
             Self::ShareLink(scope)
             | Self::ShareSource(scope)
@@ -382,9 +469,12 @@ impl CounterKey {
             | Self::SecondFactor(scope)
             | Self::OidcAuthorize(scope)
             | Self::PeerRequests(scope)
+            | Self::PeerBytes(scope)
             | Self::FederatedReports(scope)
             | Self::PeerReports(scope)
             | Self::FederatedIntake(scope)
+            | Self::FederatedReportNonce(scope)
+            | Self::FederatedRequestNonce(scope)
             | Self::RegistrationSource(scope) => scope,
             // The two unit variants are each **one** global bucket by construction — that is why
             // they are unit variants rather than a scoped one carrying a sentinel string (see
@@ -459,6 +549,39 @@ pub trait CounterStore: std::fmt::Debug + Send + Sync {
     fn hit<'a>(
         &'a self,
         key: &'a CounterKey,
+        budget: Budget,
+        at: Timestamp,
+    ) -> StoreFuture<'a, Verdict> {
+        self.charge(key, 1, budget, at)
+    }
+
+    /// Charge `units` against `key`'s budget and decide, as one operation (#476).
+    ///
+    /// The weighted form of [`Self::hit`], which is `charge(key, 1, …)`. It exists because a
+    /// budget measured in something other than requests — bytes served to a peer — cannot be
+    /// charged as `units` calls to [`Self::hit`]: that is a loop of separate decisions, and a
+    /// burst interleaving with it reads a half-charged window, which is the read-then-write this
+    /// port exists to forbid. One call, one critical section, whatever `units` is.
+    ///
+    /// **All or nothing.** A charge that would take an open window past its limit is refused
+    /// whole and charges nothing, exactly as a refused hit charges nothing; it does not spend the
+    /// remainder and fail on the rest.
+    ///
+    /// **A fresh window admits any charge.** The first charge of a window is admitted whatever
+    /// its size, and one larger than the whole limit leaves the window spent until it ends. That
+    /// is the rule [`Self::hit`] already follows for a zero limit, and it is what keeps a single
+    /// unit of work larger than the budget — one blob bigger than a peer's hourly allowance —
+    /// servable once a window rather than never.
+    ///
+    /// A charge of zero units writes nothing and answers what [`Self::peek`] answers.
+    ///
+    /// The errors are [`Self::hit`]'s: [`StoreError::Rejected`](crate::store::StoreError::Rejected)
+    /// when the key's partition is full, and any other store error when the adapter could not
+    /// answer.
+    fn charge<'a>(
+        &'a self,
+        key: &'a CounterKey,
+        units: u32,
         budget: Budget,
         at: Timestamp,
     ) -> StoreFuture<'a, Verdict>;
@@ -610,9 +733,10 @@ pub mod ceilings {
     /// window.
     pub const OIDC_DEVICE: usize = 1;
 
-    /// [`CounterKey::PeerRequests`](super::CounterKey::PeerRequests) and
-    /// [`CounterKey::PeerReports`](super::CounterKey::PeerReports) — both keyed on a peer's
-    /// origin, so both are bounded by the same thing and share one number.
+    /// [`CounterKey::PeerRequests`](super::CounterKey::PeerRequests),
+    /// [`CounterKey::PeerBytes`](super::CounterKey::PeerBytes) and
+    /// [`CounterKey::PeerReports`](super::CounterKey::PeerReports) — all keyed on a peer's
+    /// origin, so all are bounded by the same thing and share one number.
     ///
     /// Not caller-controlled: a peer origin reaches either key only off a capability this
     /// server minted, so the true bound is the size of the peer list an operator pinned. Ten
@@ -633,15 +757,35 @@ pub mod ceilings {
     pub const FEDERATED_REPORTS: usize = 20_000;
 
     /// [`CounterKey::FederatedIntake`](super::CounterKey::FederatedIntake) — 1-hour window,
-    /// keyed on the **claimed** reporting origin.
+    /// keyed on a **verified** reporting peer.
     ///
-    /// The one federation key charged before anything is authenticated, so the key space is
-    /// attacker-chosen outright and this ceiling is the only bound on it. Sized like
-    /// [`SHARE_LINK`] and [`DROP_LINK`], the other partitions a caller supplies the key for:
-    /// twenty thousand distinct claimed origins in an hour is under six a second, and spending
-    /// it costs the intake path its first-time keys and costs no other surface anything. That
-    /// containment is the whole reason it is a partition rather than a share of one.
-    pub const FEDERATED_INTAKE: usize = 20_000;
+    /// Only a peer an operator pinned can hold a window here, so the key space is the pinned
+    /// list, which is what [`PEER_ORIGIN`] is sized for.
+    pub const FEDERATED_INTAKE: usize = PEER_ORIGIN;
+
+    /// [`CounterKey::FederatedReportNonce`](super::CounterKey::FederatedReportNonce) — 10-minute
+    /// window, keyed on a verified peer and a nonce it chose.
+    ///
+    /// Each verified report charges one, and a verified peer is held to
+    /// [`budgets::FEDERATED_INTAKE`](super::budgets::FEDERATED_INTAKE) reports an hour, so one
+    /// peer holds at most fifty live windows here. Twenty thousand is four hundred peers doing
+    /// that at once.
+    pub const FEDERATED_REPORT_NONCE: usize = 20_000;
+
+    /// [`CounterKey::FederatedRequestNonce`](super::CounterKey::FederatedRequestNonce) —
+    /// 10-minute window, keyed on a verified peer and a nonce it chose.
+    ///
+    /// A nonce is spent only for a request a pinned peer signed while inside
+    /// [`budgets::PEER_REQUESTS`](super::budgets::PEER_REQUESTS), which is ten thousand an hour
+    /// in a fixed window — so one peer holds at most twenty thousand live windows here, its whole
+    /// budget at the end of one hour and again at the start of the next. Two hundred thousand is
+    /// ten peers doing that at once. Full, the partition refuses every capability presentation
+    /// closed until windows lapse, which is the cost of a replay memory that never fails open.
+    pub const FEDERATED_REQUEST_NONCE: usize = 200_000;
+
+    /// [`CounterKey::CapabilityMints`](super::CounterKey::CapabilityMints) — 1-hour window, keyed
+    /// on an authenticated account. Bounded by the directory, as `LOGIN_ATTEMPTS` is.
+    pub const CAPABILITY_MINTS: usize = 10_000;
 }
 
 /// A deterministic in-memory adapter.
@@ -653,9 +797,11 @@ pub struct InMemoryCounters {
     /// Set by [`InMemoryCounters::with_ceiling`], and then the ceiling of **every** partition.
     /// `None` in production, where each variant carries its own.
     ceiling_override: Option<usize>,
-    /// Partitioned by [`CounterKey::as_str`], so one variant's occupancy is invisible to
-    /// another's ceiling. An emptied partition is dropped by the purge rather than left behind.
-    windows: Mutex<BTreeMap<&'static str, BTreeMap<CounterKey, Window>>>,
+    /// One lock per [`CounterKey`] variant, so one variant's occupancy is invisible to
+    /// another's ceiling, and one variant's charges never wait on another's (only, at most once
+    /// per lapse, on a purge of their own lapsed windows; see the module docs). The array
+    /// itself is fixed at construction and read without a lock.
+    windows: Partitions,
 }
 
 /// One key's open window.
@@ -672,8 +818,97 @@ struct Window {
     purge_after: Timestamp,
 }
 
-/// The partitioned window map: one inner map per [`CounterKey`] variant.
-type Partitions = BTreeMap<&'static str, BTreeMap<CounterKey, Window>>;
+/// Declares [`Slot`] and derives [`PARTITION_COUNT`] from the same list, so the two cannot
+/// disagree: adding a slot grows the array, and no slot can index past it.
+macro_rules! partition_slots {
+    ($($slot:ident),+ $(,)?) => {
+        /// One partition of [`InMemoryCounters`], named for the [`CounterKey`] variant it holds.
+        ///
+        /// Fieldless with implicit discriminants, so `slot as usize` runs `0..PARTITION_COUNT`
+        /// and indexing the partition array with it cannot go out of bounds.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        #[repr(usize)]
+        enum Slot {
+            $($slot),+
+        }
+
+        /// How many partitions the store holds: one per [`Slot`], counted from its declaration.
+        const PARTITION_COUNT: usize = [$(Slot::$slot),+].len();
+    };
+}
+
+partition_slots!(
+    LoginAttempts,
+    EnrollmentRedemption,
+    EnrollmentRedemptionMalformed,
+    ShareLink,
+    ShareSource,
+    DropLink,
+    DropSource,
+    DeepVerify,
+    UploadSessions,
+    UploadChunks,
+    UploadSessionsSource,
+    UploadChunksSource,
+    SecondFactor,
+    RegistrationSource,
+    OidcAuthorize,
+    OidcAuthorizeRefused,
+    OidcDevice,
+    PeerRequests,
+    FederatedReports,
+    PeerReports,
+    FederatedIntake,
+    FederatedReportNonce,
+    FederatedRequestNonce,
+    PeerBytes,
+    CapabilityMints,
+);
+
+/// One variant's windows, behind that variant's own lock, with a lock-free hint of when the
+/// earliest of them lapses.
+#[derive(Debug)]
+struct Partition {
+    windows: Mutex<BTreeMap<CounterKey, Window>>,
+    /// The earliest `purge_after` among `windows`, in whole milliseconds rounded down, or
+    /// [`i64::MAX`] when nothing is held.
+    ///
+    /// Written only under `windows`' lock and read without it, so another variant's caller can
+    /// tell that nothing here has lapsed without touching the lock. A purge hint like
+    /// [`Window::purge_after`] itself: a stale read at worst delays a sweep to a later write or
+    /// spends one that drops nothing, and admission never reads it.
+    next_lapse_ms: AtomicI64,
+}
+
+impl Default for Partition {
+    fn default() -> Self {
+        Self {
+            windows: Mutex::default(),
+            next_lapse_ms: AtomicI64::new(i64::MAX),
+        }
+    }
+}
+
+impl Partition {
+    /// Whether some window here may have lapsed by `now`, read without the lock.
+    ///
+    /// Strictly after the rounded-down millisecond, so an open gate means a window whose
+    /// `purge_after` is before `now` is held, or was until a [`CounterStore::reset`] removed it;
+    /// the second costs one sweep that drops nothing and re-derives the hint.
+    fn may_have_lapsed(&self, now: Timestamp) -> bool {
+        now.as_millisecond() > self.next_lapse_ms.load(Ordering::Relaxed)
+    }
+
+    /// Lower the lapse hint to cover a window that lapses at `purge_after`; call under the lock.
+    fn note_lapse(&self, purge_after: Timestamp) {
+        self.next_lapse_ms
+            .fetch_min(purge_after.as_millisecond(), Ordering::Relaxed);
+    }
+}
+
+/// The partitioned window map: one independently locked map per [`CounterKey`] variant,
+/// indexed by [`CounterKey::partition_index`].
+type Partitions = [Partition; PARTITION_COUNT];
 
 impl InMemoryCounters {
     /// An empty set of counters, each variant bounded by its own [`CounterKey::ceiling`].
@@ -696,8 +931,14 @@ impl InMemoryCounters {
     ///
     /// For tests that assert the *cardinality* of the key space rather than any one verdict —
     /// the property a caller-controlled key silently destroys.
+    ///
+    /// Each partition is counted under its own lock in turn, so under concurrent writes the sum
+    /// is not one snapshot of the whole store.
     pub fn len(&self) -> usize {
-        lock(&self.windows).values().map(BTreeMap::len).sum()
+        self.windows
+            .iter()
+            .map(|partition| lock(&partition.windows).len())
+            .sum()
     }
 
     /// How many distinct keys hold a window in `key`'s partition.
@@ -705,9 +946,7 @@ impl InMemoryCounters {
     /// The number the ceiling is actually compared against, so a test can assert that filling
     /// one surface left another's occupancy alone.
     pub fn len_of(&self, key: &CounterKey) -> usize {
-        lock(&self.windows)
-            .get(key.as_str())
-            .map_or(0, BTreeMap::len)
+        lock(&self.partition(key).windows).len()
     }
 
     /// Whether no key holds a window.
@@ -720,12 +959,54 @@ impl InMemoryCounters {
         self.ceiling_override.unwrap_or_else(|| key.ceiling())
     }
 
-    /// Drop every window whose budget has lapsed, and every partition thereby emptied.
-    fn purge(windows: &mut Partitions, now: Timestamp) {
-        windows.retain(|_, partition| {
-            partition.retain(|_, window| now < window.purge_after);
-            !partition.is_empty()
+    /// `key`'s partition. Infallible: [`CounterKey::partition_index`] is a [`Slot`]'s
+    /// discriminant, and [`PARTITION_COUNT`] is counted from the same declaration.
+    fn partition(&self, key: &CounterKey) -> &Partition {
+        &self.windows[key.partition_index()]
+    }
+
+    /// Drop every window in `windows` whose budget has lapsed, and re-derive `partition`'s
+    /// lapse hint from what is left. `windows` is `partition`'s own map, held by the caller.
+    fn purge(partition: &Partition, windows: &mut BTreeMap<CounterKey, Window>, now: Timestamp) {
+        let mut next_lapse_ms = i64::MAX;
+        windows.retain(|_, window| {
+            let live = now < window.purge_after;
+            if live {
+                next_lapse_ms = next_lapse_ms.min(window.purge_after.as_millisecond());
+            }
+            live
         });
+        partition
+            .next_lapse_ms
+            .store(next_lapse_ms, Ordering::Relaxed);
+    }
+
+    /// Purge every partition except `own` that holds a lapsed window and that nobody else
+    /// holds right now, and return how many were swept.
+    ///
+    /// Opportunistic, so a write still collects what lapsed in a partition nobody writes to.
+    /// A partition whose earliest window has not lapsed is passed over on its lock-free hint
+    /// without its lock being touched, so how often another variant's traffic takes this
+    /// partition's lock is set by how often windows *here* lapse — at most once per lapse —
+    /// and never by that traffic's own rate. A partition another caller holds is skipped
+    /// rather than waited on, and that caller purges it on its own write. One lock at a time,
+    /// and never while `own`'s is held, so no ordering between partition locks exists to
+    /// deadlock on.
+    fn purge_others(&self, own: usize, now: Timestamp) -> usize {
+        let mut swept = 0;
+        for (index, partition) in self.windows.iter().enumerate() {
+            if index == own || !partition.may_have_lapsed(now) {
+                continue;
+            }
+            let mut guard = match partition.windows.try_lock() {
+                Ok(guard) => guard,
+                Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+                Err(std::sync::TryLockError::WouldBlock) => continue,
+            };
+            Self::purge(partition, &mut guard, now);
+            swept += 1;
+        }
+        swept
     }
 }
 
@@ -736,12 +1017,22 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// Decide `window` against `budget` at `at`, treating an elapsed window as absent.
-fn verdict(window: Option<Window>, budget: Budget, at: Timestamp) -> (Verdict, Option<Window>) {
+/// Decide a charge of `units` against `window` and `budget` at `at`, treating an elapsed window
+/// as absent.
+///
+/// An open window refuses a charge that would take it past its limit; a fresh one admits any
+/// charge (see [`CounterStore::charge`]). With `units` of one this is exactly the hit rule:
+/// `hits + 1 > limit` is `hits >= limit`.
+fn verdict(
+    window: Option<Window>,
+    units: u32,
+    budget: Budget,
+    at: Timestamp,
+) -> (Verdict, Option<Window>) {
     let live = window.filter(|open| at < crate::store::deadline(open.opened_at, budget.window));
 
     match live {
-        Some(open) if open.hits >= budget.limit => (
+        Some(open) if u64::from(open.hits) + u64::from(units) > u64::from(budget.limit) => (
             Verdict::Limited {
                 retry_after: crate::store::deadline(open.opened_at, budget.window),
             },
@@ -764,22 +1055,36 @@ fn verdict(window: Option<Window>, budget: Budget, at: Timestamp) -> (Verdict, O
 }
 
 impl CounterStore for InMemoryCounters {
-    fn hit<'a>(
+    fn charge<'a>(
         &'a self,
         key: &'a CounterKey,
+        units: u32,
         budget: Budget,
         at: Timestamp,
     ) -> StoreFuture<'a, Verdict> {
+        if units == 0 {
+            return self.peek(key, budget, at);
+        }
         Box::pin(async move {
-            let mut windows = lock(&self.windows);
-            Self::purge(&mut windows, at);
+            let own = key.partition_index();
+            let partition = self.partition(key);
+            let swept = self.purge_others(own, at);
+            if swept > 0 {
+                tracing::trace!(
+                    counter = key.as_str(),
+                    swept,
+                    "a hit collected lapsed windows from other partitions"
+                );
+            }
 
-            let held = windows
-                .get(key.as_str())
-                .and_then(|partition| partition.get(key))
-                .copied();
+            // Everything from here is under this key's partition lock alone: the charge and the
+            // decision stay one critical section, and no other variant's caller waits on it.
+            let mut windows = lock(&partition.windows);
+            Self::purge(partition, &mut windows, at);
+
+            let held = windows.get(key).copied();
             let ceiling = self.ceiling_for(key);
-            let occupancy = windows.get(key.as_str()).map_or(0, BTreeMap::len);
+            let occupancy = windows.len();
             // Only a key with no window yet can be refused, and only by its own partition's
             // occupancy. A key already being counted keeps being counted, and another variant's
             // flood is not visible here at all.
@@ -798,12 +1103,13 @@ impl CounterStore for InMemoryCounters {
                     ),
                 });
             }
-            let (decision, live) = verdict(held, budget, at);
+            let (decision, live) = verdict(held, units, budget, at);
 
             match decision {
                 Verdict::Limited { retry_after } => {
                     tracing::info!(
                         counter = key.as_str(),
+                        units,
                         %retry_after,
                         "a rate limit engaged"
                     );
@@ -814,20 +1120,18 @@ impl CounterStore for InMemoryCounters {
                     // observe the state in between, which is the whole property.
                     let updated = match live {
                         Some(open) => Window {
-                            hits: open.hits.saturating_add(1),
+                            hits: open.hits.saturating_add(units),
                             opened_at: open.opened_at,
                             purge_after: crate::store::deadline(open.opened_at, budget.window),
                         },
                         None => Window {
-                            hits: 1,
+                            hits: units,
                             opened_at: at,
                             purge_after: crate::store::deadline(at, budget.window),
                         },
                     };
-                    windows
-                        .entry(key.as_str())
-                        .or_default()
-                        .insert(key.clone(), updated);
+                    windows.insert(key.clone(), updated);
+                    partition.note_lapse(updated.purge_after);
                     Ok(Verdict::Admitted {
                         remaining: budget.limit.saturating_sub(updated.hits),
                     })
@@ -843,24 +1147,16 @@ impl CounterStore for InMemoryCounters {
         at: Timestamp,
     ) -> StoreFuture<'a, Verdict> {
         Box::pin(async move {
-            let windows = lock(&self.windows);
-            let held = windows
-                .get(key.as_str())
-                .and_then(|partition| partition.get(key))
-                .copied();
-            Ok(verdict(held, budget, at).0)
+            let partition = self.partition(key);
+            let held = lock(&partition.windows).get(key).copied();
+            Ok(verdict(held, 1, budget, at).0)
         })
     }
 
     fn reset<'a>(&'a self, key: &'a CounterKey) -> StoreFuture<'a, ()> {
         Box::pin(async move {
-            let mut windows = lock(&self.windows);
-            if let Some(partition) = windows.get_mut(key.as_str())
-                && partition.remove(key).is_some()
-            {
-                if partition.is_empty() {
-                    windows.remove(key.as_str());
-                }
+            let partition = self.partition(key);
+            if lock(&partition.windows).remove(key).is_some() {
                 tracing::debug!(counter = key.as_str(), "a counter window was cleared");
             }
             Ok(())
@@ -894,6 +1190,22 @@ impl CounterContext {
         budget: Budget,
     ) -> Result<Verdict, crate::store::StoreError> {
         self.counters.hit(key, budget, self.clock.now()).await
+    }
+
+    /// Charge `units` and decide: the weighted [`Self::hit`] (see [`CounterStore::charge`]).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::hit`], under the same rule: an error is a refusal, never an admission.
+    pub async fn charge(
+        &self,
+        key: &CounterKey,
+        units: u32,
+        budget: Budget,
+    ) -> Result<Verdict, crate::store::StoreError> {
+        self.counters
+            .charge(key, units, budget, self.clock.now())
+            .await
     }
 
     /// The verdict a hit would get.

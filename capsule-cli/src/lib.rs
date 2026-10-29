@@ -19,12 +19,12 @@ use capsule_library::import::{
     plan, scan_paths as scan_files,
 };
 use capsule_library::library::{Library, LibraryError, init_library, open_library, rebuild_index};
-use capsule_library::lifecycle::{DerivativeStatus, Workspace, unmigrated_sidecars};
+use capsule_library::lifecycle::{DerivativeStatus, Workspace, unanchored_sidecars};
 use capsule_sdk::cache_budget::DesktopConnectionClass;
 use cli::{
     AuthCommands, CacheCommands, Cli, Commands, EditCommands, EditLibraryArgs, ImportProviderArg,
     LabelArgs, LabelCommands, LibraryCommands, PeerCommands, RegionCommands, RepairCommands,
-    ShareCommands, SyncCommands,
+    ShareCommands, SyncCommands, TrashCommands,
 };
 use colored::*;
 use dialoguer::{Confirm, Input, Password};
@@ -44,7 +44,6 @@ pub mod edit;
 pub mod i18n;
 pub mod import_report;
 pub mod import_run;
-pub mod migrate;
 pub mod oidc;
 pub mod peer;
 pub mod peering_state;
@@ -77,20 +76,31 @@ fn as_capsule_cli(ws: Workspace) -> Workspace {
 /// The refusal every networked command gives before a session exists.
 pub(crate) const NOT_AUTHENTICATED: &str = "Not authenticated. Run 'capsule auth login' first.";
 
-/// The `capsule library info` row for the unmigrated-sidecar count, plus the pointer at
-/// `capsule library migrate` — `None` when nothing is left to migrate. The count comes from
-/// the keyless scan, since `info` opens the library without a passphrase.
+/// The line printed when a library holds sidecars no provenance chain anchors — the assets
+/// they name are hidden from every verb — or `None` when it holds none.
 #[must_use]
-fn library_info_unmigrated(unmigrated: usize) -> (String, Option<String>) {
-    let row = format!("Unmigrated sidecars: {unmigrated}");
-    let hint = match unmigrated {
+fn unanchored_notice(unanchored: usize) -> Option<String> {
+    match unanchored {
         0 => None,
-        1 => Some("Run `capsule library migrate` to admit the 1 unsigned sidecar.".to_owned()),
+        1 => Some(
+            "1 sidecar in this library has no provenance chain, so its asset is hidden.".to_owned(),
+        ),
         count => Some(format!(
-            "Run `capsule library migrate` to admit the {count} unsigned sidecars."
+            "{count} sidecars in this library have no provenance chain, so their assets are \
+             hidden."
         )),
-    };
-    (row, hint)
+    }
+}
+
+/// The `capsule library info` row for the unanchored-sidecar count, plus the
+/// [`unanchored_notice`] when there are any. The count comes from the keyless scan, since
+/// `info` opens the library without a passphrase.
+#[must_use]
+fn library_info_unanchored(unanchored: usize) -> (String, Option<String>) {
+    (
+        format!("Unanchored sidecars: {unanchored}"),
+        unanchored_notice(unanchored),
+    )
 }
 
 /// Resolve the persisted-session file path, erroring if the config directory
@@ -234,13 +244,15 @@ async fn dispatch(command: Commands) -> Result<()> {
             AuthCommands::Login {
                 oidc: true,
                 device: true,
+                json,
                 ..
-            } => auth_login_oidc_device().await?,
+            } => auth_login_oidc_device(json).await?,
             AuthCommands::Login {
                 oidc: true,
                 no_browser,
+                json,
                 ..
-            } => auth_login_oidc(no_browser).await?,
+            } => auth_login_oidc(no_browser, json).await?,
             AuthCommands::Login {
                 email,
                 password_stdin,
@@ -308,13 +320,13 @@ async fn dispatch(command: Commands) -> Result<()> {
                     cfg.last_scrubbed_at
                         .map_or_else(|| "never".to_string(), |t| t.to_string())
                 );
-                let unmigrated = unmigrated_sidecars(&path).len();
+                let unanchored = unanchored_sidecars(&path).len();
                 tracing::debug!(
                     library = %path.display(),
-                    unmigrated,
-                    "library info: unmigrated-sidecar count"
+                    unanchored,
+                    "library info: unanchored-sidecar count"
                 );
-                let (count_line, hint) = library_info_unmigrated(unmigrated);
+                let (count_line, hint) = library_info_unanchored(unanchored);
                 println!("  {count_line}");
                 if let Some(hint) = hint {
                     println!("{}", hint.yellow());
@@ -333,27 +345,22 @@ async fn dispatch(command: Commands) -> Result<()> {
                 lib.close()
                     .map_err(|e| eyre!("Failed to close library: {e}"))?;
             }
-            LibraryCommands::Migrate {
-                path,
+            LibraryCommands::List {
+                library,
+                view,
                 passphrase_stdin,
-                retain_days,
+                json,
             } => {
-                let mut ws = open_workspace_quiet(&path, passphrase_stdin)?;
-                println!(
-                    "{}",
-                    format!(
-                        "Migrating the unsigned sidecars in {} ({} found)…",
-                        path.to_string_lossy(),
-                        ws.unmigrated_sidecars().len()
-                    )
-                    .cyan()
-                );
-                match migrate::run(&mut ws, retain_days) {
-                    Ok(report) => print!(
-                        "{}",
-                        migrate::render(&report, ws.unmigrated_sidecars().len())
-                    ),
-                    Err(error) => return Err(eyre!("Migration failed: {error}")),
+                use tui::library::catalogue;
+                let ws = open_workspace(&library, passphrase_stdin)?;
+                let listing = catalogue::listing(&catalogue::collect(&ws), view.into());
+                // The workspace holds the library's lock; the listing is owned values.
+                drop(ws);
+                tracing::info!(library = %library.display(), ?view, json, "library list");
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&listing)?);
+                } else {
+                    print!("{}", catalogue::render_listing(&listing));
                 }
             }
         },
@@ -610,21 +617,63 @@ async fn dispatch(command: Commands) -> Result<()> {
             }
         }
 
+        // ── Trash ─────────────────────────────────────────────────────────
+        Commands::Trash { command } => {
+            let (library, passphrase_stdin, json, request) = match command {
+                TrashCommands::Delete {
+                    library,
+                    asset,
+                    retain_days,
+                    passphrase_stdin,
+                    json,
+                } => (
+                    library,
+                    passphrase_stdin,
+                    json,
+                    remote::TrashRequest {
+                        action: remote::TrashAction::Delete,
+                        assets: asset,
+                        retain_days,
+                    },
+                ),
+                TrashCommands::Restore {
+                    library,
+                    asset,
+                    passphrase_stdin,
+                    json,
+                } => (
+                    library,
+                    passphrase_stdin,
+                    json,
+                    remote::TrashRequest {
+                        action: remote::TrashAction::TrashRestore,
+                        assets: asset,
+                        retain_days: cull::DEFAULT_RETAIN_DAYS,
+                    },
+                ),
+            };
+            let mut ws = open_workspace(&library, passphrase_stdin)?;
+            trash_workspace(&mut ws, &request, json).await?;
+        }
+
         // ── Show ──────────────────────────────────────────────────────────
         Commands::Show {
             asset,
             library,
             passphrase_stdin,
+            json,
         } => {
             let ws = open_workspace(&library, passphrase_stdin)?;
-            let view = show::resolve(&ws, &asset).and_then(|id| {
-                show::collect(&ws, &id).ok_or_else(|| show::ShowError::UnknownAsset(id.to_string()))
-            });
-            match view {
-                Ok(view) => print!("{}", show::render(&view)),
-                Err(error) => {
-                    return Err(eyre!("Show failed: {}", show::describe_error(&error)));
-                }
+            let failed =
+                |error: &show::ShowError| eyre!("Show failed: {}", show::describe_error(error));
+            let id = show::resolve(&ws, &asset).map_err(|error| failed(&error))?;
+            let missing = || failed(&show::ShowError::UnknownAsset(id.to_string()));
+            if json {
+                let report = show::report(&ws, &id).ok_or_else(missing)?;
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                let view = show::collect(&ws, &id).ok_or_else(missing)?;
+                print!("{}", show::render(&view));
             }
         }
 
@@ -864,6 +913,38 @@ async fn dispatch(command: Commands) -> Result<()> {
             } => {
                 let ws = open_workspace(&library, passphrase_stdin)?;
                 peer_discard(&ws, &hand_off, json)?;
+            }
+            PeerCommands::Offer {
+                library,
+                peer,
+                to,
+                asset,
+                passphrase_stdin,
+                json,
+            } => {
+                let options = peer::OfferOptions {
+                    peer,
+                    to,
+                    assets: asset.into_iter().collect(),
+                };
+                let ws = open_workspace(&library, passphrase_stdin)?;
+                peer_offer(&ws, &options, json).await?;
+            }
+            PeerCommands::Pull {
+                library,
+                listen,
+                listen_timeout,
+                passphrase_stdin,
+                json,
+            } => {
+                let mut ws = open_workspace(&library, passphrase_stdin)?;
+                peer_pull(
+                    &mut ws,
+                    listen,
+                    std::time::Duration::from_secs(listen_timeout),
+                    json,
+                )
+                .await?;
             }
         },
 
@@ -1221,8 +1302,34 @@ async fn finish_second_factor(
     Ok(true)
 }
 
+/// Provider-authored text with its control characters dropped, so a provider cannot write
+/// escape sequences into the terminal: the one filter the CLI's prints and the TUI's account
+/// screen both pass that text through.
+pub(crate) fn printable(text: &str) -> String {
+    text.chars().filter(|c| !c.is_control()).collect()
+}
+
+/// The line a browser sign-in prints above the authorization address.
+pub(crate) const OIDC_OPEN_ADDRESS: &str = "To sign in, open this address in a browser:";
+
+/// The line a browser sign-in prints when no browser could be opened for it.
+pub(crate) const OIDC_NO_BROWSER: &str =
+    "No browser could be opened from here. Open the address above in any browser.";
+
+/// The line a device sign-in prints above the verification address.
+pub(crate) const DEVICE_OPEN_ADDRESS: &str = "On any device with a browser, open this address:";
+
+/// The line a device sign-in prints above the address that already carries the code.
+pub(crate) const DEVICE_OPEN_COMPLETE: &str =
+    "Or open this address, which already carries the code:";
+
+/// The line a device sign-in prints carrying the code to enter.
+pub(crate) fn device_code_line(user_code: &str) -> String {
+    format!("and enter this code: {user_code}")
+}
+
 /// The line a browser sign-in prints while it waits, in whole minutes rounded up.
-fn oidc_waiting_line(waited: std::time::Duration) -> String {
+pub(crate) fn oidc_waiting_line(waited: std::time::Duration) -> String {
     match waited.as_secs().div_ceil(60) {
         1 => "Waiting up to 1 minute for the sign-in to finish…".to_owned(),
         count => format!("Waiting up to {count} minutes for the sign-in to finish…"),
@@ -1230,7 +1337,7 @@ fn oidc_waiting_line(waited: std::time::Duration) -> String {
 }
 
 /// The line a device sign-in prints while it waits, in whole minutes rounded up.
-fn device_waiting_line(waited: std::time::Duration) -> String {
+pub(crate) fn device_waiting_line(waited: std::time::Duration) -> String {
     match waited.as_secs().div_ceil(60) {
         1 => "Waiting up to 1 minute for you to approve the sign-in…".to_owned(),
         count => format!("Waiting up to {count} minutes for you to approve the sign-in…"),
@@ -1240,82 +1347,123 @@ fn device_waiting_line(waited: std::time::Duration) -> String {
 /// The line an identity-provider sign-in prints when it succeeds.
 const OIDC_SUCCESS: &str = "Signed in through your identity provider.";
 
-/// `capsule auth login --oidc`: sign in through the server's identity provider in a browser,
-/// over a loopback listener, and persist the session ([`oidc`] owns the flow).
-async fn auth_login_oidc(no_browser: bool) -> Result<()> {
-    let remote = remote::RemoteConfig::from_env();
-    let store = session_store()?;
-    let ceremony = oidc::SdkCeremony::new(&remote, &store)
-        .map_err(|error| login_failed(&describe_remote_error(&error)))?;
-    let pages = oidc::CallbackPages {
+/// The pages the loopback listener shows the browser: shared by `capsule auth login --oidc` and
+/// the TUI's account screen, both of which finish the sign-in in the terminal.
+pub(crate) fn oidc_callback_pages() -> oidc::CallbackPages {
+    oidc::CallbackPages {
         received: "Capsule received your sign-in. Return to the terminal, which finishes signing \
                    you in."
             .to_owned(),
         refused: "The sign-in did not complete. Return to the terminal to see why.".to_owned(),
-    };
+    }
+}
 
-    println!(
-        "{}",
-        "Signing in to Capsule through your identity provider…".green()
+/// What `capsule auth login --oidc [--device] --json` prints once the session is stored.
+#[derive(Debug, serde::Serialize)]
+struct OidcLoginReport {
+    /// Always true: a sign-in that did not finish exits non-zero and prints no document.
+    signed_in: bool,
+    /// How the identity provider was reached: `browser` (`--oidc`) or `device` (`--device`).
+    flow: &'static str,
+    /// Whether the sign-in asked for an authenticator code.
+    second_factor: bool,
+}
+
+/// Finish an identity-provider sign-in that settled as `step`: the second factor, then the
+/// success line, or under `json` the one [`OidcLoginReport`] on stdout.
+async fn finish_oidc_login(
+    remote: &remote::RemoteConfig,
+    store: &session::SessionStore,
+    step: remote::LoginStep,
+    flow: &'static str,
+    json: bool,
+) -> Result<()> {
+    let second_factor = finish_second_factor(remote, store, step, json).await?;
+    if json {
+        let report = OidcLoginReport {
+            signed_in: true,
+            flow,
+            second_factor,
+        };
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!("{}", OIDC_SUCCESS.green());
+    }
+    Ok(())
+}
+
+/// `capsule auth login --oidc`: sign in through the server's identity provider in a browser,
+/// over a loopback listener, and persist the session ([`oidc`] owns the flow).
+///
+/// With `json`, the address and the progress lines go to stderr and stdout carries exactly one
+/// document, [`OidcLoginReport`].
+async fn auth_login_oidc(no_browser: bool, json: bool) -> Result<()> {
+    let remote = remote::RemoteConfig::from_env();
+    let store = session_store()?;
+    let ceremony = oidc::SdkCeremony::new(&remote, &store)
+        .map_err(|error| login_failed(&describe_remote_error(&error)))?;
+
+    progress(
+        json,
+        "Signing in to Capsule through your identity provider…".green(),
     );
     let show = |authorization_url: &str, waited: std::time::Duration| {
-        println!("To sign in, open this address in a browser:");
-        println!("{authorization_url}");
+        progress(json, OIDC_OPEN_ADDRESS);
+        progress(json, authorization_url);
         if !no_browser && !oidc::open_in_browser(authorization_url) {
-            println!(
-                "{}",
-                "No browser could be opened from here. Open the address above in any browser."
-                    .yellow()
-            );
+            progress(json, OIDC_NO_BROWSER.yellow());
         }
-        println!("{}", oidc_waiting_line(waited));
+        progress(json, oidc_waiting_line(waited));
     };
-    let step = oidc::login(&ceremony, show, &pages, oidc::LISTENER_TIMEOUT)
-        .await
-        .map_err(|error| login_failed(&describe_oidc_error(&error)))?;
+    let step = oidc::login(
+        &ceremony,
+        show,
+        &oidc_callback_pages(),
+        oidc::LISTENER_TIMEOUT,
+    )
+    .await
+    .map_err(|error| login_failed(&describe_oidc_error(&error)))?;
 
-    finish_second_factor(&remote, &store, step, false).await?;
-    println!("{}", OIDC_SUCCESS.green());
-    Ok(())
+    finish_oidc_login(&remote, &store, step, "browser", json).await
 }
 
 /// `capsule auth login --oidc --device`: sign in through the server's identity provider from
 /// another device (RFC 8628, issue #635) — print the address and the code, poll until the person
 /// approves, and persist the session ([`oidc::login_device`] owns the flow).
-async fn auth_login_oidc_device() -> Result<()> {
+///
+/// With `json`, the address, the code and the progress lines go to stderr and stdout carries
+/// exactly one document, [`OidcLoginReport`].
+async fn auth_login_oidc_device(json: bool) -> Result<()> {
     let remote = remote::RemoteConfig::from_env();
     let store = session_store()?;
     let ceremony = oidc::SdkCeremony::new(&remote, &store)
         .map_err(|error| login_failed(&describe_remote_error(&error)))?;
 
-    println!(
-        "{}",
-        "Signing in to Capsule through your identity provider, from another device…".green()
+    progress(
+        json,
+        "Signing in to Capsule through your identity provider, from another device…".green(),
     );
     let show = |pending: &capsule_sdk::auth::OidcDeviceAuthorization,
                 waited: std::time::Duration| {
         // Provider-authored, printed to a terminal: control characters are dropped, as the
         // server already refused any code carrying one.
-        let printable = |text: &str| text.chars().filter(|c| !c.is_control()).collect::<String>();
-        println!("On any device with a browser, open this address:");
-        println!("{}", printable(&pending.verification_uri));
-        println!(
-            "{}",
-            format!("and enter this code: {}", printable(&pending.user_code)).bold()
+        progress(json, DEVICE_OPEN_ADDRESS);
+        progress(json, printable(&pending.verification_uri));
+        progress(
+            json,
+            device_code_line(&printable(&pending.user_code)).bold(),
         );
         if let Some(complete) = &pending.verification_uri_complete {
-            println!("Or open this address, which already carries the code:");
-            println!("{}", printable(complete));
+            progress(json, DEVICE_OPEN_COMPLETE);
+            progress(json, printable(complete));
         }
-        println!("{}", device_waiting_line(waited));
+        progress(json, device_waiting_line(waited));
     };
     let step = oidc::login_device(&ceremony, show, oidc::DEVICE_TIMEOUT)
         .await
         .map_err(|error| login_failed(&describe_oidc_error(&error)))?;
 
-    finish_second_factor(&remote, &store, step, false).await?;
-    println!("{}", OIDC_SUCCESS.green());
-    Ok(())
+    finish_oidc_login(&remote, &store, step, "device", json).await
 }
 
 /// The `capsule auth login` failure line, carrying `reason`.
@@ -1328,7 +1476,7 @@ fn login_failed(reason: &str) -> eyre::Report {
 /// A refused loopback redirect gets the remedy rather than only the code: the server's operator
 /// has to set `OIDC_ALLOW_LOOPBACK_REDIRECT=true`, which is off by default, and nothing the person
 /// at the terminal does will change that.
-fn describe_oidc_error(error: &oidc::OidcLoginError) -> String {
+pub(crate) fn describe_oidc_error(error: &oidc::OidcLoginError) -> String {
     match error {
         oidc::OidcLoginError::Remote(remote::RemoteError::Auth(
             capsule_sdk::auth::AuthError::OidcRedirectInvalid,
@@ -1350,8 +1498,6 @@ fn describe_oidc_error(error: &oidc::OidcLoginError) -> String {
         oidc::OidcLoginError::Denied { error, description } => {
             // Provider-authored text, printed to a terminal: control characters are dropped so
             // a provider cannot write escape sequences into it.
-            let printable =
-                |text: &str| text.chars().filter(|c| !c.is_control()).collect::<String>();
             let error = printable(error);
             match description {
                 Some(description) => format!(
@@ -1700,25 +1846,18 @@ fn sync_run_error(error: &remote::RemoteError) -> eyre::Report {
 /// replacing it — minting a fresh one per run is exactly what left a reopened library unable to
 /// decrypt or extend its own prior imports (and would make a push unrepeatable).
 ///
-/// When the open found unsigned pre-signed-path sidecars, a notice naming their count
-/// and `capsule library migrate` goes to stderr, so every verb over such a library says why
-/// some assets are missing before the user runs the migration.
+/// When the open found sidecars no provenance chain anchors, the [`unanchored_notice`] goes to
+/// stderr, so every verb over such a library says why some assets are missing.
 fn open_workspace(library: &Path, passphrase_stdin: bool) -> Result<Workspace> {
-    let ws = open_workspace_quiet(library, passphrase_stdin)?;
-    if let Some(notice) = migrate::unmigrated_notice(ws.unmigrated_sidecars()) {
-        eprintln!("{}", notice.yellow());
-    }
-    Ok(ws)
-}
-
-/// [`open_workspace`] without the unmigrated-sidecar notice: for `capsule library migrate`,
-/// which reports the same count as the work it is about to do.
-fn open_workspace_quiet(library: &Path, passphrase_stdin: bool) -> Result<Workspace> {
     let passphrase = read_password(
         passphrase_stdin.then_some("--passphrase-stdin"),
         "Library passphrase".to_string(),
     )?;
-    open_workspace_with(library, &passphrase)
+    let ws = open_workspace_with(library, &passphrase)?;
+    if let Some(notice) = unanchored_notice(ws.unanchored_sidecars().len()) {
+        eprintln!("{}", notice.yellow());
+    }
+    Ok(ws)
 }
 
 /// Open the library `args` names, build an edit against it with `build` (which resolves the
@@ -1738,8 +1877,8 @@ fn edit_library(
     Ok(())
 }
 
-/// [`open_workspace_quiet`] with the passphrase already in hand: the TUI's forms collect it
-/// themselves.
+/// [`open_workspace`] with the passphrase already in hand and without the unanchored-sidecar
+/// notice: the TUI's forms collect the passphrase themselves.
 fn open_workspace_with(library: &Path, passphrase: &str) -> Result<Workspace> {
     let mut ws = as_capsule_cli(
         Workspace::open(library, passphrase.as_bytes(), DeviceTier::Normal.params())
@@ -1968,8 +2107,12 @@ async fn push_workspace(
     let assets = only
         .as_ref()
         .map_or_else(|| workspace.asset_ids().len(), Vec::len);
+    // An asset handed to another device and still inside its deadline is that device's to
+    // upload; a re-queued one is pushed from here.
+    let delegated = peer::delegated_for_push(workspace.device_id());
     let run = || remote::PushRun {
         assets: only.clone(),
+        delegated: delegated.clone(),
         ..remote::PushRun::default()
     };
 
@@ -2018,7 +2161,10 @@ async fn push_workspace(
                     )
                     .cyan()
                 );
-            } else if summary.is_no_op() && summary.failed_assets == 0 {
+            } else if summary.is_no_op()
+                && summary.failed_assets == 0
+                && summary.delegated_assets == 0
+            {
                 println!(
                     "{}",
                     "Everything in this library is already on the server.".cyan()
@@ -2195,6 +2341,42 @@ async fn verify_workspace(
         Some(reason) => Err(eyre!("verify failed: {reason}")),
         None => Ok(()),
     }
+}
+
+/// Run one `capsule trash delete|restore` over `workspace` and report it: one JSON document
+/// under `--json`, a summary line and one line per failed asset otherwise. A run with any
+/// failed asset exits non-zero.
+async fn trash_workspace(
+    workspace: &mut Workspace,
+    request: &remote::TrashRequest,
+    json: bool,
+) -> Result<()> {
+    let remote = remote::RemoteConfig::from_env();
+    let store = session_store()?;
+    let summary = remote::trash(&remote, &store, workspace, request)
+        .await
+        .map_err(|error| {
+            if matches!(error, remote::RemoteError::NotAuthenticated) {
+                return eyre!(NOT_AUTHENTICATED);
+            }
+            eyre!("trash failed: {}", describe_remote_error(&error))
+        })?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&summary)?);
+    } else {
+        println!("{}", remote::trash_line(&summary).cyan());
+        for outcome in summary.failures() {
+            eprintln!("{}", remote::trash_failure_line(outcome).red());
+        }
+    }
+    if summary.failed > 0 {
+        return Err(eyre!(
+            "trash failed: {} of {} assets were not applied",
+            summary.failed,
+            summary.outcomes.len()
+        ));
+    }
+    Ok(())
 }
 
 /// The flags of one `capsule share create` run.
@@ -2544,6 +2726,36 @@ async fn peer_status(workspace: &Workspace, acks: &[PathBuf], json: bool) -> Res
                 .yellow()
             );
         }
+        for delete in &summary.deletes {
+            let line = match delete.outcome {
+                "held" => format!(
+                    "{}: delete held until the server holds the asset",
+                    delete.asset_id
+                )
+                .yellow(),
+                "sent" => format!(
+                    "{}: {} sent",
+                    delete.asset_id,
+                    delete.action.as_deref().unwrap_or("delete")
+                )
+                .green(),
+                "refused" => format!(
+                    "{}: {} refused by the server, not retried; the library keeps it: {}",
+                    delete.asset_id,
+                    delete.action.as_deref().unwrap_or("delete"),
+                    delete.message.as_deref().unwrap_or("no detail")
+                )
+                .red(),
+                _ => format!(
+                    "{}: {} not applied, kept for the next run: {}",
+                    delete.asset_id,
+                    delete.action.as_deref().unwrap_or("delete"),
+                    delete.message.as_deref().unwrap_or("no detail")
+                )
+                .red(),
+            };
+            println!("{line}");
+        }
     }
     if summary.refused_acks.is_empty() {
         Ok(())
@@ -2571,6 +2783,118 @@ fn peer_discard(workspace: &Workspace, hand_off: &str, json: bool) -> Result<()>
         );
     }
     Ok(())
+}
+
+/// `capsule peer offer`: send this library's assets to the device at `--peer`.
+async fn peer_offer(workspace: &Workspace, options: &peer::OfferOptions, json: bool) -> Result<()> {
+    let remote = remote::RemoteConfig::from_env();
+    let store = session_store()?;
+    let state = peer::PeerState::for_device(workspace.device_id())
+        .map_err(|error| peer_run_error("Offer", &error))?;
+    let versions = peer_floor(workspace, &state, "Offer").await?;
+    let summary = peer::offer(&remote, &store, workspace, &versions, options)
+        .await
+        .map_err(|error| peer_run_error("Offer", &error))?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&summary)?);
+    } else {
+        if let (Some(receiver), Some(artifact)) = (summary.receiver, &summary.artifact) {
+            println!(
+                "{}",
+                format!(
+                    "Offered {} asset(s) to device {receiver} as {artifact} ({} bytes); it \
+                     pulled {} bytes",
+                    summary.assets.len(),
+                    summary.bytes,
+                    summary.served_bytes
+                )
+                .green()
+            );
+        }
+        for failed in &summary.failed {
+            println!(
+                "{}",
+                format!("{}: not offered: {}", failed.subject, failed.message).red()
+            );
+        }
+    }
+    if summary.failed.is_empty() {
+        Ok(())
+    } else {
+        Err(eyre!(
+            "Offer finished with {} failure(s)",
+            summary.failed.len()
+        ))
+    }
+}
+
+/// `capsule peer pull`: take what the device that dials in offers, against the tombstones this
+/// device persisted.
+async fn peer_pull(
+    workspace: &mut Workspace,
+    listen: std::net::SocketAddr,
+    timeout: std::time::Duration,
+    json: bool,
+) -> Result<()> {
+    let remote = remote::RemoteConfig::from_env();
+    let store = session_store()?;
+    let state = peer::PeerState::for_device(workspace.device_id())
+        .map_err(|error| peer_run_error("Pull", &error))?;
+    let db = db::init_sqlite()
+        .await
+        .map_err(|e| eyre!("Failed to open local database: {e}"))?;
+    // Read before anything binds or dials: a set that cannot be read refuses the run.
+    peer::ingest_tombstones(&db)
+        .await
+        .map_err(|error| peer_run_error("Pull", &error))?;
+    let versions = peer_floor(workspace, &state, "Pull").await?;
+    let listener = peer::PeerListener::bind(listen, timeout)
+        .await
+        .map_err(|error| peer_run_error("Pull", &error))?;
+    let bound = listener
+        .local_addr()
+        .map_err(|error| peer_run_error("Pull", &error))?;
+    eprintln!(
+        "Listening for a peer on {bound} for up to {}s",
+        timeout.as_secs()
+    );
+    let summary = peer::pull(&remote, &store, workspace, &db, &versions, &listener)
+        .await
+        .map_err(|error| peer_run_error("Pull", &error))?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&summary)?);
+    } else {
+        let peer = summary
+            .peer
+            .map_or_else(|| "the peer".to_owned(), |id| format!("device {id}"));
+        println!(
+            "{}",
+            format!(
+                "From {peer}: {} applied, {} already held, {} refused as purged here, {} \
+                 quarantined as stale, {} incomplete",
+                summary.applied.len(),
+                summary.identical.len(),
+                summary.tombstoned.len(),
+                summary.quarantined.len(),
+                summary.incomplete.len()
+            )
+            .green()
+        );
+        for failed in summary.failed.iter().chain(&summary.refused) {
+            println!(
+                "{}",
+                format!("{}: {}", failed.subject, failed.message).red()
+            );
+        }
+    }
+    if summary.has_failures() {
+        Err(eyre!(
+            "Pull finished with {} failure(s)",
+            summary.failed.len()
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 /// `capsule list`: query the sync-fed local store and render it.

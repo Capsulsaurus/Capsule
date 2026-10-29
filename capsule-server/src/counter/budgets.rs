@@ -190,6 +190,36 @@ pub const UPLOAD_LIVE_SESSIONS: usize = 1_000;
 /// hour to turn rather than trickling back in.
 pub const PEER_REQUESTS: Budget = Budget::new(10_000, SignedDuration::from_hours(1));
 
+/// Ciphertext served to one federated peer, in kibibytes, at `GET /v1/blob/{hash}` (#476).
+///
+/// Twenty gibibytes an hour — the bytes half of invariant 21's transfer budget. A household's
+/// evening of photos and a few videos is a few gibibytes; twenty leaves room for a peer
+/// catching up on a large shared album, and bounds what a hostile peer can make this server
+/// read off disk and send to a little under six megabytes a second. Charged in one weighted
+/// call per delivery ([`CounterStore::charge`](super::CounterStore::charge)), so a blob bigger
+/// than what is left is refused whole rather than half-served.
+pub const PEER_KIBIBYTES: Budget = Budget::new(20 * 1024 * 1024, SignedDuration::from_hours(1));
+
+/// How long a peer is on probation, from when this server first recorded it (#476).
+///
+/// Seven days. design/federation.md's probation tier gives a new peer "tighter quotas … until
+/// it has behaved", and the serving side has one fact to measure that by: how long the operator
+/// has known the peer ([`PeerRecord::first_seen_at`](crate::federation::PeerRecord)). A week is
+/// long enough that a peer pinned in a hurry and misbehaving is noticed while its budget is still
+/// the small one, and short enough that an honest peer is not waiting on anything but the
+/// calendar. A peer with no record at all is on probation by definition.
+pub const PEER_PROBATION: SignedDuration = SignedDuration::from_hours(24 * 7);
+
+/// [`PEER_REQUESTS`] for a peer on probation: a tenth.
+///
+/// A thousand an hour is still a few hundred photos with their derivatives — a new peer can do
+/// real work — while a peer that turns out hostile in its first week gets a tenth of the reach.
+pub const PEER_REQUESTS_PROBATION: Budget = Budget::new(1_000, SignedDuration::from_hours(1));
+
+/// [`PEER_KIBIBYTES`] for a peer on probation: one gibibyte an hour.
+pub const PEER_KIBIBYTES_PROBATION: Budget =
+    Budget::new(1024 * 1024, SignedDuration::from_hours(1));
+
 /// Federated moderation reports from one peer against one account (invariant 24).
 ///
 /// Twenty an hour per `(reporting_server, reported_user)`. A real report is one message; a
@@ -205,10 +235,32 @@ pub const FEDERATED_REPORTS: Budget = Budget::new(20, SignedDuration::from_hours
 /// which account it named.
 pub const PEER_REPORTS: Budget = Budget::new(200, SignedDuration::from_hours(1));
 
-/// Attempts at `POST /v1/federation/reports` from one **claimed** origin.
+/// Signed reports at `POST /v1/federation/reports` from one **verified** peer.
 ///
-/// Three hundred an hour, charged before the peer is looked up. Deliberately above
-/// [`PEER_REPORTS`], because it is not a policy on reporting — it is the bound on how much work
-/// an anonymous caller can ask for on the server's one unauthenticated write, and a real peer
-/// must never meet it before meeting the budget that *is* the policy.
+/// Three hundred an hour, charged once the signature has verified under the peer's pinned key
+/// and before the account directory is read (#529). Charged before verification, on the origin
+/// a body merely claimed, it was a budget a stranger could spend in a real peer's name.
+/// Deliberately above [`PEER_REPORTS`]: it bounds the work a pinned peer can ask for, replays and
+/// unhosted accounts included, and a peer reporting honestly meets the budget that *is* the
+/// policy first.
 pub const FEDERATED_INTAKE: Budget = Budget::new(300, SignedDuration::from_hours(1));
+
+/// One use of one report nonce, per verified peer (#529).
+///
+/// A limit of one over [`REPORT_NONCE_WINDOW`](crate::federation::REPORT_NONCE_WINDOW): the
+/// second report carrying a nonce inside the span its first could still be fresh in is a replay.
+pub const FEDERATED_REPORT_NONCE: Budget = Budget::new(1, crate::federation::REPORT_NONCE_WINDOW);
+
+/// One use of one request-signature nonce, per verified peer (#949).
+///
+/// A limit of one over [`REQUEST_NONCE_WINDOW`](crate::federation::scheme::REQUEST_NONCE_WINDOW):
+/// the second capability presentation carrying a nonce inside the span its first signature could
+/// still be fresh in is a replay.
+pub const FEDERATED_REQUEST_NONCE: Budget =
+    Budget::new(1, crate::federation::scheme::REQUEST_NONCE_WINDOW);
+
+/// Capability mints per account (#529).
+///
+/// Sixty an hour. An owner sharing an album mints one grant per peer; sixty is an owner sharing
+/// with a peer a minute for an hour, and a script writing capability rows meets it at once.
+pub const CAPABILITY_MINTS: Budget = Budget::new(60, SignedDuration::from_hours(1));

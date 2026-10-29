@@ -20,9 +20,9 @@
 //! (description, favorites, album membership) unconditionally — so a migrated library keeps what
 //! the exporting service carried instead of discarding it once the plan is built.
 //!
-//! The committed adapter is [`takeout::TakeoutAdapter`] (Google Takeout); the iCloud, Immich, and
-//! tethered-camera adapters are post-v1 and land on this
-//! same seam.
+//! The committed adapters are [`takeout::TakeoutAdapter`] (Google Takeout) and the
+//! [camera adapter](crate::import::camera::CameraAdapter) (PTP/IP); the iCloud and Immich
+//! adapters are post-v1 and land on this same seam.
 //!
 //! [Scan & Extract]: https://docs/design/import/pipeline/#scan--extract
 
@@ -43,7 +43,7 @@ pub enum ImportProvider {
     ICloud,
     /// Immich export/API (post-v1).
     Immich,
-    /// Tethered camera over PTP/IP (post-v1).
+    /// A camera over PTP/IP ([`CameraAdapter`](crate::import::camera::CameraAdapter)).
     Camera,
 }
 

@@ -4506,17 +4506,36 @@ pub(crate) fn signed_report(
     reason: Option<&str>,
     reported_at: &str,
 ) -> serde_json::Value {
-    let claim = ReportClaim {
-        reporting_server: reporting_server.to_owned(),
-        reported_user: reported_user.to_owned(),
-        asset_hash: asset_hash.to_owned(),
-        album_id: album.as_str().to_owned(),
-        reason: reason.map(str::to_owned),
-        reported_at: reported_at.to_owned(),
-    };
+    sign_report(
+        pair,
+        &ReportClaim {
+            reporting_server: reporting_server.to_owned(),
+            recipient_server: SERVER_ORIGIN.to_owned(),
+            // A fresh nonce per report, as a peer mints one: the server accepts each once.
+            nonce: uuid::Uuid::now_v7().to_string(),
+            reported_user: reported_user.to_owned(),
+            asset_hash: asset_hash.to_owned(),
+            album_id: album.as_str().to_owned(),
+            reason: reason.map(str::to_owned),
+            reported_at: reported_at.to_owned(),
+        },
+    )
+}
+
+/// The instant the suite's reports are signed at: the fixture clock's own start, so a report is
+/// inside the server's freshness window until a case moves the clock.
+pub(crate) const REPORTED_AT: &str = "1970-01-01T00:00:00Z";
+
+/// `claim` as the body a peer sends, signed by `pair`.
+pub(crate) fn sign_report(
+    pair: &ring::signature::Ed25519KeyPair,
+    claim: &ReportClaim,
+) -> serde_json::Value {
     let signature = pair.sign(&claim.signing_bytes().expect("a claim encodes"));
     serde_json::json!({
         "reporting_server": claim.reporting_server,
+        "recipient_server": claim.recipient_server,
+        "nonce": claim.nonce,
         "reported_user": claim.reported_user,
         "asset_hash": claim.asset_hash,
         "album_id": claim.album_id,
@@ -4524,6 +4543,102 @@ pub(crate) fn signed_report(
         "reported_at": claim.reported_at,
         "signature": base64::engine::general_purpose::STANDARD.encode(signature.as_ref()),
     })
+}
+
+/// The key the suite's peers sign their capability presentations with.
+///
+/// One fixed pair for every peer the suite names: what a case under test is the binding of a
+/// presentation to *a* pinned key, and a case that means "some other key" asks
+/// [`peer_keypair`] for one.
+pub(crate) fn request_keypair() -> (ring::signature::Ed25519KeyPair, [u8; 32]) {
+    use ring::signature::KeyPair as _;
+
+    let pair = ring::signature::Ed25519KeyPair::from_seed_unchecked(&[0x5e; 32]).expect("a seed");
+    let public = pair
+        .public_key()
+        .as_ref()
+        .try_into()
+        .expect("an Ed25519 public key is thirty-two bytes");
+    (pair, public)
+}
+
+/// Pin [`request_keypair`] as `peer`'s operational key, as an operator would.
+///
+/// Pinned one probation period ago, so the peer is held to the established budgets the suite's
+/// budget cases spend: a case about probation pins a peer now with [`pin_request_key_now`].
+pub(crate) async fn pin_request_key(fixture: &Fixture, peer: &str) {
+    let established = fixture
+        .clock
+        .now()
+        .checked_sub(capsule_server::counter::budgets::PEER_PROBATION)
+        .expect("the fixture clock is a probation period past the minimum instant");
+    pin_request_key_at(fixture, peer, established).await;
+}
+
+/// Pin [`request_keypair`] as `peer`'s operational key now, so the peer is on probation.
+pub(crate) async fn pin_request_key_now(fixture: &Fixture, peer: &str) {
+    pin_request_key_at(fixture, peer, fixture.clock.now()).await;
+}
+
+async fn pin_request_key_at(fixture: &Fixture, peer: &str, at: jiff::Timestamp) {
+    use capsule_server::federation::PeerStore as _;
+
+    fixture
+        .peers
+        .pin(
+            &capsule_server::federation::PeerId::new(peer),
+            request_keypair().1,
+            at,
+        )
+        .await
+        .expect("the peer store pins");
+}
+
+/// The `X-Capsule-Request-Signature` a peer holding [`request_keypair`] sends with `bearer` on
+/// `method target`, signed now on the fixture's clock with a fresh nonce.
+///
+/// Built through the server's own `RequestClaim`, so the suite signs the bytes the server
+/// verifies and a change to the format fails as a refusal rather than as a different test.
+pub(crate) fn request_signature(
+    fixture: &Fixture,
+    method: &str,
+    target: &str,
+    bearer: &str,
+) -> String {
+    request_signature_by(
+        &request_keypair().0,
+        fixture.clock.now(),
+        method,
+        target,
+        bearer,
+    )
+}
+
+/// As [`request_signature`], by `pair` at `at`.
+pub(crate) fn request_signature_by(
+    pair: &ring::signature::Ed25519KeyPair,
+    at: jiff::Timestamp,
+    method: &str,
+    target: &str,
+    bearer: &str,
+) -> String {
+    use capsule_server::federation::scheme::{RequestClaim, RequestSignature};
+
+    let path = target.split_once('?').map_or(target, |(path, _)| path);
+    let token = bearer.strip_prefix("Bearer ").unwrap_or(bearer);
+    let nonce =
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(uuid::Uuid::now_v7().as_bytes());
+    let claim = RequestClaim::new(method, path, token, at.as_second(), &nonce);
+    let signature = pair.sign(&claim.signing_bytes().expect("a claim encodes"));
+    RequestSignature {
+        signed_at: claim.signed_at,
+        nonce,
+        signature: signature
+            .as_ref()
+            .try_into()
+            .expect("an Ed25519 signature is sixty-four bytes"),
+    }
+    .to_header_value()
 }
 
 /// `hours` from the fixture's own clock, as an RFC 3339 instant.

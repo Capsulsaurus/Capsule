@@ -39,6 +39,7 @@ use capsule_i18n::error_codes;
 use tracing::instrument;
 
 use crate::auth::{AuthError, Session};
+use crate::federation::RequestSigner;
 use crate::net::{RetryClass, RetryDecision, RetryEngine, Sleeper, TokioSleeper};
 use crate::rest;
 
@@ -164,6 +165,13 @@ pub struct FeedEntry {
     /// Whether the original blob is finalized on the server (`awaiting-original`
     /// derived state when `false`; staged uploads).
     pub original_held: bool,
+    /// Whether the server has purged the asset (#885): its retention window closed and its
+    /// references are gone, so no `trash-restore` can bring it back. Only ever set on a
+    /// [`ChangeKind::Deleted`] entry, and `false` from a server that predates the signal.
+    ///
+    /// The positive evidence of a purge. An empty [`Self::manifest_cbor`] is not: the server
+    /// also serves none when it cannot produce the blob.
+    pub purged: bool,
     /// When the change happened, RFC 3339, on the server's clock.
     pub changed_at: String,
 }
@@ -459,7 +467,17 @@ enum SyncAuth {
     /// and what this arm decides is that a `401` is **final** — a static token cannot be
     /// refreshed, so retrying would only ask the same question twice.
     Static,
+    /// A federation capability, held by the client like [`Self::Static`], whose every request
+    /// also carries the puller's request signature. Its `401` is final for the same reason.
+    Signed {
+        token: Arc<str>,
+        signer: Arc<dyn RequestSigner>,
+    },
 }
+
+/// The path the feed is signed over: the operation's own, whatever prefix the base URL has,
+/// because the issuer verifies against the path it routes (design/federation.md, `path`).
+const FEED_PATH: &str = "/v1/sync";
 
 /// The sync consumer, over the **generated REST client**.
 ///
@@ -502,6 +520,27 @@ impl SyncConsumer {
         })
     }
 
+    /// A consumer presenting a federation capability `token`, each request signed by `signer` —
+    /// the puller's key, which the home server pinned for the peer the capability names.
+    ///
+    /// # Errors
+    ///
+    /// [`SyncError::Transport`] when `base_url` is not a URL the client can hang paths off.
+    pub fn with_signed_capability(
+        base_url: &str,
+        token: impl Into<String>,
+        signer: Arc<dyn RequestSigner>,
+    ) -> Result<Self, SyncError> {
+        let token: String = token.into();
+        Ok(Self {
+            client: build_client(base_url, rest::Credential::Bearer(token.clone().into()))?,
+            auth: SyncAuth::Signed {
+                token: token.into(),
+                signer,
+            },
+        })
+    }
+
     /// Pull one page after `cursor`.
     ///
     /// On a `401` under a session, refreshes once and retries — the reactive half of the session
@@ -522,18 +561,21 @@ impl SyncConsumer {
     ) -> Result<SyncPage, SyncError> {
         let mut engine: RetryEngine = RetryClass::Interactive.engine();
         let response = loop {
-            match self.call(cursor, page_size, album_id).await {
+            match self
+                .call(cursor, page_size, album_id, self.signature()?)
+                .await
+            {
                 Ok(page) => break page,
                 Err(error) if is_unauthenticated(&error) => match &self.auth {
                     SyncAuth::Session(session) => {
                         tracing::info!("the feed answered 401; refreshing once and retrying");
                         session.refresh().await?;
                         break self
-                            .call(cursor, page_size, album_id)
+                            .call(cursor, page_size, album_id, None)
                             .await
                             .map_err(map_error)?;
                     }
-                    SyncAuth::Static => return Err(map_error(error)),
+                    SyncAuth::Static | SyncAuth::Signed { .. } => return Err(map_error(error)),
                 },
                 Err(error) if is_transient(&error) => match engine.next_backoff(None) {
                     RetryDecision::GiveUp => {
@@ -551,6 +593,25 @@ impl SyncConsumer {
         let page = decode_page(response)?;
         tracing::Span::current().record("entries", page.entries.len());
         Ok(page)
+    }
+
+    /// The request signature for one attempt at the feed, when this consumer presents a
+    /// capability.
+    ///
+    /// Made per attempt, retries included, so each carries a fresh nonce: the home server
+    /// accepts each signature once.
+    fn signature(&self) -> Result<Option<String>, SyncError> {
+        match &self.auth {
+            SyncAuth::Signed { token, signer } => {
+                crate::federation::request_signature(signer.as_ref(), "GET", FEED_PATH, token)
+                    .map(Some)
+                    .map_err(|error| {
+                        tracing::error!(%error, "a federated feed request could not be signed");
+                        SyncError::Transport(error)
+                    })
+            }
+            SyncAuth::Session(_) | SyncAuth::Static => Ok(None),
+        }
     }
 
     /// Pull one page of **one album** after `cursor`.
@@ -594,8 +655,10 @@ impl SyncConsumer {
         cursor: &SyncCursor,
         page_size: u32,
         album_id: Option<&str>,
+        signature: Option<String>,
     ) -> Result<rest::types::SyncPageResponse, rest::Error<rest::SyncFeedError>> {
         let params = rest::SyncFeedParams {
+            x_capsule_request_signature: signature,
             // Absent is the caller's own feed; present is one album's page.
             album_id: album_id.map(str::to_owned),
             // The cursor is round-tripped verbatim. Empty means "from the beginning", which the
@@ -756,6 +819,9 @@ fn decode_entry(entry: rest::types::SyncEntry) -> Result<FeedEntry, SyncError> {
         blobs: decode_blobs(entry.blobs),
         derivative_manifests,
         original_held: entry.original_held,
+        // Optional on the wire: a server that predates the signal sends no key, and that is no
+        // purge. A signal on anything but a tombstone is not one either.
+        purged: kind == ChangeKind::Deleted && entry.purged.unwrap_or(false),
         changed_at: entry.changed_at,
     })
 }

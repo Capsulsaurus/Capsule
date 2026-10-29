@@ -44,6 +44,10 @@ public struct MockEnvironment: Sendable {
     public let federationStore: MockFederationStore
     /// Share links and the drop inbox.
     public let sharingStore: MockSharingStore
+    /// Region, stack and album labels, and the regions themselves.
+    public let labelStore: MockLabelStore
+    /// The recorded transfer event stream the transfer view replays.
+    public let transferEventFeed: MockTransferEventFeed
     /// Procedural thumbnails. Not a port — the image pipeline reads it directly.
     public let thumbnails: MockThumbnailRenderer
 
@@ -52,6 +56,8 @@ public struct MockEnvironment: Sendable {
     public var library: any LibraryPort { libraryStore }
     public var organize: any OrganizePort { libraryStore }
     public var stacks: any StackPort { libraryStore }
+    public var labels: any LabelPort { labelStore }
+    public var transferEvents: any TransferEventPort { transferEventFeed }
     public var albums: any AlbumPort { libraryStore }
     /// An adapter rather than the store itself: ``AlbumPort`` and
     /// ``SmartAlbumPort`` both declare `changes() -> AsyncStream<Void>`, and a
@@ -111,6 +117,15 @@ public struct MockEnvironment: Sendable {
         systemStore = MockSystemStore(configuration: configuration)
         federationStore = MockFederationStore(store: library, configuration: configuration)
         sharingStore = MockSharingStore(store: library, configuration: configuration)
+        labelStore = MockLabelStore(
+            existence: MockLabelStore.Existence(
+                asset: { id in await (try? library.asset(for: id)) != nil },
+                stack: { id in await (try? library.stack(id)) != nil },
+                album: { id in await (try? library.containerAlbum(id)) != nil }
+            ),
+            seed: configuration.seed
+        )
+        transferEventFeed = .demo(seed: configuration.seed)
         thumbnails = MockThumbnailRenderer(library: library.library)
     }
 
@@ -119,10 +134,15 @@ public struct MockEnvironment: Sendable {
     /// The composition root and the UI tests agree through the raw strings in
     /// ``MockScenario``, because a UI-test bundle links the app as a target and
     /// cannot import this module.
+    ///
+    /// `persisted` is the next-launch override the Advanced settings screen
+    /// records; the command line wins over it whenever it names a scenario, as
+    /// ``MockScenario/resolve(fromArguments:persisted:)`` documents.
     public static func fromLaunchArguments(
         _ processInfo: ProcessInfo = .processInfo,
+        persisted: MockScenario? = nil,
         clock: MockClock = .reference
     ) -> MockEnvironment {
-        MockEnvironment(scenario: .resolve(from: processInfo), clock: clock)
+        MockEnvironment(scenario: .resolve(from: processInfo, persisted: persisted), clock: clock)
     }
 }

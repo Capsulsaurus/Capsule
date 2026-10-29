@@ -135,9 +135,9 @@ pub fn bounded_body_size() -> BodySize {
 /// stays declared on every operation, which `tests/conformance.rs` pins, and no route can be
 /// mounted outside a group without losing it, which `tests/limits.rs` pins.
 ///
-/// The field-length caps ([`crate::routes::federation`]) and the
-/// [`CounterKey::FederatedIntake`](crate::counter::CounterKey::FederatedIntake) budget still run
-/// first in the handler; this bounds what happens before either — the bytes parsed.
+/// The field-length caps ([`crate::routes::federation`]) still run first in the handler, and the
+/// [`CounterKey::FederatedIntake`](crate::counter::CounterKey::FederatedIntake) budget once the
+/// signature verifies; this bounds what happens before either — the bytes parsed.
 pub const MAX_FEDERATION_BODY_BYTES: u64 = 16 * 1024;
 
 /// The body-size interceptor the federation group mounts, at [`MAX_FEDERATION_BODY_BYTES`].
