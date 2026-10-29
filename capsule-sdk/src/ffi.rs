@@ -34,8 +34,10 @@
 //! ids/hashes/paths cross as `String`, blobs/manifests/cursors as `bytes`, and the
 //! rich SDK enums/records are flattened into `Ffi*` mirrors so the Rust API stays
 //! free to evolve behind the boundary. Errors carry the stable `error.*` catalog
-//! `code` (which clients localize) plus the English detail `message` (which stays
-//! English) — mirroring the server's `{ error, code }` contract.
+//! `code` (which clients localize) plus the English `detail` (which stays
+//! English) — mirroring the server's `{ error, code }` contract. The field is `detail`, not
+//! `message`, because uniffi turns each variant into a Kotlin `Throwable` subclass whose own
+//! `message` property a `val message` field would clash with.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -86,84 +88,84 @@ pub use notify::{
 
 /// Every failure the FFI flows can surface, flattened by originating layer. Each
 /// variant carries the stable `error.*` catalog `code` (when one applies — clients
-/// localize it) and the English detail `message` (stays English), mirroring the
+/// localize it) and the English `detail` (stays English), mirroring the
 /// SDK's `{ error, code }` contract so foreign apps switch on the code, never a
 /// bare HTTP status.
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum FfiError {
     /// An authentication flow (login/register/refresh/logout) failed.
-    #[error("authentication failed ({code:?}): {message}")]
+    #[error("authentication failed ({code:?}): {detail}")]
     Auth {
         /// Stable `error.*` catalog code, when the SDK mapped one.
         code: Option<String>,
         /// English detail (developer/log message).
-        message: String,
+        detail: String,
     },
     /// An upload flow (create/transfer/status) failed.
-    #[error("upload failed ({code:?}): {message}")]
+    #[error("upload failed ({code:?}): {detail}")]
     Upload {
         /// Stable `error.*` catalog code, when the server supplied one.
         code: Option<String>,
         /// English detail (developer/log message).
-        message: String,
+        detail: String,
     },
     /// A sync flow (pull/reconcile) failed.
-    #[error("sync failed ({code:?}): {message}")]
+    #[error("sync failed ({code:?}): {detail}")]
     Sync {
         /// Stable `error.*` catalog code, when one applies.
         code: Option<String>,
         /// English detail (developer/log message).
-        message: String,
+        detail: String,
     },
     /// A local workspace operation failed — opening the library, sealing an asset, reading a
     /// managed asset. This is the *workspace* failing, never an entry being refused: a refused
     /// sync entry is a [`FfiSyncApplyOutcome::Quarantined`] verdict, not an error.
-    #[error("workspace error: {message}")]
+    #[error("workspace error: {detail}")]
     Workspace {
         /// English detail (developer/log message).
-        message: String,
+        detail: String,
     },
     /// A master-key escrow flow (store/fetch) failed.
-    #[error("escrow failed ({code:?}): {message}")]
+    #[error("escrow failed ({code:?}): {detail}")]
     Escrow {
         /// Stable `error.*` catalog code, when the server supplied one — `error.escrow.*`
         /// separates "you have no recovery backup" (a setup prompt) from "we could not read
         /// it" (a retry), which is the whole reason the catalog distinguishes them.
         code: Option<String>,
         /// English detail (developer/log message).
-        message: String,
+        detail: String,
     },
     /// A device-directory flow (publish/fetch) failed.
-    #[error("device directory failed ({code:?}): {message}")]
+    #[error("device directory failed ({code:?}): {detail}")]
     Directory {
         /// Stable `error.*` catalog code, when one applies.
         code: Option<String>,
         /// English detail (developer/log message).
-        message: String,
+        detail: String,
     },
     /// A blob fetch ([`FfiSession::fetch_blob_to_path`]) failed: the blob is gone, still
     /// awaiting its original, refused, did not hash to its content address, or could not be
     /// written locally. Nothing is left at the destination path.
-    #[error("blob fetch failed ({code:?}): {message}")]
+    #[error("blob fetch failed ({code:?}): {detail}")]
     Fetch {
         /// Stable `error.*` catalog code, when one applies (e.g. `error.blob.pending_upload`).
         code: Option<String>,
         /// English detail (developer/log message).
-        message: String,
+        detail: String,
     },
     /// A foreign argument was structurally invalid (e.g. an un-parseable URL) before
     /// any network call.
-    #[error("invalid argument: {message}")]
+    #[error("invalid argument: {detail}")]
     InvalidArgument {
         /// What was wrong with the argument.
-        message: String,
+        detail: String,
     },
 }
 
 impl From<LifecycleError> for FfiError {
     fn from(err: LifecycleError) -> Self {
         Self::Workspace {
-            message: err.to_string(),
+            detail: err.to_string(),
         }
     }
 }
@@ -176,20 +178,17 @@ impl From<RecoveryError> for FfiError {
         // `RecoveryError::Auth`; routing `Unauthorized` here is what stops the move from
         // silently downgrading "sign in again" into "escrow failed".
         if let RecoveryError::Unauthorized { code, detail } = err {
-            return Self::Auth {
-                code,
-                message: detail,
-            };
+            return Self::Auth { code, detail };
         }
         // A malformed argument is the caller's, not the escrow surface's.
         if let RecoveryError::InvalidBaseUrl { .. } = err {
             return Self::InvalidArgument {
-                message: err.to_string(),
+                detail: err.to_string(),
             };
         }
         Self::Escrow {
             code: err.error_code().map(str::to_owned),
-            message: err.to_string(),
+            detail: err.to_string(),
         }
     }
 }
@@ -201,7 +200,7 @@ impl From<DirectoryError> for FfiError {
         }
         Self::Directory {
             code: err.error_code().map(str::to_string),
-            message: err.to_string(),
+            detail: err.to_string(),
         }
     }
 }
@@ -211,11 +210,11 @@ impl From<AuthError> for FfiError {
         let code = err.error_code().map(str::to_string);
         match &err {
             AuthError::InvalidBaseUrl { .. } => Self::InvalidArgument {
-                message: err.to_string(),
+                detail: err.to_string(),
             },
             _ => Self::Auth {
                 code,
-                message: err.to_string(),
+                detail: err.to_string(),
             },
         }
     }
@@ -237,7 +236,7 @@ impl From<UploadError> for FfiError {
         };
         Self::Upload {
             code,
-            message: err.to_string(),
+            detail: err.to_string(),
         }
     }
 }
@@ -253,7 +252,7 @@ impl From<PushError> for FfiError {
         }
         Self::Upload {
             code: err.error_code().map(str::to_string),
-            message: err.to_string(),
+            detail: err.to_string(),
         }
     }
 }
@@ -263,11 +262,14 @@ impl From<FetchError> for FfiError {
         // A fetch the session could not authorize keeps its auth identity, as the upload and
         // sync mappings do, so the app re-authenticates rather than retrying.
         if let FetchError::Unauthenticated { code, message } = err {
-            return Self::Auth { code, message };
+            return Self::Auth {
+                code,
+                detail: message,
+            };
         }
         Self::Fetch {
             code: err.error_code().map(str::to_string),
-            message: err.to_string(),
+            detail: err.to_string(),
         }
     }
 }
@@ -280,7 +282,7 @@ impl From<SyncError> for FfiError {
         let code = err.error_code().map(str::to_string);
         Self::Sync {
             code,
-            message: err.to_string(),
+            detail: err.to_string(),
         }
     }
 }
@@ -975,7 +977,7 @@ impl FfiSession {
     ) -> Result<(), FfiError> {
         if hash.len() != 64 || !hash.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
             return Err(FfiError::InvalidArgument {
-                message: format!("hash: {hash:?} is not a lowercase hex SHA-256"),
+                detail: format!("hash: {hash:?} is not a lowercase hex SHA-256"),
             });
         }
         let path = PathBuf::from(path);
@@ -1032,7 +1034,7 @@ impl FfiSession {
     ) -> Result<FfiEscrowStored, FfiError> {
         let blob =
             capsule_core::cbor::from_slice(&blob).map_err(|e| FfiError::InvalidArgument {
-                message: format!("escrow blob is not a canonical WrappedSecret: {e}"),
+                detail: format!("escrow blob is not a canonical WrappedSecret: {e}"),
             })?;
         let stored = RecoveryClient::new(self.session.clone(), &api_base_url)?
             .store_escrow(&blob)
@@ -1054,7 +1056,7 @@ impl FfiSession {
         capsule_core::cbor::to_canonical_vec(cache.blob()).map_err(|e| FfiError::Escrow {
             // A local encode failure is ours, not the server's: no catalog code applies.
             code: None,
-            message: format!("encoding the fetched escrow blob failed: {e}"),
+            detail: format!("encoding the fetched escrow blob failed: {e}"),
         })
     }
 
@@ -1076,12 +1078,12 @@ impl FfiSession {
     ) -> Result<u64, FfiError> {
         let directory = capsule_core::cbor::from_slice(&directory_cbor).map_err(|e| {
             FfiError::InvalidArgument {
-                message: format!("not a canonical DeviceDirectory: {e}"),
+                detail: format!("not a canonical DeviceDirectory: {e}"),
             }
         })?;
         let identity_key = capsule_core::crypto::keys::HybridVerifyingKey::from_bytes(&user_ik)
             .map_err(|e| FfiError::InvalidArgument {
-                message: format!("user_ik is not a hybrid verifying key: {e}"),
+                detail: format!("user_ik is not a hybrid verifying key: {e}"),
             })?;
         let version = DirectoryClient::new(self.session.clone(), &api_base_url)
             .publish(&directory, &identity_key)
@@ -1099,18 +1101,18 @@ impl FfiSession {
         pinned_user_ik: Vec<u8>,
     ) -> Result<Vec<u8>, FfiError> {
         let user_id = uuid::Uuid::parse_str(&user_id).map_err(|e| FfiError::InvalidArgument {
-            message: format!("user_id: {user_id:?} is not a UUID ({e})"),
+            detail: format!("user_id: {user_id:?} is not a UUID ({e})"),
         })?;
         let pinned = capsule_core::crypto::keys::HybridVerifyingKey::from_bytes(&pinned_user_ik)
             .map_err(|e| FfiError::InvalidArgument {
-                message: format!("pinned_user_ik is not a hybrid verifying key: {e}"),
+                detail: format!("pinned_user_ik is not a hybrid verifying key: {e}"),
             })?;
         let directory = DirectoryClient::new(self.session.clone(), &api_base_url)
             .fetch(user_id, &pinned)
             .await?;
         capsule_core::cbor::to_canonical_vec(&directory).map_err(|e| FfiError::Directory {
             code: None,
-            message: format!("re-encoding the verified directory failed: {e}"),
+            detail: format!("re-encoding the verified directory failed: {e}"),
         })
     }
 
@@ -1163,7 +1165,7 @@ async fn fetch_to_file<B: crate::fetch::BlobSource>(
 ) -> Result<(), FfiError> {
     let local = |action: &str, e: std::io::Error| FfiError::Fetch {
         code: None,
-        message: format!("{action} {}: {e}", path.display()),
+        detail: format!("{action} {}: {e}", path.display()),
     };
     let file = std::fs::File::create(path).map_err(|e| local("creating", e))?;
     let mut sink = std::io::BufWriter::new(file);

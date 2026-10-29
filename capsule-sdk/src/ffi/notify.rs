@@ -288,7 +288,7 @@ impl FfiNotifyInput {
 /// Parse one alert-class wire name against the closed enum, naming the field it came from.
 fn parse_class(name: &str, field: &str) -> Result<AlertClass, FfiError> {
     AlertClass::from_wire(name).ok_or_else(|| FfiError::InvalidArgument {
-        message: format!("{field}: `{name}` is not an alert class"),
+        detail: format!("{field}: `{name}` is not an alert class"),
     })
 }
 
@@ -296,7 +296,7 @@ fn parse_class(name: &str, field: &str) -> Result<AlertClass, FfiError> {
 fn parse_instant(raw: &str, field: &str) -> Result<Timestamp, FfiError> {
     raw.parse::<Timestamp>()
         .map_err(|err| FfiError::InvalidArgument {
-            message: format!("{field}: `{raw}` is not an RFC 3339 timestamp: {err}"),
+            detail: format!("{field}: `{raw}` is not an RFC 3339 timestamp: {err}"),
         })
 }
 
