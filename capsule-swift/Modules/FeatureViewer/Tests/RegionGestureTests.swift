@@ -8,15 +8,16 @@ import Testing
 struct RegionGestureTests {
     private let base = RegionDraft.rect(left: 0.4, top: 0.4, width: 0.2, height: 0.2)
 
-    private func isClose(_ draft: RegionDraft, _ expected: RegionDraft) -> Bool {
-        switch (draft, expected) {
-        case let (.rect(l1, t1, w1, h1), .rect(l2, t2, w2, h2)):
-            [l1 - l2, t1 - t2, w1 - w2, h1 - h2].allSatisfy { abs($0) < 1e-9 }
-        case let (.circle(x1, y1, r1), .circle(x2, y2, r2)):
-            [x1 - x2, y1 - y2, r1 - r2].allSatisfy { abs($0) < 1e-9 }
-        default:
-            false
+    private func components(of draft: RegionDraft) -> [Double] {
+        switch draft {
+        case let .circle(centerX, centerY, radius): [centerX, centerY, radius]
+        case let .rect(left, top, width, height): [left, top, width, height]
         }
+    }
+
+    private func isClose(_ draft: RegionDraft, _ expected: RegionDraft) -> Bool {
+        guard draft.kind == expected.kind else { return false }
+        return zip(components(of: draft), components(of: expected)).allSatisfy { abs($0 - $1) < 1e-9 }
     }
 
     @Test("A drag alone moves the base by its cumulative translation")

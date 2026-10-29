@@ -42,10 +42,10 @@ public struct RegionGesture: Sendable, Equatable {
     }
 
     /// The drag's cumulative translation, in fractions of the image.
-    public mutating func drag(dx: Double, dy: Double) {
+    public mutating func drag(dx across: Double, dy down: Double) {
         isDragging = true
-        dragDX = dx
-        dragDY = dy
+        dragDX = across
+        dragDY = down
     }
 
     /// The drag ended; its translation stays applied.
