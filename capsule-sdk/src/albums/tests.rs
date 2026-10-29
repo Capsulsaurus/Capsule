@@ -27,8 +27,8 @@
 //! | `the_widest_version_the_server_can_name_still_decodes` | the recovery hint survives at the top of the server's range, where an unbounded counter would not |
 //! | `the_roster_publish_goes_through_the_generated_operation` | the path, method and body come from the committed contract, not from a hand-written request |
 //! | `a_lifecycle_op_is_posted_to_its_albums_ops_route` | the op reaches `POST /v1/albums/{album}/ops` verbatim, and the answer maps, replay included |
-//! | `a_closed_retention_window_is_its_own_permanent_kind` | `409 error.upload.retention_elapsed` is `retention_elapsed`, permanent, and sent once |
-//! | `a_stale_chain_carries_the_head_to_rebase_onto` | the other `409` is `stale_revival` and carries `chain_head` |
+//! | `a_closed_retention_window_is_its_own_permanent_kind` | `409 error.upload.retention_elapsed` is `retention_elapsed`, permanent, sent once, and carries the server's `retention_until` |
+//! | `a_stale_chain_carries_the_head_to_rebase_onto` | the other `409` is `stale_revival` and carries `chain_head`, with no `retention_until` |
 //! | `a_transient_refusal_is_not_permanent` | `500` and `403` are not judgements of the op, so they are not permanent |
 //! | `a_401_under_a_session_is_refreshed_and_the_op_replayed_once` | a mid-flight `401` is refreshed once and replayed once with the rotated bearer |
 //! | `an_op_naming_no_album_is_refused_before_the_wire` | nothing is sent for an envelope with no album |
@@ -689,6 +689,14 @@ async fn a_closed_retention_window_is_its_own_permanent_kind() {
         Some(error_codes::UPLOAD_RETENTION_ELAPSED)
     );
     assert!(error.is_permanent(), "no resend reopens the window");
+    assert!(
+        matches!(
+            &error,
+            LifecycleOpError::Refused { retention_until: Some(until), chain_head: None, .. }
+                if until == "2026-09-01T00:00:00Z"
+        ),
+        "the floor the server judged survives the generated decode: {error:?}"
+    );
     assert_eq!(seen.lock().expect("requests").len(), 1, "not retried");
 }
 
@@ -709,7 +717,8 @@ async fn a_stale_chain_carries_the_head_to_rebase_onto() {
     assert!(
         matches!(
             &error,
-            LifecycleOpError::Refused { status: 409, chain_head: Some(head), .. } if head == "abcd"
+            LifecycleOpError::Refused { status: 409, chain_head: Some(head), retention_until: None, .. }
+                if head == "abcd"
         ),
         "{error:?}"
     );
