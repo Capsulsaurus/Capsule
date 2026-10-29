@@ -145,6 +145,27 @@ impl Catalog {
         Ok(rows.into_iter().map(AssetRecord::from).collect())
     }
 
+    /// Set (or, with `None` or an empty string, clear) an asset's caption — the `caption`
+    /// column the index projects from the sidecar's LWW register, read back as
+    /// [`AssetRecord::caption`].
+    ///
+    /// An unknown `uuid` is [`CatalogError::InvalidArgument`] and nothing is written, so a
+    /// caption is never reported saved against a row that does not exist.
+    pub fn set_caption(&self, uuid: String, caption: Option<String>) -> Result<(), CatalogError> {
+        tracing::debug!(%uuid, cleared = caption.as_deref().is_none_or(str::is_empty), "catalog: set_caption");
+        if self
+            .driver()
+            .update_asset_caption(&uuid, caption.as_deref())?
+        {
+            Ok(())
+        } else {
+            tracing::debug!(%uuid, "catalog: set_caption refused, no such asset");
+            Err(CatalogError::InvalidArgument {
+                message: format!("no asset: {uuid}"),
+            })
+        }
+    }
+
     pub fn soft_delete(&self, uuid: String, deleted_at: i64) -> Result<(), CatalogError> {
         tracing::debug!(%uuid, "catalog: soft_delete");
         self.driver().soft_delete(&uuid, deleted_at)?;

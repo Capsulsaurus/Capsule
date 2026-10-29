@@ -45,6 +45,7 @@
 //! | v2    | *still* v2 after `albums`, `idx_albums_created`, `idx_assets_type` arrived from a branch that had independently bumped 1 → 2 for its own change (`3e19de0`, merged `3ebb16d`) |
 //! | v3    | + `embeddings` + its two indexes (`09ae1d1`) |
 //! | v4    | + `assets.is_hidden`, `idx_assets_hidden`, widened `idx_assets_timeline` (`5d3ef26`) |
+//! | v5    | + `assets.caption`, `assets.latitude`, `assets.longitude` |
 //!
 //! Two consequences the original plan did not anticipate, both handled below:
 //!
@@ -273,8 +274,38 @@ const STEP_3_TO_4: Step = Step {
     ],
 };
 
+/// v4 → v5. Adds `assets.caption`, `assets.latitude` and `assets.longitude`, the index
+/// projections of the sidecar `caption` LWW register and of its effective location.
+///
+/// Existing rows read `NULL` — no caption, no location — until their sidecars are re-projected
+/// (the next signed write to the asset, or `rebuild_index`). SQL cannot read a sealed sidecar,
+/// so the step cannot backfill them; the sidecar stays the only copy of record either way, so
+/// nothing is lost while the projection trails it.
+const STEP_4_TO_5: Step = Step {
+    from: 4,
+    to: 5,
+    name: "v4_to_v5_caption_and_location",
+    ddl: &[
+        Ddl::IfColumnMissing {
+            table: "assets",
+            column: "caption",
+            sql: "ALTER TABLE assets ADD COLUMN caption TEXT;",
+        },
+        Ddl::IfColumnMissing {
+            table: "assets",
+            column: "latitude",
+            sql: "ALTER TABLE assets ADD COLUMN latitude REAL;",
+        },
+        Ddl::IfColumnMissing {
+            table: "assets",
+            column: "longitude",
+            sql: "ALTER TABLE assets ADD COLUMN longitude REAL;",
+        },
+    ],
+};
+
 /// Every shipped step, in ascending order. Append only.
-pub(crate) const STEPS: &[Step] = &[STEP_1_TO_2, STEP_2_TO_3, STEP_3_TO_4];
+pub(crate) const STEPS: &[Step] = &[STEP_1_TO_2, STEP_2_TO_3, STEP_3_TO_4, STEP_4_TO_5];
 
 /// SHA-256 (hex) of each shipped step's canonical rendering, parallel to [`STEPS`].
 ///
@@ -289,6 +320,8 @@ const STEP_FINGERPRINTS: &[&str] = &[
     "15ff0fc10221e1d01deebaafd9b8855b8a9f59491285379a11bf90ba7756f2f6",
     // v3 -> v4  v3_to_v4_hidden_assets
     "420ac7077cf5dd3d5888ce07594263e8ace4558adc79f8972096d80ef9a6fe14",
+    // v4 -> v5  v4_to_v5_caption_and_location
+    "a11341c354995462fad47c5f15f02450d4a90d8d0ab3e69fa5cba55da5982004",
 ];
 
 // ── Errors ──────────────────────────────────────────────────────────────────

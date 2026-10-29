@@ -45,7 +45,7 @@ public struct CompositeCaptionStore: CaptionStore {
 /// It claims imported assets, so ``CompositeCaptionStore`` never sends their
 /// captions to a store that does not hold them, and writes through
 /// ``ManagedProvider/setCaption(_:for:)``. A catalog with no caption register
-/// (the core-backed one) refuses the write, and the refusal is thrown to the
+/// refuses the write, and the refusal is thrown to the
 /// caller rather than swallowed, so a caption typed on such an asset is never
 /// reported saved and then lost.
 public struct ManagedCaptionStore: CaptionStore, AssetOwning {

@@ -22,6 +22,9 @@ fn make_asset(uuid: &str, hash: &str) -> AssetRow {
         is_deleted: false,
         deleted_at: None,
         is_hidden: false,
+        caption: None,
+        latitude: None,
+        longitude: None,
     }
 }
 
@@ -29,7 +32,54 @@ fn make_asset(uuid: &str, hash: &str) -> AssetRow {
 fn test_init_schema_idempotent() {
     let db = DatabaseDriver::open_in_memory().unwrap();
     db.init_schema().unwrap(); // second call — should not fail
-    assert_eq!(db.schema_version().unwrap(), 4);
+    assert_eq!(db.schema_version().unwrap(), 5);
+}
+
+/// The caption and location projections round-trip through insert, upsert and the row
+/// mapper, and an empty caption is stored as no caption.
+#[test]
+fn caption_and_location_round_trip_and_an_empty_caption_is_none() {
+    let db = DatabaseDriver::open_in_memory().unwrap();
+    let mut row = make_asset("uuid-1", &"a".repeat(64));
+    row.caption = Some("harbour at dusk".to_string());
+    row.latitude = Some(37.8199);
+    row.longitude = Some(-122.4783);
+    db.insert_asset(&row).unwrap();
+    assert_eq!(db.find_by_uuid("uuid-1").unwrap().unwrap(), row);
+
+    row.caption = Some(String::new());
+    row.latitude = None;
+    row.longitude = None;
+    db.upsert_asset(&row).unwrap();
+    let stored = db.find_by_uuid("uuid-1").unwrap().unwrap();
+    assert_eq!(stored.caption, None, "an empty caption is no caption");
+    assert_eq!((stored.latitude, stored.longitude), (None, None));
+}
+
+/// `update_asset_caption` sets and clears the projection, and reports an unknown uuid as
+/// `false` without writing anything.
+#[test]
+fn update_asset_caption_sets_clears_and_reports_a_missing_row() {
+    let db = DatabaseDriver::open_in_memory().unwrap();
+    db.insert_asset(&make_asset("uuid-1", &"a".repeat(64)))
+        .unwrap();
+
+    assert!(
+        db.update_asset_caption("uuid-1", Some("on the pier"))
+            .unwrap()
+    );
+    let caption = db.find_by_uuid("uuid-1").unwrap().unwrap().caption;
+    assert_eq!(caption.as_deref(), Some("on the pier"));
+
+    assert!(db.update_asset_caption("uuid-1", Some("")).unwrap());
+    assert_eq!(db.find_by_uuid("uuid-1").unwrap().unwrap().caption, None);
+
+    assert!(db.update_asset_caption("uuid-1", Some("again")).unwrap());
+    assert!(db.update_asset_caption("uuid-1", None).unwrap());
+    assert_eq!(db.find_by_uuid("uuid-1").unwrap().unwrap().caption, None);
+
+    assert!(!db.update_asset_caption("uuid-missing", Some("x")).unwrap());
+    assert!(db.find_by_uuid("uuid-missing").unwrap().is_none());
 }
 
 #[test]

@@ -61,15 +61,42 @@ struct CapsuleCatalogTests {
         }
     }
 
-    @Test("a caption write is refused, not dropped: the core catalog has no caption register")
-    func captionWriteIsRefused() async throws {
+    @Test("a caption is set, survives an upsert of the row, and clears with nil")
+    func captionRegister() async throws {
         let catalog = try FFIAssetCatalog.inMemory()
         try await catalog.insertAsset(makeAsset(id: "captioned"))
 
-        await #expect(throws: CapsuleCatalog.CatalogError.self) {
-            try await catalog.setCaption("harbour", assetID: "captioned")
-        }
+        try await catalog.setCaption("harbour", assetID: "captioned")
+        var row = try #require(try await catalog.asset(id: "captioned"))
+        #expect(row.caption == "harbour")
+
+        row.rating = 1
+        try await catalog.upsertAsset(row)
+        #expect(try await catalog.asset(id: "captioned")?.caption == "harbour")
+
+        try await catalog.setCaption(nil, assetID: "captioned")
         #expect(try await catalog.asset(id: "captioned")?.caption == nil)
+    }
+
+    @Test("a caption for an asset the catalog does not hold is refused")
+    func captionForUnknownAssetIsRefused() async throws {
+        let catalog = try FFIAssetCatalog.inMemory()
+        await #expect(throws: CapsuleCatalog.CatalogError.invalidArgument(message: "no asset: ghost")) {
+            try await catalog.setCaption("harbour", assetID: "ghost")
+        }
+    }
+
+    @Test("an import's GPS fix and caption round-trip through SQLite")
+    func locationRoundTrip() async throws {
+        let catalog = try FFIAssetCatalog.inMemory()
+        var asset = makeAsset(id: "located")
+        asset.caption = "on the pier"
+        asset.latitude = -33.8568
+        asset.longitude = 151.2153
+
+        try await catalog.insertAsset(asset)
+
+        #expect(try await catalog.asset(id: "located") == asset)
     }
 
     @Test("the timeline is ordered by capture time, newest first")
