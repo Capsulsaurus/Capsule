@@ -5,13 +5,15 @@ import FeatureTransfer
 import SwiftUI
 
 extension RouteDestination {
-    /// Everything in flight, in one place.
+    /// Everything in flight, in one place, with the door to the chunk-by-chunk
+    /// view of it.
     var transferCenterDestination: some View {
         TransferCenterView(
             uploads: environment.uploads,
             sync: environment.sync,
             library: environment.library,
-            storage: environment.storage
+            storage: environment.storage,
+            transferEvents: environment.transferEvents
         )
     }
 

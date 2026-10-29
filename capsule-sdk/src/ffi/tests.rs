@@ -152,6 +152,7 @@ async fn ffi_login_upload_status_round_trip() {
             .unwrap(),
     );
     assert!(session.is_authenticated().await);
+    let progress = session.transfer_events();
 
     // upload file through the handle.
     let outcome = session
@@ -163,6 +164,21 @@ async fn ffi_login_upload_status_round_trip() {
         FfiUploadOutcome::AlreadyStored { asset_ref } => panic!("unexpected merge: {asset_ref}"),
     };
     assert_eq!(session_id, "sess-1");
+
+    // The subscription saw the upload step by step, stamped on a clock that never runs back.
+    let steps = drain_until_finalize(&progress).await;
+    assert!(matches!(
+        steps.first(),
+        Some(FfiTransferEvent::SessionCreated { session_id, size: SIZE, resume_offset: 0, .. })
+            if session_id == "sess-1"
+    ));
+    assert!(steps.iter().any(|step| matches!(
+        step,
+        FfiTransferEvent::ChunkAcked {
+            acked_offset: SIZE,
+            ..
+        }
+    )));
 
     // upload status (HEAD) through the handle.
     let status = session
@@ -177,6 +193,28 @@ async fn ffi_login_upload_status_round_trip() {
     // logout clears the handle.
     session.logout().await.unwrap();
     assert!(!session.is_authenticated().await);
+}
+
+/// Every event a session's subscription yields up to and including `Finalize`, asserting the
+/// stamps never run backwards. Bounded, so a missing `Finalize` fails rather than hangs.
+async fn drain_until_finalize(progress: &FfiTransferSubscription) -> Vec<FfiTransferEvent> {
+    let mut steps = Vec::new();
+    let mut last_stamp = 0;
+    loop {
+        let item = tokio::time::timeout(std::time::Duration::from_secs(5), progress.next())
+            .await
+            .expect("the upload published its finalize step");
+        let Some(FfiTransferFeedItem::Event { stamped }) = item else {
+            panic!("expected an event, got {item:?}");
+        };
+        assert!(stamped.at_ms >= last_stamp, "stamps run forwards");
+        last_stamp = stamped.at_ms;
+        let done = matches!(stamped.event, FfiTransferEvent::Finalize { .. });
+        steps.push(stamped.event);
+        if done {
+            return steps;
+        }
+    }
 }
 
 /// A `duplicate_blob` on create resolves through the FFI as the merge outcome, not a
@@ -206,6 +244,7 @@ async fn ffi_upload_surfaces_duplicate_blob_merge() {
             .await
             .unwrap(),
     );
+    let progress = session.transfer_events();
 
     let outcome = session
         .upload(ffi_request(4096), vec![7u8; 4096])
@@ -215,6 +254,17 @@ async fn ffi_upload_surfaces_duplicate_blob_merge() {
         FfiUploadOutcome::AlreadyStored { asset_ref } => assert_eq!(asset_ref, "asset-xyz"),
         FfiUploadOutcome::Completed { .. } => panic!("expected a merge, not a transfer"),
     }
+    // The merge is the one step the subscription saw.
+    let item = progress.next().await;
+    assert!(matches!(
+        item,
+        Some(FfiTransferFeedItem::Event {
+            stamped: FfiStampedTransferEvent {
+                event: FfiTransferEvent::Merged { ref asset_ref, .. },
+                ..
+            },
+        }) if asset_ref == "asset-xyz"
+    ));
 }
 
 /// Login failure maps to a typed `FfiError::Auth` carrying the stable catalog code
@@ -1955,4 +2005,210 @@ fn a_refused_create_with_no_newer_epoch_does_not_claim_a_missing_key() {
         }
         other => panic!("expected an Upload refusal, got {other:?}"),
     }
+}
+
+// ─── Labels and regions ──────────────────────────────────────────────────────
+
+/// A workspace holding one sealed asset, and that asset's album and id.
+fn labelled_fixture(root: &std::path::Path) -> (Arc<FfiWorkspace>, String, String) {
+    let workspace = enroll(root);
+    let album = workspace
+        .ensure_album(workspace.default_album_id().unwrap(), "Camera Roll".into())
+        .unwrap();
+    let asset = workspace
+        .seal_asset(album.clone(), "IMG_0042.JPG".into(), b"photo".to_vec())
+        .unwrap();
+    (workspace, album, asset)
+}
+
+fn refusal<T: std::fmt::Debug>(result: Result<T, FfiError>) -> FfiLabelRefusal {
+    match result {
+        Err(FfiError::Label { refusal, .. }) => refusal,
+        other => panic!("expected a label refusal, got {other:?}"),
+    }
+}
+
+const CIRCLE: FfiRegionShape = FfiRegionShape::Circle {
+    cx: 0.5,
+    cy: 0.5,
+    r: 0.25,
+};
+
+/// A region is marked with its first labels normalized and sorted, listed oldest first,
+/// relabelled through the region target, and deleted for good.
+#[test]
+fn ffi_regions_are_marked_labelled_and_deleted() {
+    let lib = tempfile::TempDir::new().unwrap();
+    let (workspace, _, asset) = labelled_fixture(lib.path());
+    assert!(workspace.regions(asset.clone()).unwrap().is_empty());
+
+    let first = workspace
+        .add_region(asset.clone(), CIRCLE, vec!["  Zoe ".into(), "Ada".into()])
+        .unwrap();
+    assert_eq!(first.shape, CIRCLE);
+    assert_eq!(first.labels, ["Ada", "Zoe"]);
+    let rect = FfiRegionShape::Rect {
+        x: 0.0,
+        y: 0.0,
+        w: 0.5,
+        h: 1.0,
+    };
+    let second = workspace.add_region(asset.clone(), rect, vec![]).unwrap();
+    assert_eq!(
+        workspace.regions(asset.clone()).unwrap(),
+        [first.clone(), second.clone()]
+    );
+
+    let target = FfiLabelTarget::Region {
+        asset_id: asset.clone(),
+        region_id: first.region_id.clone(),
+    };
+    assert_eq!(
+        workspace.add_label(target.clone(), "Cy".into()).unwrap(),
+        ["Ada", "Cy", "Zoe"]
+    );
+    assert_eq!(
+        workspace
+            .remove_label(target.clone(), "Zoe".into())
+            .unwrap(),
+        ["Ada", "Cy"]
+    );
+    // A label the region does not carry writes nothing and answers the unchanged list.
+    assert_eq!(
+        workspace
+            .remove_label(target.clone(), "Nobody".into())
+            .unwrap(),
+        ["Ada", "Cy"]
+    );
+    assert_eq!(workspace.labels(target.clone()).unwrap(), ["Ada", "Cy"]);
+
+    workspace
+        .delete_region(asset.clone(), first.region_id.clone())
+        .unwrap();
+    assert_eq!(workspace.regions(asset.clone()).unwrap(), [second]);
+    // A deleted region is gone for every verb.
+    assert_eq!(
+        refusal(workspace.labels(target.clone())),
+        FfiLabelRefusal::NotFound
+    );
+    assert_eq!(
+        refusal(workspace.add_label(target, "Ada".into())),
+        FfiLabelRefusal::NotFound
+    );
+    assert_eq!(
+        refusal(workspace.delete_region(asset, first.region_id)),
+        FfiLabelRefusal::NotFound
+    );
+}
+
+/// A refused label or shape writes nothing, and each refusal is named.
+#[test]
+fn ffi_label_and_region_refusals_are_typed_and_write_nothing() {
+    let lib = tempfile::TempDir::new().unwrap();
+    let (workspace, _, asset) = labelled_fixture(lib.path());
+
+    assert_eq!(
+        refusal(workspace.add_region(asset.clone(), CIRCLE, vec!["Ada".into(), "  ".into()])),
+        FfiLabelRefusal::LabelEmpty
+    );
+    assert_eq!(
+        refusal(workspace.add_region(asset.clone(), CIRCLE, vec!["x".repeat(257)])),
+        FfiLabelRefusal::LabelTooLong { bytes: 257 }
+    );
+    let past_edge = FfiRegionShape::Circle {
+        cx: 0.1,
+        cy: 0.5,
+        r: 0.25,
+    };
+    assert_eq!(
+        refusal(workspace.add_region(asset.clone(), past_edge, vec![])),
+        FfiLabelRefusal::RegionPastEdge
+    );
+    let empty = FfiRegionShape::Rect {
+        x: 0.1,
+        y: 0.1,
+        w: 0.0,
+        h: 0.5,
+    };
+    assert_eq!(
+        refusal(workspace.add_region(asset.clone(), empty, vec![])),
+        FfiLabelRefusal::RegionEmpty
+    );
+    let outside = FfiRegionShape::Rect {
+        x: -0.1,
+        y: 0.1,
+        w: 0.2,
+        h: 0.5,
+    };
+    assert_eq!(
+        refusal(workspace.add_region(asset.clone(), outside, vec![])),
+        FfiLabelRefusal::RegionOutOfRange
+    );
+    assert!(workspace.regions(asset.clone()).unwrap().is_empty());
+
+    let missing = uuid::Uuid::now_v7().to_string();
+    assert_eq!(
+        refusal(workspace.regions(missing.clone())),
+        FfiLabelRefusal::NotFound
+    );
+    assert_eq!(
+        refusal(workspace.add_region(missing.clone(), CIRCLE, vec![])),
+        FfiLabelRefusal::NotFound
+    );
+    assert_eq!(
+        refusal(workspace.labels(FfiLabelTarget::Stack {
+            stack_id: missing.clone()
+        })),
+        FfiLabelRefusal::NotFound
+    );
+    assert_eq!(
+        refusal(workspace.add_label(
+            FfiLabelTarget::Album {
+                album_id: missing.clone()
+            },
+            "Trips".into()
+        )),
+        FfiLabelRefusal::NotFound
+    );
+    // A malformed id is the caller's argument, not a missing target.
+    match workspace.labels(FfiLabelTarget::Region {
+        asset_id: asset,
+        region_id: "not-a-uuid".into(),
+    }) {
+        Err(FfiError::InvalidArgument { .. }) => {}
+        other => panic!("expected InvalidArgument, got {other:?}"),
+    }
+}
+
+/// An album's labels are added normalized, removed, and refused by the same rule.
+#[test]
+fn ffi_album_labels_round_trip() {
+    let lib = tempfile::TempDir::new().unwrap();
+    let (workspace, album, _) = labelled_fixture(lib.path());
+    let target = FfiLabelTarget::Album { album_id: album };
+
+    assert!(workspace.labels(target.clone()).unwrap().is_empty());
+    assert_eq!(
+        workspace
+            .add_label(target.clone(), " Trips ".into())
+            .unwrap(),
+        ["Trips"]
+    );
+    assert_eq!(
+        workspace
+            .add_label(target.clone(), "Family".into())
+            .unwrap(),
+        ["Family", "Trips"]
+    );
+    assert_eq!(
+        refusal(workspace.add_label(target.clone(), "\n".into())),
+        FfiLabelRefusal::LabelEmpty
+    );
+    assert_eq!(
+        workspace
+            .remove_label(target.clone(), "Trips".into())
+            .unwrap(),
+        ["Family"]
+    );
+    assert_eq!(workspace.labels(target).unwrap(), ["Family"]);
 }

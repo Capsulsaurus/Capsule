@@ -2,6 +2,7 @@ import CapsuleDomain
 import CapsuleFoundation
 import CapsuleNavigation
 import FeatureAlbums
+import FeatureViewer
 import SwiftUI
 
 extension RouteDestination {
@@ -12,6 +13,8 @@ extension RouteDestination {
     /// id, so the summary is read back through the provider on appearance. That
     /// is the whole point of an id-only payload: a restored route shows the
     /// album as it is now, not as it was when the stack was persisted.
+    ///
+    /// A Capsule album's toolbar carries the door to its labels.
     @ViewBuilder
     func albumDetailDestination(_ id: AlbumID) -> some View {
         let albumProvider = environment.albumProvider
@@ -29,6 +32,15 @@ extension RouteDestination {
                     captionStore: environment.captionStore,
                     placeNames: environment.placeNames
                 )
+                // A Capsule album carries labels; a system smart album has
+                // nowhere to keep them.
+                .toolbar {
+                    ToolbarItem(placement: .secondaryAction) {
+                        if summary.isUserAlbum {
+                            LabelEditorButton(subject: .album(summary.id))
+                        }
+                    }
+                }
             }
         )
     }

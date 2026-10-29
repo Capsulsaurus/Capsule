@@ -4,6 +4,7 @@ import CapsuleFoundation
 import CapsuleNavigation
 import CapsuleUI
 import FeatureAuth
+import FeatureViewer
 import SwiftUI
 
 /// The app's root, and the only place that decides which shell the user sees.
@@ -55,6 +56,10 @@ struct RootShell: View {
             }
         }
         .environment(router)
+        // The label editor is reached from the viewer wherever it is presented
+        // (timeline, albums, search, places) and from album detail, so its ports
+        // ride the environment rather than every presenter's initializer.
+        .environment(\.labelEditing, environment.labelEditing)
         // Every tap in the scene's window opens an `inputToFrame` signpost interval that closes
         // once its answering frame is drawn; the parity benchmark reads it. Signposts cost
         // nothing unless a trace is recording, so the probe is installed in every build.

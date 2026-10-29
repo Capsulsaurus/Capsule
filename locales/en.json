@@ -2199,6 +2199,134 @@
     "message": "Capsule shows and organizes the photos and videos in your library.",
     "context": "iOS NSPhotoLibraryUsageDescription — system permission prompt explaining why Capsule reads the photo library."
   },
+  "app.labels.add": {
+    "message": "Add",
+    "context": "Button that adds the typed label in the label editor."
+  },
+  "app.labels.add.placeholder": {
+    "message": "Add a label",
+    "context": "Placeholder of the field where a new label is typed in the label editor."
+  },
+  "app.labels.album.title": {
+    "message": "Album Labels",
+    "context": "Title of the label editor opened on an album, and of the album toolbar button that opens it."
+  },
+  "app.labels.draft.hint": {
+    "message": "Drag to move it and pinch to resize it.",
+    "context": "Hint under a region being drawn over a photo, and its VoiceOver hint."
+  },
+  "app.labels.draft.label": {
+    "message": "New region",
+    "context": "VoiceOver label of the region being drawn over a photo. Swipe up or down grows or shrinks it."
+  },
+  "app.labels.draft.move_down": {
+    "message": "Move down",
+    "context": "VoiceOver action that moves the region being drawn a small step down."
+  },
+  "app.labels.draft.move_left": {
+    "message": "Move left",
+    "context": "VoiceOver action that moves the region being drawn a small step left."
+  },
+  "app.labels.draft.move_right": {
+    "message": "Move right",
+    "context": "VoiceOver action that moves the region being drawn a small step right."
+  },
+  "app.labels.draft.move_up": {
+    "message": "Move up",
+    "context": "VoiceOver action that moves the region being drawn a small step up."
+  },
+  "app.labels.empty": {
+    "message": "No labels yet",
+    "context": "Shown in the label editor when the region, stack or album has no labels."
+  },
+  "app.labels.failure.empty": {
+    "message": "A label needs at least one character.",
+    "context": "Shown in the label editor when the typed label is only spaces."
+  },
+  "app.labels.failure.not_found": {
+    "message": "This item no longer exists.",
+    "context": "Shown in the label editor when the photo, region, stack or album was deleted, possibly on another device."
+  },
+  "app.labels.failure.shape": {
+    "message": "That region does not fit inside the photo.",
+    "context": "Shown in the label editor when a drawn region was refused for reaching past the photo's edge."
+  },
+  "app.labels.failure.too_long": {
+    "message": "That label is too long.",
+    "context": "Shown in the label editor when the typed label is longer than the limit."
+  },
+  "app.labels.failure.unavailable": {
+    "message": "The change could not be saved. Try again.",
+    "context": "Shown in the label editor when a label or region change failed for a reason it cannot name."
+  },
+  "app.labels.open": {
+    "message": "Regions and Labels",
+    "context": "Menu item in the photo viewer that opens the editor for marking and labelling parts of the photo."
+  },
+  "app.labels.preview.unavailable": {
+    "message": "Preview unavailable",
+    "context": "Shown in the label editor where the photo would be when it cannot be loaded."
+  },
+  "app.labels.region.delete": {
+    "message": "Delete Region",
+    "context": "Button in the label editor that deletes the selected region of a photo."
+  },
+  "app.labels.region.delete.confirm": {
+    "message": "Delete this region and its labels on every device?",
+    "context": "Confirmation title before deleting a region of a photo. The deletion cannot be undone and reaches every device."
+  },
+  "app.labels.region.draw_circle": {
+    "message": "Draw Circle",
+    "context": "Button in the label editor that starts drawing a round region over the photo."
+  },
+  "app.labels.region.draw_rect": {
+    "message": "Draw Rectangle",
+    "context": "Button in the label editor that starts drawing a rectangular region over the photo."
+  },
+  "app.labels.region.empty": {
+    "message": "No regions yet. Draw one to label part of this photo.",
+    "context": "Shown in the label editor when the photo has no regions."
+  },
+  "app.labels.region.first_label": {
+    "message": "First label (optional)",
+    "context": "Placeholder of the field for the label a new region is saved with."
+  },
+  "app.labels.region.none_selected": {
+    "message": "Select a region to see its labels.",
+    "context": "Shown in the label editor on a photo when no region is selected."
+  },
+  "app.labels.region.save": {
+    "message": "Save Region",
+    "context": "Button in the label editor that saves the region being drawn."
+  },
+  "app.labels.region.title": {
+    "message": "Regions",
+    "context": "Section header over the list of marked parts of a photo in the label editor."
+  },
+  "app.labels.region.unlabelled": {
+    "message": "Unlabelled region",
+    "context": "Name of a marked part of a photo that has no labels yet, on screen and for VoiceOver."
+  },
+  "app.labels.remove": {
+    "message": "Remove label",
+    "context": "VoiceOver label of the button that removes one label in the label editor."
+  },
+  "app.labels.section": {
+    "message": "Labels",
+    "context": "Section header over the labels of the selected region, stack or album in the label editor."
+  },
+  "app.labels.stack.open": {
+    "message": "Stack Labels",
+    "context": "Link in the label editor on a photo that opens the labels of the stack the photo belongs to."
+  },
+  "app.labels.stack.title": {
+    "message": "Stack Labels",
+    "context": "Title of the label editor opened on a stack of related photos, such as a burst."
+  },
+  "app.labels.title": {
+    "message": "Regions and Labels",
+    "context": "Title of the label editor opened on a photo."
+  },
   "app.media.live_photo": {
     "message": "Live Photo",
     "context": "Name of a Live Photo asset. 'Live Photo' is Apple's product name and stays English on Apple platforms."
@@ -6314,6 +6442,142 @@
   "app.transfer.empty.title": {
     "message": "Nothing to Transfer",
     "context": "Empty-state title on the transfers screen when everything is up to date."
+  },
+  "app.transfer.live.custody.durable": {
+    "message": "Durable",
+    "context": "VoiceOver label on the live transfers screen for how many photos the server confirmed it holds safely. The spoken value is a number."
+  },
+  "app.transfer.live.custody.not_durable": {
+    "message": "Not yet durable",
+    "context": "VoiceOver label on the live transfers screen for how many photos the server says it does not yet hold safely. The spoken value is a number."
+  },
+  "app.transfer.live.custody.receipts": {
+    "message": "Receipts verified",
+    "context": "VoiceOver label on the live transfers screen for how many signed delivery receipts were checked. The spoken value is a number."
+  },
+  "app.transfer.live.custody.title": {
+    "message": "Custody",
+    "context": "Row label on the live transfers screen for the server's answers about whether it holds the uploaded photos safely."
+  },
+  "app.transfer.live.detail.chunk_history": {
+    "message": "Earlier chunk sizes",
+    "context": "Label on one live transfer for the piece sizes used before the current one, as the app adapted to the connection. The value is a list of data amounts."
+  },
+  "app.transfer.live.detail.chunk_size": {
+    "message": "Chunk size",
+    "context": "Label on one live transfer for the size of the pieces it is sent in right now. The value is a data amount."
+  },
+  "app.transfer.live.detail.progress": {
+    "message": "Done",
+    "context": "Label on one live transfer for how much of it has moved. The value is a data amount, or 'amount of total'."
+  },
+  "app.transfer.live.detail.progress.value": {
+    "message": "%1$@ of %2$@",
+    "context": "How much of one live transfer has moved: the amount done, then the total. Both values arrive already formatted, such as '3 MB'."
+  },
+  "app.transfer.live.detail.receipt": {
+    "message": "Receipt",
+    "context": "Label on one live transfer for the number of the signed delivery receipt that verified it. The value is a number."
+  },
+  "app.transfer.live.detail.rejects": {
+    "message": "Checksum refusals",
+    "context": "Label on one live transfer for how many times the server refused a damaged piece. The value is a number."
+  },
+  "app.transfer.live.detail.resumed_at": {
+    "message": "Resumed at",
+    "context": "Label on one live transfer for where it picked up after an interruption. The value is a data amount."
+  },
+  "app.transfer.live.detail.retries": {
+    "message": "Retries",
+    "context": "Label on one live transfer for how many times a piece had to be sent again. The value is a number."
+  },
+  "app.transfer.live.detail.sessions": {
+    "message": "Sessions",
+    "context": "Label on one live transfer for how many upload sessions it took, more than one after the server lost one. The value is a number."
+  },
+  "app.transfer.live.direction.fetch": {
+    "message": "Download",
+    "context": "VoiceOver label for the arrow marking a live transfer that comes from the server."
+  },
+  "app.transfer.live.direction.upload": {
+    "message": "Upload",
+    "context": "VoiceOver label for the arrow marking a live transfer that goes to the server."
+  },
+  "app.transfer.live.empty.description": {
+    "message": "Uploads and downloads appear here piece by piece while they run.",
+    "context": "Empty-state description on the live transfers screen."
+  },
+  "app.transfer.live.empty.title": {
+    "message": "Nothing Moving",
+    "context": "Empty-state title on the live transfers screen when no upload or download is running."
+  },
+  "app.transfer.live.link.description": {
+    "message": "Every piece of every upload and download, as it moves",
+    "context": "Subtitle of the link from the transfers screen to the live transfers screen."
+  },
+  "app.transfer.live.phase.active": {
+    "message": "Moving",
+    "context": "Status of a live transfer whose data is being sent or received."
+  },
+  "app.transfer.live.phase.finalizing": {
+    "message": "Finalizing",
+    "context": "Status of a live upload whose data has all reached the server, which is finishing it."
+  },
+  "app.transfer.live.phase.integrity_rejected": {
+    "message": "Failed Its Check",
+    "context": "Status of a live download whose data did not match what was asked for and was thrown away."
+  },
+  "app.transfer.live.phase.merged": {
+    "message": "Already Stored",
+    "context": "Status of a live upload the server already had, so nothing was sent."
+  },
+  "app.transfer.live.phase.verified": {
+    "message": "Verified",
+    "context": "Status of a live transfer that finished and was checked."
+  },
+  "app.transfer.live.retry.fetch_empty": {
+    "message": "Nothing arrived, so the download paused and tried again",
+    "context": "Why a live download was retried: a request brought no data."
+  },
+  "app.transfer.live.retry.fetch_stalled": {
+    "message": "The download stalled, so it paused and tried again",
+    "context": "Why a live download was retried: no data arrived for too long."
+  },
+  "app.transfer.live.retry.offset_realign": {
+    "message": "The server asked to continue from a different point",
+    "context": "Why a live upload was retried: the server reported a different position than expected."
+  },
+  "app.transfer.live.retry.server_wait": {
+    "message": "The server asked to wait, then the upload continued",
+    "context": "Why a live upload was retried: the server was busy or full and asked for a pause."
+  },
+  "app.transfer.live.retry.session_lost": {
+    "message": "The server lost the upload, so a new one was started",
+    "context": "Why a live upload was retried: its server session was gone and a new one was opened."
+  },
+  "app.transfer.live.retry.transport_reset": {
+    "message": "The connection dropped, so the piece was sent again",
+    "context": "Why a live upload was retried: the connection reset or a request was lost."
+  },
+  "app.transfer.live.strip": {
+    "message": "Transfer map",
+    "context": "VoiceOver label for the strip of coloured cells showing which parts of one transfer have moved. The spoken value is a percentage."
+  },
+  "app.transfer.live.summary.active": {
+    "message": "Active",
+    "context": "Row label on the live transfers screen for how many transfers are running. The value is a number."
+  },
+  "app.transfer.live.summary.missed": {
+    "message": "Steps not shown",
+    "context": "Row label on the live transfers screen for how many progress updates the screen fell too far behind to show. The transfers themselves were not affected. The value is a number."
+  },
+  "app.transfer.live.title": {
+    "message": "Live Transfers",
+    "context": "Title of the screen that shows every upload and download piece by piece as it moves, and of the link to it."
+  },
+  "app.transfer.live.transfers": {
+    "message": "Transfers",
+    "context": "Section header over the list of uploads and downloads on the live transfers screen."
   },
   "app.transfer.policy.staged": {
     "message": "Full-size photos are uploaded after the details and previews.",
