@@ -331,6 +331,18 @@ pub async fn admit(
         return Err(Refusal::PeerBlocked);
     }
 
+    // The authenticator left this request's nonce unspent because it foresaw this refusal. An
+    // unblock or a budget window rolling over since then does not admit it: its signature was
+    // never recorded, so admitting it would let the same signature be presented again.
+    if let Some(refusal) = capability.foreseen {
+        tracing::info!(
+            %peer,
+            ?refusal,
+            "a request whose nonce was left unspent is refused as the authenticator foresaw"
+        );
+        return Err(refusal);
+    }
+
     let key = CounterKey::PeerRequests(peer.as_str().to_owned());
     match counters
         .hit(&key, budgets::PEER_REQUESTS)

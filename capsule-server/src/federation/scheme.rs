@@ -47,7 +47,12 @@
 //! nonces, and it is **not** spent for a peer that is blocked or over its events budget: the
 //! route's [`admit`](super::admit) answers those with their coded `403` and `429`, and a
 //! nonce spent on a request that was going to be refused anyway would only let a refused peer
-//! grow the replay partition past what its budget admits.
+//! grow the replay partition past what its budget admits. A request whose nonce was left
+//! unspent carries the refusal the authenticator foresaw
+//! ([`VerifiedCapability::foreseen`]), and `admit` answers that refusal even when the peer
+//! row or the budget window has changed since: a signature whose nonce was never recorded is
+//! never admitted, so an unblock or a window rollover between the two reads cannot turn it into
+//! one that can be replayed.
 //!
 //! # What this authenticator refuses, and what it deliberately does not
 //!
@@ -72,7 +77,7 @@ use serde::Serialize;
 
 use super::capability::CapabilityGrant;
 use super::store::CapabilityRecord;
-use super::{FederationContext, PeerId};
+use super::{FederationContext, PeerId, Refusal};
 use crate::app::App;
 use crate::auth::{AccessToken, AuthContext, AuthenticatedSession};
 use crate::counter::{CounterKey, Verdict, budgets};
@@ -121,7 +126,8 @@ pub struct RequestClaim {
     pub context: String,
     /// The request method, upper case.
     pub method: String,
-    /// The request path as sent, without the query.
+    /// The operation's path as this server routes it, without the query: a prefix in the
+    /// peer's base URL is not part of it (design/federation.md, "Request Signatures").
     pub path: String,
     /// Lowercase hex SHA-256 of the presented capability.
     pub token_sha256: String,
@@ -356,6 +362,13 @@ pub struct VerifiedCapability {
     pub grant: CapabilityGrant,
     /// The issued record the `jti` names.
     pub record: CapabilityRecord,
+    /// The refusal the authenticator foresaw when it left the request's nonce unspent: the
+    /// peer was blocked, or over its events budget, when the signature was checked.
+    ///
+    /// [`admit`](super::admit) answers it whatever the peer row and the budget read by then,
+    /// because the nonce was never recorded and admitting the request would leave its signature
+    /// replayable. `None` when the nonce was spent, which is the only way a request is admitted.
+    pub foreseen: Option<Refusal>,
 }
 
 /// Who a read is being served to.
@@ -407,6 +420,9 @@ impl Carries for ReadBearer {
             bearer,
             signature,
             method: parts.method.as_str().to_owned(),
+            // The path this server routed, which is the operation's own: a deployment served
+            // under a prefix has it stripped before the request gets here, and the peer signs
+            // the operation's path for the same reason (design/federation.md, `path`).
             path: parts.uri.path().to_owned(),
         }))
     }
@@ -414,7 +430,7 @@ impl Carries for ReadBearer {
 
 impl FederationContext {
     /// Check that `presented` carries a request signature `grant`'s peer made, and spend its
-    /// nonce.
+    /// nonce, or return the refusal the route must answer instead of spending it.
     ///
     /// The order is the cheapest refusal first, and nothing a third party sends reaches the
     /// counter: the header is parsed and its freshness checked before the peer store is read,
@@ -424,7 +440,7 @@ impl FederationContext {
         grant: &CapabilityGrant,
         presented: &ReadPresentation,
         context: &App,
-    ) -> Result<(), RequestSignatureError> {
+    ) -> Result<Option<Refusal>, RequestSignatureError> {
         let header = presented
             .signature
             .as_deref()
@@ -453,18 +469,30 @@ impl FederationContext {
         );
         signature.verify(&claim, &key)?;
 
-        // A request the route is about to refuse with a code spends no nonce: see the module
-        // docs. A budget that cannot be read is not a reason to skip the replay check.
-        if record.is_blocked() || over_budget(peer, context).await? {
-            tracing::debug!(%peer, "a request signature verified; its nonce is left for a refusal the route makes");
-            return Ok(());
+        // A request the route is about to refuse with a code spends no nonce, and carries that
+        // refusal to the route so it is answered even if the state changes first: see the
+        // module docs. A budget that cannot be read is not a reason to skip the replay check.
+        let foreseen = if record.is_blocked() {
+            Some(Refusal::PeerBlocked)
+        } else {
+            over_budget(peer, context)
+                .await?
+                .map(|retry_after| Refusal::RateLimited { retry_after })
+        };
+        if let Some(refusal) = foreseen {
+            tracing::debug!(%peer, ?refusal, "a request signature verified; its nonce is left unspent for the refusal the route makes");
+            return Ok(Some(refusal));
         }
-        spend_nonce(peer, &signature.nonce, context).await
+        spend_nonce(peer, &signature.nonce, context).await?;
+        Ok(None)
     }
 }
 
-/// Whether `peer` is already over its events budget, so the route will answer `429`.
-async fn over_budget(peer: &PeerId, context: &App) -> Result<bool, RequestSignatureError> {
+/// When `peer`'s events budget resets, if it is already spent so the route will answer `429`.
+async fn over_budget(
+    peer: &PeerId,
+    context: &App,
+) -> Result<Option<Timestamp>, RequestSignatureError> {
     let verdict = context
         .counters()
         .peek(
@@ -476,7 +504,10 @@ async fn over_budget(peer: &PeerId, context: &App) -> Result<bool, RequestSignat
             tracing::error!(%error, %peer, "the per-peer counter could not be read for a signature check");
             RequestSignatureError::Unavailable
         })?;
-    Ok(!verdict.admits())
+    Ok(match verdict {
+        Verdict::Admitted { .. } => None,
+        Verdict::Limited { retry_after } => Some(retry_after),
+    })
 }
 
 /// Remember `nonce` for `peer`, refusing it if it was already used inside the window.
@@ -577,18 +608,21 @@ impl Authenticator<ReadBearer, App> for FederationContext {
 
         // The capability is genuine; is its presenter the peer it names? After the record, so
         // a token this server never issued costs no peer-store read and spends no nonce.
-        if let Err(reason) = self
+        let foreseen = match self
             .verify_request_signature(&grant, &presented, context)
             .await
         {
-            tracing::info!(
-                peer = %grant.peer,
-                jti = %grant.jti,
-                %reason,
-                "a capability was presented without a valid request signature from its peer"
-            );
-            return Err(AuthRejection::unauthenticated());
-        }
+            Ok(foreseen) => foreseen,
+            Err(reason) => {
+                tracing::info!(
+                    peer = %grant.peer,
+                    jti = %grant.jti,
+                    %reason,
+                    "a capability was presented without a valid request signature from its peer"
+                );
+                return Err(AuthRejection::unauthenticated());
+            }
+        };
 
         tracing::trace!(
             peer = %grant.peer,
@@ -599,6 +633,7 @@ impl Authenticator<ReadBearer, App> for FederationContext {
         Ok(Principal::Peer(Box::new(VerifiedCapability {
             grant,
             record,
+            foreseen,
         })))
     }
 
