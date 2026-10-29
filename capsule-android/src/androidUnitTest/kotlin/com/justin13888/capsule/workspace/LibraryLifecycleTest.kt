@@ -8,6 +8,7 @@ import java.nio.file.Files
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFails
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -55,6 +56,47 @@ class LibraryLifecycleTest {
         assertEquals(user, second.workspace.userId())
         assertEquals(asset, second.sampleAsset?.value)
         assertEquals(1, second.workspace.albums().size)
+    }
+
+    @Test
+    fun aRelaunchAfterTheProcessWasKilledOpensDespiteTheLockItLeft() {
+        // The core reads liveness from /proc, as on a device; a host without it keeps every lock.
+        val pidMax = File("/proc/sys/kernel/pid_max").takeIf { it.isFile } ?: return
+        val first = open()
+        val user = first.workspace.userId()
+        val lock = File(root, "${LibraryLifecycle.LIBRARY_DIR}/lock")
+        val held = lock.readText()
+        (first.workspace as AutoCloseable).close()
+        opened.clear()
+        // What a killed process leaves: its lock, naming a process that no longer runs.
+        // Every pid is below pid_max, so none runs under it.
+        val dead = pidMax.readText().trim()
+        lock.writeText(held.replace(Regex("\"pid\":\\d+"), "\"pid\":$dead"))
+
+        assertEquals(user, open().workspace.userId())
+    }
+
+    @Test
+    fun aFirstLaunchKilledWhileTheLibraryWasLaidOutIsCreatedAgain() {
+        // The skeleton `init_library` leaves when killed before `version.cbor` is written.
+        File(root, "${LibraryLifecycle.LIBRARY_DIR}/trash").mkdirs()
+        File(root, "media").mkdirs()
+        File(root, "index/thumbnails").mkdirs()
+
+        val library = open()
+        assertTrue(File(root, "${LibraryLifecycle.LIBRARY_DIR}/version.cbor").isFile)
+        assertEquals(listOf(library.workspace.defaultAlbumId()), library.workspace.albums().map { it.albumId })
+    }
+
+    @Test
+    fun anUnfinishedLibraryHoldingMediaIsNeverCleared() {
+        val media = File(root, "media/IMG_0001.JPG")
+        media.parentFile.mkdirs()
+        media.writeBytes("photo".toByteArray())
+        File(root, LibraryLifecycle.LIBRARY_DIR).mkdirs()
+
+        assertFails { lifecycle().open() }
+        assertTrue(media.readBytes().contentEquals("photo".toByteArray()))
     }
 
     @Test
