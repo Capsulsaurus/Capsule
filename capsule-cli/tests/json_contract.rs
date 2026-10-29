@@ -108,8 +108,13 @@
 //!   and otherwise identical on a second run.
 //! - `camera_import_json_with_a_blank_address_prints_nothing_on_stdout` — a run-level failure
 //!   before any library or camera is opened.
-//! - `camera_import_json_without_an_address_is_a_usage_error` — the parser's exit status 2. A
-//!   run that reaches a camera is `tests/camera_import.rs`'s, against a scripted responder.
+//! - `camera_import_json_without_an_address_opens_the_library_before_looking` — no
+//!   `--address` is not a usage error: the library is opened first, so a library that does not
+//!   open fails the run before the network is browsed. A run that reaches a camera is
+//!   `tests/camera_import.rs`'s, against a scripted responder; discovery's window and choice are
+//!   `camera_discovery`'s unit tests, against a scripted mDNS responder.
+//! - `camera_discover_json_with_an_unbounded_timeout_is_a_usage_error` — the parser's exit
+//!   status 2 for a window of 0 s or over 60 s, before the network is browsed.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -1273,10 +1278,32 @@ fn camera_import_json_with_a_blank_address_prints_nothing_on_stdout() {
 }
 
 #[test]
-fn camera_import_json_without_an_address_is_a_usage_error() {
+fn camera_import_json_without_an_address_opens_the_library_before_looking() {
     let scratch = Scratch::new();
     insta::assert_snapshot!(run(
         &scratch,
-        &["camera", "import", "--library", "lib", "--json"],
+        &[
+            "camera",
+            "import",
+            "--library",
+            "lib",
+            "--passphrase-stdin",
+            "--json"
+        ],
     ));
+}
+
+#[test]
+fn camera_discover_json_with_an_unbounded_timeout_is_a_usage_error() {
+    let scratch = Scratch::new();
+    let zero = run(
+        &scratch,
+        &["camera", "discover", "--timeout", "0", "--json"],
+    );
+    let over = run(
+        &scratch,
+        &["camera", "discover", "--timeout", "61", "--json"],
+    );
+    assert!(over.starts_with("status: 2"), "{over}");
+    insta::assert_snapshot!(zero);
 }

@@ -542,7 +542,8 @@ fn rendered_android() -> Vec<(PathBuf, String)> {
         .expect("the real catalogs compile")
         .into_iter()
         .filter(|(path, _)| {
-            path.to_string_lossy().contains("androidMain")
+            path.to_string_lossy()
+                .contains("capsule-android/src/main/res")
                 && path.file_name().is_some_and(|name| name == "strings.xml")
         })
         .collect()

@@ -27,7 +27,8 @@ Every Rust version is pinned once in the root `[workspace.dependencies]`; member
 | Logging | `tracing` + `tracing-subscriber` | The `log` facade is forbidden in new code; remaining call sites in `capsule-core-ffi` are to migrate. |
 | TLS | `rustls` (`tokio-rustls` async), `ring` provider | Never native-tls/openssl; no exceptions. |
 | X.509 leaf generation | `rcgen` | Ephemeral self-signed leaf for [LAN-peering](/design/peering/) mTLS; trust is decided at the application layer. |
-| LAN service discovery | mocked seam (`capsule-sdk::peering::Discovery`) | A live responder (`mdns-sd`) gets its own row when added. |
+| LAN service discovery | mocked seam (`capsule-sdk::peering::Discovery`) | Peering's live responder will use the mDNS / DNS-SD row below. |
+| mDNS / DNS-SD browsing | `mdns-sd` **0.21** (`default-features = false`) | Pure Rust, no async runtime, builds for every client target; MIT OR Apache-2.0. `capsule-cli` only for now: [camera discovery](/design/import/camera-import/#discovery) browses `_ptp._tcp` behind a seam its tests script. No default features (`logging` pulls the `log` facade). Not `zeroconf` (binds Avahi/Bonjour) or `libmdns` (responder only). |
 | Identifiers | `uuid`, **UUIDv7 for every new identifier** | UUIDv4 where creation time must not leak (e.g. `device_id`); capability ids are not UUIDs. |
 | Async runtime | `tokio` | — |
 | HTTP server | Kynos `0.4.0` from crates.io, feature `openapi32` | The document is pinned to 3.2 with `openapi_as(SpecVersion::V3_2)`; the feature alone does not select it. No secondary public transport. |

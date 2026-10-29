@@ -50,12 +50,7 @@ class UnlockSecretStore(
 
     /** The stored secret. Throws [UnlockSecretUnavailableException] when it does not open. */
     fun load(): ByteArray {
-        val sealed =
-            try {
-                file.readBytes()
-            } catch (error: IOException) {
-                throw UnlockSecretUnavailableException("the sealed unlock secret is unreadable", error)
-            }
+        val sealed = readSealed()
         return try {
             sealer.open(sealed)
         } catch (error: UnlockSecretUnavailableException) {
@@ -69,6 +64,13 @@ class UnlockSecretStore(
             throw UnlockSecretUnavailableException("the sealed unlock secret did not open", error)
         }
     }
+
+    private fun readSealed(): ByteArray =
+        try {
+            file.readBytes()
+        } catch (error: IOException) {
+            throw UnlockSecretUnavailableException("the sealed unlock secret is unreadable", error)
+        }
 
     private fun create(): ByteArray {
         val secret = random(SECRET_BYTES)

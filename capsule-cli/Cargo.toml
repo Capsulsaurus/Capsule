@@ -94,6 +94,11 @@ uuid = { workspace = true }
 # percent-decoding.
 url = "2.5.8"
 walkdir = "2.5.0"
+# `capsule camera discover`, and `capsule camera import` without `--address`: browses DNS-SD
+# `_ptp._tcp` for a bounded window (Dependencies design doc, "mDNS / DNS-SD browsing"). Pure
+# Rust, no async runtime. No default features: `logging` pulls the `log` facade and `async` the
+# flume async channel, neither of which the blocking browse needs.
+mdns-sd = { version = "0.21.6", default-features = false }
 
 # `media-avif-decode`: AVIF stills decode, so an AVIF original gets its dimensions, placeholder and
 # thumbnail instead of a no-codec deferral (issue #588). It links a **system** libdav1d (BSD-2)

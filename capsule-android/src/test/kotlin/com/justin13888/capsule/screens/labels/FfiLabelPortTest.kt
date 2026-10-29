@@ -15,6 +15,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import uniffi.capsule_sdk.FfiClientBuild
 import uniffi.capsule_sdk.FfiDeviceTier
+import uniffi.capsule_sdk.FfiException
 import uniffi.capsule_sdk.FfiLabelRefusal
 import uniffi.capsule_sdk.FfiWorkspace
 import java.nio.file.Files
@@ -23,6 +24,7 @@ import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 /**
@@ -70,7 +72,8 @@ class FfiLabelPortTest {
 
             port.deleteRegion(first.id, asset)
             assertEquals(listOf(second), port.regions(asset))
-            assertFailsWith<LabelTargetNotFound> { port.labels(target) }
+            val gone = assertFailsWith<LabelTargetNotFound> { port.labels(target) }
+            assertEquals(FfiLabelRefusal.NotFound, assertIs<FfiException.Label>(gone.cause).refusal)
             assertFailsWith<LabelTargetNotFound> { port.addLabel("Ada", target) }
             assertFailsWith<LabelTargetNotFound> { port.deleteRegion(first.id, asset) }
         }
@@ -91,10 +94,10 @@ class FfiLabelPortTest {
             val pastEdge = RegionShape.Circle(0.1f, 0.5f, 0.25f)
             val empty = RegionShape.Rect(0.1f, 0.1f, 0f, 0.5f)
             val outside = RegionShape.Rect(-0.1f, 0.1f, 0.2f, 0.5f)
-            assertEquals(
-                ShapeRefusal(ShapeRefusalReason.PAST_EDGE),
-                assertFailsWith<ShapeRefusal> { port.addRegion(pastEdge, emptyList(), asset) },
-            )
+            val refused = assertFailsWith<ShapeRefusal> { port.addRegion(pastEdge, emptyList(), asset) }
+            assertEquals(ShapeRefusal(ShapeRefusalReason.PAST_EDGE), refused)
+            val cause = assertIs<FfiException.Label>(refused.cause)
+            assertEquals(FfiLabelRefusal.RegionPastEdge, cause.refusal)
             assertEquals(
                 ShapeRefusal(ShapeRefusalReason.EMPTY),
                 assertFailsWith<ShapeRefusal> { port.addRegion(empty, emptyList(), asset) },

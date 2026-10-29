@@ -84,7 +84,8 @@ pub(crate) enum Commands {
         #[arg(long, conflicts_with = "push")]
         json: bool,
     },
-    /// Import straight from a camera over PTP/IP, and manage the identity cameras pair with
+    /// Find cameras on the network, import straight from one over PTP/IP, and manage the
+    /// identity cameras pair with
     Camera {
         #[command(subcommand)]
         command: CameraCommands,
@@ -401,9 +402,10 @@ pub(crate) enum CameraCommands {
     /// the camera is changed, and an interrupted run resumes where it stopped
     Import {
         /// The camera's address on the network, as HOST or HOST:PORT (port 15740 when omitted);
-        /// the camera shows it on its Wi-Fi or "Remote/PC connection" screen
+        /// the camera shows it on its Wi-Fi or "Remote/PC connection" screen. Without it, the
+        /// one camera `capsule camera discover` finds is used, and none or several refuse the run
         #[arg(long, value_name = "HOST[:PORT]")]
-        address: String,
+        address: Option<String>,
         /// Path to the Capsule library
         #[arg(long, value_name = "PATH")]
         library: PathBuf,
@@ -413,6 +415,22 @@ pub(crate) enum CameraCommands {
         passphrase_stdin: bool,
         /// Print the run as one JSON document on stdout: the camera, the identity presented to
         /// it, every object received or left on the camera and why, and the import's report
+        #[arg(long)]
+        json: bool,
+    },
+    /// List the cameras on the local network that offer PTP/IP, by browsing DNS-SD `_ptp._tcp`
+    /// for a bounded window
+    Discover {
+        /// How long to listen for cameras, in seconds
+        #[arg(
+            long,
+            value_name = "SECONDS",
+            default_value_t = crate::camera_discovery::DEFAULT_WINDOW_SECS,
+            value_parser = clap::value_parser!(u64).range(1..=crate::camera_discovery::MAX_WINDOW_SECS),
+        )]
+        timeout: u64,
+        /// Print what answered as one JSON document on stdout: the service type browsed, the
+        /// window, and each camera's name, host, address and port
         #[arg(long)]
         json: bool,
     },

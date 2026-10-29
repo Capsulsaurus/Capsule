@@ -231,14 +231,17 @@ data class Transfer(
             chunk != null && overlaps(chunk.offset, chunk.length) -> chunk.state.cell
             high <= held -> Cell.HELD
             high > done -> Cell.PENDING
-            else -> {
-                val hits = scars.filter { overlaps(it.offset, it.length) }
-                when {
-                    hits.any { it.kind == ScarKind.REJECTED } -> Cell.ACKED_AFTER_REJECT
-                    hits.isNotEmpty() -> Cell.ACKED_AFTER_RETRY
-                    else -> Cell.ACKED
-                }
-            }
+            else -> acked(overlaps)
+        }
+    }
+
+    /** An acknowledged cell, marked by the worst scar that [overlaps] it. */
+    private fun acked(overlaps: (Long, Long?) -> Boolean): Cell {
+        val hits = scars.filter { overlaps(it.offset, it.length) }
+        return when {
+            hits.any { it.kind == ScarKind.REJECTED } -> Cell.ACKED_AFTER_REJECT
+            hits.isNotEmpty() -> Cell.ACKED_AFTER_RETRY
+            else -> Cell.ACKED
         }
     }
 
