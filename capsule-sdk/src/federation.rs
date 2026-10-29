@@ -29,10 +29,23 @@
 //! successor; the predecessor is revoked as the successor is issued, so a puller that kept using
 //! it would refuse itself on the next poll. [`FederationPull::refresh`] therefore swaps the held
 //! token, its `jti` and both clients over together, under one lock.
+//!
+//! # Every presentation is signed by the puller
+//!
+//! A capability alone is a bearer token, so the home server admits one only with an
+//! `X-Capsule-Request-Signature` made by the peer its `sub` names, over the request's method,
+//! path and the token itself (design/federation.md, "Request Signatures"). The puller's
+//! operational key signs through a [`RequestSigner`] it is handed rather than one this crate
+//! holds: the key is the peer server's, and where it lives (memory, a file, an HSM) is the
+//! server's business. Every request is signed afresh — a new nonce, the current time — retries
+//! included, because the home server accepts each signature once.
 
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD as BASE64URL;
+use serde::Serialize;
 use tracing::instrument;
 
 use crate::fetch::{BlobSource, RangeOutcome};
@@ -44,6 +57,84 @@ use crate::{net, rest};
 /// The same one a session token rides: the server registers one `bearer` component for both
 /// token types, which is what keeps a capability presentable through the generated client at all.
 const BEARER_SCHEME: &str = "bearer";
+
+/// The domain separator a request signature's claim opens with (design/federation.md).
+pub const REQUEST_CONTEXT: &str = "capsule-federation-request-v1";
+
+/// The path the capability refresh is signed over: the operation's own, whatever prefix the
+/// base URL has (design/federation.md, `path`).
+const REFRESH_PATH: &str = "/v1/federation/capabilities/refresh";
+
+/// What signs a puller's capability presentations: its operational Ed25519 key, the one the
+/// home server's operator pinned for it.
+pub trait RequestSigner: Send + Sync {
+    /// The Ed25519 signature over `message`.
+    fn sign(&self, message: &[u8]) -> [u8; 64];
+}
+
+/// The map a request signature covers, encoded as canonical CBOR.
+///
+/// The server holds its own copy of this shape; both pin the same vector
+/// (`tests::the_signing_bytes_match_the_servers_vector`), so neither can drift alone.
+#[derive(Serialize)]
+struct RequestClaim<'a> {
+    context: &'a str,
+    method: &'a str,
+    path: &'a str,
+    token_sha256: String,
+    signed_at: i64,
+    nonce: &'a str,
+}
+
+/// The `X-Capsule-Request-Signature` for presenting `token` on `method path`, now, with a fresh
+/// nonce.
+///
+/// # Errors
+///
+/// A description when the claim does not encode, which nothing a caller passes can cause.
+pub(crate) fn request_signature(
+    signer: &dyn RequestSigner,
+    method: &str,
+    path: &str,
+    token: &str,
+) -> Result<String, String> {
+    // A UUIDv7's sixteen bytes: unique per call, and the instant it carries is already in `t`.
+    let nonce = BASE64URL.encode(uuid::Uuid::now_v7().as_bytes());
+    signature_header(
+        signer,
+        method,
+        path,
+        token,
+        jiff::Timestamp::now().as_second(),
+        &nonce,
+    )
+}
+
+/// The header value for one request, at `signed_at` with `nonce`.
+fn signature_header(
+    signer: &dyn RequestSigner,
+    method: &str,
+    path: &str,
+    token: &str,
+    signed_at: i64,
+    nonce: &str,
+) -> Result<String, String> {
+    let method = method.to_ascii_uppercase();
+    let claim = RequestClaim {
+        context: REQUEST_CONTEXT,
+        method: &method,
+        path,
+        token_sha256: capsule_core::crypto::hash::hash_bytes(token.as_bytes()).to_hex(),
+        signed_at,
+        nonce,
+    };
+    let bytes = capsule_core::cbor::to_canonical_vec(&claim).map_err(|error| error.to_string())?;
+    let signature = signer.sign(&bytes);
+    Ok(format!(
+        "t={signed_at}, n={nonce}, s={}",
+        BASE64URL.encode(signature)
+    ))
+}
 
 /// Why a federated pull could not proceed.
 #[derive(Debug, thiserror::Error)]
@@ -122,17 +213,22 @@ struct Held {
 pub struct FederationPull {
     base_url: String,
     album_id: String,
+    signer: Arc<dyn RequestSigner>,
     held: RwLock<Held>,
     snapshot: RwLock<Option<RevocationSnapshot>>,
 }
 
 impl FederationPull {
-    /// A puller against `base_url`, presenting `token` for `album_id`.
+    /// A puller against `base_url`, presenting `token` for `album_id`, signing every request
+    /// with `signer`.
     ///
     /// `jti` is the token's own identifier as the home server minted it — the key the revocation
     /// list is checked against. It is passed in rather than parsed out of the token, because
     /// this module holds no JWT parser and a client that read its own credential's claims would
     /// be trusting a value it never verified.
+    ///
+    /// `signer` holds the key the home server pinned for this peer; a request it did not sign
+    /// is refused `401` however good the token is.
     ///
     /// # Errors
     ///
@@ -142,13 +238,15 @@ impl FederationPull {
         album_id: impl Into<String>,
         token: impl Into<String>,
         jti: impl Into<String>,
+        signer: Arc<dyn RequestSigner>,
     ) -> Result<Self, FederationError> {
         let token = token.into();
         let jti = jti.into();
         Ok(Self {
             base_url: base_url.to_owned(),
             album_id: album_id.into(),
-            held: RwLock::new(Held::build(base_url, token, jti)?),
+            held: RwLock::new(Held::build(base_url, token, jti, &signer)?),
+            signer,
             snapshot: RwLock::new(None),
         })
     }
@@ -296,9 +394,20 @@ impl FederationPull {
     /// (`error.federation.member_not_on_roster`) — or [`FederationError::Transport`].
     #[instrument(skip(self))]
     pub async fn refresh(&self) -> Result<String, FederationError> {
-        let client = read(&self.held).client.clone();
+        let (client, token) = {
+            let held = read(&self.held);
+            (held.client.clone(), held.token.clone())
+        };
+        let signature = request_signature(self.signer.as_ref(), "POST", REFRESH_PATH, &token)
+            .map_err(FederationError::Transport)?;
         let refreshed = client
-            .refresh_capability(capsule_core::crypto::primitives::PROTOCOL_VERSION, None)
+            .refresh_capability(
+                capsule_core::crypto::primitives::PROTOCOL_VERSION,
+                rest::RefreshCapabilityParams {
+                    x_capsule_request_signature: Some(signature),
+                    ..rest::RefreshCapabilityParams::default()
+                },
+            )
             .await
             .map_err(|error| match crate::client::upgrade_required_of(&error) {
                 // The gate's `426`, or the typed transport's local one (issue #674).
@@ -311,6 +420,7 @@ impl FederationPull {
             &self.base_url,
             refreshed.token.clone(),
             refreshed.jti.clone(),
+            &self.signer,
         )?;
         // The predecessor is revoked the moment the successor is issued, so the swap has to be
         // one act: a puller holding one client on the old token and another on the new would
@@ -363,11 +473,16 @@ impl std::fmt::Debug for FederationPull {
 }
 
 impl Held {
-    fn build(base_url: &str, token: String, jti: String) -> Result<Self, FederationError> {
+    fn build(
+        base_url: &str,
+        token: String,
+        jti: String,
+        signer: &Arc<dyn RequestSigner>,
+    ) -> Result<Self, FederationError> {
         Ok(Self {
-            sync: SyncConsumer::with_static_token(base_url, token.clone())
+            sync: SyncConsumer::with_signed_capability(base_url, token.clone(), signer.clone())
                 .map_err(|error| FederationError::Transport(error.to_string()))?,
-            blobs: CapabilityBlobSource::new(base_url, token.clone())?,
+            blobs: CapabilityBlobSource::new(base_url, token.clone(), signer.clone())?,
             client: client_for(base_url, &token)?,
             token,
             jti,
@@ -416,17 +531,26 @@ fn write<T>(lock: &RwLock<T>) -> std::sync::RwLockWriteGuard<'_, T> {
 #[derive(Clone)]
 pub struct CapabilityBlobSource {
     client: Arc<rest::Client>,
+    token: Arc<str>,
+    signer: Arc<dyn RequestSigner>,
 }
 
 impl CapabilityBlobSource {
-    /// A source against `base_url`, presenting `token`.
+    /// A source against `base_url`, presenting `token` and signing each range with `signer`.
     ///
     /// # Errors
     ///
     /// [`FederationError::Transport`] when `base_url` is not a URL a client can hang paths off.
-    pub fn new(base_url: &str, token: impl Into<String>) -> Result<Self, FederationError> {
+    pub fn new(
+        base_url: &str,
+        token: impl Into<String>,
+        signer: Arc<dyn RequestSigner>,
+    ) -> Result<Self, FederationError> {
+        let token: String = token.into();
         Ok(Self {
-            client: Arc::new(client_for(base_url, &token.into())?),
+            client: Arc::new(client_for(base_url, &token)?),
+            token: token.into(),
+            signer,
         })
     }
 }
@@ -445,8 +569,26 @@ impl BlobSource for CapabilityBlobSource {
             Some(len) if len > 0 => format!("bytes={start}-{}", start + len - 1),
             _ => format!("bytes={start}-"),
         };
+        // Signed per range: the fetcher's next range is a new request, and the home server
+        // accepts each signature once.
+        let signature = match request_signature(
+            self.signer.as_ref(),
+            "GET",
+            &format!("/v1/blob/{hash}"),
+            &self.token,
+        ) {
+            Ok(signature) => signature,
+            Err(error) => {
+                tracing::error!(%error, "a federated blob request could not be signed");
+                return RangeOutcome::Status {
+                    status: 0,
+                    code: None,
+                };
+            }
+        };
         let params = rest::GetBlobParams {
             range: Some(range),
+            x_capsule_request_signature: Some(signature),
             ..rest::GetBlobParams::default()
         };
         match self

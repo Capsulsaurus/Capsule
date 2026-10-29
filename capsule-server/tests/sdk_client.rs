@@ -1331,6 +1331,19 @@ async fn rebuild_matches(fixture: &Fixture, owner: &capsule_server::store::UserI
     assert_eq!(rebuilt.state, original.state);
 }
 
+/// The peer server's operational key, as the SDK's puller signs with it.
+struct PeerKey(ring::signature::Ed25519KeyPair);
+
+impl capsule_sdk::federation::RequestSigner for PeerKey {
+    fn sign(&self, message: &[u8]) -> [u8; 64] {
+        self.0
+            .sign(message)
+            .as_ref()
+            .try_into()
+            .expect("an Ed25519 signature is sixty-four bytes")
+    }
+}
+
 /// E2E case 4 (server half, SDK client): a peer pulls a shared album over a socket.
 ///
 /// What only a socket can prove for the federated path: the capability is presentable under the
@@ -1355,6 +1368,14 @@ async fn e2e_case_4_a_peer_pulls_a_shared_album_through_the_sdk_over_a_socket() 
     use capsule_server::album::{AlbumRecord, AlbumStore as _};
 
     let fixture = Fixture::working();
+    // The SDK signs each request at the wall clock's now, so the home server's clock is moved
+    // there too: a signature is fresh only within minutes of the server's own time.
+    fixture
+        .clock
+        .advance(Timestamp::now().duration_since(fixture.clock.now()));
+    // The peer's operational key, pinned as an operator pins it: every request the SDK makes
+    // below is signed with it.
+    support::pin_request_key(&fixture, PEER).await;
     // The album row itself: a peer's page is bound to the album's *owner*, which is a fact of
     // the album store rather than of the index.
     fixture
@@ -1423,6 +1444,7 @@ async fn e2e_case_4_a_peer_pulls_a_shared_album_through_the_sdk_over_a_socket() 
         album().as_str(),
         minted.token.clone(),
         minted.grant.jti.clone(),
+        std::sync::Arc::new(PeerKey(support::request_keypair().0)),
     )
     .expect("the base url is a url");
 
@@ -1473,6 +1495,16 @@ async fn e2e_case_4_a_peer_pulls_a_shared_album_through_the_sdk_over_a_socket() 
         pull.blob(&address, manifest.len() as u64).await,
         Err(FederationError::Revoked)
     ));
+
+    // The refresh is signed too: the home server gets far enough to refuse the revoked grant
+    // with its code, which a refresh its peer did not sign never reaches (that is an uncoded
+    // `401`).
+    match pull.refresh().await {
+        Err(FederationError::Refused { code, .. }) => {
+            assert_eq!(code, "error.federation.capability_revoked");
+        }
+        other => panic!("a signed refresh of a revoked grant answered {other:?}"),
+    }
 }
 
 /// **The release gate's receipt fetch, against the real route** (issue #441).

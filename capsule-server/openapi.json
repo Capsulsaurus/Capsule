@@ -18814,6 +18814,18 @@
         "operationId": "refresh_capability",
         "parameters": [
           {
+            "name": "X-Capsule-Request-Signature",
+            "in": "header",
+            "description": "`t=<Unix seconds>, n=<nonce>, s=<base64url Ed25519 signature>`, made by the peer a\npresented federation capability names, over the request's method, path and capability\n(design/federation.md, \"Request Signatures\"). Required with a capability; ignored with a\nsession token.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
             "name": "X-Capsule-Protocol",
             "in": "header",
             "description": "The `YYYY-MM-DD` protocol version this request is written against. Outside the server's `[X-Capsule-Protocol-Min, X-Capsule-Protocol-Max]` window the request is refused with `426`.",
@@ -18892,6 +18904,42 @@
           },
           "403": {
             "description": "Forbidden; Capability invalid; Capability revoked; Server blocked; Capability expired",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request; Malformed handshake",
             "headers": {
               "X-Capsule-Protocol-Min": {
                 "description": "The oldest protocol version this server accepts.",
@@ -19144,42 +19192,6 @@
           },
           "426": {
             "description": "Protocol version unsupported",
-            "headers": {
-              "X-Capsule-Protocol-Min": {
-                "description": "The oldest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Protocol-Max": {
-                "description": "The newest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Min-Client-Build": {
-                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
-                }
-              }
-            },
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CodedProblem"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Malformed handshake",
             "headers": {
               "X-Capsule-Protocol-Min": {
                 "description": "The oldest protocol version this server accepts.",
@@ -21505,6 +21517,18 @@
             }
           },
           {
+            "name": "X-Capsule-Request-Signature",
+            "in": "header",
+            "description": "`t=<Unix seconds>, n=<nonce>, s=<base64url Ed25519 signature>`, made by the peer a\npresented federation capability names, over the request's method, path and capability\n(design/federation.md, \"Request Signatures\"). Required with a capability; ignored with a\nsession token.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
             "name": "X-Capsule-Protocol",
             "in": "header",
             "description": "The `YYYY-MM-DD` protocol version this request is written against. Outside the server's `[X-Capsule-Protocol-Min, X-Capsule-Protocol-Max]` window the request is refused with `426`.",
@@ -21857,6 +21881,18 @@
             "required": true,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "X-Capsule-Request-Signature",
+            "in": "header",
+            "description": "`t=<Unix seconds>, n=<nonce>, s=<base64url Ed25519 signature>`, made by the peer a\npresented federation capability names, over the request's method, path and capability\n(design/federation.md, \"Request Signatures\"). Required with a capability; ignored with a\nsession token.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
             }
           },
           {

@@ -112,6 +112,7 @@ fn capability(member: &str, granted_epoch: u64, scope: Scope) -> VerifiedCapabil
     VerifiedCapability {
         grant: record.grant(),
         record,
+        foreseen: None,
     }
 }
 

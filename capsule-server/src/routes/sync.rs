@@ -72,6 +72,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::blob::ContentAddress;
 use crate::counter::CounterContext;
+use crate::federation::scheme::RequestSignatureHeader;
 use crate::federation::{
     self, FederationContext, Principal, ReadBearer, Refusal, VerifiedCapability,
 };
@@ -384,6 +385,8 @@ pub async fn sync_feed(
     Inject(federation): Inject<FederationContext>,
     Inject(counters): Inject<CounterContext>,
     Query(query): Query<SyncQuery>,
+    // Declared for the contract; `ReadBearer` has already verified it (see its module docs).
+    Headers(_signature): Headers<RequestSignatureHeader>,
 ) -> Result<Json<SyncPageResponse>, SyncRejection> {
     let requested = query.album_id.as_deref().map(AlbumId::new);
 

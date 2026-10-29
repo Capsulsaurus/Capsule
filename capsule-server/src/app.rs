@@ -159,6 +159,11 @@ impl App {
         &self.auth
     }
 
+    /// The rate-limit counters, for the read scheme's request-nonce replay memory.
+    pub(crate) fn counters(&self) -> &CounterContext {
+        &self.counters
+    }
+
     /// Assembles the application from its modules.
     pub fn new(modules: Modules) -> Self {
         let Modules {

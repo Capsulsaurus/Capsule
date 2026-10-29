@@ -4545,6 +4545,85 @@ pub(crate) fn sign_report(
     })
 }
 
+/// The key the suite's peers sign their capability presentations with.
+///
+/// One fixed pair for every peer the suite names: what a case under test is the binding of a
+/// presentation to *a* pinned key, and a case that means "some other key" asks
+/// [`peer_keypair`] for one.
+pub(crate) fn request_keypair() -> (ring::signature::Ed25519KeyPair, [u8; 32]) {
+    use ring::signature::KeyPair as _;
+
+    let pair = ring::signature::Ed25519KeyPair::from_seed_unchecked(&[0x5e; 32]).expect("a seed");
+    let public = pair
+        .public_key()
+        .as_ref()
+        .try_into()
+        .expect("an Ed25519 public key is thirty-two bytes");
+    (pair, public)
+}
+
+/// Pin [`request_keypair`] as `peer`'s operational key, as an operator would.
+pub(crate) async fn pin_request_key(fixture: &Fixture, peer: &str) {
+    use capsule_server::federation::PeerStore as _;
+
+    fixture
+        .peers
+        .pin(
+            &capsule_server::federation::PeerId::new(peer),
+            request_keypair().1,
+            fixture.clock.now(),
+        )
+        .await
+        .expect("the peer store pins");
+}
+
+/// The `X-Capsule-Request-Signature` a peer holding [`request_keypair`] sends with `bearer` on
+/// `method target`, signed now on the fixture's clock with a fresh nonce.
+///
+/// Built through the server's own `RequestClaim`, so the suite signs the bytes the server
+/// verifies and a change to the format fails as a refusal rather than as a different test.
+pub(crate) fn request_signature(
+    fixture: &Fixture,
+    method: &str,
+    target: &str,
+    bearer: &str,
+) -> String {
+    request_signature_by(
+        &request_keypair().0,
+        fixture.clock.now(),
+        method,
+        target,
+        bearer,
+    )
+}
+
+/// As [`request_signature`], by `pair` at `at`.
+pub(crate) fn request_signature_by(
+    pair: &ring::signature::Ed25519KeyPair,
+    at: jiff::Timestamp,
+    method: &str,
+    target: &str,
+    bearer: &str,
+) -> String {
+    use capsule_server::federation::scheme::{RequestClaim, RequestSignature};
+
+    let path = target.split_once('?').map_or(target, |(path, _)| path);
+    let token = bearer.strip_prefix("Bearer ").unwrap_or(bearer);
+    let nonce =
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(uuid::Uuid::now_v7().as_bytes());
+    let claim = RequestClaim::new(method, path, token, at.as_second(), &nonce);
+    let signature = pair.sign(&claim.signing_bytes().expect("a claim encodes"));
+    RequestSignature {
+        signed_at: claim.signed_at,
+        nonce,
+        signature: signature
+            .as_ref()
+            .try_into()
+            .expect("an Ed25519 signature is sixty-four bytes"),
+    }
+    .to_header_value()
+}
+
 /// `hours` from the fixture's own clock, as an RFC 3339 instant.
 ///
 /// The suite's clock starts at the Unix epoch, so a wall-clock literal in a request body is

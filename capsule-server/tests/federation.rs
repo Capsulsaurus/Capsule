@@ -15,6 +15,7 @@ mod support;
 use capsule_core::crypto::keys::HybridSigningKey;
 use capsule_server::blob::{BlobStore, ContentAddress};
 use capsule_server::counter::{CounterKey, CounterStore as _, budgets};
+use capsule_server::federation::scheme::REQUEST_FRESHNESS;
 use capsule_server::federation::{
     CapabilityCodec, CapabilityRecord, CapabilityStore as _, FederationCollaborators,
     FederationContext, MintRequest, PeerId, PeerStore as _, Scope,
@@ -165,8 +166,22 @@ async fn capability(
     .await
 }
 
-/// As [`capability`], over `codec` and `album`.
+/// As [`capability`], over `codec` and `album`, with `peer`'s request key pinned as an operator
+/// pins it — the key [`page`], [`fetch`] and [`refresh`] sign with.
 async fn capability_over(
+    fixture: &Fixture,
+    codec: &CapabilityCodec,
+    peer: &str,
+    album: &AlbumId,
+    scope: Scope,
+    granted_epoch: u64,
+) -> (String, String) {
+    support::pin_request_key(fixture, peer).await;
+    unpinned_capability(fixture, codec, peer, album, scope, granted_epoch).await
+}
+
+/// As [`capability_over`], leaving the peer store as it is.
+async fn unpinned_capability(
     fixture: &Fixture,
     codec: &CapabilityCodec,
     peer: &str,
@@ -207,7 +222,11 @@ async fn capability_over(
 /// A fixture with the album provisioned, Bob on its roster at epoch 1, two assets in the
 /// album and one elsewhere; returns the fixture and the album's two sequence numbers.
 async fn shared() -> (Fixture, Vec<u64>) {
-    let fixture = Fixture::working();
+    shared_on(Fixture::working()).await
+}
+
+/// As [`shared`], on `fixture`.
+async fn shared_on(fixture: Fixture) -> (Fixture, Vec<u64>) {
     let owner_bearer = fixture.bearer().await;
     provision(&fixture, &owner_bearer).await;
     let first = publish_into(&fixture, "shared-1", &album()).await;
@@ -217,21 +236,42 @@ async fn shared() -> (Fixture, Vec<u64>) {
     (fixture, vec![first, third])
 }
 
-/// Ask for a page as `bearer` and return the raw response.
+/// Ask for a page as `bearer`, signed as the peer signs, and return the raw response.
+///
+/// Every helper signs whatever it presents: a session token ignores the header, so signing it
+/// too is the case that proves it does.
 async fn page(fixture: &Fixture, bearer: &str, query: &str) -> kynos::test::TestResponse {
     let path = if query.is_empty() {
         "/v1/sync".to_owned()
     } else {
         format!("/v1/sync?{query}")
     };
-    fixture
-        .client
-        .get(&path)
-        .header("authorization", bearer)
-        .header("accept", "application/json")
-        .send()
-        .await
+    let signature = support::request_signature(fixture, "GET", &path, bearer);
+    page_signed(fixture, bearer, &path, Some(&signature)).await
 }
+
+/// `GET path` as `bearer`, carrying `signature` verbatim, or none.
+async fn page_signed(
+    fixture: &Fixture,
+    bearer: &str,
+    path: &str,
+    signature: Option<&str>,
+) -> kynos::test::TestResponse {
+    let request = fixture
+        .client
+        .get(path)
+        .header("authorization", bearer)
+        .header("accept", "application/json");
+    match signature {
+        Some(signature) => request.header(SIGNATURE, signature),
+        None => request,
+    }
+    .send()
+    .await
+}
+
+/// The request-signature header, as the contract names it.
+const SIGNATURE: &str = "x-capsule-request-signature";
 
 /// The seeded album's page query.
 fn album_query() -> String {
@@ -594,6 +634,344 @@ async fn a_store_that_cannot_answer_a_peer_is_an_outage_never_an_admission() {
 }
 
 // ===========================================================================================
+// The binding: a capability is presented by its peer (#949)
+// ===========================================================================================
+
+#[tokio::test]
+async fn a_capability_without_its_peers_signature_over_this_request_is_unauthenticated() {
+    let (fixture, _) = shared().await;
+    // Off the epoch, so an instant before "now" is still a Unix second the header can carry.
+    fixture.clock.advance(SignedDuration::from_hours(1));
+    let (bearer, _) = capability(&fixture, PEER, Scope::Read, 1).await;
+    let (sibling, _) = capability(&fixture, PEER, Scope::Read, 1).await;
+    let path = format!("/v1/sync?{}", album_query());
+    let now = fixture.clock.now();
+    let (pair, _) = support::request_keypair();
+    let (stranger, _) = support::peer_keypair();
+    let past_freshness = REQUEST_FRESHNESS + SignedDuration::from_secs(1);
+
+    let cases = [
+        ("absent", None),
+        ("malformed", Some("t=0, n=short, s=none".to_owned())),
+        (
+            "stale",
+            Some(support::request_signature_by(
+                &pair,
+                now - past_freshness,
+                "GET",
+                &path,
+                &bearer,
+            )),
+        ),
+        (
+            "pre-signed for later",
+            Some(support::request_signature_by(
+                &pair,
+                now + past_freshness,
+                "GET",
+                &path,
+                &bearer,
+            )),
+        ),
+        (
+            "made by another key",
+            Some(support::request_signature_by(
+                &stranger, now, "GET", &path, &bearer,
+            )),
+        ),
+        (
+            "made for another path",
+            Some(support::request_signature_by(
+                &pair,
+                now,
+                "GET",
+                "/v1/blob/aaaa",
+                &bearer,
+            )),
+        ),
+        (
+            "made for another method",
+            Some(support::request_signature_by(
+                &pair, now, "POST", &path, &bearer,
+            )),
+        ),
+        (
+            "made for another capability",
+            Some(support::request_signature_by(
+                &pair, now, "GET", &path, &sibling,
+            )),
+        ),
+    ];
+    for (case, signature) in &cases {
+        page_signed(&fixture, &bearer, &path, signature.as_deref())
+            .await
+            .assert_status(StatusCode::UNAUTHORIZED);
+        assert!(
+            fixture
+                .counters
+                .peek(
+                    &CounterKey::PeerRequests(PEER.to_owned()),
+                    budgets::PEER_REQUESTS,
+                    fixture.clock.now(),
+                )
+                .await
+                .expect("the counter answers")
+                .admits(),
+            "{case}: the budget is untouched"
+        );
+    }
+    uncharged(
+        &fixture,
+        &CounterKey::PeerRequests(PEER.to_owned()),
+        budgets::PEER_REQUESTS,
+    )
+    .await;
+
+    // The edges of the window are inside it, and the peer's own signature over this request is
+    // the one that is admitted.
+    for at in [now - REQUEST_FRESHNESS, now + REQUEST_FRESHNESS, now] {
+        let signature = support::request_signature_by(&pair, at, "GET", &path, &bearer);
+        page_signed(&fixture, &bearer, &path, Some(&signature))
+            .await
+            .assert_status(StatusCode::OK);
+    }
+}
+
+#[tokio::test]
+async fn a_signed_request_is_accepted_once_and_a_replay_costs_the_peer_nothing() {
+    let (fixture, _) = shared().await;
+    let (bearer, _) = capability(&fixture, PEER, Scope::Read, 1).await;
+    let path = format!("/v1/sync?{}", album_query());
+    let signature = support::request_signature(&fixture, "GET", &path, &bearer);
+
+    page_signed(&fixture, &bearer, &path, Some(&signature))
+        .await
+        .assert_status(StatusCode::OK);
+    page_signed(&fixture, &bearer, &path, Some(&signature))
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    // Still a replay a minute later, while the signature is fresh.
+    fixture.clock.advance(SignedDuration::from_mins(1));
+    page_signed(&fixture, &bearer, &path, Some(&signature))
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+
+    assert_eq!(
+        fixture
+            .counters
+            .peek(
+                &CounterKey::PeerRequests(PEER.to_owned()),
+                budgets::PEER_REQUESTS,
+                fixture.clock.now(),
+            )
+            .await
+            .expect("the counter answers"),
+        capsule_server::counter::Verdict::Admitted {
+            remaining: budgets::PEER_REQUESTS.limit - 1
+        },
+        "only the first presentation was charged to the peer"
+    );
+
+    // The same nonce under another request is the same replay: it is the peer's nonce, not the
+    // request's.
+    let blob = format!("/v1/blob/{}", support::checksum(b"anything"));
+    let nonce = capsule_server::federation::scheme::RequestSignature::parse(&signature)
+        .expect("the suite's signature parses")
+        .nonce;
+    let replayed = resign_with_nonce(&fixture, "GET", &blob, &bearer, &nonce);
+    fixture
+        .client
+        .get(&blob)
+        .header("authorization", &bearer)
+        .header(SIGNATURE, &replayed)
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+}
+
+/// A signature by the suite's request key over `method path` and `bearer`, now, reusing `nonce`.
+fn resign_with_nonce(
+    fixture: &Fixture,
+    method: &str,
+    path: &str,
+    bearer: &str,
+    nonce: &str,
+) -> String {
+    use capsule_server::federation::scheme::{RequestClaim, RequestSignature};
+
+    let token = bearer.strip_prefix("Bearer ").unwrap_or(bearer);
+    let claim = RequestClaim::new(method, path, token, fixture.clock.now().as_second(), nonce);
+    let signature = support::request_keypair()
+        .0
+        .sign(&claim.signing_bytes().expect("a claim encodes"));
+    RequestSignature {
+        signed_at: claim.signed_at,
+        nonce: nonce.to_owned(),
+        signature: signature.as_ref().try_into().expect("64 bytes"),
+    }
+    .to_header_value()
+}
+
+#[tokio::test]
+async fn a_peer_with_no_pinned_key_cannot_present_a_capability() {
+    let (fixture, _) = shared().await;
+
+    // Never recorded at all.
+    let (never, _) = unpinned_capability(
+        &fixture,
+        &fixture.codec,
+        "unpinned.test",
+        &album(),
+        Scope::Read,
+        1,
+    )
+    .await;
+    page(&fixture, &never, &album_query())
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+
+    // Recorded by a block alone, which carries no key.
+    fixture
+        .peers
+        .block(&PeerId::new("blocked.test"), fixture.clock.now(), None)
+        .await
+        .expect("blocks");
+    let (blocked, _) = unpinned_capability(
+        &fixture,
+        &fixture.codec,
+        "blocked.test",
+        &album(),
+        Scope::Read,
+        1,
+    )
+    .await;
+    page(&fixture, &blocked, &album_query())
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+
+    // Pinning the key is what admits it.
+    support::pin_request_key(&fixture, "unpinned.test").await;
+    page(&fixture, &never, &album_query())
+        .await
+        .assert_status(StatusCode::OK);
+}
+
+#[tokio::test]
+async fn a_request_the_route_refuses_with_a_code_spends_no_nonce() {
+    // A blocked peer is told `403` and a peer over budget `429`, each by the route; neither
+    // spends the nonce, so the same signed request is admitted once the refusal lifts.
+    let (fixture, _) = shared().await;
+    let (bearer, _) = capability(&fixture, PEER, Scope::Read, 1).await;
+    let path = format!("/v1/sync?{}", album_query());
+
+    let signature = support::request_signature(&fixture, "GET", &path, &bearer);
+    fixture
+        .peers
+        .block(&PeerId::new(PEER), fixture.clock.now(), None)
+        .await
+        .expect("blocks");
+    page_signed(&fixture, &bearer, &path, Some(&signature))
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    fixture
+        .peers
+        .unblock(&PeerId::new(PEER))
+        .await
+        .expect("unblocks");
+    page_signed(&fixture, &bearer, &path, Some(&signature))
+        .await
+        .assert_status(StatusCode::OK);
+
+    let signature = support::request_signature(&fixture, "GET", &path, &bearer);
+    let key = CounterKey::PeerRequests(PEER.to_owned());
+    for _ in 1..budgets::PEER_REQUESTS.limit {
+        fixture
+            .counters
+            .hit(&key, budgets::PEER_REQUESTS, fixture.clock.now())
+            .await
+            .expect("the counter answers");
+    }
+    page_signed(&fixture, &bearer, &path, Some(&signature))
+        .await
+        .assert_status(StatusCode::TOO_MANY_REQUESTS);
+    fixture
+        .counters
+        .reset(&key)
+        .await
+        .expect("the counter resets");
+    page_signed(&fixture, &bearer, &path, Some(&signature))
+        .await
+        .assert_status(StatusCode::OK);
+}
+
+#[tokio::test]
+async fn a_full_request_nonce_partition_refuses_closed_never_open() {
+    // One window per partition, so the first admitted request fills the nonce partition and a
+    // second, honestly signed with a fresh nonce, meets it full.
+    let (fixture, _) = shared_on(Fixture::with_counter_ceiling(1)).await;
+    let (bearer, _) = capability(&fixture, PEER, Scope::Read, 1).await;
+    page(&fixture, &bearer, &album_query())
+        .await
+        .assert_status(StatusCode::OK);
+
+    page(&fixture, &bearer, &album_query())
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+
+    // Room returns as the windows lapse, and so does the peer.
+    fixture
+        .clock
+        .advance(budgets::FEDERATED_REQUEST_NONCE.window);
+    page(&fixture, &bearer, &album_query())
+        .await
+        .assert_status(StatusCode::OK);
+}
+
+#[tokio::test]
+async fn a_session_token_ignores_the_request_signature_header() {
+    let (fixture, _) = shared().await;
+    let owner_bearer = fixture.bearer().await;
+    for signature in [None, Some("not a signature")] {
+        page_signed(&fixture, &owner_bearer, "/v1/sync", signature)
+            .await
+            .assert_status(StatusCode::OK);
+    }
+}
+
+#[tokio::test]
+async fn the_blob_and_refresh_routes_are_bound_to_the_peer_too() {
+    let (fixture, _) = shared().await;
+    let (bearer, _) = capability(&fixture, PEER, Scope::Read, 1).await;
+    let blob = format!("/v1/blob/{}", support::checksum(b"anything"));
+    fixture
+        .client
+        .get(&blob)
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    fixture
+        .client
+        .post("/v1/federation/capabilities/refresh")
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    // A signature over the read does not admit the refresh.
+    let read = support::request_signature(&fixture, "GET", &blob, &bearer);
+    fixture
+        .client
+        .post("/v1/federation/capabilities/refresh")
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .header(SIGNATURE, &read)
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+}
+
+// ===========================================================================================
 // The pull path: blob bytes under a capability
 // ===========================================================================================
 
@@ -603,10 +981,13 @@ async fn fetch(
     bearer: &str,
     address: &ContentAddress,
 ) -> kynos::test::TestResponse {
+    let path = format!("/v1/blob/{address}");
+    let signature = support::request_signature(fixture, "GET", &path, bearer);
     fixture
         .client
-        .get(&format!("/v1/blob/{address}"))
+        .get(&path)
         .header("authorization", bearer)
+        .header(SIGNATURE, &signature)
         .send()
         .await
 }
@@ -842,6 +1223,8 @@ async fn anchored(dsk: &HybridSigningKey) -> (Fixture, String) {
         .await
         .assert_status(StatusCode::OK);
     provision(&fixture, &bearer).await;
+    // The peer the owner mints for, with the key its requests are signed under.
+    support::pin_request_key(&fixture, PEER).await;
     (fixture, bearer)
 }
 
@@ -916,10 +1299,15 @@ async fn revoke(
 
 /// POST the refresh, presenting `credential`.
 async fn refresh(fixture: &Fixture, credential: &str) -> kynos::test::TestResponse {
+    let path = "/v1/federation/capabilities/refresh";
     fixture
         .client
-        .post("/v1/federation/capabilities/refresh")
+        .post(path)
         .header("authorization", credential)
+        .header(
+            SIGNATURE,
+            &support::request_signature(fixture, "POST", path, credential),
+        )
         .header("accept", "application/json")
         .send()
         .await
@@ -1237,8 +1625,10 @@ async fn a_deployment_that_does_not_federate_answers_404_before_any_work() {
     provision(&fixture, &bearer).await;
     roster(&fixture, 1, &[(BOB, MemberRole::Reader)]).await;
     publish_into(&fixture, "unfederated-1", &album()).await;
-    let (signer, public) = support::peer_keypair();
-    pin(&fixture, public).await;
+    // One key for the peer's reports and its requests, as a real peer has one operational key.
+    // A grant recorded as though it were minted while federation was on, which pins that key.
+    let (capability, jti) = capability(&fixture, PEER, Scope::Read, 1).await;
+    let (signer, _) = support::request_keypair();
     let hash = support::checksum(b"the reported bytes");
 
     let pinned = fixture
@@ -1246,8 +1636,6 @@ async fn a_deployment_that_does_not_federate_answers_404_before_any_work() {
         .read(&PeerId::new(PEER))
         .await
         .expect("the store answers");
-    // A grant recorded as though it were minted while federation was on.
-    let (capability, jti) = capability(&fixture, PEER, Scope::Read, 1).await;
 
     assert_not_federating(&mint(&fixture, &bearer, mint_body("read")).await, "mint");
     assert_not_federating(&revoke(&fixture, &bearer, &album(), &jti).await, "revoke");

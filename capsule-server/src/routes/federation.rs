@@ -130,6 +130,7 @@ use serde::{Deserialize, Serialize};
 use crate::album::AlbumContext;
 use crate::auth::AccessToken;
 use crate::counter::{CounterContext, CounterKey, budgets};
+use crate::federation::scheme::RequestSignatureHeader;
 use crate::federation::{
     self, CapabilityRecord, FederationContext, MAX_GRANT_LIFETIME, MintRequest, PeerId,
     Presentation, Principal, ReadBearer, Refusal, ReportClaim, Scope,
@@ -850,6 +851,8 @@ pub async fn refresh_capability(
     Inject(federation): Inject<FederationContext>,
     Inject(membership): Inject<MembershipContext>,
     Inject(counters): Inject<CounterContext>,
+    // Declared for the contract; `ReadBearer` has already verified it (see its module docs).
+    Headers(_signature): Headers<RequestSignatureHeader>,
 ) -> Result<Json<RefreshedCapabilityResponse>, RefreshRejection> {
     let Principal::Peer(capability) = principal else {
         tracing::info!("a session token was presented on the capability refresh");

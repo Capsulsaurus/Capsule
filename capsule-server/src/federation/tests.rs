@@ -144,6 +144,7 @@ fn verified(clock: &ManualClock) -> VerifiedCapability {
     VerifiedCapability {
         grant: record.grant(),
         record,
+        foreseen: None,
     }
 }
 
@@ -228,5 +229,48 @@ async fn a_revoked_capability_is_refused_before_the_peer_is_charged() {
             remaining: budgets::PEER_REQUESTS.limit
         },
         "a revoked grant costs the peer nothing"
+    );
+}
+
+#[tokio::test]
+async fn a_foreseen_refusal_is_answered_after_an_unblock_or_a_window_rollover() {
+    // The authenticator left the nonce unspent because the peer was blocked or over budget.
+    // By the time the route admits, the peer row and the budget read clean — the race the
+    // field closes: admitting now would serve a signature whose nonce was never recorded.
+    let clock = Arc::new(ManualClock::default());
+    let federation = context(Arc::new(InMemoryPeers::new()), clock.clone());
+    let store = Arc::new(InMemoryCounters::new());
+    let counters = CounterContext::new(store.clone(), clock.clone());
+    let retry_after = clock.now();
+    for foreseen in [Refusal::PeerBlocked, Refusal::RateLimited { retry_after }] {
+        let mut capability = verified(&clock);
+        capability.foreseen = Some(foreseen);
+        assert_eq!(
+            admit(&federation, &counters, &capability, Presentation::Read).await,
+            Err(foreseen)
+        );
+    }
+    assert_eq!(
+        store
+            .peek(
+                &CounterKey::PeerRequests("other.test".to_owned()),
+                budgets::PEER_REQUESTS,
+                clock.now(),
+            )
+            .await
+            .expect("answers"),
+        Verdict::Admitted {
+            remaining: budgets::PEER_REQUESTS.limit
+        },
+        "a request refused as foreseen costs the peer nothing"
+    );
+
+    // A revocation still comes first, as it does for every other refusal.
+    let mut capability = verified(&clock);
+    capability.foreseen = Some(Refusal::PeerBlocked);
+    capability.record.revoked_at = Some(clock.now());
+    assert_eq!(
+        admit(&federation, &counters, &capability, Presentation::Read).await,
+        Err(Refusal::Revoked)
     );
 }
