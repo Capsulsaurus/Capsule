@@ -517,9 +517,11 @@ impl LogoutRejection {
 /// # Rate-limited per source
 ///
 /// This is the one unauthenticated write on the surface, and its `409` is an account oracle, so
-/// every attempt is charged against [`budgets::REGISTRATION_SOURCE`] for the trusted client
-/// address **before** the body is validated or the registry is asked anything: probing costs the
-/// prober whatever the answer. A spent budget, or a full limiter partition, is
+/// every attempt whose body parses is charged against [`budgets::REGISTRATION_SOURCE`] for the
+/// trusted client address **before** the address and password are validated or the registry is
+/// asked anything: probing costs the prober whatever the answer. A body the `Json` extractor
+/// refuses (`400`/`415`/`422`) never reaches the handler and is not charged; it learns nothing
+/// about any account. A spent budget, or a full limiter partition, is
 /// `429 error.auth.rate_limited` with `Retry-After`; a counter store that cannot answer is `500`,
 /// never an admission.
 ///

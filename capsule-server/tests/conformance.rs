@@ -347,6 +347,24 @@ async fn every_declared_response_is_exercised() {
         .send()
         .await
         .assert_status(StatusCode::CONFLICT);
+    // 429: a source whose registration budget is spent (#1001). Its own address, so the walk's
+    // other registrations keep their source's budget.
+    fixture
+        .spend_budget(
+            &capsule_server::counter::CounterKey::RegistrationSource("203.0.113.77".to_owned()),
+            capsule_server::counter::budgets::REGISTRATION_SOURCE,
+        )
+        .await;
+    client
+        .post("/v1/auth/register")
+        .peer(std::net::SocketAddr::new(
+            std::net::Ipv4Addr::new(203, 0, 113, 77).into(),
+            40_000,
+        ))
+        .json(&json!({ "email": "throttled@example.test", "password": PASSWORD }))
+        .send()
+        .await
+        .assert_status(StatusCode::TOO_MANY_REQUESTS);
 
     // ── POST /v1/auth/login ────────────────────────────────────────────────────────────────
     // 400, 415, 422 are the `Json` extractor's, declared on every operation that takes a body.

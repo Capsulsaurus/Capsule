@@ -1319,9 +1319,8 @@ async fn registration_is_rate_limited_per_source_address() {
         );
     }
 
-    let refused = register_from(&fixture, "203.0.113.7", "one-more@example.test")
-        .await
-        .assert_status(StatusCode::TOO_MANY_REQUESTS);
+    let refused = register_from(&fixture, "203.0.113.7", "one-more@example.test").await;
+    refused.assert_status(StatusCode::TOO_MANY_REQUESTS);
     assert_rate_limited(&refused, &fixture);
 
     // Nothing was created by the refused attempt, so the address is still free from elsewhere —
@@ -1348,9 +1347,8 @@ async fn an_ipv6_source_is_limited_per_slash_64() {
         .await
         .assert_status(StatusCode::OK);
     }
-    let refused = register_from(&fixture, "2001:db8:1:2::ffff", "v6-more@example.test")
-        .await
-        .assert_status(StatusCode::TOO_MANY_REQUESTS);
+    let refused = register_from(&fixture, "2001:db8:1:2::ffff", "v6-more@example.test").await;
+    refused.assert_status(StatusCode::TOO_MANY_REQUESTS);
     assert_rate_limited(&refused, &fixture);
 
     // The neighbouring /64 is another source.
@@ -1370,9 +1368,8 @@ async fn a_full_registration_limiter_is_a_429_and_not_an_outage() {
     register_from(&fixture, "203.0.113.7", "first@example.test")
         .await
         .assert_status(StatusCode::OK);
-    let refused = register_from(&fixture, "203.0.113.8", "second@example.test")
-        .await
-        .assert_status(StatusCode::TOO_MANY_REQUESTS);
+    let refused = register_from(&fixture, "203.0.113.8", "second@example.test").await;
+    refused.assert_status(StatusCode::TOO_MANY_REQUESTS);
     assert_rate_limited(&refused, &fixture);
 
     fixture.client.assert_conformance();
