@@ -10,7 +10,7 @@ Federation lets an album owned on one Capsule server be shared with users whose 
 
 Federation is deferred. Every federation operation answers `404 error.federation.not_configured` unless the deployment sets `FEDERATION_ENABLED=true` **and** `FEDERATION_URL` (`serve` refuses to start with the switch on and no URL). Off, the read primitives honour no capability and `server-info` publishes no `federation_url`; the routes stay in the OpenAPI document either way.
 
-Shipped: minting, refresh, revocation, the capability arm of the pull path, signed report intake, the server-level blocklist and the events/hour budget. Open: [#476](https://github.com/Capsulsaurus/Capsule/issues/476) — the egress pull worker and everything downstream of it (re-validation of pulled data, the receiving-user quota, the breadcrumb index, the rejected-hash table, hints), the weighted budgets (bytes, CPU, error budget, circuit breaker, probation), and the operator command that pins or blocks a peer. Until that command exists, report intake answers `403 error.federation.peer_unknown` and the blocklist is empty.
+Shipped: minting, refresh, revocation, the capability arm of the pull path, request signatures, signed report intake, the server-level blocklist and the events/hour budget. Open: [#476](https://github.com/Capsulsaurus/Capsule/issues/476) — the egress pull worker and everything downstream of it (re-validation of pulled data, the receiving-user quota, the breadcrumb index, the rejected-hash table, hints), the weighted budgets (bytes, CPU, error budget, circuit breaker, probation), and the operator command that pins or blocks a peer. Until that command exists, no peer key is pinned, so every capability presentation is refused `401` for want of a key to verify its request signature, report intake answers `403 error.federation.peer_unknown`, and the blocklist is empty.
 
 **Before federation is enabled in a real deployment**, every MUST in this document holds, including re-validation of pulled data at the [boundary](#validation-at-the-boundary) and the [per-peer limits](#per-peer-compartmentalization).
 
@@ -27,6 +27,7 @@ Federation introduces **no new data protocol**. A peer reads the same content-ad
 | `GET /v1/sync?album_id=…&cursor=…` | Metadata changes after a cursor, for an album the peer holds a capability for. |
 | `GET /v1/blob/{hash}` (HTTP `Range`) | An opaque ciphertext blob by content address. |
 | `Authorization: Bearer <capability>` | Presents a [federation capability](#federation-capabilities). |
+| `X-Capsule-Request-Signature` | Binds that presentation to the peer named in `sub` ([request signatures](#request-signatures)). |
 
 Rejections follow [API Surfaces — Rejection Mapping](/design/api-surfaces/#rejection-mapping). [Hints](/design/notifications/#vocabulary) and presence ride a separate low-trust channel and never feed validation. Capsule recomputes every blob's content hash on arrival, so a peer cannot lie about what a hash contains.
 
@@ -99,6 +100,37 @@ Signed with the home server's operational key, classical Ed25519 ([carve-out](/d
 
 A grant is bound to the epoch its member was admitted at, so a member removed and re-admitted cannot reuse an old token. That binding holds because a removal always advances the epoch: `PUT /v1/albums/{album_id}/roster` refuses a roster that omits a current member at the held `amk_epoch` with `400 error.album.roster_malformed`, decided under the same lock as the version check, and changes nothing.
 
+### Request Signatures
+
+A capability alone is a bearer token: whoever holds it could present it. So every request that presents one also carries a signature by the peer named in its `sub`, made with that peer's operational Ed25519 key, and the issuer verifies it against the key its operator [pinned](#server-identity-and-key-rotation) for that peer. A leaked capability is then useless without the peer's key. The format is normative; every peer produces it.
+
+The header is declared on the three operations a capability is presented to: `GET /v1/sync`, `GET /v1/blob/{hash}` and `POST /v1/federation/capabilities/refresh`. It is a comma-separated list of exactly three `key=value` members, each once, in any order, with optional whitespace around each member:
+
+```text
+X-Capsule-Request-Signature: t=1767225600, n=AZQ3hW1ae6qB2vX9k0cR0w, s=<signature>
+```
+
+| Member | Meaning |
+| --- | --- |
+| `t` | When the peer signed, in decimal Unix seconds. |
+| `n` | A nonce the peer never signs twice: 22 to 128 characters of the unpadded base64url alphabet, so at least 16 bytes. |
+| `s` | The Ed25519 signature, unpadded base64url (64 bytes). |
+
+The signed bytes are the canonical CBOR of this map, the encoding every other signed document in Capsule uses:
+
+| Key | Value |
+| --- | --- |
+| `context` | The text `capsule-federation-request-v1`, so the signature cannot be mistaken for any other this key makes. |
+| `method` | The request method, upper case. |
+| `path` | The request path as sent, without the query or fragment. Every path segment of the three operations is unreserved characters, so there is no percent-encoding to agree on. |
+| `token_sha256` | The lowercase hex SHA-256 of the presented capability, exactly the token bytes that follow the `Bearer` scheme and its single space. |
+| `signed_at` | `t`, as an integer. |
+| `nonce` | `n`, as text. |
+
+The issuer refuses the request `401` when the header is absent, is malformed, or has `t` more than **5 minutes** from its own clock either way. It also refuses `401` when the peer has no pinned key, when the signature does not verify, or when the nonce was already used by this peer within the last **10 minutes** (the span in which a signature can still be fresh). These are structural refusals, uncoded like every other the authenticator makes. The nonce is remembered only after the signature verifies, so a third party cannot spend a peer's nonces. It is not spent for a blocked peer or one over its events budget: those are answered by their own coded `403` or `429`. The replay memory fails closed: a counter store that cannot answer, or is full, is a `401`.
+
+Neither the query string nor any other header is covered. A signature only the peer could have made, used once, within minutes of being made, is what binds the presentation to the peer. Rewriting a signed request's query in flight needs a position inside its TLS session, and every query parameter these operations take is bounded by the capability itself (`aud` fixes the album). The reads carry no body, and the refresh's body is empty. A session token on the same operations ignores the header.
+
 ### What a scope hides, and what it does not
 
 `read-derivative-only` controls which **bytes** are served, not which identifiers a peer learns. The peer still receives every sync entry, including the original's `hash`, `role` and `size`, because the signed manifest it must verify names the original's address anyway; it is refused only at `GET /v1/blob/{hash}` with `403 error.federation.scope_insufficient`. Hiding an original's existence needs a separate album. A **backup** is outside every scope and answers `404`.
@@ -160,6 +192,7 @@ Federation supplies the transport for federated reports and the untrusted-server
 ## Validation
 
 - **Capability verify (unit):** mutate each claim; each mutation is rejected with its code.
+- **Request signature (unit and integration):** a missing, malformed, stale, forged, replayed or unpinned signature is each `401`; the signing bytes are pinned to a fixed vector.
 - **Revocation fail-closed (unit):** stale list past 15 minutes rejects unconfirmable tokens.
 - **Refresh chain (conformance):** revoking the original `jti` revokes every successor.
 - **Pull boundary (unit):** each malformed envelope is refused at its invariant.
