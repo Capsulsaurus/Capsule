@@ -81,7 +81,7 @@ jobs:
         with:
           tool: nextest,cargo-mutants@27.1.0
       - name: Set up mise (task runner)
-        uses: jdx/mise-action@v2
+        uses: jdx/mise-action@v4
         with:
           install: false
       # Exits 2 when a mutant survives and 3 when one times out: a surviving mutant is a

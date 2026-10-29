@@ -146,7 +146,7 @@ jobs:
         with:
           fetch-depth: 0
       - name: Set up convco (via mise)
-        uses: jdx/mise-action@v2
+        uses: jdx/mise-action@v4
         with:
           install_args: convco
       - name: Download build artifacts
