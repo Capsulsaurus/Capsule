@@ -1639,6 +1639,7 @@
     <string name="app_viewer_info_aperture">Aperture</string>
     <string name="app_viewer_info_camera">Camera</string>
     <string name="app_viewer_info_caption_accessibility">Caption</string>
+    <string name="app_viewer_info_caption_save_failed">This caption couldn\'t be saved. Edit it again to retry.</string>
     <string name="app_viewer_info_caption_placeholder">Add a Caption</string>
     <string name="app_viewer_info_capture">Capture</string>
     <string name="app_viewer_info_date">Date</string>

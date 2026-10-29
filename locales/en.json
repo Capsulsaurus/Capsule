@@ -6587,6 +6587,10 @@
     "message": "Caption",
     "context": "iOS asset info: VoiceOver label for the editable caption field."
   },
+  "app.viewer.info.caption.save_failed": {
+    "message": "This caption couldn't be saved. Edit it again to retry.",
+    "context": "iOS asset info: shown under the caption field when the store refused the last save; the typed text is kept in the field."
+  },
   "app.viewer.info.caption_placeholder": {
     "message": "Add a Caption",
     "context": "iOS asset info: placeholder in the editable caption field at the top of the info panel."
