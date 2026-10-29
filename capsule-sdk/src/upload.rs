@@ -39,6 +39,8 @@ use crate::net::{
     ConnectionClass, RetryClass, RetryDecision, RetryEngine, Sleeper, TokioSleeper, negotiation,
 };
 
+pub mod queue;
+
 // Constants for chunk sizes (4KB aligned)
 const KB: u64 = 1024;
 const CHUNK_SIZE_256KB: u64 = 256 * KB;
