@@ -286,6 +286,12 @@ const EXTRAS: &[Extra] = &[
         status: 429,
         members: RETRY_AFTER,
     },
+    Extra {
+        component: "RegistrationRateLimitedProblem",
+        operation: "register_user",
+        status: 429,
+        members: RETRY_AFTER,
+    },
     // The upload surface's three waits (transfer/upload.md, Hostile Clients): a spent budget or
     // the live-session cap, an outage, and a full disk. Each says when, and `Retry-After` says it
     // again on the header.
