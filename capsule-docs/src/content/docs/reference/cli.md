@@ -31,12 +31,12 @@ A `capsule` invocation reads at most two pieces of durable state, and it helps t
   user's configuration directory. Every networked command reads it, and `capsule reset` removes
   it.
 
-Ten commands unseal a library, and all ten take its passphrase: `capsule import`,
-`capsule push`, `capsule restore`, `capsule cull`, `capsule show`,
+Eleven commands unseal a library, and all eleven take its passphrase: `capsule import`,
+`capsule push`, `capsule restore`, `capsule cull`, `capsule show`, `capsule library list`,
 `capsule repair capture-time`, `capsule label`, `capsule region`, `capsule edit`, and
 `capsule sync reannounce` (which `capsule sync --library` runs itself when the server has
 rebuilt the library's index). Each accepts `--passphrase-stdin`
-as well as prompting, so each runs unattended. The
+as well as prompting, so each runs unattended. The other
 `capsule library` subcommands are not among them — `info` and `rebuild` read the version
 file, the sidecars, and the index, none of which is sealed, so they need no passphrase and
 offer no flag for one.
@@ -52,7 +52,10 @@ A password, passphrase or authenticator code typed into the TUI is masked on scr
 neither it nor an issued share URL is written to that log. Signing out and revoking a share
 link ask `y` or `n` first in the TUI; the subcommands do not ask, so scripts keep working.
 Every flow the TUI offers stays reachable as a subcommand, with `--json` where it reports.
-The library browser asks the terminal once, at start-up, whether it draws Kitty, Sixel or
+The library browser's twins are `capsule library list --library PATH
+[--view timeline|albums|stacks]`, which lists the same timeline, albums and stacks from the
+same snapshot, and `capsule show ASSET --library PATH`, whose `--json` document carries the
+asset's provenance history record by record. The library browser asks the terminal once, at start-up, whether it draws Kitty, Sixel or
 iTerm2 graphics; where it draws none, the preview pane says so in text and no original is
 decoded for it. From the browser, the label editor (`e`) and the time-and-place screen (`m`)
 write to the library it has open with the passphrase it was opened with, kept in memory only
