@@ -141,12 +141,12 @@ fn every_plural_renders_in_every_locale() {
 /// had to close: `Bundle::format` used to drop `self.locale` on the floor.
 #[test]
 fn a_bundle_selects_the_arm_its_own_locale_asks_for() {
-    // French counts zero as singular, English does not — the same catalog message, two
-    // different arms, chosen only because the bundle knows which locale it is.
+    // French counts zero as singular, English does not — two different arms, chosen only
+    // because the bundle knows which locale it is.
     let count = [("count", Value::Int(0))];
     assert_eq!(
         Bundle::for_locale("fr").format("common.item_count", &count),
-        "0 item"
+        "0 élément"
     );
     assert_eq!(
         Bundle::for_locale("en").format("common.item_count", &count),
