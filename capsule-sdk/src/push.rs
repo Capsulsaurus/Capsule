@@ -679,6 +679,74 @@ fn classify_refusal(bundle: &UploadBundle, blob: &BundleBlob<'_>, error: UploadE
     PushError::Upload(error)
 }
 
+// ─── Redacting a deleted asset ────────────────────────────────────────────────
+
+/// What [`redact_asset`] did to one asset's open upload sessions.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Redaction {
+    /// The sessions cancelled (`DELETE /upload/{id}` answered `204` or `404`): no further byte
+    /// of them is sent, and the server dropped what they had staged.
+    pub cancelled: Vec<String>,
+    /// The sessions the server would not cancel because their finalization was already running
+    /// or done (`409 error.upload.session_not_active`). Their blob lands; the asset's `delete`
+    /// record, sent after, supersedes the create it completes.
+    pub finalizing: Vec<String>,
+}
+
+/// Abort every open upload session this account holds for `asset_id`: the network half of
+/// redacting an asset deleted before its upload finished
+/// ([Organization — Deletion State Machine]).
+///
+/// The sessions come from `GET /upload/sessions`, filtered by the asset each names, so a
+/// session a previous run left behind (a staged tier that never finished, a push killed
+/// mid-ladder) is found without any client-side state. Each is cancelled with
+/// `DELETE /upload/{id}`:
+///
+/// - `204` or `404` is a cancelled session: its staged bytes and quota reservation are released.
+/// - `409 error.upload.session_not_active` is the race with a finalization that started before
+///   the abort reached it. Finalization is not interruptible, so that blob lands; the session is
+///   reported in [`Redaction::finalizing`] and the caller's `delete` supersedes the create.
+///
+/// Any other answer fails the redaction. Re-running it is safe: a session already cancelled is a
+/// `404`, and the listing no longer names it.
+///
+/// Pending tiers need no call: a deferred tier has no session, and a push of a trashed asset
+/// plans nothing, so the abort is the whole of what the server has to forget.
+///
+/// [Organization — Deletion State Machine]: https://docs/design/organization/#deletion-state-machine
+#[instrument(skip(client), fields(%asset_id))]
+pub async fn redact_asset(client: &UploadClient, asset_id: &str) -> Result<Redaction, UploadError> {
+    let sessions = client.list_sessions().await?;
+    let mut redaction = Redaction::default();
+    for session in sessions.iter().filter(|s| s.asset_id == asset_id) {
+        match client.delete(&session.id).await {
+            Ok(()) => {
+                tracing::info!(session_id = %session.id, status = %session.status, received = session.received_bytes, "redact: upload session cancelled");
+                redaction.cancelled.push(session.id.clone());
+            }
+            Err(UploadError::Rejected {
+                status: 409,
+                code: Some(code),
+                ..
+            }) if code == capsule_i18n::error_codes::UPLOAD_SESSION_NOT_ACTIVE => {
+                tracing::info!(session_id = %session.id, status = %session.status, "redact: the session is already finalizing; its delete will supersede it");
+                redaction.finalizing.push(session.id.clone());
+            }
+            Err(error) => {
+                tracing::warn!(session_id = %session.id, %error, "redact: an upload session could not be cancelled");
+                return Err(error);
+            }
+        }
+    }
+    tracing::info!(
+        listed = sessions.len(),
+        cancelled = redaction.cancelled.len(),
+        finalizing = redaction.finalizing.len(),
+        "redact: the asset's open upload sessions are aborted"
+    );
+    Ok(redaction)
+}
+
 // ─── Confirming custody ───────────────────────────────────────────────────────
 
 /// What [`verify_custody`] established for one asset.
