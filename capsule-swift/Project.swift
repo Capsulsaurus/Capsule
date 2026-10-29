@@ -219,6 +219,10 @@ private let moduleTargets: [Target] =
     // `capsule_sdk` user flows), the record conversions, and the
     // error mapping onto the FFI-free `CatalogError`. Present only when
     // `TUIST_FFI=1`; nothing above it names a generated type.
+    //
+    // It also holds the Rust-backed `AlertPolicyPort`, because a uniffi
+    // namespace's glue compiles into exactly one module: a second module over
+    // `capsule_sdk.swift` would be a second copy of every generated type.
     + (ffiEnabled
         ? module(
             "CapsuleCatalogFFI",
@@ -230,9 +234,12 @@ private let moduleTargets: [Target] =
             dependencies: [
                 .target(name: "CapsuleFoundation"),
                 .target(name: "CapsuleCatalog"),
+                .target(name: "CapsuleDomain"),
+                .target(name: "CapsulePorts"),
                 .xcframework(path: ".ffi/CapsuleCoreFFI.xcframework"),
             ],
-            testDependencies: []
+            // The alert-policy tests build `NotifyInput`s and read `Alert`s.
+            testDependencies: [.target(name: "CapsuleDomain")]
         )
         : [])
 

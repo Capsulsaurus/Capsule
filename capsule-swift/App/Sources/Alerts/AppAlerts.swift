@@ -4,38 +4,113 @@ import CapsuleFoundation
 import CapsuleMock
 import CapsuleNavigation
 import CapsulePorts
+import Foundation
+#if canImport(CapsuleCatalogFFI)
+    import CapsuleCatalogFFI
+#endif
+
+// MARK: - Adapters
+
+/// Which adapters the alert loop runs on.
+///
+/// The two lanes differ in exactly the three seams that reach outside the
+/// process — the predicate, the OS scheduler and the permission prompt — and
+/// in the clock, because the clock has to be the one the scheduler fires on.
+enum AlertAdapters {
+    /// The mock lane: `MockAlertPolicy`, the in-memory scheduler and a
+    /// scripted permission prompt, measured against the mock world's clock.
+    ///
+    /// Composed for the reason the lane composes `MockLocalAuthenticator`: a
+    /// system prompt over a mocked world is exactly what the mock lane keeps
+    /// out, and a build with no Rust core has no other predicate to call.
+    case mock
+    /// The system lane: `policy` — the core's predicate over uniffi —
+    /// `UserNotificationAlertScheduler` and `UserNotificationAuthorization`,
+    /// measured against the wall clock.
+    case system(policy: any AlertPolicyPort)
+
+    /// The adapters this build launches with: the system lane wherever the
+    /// Rust core is linked (`TUIST_FFI=1`), the mock lane everywhere else.
+    static var launch: AlertAdapters {
+        #if canImport(CapsuleCatalogFFI)
+            .system(policy: FFIAlertPolicy())
+        #else
+            .mock
+        #endif
+    }
+
+    /// Whether alarms are armed with the OS, and taps arrive from it.
+    var armsWithSystem: Bool {
+        switch self {
+        case .mock: false
+        case .system: true
+        }
+    }
+
+    /// The instant the launch world's facts are dated against.
+    ///
+    /// The system lane dates the world at the launch instant: the OS fires on
+    /// the wall clock, so a deadline computed from facts dated at the mock
+    /// lane's fixed reference instant would be armed in the past and never
+    /// fire. The mock lane keeps the reference instant, which is what makes
+    /// its screens and tests reproducible.
+    func worldClock(launchedAt now: Date = Date()) -> MockClock {
+        switch self {
+        case .mock: .reference
+        case .system: MockClock(now: CapsuleTimestamp(epochSeconds: Int64(now.timeIntervalSince1970)))
+        }
+    }
+
+    /// The clock the alert loop measures against: always the clock its
+    /// scheduler fires on.
+    func alertClock(world: MockEnvironment) -> AlertClock {
+        switch self {
+        case .mock:
+            // The mock world's, not the wall clock: every fact in this world
+            // is dated against it, and a deadline measured against another
+            // clock would be weeks wrong.
+            let clock = world.configuration.clock
+            return AlertClock { clock.now }
+        case .system:
+            return .system
+        }
+    }
+}
 
 // MARK: - Composition
 
 extension AppEnvironment {
-    /// The alert loop over this world's ports.
-    ///
-    /// The mock lane composes the in-memory scheduler and a scripted
-    /// permission prompt, for the reason it composes `MockLocalAuthenticator`:
-    /// a system prompt over a mocked world is exactly what this composition
-    /// root keeps out. The system adapters — `UserNotificationAlertScheduler`
-    /// and `UserNotificationAuthorization` — are the swap, beside the
-    /// Rust-backed `AlertPolicyPort`, when the SDK adapter lands.
-    ///
-    /// The clock is the mock world's, not the wall clock: every fact in this
-    /// world is dated against it, and a deadline measured against another
-    /// clock would be weeks wrong.
-    static func makeAlerts(mock: MockEnvironment) -> AlertCoordinator {
-        let clock = mock.configuration.clock
+    /// The alert loop over this world's ports, on `adapters`.
+    static func makeAlerts(mock: MockEnvironment, adapters: AlertAdapters) -> AlertCoordinator {
+        let facts = PortAlertFacts(
+            sync: mock.sync,
+            quota: mock.quota,
+            quarantine: mock.quarantine,
+            drops: mock.drops,
+            recovery: mock.recovery,
+            settings: mock.settings
+        )
+        let policy: any AlertPolicyPort
+        let scheduler: any AlertSchedulerPort
+        let authorization: any NotificationAuthorizationPort
+        switch adapters {
+        case .mock:
+            policy = MockAlertPolicy()
+            scheduler = InMemoryAlertScheduler()
+            authorization = MockNotificationAuthorization()
+        case let .system(core):
+            policy = core
+            scheduler = UserNotificationAlertScheduler()
+            authorization = UserNotificationAuthorization()
+        }
+        CapsuleLog.alerts.info("alert loop composed; armed with the OS: \(adapters.armsWithSystem, privacy: .public)")
         return AlertCoordinator(
-            facts: PortAlertFacts(
-                sync: mock.sync,
-                quota: mock.quota,
-                quarantine: mock.quarantine,
-                drops: mock.drops,
-                recovery: mock.recovery,
-                settings: mock.settings
-            ),
-            policy: MockAlertPolicy(),
-            scheduler: InMemoryAlertScheduler(),
-            authorization: MockNotificationAuthorization(),
+            facts: facts,
+            policy: policy,
+            scheduler: scheduler,
+            authorization: authorization,
             snoozes: UserDefaultsAlertSnoozeStore(),
-            clock: AlertClock { clock.now }
+            clock: adapters.alertClock(world: mock)
         )
     }
 

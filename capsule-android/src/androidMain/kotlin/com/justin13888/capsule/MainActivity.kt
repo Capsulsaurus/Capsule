@@ -57,8 +57,16 @@ class MainActivity : ComponentActivity() {
      * so it is only recorded; the re-wrap is already distinct from the routine check.
      */
     private fun handleAlertTap(intent: Intent?) {
-        val name = intent?.getStringExtra(AlertNotifications.EXTRA_DESTINATION) ?: return
-        val destination = AlertDestination.entries.firstOrNull { it.name == name } ?: return
+        val destination = tappedAlertDestination(intent?.getStringExtra(AlertNotifications.EXTRA_DESTINATION)) ?: return
         Logger.getLogger("capsule.alerts").info("alert tapped: $destination")
     }
 }
+
+/**
+ * The destination a tapped alert's intent names, or `null` for an intent that is not
+ * an alert tap or names a destination this build does not know - which is dropped,
+ * never routed to a neighbour. The name is the one [AlertNotifications] armed with,
+ * so `GUIDED_REWRAP` decodes to the re-wrap and never to the routine check.
+ */
+internal fun tappedAlertDestination(name: String?): AlertDestination? =
+    name?.let { extra -> AlertDestination.entries.firstOrNull { it.name == extra } }

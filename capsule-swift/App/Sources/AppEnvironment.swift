@@ -107,16 +107,18 @@ struct AppEnvironment {
     let diagnostics: DiagnosticsCoordinator
 
     /// The local-alert loop: per-class arm / re-arm / cancel, permission at
-    /// first use, and the bounded snooze. See ``makeAlerts(mock:)``.
+    /// first use, and the bounded snooze. See ``makeAlerts(mock:adapters:)``.
     let alerts: AlertCoordinator
+    /// Which adapters ``alerts`` runs on.
+    let alertAdapters: AlertAdapters
     /// The notification-center delegate, held for the app's lifetime so a tap
     /// — including one that launched the app — reaches the router.
     ///
-    /// Not installed in the mock lane: nothing there is armed with the OS, so
-    /// there is nothing to tap, and touching `UNUserNotificationCenter` at all
-    /// is what the mock lane avoids. The lane that composes
-    /// `UserNotificationAlertScheduler` calls `install()` beside it, before
-    /// launch finishes.
+    /// Installed only by the system lane, which composes
+    /// `UserNotificationAlertScheduler` beside it, and installed here, while
+    /// the app is still launching, so a tap that launched the app is not
+    /// lost. The mock lane arms nothing with the OS, so there is nothing to
+    /// tap, and touching `UNUserNotificationCenter` at all is what it avoids.
     let alertResponder: AlertNotificationResponder
 
     // MARK: Raw ports
@@ -190,9 +192,11 @@ struct AppEnvironment {
 
     // MARK: Construction
 
-    /// The world this launch runs: see ``launchWorld(_:defaults:)``.
+    /// The world this launch runs: see ``launchWorld(_:defaults:clock:)``,
+    /// dated for the alert adapters this build links (``AlertAdapters/launch``).
     init() {
-        self.init(mock: Self.launchWorld())
+        let adapters = AlertAdapters.launch
+        self.init(mock: Self.launchWorld(clock: adapters.worldClock()), alertAdapters: adapters)
     }
 
     /// Read the scenario at launch.
@@ -205,16 +209,21 @@ struct AppEnvironment {
     /// is why the screen records a choice and this is where it takes effect.
     static func launchWorld(
         _ processInfo: ProcessInfo = .processInfo,
-        defaults: UserDefaults = .standard
+        defaults: UserDefaults = .standard,
+        clock: MockClock = .reference
     ) -> MockEnvironment {
         let persisted = MockScenarioSelection(defaults: defaults).selected()
         CapsuleLog.app.debug(
             "persisted mock scenario: \(persisted?.rawValue ?? "none", privacy: .public)"
         )
-        return .fromLaunchArguments(processInfo, persisted: persisted)
+        return .fromLaunchArguments(processInfo, persisted: persisted, clock: clock)
     }
 
-    init(mock: MockEnvironment) {
+    /// - Parameters:
+    ///   - mock: the world every port reads.
+    ///   - alertAdapters: what the alert loop arms with. Defaults to the mock
+    ///     lane, so a test that builds an environment never reaches the OS.
+    init(mock: MockEnvironment, alertAdapters: AlertAdapters = .mock) {
         self.mock = mock
         CapsuleLog.app.info("mock scenario: \(mock.scenario.rawValue, privacy: .public)")
 
@@ -271,8 +280,13 @@ struct AppEnvironment {
         consentStore = consent
         diagnostics = DiagnosticsCoordinator(consent: consent)
 
-        alerts = Self.makeAlerts(mock: mock)
-        alertResponder = AlertNotificationResponder()
+        alerts = Self.makeAlerts(mock: mock, adapters: alertAdapters)
+        self.alertAdapters = alertAdapters
+        let responder = AlertNotificationResponder()
+        if alertAdapters.armsWithSystem {
+            responder.install()
+        }
+        alertResponder = responder
     }
 
     /// The on-disk managed store's faces: the provider the timeline and the
