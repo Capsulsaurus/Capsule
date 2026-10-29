@@ -898,7 +898,7 @@ async fn peer(config: &Config, action: &PeerAction) -> Result<ExitCode> {
                 .read(&peer)
                 .await
                 .map_err(|error| eyre!("the peer store could not read {peer}: {error}"))?;
-            render_peer(&peer, record.as_ref(), maintenance.quota.clock().now()).to_string()
+            render_peer(&peer, record.as_ref(), admin.clock().now()).to_string()
         }
     };
     println!("{}", report.trim_end());

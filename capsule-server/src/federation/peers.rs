@@ -248,6 +248,11 @@ impl PeerAdministration {
     pub async fn read(&self, peer: &PeerId) -> Result<Option<PeerRecord>, StoreError> {
         self.peers.read(peer).await
     }
+
+    /// The clock these acts are stamped from, which is also what a peer's tier is read against.
+    pub fn clock(&self) -> &dyn Clock {
+        self.clock.as_ref()
+    }
 }
 
 /// Revoke and publish every capability `peer` holds that is live at `now`.
