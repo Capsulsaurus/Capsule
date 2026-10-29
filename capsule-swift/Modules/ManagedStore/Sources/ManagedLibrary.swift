@@ -112,15 +112,28 @@ public actor ManagedLibrary {
     /// derived. The paired `.cbor` sidecar shares the stem and is skipped, so the
     /// answer is always the original, never its record.
     ///
+    /// The stem is compared in ``fileStemKey(_:)`` form, so the lookup holds on
+    /// both lanes: the Rust workspace names an original `{uuid.simple()}.{ext}`
+    /// (lowercase, no hyphens) while the catalog hands back the hyphenated id,
+    /// and the local workspace names it with the id exactly as given.
+    ///
     /// - Parameter captureDate: the asset's capture instant, which decides its
     ///   `media/{YYYY}/{YYYY-MM}` partition.
     public func mediaFile(uuid: String, captureDate: Date) async throws -> URL? {
         let directory = layout.mediaDirectory(forCaptureDate: captureDate)
         guard await fileStore.fileExists(at: directory) else { return nil }
+        let key = Self.fileStemKey(uuid)
         return try await fileStore.contentsOfDirectory(at: directory).first { entry in
-            entry.deletingPathExtension().lastPathComponent == uuid
+            Self.fileStemKey(entry.deletingPathExtension().lastPathComponent) == key
                 && entry.pathExtension.lowercased() != Self.sidecarExtension
         }
+    }
+
+    /// An asset id or file stem reduced to the form the Rust workspace names
+    /// files with: lowercase, hyphens removed. A hyphenated UUID and its
+    /// `simple()` rendering reduce to the same key.
+    static func fileStemKey(_ id: String) -> String {
+        id.lowercased().replacingOccurrences(of: "-", with: "")
     }
 
     /// Rewrite an asset's sidecar: decode it through `coder`, apply `change`, and

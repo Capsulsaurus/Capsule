@@ -50,6 +50,34 @@ struct ManagedMediaReaderTests {
         #expect(url.pathExtension == "jpg")
     }
 
+    @Test("a workspace-sealed original named by the simple UUID is found from the hyphenated id")
+    func mediaFileMatchesRustLayout() async throws {
+        // The Rust workspace writes `{uuid.simple()}.{ext}` beside
+        // `{simple}.cbor`, `{simple}.provenance.cbor` and `{simple}.metadata.bin`
+        // (capsule-library/src/lifecycle/mod.rs), while the catalog row carries
+        // the hyphenated id.
+        let hyphenated = "0192f0c4-7b3a-7e21-9c4d-5a6b7c8d9e0f"
+        let simple = "0192f0c47b3a7e219c4d5a6b7c8d9e0f"
+        let catalog = MockCatalog()
+        let fileStore = MockFileStore()
+        let row = Fixtures.catalogAsset(id: hyphenated)
+        try await catalog.insertAsset(row)
+        let captureDate = Date(timeIntervalSince1970: TimeInterval(row.captureTimestamp))
+        let directory = layout.mediaDirectory(forCaptureDate: captureDate)
+        let bytes = try ImageFixture.jpeg(width: 8, height: 8)
+        await fileStore.seedFile(Data("sidecar".utf8), at: directory.appending(path: "\(simple).cbor"))
+        await fileStore.seedFile(Data("chain".utf8), at: directory.appending(path: "\(simple).provenance.cbor"))
+        await fileStore.seedFile(Data("meta".utf8), at: directory.appending(path: "\(simple).metadata.bin"))
+        await fileStore.seedFile(bytes, at: directory.appending(path: "\(simple).jpg"))
+        let library = ManagedLibrary(layout: layout, fileStore: fileStore, catalog: catalog)
+        let reader = ManagedMediaReader(library: library, fileStore: fileStore)
+
+        let url = try #require(await reader.mediaFile(uuid: hyphenated))
+
+        #expect(url.lastPathComponent == "\(simple).jpg")
+        #expect(await reader.image(uuid: hyphenated, maxPixelEdge: 8) != nil)
+    }
+
     @Test("an identifier the catalog does not index answers nil everywhere")
     func unknownIdentifier() async throws {
         let (reader, _) = try await makeReader(uuid: "a", bytes: try ImageFixture.jpeg(width: 8, height: 8))
