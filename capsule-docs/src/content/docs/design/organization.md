@@ -59,7 +59,7 @@ v1 ships only explicit pick → pointer → derived album; the override and defa
 
 ### Album Order and Recency
 
-Every native app and the CLI list albums, container albums and views alike, in one order, computed once in `capsule-library` and reached through the FFI; no app sorts albums on its own. The web client has no local index, so it applies the same order over what it has synced. The default is **most recent asset first**: an album ranks by the latest [effective](/design/metadata/#as-imported-and-user-values) capture time among its assets that are neither hidden nor trashed. An album with no such asset ranks by its own creation time. Ties are broken by ascending `album_id`.
+Every native app and the CLI list container albums in one order, computed once in `capsule-library`, which the CLI links directly and the native apps reach through the FFI; no app sorts albums on its own. System views (All, Trash, Hidden) are listed apart from that order. The web client has no local index, so it applies the same order over what it has synced. The default is **most recent asset first**: an album ranks by the latest [effective](/design/metadata/#as-imported-and-user-values) capture time among its assets that are neither hidden nor trashed. An album with no such asset ranks by its own creation time. Ties are broken by ascending `album_id`.
 
 - **Derived, never stored.** Recency is a query over the [local index](/design/filesystem/client/#local-index-staleness), so imports, moves, deletes, restores and capture-date edits change it with nothing extra to keep in step.
 - **Not on the server.** Capture times are inside the encrypted metadata, so the server cannot compute album recency and is never asked to.
@@ -191,7 +191,7 @@ A **trinary flag per asset** — `pick | neutral | reject` — in the sidecar's 
 
 Culling is a high-volume, repetitive pass, so every native client's culling surface is built for speed without a pointer and for use without sight:
 
-- **Keyboard first.** With a hardware keyboard attached, the whole pass works without a pointer: one key each for pick, neutral and reject, next and previous asset, expand and collapse a stack, and the reject sweep. A verdict advances to the next asset. Bindings are discoverable in the platform's usual way (the menu bar on macOS, the hold-⌘ shortcut overlay on iPadOS, the keyboard shortcuts helper on Android).
+- **Keyboard first.** With a hardware keyboard attached, the whole pass works without a pointer: one key each for pick, neutral and reject, next and previous asset, expand and collapse a stack, and the reject sweep. A verdict advances to the next asset. Bindings are discoverable in the platform's usual way (the menu bar on macOS, the hold-⌘ shortcut overlay on iPadOS, an in-app shortcut list on iPhone, the keyboard shortcuts helper on Android).
 - **Accessible.** Each verdict is also an accessibility action on the focused asset (VoiceOver and TalkBack custom actions), with no gesture as its only path. The asset's current flag and its position in the pass are announced. Flag state is never shown by colour alone.
 - **Audited before it ships.** A culling surface passes each platform's full automated accessibility audit with no exclusions: `performAccessibilityAudit(for: .all)` on Apple platforms, and the Compose UI accessibility checks on Android.
 
@@ -205,7 +205,7 @@ Delete defaults to trash (a soft delete, synced as a metadata change). A hard de
 
 ### Deletion State Machine
 
-Deletion is owned entirely by `capsule-library`'s `Workspace` and reaches the apps through the FFI as verbs: delete, restore, purge and list trash. An app holds no deletion or retention logic of its own, and never writes the index row directly. Live and Trashed are derived from the asset's signed chain, never stored on their own, so rebuilding the index reproduces them. Purged is recorded as a tombstone only on the evidence [Sync](/design/sync/#discovering-what-changed) names (the retention window seen closed, or a `purged` feed entry) or by this device's own purge. Missing bytes are never read as a purge, because a device whose scope is metadata-only holds no bytes for a Trashed asset either.
+Deletion is owned entirely by `capsule-library`'s `Workspace` and reaches the apps through the FFI as verbs: delete, restore, purge and list trash. An app holds no deletion or retention logic of its own, and never writes the index row directly. Live and Trashed are derived from the asset's signed chain, never stored on their own, so rebuilding the index reproduces them. Purged is recorded as a tombstone only on the evidence [Sync](/design/sync/#discovering-what-changed) names (the retention window seen closed, or a delete entry marked `purged`) or by this device's own purge. Missing bytes are never read as a purge, because a device whose scope is metadata-only holds no bytes for a Trashed asset either.
 
 ```text
 Live ──delete──▶ Trashed ──restore (before retention_until)──▶ Live
@@ -218,9 +218,7 @@ Live ──delete──▶ Trashed ──restore (before retention_until)──�
 - **Purge** before `retention_until` (emptying the trash, or immediate deletion) first appends the signed shorter-retention re-issue the [retention window](#retention-window) requires, so the chain and the server agree that the purge is due. Purge then removes the original, every derivative and cache entry, and the index row. The provenance file stays as the tombstone ([Filesystem — Client](/design/filesystem/client/)).
 - **An upload in flight is redacted.** Deleting an asset whose upload has not finished aborts its open upload sessions, drops its pending [tiers](/design/transfer/upload/#upload-tiering-staged-uploads), and removes it from the upload queue, so this device sends no further byte of it.
   - The server never sees a delete for an asset it has not indexed ([Peering — Delegation](/design/peering/#delegation)). The `delete` record goes to the server only once the asset's create is indexed there, whichever device uploaded it, and then supersedes it. Until then it is held on the device and travels to the user's other devices over [peering](/design/peering/#sync). If the create never reaches the server, the delete never does either.
-  - A redacted asset is not re-queued at a delegation deadline. If its delegate never uploads, the delete stays held and the asset is purged on this device when its retention ends.
-  - A restore before `retention_until` returns the asset to the upload queue, and its remaining tiers resume.
-  - Redaction never discards the local original before the delete's own retention runs out. At purge, the original is released even though a staged upload would otherwise have pinned it until T2 was custody-confirmed.
+  - Redaction never weakens what keeps data safe. The local original stays pinned exactly as an unredacted staged upload pins it, until T2 is custody-confirmed or the asset's purge. A restore made before `retention_until` by the device's clock is never lost because the asset's records reached the server late.
 
 ### Retention Window
 

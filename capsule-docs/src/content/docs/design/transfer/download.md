@@ -22,8 +22,8 @@ The per-library [synchronization scope](/design/sync/#synchronization-scope) set
 What a client *shows* follows the same ladder, extended with what is already on the device. The order is computed once, in Rust, and reaches every app through the FFI; apps render the representation it names and keep no ladder of their own. From least to most faithful:
 
 1. **LQIP** from the metadata blob, or its dominant colour when the LQIP cannot be decoded ([LQIP](/design/thumbnails/#lqip)).
-2. **Thumbnail**: the encoded tier, or an [embedded preview](/design/thumbnails/#embedded-previews) whose long edge reaches the Thumbnail tier's.
-3. **Preview**: the encoded tier, or, on the device that holds the original and until an encoded Preview exists, an embedded preview that covers the surface showing it.
+2. **Thumbnail**: the encoded tier, or, until it exists, an [embedded preview](/design/thumbnails/#embedded-previews) whose long edge reaches the Thumbnail tier's.
+3. **Preview**: the encoded tier, or, on the device that holds the original and until an encoded Preview exists, an embedded preview that covers the surface showing it when the view opens. A view that later grows keeps the embedded preview rather than dropping a rung.
 4. **Original**, decoded.
 
 A surface asks for the rung its intent needs (the grid asks for Thumbnail, the single-asset view for Preview) and is shown the best rung held at or below it at once. The view then **upgrades in place** as a better rung arrives, whether it is generated on the device or fetched from the server, and never shows a blank while it waits. It never downgrades a rung it has already shown, except through the [fallback ladder](#fallback-ladder).

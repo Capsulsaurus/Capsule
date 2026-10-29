@@ -55,6 +55,7 @@ shared between clients is Rust; code shared between Apple clients is Swift.
   Android Gradle plugin and Jetpack Compose.
 - Windows and Linux are deferred. This decision rules out reaching them through Compose
   Multiplatform and leaves their toolkit to be chosen when they are built, under the same rule.
-- A JVM-free Compose Multiplatform desktop target would remove only one of the reasons above:
-  the design language would still not share views. Reopening this decision takes a case against
-  both, and the ADR that makes it supersedes this one.
+- A JVM-free Compose Multiplatform desktop target would remove only one of the three reasons above.
+  The Swift export reason and the design language's unshared views would both still stand.
+  Reopening this decision takes a case against all three, and the ADR that makes it
+  supersedes this one.
