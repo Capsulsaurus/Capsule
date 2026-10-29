@@ -62,6 +62,19 @@ struct MockLabelStoreTests {
         }
     }
 
+    @Test("Refusals come in the workspace's order: the label or shape before the target")
+    func refusalOrder() async {
+        let store = store(existing: false)
+        let missingRegion = LabelTarget.region(asset: asset, region: MockIdentifiers.regionID(seed: 7, ordinal: 0))
+        await #expect(throws: UserLabel.Refusal.empty) { try await store.addLabel(" ", to: .stack(stack)) }
+        await #expect(throws: UserLabel.Refusal.empty) { try await store.removeLabel(" ", from: .album(album)) }
+        await #expect(throws: UserLabel.Refusal.empty) { try await store.addLabel("", to: missingRegion) }
+        await #expect(throws: RegionShape.Refusal.pastEdge) {
+            try await store.addRegion(.rect(left: 0.8, top: 0, width: 0.5, height: 0.5), labels: [" "], to: asset)
+        }
+        await #expect(throws: LabelTargetRefusal.notFound) { try await store.addRegion(square, labels: [" "], to: asset) }
+    }
+
     @Test("A region is written with its first labels and takes labels of its own")
     func regionLabels() async throws {
         let store = store()

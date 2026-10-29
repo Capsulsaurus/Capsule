@@ -7,9 +7,12 @@ import Foundation
 
 /// Region, stack and album labels, and the regions themselves, in memory.
 ///
-/// Refuses what the core's workspace refuses, in the same order: an unknown
-/// target first, then a label the rule refuses, then a shape outside the
-/// normalized-coordinate contract — and writes nothing on any refusal. Region
+/// Refuses what the core's workspace refuses, in the same order: a label
+/// write refuses a label the rule refuses before an unknown target, and a
+/// region write refuses a shape outside the normalized-coordinate contract,
+/// then an unknown asset, then a refused first label (the workspace's
+/// `add_region` followed by `add_region_label`) — and writes nothing on any
+/// refusal. Region
 /// ids are minted deterministically from the seed, so two environments built
 /// alike mint the same ids, and a deleted id is never minted again.
 ///
@@ -57,15 +60,15 @@ public actor MockLabelStore: LabelPort {
     }
 
     public func addLabel(_ label: String, to target: LabelTarget) async throws -> [String] {
-        try await requireExists(target)
         let normalized = try UserLabel.normalize(label)
+        try await requireExists(target)
         update(target) { $0.insert(normalized) }
         return current(target)
     }
 
     public func removeLabel(_ label: String, from target: LabelTarget) async throws -> [String] {
-        try await requireExists(target)
         let normalized = try UserLabel.normalize(label)
+        try await requireExists(target)
         update(target) { $0.remove(normalized) }
         return current(target)
     }
@@ -76,9 +79,9 @@ public actor MockLabelStore: LabelPort {
     }
 
     public func addRegion(_ shape: RegionShape, labels: [String], to assetID: AssetID) async throws -> AssetRegion {
+        try shape.validate()
         guard await existence.asset(assetID) else { throw LabelTargetRefusal.notFound }
         let normalized = try labels.map { try UserLabel.normalize($0) }
-        try shape.validate()
         let region = AssetRegion(
             id: MockIdentifiers.regionID(seed: seed, ordinal: minted),
             shape: shape,
