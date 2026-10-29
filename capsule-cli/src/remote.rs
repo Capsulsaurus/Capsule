@@ -2262,7 +2262,9 @@ pub struct TrashRequest {
     pub action: TrashAction,
     /// The assets, in the order given; repeats are dropped.
     pub assets: Vec<Uuid>,
-    /// The retention window, in days, a fresh delete signs. Unused by a restore.
+    /// The retention window, in days, a fresh delete signs. Unused by a restore, and by an
+    /// asset whose latest record already is a delete: that record is resent with its own
+    /// window, which the outcome's `retention_until` reports.
     pub retain_days: i64,
 }
 
@@ -2313,6 +2315,11 @@ pub struct TrashOutcome {
     pub replayed: bool,
     /// Why the op was not applied, for a [`TrashStatus::Failed`] asset only.
     pub error: Option<TrashFailure>,
+    /// For a delete, the signed retention floor (RFC 3339) of the delete record that was sent.
+    /// An asset whose latest record already is a delete (a rerun, or a delete `capsule cull
+    /// --sweep` signed) has that record resent with the window it was signed with, so this can
+    /// differ from what `--retain-days` asked for. `None` for a restore.
+    pub retention_until: Option<String>,
 }
 
 /// The outcome of a `capsule trash` run.
@@ -2386,34 +2393,45 @@ async fn trash_with(
         let outcome = match prepare_trash_op(workspace, &asset_id, request, jiff::Timestamp::now())
         {
             Err(failure) => failed_trash(asset_id, failure),
-            Ok(prepared) => match send_op(remote, session.clone(), &prepared.op).await {
-                Ok(applied) => {
-                    tracing::info!(%asset_id, sync_seq = applied.sync_seq, replayed = applied.replayed, "trash: op applied");
-                    TrashOutcome {
-                        asset_id: asset_id.to_string(),
-                        status: TrashStatus::Applied,
-                        sync_seq: Some(applied.sync_seq),
-                        replayed: applied.replayed,
-                        error: None,
+            Ok(prepared) => {
+                // The window a delete actually carries: the sent record's, which a resend
+                // keeps whatever `--retain-days` says.
+                let sent_until = (request.action == TrashAction::Delete)
+                    .then(|| prepared.retention_until.clone())
+                    .flatten();
+                match send_op(remote, session.clone(), &prepared.op).await {
+                    Ok(applied) => {
+                        tracing::info!(%asset_id, sync_seq = applied.sync_seq, replayed = applied.replayed, retention_until = ?sent_until, "trash: op applied");
+                        TrashOutcome {
+                            asset_id: asset_id.to_string(),
+                            status: TrashStatus::Applied,
+                            sync_seq: Some(applied.sync_seq),
+                            replayed: applied.replayed,
+                            error: None,
+                            retention_until: sent_until,
+                        }
+                    }
+                    Err(failure) => {
+                        tracing::warn!(%asset_id, kind = failure.kind, code = ?failure.code, permanent = failure.permanent, error = %failure.message, "trash: op not applied");
+                        let retention_until = (failure.kind == "retention_elapsed")
+                            .then_some(prepared.retention_until)
+                            .flatten();
+                        TrashOutcome {
+                            retention_until: sent_until,
+                            ..failed_trash(
+                                asset_id,
+                                TrashFailure {
+                                    kind: failure.kind,
+                                    code: failure.code,
+                                    message: failure.message,
+                                    permanent: failure.permanent,
+                                    retention_until,
+                                },
+                            )
+                        }
                     }
                 }
-                Err(failure) => {
-                    tracing::warn!(%asset_id, kind = failure.kind, code = ?failure.code, permanent = failure.permanent, error = %failure.message, "trash: op not applied");
-                    let retention_until = (failure.kind == "retention_elapsed")
-                        .then_some(prepared.retention_until)
-                        .flatten();
-                    failed_trash(
-                        asset_id,
-                        TrashFailure {
-                            kind: failure.kind,
-                            code: failure.code,
-                            message: failure.message,
-                            permanent: failure.permanent,
-                            retention_until,
-                        },
-                    )
-                }
-            },
+            }
         };
         match outcome.status {
             TrashStatus::Applied => summary.applied += 1,
@@ -2436,6 +2454,7 @@ fn failed_trash(asset_id: Uuid, failure: TrashFailure) -> TrashOutcome {
         sync_seq: None,
         replayed: false,
         error: Some(failure),
+        retention_until: None,
     }
 }
 
@@ -2479,7 +2498,9 @@ fn prepare_trash_op(
     let retention_until = trashed_until(asset);
     let wanted = request.action.action();
     if head == Some(wanted) {
-        tracing::debug!(%asset_id, action = ?wanted, "trash: the head already is this record; resending it");
+        // A delete head keeps the window it was signed with: `retain_days` signs only a fresh
+        // delete, and a second delete over the first would not chain onto the server's head.
+        tracing::debug!(%asset_id, action = ?wanted, retention_until = ?retention_until, "trash: the head already is this record; resending it");
     } else {
         let signed = match request.action {
             TrashAction::Delete => workspace.soft_delete(asset_id, request.retain_days),

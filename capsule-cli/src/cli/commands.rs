@@ -332,7 +332,9 @@ pub(crate) enum TrashCommands {
         /// The asset to move to the trash (repeatable)
         #[arg(long, value_name = "ASSET_ID", required = true)]
         asset: Vec<Uuid>,
-        /// Retention window, in days, the delete signs
+        /// Retention window, in days, a fresh delete signs. An asset already in the trash
+        /// (for example by `capsule cull --sweep`) is resent with the window it was deleted
+        /// with; `--json` reports that window as `retention_until`.
         #[arg(long, value_name = "DAYS", default_value_t = crate::cull::DEFAULT_RETAIN_DAYS)]
         retain_days: i64,
         /// Read the library passphrase from stdin instead of prompting, so the command

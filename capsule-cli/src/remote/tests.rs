@@ -1431,10 +1431,64 @@ async fn an_applied_delete_reports_its_feed_position() {
     assert_eq!((summary.applied, summary.failed), (1, 0));
     assert_eq!(summary.outcomes[0].status, TrashStatus::Applied);
     assert_eq!(summary.outcomes[0].sync_seq, Some(7));
+    assert!(
+        summary.outcomes[0].retention_until.is_some(),
+        "the sent delete's window is reported"
+    );
     assert_eq!(
         trash_line(&summary),
         "1 asset moved to the trash on the server"
     );
+}
+
+/// An asset already deleted locally (as `capsule cull --sweep` does) is resent with the window
+/// its delete was signed with, not `--retain-days`, and the outcome reports the window sent.
+#[tokio::test]
+async fn a_resent_delete_reports_the_window_it_carries_not_the_flag() {
+    let scratch = Scratch::new();
+    let (mut ws, asset) = trash_library(&scratch);
+    ws.soft_delete(&asset, 5).expect("swept");
+    let before = chain_len(&ws, &asset);
+    let swept_until = ws
+        .asset(&asset)
+        .expect("held")
+        .chain
+        .records()
+        .last()
+        .expect("a head")
+        .manifest
+        .core
+        .retention_until
+        .clone()
+        .expect("a delete carries its floor");
+    let (remote, session, _) = ops_mock(
+        200,
+        serde_json::json!({
+            "asset_id": asset.to_string(),
+            "sync_seq": 8,
+            "action": "delete",
+            "replayed": false,
+        }),
+    )
+    .await;
+
+    // `request` asks for 30 days; the swept delete carries 5.
+    let summary = trash_with(
+        &remote,
+        &mut ws,
+        session,
+        &request(TrashAction::Delete, asset),
+    )
+    .await;
+
+    assert_eq!((summary.applied, summary.failed), (1, 0));
+    assert_eq!(chain_len(&ws, &asset), before, "no second delete signed");
+    assert_eq!(
+        summary.outcomes[0].retention_until.as_deref(),
+        Some(swept_until.as_str())
+    );
+    let json = serde_json::to_value(&summary).expect("serializes");
+    assert_eq!(json["outcomes"][0]["retention_until"], swept_until);
 }
 
 /// Held bytes no resend can fix — not an op, or an op naming no album — are refused for good

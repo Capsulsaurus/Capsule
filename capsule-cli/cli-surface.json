@@ -2161,7 +2161,7 @@
               "default_values": [
                 "30"
               ],
-              "help": "Retention window, in days, the delete signs",
+              "help": "Retention window, in days, a fresh delete signs. An asset already in the trash (for example by `capsule cull --sweep`) is resent with the window it was deleted with; `--json` reports that window as `retention_until`",
               "id": "retain_days",
               "long": "retain-days",
               "positional": false,
