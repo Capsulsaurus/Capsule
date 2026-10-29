@@ -35,9 +35,14 @@ use tracing_subscriber::{EnvFilter, fmt as log_fmt};
 
 use crate::boot::{self, Assembled, Maintenance};
 use crate::config::{Config, Demands, Environment, LogFormat, Overrides, ProcessEnvironment};
+use crate::federation::{
+    BlockOutcome, Blocked, PeerId, PeerRecord, PeerTier, PinOutcome, UnblockOutcome,
+    parse_signing_key,
+};
 use crate::gc::{CollectionReport, Mode, PurgeReport};
 use crate::ledger::ChainFault;
 use crate::ledger::rebuild::RebuildReport;
+use crate::moderation::FederatedReport;
 use crate::scrub::{Depth, ScrubReport};
 use crate::store::UserId;
 
@@ -219,6 +224,24 @@ pub enum Command {
         action: QuotaAction,
     },
 
+    /// Pin, block, unblock or show a federated peer server.
+    ///
+    /// Peer keys are operator-pinned (design/federation.md): a peer's capability presentations
+    /// and its federated reports verify only against a key pinned here. Blocking refuses every
+    /// federated request from the peer and revokes and publishes every live grant it holds.
+    Peer {
+        /// Which act.
+        #[command(subcommand)]
+        action: PeerAction,
+    },
+
+    /// Read the moderation queue.
+    Moderation {
+        /// Which read.
+        #[command(subcommand)]
+        action: ModerationCommand,
+    },
+
     /// Emit the OpenAPI 3.2 document the SDK's client is generated from.
     ///
     /// Needs no database, no Valkey, no key material, no disk and no network: the router is
@@ -269,6 +292,108 @@ impl QuotaAction {
     }
 }
 
+/// The operator's acts on one federated peer (#476).
+#[derive(Debug, Subcommand)]
+pub enum PeerAction {
+    /// Pin a peer's operational signing key, replacing any key already pinned.
+    Pin {
+        /// The peer's origin, as its own `server-info` names it (`other.example`).
+        #[arg(value_name = "ORIGIN")]
+        peer: String,
+
+        /// The peer's `signing_key`, exactly as its `/.well-known/capsule/server-info` publishes
+        /// it: the raw Ed25519 public key, base64. Read it out of band; pinning is the decision
+        /// to trust it.
+        #[arg(value_name = "SIGNING_KEY")]
+        key: String,
+
+        /// Where state lives.
+        #[command(flatten)]
+        backend: BackendArgs,
+    },
+
+    /// Refuse every federated request from a peer, and revoke and publish its live grants.
+    ///
+    /// Repeating it is safe and finishes a revocation a failed run left part-way.
+    Block {
+        /// The peer's origin.
+        #[arg(value_name = "ORIGIN")]
+        peer: String,
+
+        /// A note for the operator's record of why.
+        #[arg(long, value_name = "TEXT")]
+        note: Option<String>,
+
+        /// Where state lives.
+        #[command(flatten)]
+        backend: BackendArgs,
+    },
+
+    /// Lift a block. The pinned key is kept; revoked grants stay revoked.
+    Unblock {
+        /// The peer's origin.
+        #[arg(value_name = "ORIGIN")]
+        peer: String,
+
+        /// Where state lives.
+        #[command(flatten)]
+        backend: BackendArgs,
+    },
+
+    /// Show what this server knows about a peer.
+    Show {
+        /// The peer's origin.
+        #[arg(value_name = "ORIGIN")]
+        peer: String,
+
+        /// Where state lives.
+        #[command(flatten)]
+        backend: BackendArgs,
+    },
+}
+
+impl PeerAction {
+    /// Where state lives, whichever act.
+    fn backend(&self) -> &BackendArgs {
+        match self {
+            Self::Pin { backend, .. }
+            | Self::Block { backend, .. }
+            | Self::Unblock { backend, .. }
+            | Self::Show { backend, .. } => backend,
+        }
+    }
+
+    /// The peer the act names, as typed.
+    fn peer(&self) -> &str {
+        match self {
+            Self::Pin { peer, .. }
+            | Self::Block { peer, .. }
+            | Self::Unblock { peer, .. }
+            | Self::Show { peer, .. } => peer,
+        }
+    }
+}
+
+/// The operator's reads of the moderation queue (#476).
+#[derive(Debug, Subcommand)]
+pub enum ModerationCommand {
+    /// List every federated report on file, oldest first.
+    Reports {
+        /// Where state lives.
+        #[command(flatten)]
+        backend: BackendArgs,
+    },
+}
+
+impl ModerationCommand {
+    /// Where state lives.
+    fn backend(&self) -> &BackendArgs {
+        match self {
+            Self::Reports { backend } => backend,
+        }
+    }
+}
+
 impl Command {
     /// What this subcommand needs from the configuration.
     fn demands(&self) -> Demands {
@@ -282,7 +407,9 @@ impl Command {
             | Self::Purge { .. }
             | Self::Scrub { .. }
             | Self::Rebuild { .. }
-            | Self::Quota { .. } => Demands::Maintenance,
+            | Self::Quota { .. }
+            | Self::Peer { .. }
+            | Self::Moderation { .. } => Demands::Maintenance,
             Self::GenOpenapi { .. } => Demands::Nothing,
         }
     }
@@ -315,6 +442,16 @@ impl Command {
                 overrides.memory = backend.memory;
             }
             Self::Quota { action } => {
+                let backend = action.backend();
+                overrides.blob_root.clone_from(&backend.blob_root);
+                overrides.memory = backend.memory;
+            }
+            Self::Peer { action } => {
+                let backend = action.backend();
+                overrides.blob_root.clone_from(&backend.blob_root);
+                overrides.memory = backend.memory;
+            }
+            Self::Moderation { action } => {
                 let backend = action.backend();
                 overrides.blob_root.clone_from(&backend.blob_root);
                 overrides.memory = backend.memory;
@@ -369,6 +506,8 @@ pub async fn run() -> Result<ExitCode> {
             ..
         } => rebuild(&config, mode(apply), accept_rewrites).await,
         Command::Quota { action } => quota(&config, &action).await,
+        Command::Peer { action } => peer(&config, &action).await,
+        Command::Moderation { action } => moderation(&config, &action).await,
         // The document is a property of the router's types, so the configuration is loaded only
         // to refuse `--config` and is deliberately not logged: `mise run openapi-check-kynos` is
         // a check gate, and a settings dump on its stderr is noise in every CI log that runs it.
@@ -708,6 +847,195 @@ async fn quota(config: &Config, action: &QuotaAction) -> Result<ExitCode> {
     };
     println!("{report}");
     Ok(ExitCode::SUCCESS)
+}
+
+/// Pin, block, unblock or show a federated peer (#476).
+///
+/// Exits zero whether or not the act changed anything, and says which on stdout, for the reason
+/// [`quota`] does. A malformed origin or key is refused before anything is assembled, so a typo
+/// never reaches the store.
+async fn peer(config: &Config, action: &PeerAction) -> Result<ExitCode> {
+    let peer =
+        PeerId::parse(action.peer()).map_err(|error| eyre!("`{}`: {error}", action.peer()))?;
+    let key = match action {
+        PeerAction::Pin { key, .. } => {
+            Some(parse_signing_key(key).map_err(|error| eyre!("{error}"))?)
+        }
+        _ => None,
+    };
+    let maintenance = maintenance(config).await?;
+    let admin = &maintenance.peers;
+    let report = match action {
+        PeerAction::Pin { .. } => {
+            let key = key.ok_or_else(|| eyre!("a pin carries a key"))?;
+            let outcome = admin
+                .pin(&peer, key)
+                .await
+                .map_err(|error| eyre!("the peer store could not pin {peer}: {error}"))?;
+            render_pin(&peer, outcome)
+        }
+        PeerAction::Block { note, .. } => {
+            let blocked = admin.block(&peer, note.clone()).await.map_err(|error| {
+                eyre!(
+                    "blocking {peer} could not finish: {error}; if the block was written it \
+                         is in force, and running the command again finishes revoking its grants"
+                )
+            })?;
+            render_block(&peer, blocked)
+        }
+        PeerAction::Unblock { .. } => {
+            let outcome = admin
+                .unblock(&peer)
+                .await
+                .map_err(|error| eyre!("the peer store could not unblock {peer}: {error}"))?;
+            match outcome {
+                UnblockOutcome::Unblocked => format!("peer unblocked: {peer}"),
+                UnblockOutcome::NotBlocked => format!("peer was not blocked: {peer}"),
+            }
+        }
+        PeerAction::Show { .. } => {
+            let record = admin
+                .read(&peer)
+                .await
+                .map_err(|error| eyre!("the peer store could not read {peer}: {error}"))?;
+            render_peer(&peer, record.as_ref(), maintenance.quota.clock().now()).to_string()
+        }
+    };
+    println!("{}", report.trim_end());
+    Ok(ExitCode::SUCCESS)
+}
+
+/// What a pin did, in one line.
+fn render_pin(peer: &PeerId, outcome: PinOutcome) -> String {
+    match outcome {
+        PinOutcome::Pinned => format!("peer key pinned: {peer}"),
+        PinOutcome::Rotated => format!("peer key replaced: {peer}"),
+        PinOutcome::Unchanged => format!("peer key already pinned: {peer}"),
+    }
+}
+
+/// What a block did, in one line, with the cascade's count.
+fn render_block(peer: &PeerId, blocked: Blocked) -> String {
+    let posture = match blocked.outcome {
+        BlockOutcome::Blocked => "peer blocked",
+        BlockOutcome::AlreadyBlocked => "peer already blocked",
+    };
+    format!(
+        "{posture}: {peer} ({} live grants revoked)",
+        blocked.revoked
+    )
+}
+
+/// One peer's record, rendered for a person: key, tier, block.
+fn render_peer<'a>(
+    peer: &'a PeerId,
+    record: Option<&'a PeerRecord>,
+    now: jiff::Timestamp,
+) -> RenderedPeer<'a> {
+    RenderedPeer { peer, record, now }
+}
+
+/// [`render_peer`]'s output.
+struct RenderedPeer<'a> {
+    peer: &'a PeerId,
+    record: Option<&'a PeerRecord>,
+    now: jiff::Timestamp,
+}
+
+impl std::fmt::Display for RenderedPeer<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use base64::Engine as _;
+
+        let Some(record) = self.record else {
+            return writeln!(f, "peer not recorded: {}", self.peer);
+        };
+        writeln!(f, "peer {}", self.peer)?;
+        match record.signing_key {
+            Some(key) => writeln!(
+                f,
+                "  signing key: {}",
+                base64::engine::general_purpose::STANDARD.encode(key)
+            )?,
+            None => writeln!(f, "  signing key: none pinned")?,
+        }
+        writeln!(f, "  first seen: {}", record.first_seen_at)?;
+        writeln!(
+            f,
+            "  tier: {}",
+            PeerTier::of(Some(record), self.now).as_str()
+        )?;
+        match record.blocked_at {
+            Some(at) => {
+                writeln!(f, "  blocked since: {at}")?;
+                if let Some(note) = &record.note {
+                    // Debug-quoted: the note is free text, and a control character in it should
+                    // reach the operator's terminal as an escape, not as a command.
+                    writeln!(f, "  note: {note:?}")?;
+                }
+            }
+            None => writeln!(f, "  blocked: no")?,
+        }
+        Ok(())
+    }
+}
+
+/// Read the moderation queue (#476).
+///
+/// design/moderation.md names an admin who works the queue and no way for one to authenticate
+/// over HTTP; the operator who runs this on the host is that admin, authenticated by holding the
+/// deployment's database credentials, exactly as for every other command here.
+async fn moderation(config: &Config, action: &ModerationCommand) -> Result<ExitCode> {
+    let maintenance = maintenance(config).await?;
+    match action {
+        ModerationCommand::Reports { .. } => {
+            let reports = maintenance
+                .moderation
+                .pending_reports()
+                .await
+                .map_err(|error| eyre!("the moderation store could not list reports: {error}"))?;
+            tracing::info!(
+                reports = reports.len(),
+                "an operator read the moderation queue"
+            );
+            print!("{}", render_reports(&reports));
+        }
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// The federated report queue, rendered for a person, oldest first.
+fn render_reports(reports: &[FederatedReport]) -> RenderedReports<'_> {
+    RenderedReports(reports)
+}
+
+/// [`render_reports`]'s output.
+struct RenderedReports<'a>(&'a [FederatedReport]);
+
+impl std::fmt::Display for RenderedReports<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self(reports) = self;
+        writeln!(f, "federated reports ({} on file)", reports.len())?;
+        for report in *reports {
+            writeln!(f, "  report {}", report.report_id)?;
+            writeln!(f, "    from: {}", report.reporting_server)?;
+            writeln!(f, "    against: {}", report.reported_user)?;
+            writeln!(
+                f,
+                "    asset: {} in album {}",
+                report.asset_hash, report.album_id
+            )?;
+            writeln!(
+                f,
+                "    reported at: {} (received {})",
+                report.reported_at, report.received_at
+            )?;
+            if let Some(reason) = &report.reason {
+                // Debug-quoted, as a peer note is: the reason is a peer's free text.
+                writeln!(f, "    reason: {reason:?}")?;
+            }
+        }
+        Ok(())
+    }
 }
 
 /// One pass's report, rendered for a person.

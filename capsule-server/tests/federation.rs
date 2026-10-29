@@ -17,8 +17,8 @@ use capsule_server::blob::{BlobStore, ContentAddress};
 use capsule_server::counter::{CounterKey, CounterStore as _, budgets};
 use capsule_server::federation::scheme::REQUEST_FRESHNESS;
 use capsule_server::federation::{
-    CapabilityCodec, CapabilityRecord, CapabilityStore as _, FederationCollaborators,
-    FederationContext, MintRequest, PeerId, PeerStore as _, Scope,
+    CapabilityCodec, CapabilityRecord, CapabilityStore as _, MintRequest, PeerAdministration,
+    PeerId, PeerStore as _, Scope,
 };
 use capsule_server::index::{AssetIndex, BlobRecord, PendingAsset, ServingHold};
 use capsule_server::membership::{MemberRole, MembershipStore as _, RosterRecord};
@@ -2118,24 +2118,18 @@ async fn blocking_a_peer_cuts_and_publishes_every_grant_it_holds() {
     let (_, second_jti) = capability(&fixture, PEER, Scope::ReadDerivativeOnly, 1).await;
     let (other, other_jti) = capability(&fixture, "third.test", Scope::Read, 1).await;
 
-    fixture
-        .peers
-        .block(&PeerId::new(PEER), fixture.clock.now(), None)
+    // The operator's act, over the *same* stores the server holds, so what the cascade writes
+    // is what the published list and the next presentation read.
+    let admin = PeerAdministration::new(
+        fixture.peers.clone(),
+        fixture.revocations.clone(),
+        fixture.clock.clone(),
+    );
+    let blocked = admin
+        .block(&PeerId::new(PEER), None)
         .await
-        .expect("blocks");
-    // Over the *same* stores the server holds, so what the cascade writes is what the
-    // published list and the next presentation read.
-    let federation = FederationContext::new(FederationCollaborators {
-        codec: fixture.codec.clone(),
-        capabilities: fixture.revocations.clone(),
-        peers: fixture.peers.clone(),
-        clock: fixture.clock.clone(),
-        enabled: std::sync::Arc::new(true),
-    });
-    let cut = capsule_server::federation::on_peer_blocked(&federation, &PeerId::new(PEER))
-        .await
-        .expect("the cascade runs");
-    assert_eq!(cut, 2);
+        .expect("the block and its cascade run");
+    assert_eq!(blocked.revoked, 2);
 
     let list: Value = fixture
         .client

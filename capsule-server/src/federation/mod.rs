@@ -21,7 +21,8 @@
 //!   [`RevocationList`](crate::discovery::revocation::RevocationList) and
 //!   `/.well-known/capsule/revoked-jti` reads them, so "is this `jti` revoked" has one answer.
 //! - [`peers`] — [`PeerStore`], the peers whose signing keys an operator has pinned and the
-//!   blocklist, which is a column on the same row.
+//!   blocklist, which is a column on the same row; and [`PeerAdministration`], the operator's
+//!   `capsule-server peer …` acts on it, a block's cascade over the issued grants included.
 //! - [`memory`] — the deterministic doubles; [`conformance`] — the suite every adapter passes.
 //!
 //! # A peer is not an account
@@ -48,7 +49,10 @@ pub use self::capability::{
     Minted, Scope, album_from_urn, album_urn,
 };
 pub use self::memory::{InMemoryCapabilities, InMemoryPeers};
-pub use self::peers::{BlockOutcome, PeerRecord, PeerStore, UnblockOutcome};
+pub use self::peers::{
+    BlockOutcome, Blocked, InvalidSigningKey, PeerAdministration, PeerRecord, PeerStore,
+    PinOutcome, UnblockOutcome, parse_signing_key, revoke_grants_of,
+};
 pub use self::report::{
     REPORT_FRESHNESS, REPORT_NONCE_WINDOW, ReportClaim, ReportError, verify_signed_report,
 };
@@ -504,52 +508,6 @@ pub async fn on_roster_applied(
     if revoked > 0 {
         tracing::info!(%album, revoked, "a roster change cut federated grants");
     }
-    Ok(revoked)
-}
-
-/// Revoke every live capability held by `peer`, because it has just been blocked.
-///
-/// A block is already consulted at every federation boundary, so this cuts nothing the
-/// blocklist would have let through. What it adds is **publication**: the peer's `jti`s go onto
-/// `/.well-known/capsule/revoked-jti`, so a blocked peer learns its grants are gone from the
-/// record every peer polls rather than only from a refusal, and an operator who later unblocks
-/// the peer does not silently restore access the block was meant to end.
-///
-/// # It is owed a caller
-///
-/// **Nothing in production calls this.** A block is written by an operator command, and there is
-/// none: `boot::assemble` refuses the durable backend until #403 lands its adapters, so a
-/// command that blocked a peer could only run against `serve --memory` and would forget the
-/// moment it exited. The command is owed with #476, and this function is what it will call.
-///
-/// Said here the way [`crate::boot`] names what #403 owes, so a reader does not take the cascade
-/// for something that happens automatically. What *is* automatic is the refusal: `blocked_at` is
-/// consulted at mint, at every presentation, at refresh and at report intake, so a block
-/// enforces itself the moment it is written. This adds only **publication** — the peer's `jti`s
-/// reach the list every peer polls — which is why it is a separate step at all.
-///
-/// # Errors
-///
-/// Returns the store error. The caller — an operator command — reports it; the block itself has
-/// already been written, and a block whose cascade failed still refuses every request.
-pub async fn on_peer_blocked(
-    federation: &FederationContext,
-    peer: &PeerId,
-) -> Result<usize, crate::store::StoreError> {
-    let now = federation.clock().now();
-    let live = federation
-        .capabilities()
-        .live(&CapabilityFilter::Peer(peer.clone()), now)
-        .await?;
-    let mut revoked = 0;
-    for record in live {
-        federation
-            .capabilities()
-            .revoke_issued(&record.jti, now)
-            .await?;
-        revoked += 1;
-    }
-    tracing::info!(%peer, revoked, "a peer was blocked and its grants were cut");
     Ok(revoked)
 }
 
