@@ -7,8 +7,7 @@ status: draft
 Most photo services give a device a window onto a library that lives on someone else's
 server. Without a connection, the window closes. Capsule is designed the other way round: every
 native app holds a **full index of every photo and video you have ever kept**, so the whole library
-can be browsed, searched and organized offline. Capsule has not been released yet, so this page
-describes the design.
+can be browsed, searched and organized offline.
 
 ## What you get
 

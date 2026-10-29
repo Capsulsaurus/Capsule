@@ -11,8 +11,8 @@
 
 Capsule ships a client on iOS, iPadOS, macOS and Android, and Windows and Linux later. Writing
 each one natively costs a second UI codebase per platform. A cross-platform UI framework would
-remove that cost, so the question has been reopened every year, with Compose Multiplatform as the
-candidate each time.
+remove that cost, so the maintainer has re-evaluated the question every year, with Compose Multiplatform as
+the candidate each time.
 
 Two things have kept the answer the same:
 
@@ -56,6 +56,7 @@ shared between clients is Rust; code shared between Apple clients is Swift.
 - Windows and Linux are deferred. This decision rules out reaching them through Compose
   Multiplatform and leaves their toolkit to be chosen when they are built, under the same rule.
 - A JVM-free Compose Multiplatform desktop target would remove only one of the three reasons above.
-  The Swift export reason and the design language's unshared views would both still stand.
+  Two would still stand. Kotlin shared with Apple clients would duplicate what Rust already
+  shares, however stable Swift export becomes, and the design language would still not share views.
   Reopening this decision takes a case against all three, and the ADR that makes it
   supersedes this one.

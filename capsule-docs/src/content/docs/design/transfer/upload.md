@@ -233,11 +233,11 @@ Streaming import uses these same sessions unchanged, one bounded window at a tim
 
 ## Queueing Across Servers
 
-The upload queue holds a device's data-heavy work (originals, video, derivatives). It is the client's queue, not the server's. When a device is signed in to more than one server (for example, two accounts on different self-hosted servers), the queue holds work for each of them and keeps four properties:
+The upload queue holds every tier a device uploads, from T0 records to the data-heavy originals, video and derivatives. It is the client's queue, not the server's. When a device is signed in to more than one server (for example, two accounts on different self-hosted servers), the queue holds work for each of them and keeps four properties:
 
 - **Per-server lanes.** The queue is keyed by server. Each lane has its own sessions, backoff, negotiated [protocol window](/design/versioning/#update-policy) and `Retry-After` state, so a `429`, an outage or a stall at one server never delays work bound for another.
 - **One shared, bounded memory budget.** All lanes draw on one device-wide byte budget, and each open session holds at most one chunk window. Adding a server divides the budget and never multiplies it. A lane that makes no progress gives up its share, rather than holding buffers it cannot send.
-- **Fair, preemptible scheduling.** Lanes are served round-robin, and within a lane the [tier order](#upload-tiering-staged-uploads) holds. One lane's T0 work is never starved by another lane's T2 originals.
-- **Rebuildable state.** On resume, each lane re-derives what remains from the local index (the Live assets that should reach that server; this device's own upload of a trashed asset stays [redacted](/design/organization/#deletion-state-machine)) and from its own server's truth (what already has), as a single-server queue does. Losing the queue loses no work.
+- **Fair scheduling.** Lanes are served round-robin, and within a lane the [tier order](#upload-tiering-staged-uploads) holds. One lane's T0 work is never starved by another lane's T2 originals.
+- **Rebuildable state.** On resume, each lane re-derives what remains from the local index (the Live assets that should reach that server; this device's own upload of a trashed asset stays [redacted](/design/organization/#deletion-state-machine)) and from its own server's truth (what it already has), as a single-server queue does. Losing the queue loses no work.
 
 A [delegation](/design/peering/#delegation) hand-off is not a lane: the delegate pulls the bundle over the peer channel and uploads it from its own queue. Every album has exactly one home server, which takes every write to it, and multi-writer albums across servers are not part of v1 ([Federation](/design/federation/)). An asset is therefore only ever queued for its album's home server.
