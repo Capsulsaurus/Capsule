@@ -1,7 +1,7 @@
 //! Workspace construction and opening: account create/unlock, device-directory publication,
 //! and the injected client / still-encoder seams.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -13,7 +13,7 @@ use capsule_core::crypto::keys::directory::{DekPublic, DeviceEntry, DirectoryCor
 use capsule_core::crypto::keys::{
     Account, AccountFile, DeviceDirectory, HardwareKeyAgreement, HybridVerifyingKey, Signer,
 };
-use capsule_core::crypto::provenance::{ProvenanceChain, ProvenanceRecord};
+use capsule_core::crypto::provenance::{Action, ProvenanceChain, ProvenanceRecord};
 use capsule_core::metadata::crdt::Counter;
 use capsule_core::sidecar::sidecar_v1::{SIDECAR_SCHEMA_V1, SidecarV1};
 use jiff::civil::Date;
@@ -168,6 +168,36 @@ pub(super) fn month_dir_timestamp(dir: &Path) -> i64 {
         Some(date.to_zoned(TimeZone::UTC).ok()?.timestamp().as_second())
     };
     parse().unwrap_or(0)
+}
+
+/// Read a `{uuid}.provenance.cbor` file, replayed through `append` so the chain's own link
+/// invariants are re-checked rather than assumed.
+fn read_chain(provenance_path: &Path) -> Result<ProvenanceChain> {
+    let bytes = fs::read(provenance_path).map_err(|e| LifecycleError::Io(e.to_string()))?;
+    let records: Vec<ProvenanceRecord> =
+        cbor::from_slice(&bytes).map_err(|e| LifecycleError::Cbor(e.to_string()))?;
+    let mut chain = ProvenanceChain::new();
+    for rec in records {
+        chain
+            .append(rec)
+            .map_err(|e| LifecycleError::Cbor(format!("provenance chain: {e}")))?;
+    }
+    Ok(chain)
+}
+
+/// The asset id and kept chain head of a purged asset: a provenance chain that reads whole, is
+/// headed by a `delete`, and has no sidecar beside it. `None` for anything else, which is
+/// damage (a lost sidecar of a live or restored asset, a corrupt chain) rather than a purge.
+fn purged_head(provenance_path: &Path, stem: &str) -> Option<(Uuid, ProvenanceRecord)> {
+    if provenance_path
+        .with_file_name(format!("{stem}.cbor"))
+        .exists()
+    {
+        return None;
+    }
+    let asset_id = Uuid::parse_str(stem).ok()?;
+    let head = read_chain(provenance_path).ok()?.records().last()?.clone();
+    (head.manifest.core.action == Action::Delete).then_some((asset_id, head))
 }
 
 impl Workspace {
@@ -527,6 +557,7 @@ impl Workspace {
             upload_links: HashMap::new(),
             inbox: HashMap::new(),
             unanchored: Vec::new(),
+            purged: BTreeMap::new(),
         })
     }
 
@@ -667,6 +698,7 @@ impl Workspace {
             upload_links: HashMap::new(),
             inbox: HashMap::new(),
             unanchored: Vec::new(),
+            purged: BTreeMap::new(),
         };
         // Album keys, authorities, and every managed asset come back from disk here.
         // Without this the reopened workspace would hold an unlocked account and nothing else.
@@ -746,21 +778,25 @@ impl Workspace {
                     tracing::trace!(asset_id = %asset.asset_id, album_id = %asset.album_id, "asset restored");
                     self.assets.insert(asset.asset_id, asset);
                 }
-                // A purge keeps the chain and removes the sidecar and the original
-                // (`Workspace::purge`): a chain with no sidecar beside it is that record, not
-                // damage.
-                Err(_) if !path.with_file_name(format!("{stem}.cbor")).exists() => {
-                    purged += 1;
-                    tracing::trace!(provenance = %path.display(), "workspace open: purged asset; only its provenance chain is kept");
-                }
-                Err(e) => {
-                    skipped += 1;
-                    tracing::warn!(
-                        provenance = %path.display(),
-                        error = %e,
-                        "workspace open: could not restore this asset; skipping it"
-                    );
-                }
+                // A purge keeps the chain, ends it with a `delete`, and removes the sidecar and
+                // the original (`Workspace::purge`): a chain headed by a `delete` with no
+                // sidecar beside it is that record, not damage. Anything else falls through to
+                // the warning below.
+                Err(e) => match purged_head(path, stem) {
+                    Some((asset_id, head)) => {
+                        purged += 1;
+                        tracing::trace!(provenance = %path.display(), %asset_id, restore_error = %e, "workspace open: purged asset; only its provenance chain is kept");
+                        self.purged.insert(asset_id, head);
+                    }
+                    None => {
+                        skipped += 1;
+                        tracing::warn!(
+                            provenance = %path.display(),
+                            error = %e,
+                            "workspace open: could not restore this asset; skipping it"
+                        );
+                    }
+                },
             }
         }
         tracing::info!(
@@ -798,17 +834,8 @@ impl Workspace {
             .parent()
             .ok_or_else(|| LifecycleError::Io("provenance file has no parent".into()))?;
 
-        // (1) The provenance chain — the anchor. Replayed through `append` so the chain's own
-        // link invariants are re-checked rather than assumed.
-        let bytes = fs::read(provenance_path).map_err(|e| LifecycleError::Io(e.to_string()))?;
-        let records: Vec<ProvenanceRecord> =
-            cbor::from_slice(&bytes).map_err(|e| LifecycleError::Cbor(e.to_string()))?;
-        let mut chain = ProvenanceChain::new();
-        for rec in records {
-            chain
-                .append(rec)
-                .map_err(|e| LifecycleError::Cbor(format!("provenance chain: {e}")))?;
-        }
+        // (1) The provenance chain — the anchor.
+        let chain = read_chain(provenance_path)?;
         let head = &chain
             .records()
             .last()

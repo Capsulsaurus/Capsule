@@ -91,11 +91,19 @@ impl Workspace {
         backup::verify_recovery_secret(blob, recovery_secret, self.account.master.as_bytes())
     }
 
-    /// The current provenance head hash for each managed asset (for backup reconciliation).
+    /// The current provenance head hash for each managed asset (for backup reconciliation),
+    /// and for each purged one the head of its kept chain, its final `delete`. A purged asset
+    /// is held at that head, so an import or a peer offer never reads it as absent and
+    /// re-applies an older copy as new.
     pub fn local_heads(&self) -> BTreeMap<Uuid, Hash32> {
+        let purged = self
+            .purged
+            .iter()
+            .map(|(id, head)| (*id, head.record_hash()));
         self.assets
             .iter()
             .filter_map(|(id, a)| a.chain.head().map(|h| (*id, h)))
+            .chain(purged)
             .collect()
     }
 
@@ -462,11 +470,16 @@ impl Workspace {
     ///
     /// # Errors
     ///
+    /// [`LifecycleError::Purged`] for an asset this workspace purged,
     /// [`LifecycleError::NotFound`] when the album or its epoch is not held, and
     /// [`LifecycleError::RestoredMetadata`] when the sealed metadata does not stand (nothing is
     /// written in either case), or the I/O, chain or index failure that stopped the write.
     #[tracing::instrument(skip_all, fields(asset_id = %restored.asset_id, album_id = %restored.album_id))]
     pub fn apply_peer_restored(&mut self, restored: &backup::RestoredAsset) -> Result<()> {
+        if self.purged.contains_key(&restored.asset_id) {
+            tracing::warn!(asset_id = %restored.asset_id, "peer: the asset was purged here; refusing to resurrect it");
+            return Err(LifecycleError::Purged(restored.asset_id));
+        }
         let epoch = restored
             .provenance
             .last()

@@ -19,7 +19,7 @@ use super::{AssetState, LifecycleError, Result, Workspace, asset_is_deleted, now
 
 mod trash;
 
-pub use trash::{PurgeOutcome, TrashEntry};
+pub use trash::{FeedDrain, PurgeOutcome, TrashEntry};
 
 impl Workspace {
     // ── Culling workflow ────────────────────────────────────────────────

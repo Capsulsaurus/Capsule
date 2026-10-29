@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 
 use capsule_core::cbor;
@@ -355,4 +356,105 @@ fn a_delete_survives_a_rebuild_still_trashed_with_its_window() {
     }
     let ws = Workspace::open(lib.path(), b"passphrase", FAST_PARAMS).unwrap();
     assert_eq!(until_of(&ws, &asset), until);
+}
+
+#[test]
+fn a_purge_records_a_tombstone_and_keeps_the_reissue_retrievable_across_a_reopen() {
+    let (lib, src) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let (gone, kept, reissue) = {
+        let (mut ws, ids) = library(&lib, &src, 2);
+        ws.soft_delete(&ids[0], 30).unwrap();
+        let now = until_of(&ws, &ids[0]) - SignedDuration::from_hours(24);
+        let reissue = ws.purge_at(&ids[0], now).unwrap().reissue.unwrap();
+        assert_eq!(ws.tombstones(), BTreeSet::from([ids[0]]));
+        assert_eq!(ws.purge_record(&ids[0]), Some(&reissue));
+        assert_eq!(
+            ws.local_heads().get(&ids[0]),
+            Some(&reissue.record_hash()),
+            "a purged asset is held at its kept chain's head"
+        );
+        (ids[0], ids[1], reissue)
+    };
+
+    let ws = Workspace::open(lib.path(), b"passphrase", FAST_PARAMS).unwrap();
+    assert_eq!(ws.tombstones(), BTreeSet::from([gone]));
+    assert_eq!(ws.purge_record(&gone), Some(&reissue));
+    assert_eq!(ws.purge_record(&kept), None);
+    assert_eq!(ws.local_heads().get(&gone), Some(&reissue.record_hash()));
+}
+
+#[test]
+fn a_lost_sidecar_of_an_asset_not_in_the_trash_is_no_tombstone() {
+    let (lib, src) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let lost = {
+        let (ws, ids) = library(&lib, &src, 1);
+        fs::remove_file(ws.sidecar_path(ws.asset(&ids[0]).unwrap())).unwrap();
+        ids[0]
+    };
+
+    let ws = Workspace::open(lib.path(), b"passphrase", FAST_PARAMS).unwrap();
+    assert!(ws.asset(&lost).is_none(), "the damaged asset is skipped");
+    assert!(
+        ws.tombstones().is_empty(),
+        "a chain whose head is not a delete is damage, not a purge"
+    );
+    assert!(!ws.local_heads().contains_key(&lost));
+}
+
+#[test]
+fn an_older_backup_or_peer_copy_never_resurrects_a_purged_asset() {
+    let (lib, src) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let (mut ws, ids) = library(&lib, &src, 1);
+    let archive = src.path().join("before-purge.tar");
+    ws.export_backup_with_params(&archive, b"pw", FAST_PARAMS)
+        .unwrap();
+    ws.soft_delete(&ids[0], 30).unwrap();
+    ws.purge(&ids[0]).unwrap();
+
+    let added = ws
+        .import_backup(&archive, b"pw", &ws.exporter_verifying_key())
+        .unwrap();
+    assert_eq!(added, 0);
+    assert!(ws.asset(&ids[0]).is_none());
+
+    let bytes = fs::read(&archive).unwrap();
+    let restored =
+        capsule_core::backup::BackupArtifact::open(&bytes, b"pw", &ws.exporter_verifying_key())
+            .unwrap()
+            .restore(capsule_core::backup::RestoreMode::Commit, &BTreeMap::new())
+            .unwrap()
+            .applied;
+    let refused = ws.apply_peer_restored(&restored[0]).unwrap_err();
+    assert!(matches!(refused, LifecycleError::Purged(id) if id == ids[0]));
+    assert!(ws.asset(&ids[0]).is_none());
+}
+
+#[test]
+fn a_retention_sweep_purges_nothing_without_a_drain_and_is_floored_by_the_server_clock() {
+    let (lib, src) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let (mut ws, ids) = library(&lib, &src, 1);
+    ws.soft_delete(&ids[0], 30).unwrap();
+    let until = until_of(&ws, &ids[0]);
+    let slow_clock = until - SignedDuration::from_hours(1);
+
+    assert!(ws.expired_trash_after_drain(until, None).is_empty());
+    assert!(
+        ws.expired_trash_after_drain(slow_clock, Some(FeedDrain::default()))
+            .is_empty()
+    );
+    let floored = ws.expired_trash_after_drain(
+        slow_clock,
+        Some(FeedDrain {
+            latest_changed_at: Some(until),
+        }),
+    );
+    assert_eq!(
+        floored.iter().map(|e| e.asset_id).collect::<Vec<_>>(),
+        vec![ids[0]]
+    );
+    // An older server stamp never moves a later clock back.
+    let drain = FeedDrain {
+        latest_changed_at: Some(slow_clock),
+    };
+    assert_eq!(drain.judged_at(until), until);
 }

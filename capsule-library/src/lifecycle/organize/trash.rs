@@ -9,6 +9,7 @@
 //!
 //! [Organization — Deletion State Machine]: https://docs/design/organization/#deletion-state-machine
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -45,6 +46,25 @@ impl TrashEntry {
     /// Whether the retention window has closed at `now`, so a purge needs no re-issue.
     pub fn is_expired_at(&self, now: Timestamp) -> bool {
         self.retention_until.is_some_and(|until| now >= until)
+    }
+}
+
+/// A sync that drained the feed to its head: the evidence a retention sweep needs before it
+/// judges a deadline ([Peering — Sync]).
+///
+/// [Peering — Sync]: https://docs/design/peering/
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct FeedDrain {
+    /// The latest server `changed_at` the drain saw, or `None` for a drain that saw no entry.
+    pub latest_changed_at: Option<Timestamp>,
+}
+
+impl FeedDrain {
+    /// The instant a deadline is judged at: this device's `clock`, floored by the latest server
+    /// `changed_at`, so a slow device clock cannot hold a window open the server has closed.
+    pub fn judged_at(self, clock: Timestamp) -> Timestamp {
+        self.latest_changed_at
+            .map_or(clock, |changed_at| clock.max(changed_at))
     }
 }
 
@@ -172,6 +192,40 @@ impl Workspace {
             .collect()
     }
 
+    /// The retention sweep's input after a sync: [`expired_trash`](Self::expired_trash) judged
+    /// at the instant [`FeedDrain::judged_at`] gives, or nothing at all when no sync drained
+    /// the feed to its head (`drain` is `None`). A restore on a later feed page must land
+    /// before a deadline is judged, and a device whose clock runs slow is floored by the
+    /// server's, so neither can purge an asset the server still holds as restorable.
+    pub fn expired_trash_after_drain(
+        &self,
+        clock: Timestamp,
+        drain: Option<FeedDrain>,
+    ) -> Vec<TrashEntry> {
+        let Some(drain) = drain else {
+            tracing::debug!("trash: no drained feed; the retention sweep purges nothing");
+            return Vec::new();
+        };
+        let now = drain.judged_at(clock);
+        let expired = self.expired_trash(now);
+        tracing::debug!(%clock, %now, expired = expired.len(), "trash: retention sweep judged after a drain");
+        expired
+    }
+
+    /// Every asset this workspace has purged: the peering tombstones a backup import or a
+    /// peer ingest must never resurrect.
+    pub fn tombstones(&self) -> BTreeSet<Uuid> {
+        self.purged.keys().copied().collect()
+    }
+
+    /// The head of a purged asset's kept provenance chain: the `delete` that ended it. After
+    /// an early purge this is the shorter-retention re-issue, so a delivery that failed can be
+    /// retried from it after [`purge`](Self::purge) returned, and after a reopen. `None` for
+    /// an asset this workspace has not purged.
+    pub fn purge_record(&self, asset_id: &Uuid) -> Option<&ProvenanceRecord> {
+        self.purged.get(asset_id)
+    }
+
     /// Purge a trashed asset by this device's clock; see [`purge_at`](Self::purge_at).
     pub fn purge(&mut self, asset_id: &Uuid) -> Result<PurgeOutcome> {
         self.purge_at(asset_id, Timestamp::now())
@@ -213,7 +267,14 @@ impl Workspace {
         db.purge_asset(&id)
             .and_then(|()| db.delete_embeddings_for(&id))
             .map_err(|e| LifecycleError::Db(e.to_string()))?;
-        self.assets.remove(asset_id);
+        if let Some(head) = self
+            .assets
+            .remove(asset_id)
+            .and_then(|asset| asset.chain.records().last().cloned())
+        {
+            // The peering tombstone: the kept chain's `delete` head, which a reopen reads back.
+            self.purged.insert(*asset_id, head);
+        }
         tracing::info!(
             removed_files,
             reissued = reissue.is_some(),

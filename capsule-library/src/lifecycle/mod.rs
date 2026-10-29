@@ -56,7 +56,7 @@ use capsule_core::crypto::keys::{
     Account, DeviceDirectory, DirectoryError, HybridSigningKey, HybridVerifyingKey, Signer,
 };
 use capsule_core::crypto::primitives::Argon2Params;
-use capsule_core::crypto::provenance::{Action, ProvenanceChain};
+use capsule_core::crypto::provenance::{Action, ProvenanceChain, ProvenanceRecord};
 use capsule_core::crypto::verify_asset::{MetadataBinding, VerifyOutcome};
 pub use capsule_core::derivative_format::DerivativeStatus;
 use capsule_core::drop::{DropId, UploadLinkId};
@@ -77,7 +77,7 @@ pub use self::enrollment::{
     EnrollmentPayloadError, InitiatorKeys, MAX_ENROLLMENT_PAYLOAD_CHARS, enrollment_safety_code,
 };
 pub use self::open::HardwareDekBinding;
-pub use self::organize::{PurgeOutcome, TrashEntry};
+pub use self::organize::{FeedDrain, PurgeOutcome, TrashEntry};
 pub use self::reseal::{ResealOutcome, ResealRefusal};
 pub use self::sync_apply::{
     QuarantineReason, RemoteAssetFacts, RemoteEntry, RemoteHead, RemoteOriginal, SyncApplyOutcome,
@@ -103,6 +103,10 @@ pub enum LifecycleError {
     /// A restore or purge named an asset that is not in the trash. Nothing was written.
     #[error("asset {0} is not in the trash")]
     NotInTrash(Uuid),
+    /// A peer copy named an asset this workspace purged: its tombstone refuses every copy, so
+    /// a purged asset is never resurrected. Nothing was written.
+    #[error("asset {0} was purged; its tombstone refuses any copy")]
+    Purged(Uuid),
     /// A `trash-restore` at or after the signed `retention_until` of the asset's `delete`
     /// record. Nothing was written; the asset stays in the trash until it is purged.
     #[error("asset {asset_id}'s retention window closed at {retention_until}")]
@@ -508,6 +512,12 @@ pub struct Workspace {
     /// [`open`](Self::open): the debris of an interrupted write, a torn or foreign file, or a
     /// retired unsigned record. Empty for a library with no debris.
     unanchored: Vec<UnanchoredSidecar>,
+    /// The purged assets, each with the head of the provenance chain a purge keeps on disk:
+    /// the `delete` that ended it. This is the peering tombstone the workspace owns. It is
+    /// filled by [`purge_at`](Self::purge_at) and, on [`open`](Self::open), from every kept
+    /// chain whose head is a `delete` with no sidecar beside it, so a reopen or rebuild
+    /// reproduces it from the provenance file alone.
+    purged: BTreeMap<Uuid, ProvenanceRecord>,
 }
 
 fn now_rfc3339() -> String {
