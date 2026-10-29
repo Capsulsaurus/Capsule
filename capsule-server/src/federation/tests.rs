@@ -71,7 +71,13 @@ fn down<T>() -> StoreFuture<'static, T> {
 }
 
 impl CounterStore for DownCounters {
-    fn hit<'a>(&'a self, _: &'a CounterKey, _: Budget, _: Timestamp) -> StoreFuture<'a, Verdict> {
+    fn charge<'a>(
+        &'a self,
+        _: &'a CounterKey,
+        _: u32,
+        _: Budget,
+        _: Timestamp,
+    ) -> StoreFuture<'a, Verdict> {
         down()
     }
 

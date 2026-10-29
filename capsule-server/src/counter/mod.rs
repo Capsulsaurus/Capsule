@@ -540,6 +540,39 @@ pub trait CounterStore: std::fmt::Debug + Send + Sync {
         key: &'a CounterKey,
         budget: Budget,
         at: Timestamp,
+    ) -> StoreFuture<'a, Verdict> {
+        self.charge(key, 1, budget, at)
+    }
+
+    /// Charge `units` against `key`'s budget and decide, as one operation (#476).
+    ///
+    /// The weighted form of [`Self::hit`], which is `charge(key, 1, …)`. It exists because a
+    /// budget measured in something other than requests — bytes served to a peer — cannot be
+    /// charged as `units` calls to [`Self::hit`]: that is a loop of separate decisions, and a
+    /// burst interleaving with it reads a half-charged window, which is the read-then-write this
+    /// port exists to forbid. One call, one critical section, whatever `units` is.
+    ///
+    /// **All or nothing.** A charge that would take an open window past its limit is refused
+    /// whole and charges nothing, exactly as a refused hit charges nothing; it does not spend the
+    /// remainder and fail on the rest.
+    ///
+    /// **A fresh window admits any charge.** The first charge of a window is admitted whatever
+    /// its size, and one larger than the whole limit leaves the window spent until it ends. That
+    /// is the rule [`Self::hit`] already follows for a zero limit, and it is what keeps a single
+    /// unit of work larger than the budget — one blob bigger than a peer's hourly allowance —
+    /// servable once a window rather than never.
+    ///
+    /// A charge of zero units writes nothing and answers what [`Self::peek`] answers.
+    ///
+    /// The errors are [`Self::hit`]'s: [`StoreError::Rejected`](crate::store::StoreError::Rejected)
+    /// when the key's partition is full, and any other store error when the adapter could not
+    /// answer.
+    fn charge<'a>(
+        &'a self,
+        key: &'a CounterKey,
+        units: u32,
+        budget: Budget,
+        at: Timestamp,
     ) -> StoreFuture<'a, Verdict>;
 
     /// The verdict a hit *would* get, without charging one.
@@ -971,12 +1004,22 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// Decide `window` against `budget` at `at`, treating an elapsed window as absent.
-fn verdict(window: Option<Window>, budget: Budget, at: Timestamp) -> (Verdict, Option<Window>) {
+/// Decide a charge of `units` against `window` and `budget` at `at`, treating an elapsed window
+/// as absent.
+///
+/// An open window refuses a charge that would take it past its limit; a fresh one admits any
+/// charge (see [`CounterStore::charge`]). With `units` of one this is exactly the hit rule:
+/// `hits + 1 > limit` is `hits >= limit`.
+fn verdict(
+    window: Option<Window>,
+    units: u32,
+    budget: Budget,
+    at: Timestamp,
+) -> (Verdict, Option<Window>) {
     let live = window.filter(|open| at < crate::store::deadline(open.opened_at, budget.window));
 
     match live {
-        Some(open) if open.hits >= budget.limit => (
+        Some(open) if u64::from(open.hits) + u64::from(units) > u64::from(budget.limit) => (
             Verdict::Limited {
                 retry_after: crate::store::deadline(open.opened_at, budget.window),
             },
@@ -999,12 +1042,16 @@ fn verdict(window: Option<Window>, budget: Budget, at: Timestamp) -> (Verdict, O
 }
 
 impl CounterStore for InMemoryCounters {
-    fn hit<'a>(
+    fn charge<'a>(
         &'a self,
         key: &'a CounterKey,
+        units: u32,
         budget: Budget,
         at: Timestamp,
     ) -> StoreFuture<'a, Verdict> {
+        if units == 0 {
+            return self.peek(key, budget, at);
+        }
         Box::pin(async move {
             let own = key.partition_index();
             let partition = self.partition(key);
@@ -1043,12 +1090,13 @@ impl CounterStore for InMemoryCounters {
                     ),
                 });
             }
-            let (decision, live) = verdict(held, budget, at);
+            let (decision, live) = verdict(held, units, budget, at);
 
             match decision {
                 Verdict::Limited { retry_after } => {
                     tracing::info!(
                         counter = key.as_str(),
+                        units,
                         %retry_after,
                         "a rate limit engaged"
                     );
@@ -1059,12 +1107,12 @@ impl CounterStore for InMemoryCounters {
                     // observe the state in between, which is the whole property.
                     let updated = match live {
                         Some(open) => Window {
-                            hits: open.hits.saturating_add(1),
+                            hits: open.hits.saturating_add(units),
                             opened_at: open.opened_at,
                             purge_after: crate::store::deadline(open.opened_at, budget.window),
                         },
                         None => Window {
-                            hits: 1,
+                            hits: units,
                             opened_at: at,
                             purge_after: crate::store::deadline(at, budget.window),
                         },
@@ -1088,7 +1136,7 @@ impl CounterStore for InMemoryCounters {
         Box::pin(async move {
             let partition = self.partition(key);
             let held = lock(&partition.windows).get(key).copied();
-            Ok(verdict(held, budget, at).0)
+            Ok(verdict(held, 1, budget, at).0)
         })
     }
 
@@ -1129,6 +1177,22 @@ impl CounterContext {
         budget: Budget,
     ) -> Result<Verdict, crate::store::StoreError> {
         self.counters.hit(key, budget, self.clock.now()).await
+    }
+
+    /// Charge `units` and decide: the weighted [`Self::hit`] (see [`CounterStore::charge`]).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::hit`], under the same rule: an error is a refusal, never an admission.
+    pub async fn charge(
+        &self,
+        key: &CounterKey,
+        units: u32,
+        budget: Budget,
+    ) -> Result<Verdict, crate::store::StoreError> {
+        self.counters
+            .charge(key, units, budget, self.clock.now())
+            .await
     }
 
     /// The verdict a hit would get.
