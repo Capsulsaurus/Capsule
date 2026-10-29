@@ -1152,3 +1152,168 @@ async fn a_refused_non_create_is_a_plain_upload_failure() {
         .expect_err("the refusal fails the push");
     assert!(matches!(error, PushError::Upload(_)), "{error:?}");
 }
+
+// ─── Redaction ────────────────────────────────────────────────────────────────
+
+/// One listed upload session: `(id, asset_id, status)`.
+type ListedSession = (&'static str, &'static str, &'static str);
+
+/// A mock upload server holding `sessions`, answering each `DELETE /{id}` from `cancel`, and
+/// recording every request line it served.
+async fn session_server(
+    sessions: &'static [ListedSession],
+    cancel: fn(&str) -> MockResponse,
+) -> (MockServer, Arc<Mutex<Vec<String>>>) {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let log = seen.clone();
+    let server = MockServer::start(move |req: &MockRequest| {
+        log.lock()
+            .unwrap()
+            .push(format!("{} {}", req.method, req.path));
+        match req.method.as_str() {
+            "GET" if req.path.ends_with("/sessions") => {
+                let rows: Vec<String> = sessions
+                    .iter()
+                    .map(|(id, asset, status)| {
+                        format!(
+                            r#"{{"id":"{id}","asset_id":"{asset}","album_id":null,"blob_role":"original","status":"{status}","received_bytes":4096,"total_size":8192,"created_at":"2026-01-01T00:00:00Z","last_progress_at":"2026-01-01T00:00:00Z"}}"#
+                        )
+                    })
+                    .collect();
+                MockResponse::new(200, "OK")
+                    .json_body(format!(r#"{{"sessions":[{}]}}"#, rows.join(",")))
+            }
+            "DELETE" => cancel(req.path.rsplit('/').next().unwrap_or_default()),
+            _ => MockResponse::new(500, "Internal Server Error"),
+        }
+    })
+    .await;
+    (server, seen)
+}
+
+/// **A delete aborts only that asset's sessions.** Every listed session of the deleted asset
+/// is cancelled; another asset's session is never touched.
+#[tokio::test]
+async fn redaction_cancels_every_session_of_the_asset_and_no_other() {
+    static SESSIONS: &[ListedSession] = &[
+        ("s-meta", "asset-a", "uploading"),
+        ("s-other", "asset-b", "uploading"),
+        ("s-orig", "asset-a", "pending"),
+    ];
+    let (server, seen) = session_server(SESSIONS, |_| MockResponse::new(204, "No Content")).await;
+    let client = server.client("2026-01-01");
+
+    let redaction = redact_asset(&client, "asset-a").await.expect("redacts");
+
+    assert_eq!(redaction.cancelled, vec!["s-meta", "s-orig"]);
+    assert!(redaction.finalizing.is_empty());
+    let deletes: Vec<String> = seen
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|line| line.starts_with("DELETE"))
+        .cloned()
+        .collect();
+    assert_eq!(deletes.len(), 2, "{deletes:?}");
+    assert!(
+        deletes.iter().all(|line| !line.ends_with("/s-other")),
+        "another asset's session was cancelled: {deletes:?}"
+    );
+}
+
+/// **The finalize race.** A session whose finalization began before the abort reached it
+/// answers `409 session_not_active`; that is not a failure, it is reported as finalizing so the
+/// delete that follows supersedes the create it completes. A session already gone (`404`) is a
+/// cancellation.
+#[tokio::test]
+async fn a_session_finalizing_during_the_abort_is_reported_not_failed() {
+    static SESSIONS: &[ListedSession] = &[
+        ("s-done", "asset-a", "waiting_for_processing"),
+        ("s-gone", "asset-a", "uploading"),
+    ];
+    let (server, _) = session_server(SESSIONS, |id| {
+        if id == "s-done" {
+            MockResponse::api_error(
+                409,
+                "Conflict",
+                error_codes::UPLOAD_SESSION_NOT_ACTIVE,
+                "Session not active",
+            )
+        } else {
+            MockResponse::new(404, "Not Found")
+        }
+    })
+    .await;
+    let client = server.client("2026-01-01");
+
+    let redaction = redact_asset(&client, "asset-a").await.expect("redacts");
+
+    assert_eq!(redaction.finalizing, vec!["s-done"]);
+    assert_eq!(redaction.cancelled, vec!["s-gone"]);
+}
+
+/// Any other refusal fails the redaction, so the caller knows a session may still be open.
+#[tokio::test]
+async fn an_unexpected_cancel_refusal_fails_the_redaction() {
+    static SESSIONS: &[ListedSession] = &[("s-1", "asset-a", "uploading")];
+    let (server, _) = session_server(SESSIONS, |_| {
+        MockResponse::api_error(403, "Forbidden", "error.auth.forbidden", "no")
+    })
+    .await;
+    let client = server.client("2026-01-01");
+
+    let error = redact_asset(&client, "asset-a")
+        .await
+        .expect_err("a 403 is not a cancellation");
+    assert!(
+        matches!(error, UploadError::Rejected { status: 403, .. }),
+        "{error:?}"
+    );
+}
+
+/// **A settled session is not cancelled.** The listing keeps `completed` and
+/// `failed_processing` records until their lifetime cap; deleting an asset whose upload already
+/// settled sends no `DELETE` for them and reports none of them as finalizing.
+#[tokio::test]
+async fn a_terminal_session_is_skipped_not_cancelled_or_finalizing() {
+    static SESSIONS: &[ListedSession] = &[
+        ("s-done", "asset-a", "completed"),
+        ("s-failed", "asset-a", "failed_processing"),
+        ("s-open", "asset-a", "waiting_for_processing"),
+    ];
+    let (server, seen) = session_server(SESSIONS, |id| {
+        if id == "s-open" {
+            MockResponse::new(204, "No Content")
+        } else {
+            MockResponse::new(500, "a settled session was cancelled")
+        }
+    })
+    .await;
+    let client = server.client("2026-01-01");
+
+    let redaction = redact_asset(&client, "asset-a").await.expect("redacts");
+
+    assert_eq!(redaction.cancelled, vec!["s-open"]);
+    assert!(redaction.finalizing.is_empty(), "{redaction:?}");
+    let deletes: Vec<String> = seen
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|line| line.starts_with("DELETE"))
+        .cloned()
+        .collect();
+    assert_eq!(deletes.len(), 1, "{deletes:?}");
+}
+
+/// An asset with no open session costs one listing and no cancel.
+#[tokio::test]
+async fn an_asset_with_no_open_session_redacts_to_nothing() {
+    static SESSIONS: &[ListedSession] = &[("s-1", "asset-b", "uploading")];
+    let (server, seen) = session_server(SESSIONS, |_| MockResponse::new(500, "boom")).await;
+    let client = server.client("2026-01-01");
+
+    let redaction = redact_asset(&client, "asset-a").await.expect("redacts");
+
+    assert_eq!(redaction, Redaction::default());
+    assert_eq!(seen.lock().unwrap().len(), 1, "only the listing was asked");
+}
