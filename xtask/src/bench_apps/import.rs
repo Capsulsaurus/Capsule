@@ -175,13 +175,18 @@ fn macrobenchmark(report: &Value, device: &str, library_size: u64) -> Result<Res
         let sampled = &benchmark["sampledMetrics"];
         match measure {
             Measure::ColdStartToFirstThumbnail => {
-                // Capsule calls `reportFullyDrawn()` once the first thumbnail is on screen; a
-                // platform app that never does is held to its initial display instead.
-                let value = metrics
-                    .get("timeToFullDisplayMs")
-                    .and_then(macro_median)
-                    .or_else(|| metrics.get("timeToInitialDisplayMs").and_then(macro_median))
-                    .with_context(|| format!("`{raw}` reports no startup timing"))?;
+                // Capsule calls `reportFullyDrawn()` once the first thumbnail has decoded, and
+                // is held to it: its first frame is not a library on screen. A platform app that
+                // never reports is held to its first frame instead, which can only flatter it.
+                let full = metrics.get("timeToFullDisplayMs").and_then(macro_median);
+                let value = match client {
+                    Client::Capsule => full.with_context(|| {
+                        format!("`{raw}` reports no timeToFullDisplayMs; Capsule never reported fully drawn")
+                    })?,
+                    Client::PlatformApp => full
+                        .or_else(|| metrics.get("timeToInitialDisplayMs").and_then(macro_median))
+                        .with_context(|| format!("`{raw}` reports no startup timing"))?,
+                };
                 put(
                     &mut results,
                     client,

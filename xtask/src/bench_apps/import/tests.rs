@@ -67,6 +67,17 @@ fn macrobenchmark_startup_prefers_full_display_and_falls_back_to_initial() {
 }
 
 #[test]
+fn macrobenchmark_capsule_startup_without_a_full_display_report_is_refused() {
+    let report = macro_report(json!([{
+        "name": "capsule_coldStartToFirstThumbnail",
+        "metrics": { "timeToInitialDisplayMs": { "median": 300.0 } },
+    }]));
+    let error = import(Format::Macrobenchmark, &report, "pixel-8", 100_000)
+        .expect_err("Capsule must report fully drawn");
+    assert!(error.to_string().contains("timeToFullDisplayMs"), "{error}");
+}
+
+#[test]
 fn macrobenchmark_scroll_counts_overrun_frames_across_every_iteration() {
     let report = macro_report(json!([{
         "name": "capsule_scroll",
