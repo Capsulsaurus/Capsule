@@ -174,4 +174,69 @@ struct MockCatalogTests {
         // No grant taken: the unattended purge job has no user to authenticate.
         #expect(await catalog.expiredTrash(olderThanSeconds: 5000).map(\.id) == ["stale"])
     }
+
+    @Test("the caption register is set, survives an upsert of the row, and clears with nil")
+    func captionRegister() async throws {
+        let catalog = MockCatalog()
+        try await catalog.insertAsset(Fixtures.catalogAsset(id: "a"))
+
+        try await catalog.setCaption("harbour", assetID: "a")
+        var row = try #require(await catalog.asset(id: "a"))
+        #expect(row.caption == "harbour")
+
+        row.rating = 1
+        await catalog.upsertAsset(row)
+        #expect(await catalog.asset(id: "a")?.caption == "harbour")
+
+        try await catalog.setCaption(nil, assetID: "a")
+        #expect(await catalog.asset(id: "a")?.caption == nil)
+    }
+
+    @Test("a caption for an asset the catalog does not hold is refused")
+    func captionForUnknownAssetIsRefused() async {
+        let catalog = MockCatalog()
+        await #expect(throws: CatalogError.invalidArgument(message: "no asset: ghost")) {
+            try await catalog.setCaption("harbour", assetID: "ghost")
+        }
+        #expect(await catalog.asset(id: "ghost") == nil)
+    }
+}
+
+@Suite("JSONSidecarCoder")
+struct JSONSidecarCoderTests {
+    private func sidecar(caption: String?) -> CatalogSidecar {
+        CatalogSidecar(
+            version: 1,
+            uuid: "u",
+            assetType: "photo",
+            originalFilename: "a.jpg",
+            importTimestamp: 1,
+            modifiedTimestamp: 1,
+            hashSHA256: String(repeating: "0", count: 64),
+            fileSize: 3,
+            importerVersion: "test",
+            rawshiftVersion: "0.0.0",
+            gpsLatitude: 48.8584,
+            gpsLongitude: 2.2945,
+            caption: caption
+        )
+    }
+
+    @Test("a caption and a GPS fix round-trip")
+    func captionAndGPSRoundTrip() throws {
+        let coder = JSONSidecarCoder()
+        let original = sidecar(caption: "harbour")
+        #expect(try coder.decode(coder.encode(original)) == original)
+    }
+
+    @Test("a sidecar written before the caption field decodes with no caption")
+    func olderSidecarDecodes() throws {
+        let coder = JSONSidecarCoder()
+        let encoded = try coder.encode(sidecar(caption: nil))
+        var object = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        object["caption"] = nil
+        let older = try JSONSerialization.data(withJSONObject: object)
+
+        #expect(try coder.decode(older) == sidecar(caption: nil))
+    }
 }

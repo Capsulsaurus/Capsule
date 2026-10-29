@@ -113,6 +113,13 @@ public actor InMemoryAssetCatalog: AssetCatalog {
         assets[id] = nil
     }
 
+    public func setCaption(_ caption: String?, assetID: String) throws {
+        guard assets[assetID] != nil else {
+            throw CatalogError.invalidArgument(message: "no asset: \(assetID)")
+        }
+        assets[assetID]?.caption = caption
+    }
+
     // MARK: Stacks
 
     public func insertStack(_ stack: CatalogStack) {

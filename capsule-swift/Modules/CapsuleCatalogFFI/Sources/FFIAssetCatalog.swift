@@ -157,6 +157,15 @@ public actor FFIAssetCatalog: AssetCatalog {
         }
     }
 
+    /// Refused: the core's `assets` table has no caption column. A caption in
+    /// the core lives in the signed sidecar's LWW register, which the
+    /// `Workspace` authors and this catalog object does not expose. Refusing is
+    /// what keeps a typed caption from being reported saved and then lost.
+    public func setCaption(_: String?, assetID: String) throws {
+        CapsuleLog.catalog.notice("setCaption refused id=\(assetID, privacy: .public): no caption register in the core catalog")
+        throw NativeCatalogError.database(message: "the core catalog has no caption register")
+    }
+
     // MARK: Gated views
 
     // These three are the only `AssetCatalog` requirements whose signatures name a

@@ -75,6 +75,18 @@ public protocol AssetCatalog: Sendable {
     /// Permanently remove an asset row. The on-disk file is the caller's concern.
     func purgeAsset(id: String) async throws
 
+    /// Set (or, with `nil`, clear) an asset's caption register, read back as
+    /// ``CatalogAsset/caption``.
+    ///
+    /// A register of its own rather than a field an ``upsertAsset(_:)`` carries,
+    /// so a conformer with no caption column refuses the write instead of
+    /// accepting a row and silently dropping the caption from it.
+    ///
+    /// - Throws: ``CatalogError/invalidArgument(message:)`` when no asset has
+    ///   `assetID`; ``CatalogError/database(message:)`` when this catalog has no
+    ///   caption register. Either way nothing is written.
+    func setCaption(_ caption: String?, assetID: String) async throws
+
     // MARK: Stacks
 
     /// Insert a new stack.
