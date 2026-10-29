@@ -39,7 +39,7 @@ Quota is charged to `upload_user_id` (the authenticated uploader), not `owner_id
 ## Enforcement Points
 
 - **Upload session creation is the only hard enforcement point.** [`POST /v1/upload`](/design/transfer/upload/#endpoints) refuses `403 error.quota.exceeded` if `used + declared_size` crosses the hard limit, and `403 error.quota.suspended` for a suspended account, before any pending row is written. Once open, the declared size is the cap and the session may complete; finalization does no quota check.
-- **Cancellation and expiry** release the reservation.
+- **Cancellation, expiry, pressure discard and `FailedProcessing`** release the reservation.
 - **Metadata-update writes** are checked as metadata growth.
 - **[Staged uploads](/design/transfer/upload/#upload-tiering-staged-uploads) and [streaming import](/design/import/pipeline/#import-upload-streaming-mode)** need no special case: each session is charged at its own creation. Exhaustion mid-stream refuses the next session; no local original is released for an asset that did not upload.
 

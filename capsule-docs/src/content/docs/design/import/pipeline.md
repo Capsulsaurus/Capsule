@@ -51,7 +51,7 @@ For a storage-constrained device, streaming mode (`capsule-library::import::stre
 5. advance.
 
 - The plan MUST have headroom for its **largest single asset**; otherwise confirmation fails with a "free *Y* to import *X*" error.
-- On lost connectivity or exhausted [quota](/design/quota/#enforcement-points) the window **pauses** — it admits no new source files — and in-flight uploads resume from server offsets. No original is released for an asset that did not upload.
+- On lost connectivity or exhausted [quota](/design/quota/#enforcement-points) the window **pauses** — it admits no new source files — and in-flight uploads resume from the server's committed set. No original is released for an asset that did not upload.
 - Streaming is a large reconciliation under the [synchronization criteria](/design/sync/#synchronization-criteria), and is mutually exclusive with a [staged upload policy](/design/transfer/upload/#upload-tiering-staged-uploads).
 
 ## Third-Party Importers

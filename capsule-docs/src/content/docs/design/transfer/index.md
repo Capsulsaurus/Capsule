@@ -20,15 +20,17 @@ Every implementation, on either side, MUST uphold:
 
 1. **Blobs are immutable and content-addressed.** A blob is named by the hash of its stored bytes ([ciphertext content hash](/design/cryptography/primitives/)); bytes at an address never change. Identical bytes are one object.
 2. **The wire is strict.** A request that violates the contract is rejected with a machine-readable `error.*` code, never silently corrected or partially honoured.
-3. **A chunk is acknowledged only after it is durably appended.** The server fsyncs the staged file before answering `204`; an acknowledged byte is a byte on disk.
+3. **A chunk is acknowledged only after it is durably committed.** The server fsyncs the staged range and records it in the committed set before answering `204`; an acknowledged byte is a byte on disk, and no write ever touches a committed byte.
 4. **Finalize re-hashes before commit.** The server recomputes the content hash over the staged bytes and re-runs the envelope checks before the blob is committed to its address. A mismatch is corruption, never retried server-side.
 5. **An index row never points at a missing blob.** The blob is committed (atomic rename plus directory fsync) before any index row references it. The failure direction is an unreferenced blob, which GC collects, never a dangling reference.
 6. **Custody and receipt are one fact.** A receipt is written in the same transaction that indexes the committed blob; neither exists without the other.
 7. **A client releases a local original only on server custody**: a `durable` storage verdict, a verified signed custody receipt whose server-recomputed hash matches the bytes the client sent (the read-back hash), and [`verify_asset`](/design/cryptography/keys/#write-authorization) acceptance. See [Verify Before Destroy](/design/transfer/durability/#verify-before-destroy).
-8. **Resume is driven by server truth, not client state.** The upload offset comes from `HEAD`, in-flight sessions from `GET /v1/upload/sessions`, held tiers from the sync feed. Client-side queues are rebuildable caches.
+8. **Resume is driven by server truth, not client state.** The committed set comes from `HEAD`, in-flight sessions from `GET /v1/upload/sessions`, held tiers from the sync feed. Client-side queues are rebuildable caches.
 9. **Every transfer step is idempotent.** Re-creating a session, re-sending a chunk, re-finalizing, re-fetching a range and re-verifying all converge on the same state.
 10. **Every session terminates.** A session is driven to `Completed` or `FailedProcessing`, or discarded; no staged file or reserved row outlives it.
 11. **The server never produces manifest bytes.** Manifests travel as `provenance` blobs and are served verbatim.
+12. **Semantics never depend on the transport.** Every operation means the same over HTTP/1.1, HTTP/2 and HTTP/3, and correctness survives the loss of any connection at any moment ([HTTP Transport](/design/networking/#http-transport)).
+13. **No request waits on unbounded server work.** A request answers with the state as it stands; finalization and other long work run detached and are observed through `HEAD`.
 
 ## Flow
 

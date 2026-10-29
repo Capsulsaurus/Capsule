@@ -60,10 +60,15 @@ Auto sync is offered only on platforms that expose what it needs (e.g. metered-c
 
 ### Background Execution
 
+Background and OS-scheduled transfer are post-v1 ([Clients — Platform Limitations](/design/clients/#platform-limitations)); v1 transfers run while the app is in the foreground. Any background transfer is held to:
+
+- **Requests are self-contained.** Every chunk `PATCH` and `Range` `GET` is complete in its URL, headers and a body that is a slice of a file. An OS transfer daemon can therefore run it while the Rust core is suspended, and the core reconciles from server truth when it wakes.
+- **Queued requests outlive the access token.** A request the OS queues may run after the access token has expired, so no queued request may depend on one; the credential that replaces it is specified with background transfer in [Authentication](/design/authentication/).
+
 - **iOS.** Small work rides `BGAppRefreshTask`; large work requests `BGProcessingTask` with network (and power for very large batches).
 - **Android.** `WorkManager` with explicit constraints (`UNMETERED` for large, `CONNECTED` for small, battery-not-low). A user-initiated large force-sync may run as a foreground service.
 - **Desktop.** Self-throttled with the [maintenance gating rules](/design/filesystem/maintenance/#content-validation-expensive-scheduled).
-- **All platforms.** Every window is preemptible: an OS kill loses at most one chunk, uploads resume from server offsets and downloads via `Range`, and there is no "must finish" state. Retries follow the [bulk-transfer policy class](/design/networking/#retry-policy-classes).
+- **All platforms.** Every window is preemptible: an OS kill loses at most the chunks in flight, uploads resume from the server's committed set and downloads via `Range`, and there is no "must finish" state. Retries follow the [bulk-transfer policy class](/design/networking/#retry-policy-classes).
 
 ### Notifications
 

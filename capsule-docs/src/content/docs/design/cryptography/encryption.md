@@ -30,6 +30,8 @@ An asset is content-addressed by the hash of its ciphertext and encrypted under 
 3. Build and sign the [manifest](/design/cryptography/provenance/#asset-manifest) (device + write-tier signatures).
 4. Upload via the [Transfer — Upload](/design/transfer/upload/).
 
+An upload re-derives each ciphertext range from the plaintext on disk, so the plaintext MUST NOT change under it. Building the bundle records the source's identity (size, modification time and file identifier); every later read checks it first, best-effort since a file system with coarse timestamps or a writer that preserves them can hide a change, and a mismatch aborts the blob with a typed source-changed error before any byte is sent. The finalize-time content-address check remains the backstop: a changed source can cost an upload, never store bytes under the wrong address.
+
 Ranged read of plaintext byte `B`: `i = B / plaintext_chunk`; fetch ciphertext at offset `i × ciphertext_chunk` (chunk + 16-byte tag). Chunk `i` decrypts independently. Using the plaintext stride as the ciphertext offset is a bug; the formula is normative.
 
 ### Re-keying on Rewrite
