@@ -107,5 +107,5 @@ Tiers per [Validation Tiers](/design/principles/#validation-tiers).
 - **Trigger predicates (unit):** each class fires exactly at its threshold.
 - **Pre-arm lifecycle (unit):** arm, re-arm, cancel; never two timers per class.
 - **Snooze, disable, denial (unit):** each degrades to a badge and changes no behavior.
-- **Pre-armed delivery (smoke, per platform):** fires with the app terminated.
+- **Pre-armed delivery (smoke, per platform):** fires with the app terminated. A manual step on a device or simulator, because no automated harness can terminate the app and wait out an OS timer: launch a build that arms with the OS (on Apple, the Rust-backed lane), let it pre-arm `sync_stale`, terminate it, move the device clock past the deadline, and observe the notification; tap it and observe the sync-status destination. Repeat with `recovery = rewrap` armed and observe the guided re-wrap, never the routine check. On Android, reboot between arming and firing as well: the alarm must survive `BOOT_COMPLETED`.
 - **Wake contentlessness (unit, post-v1):** no library-derived field; response identical to the scheduled poll.
