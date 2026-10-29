@@ -57,6 +57,14 @@ Scope {
 
 v1 ships only explicit pick → pointer → derived album; the override and default rows are deferred with the library-settings document.
 
+### Album Order and Recency
+
+Every native app and the CLI list container albums in one order, computed once in `capsule-library`, which the CLI links directly and the native apps reach through the FFI; no app sorts albums on its own. Albums shared by another owner rank in it like the user's own. Smart and aggregated albums rank in it by their members. The system albums (All, Trash) and the Hidden view are listed apart from that order. The web client holds no keys in v1, so it cannot read capture times; it keeps its key-free order from the sync feed until in-browser decrypt lands. The default is **most recent asset first**: an album ranks by the latest [effective](/design/metadata/#as-imported-and-user-values) capture time among its assets that are neither hidden nor trashed. An album with no such asset ranks by its own creation time. Ties are broken by ascending `album_id`.
+
+- **Derived, never stored.** Recency is a query over the [local index](/design/filesystem/client/#local-index-staleness), so imports, moves, deletes, restores and capture-date edits change it with nothing extra to keep in step.
+- **Not on the server.** Capture times are inside the encrypted metadata, so the server cannot compute album recency and is never asked to.
+- **No viewing history.** Albums record no viewing or opening time, synced or on the server, because that would put viewing habits into metadata that leaves the device. Any state a later "recently viewed" view needs is per-device and local only.
+
 ### System & Smart Albums (Views)
 
 Views are computed client-side from the [local index](/design/filesystem/client/#local-index-staleness). A view is **not** an MLS group, holds **no** AMK, owns no assets and is **not** a sharing boundary. The [aggregated federated album](/design/federation/#federated-shared-albums-aggregated-albums) is a view.
@@ -179,13 +187,38 @@ A **trinary flag per asset** — `pick | neutral | reject` — in the sidecar's 
 - **Groups.** A stack has no flag of its own; its state is **derived** from members (all-rejected, any-pick, else mixed). Flagging a collapsed stack writes each member atomically like any [stack edit](#asset-stacking).
 - **Sync.** Converges like every LWW field ([grouping convergence](/design/metadata/#grouping-convergence-requirement)).
 
+### Culling UI
+
+Culling is a high-volume, repetitive pass, so every native client's culling surface is built for speed without a pointer and for use without sight:
+
+- **Keyboard first.** With a hardware keyboard attached, the whole pass works without a pointer: one key each for pick, neutral and reject, next and previous asset, expand and collapse a stack, and the reject sweep. A verdict advances to the next asset. Bindings are discoverable in the platform's usual way (the menu bar on macOS, the hold-⌘ shortcut overlay on iPadOS, an in-app shortcut list on iPhone, the keyboard shortcuts helper on Android).
+- **Accessible.** Each verdict is also an accessibility action on the focused asset (VoiceOver and TalkBack custom actions), with no gesture as its only path. The asset's current flag and its position in the pass are announced. Flag state is never shown by colour alone.
+- **Audited before it ships.** A culling surface passes each platform's full automated accessibility audit with no exclusions: `performAccessibilityAudit(for: .all)` on Apple platforms, and the Compose UI accessibility checks on Android.
+
 ## Hidden Assets
 
 A `hidden` asset (sidecar LWW, wire-absent = visible) is excluded from default views — timeline, search, system views — and appears only in the Hidden view behind the fresh-local-auth gate ([Local Gallery — SR1](/design/local-gallery/)). Hiding is view-layer only — not deletion, not access control; the asset keeps its album and keeps syncing.
 
 ## Recycling
 
-Delete defaults to trash (a soft delete, synced as a metadata change). A hard delete happens only when the user empties trash, retention expires, or the user requests immediate deletion. Deletion is a lifecycle action like any other ([Provenance](/design/cryptography/provenance/#provenance-of-library-modifications), [The Closed Action Set](/design/authorization/#the-closed-action-set)).
+Delete defaults to trash (a soft delete, synced as a signed `delete` lifecycle record). A hard delete happens only when the user empties trash, retention expires, or the user requests immediate deletion. Deletion is a lifecycle action like any other ([Provenance](/design/cryptography/provenance/#provenance-of-library-modifications), [The Closed Action Set](/design/authorization/#the-closed-action-set)).
+
+### Deletion State Machine
+
+Deletion is owned entirely by `capsule-library`'s `Workspace` and reaches the apps through the FFI as verbs: delete, restore, purge and list trash. An app holds no deletion or retention logic of its own, and never writes the index row directly. Live and Trashed are derived from the asset's signed chain, never stored on their own, so rebuilding the index reproduces them. Purged is recorded as a tombstone only on the evidence [Sync](/design/sync/#discovering-what-changed) names (the retention window seen closed, or a delete entry marked `purged`) or by this device's own purge. Missing bytes are never read as a purge, because a device whose scope is metadata-only holds no bytes for a Trashed asset either.
+
+```text
+Live ──delete──▶ Trashed ──restore (before retention_until)──▶ Live
+                    │
+                    └──purge (emptied, expired, or immediate)──▶ Purged
+```
+
+- **Delete** appends a signed `delete` record carrying `retention_until`, then updates the index from it. A delete that writes only the index is not a delete: it never syncs, and a rebuild brings the asset back.
+- **Expiry** is judged by the signed `retention_until`, on the device as on the server, never by when the local row changed. The device judges expiry exactly as [Peering — Sync](/design/peering/#sync) does. It judges only once a sync has drained the feed to its head, so a restore made on another device is applied first, and it uses its own clock floored by the latest server `changed_at` that drain saw. A device that cannot drain the feed does not purge on expiry.
+- **Purge** before `retention_until` (emptying the trash, or immediate deletion) first appends the signed shorter-retention re-issue the [retention window](#retention-window) requires, so the chain and the server agree that the purge is due. Purge then removes the original, the sidecar, every derivative and cache entry, and the index row. The provenance file stays, as the tombstone-with-history ([Filesystem — Client](/design/filesystem/client/)). The peering tombstone [Sync](/design/sync/#discovering-what-changed) records is what refuses the asset's revival, and an index rebuild reproduces Purged from the two of them.
+- **An upload in flight is redacted.** Deleting an asset whose upload has not finished aborts this device's open upload sessions for it, drops its pending [tiers](/design/transfer/upload/#upload-tiering-staged-uploads), and removes it from this device's upload queue. A restore returns it to Live, and so to the queue. Redaction covers only this device's own upload. A delegation hand-off already made, and an upload another device performs from its own copy, follow [Peering](/design/peering/#delegation) unchanged.
+  - The server never sees a delete for an asset it has not indexed ([Peering — Delegation](/design/peering/#delegation)). The `delete` record goes to the server only once the asset's create is indexed there, whichever device uploaded it, and then supersedes it. Until then it is held on the device and travels to the user's other devices over [peering](/design/peering/#sync). If the create never reaches the server, the delete never does either.
+  - Redaction never weakens what keeps data safe. The local original stays pinned exactly as an unredacted staged upload pins it, until T2 is custody-confirmed or the asset's purge. A restore of an asset whose delete is still held, made before `retention_until` by the device's clock, is never lost because the held records reached the server late.
 
 ### Retention Window
 
