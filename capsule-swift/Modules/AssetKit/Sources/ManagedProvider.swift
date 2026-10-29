@@ -18,6 +18,8 @@ public actor ManagedProvider: AssetProvider, TrashProvider, AssetOwning {
     private let authGate: any LocalAuthGate
     private let sidecarCoder: any SidecarCoding
     private var observers: [UUID: AsyncStream<AssetChange>.Continuation] = [:]
+    /// The last queued mutation of each asset; see ``serializingMutation(of:_:)``.
+    private var mutationTails: [String: Task<Void, Never>] = [:]
 
     /// - Parameter authGate: the SR1 fresh-local-auth adapter used to open the
     ///   Recently Deleted view. Defaults to the real `LAContext` gate; tests and
@@ -70,11 +72,19 @@ public actor ManagedProvider: AssetProvider, TrashProvider, AssetOwning {
 
     public func setFavorite(_ isFavorite: Bool, for id: AssetID) async throws {
         guard case let .managed(uuid) = id else { return }
+        try await serializingMutation(of: uuid) {
+            try await self.applyFavorite(isFavorite, uuid: uuid)
+        }
+        await emitReload()
+    }
+
+    /// A read-modify-upsert of one row, so it runs only inside
+    /// ``serializingMutation(of:_:)``: an upsert writes back every field it read.
+    private func applyFavorite(_ isFavorite: Bool, uuid: String) async throws {
         let catalog = try await library.catalog()
         guard var asset = try await catalog.asset(id: uuid) else { return }
         asset.rating = isFavorite ? 1 : 0
         try await catalog.upsertAsset(asset)
-        await emitReload()
     }
 
     public func delete(_ ids: [AssetID]) async throws {
@@ -144,17 +154,29 @@ public actor ManagedProvider: AssetProvider, TrashProvider, AssetOwning {
     /// When the sidecar rewrite then fails, the register is put back to what it
     /// held, so the index never claims a caption the sidecar does not carry.
     ///
+    /// Edits of one asset run one at a time (``serializingMutation(of:_:)``), so
+    /// the restore only ever puts back this edit's own predecessor, never a
+    /// caption another edit saved while this one was suspended.
+    ///
     /// - Throws: ``CatalogError/invalidArgument(message:)`` for an asset this
     ///   store does not hold; the catalog's refusal; the sidecar rewrite's error.
     public func setCaption(_ caption: String?, for id: AssetID) async throws {
         guard case let .managed(uuid) = id else {
             throw CatalogError.invalidArgument(message: "not a managed asset")
         }
+        let value = caption?.isEmpty == false ? caption : nil
+        try await serializingMutation(of: uuid) {
+            try await self.applyCaption(value, uuid: uuid)
+        }
+    }
+
+    /// The register-then-sidecar write behind ``setCaption(_:for:)``; runs only
+    /// inside ``serializingMutation(of:_:)``.
+    private func applyCaption(_ value: String?, uuid: String) async throws {
         let catalog = try await library.catalog()
         guard let row = try await catalog.asset(id: uuid) else {
             throw CatalogError.invalidArgument(message: "no asset: \(uuid)")
         }
-        let value = caption?.isEmpty == false ? caption : nil
         try await catalog.setCaption(value, assetID: uuid)
         let captureDate = Date(timeIntervalSince1970: TimeInterval(row.captureTimestamp))
         let modified = Int64(Date().timeIntervalSince1970)
@@ -237,6 +259,35 @@ public actor ManagedProvider: AssetProvider, TrashProvider, AssetOwning {
     }
 
     // MARK: Private
+
+    /// Run `mutation` once every earlier mutation of the same asset has finished.
+    ///
+    /// An actor is reentrant at each `await`, and every catalog and sidecar call
+    /// is one, so two edits of one asset would otherwise interleave: a favourite's
+    /// read-modify-upsert straddling a caption edit writes the stale row back and
+    /// drops the caption, a failed caption's restore overwrites a caption saved
+    /// meanwhile, and two caption edits race on one sidecar. Each mutation waits
+    /// on the asset's previous tail, so edits apply in call order; a failed one
+    /// does not block the next. Edits of different assets still run concurrently.
+    private func serializingMutation(
+        of uuid: String,
+        _ mutation: @escaping @Sendable () async throws -> Void
+    ) async throws {
+        let previous = mutationTails[uuid]
+        let operation = Task {
+            await previous?.value
+            try await mutation()
+        }
+        let tail = Task { _ = await operation.result }
+        mutationTails[uuid] = tail
+        defer {
+            if mutationTails[uuid] == tail { mutationTails[uuid] = nil }
+        }
+        if previous != nil {
+            CapsuleLog.assetKit.trace("mutation of \(uuid, privacy: .private) queued behind an earlier one")
+        }
+        try await operation.value
+    }
 
     private func register(_ continuation: AsyncStream<AssetChange>.Continuation, token: UUID) {
         observers[token] = continuation
