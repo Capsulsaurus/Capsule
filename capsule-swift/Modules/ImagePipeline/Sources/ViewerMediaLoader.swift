@@ -3,6 +3,7 @@ import AVFoundation
 import CapsuleFoundation
 import CoreGraphics
 import ImageIO
+import ManagedStore
 import Photos
 
 /// How a file encodes high dynamic range, when it does.
@@ -229,26 +230,20 @@ public final class ViewerMediaLoader {
     }
 
     /// Parse camera/exposure fields from an image file's embedded metadata —
-    /// reads container properties only, never decoding the pixels.
+    /// reads container properties only, never decoding the pixels. The parse
+    /// is ``ContainerExif``'s, shared with the managed store; its GPS fix is
+    /// not taken, because PhotoKit's location is the one this panel shows.
     private nonisolated static func parseExif(from data: Data?) -> AssetExifMetadata {
         var metadata = AssetExifMetadata()
-        guard let data,
-              let source = CGImageSourceCreateWithData(data as CFData, nil),
-              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
-        else {
-            return metadata
-        }
-        if let tiff = properties[kCGImagePropertyTIFFDictionary] as? [CFString: Any] {
-            metadata.cameraMake = tiff[kCGImagePropertyTIFFMake] as? String
-            metadata.cameraModel = tiff[kCGImagePropertyTIFFModel] as? String
-        }
-        if let exif = properties[kCGImagePropertyExifDictionary] as? [CFString: Any] {
-            metadata.lensModel = exif[kCGImagePropertyExifLensModel] as? String
-            metadata.isoSpeed = (exif[kCGImagePropertyExifISOSpeedRatings] as? [Int])?.first
-            metadata.aperture = exif[kCGImagePropertyExifFNumber] as? Double
-            metadata.shutterSpeed = exif[kCGImagePropertyExifExposureTime] as? Double
-            metadata.focalLength = exif[kCGImagePropertyExifFocalLength] as? Double
-        }
+        guard let data else { return metadata }
+        let exif = ContainerExif.parse(data)
+        metadata.cameraMake = exif.cameraMake
+        metadata.cameraModel = exif.cameraModel
+        metadata.lensModel = exif.lensModel
+        metadata.isoSpeed = exif.isoSpeed
+        metadata.aperture = exif.aperture
+        metadata.shutterSpeed = exif.shutterSpeed
+        metadata.focalLength = exif.focalLength
         return metadata
     }
 

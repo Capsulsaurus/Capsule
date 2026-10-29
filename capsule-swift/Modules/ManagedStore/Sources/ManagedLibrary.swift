@@ -64,6 +64,27 @@ public actor ManagedLibrary {
         return catalog
     }
 
+    /// The media file an asset's bytes live in, or `nil` when none is on disk.
+    ///
+    /// Found by stem for the same reason ``removeAssetFiles(uuid:captureDate:)``
+    /// sweeps by stem: the catalog does not record the extension the importer
+    /// derived. The paired `.cbor` sidecar shares the stem and is skipped, so the
+    /// answer is always the original, never its record.
+    ///
+    /// - Parameter captureDate: the asset's capture instant, which decides its
+    ///   `media/{YYYY}/{YYYY-MM}` partition.
+    public func mediaFile(uuid: String, captureDate: Date) async throws -> URL? {
+        let directory = layout.mediaDirectory(forCaptureDate: captureDate)
+        guard await fileStore.fileExists(at: directory) else { return nil }
+        return try await fileStore.contentsOfDirectory(at: directory).first { entry in
+            entry.deletingPathExtension().lastPathComponent == uuid
+                && entry.pathExtension.lowercased() != Self.sidecarExtension
+        }
+    }
+
+    /// The extension every sidecar is written under; see ``ManagedLibraryLayout``.
+    private static let sidecarExtension = "cbor"
+
     /// Remove an asset's bytes — its media file and paired sidecar — from the store.
     ///
     /// Addressed by *stem* rather than by an exact path because the catalog does

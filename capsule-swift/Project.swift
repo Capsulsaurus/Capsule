@@ -276,6 +276,8 @@ private let moduleTargets: [Target] =
     + module("ImagePipeline", dependencies: [
         .target(name: "CapsuleFoundation"),
         .target(name: "AssetKit"),
+        // `ContainerExif`, the one ImageIO EXIF parser the viewer shares.
+        .target(name: "ManagedStore"),
     ])
 
     // Design system + shared UI components: the virtualized timeline geometry,
