@@ -29,7 +29,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -39,6 +42,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import com.justin13888.capsule.R
 import com.justin13888.capsule.data.MuseumObject
+import com.justin13888.capsule.perf.BenchmarkAnchors
 import org.koin.androidx.compose.koinViewModel
 
 @Composable
@@ -94,7 +98,10 @@ private fun ObjectDetails(
                 modifier =
                     Modifier
                         .fillMaxWidth()
-                        .background(Color.LightGray),
+                        .background(Color.LightGray)
+                        // The parity benchmark's full-resolution-open anchor.
+                        .semantics { testTagsAsResourceId = true }
+                        .testTag(BenchmarkAnchors.VIEWER_IMAGE),
             )
 
             SelectionContainer {

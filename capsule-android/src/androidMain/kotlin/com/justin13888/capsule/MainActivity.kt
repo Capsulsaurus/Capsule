@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import android.view.MotionEvent
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
@@ -27,6 +28,8 @@ import com.justin13888.capsule.i18n.AppCompatLanguageStore
 import com.justin13888.capsule.i18n.AppLanguagePicker
 import com.justin13888.capsule.i18n.LanguagePickerButton
 import com.justin13888.capsule.i18n.LocalesConfig
+import com.justin13888.capsule.perf.FrameMonitor
+import com.justin13888.capsule.perf.InputToFrameTracer
 import java.util.logging.Logger
 
 // AppCompatActivity, because below Android 13 AppCompat applies the in-app language only to
@@ -43,6 +46,10 @@ class MainActivity : AppCompatActivity() {
     // the alarms or degrades every class to its badge.
     private val notificationPrompt =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { alerts.coordinator.refresh() }
+
+    // Field jank telemetry, and the trace section the parity benchmark reads input latency from.
+    private lateinit var frameMonitor: FrameMonitor
+    private val inputToFrame = InputToFrameTracer()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -63,6 +70,13 @@ class MainActivity : AppCompatActivity() {
                 LanguageEntry()
             }
         }
+        frameMonitor = FrameMonitor(window)
+    }
+
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        // A tap lands on release; that is the input whose answering frame the contract bounds.
+        if (event.actionMasked == MotionEvent.ACTION_UP) inputToFrame.onTap()
+        return super.dispatchTouchEvent(event)
     }
 
     /**
@@ -95,9 +109,11 @@ class MainActivity : AppCompatActivity() {
         // something to arm - never at launch for its own sake.
         alerts.permission.launcher = { notificationPrompt.launch(Manifest.permission.POST_NOTIFICATIONS) }
         alerts.coordinator.refresh()
+        frameMonitor.resume()
     }
 
     override fun onPause() {
+        frameMonitor.pause()
         alerts.permission.launcher = null
         super.onPause()
     }
