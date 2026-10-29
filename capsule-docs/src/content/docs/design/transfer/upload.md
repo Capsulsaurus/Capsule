@@ -161,6 +161,7 @@ Client recovery matrix (`capsule-sdk::upload`):
 | --- | --- |
 | `error.upload.offset_mismatch` | Re-align to the returned offset (or `HEAD`) |
 | `error.upload.checksum_mismatch` | Re-send the same chunk |
+| `error.upload.chunk_timeout` (`408`) | Re-send at the same offset with half the chunk, 4 KiB-aligned, down to 4 KiB ([Adaptive Chunk Sizing](#adaptive-chunk-sizing)) |
 | `error.upload.session_not_found` | Re-create the session, restart the blob |
 | `error.upload.duplicate_blob` | Resolve as a [merge](#deduplication-and-merge) |
 | `error.upload.replace_incomplete` | Upload the rest of the bundle, retry the manifest |
@@ -172,7 +173,7 @@ Client recovery matrix (`capsule-sdk::upload`):
 
 ## Adaptive Chunk Sizing
 
-The server enforces bounds by rejection only and never adapts. `capsule-sdk::upload` adapts: it starts from the suggested size, measures throughput over a sliding window, doubles or halves after a warm-up, and keeps every candidate a 4 KiB multiple by construction. Under an [adverse connection](/design/networking/#connection-classes) it holds the tier minimum. Per-blob ordering is not protocol; the pipeline decides what to [start](/design/import/pipeline/#upload-prioritization).
+The server enforces bounds by rejection only and never adapts. `capsule-sdk::upload` adapts: it starts from the suggested size, measures throughput over a sliding window, doubles or halves after a warm-up, and keeps every candidate a 4 KiB multiple by construction. Under an [adverse connection](/design/networking/#connection-classes) it holds the tier minimum. A chunk the server timed out (`408 error.upload.chunk_timeout`) is the one way below the tier minimum: the client halves it, down to the 4 KiB protocol minimum, and after a run of successes doubles back towards the tier minimum, never again to a size that timed out unless throughput shows the link has recovered. Each re-send charges the transfer's bounded recovery budget. Per-blob ordering is not protocol; the pipeline decides what to [start](/design/import/pipeline/#upload-prioritization).
 
 ## Error Taxonomy
 
@@ -183,6 +184,7 @@ Clients branch on `error.*` codes ([i18n error-code contract](/design/i18n/#serv
 | `400` | `malformed_request`, `unknown_crypto_suite`, `invalid_hash`, `invalid_size`, `unsupported_content_type`, `unknown_derivative_format`, `envelope_mismatch`, `timestamp_out_of_range`, `invalid_action`, `empty_chunk`, `chunk_not_aligned`, `missing_offset`, `missing_checksum`, `checksum_mismatch`, `size_exceeded`, `content_hash_mismatch`, `envelope_rejected`, `invalid_status_filter` |
 | `403` | `album_access_denied`, `device_not_authorized`, `owner_not_permitted`, `error.quota.exceeded` |
 | `404` | `session_not_found` |
+| `408` | `chunk_timeout` |
 | `409` | `duplicate_blob`, `offset_mismatch`, `chunk_conflict`, `session_not_active`, `receipt_not_available`, `replace_incomplete`, `stale_revival` |
 | `413` | `file_too_large`, `chunk_too_large` |
 | `415` | `unsupported_media_type` |

@@ -53,9 +53,10 @@ memory does not grow with file size. Most of the hardware budget should therefor
 - **Upstream bandwidth is the limit for remote devices.** A phone uploading from outside your
   network uploads at your connection's *download* speed, but every fetch of a preview or original
   leaves at your *upstream* speed. By default a chunk has 120 s to arrive. A client uploading a
-  large file sends chunks of at least 4 MiB, which needs about 280 kbit/s sustained from the device
-  to the server. On a slower link a large file's chunks time out, and the client does not yet retry
-  them smaller.
+  large file starts with 4 MiB chunks, which need about 280 kbit/s sustained from the device to the
+  server. On a slower link a chunk times out, and the client sends it again at half the size, down
+  to 4 KiB, so the upload still progresses. Each timeout costs the full 120 s, so a slow link
+  uploads well below its own rate until the chunks are small enough.
 - **Size the disks for originals, not derivatives.** Derivatives are a small fraction of a
   library of RAW files and video. The server keeps each blob once, as the client encrypted it.
 - **Users add bandwidth, not compute.** Search, thumbnails and organization run on the clients.
