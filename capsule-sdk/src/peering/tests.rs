@@ -28,13 +28,15 @@ use tokio::net::{TcpListener, TcpStream};
 use uuid::Uuid;
 
 use super::channel::{
-    ArtifactSecret, HandshakeRole, LocalPeer, Message, Offered, PEERING_PROTOCOL,
-    PEERING_PROTOCOL_MIN, PeerChannel, PeerClient, PeerHello, PinnedTrust, UpdateDevice,
-    VerifiedPeer, VersionWindow, accept, connect, hello_proof_message, verify_hello,
+    ArtifactSecret, HandshakeRole, LocalPeer, Message, OFFER_EXCHANGE_PROTOCOL, Offered, Offering,
+    PEERING_PROTOCOL, PEERING_PROTOCOL_MIN, PeerChannel, PeerClient, PeerHello, PinnedTrust,
+    UpdateDevice, VerifiedPeer, VersionWindow, accept, connect, hello_proof_message, serve,
+    verify_hello,
 };
+use super::delegation::DelegationError;
 use super::delta::{
-    MIN_OFFER_BUCKET, OFFER_PAGE_CAP, Offer, decode_offer_page, missing_from, offer_bucket,
-    symmetric_difference,
+    MAX_OFFER_PAGES, MIN_OFFER_BUCKET, OFFER_PAGE_CAP, Offer, cut_to_missing, decode_offer_page,
+    head_address, missing_from, offer_bucket, symmetric_difference,
 };
 use super::discovery::{
     Discovery, MockDiscovery, OpaqueAdvertisement, SERVICE_TYPE, rotation_epoch,
@@ -1046,6 +1048,49 @@ fn malformed_offer_pages_are_refused() {
     assert!(Offer::from_pages(&[a, b]).is_err(), "cursor disagreement");
 }
 
+/// The sender's assets are cut to the receiver's complement over head record hashes: an asset
+/// the receiver holds at the same head is excluded, one it holds at an older head (a metadata
+/// edit over the same ciphertext) still moves, and one it lacks moves.
+#[test]
+fn a_receivers_offer_cuts_the_assets_to_what_it_is_missing() {
+    let fx = Fx::new();
+    let (c1, ct1, m1) = fx.records(1, b"asset one", 1);
+    let (c2, ct2, m2) = fx.records(2, b"asset two", 2);
+    let (c3, ct3, m3) = fx.records(3, b"asset three", 1);
+    let assets = vec![
+        asset_from(&c1, &ct1, &m1),
+        asset_from(&c2, &ct2, &m2),
+        asset_from(&c3, &ct3, &m3),
+    ];
+    assert_eq!(head_address(&assets[1]), Some(head_hash(&c2)));
+    assert_eq!(
+        address(&c2[..1]),
+        address(&c2),
+        "the edit kept the ciphertext"
+    );
+
+    let receiver = Offer::new(BTreeSet::from([head_hash(&c1), head_hash(&c2[..1])]), 7);
+    let (kept, excluded) = cut_to_missing(assets.clone(), &receiver);
+    let kept: Vec<Uuid> = kept.iter().map(|asset| asset.asset_id).collect();
+    assert_eq!(kept, [Uuid::from_u128(2), Uuid::from_u128(3)]);
+    assert_eq!(excluded, 1);
+
+    let everything = Offer::new(assets.iter().filter_map(head_address).collect(), 7);
+    let (kept, excluded) = cut_to_missing(assets.clone(), &everything);
+    assert!(
+        kept.is_empty(),
+        "a receiver holding every head is sent nothing"
+    );
+    assert_eq!(excluded, 3);
+
+    let (kept, excluded) = cut_to_missing(assets, &Offer::new(BTreeSet::new(), 0));
+    assert_eq!(
+        (kept.len(), excluded),
+        (3, 0),
+        "an empty offer takes everything"
+    );
+}
+
 // ── Ingest (smoke) ────────────────────────────────────────────────────────────
 
 /// Build a delta-scoped artifact on device A; feed it to device B; assert restore applies exactly
@@ -1502,6 +1547,7 @@ async fn a_channel_pull_reports_the_first_failure_not_the_broken_channel() {
     let client = PeerClient::open(delegate).await.expect("opens");
     // Eight bytes of the range arrive, then a frame larger than the bytes still owed breaks it.
     let breaking = async {
+        assert_eq!(origin.receive_offer().await.expect("the opening"), None);
         assert!(matches!(
             origin.recv().await.expect("a request"),
             Message::Range { start: 0, .. }
@@ -1524,6 +1570,133 @@ async fn a_channel_pull_reports_the_first_failure_not_the_broken_channel() {
         "the oversized frame is the diagnosis: {pulled:?}"
     );
     assert_eq!(held, [7; 8], "what arrived is kept for a resume");
+}
+
+// ── Opening offer (real channel) ──────────────────────────────────────────────
+
+/// On a channel at [`OFFER_EXCHANGE_PROTOCOL`] the pulling side's offer crosses, every page of
+/// it, before the serving side lists: what the server reads is exactly what the client holds.
+#[tokio::test]
+async fn the_receivers_offer_crosses_the_channel_before_the_listing() {
+    let fx = Fx::new();
+    let (mut origin, receiver) = channel_pair(&fx).await;
+    assert_eq!(origin.peer().protocol, OFFER_EXCHANGE_PROTOCOL);
+    // Two pages: the offer is split at the per-request cap and reassembled whole.
+    let offer = offer_of(OFFER_PAGE_CAP + 1);
+    let serving = async {
+        let read = origin.receive_offer().await.expect("the offer reads");
+        origin
+            .send(&Message::Listing {
+                artifacts: Vec::new(),
+            })
+            .await
+            .expect("lists");
+        read
+    };
+    let (read, client) = tokio::join!(serving, PeerClient::open_offering(receiver, &offer));
+    assert_eq!(read, Some(offer));
+    assert!(client.expect("the listing reads").listing().is_empty());
+    assert!(
+        matches!(origin.receive_offer().await, Err(PeeringError::Codec(_))),
+        "the opening is read once"
+    );
+}
+
+/// A pair that negotiated below [`OFFER_EXCHANGE_PROTOCOL`] exchanges no opening: the server
+/// reads no offer, the client sends none, and the next frame is the client's first request.
+#[tokio::test]
+async fn an_older_peer_exchanges_no_offer() {
+    let fx = Fx::new();
+    let (origin, receiver) = channel_pair(&fx).await;
+    let (mut origin, receiver) = (
+        origin.speaking(PEERING_PROTOCOL_MIN),
+        receiver.speaking(PEERING_PROTOCOL_MIN),
+    );
+    assert!(PEERING_PROTOCOL_MIN < OFFER_EXCHANGE_PROTOCOL);
+    assert_eq!(origin.receive_offer().await.expect("nothing to read"), None);
+    origin
+        .send(&Message::Listing {
+            artifacts: Vec::new(),
+        })
+        .await
+        .expect("lists");
+    let client = PeerClient::open_offering(receiver, &offer_of(3))
+        .await
+        .expect("the listing reads");
+    client.finish().await.expect("done");
+    assert_eq!(
+        origin.recv().await.expect("a frame"),
+        Message::Done,
+        "no offer went ahead of the client's first request"
+    );
+}
+
+/// A server that cut its offering without reading the opening still serves: [`serve`] reads and
+/// sets the opening aside, so a receiver that sent its offer to a serving side that does not
+/// use it (a delegation) is listed and served as before.
+#[tokio::test]
+async fn serve_sets_an_unread_opening_aside() {
+    let fx = Fx::new();
+    let (mut origin, receiver) = channel_pair(&fx).await;
+    let trust = fx.trust(false);
+    let versions = MemoryDirectoryVersions::default();
+    let mut offering = Offering::new();
+    let address = offering.offer(b"an artifact".to_vec()).expect("offers");
+    let serving = serve(&mut origin, &offering, &trust, &versions, |_| {
+        Err(DelegationError::AckMismatch)
+    });
+    let pulling = async {
+        let client = PeerClient::open_offering(receiver, &offer_of(2))
+            .await
+            .expect("the listing reads");
+        assert_eq!(client.listing().len(), 1);
+        let mut held = Vec::new();
+        let bytes = pull_over_channel(&client, &address, 11, &mut held).await;
+        client.finish().await.expect("done");
+        bytes
+    };
+    let (served, pulled) = tokio::join!(serving, pulling);
+    served.expect("the session ends cleanly");
+    assert_eq!(pulled.expect("pulled"), b"an artifact");
+}
+
+/// An opening the encoder would not produce ends the read: more pages than the ceiling, a page
+/// that is not a bucket, or a frame that is not an offer.
+#[tokio::test]
+async fn a_malformed_opening_is_refused() {
+    let fx = Fx::new();
+    let over = u32::try_from(MAX_OFFER_PAGES + 1).unwrap();
+    let (mut origin, mut receiver) = channel_pair(&fx).await;
+    receiver
+        .send(&Message::Offer { pages: over })
+        .await
+        .expect("sends");
+    assert!(matches!(
+        origin.receive_offer().await,
+        Err(PeeringError::Codec(_))
+    ));
+
+    let (mut origin, mut receiver) = channel_pair(&fx).await;
+    receiver
+        .send(&Message::Offer { pages: 1 })
+        .await
+        .expect("sends");
+    let page = offer_of(3).encode_pages().remove(0);
+    receiver
+        .send_data(&page[..page.len() - 32])
+        .await
+        .expect("sends");
+    assert!(matches!(
+        origin.receive_offer().await,
+        Err(PeeringError::Codec(_))
+    ));
+
+    let (mut origin, mut receiver) = channel_pair(&fx).await;
+    receiver.send(&Message::Done).await.expect("sends");
+    assert!(matches!(
+        origin.receive_offer().await,
+        Err(PeeringError::Codec(_))
+    ));
 }
 
 // ── LAN sync then server reconcile (in-process shape) ─────────────────────────

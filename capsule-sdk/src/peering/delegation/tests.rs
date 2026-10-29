@@ -1863,6 +1863,8 @@ async fn a_frame_past_what_was_asked_breaks_the_pull_before_it_is_read() {
     origin.send(&listing).await.expect("sends");
     let client = PeerClient::open(delegate).await.expect("opens");
     let lying = async {
+        let opening = origin.receive_offer().await.expect("the opening");
+        assert_eq!(opening, None, "a delegate offers nothing");
         let request = origin.recv().await.expect("a request");
         assert!(matches!(
             request,
@@ -1902,6 +1904,7 @@ async fn a_frame_past_what_was_asked_breaks_the_pull_before_it_is_read() {
     origin.send(&listing).await.expect("sends");
     let client = PeerClient::open(delegate).await.expect("opens");
     let flooding = async {
+        assert_eq!(origin.receive_offer().await.expect("the opening"), None);
         origin.recv().await.expect("a request");
         origin
             .send(&Message::RangeReply { len: 4 })
@@ -1974,6 +1977,7 @@ async fn a_peer_that_trickles_a_range_inside_each_frame_timeout_is_cut_at_the_mi
         .expect("opens");
     // One byte per frame, each well inside the per-frame timeout, far too slow overall.
     let trickling = async {
+        assert_eq!(origin.receive_offer().await.expect("the opening"), None);
         origin.recv().await.expect("a request");
         origin
             .send(&Message::RangeReply { len })
