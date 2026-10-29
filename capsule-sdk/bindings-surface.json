@@ -185,6 +185,13 @@
             },
             {
               "kind": "func",
+              "name": "transferEvents",
+              "signature": "func transferEvents() -> FfiTransferSubscription",
+              "doc": "Subscribe to the step-by-step progress of every upload, push and fetch this session\ndrives from now on, each event stamped with the milliseconds since this call on a\nmonotonic clock.\n\nProgress is advisory: a transfer never waits on its observer, so a subscriber that\nfalls behind reads [`FfiTransferFeedItem::Lagged`] with the count it missed. The\nsubscription ends once this session is dropped.",
+              "members": []
+            },
+            {
+              "kind": "func",
               "name": "upload",
               "signature": "func upload(request: FfiUploadRequest, data: Data) async throws -> FfiUploadOutcome",
               "doc": "Upload a full ciphertext blob (`data`) under `request`, driving the adaptive,\nresumable protocol with the code-driven recovery matrix.\n\n`data` crosses the boundary whole, so this is for blobs an app already holds in memory.\nTo push a sealed asset, original included, use [`push_asset`](Self::push_asset), which\nnever holds the original whole.",
@@ -195,6 +202,21 @@
               "name": "uploadStatus",
               "signature": "func uploadStatus(sessionId: String) async throws -> FfiUploadStatus?",
               "doc": "Query an upload session's progress (`HEAD /upload/{id}`). `None` means the\nsession is gone (discarded/expired/never-existent).",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "class",
+          "name": "FfiTransferSubscription",
+          "signature": "open class FfiTransferSubscription: FfiTransferSubscriptionProtocol, @unchecked Sendable",
+          "doc": "A live subscription to a session's transfer events: every step published after it opened.\n\nObtained from [`FfiSession::transfer_events`](crate::ffi::FfiSession::transfer_events).\nPull with [`next`](Self::next) until it answers `None`, which it does once the session that\npublishes the events is gone.",
+          "members": [
+            {
+              "kind": "func",
+              "name": "next",
+              "signature": "func next() async -> FfiTransferFeedItem?",
+              "doc": "The next event, or how many were missed since the last pull; `None` once the session\npublishing them is gone, and from then on.\n\nWaits for an event when none is pending. Concurrent pulls take turns: each event is\ndelivered to exactly one of them.",
               "members": []
             }
           ]
@@ -231,6 +253,20 @@
               "name": "open",
               "signature": "public static func `open`(root: String, passphrase: Data, tier: FfiDeviceTier, client: FfiClientBuild) throws -> FfiWorkspace",
               "doc": "**Open** the existing library at `root` under `passphrase`, restoring its album keys and\nauthorities, every managed asset, and the `add_id` counter from disk. This is\nwhat makes an app relaunch resume rather than re-enroll.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "addLabel",
+              "signature": "func addLabel(target: FfiLabelTarget, label: String) throws -> [String]",
+              "doc": "Add `label` to `target` and return its labels afterwards.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "addRegion",
+              "signature": "func addRegion(assetId: String, shape: FfiRegionShape, labels: [String]) throws -> FfiRegion",
+              "doc": "Mark a region of `asset_id` with its first `labels`, and return it.\n\nEvery label is checked before the region is written, so a refused label leaves no\nunlabelled region behind; then the shape, then the asset. A refusal writes nothing.",
               "members": []
             },
             {
@@ -277,6 +313,13 @@
             },
             {
               "kind": "func",
+              "name": "deleteRegion",
+              "signature": "func deleteRegion(assetId: String, regionId: String) throws",
+              "doc": "Delete a region. **Final**: a concurrent or later edit of it on another device does not\nbring it back once the two merge, and its id is never live again.",
+              "members": []
+            },
+            {
+              "kind": "func",
               "name": "deviceId",
               "signature": "func deviceId() throws -> String",
               "doc": "This device's id (UUID string) — the `created_by_device` of every manifest it authors,\nand the id to report as the session's `device_id`.",
@@ -298,6 +341,13 @@
             },
             {
               "kind": "func",
+              "name": "labels",
+              "signature": "func labels(target: FfiLabelTarget) throws -> [String]",
+              "doc": "The labels `target` carries, sorted. An unknown target is [`FfiError::Label`] with\n[`FfiLabelRefusal::NotFound`].",
+              "members": []
+            },
+            {
+              "kind": "func",
               "name": "openSyncedOriginal",
               "signature": "func openSyncedOriginal(entry: FfiSyncHead, ciphertextPath: String, destinationPath: String) throws -> FfiOpenedOriginal",
               "doc": "**Open a synced original** from the ciphertext file at `ciphertext_path` to its plaintext\nat `destination_path`, in memory bounded by a few STREAM chunks whatever its size.\n\nThe entry goes through the chokepoint as\n[`apply_sync_entry_from_file`](Self::apply_sync_entry_from_file) would take it, then the\nfile is hashed while it is decrypted: it opens only if it is the ciphertext the manifest\ncommits to, every chunk authenticates, and the plaintext hashes to the signed sidecar's\ndigest. The plaintext is written to a hidden staging file beside the destination and\nrenamed into place only once all of that holds, so `destination_path` is untouched by\nany other verdict and never holds a partial or unverified original. An existing file there\nis replaced only by a verified one.\n\nThe workspace stays locked while the original decrypts.\n\n# Errors\n\n[`FfiError::Workspace`] when a file cannot be read or written, or the workspace itself\nfails; [`FfiError::InvalidArgument`] for a malformed entry or a destination with no file\nname. A refused entry is a verdict, never an error.",
@@ -315,6 +365,20 @@
               "name": "readPlaintext",
               "signature": "func readPlaintext(assetId: String) throws -> Data",
               "doc": "The plaintext bytes of a managed asset (what a gallery renders for a locally-held\noriginal).",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "regions",
+              "signature": "func regions(assetId: String) throws -> [FfiRegion]",
+              "doc": "The asset's live regions, oldest first.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "removeLabel",
+              "signature": "func removeLabel(target: FfiLabelTarget, label: String) throws -> [String]",
+              "doc": "Remove `label` from `target` (every add of it this device has observed) and return its\nlabels afterwards. A label the target does not carry writes nothing and answers the\nunchanged list.",
               "members": []
             },
             {
@@ -1077,6 +1141,57 @@
         },
         {
           "kind": "struct",
+          "name": "FfiRegion",
+          "signature": "public struct FfiRegion: Equatable, Hashable",
+          "doc": "One live region of an asset and its labels.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "regionId",
+              "signature": "public var regionId: String",
+              "doc": "The region id (UUIDv7, minted fresh per create, never reused).",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "shape",
+              "signature": "public var shape: FfiRegionShape",
+              "doc": "The outline.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "labels",
+              "signature": "public var labels: [String]",
+              "doc": "The region's labels, sorted.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "struct",
+          "name": "FfiStampedTransferEvent",
+          "signature": "public struct FfiStampedTransferEvent: Equatable, Hashable",
+          "doc": "A transfer event and when it arrived: milliseconds since the subscription opened, on a\nmonotonic clock.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "atMs",
+              "signature": "public var atMs: UInt64",
+              "doc": "Milliseconds since the subscription opened.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "event",
+              "signature": "public var event: FfiTransferEvent",
+              "doc": "The event.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "struct",
           "name": "FfiSyncEntry",
           "signature": "public struct FfiSyncEntry: Equatable, Hashable",
           "doc": "One remote feed entry to apply, as a sync feed delivers it.\n\n`album_id` and the two id-bearing fields carry the feed's own **16-byte UUID** form (the\n`bytes album_id` of `capsule.sync.v1.SyncEntry`), so an entry from\n[`FfiSession::sync_pull`](crate::ffi::FfiSession::sync_pull) is passed through unchanged.",
@@ -1542,6 +1657,13 @@
             },
             {
               "kind": "case",
+              "name": "Label",
+              "signature": "case Label",
+              "doc": "A label or region edit was refused before anything was written: its target does not\nexist, the label rule refused the label, or the shape broke the normalized-coordinate\ncontract. `refusal` says which, so an editor shows the reason rather than parsing\n`detail`.",
+              "members": []
+            },
+            {
+              "kind": "case",
               "name": "Escrow",
               "signature": "case Escrow",
               "doc": "A master-key escrow flow (store/fetch) failed.",
@@ -1609,6 +1731,85 @@
               "name": "Backend",
               "signature": "case Backend(message: String)",
               "doc": "Any other backend error.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum",
+          "name": "FfiLabelRefusal",
+          "signature": "public enum FfiLabelRefusal: Equatable, Hashable",
+          "doc": "Why a label or region edit was refused ([`FfiError::Label`]). Nothing was written.",
+          "members": [
+            {
+              "kind": "case",
+              "name": "notFound",
+              "signature": "case notFound",
+              "doc": "The asset, region, stack or album does not exist, or no longer does.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "labelEmpty",
+              "signature": "case labelEmpty",
+              "doc": "The label is empty once trimmed.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "labelTooLong",
+              "signature": "case labelTooLong",
+              "doc": "The normalized label is this many UTF-8 bytes, past the 256-byte bound.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "regionOutOfRange",
+              "signature": "case regionOutOfRange",
+              "doc": "A coordinate is not a finite number in `[0, 1]`.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "regionEmpty",
+              "signature": "case regionEmpty",
+              "doc": "A radius, width or height is zero.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "regionPastEdge",
+              "signature": "case regionPastEdge",
+              "doc": "The shape extends past an edge of the image.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum",
+          "name": "FfiLabelTarget",
+          "signature": "public enum FfiLabelTarget: Equatable, Hashable",
+          "doc": "What a label attaches to beyond the asset itself, whose own labels are its user tags. The\nlabel rule is the same at every level.",
+          "members": [
+            {
+              "kind": "case",
+              "name": "region",
+              "signature": "case region",
+              "doc": "A region of an asset.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "stack",
+              "signature": "case stack",
+              "doc": "A stack (UUID string).",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "album",
+              "signature": "case album",
+              "doc": "A container album (UUID string).",
               "members": []
             }
           ]
@@ -1716,6 +1917,64 @@
         },
         {
           "kind": "enum",
+          "name": "FfiRegionShape",
+          "signature": "public enum FfiRegionShape: Equatable, Hashable",
+          "doc": "A region's outline, in coordinates normalized to `[0, 1]` over the original's display\norientation. Mirrors `capsule_core::sidecar::RegionShape`, single precision included, so a\nshape that validates on one side validates on the other.",
+          "members": [
+            {
+              "kind": "case",
+              "name": "circle",
+              "signature": "case circle",
+              "doc": "A circle centred at `(cx, cy)` (fractions of width and height) with radius `r`, a\nfraction of the image's shorter side.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "rect",
+              "signature": "case rect",
+              "doc": "A rectangle with its top-left corner at `(x, y)`.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum",
+          "name": "FfiRetryReason",
+          "signature": "public enum FfiRetryReason: Equatable, Hashable",
+          "doc": "Why an upload chunk is sent again. Mirrors [`RetryReason`] variant for variant.",
+          "members": [
+            {
+              "kind": "case",
+              "name": "transportReset",
+              "signature": "case transportReset",
+              "doc": "The connection reset or the request was lost; the same chunk is re-sent after the wait.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "offsetRealign",
+              "signature": "case offsetRealign",
+              "doc": "The server named a different offset; the transfer continues from it.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "sessionLost",
+              "signature": "case sessionLost",
+              "doc": "The session was gone; a new one is created and the transfer continues from the offset\nit reports.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "serverWait",
+              "signature": "case serverWait",
+              "doc": "The server asked the client to wait; afterwards the transfer resumes from the offset\n`HEAD` reports.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum",
           "name": "FfiSyncApplyOutcome",
           "signature": "public enum FfiSyncApplyOutcome: Equatable, Hashable",
           "doc": "How applying one remote entry resolved — the three verdicts the client validation duties\npermit. There is no \"ignored\" case: a failure is always a named quarantine or a hold.",
@@ -1739,6 +1998,141 @@
               "name": "quarantined",
               "signature": "case quarantined",
               "doc": "Refused. `reason` is a stable, switchable code; `detail` is English developer text.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum",
+          "name": "FfiTransferEvent",
+          "signature": "public enum FfiTransferEvent: Equatable, Hashable",
+          "doc": "One step of an upload, a custody check or a ranged fetch. Mirrors [`TransferEvent`]\nvariant for variant and field for field; `blob` is the content address (lowercase hex) and\noffsets and lengths are bytes of ciphertext.",
+          "members": [
+            {
+              "kind": "case",
+              "name": "sessionCreated",
+              "signature": "case sessionCreated",
+              "doc": "`POST /upload` opened a session; `resume_offset` is non-zero when the server returned an\nexisting session for the same blob.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "sessionResumed",
+              "signature": "case sessionResumed",
+              "doc": "An existing session resumed from the offset `HEAD` reported.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "chunkSent",
+              "signature": "case chunkSent",
+              "doc": "A chunk left the client.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "chunkAcked",
+              "signature": "case chunkAcked",
+              "doc": "The server acknowledged a chunk; `acked_offset` is its new received-byte count.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "chunkRetried",
+              "signature": "case chunkRetried",
+              "doc": "A chunk will be sent again, or the transfer moves to another offset or session.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "checksumRejected",
+              "signature": "case checksumRejected",
+              "doc": "The server refused a chunk whose body did not match its checksum; it is re-sent.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "finalize",
+              "signature": "case finalize",
+              "doc": "Every declared byte reached the server; it is finalizing the blob.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "merged",
+              "signature": "case merged",
+              "doc": "The server already held the blob: resolved as a merge, nothing sent.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "verify",
+              "signature": "case verify",
+              "doc": "`POST /storage/verify` answered for an asset.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "receipt",
+              "signature": "case receipt",
+              "doc": "A custody receipt for one blob verified under the pinned attestation keys.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "rangeRequested",
+              "signature": "case rangeRequested",
+              "doc": "A ranged request left the client; `max_len` is the bounded window, or `None` for the\nopen-ended remainder.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "rangeReceived",
+              "signature": "case rangeReceived",
+              "doc": "Bytes of a ranged request landed.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "fetchRetried",
+              "signature": "case fetchRetried",
+              "doc": "A ranged request brought nothing; the fetch backs off and resumes from the same offset.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "fetchVerified",
+              "signature": "case fetchVerified",
+              "doc": "The fetched bytes hashed to the requested content address.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "integrityRejected",
+              "signature": "case integrityRejected",
+              "doc": "The fetched bytes did not hash to the requested content address and were discarded.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum",
+          "name": "FfiTransferFeedItem",
+          "signature": "public enum FfiTransferFeedItem: Equatable, Hashable",
+          "doc": "What one pull of a subscription yields.",
+          "members": [
+            {
+              "kind": "case",
+              "name": "event",
+              "signature": "case event",
+              "doc": "The next event.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "lagged",
+              "signature": "case lagged",
+              "doc": "The subscriber fell behind and this many events never arrived. The transfers carried\non; only their progress went unseen.",
               "members": []
             }
           ]
@@ -2006,6 +2400,13 @@
             },
             {
               "kind": "fun",
+              "name": "transferEvents",
+              "signature": "fun transferEvents(): FfiTransferSubscription",
+              "doc": "Subscribe to the step-by-step progress of every upload, push and fetch this session\ndrives from now on, each event stamped with the milliseconds since this call on a\nmonotonic clock.\n\nProgress is advisory: a transfer never waits on its observer, so a subscriber that\nfalls behind reads [`FfiTransferFeedItem::Lagged`] with the count it missed. The\nsubscription ends once this session is dropped.",
+              "members": []
+            },
+            {
+              "kind": "fun",
               "name": "upload",
               "signature": "suspend fun upload(request: FfiUploadRequest, data: kotlin.ByteArray): FfiUploadOutcome",
               "doc": "Upload a full ciphertext blob (`data`) under `request`, driving the adaptive,\nresumable protocol with the code-driven recovery matrix.\n\n`data` crosses the boundary whole, so this is for blobs an app already holds in memory.\nTo push a sealed asset, original included, use [`push_asset`](Self::push_asset), which\nnever holds the original whole.",
@@ -2016,6 +2417,21 @@
               "name": "uploadStatus",
               "signature": "suspend fun uploadStatus(sessionId: kotlin.String): FfiUploadStatus?",
               "doc": "Query an upload session's progress (`HEAD /upload/{id}`). `None` means the\nsession is gone (discarded/expired/never-existent).",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "class",
+          "name": "FfiTransferSubscription",
+          "signature": "open class FfiTransferSubscription: Disposable, AutoCloseable, FfiTransferSubscriptionInterface",
+          "doc": "A live subscription to a session's transfer events: every step published after it opened.\n\nObtained from [`FfiSession::transfer_events`](crate::ffi::FfiSession::transfer_events).\nPull with [`next`](Self::next) until it answers `None`, which it does once the session that\npublishes the events is gone.",
+          "members": [
+            {
+              "kind": "fun",
+              "name": "next",
+              "signature": "suspend fun next(): FfiTransferFeedItem?",
+              "doc": "The next event, or how many were missed since the last pull; `None` once the session\npublishing them is gone, and from then on.\n\nWaits for an event when none is pending. Concurrent pulls take turns: each event is\ndelivered to exactly one of them.",
               "members": []
             }
           ]
@@ -2052,6 +2468,20 @@
               "name": "open",
               "signature": "@Throws(FfiException::class) fun open(root: kotlin.String, passphrase: kotlin.ByteArray, tier: FfiDeviceTier, client: FfiClientBuild): FfiWorkspace",
               "doc": "**Open** the existing library at `root` under `passphrase`, restoring its album keys and\nauthorities, every managed asset, and the `add_id` counter from disk. This is\nwhat makes an app relaunch resume rather than re-enroll.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "addLabel",
+              "signature": "fun addLabel(target: FfiLabelTarget, label: kotlin.String): List<kotlin.String>",
+              "doc": "Add `label` to `target` and return its labels afterwards.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "addRegion",
+              "signature": "fun addRegion(assetId: kotlin.String, shape: FfiRegionShape, labels: List<kotlin.String>): FfiRegion",
+              "doc": "Mark a region of `asset_id` with its first `labels`, and return it.\n\nEvery label is checked before the region is written, so a refused label leaves no\nunlabelled region behind; then the shape, then the asset. A refusal writes nothing.",
               "members": []
             },
             {
@@ -2098,6 +2528,13 @@
             },
             {
               "kind": "fun",
+              "name": "deleteRegion",
+              "signature": "fun deleteRegion(assetId: kotlin.String, regionId: kotlin.String)",
+              "doc": "Delete a region. **Final**: a concurrent or later edit of it on another device does not\nbring it back once the two merge, and its id is never live again.",
+              "members": []
+            },
+            {
+              "kind": "fun",
               "name": "deviceId",
               "signature": "fun deviceId(): kotlin.String",
               "doc": "This device's id (UUID string) — the `created_by_device` of every manifest it authors,\nand the id to report as the session's `device_id`.",
@@ -2119,6 +2556,13 @@
             },
             {
               "kind": "fun",
+              "name": "labels",
+              "signature": "fun labels(target: FfiLabelTarget): List<kotlin.String>",
+              "doc": "The labels `target` carries, sorted. An unknown target is [`FfiError::Label`] with\n[`FfiLabelRefusal::NotFound`].",
+              "members": []
+            },
+            {
+              "kind": "fun",
               "name": "openSyncedOriginal",
               "signature": "fun openSyncedOriginal(entry: FfiSyncHead, ciphertextPath: kotlin.String, destinationPath: kotlin.String): FfiOpenedOriginal",
               "doc": "**Open a synced original** from the ciphertext file at `ciphertext_path` to its plaintext\nat `destination_path`, in memory bounded by a few STREAM chunks whatever its size.\n\nThe entry goes through the chokepoint as\n[`apply_sync_entry_from_file`](Self::apply_sync_entry_from_file) would take it, then the\nfile is hashed while it is decrypted: it opens only if it is the ciphertext the manifest\ncommits to, every chunk authenticates, and the plaintext hashes to the signed sidecar's\ndigest. The plaintext is written to a hidden staging file beside the destination and\nrenamed into place only once all of that holds, so `destination_path` is untouched by\nany other verdict and never holds a partial or unverified original. An existing file there\nis replaced only by a verified one.\n\nThe workspace stays locked while the original decrypts.\n\n# Errors\n\n[`FfiError::Workspace`] when a file cannot be read or written, or the workspace itself\nfails; [`FfiError::InvalidArgument`] for a malformed entry or a destination with no file\nname. A refused entry is a verdict, never an error.",
@@ -2136,6 +2580,20 @@
               "name": "readPlaintext",
               "signature": "fun readPlaintext(assetId: kotlin.String): kotlin.ByteArray",
               "doc": "The plaintext bytes of a managed asset (what a gallery renders for a locally-held\noriginal).",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "regions",
+              "signature": "fun regions(assetId: kotlin.String): List<FfiRegion>",
+              "doc": "The asset's live regions, oldest first.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "removeLabel",
+              "signature": "fun removeLabel(target: FfiLabelTarget, label: kotlin.String): List<kotlin.String>",
+              "doc": "Remove `label` from `target` (every add of it this device has observed) and return its\nlabels afterwards. A label the target does not carry writes nothing and answers the\nunchanged list.",
               "members": []
             },
             {
@@ -2898,6 +3356,57 @@
         },
         {
           "kind": "data class",
+          "name": "FfiRegion",
+          "signature": "data class FfiRegion",
+          "doc": "One live region of an asset and its labels.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "regionId",
+              "signature": "var regionId: kotlin.String",
+              "doc": "The region id (UUIDv7, minted fresh per create, never reused).",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "shape",
+              "signature": "var shape: FfiRegionShape",
+              "doc": "The outline.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "labels",
+              "signature": "var labels: List<kotlin.String>",
+              "doc": "The region's labels, sorted.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "data class",
+          "name": "FfiStampedTransferEvent",
+          "signature": "data class FfiStampedTransferEvent",
+          "doc": "A transfer event and when it arrived: milliseconds since the subscription opened, on a\nmonotonic clock.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "atMs",
+              "signature": "var atMs: kotlin.ULong",
+              "doc": "Milliseconds since the subscription opened.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "event",
+              "signature": "var event: FfiTransferEvent",
+              "doc": "The event.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "data class",
           "name": "FfiSyncEntry",
           "signature": "data class FfiSyncEntry",
           "doc": "One remote feed entry to apply, as a sync feed delivers it.\n\n`album_id` and the two id-bearing fields carry the feed's own **16-byte UUID** form (the\n`bytes album_id` of `capsule.sync.v1.SyncEntry`), so an entry from\n[`FfiSession::sync_pull`](crate::ffi::FfiSession::sync_pull) is passed through unchanged.",
@@ -3363,6 +3872,13 @@
             },
             {
               "kind": "variant",
+              "name": "Label",
+              "signature": "class Label",
+              "doc": "A label or region edit was refused before anything was written: its target does not\nexist, the label rule refused the label, or the shape broke the normalized-coordinate\ncontract. `refusal` says which, so an editor shows the reason rather than parsing\n`detail`.",
+              "members": []
+            },
+            {
+              "kind": "variant",
               "name": "Escrow",
               "signature": "class Escrow",
               "doc": "A master-key escrow flow (store/fetch) failed.",
@@ -3430,6 +3946,85 @@
               "name": "Backend",
               "signature": "class Backend(message: String) : FfiHardwareSignerException(message)",
               "doc": "Any other backend error.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "sealed class",
+          "name": "FfiLabelRefusal",
+          "signature": "sealed class FfiLabelRefusal",
+          "doc": "Why a label or region edit was refused ([`FfiError::Label`]). Nothing was written.",
+          "members": [
+            {
+              "kind": "variant",
+              "name": "NotFound",
+              "signature": "object NotFound : FfiLabelRefusal()",
+              "doc": "The asset, region, stack or album does not exist, or no longer does.",
+              "members": []
+            },
+            {
+              "kind": "variant",
+              "name": "LabelEmpty",
+              "signature": "object LabelEmpty : FfiLabelRefusal()",
+              "doc": "The label is empty once trimmed.",
+              "members": []
+            },
+            {
+              "kind": "variant",
+              "name": "LabelTooLong",
+              "signature": "data class LabelTooLong",
+              "doc": "The normalized label is this many UTF-8 bytes, past the 256-byte bound.",
+              "members": []
+            },
+            {
+              "kind": "variant",
+              "name": "RegionOutOfRange",
+              "signature": "object RegionOutOfRange : FfiLabelRefusal()",
+              "doc": "A coordinate is not a finite number in `[0, 1]`.",
+              "members": []
+            },
+            {
+              "kind": "variant",
+              "name": "RegionEmpty",
+              "signature": "object RegionEmpty : FfiLabelRefusal()",
+              "doc": "A radius, width or height is zero.",
+              "members": []
+            },
+            {
+              "kind": "variant",
+              "name": "RegionPastEdge",
+              "signature": "object RegionPastEdge : FfiLabelRefusal()",
+              "doc": "The shape extends past an edge of the image.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "sealed class",
+          "name": "FfiLabelTarget",
+          "signature": "sealed class FfiLabelTarget",
+          "doc": "What a label attaches to beyond the asset itself, whose own labels are its user tags. The\nlabel rule is the same at every level.",
+          "members": [
+            {
+              "kind": "variant",
+              "name": "Region",
+              "signature": "data class Region",
+              "doc": "A region of an asset.",
+              "members": []
+            },
+            {
+              "kind": "variant",
+              "name": "Stack",
+              "signature": "data class Stack",
+              "doc": "A stack (UUID string).",
+              "members": []
+            },
+            {
+              "kind": "variant",
+              "name": "Album",
+              "signature": "data class Album",
+              "doc": "A container album (UUID string).",
               "members": []
             }
           ]
@@ -3537,6 +4132,64 @@
         },
         {
           "kind": "sealed class",
+          "name": "FfiRegionShape",
+          "signature": "sealed class FfiRegionShape",
+          "doc": "A region's outline, in coordinates normalized to `[0, 1]` over the original's display\norientation. Mirrors `capsule_core::sidecar::RegionShape`, single precision included, so a\nshape that validates on one side validates on the other.",
+          "members": [
+            {
+              "kind": "variant",
+              "name": "Circle",
+              "signature": "data class Circle",
+              "doc": "A circle centred at `(cx, cy)` (fractions of width and height) with radius `r`, a\nfraction of the image's shorter side.",
+              "members": []
+            },
+            {
+              "kind": "variant",
+              "name": "Rect",
+              "signature": "data class Rect",
+              "doc": "A rectangle with its top-left corner at `(x, y)`.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "sealed class",
+          "name": "FfiRetryReason",
+          "signature": "sealed class FfiRetryReason",
+          "doc": "Why an upload chunk is sent again. Mirrors [`RetryReason`] variant for variant.",
+          "members": [
+            {
+              "kind": "variant",
+              "name": "TransportReset",
+              "signature": "data class TransportReset",
+              "doc": "The connection reset or the request was lost; the same chunk is re-sent after the wait.",
+              "members": []
+            },
+            {
+              "kind": "variant",
+              "name": "OffsetRealign",
+              "signature": "data class OffsetRealign",
+              "doc": "The server named a different offset; the transfer continues from it.",
+              "members": []
+            },
+            {
+              "kind": "variant",
+              "name": "SessionLost",
+              "signature": "object SessionLost : FfiRetryReason()",
+              "doc": "The session was gone; a new one is created and the transfer continues from the offset\nit reports.",
+              "members": []
+            },
+            {
+              "kind": "variant",
+              "name": "ServerWait",
+              "signature": "data class ServerWait",
+              "doc": "The server asked the client to wait; afterwards the transfer resumes from the offset\n`HEAD` reports.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "sealed class",
           "name": "FfiSyncApplyOutcome",
           "signature": "sealed class FfiSyncApplyOutcome",
           "doc": "How applying one remote entry resolved — the three verdicts the client validation duties\npermit. There is no \"ignored\" case: a failure is always a named quarantine or a hold.",
@@ -3560,6 +4213,141 @@
               "name": "Quarantined",
               "signature": "data class Quarantined",
               "doc": "Refused. `reason` is a stable, switchable code; `detail` is English developer text.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "sealed class",
+          "name": "FfiTransferEvent",
+          "signature": "sealed class FfiTransferEvent",
+          "doc": "One step of an upload, a custody check or a ranged fetch. Mirrors [`TransferEvent`]\nvariant for variant and field for field; `blob` is the content address (lowercase hex) and\noffsets and lengths are bytes of ciphertext.",
+          "members": [
+            {
+              "kind": "variant",
+              "name": "SessionCreated",
+              "signature": "data class SessionCreated",
+              "doc": "`POST /upload` opened a session; `resume_offset` is non-zero when the server returned an\nexisting session for the same blob.",
+              "members": []
+            },
+            {
+              "kind": "variant",
+              "name": "SessionResumed",
+              "signature": "data class SessionResumed",
+              "doc": "An existing session resumed from the offset `HEAD` reported.",
+              "members": []
+            },
+            {
+              "kind": "variant",
+              "name": "ChunkSent",
+              "signature": "data class ChunkSent",
+              "doc": "A chunk left the client.",
+              "members": []
+            },
+            {
+              "kind": "variant",
+              "name": "ChunkAcked",
+              "signature": "data class ChunkAcked",
+              "doc": "The server acknowledged a chunk; `acked_offset` is its new received-byte count.",
+              "members": []
+            },
+            {
+              "kind": "variant",
+              "name": "ChunkRetried",
+              "signature": "data class ChunkRetried",
+              "doc": "A chunk will be sent again, or the transfer moves to another offset or session.",
+              "members": []
+            },
+            {
+              "kind": "variant",
+              "name": "ChecksumRejected",
+              "signature": "data class ChecksumRejected",
+              "doc": "The server refused a chunk whose body did not match its checksum; it is re-sent.",
+              "members": []
+            },
+            {
+              "kind": "variant",
+              "name": "Finalize",
+              "signature": "data class Finalize",
+              "doc": "Every declared byte reached the server; it is finalizing the blob.",
+              "members": []
+            },
+            {
+              "kind": "variant",
+              "name": "Merged",
+              "signature": "data class Merged",
+              "doc": "The server already held the blob: resolved as a merge, nothing sent.",
+              "members": []
+            },
+            {
+              "kind": "variant",
+              "name": "Verify",
+              "signature": "data class Verify",
+              "doc": "`POST /storage/verify` answered for an asset.",
+              "members": []
+            },
+            {
+              "kind": "variant",
+              "name": "Receipt",
+              "signature": "data class Receipt",
+              "doc": "A custody receipt for one blob verified under the pinned attestation keys.",
+              "members": []
+            },
+            {
+              "kind": "variant",
+              "name": "RangeRequested",
+              "signature": "data class RangeRequested",
+              "doc": "A ranged request left the client; `max_len` is the bounded window, or `None` for the\nopen-ended remainder.",
+              "members": []
+            },
+            {
+              "kind": "variant",
+              "name": "RangeReceived",
+              "signature": "data class RangeReceived",
+              "doc": "Bytes of a ranged request landed.",
+              "members": []
+            },
+            {
+              "kind": "variant",
+              "name": "FetchRetried",
+              "signature": "data class FetchRetried",
+              "doc": "A ranged request brought nothing; the fetch backs off and resumes from the same offset.",
+              "members": []
+            },
+            {
+              "kind": "variant",
+              "name": "FetchVerified",
+              "signature": "data class FetchVerified",
+              "doc": "The fetched bytes hashed to the requested content address.",
+              "members": []
+            },
+            {
+              "kind": "variant",
+              "name": "IntegrityRejected",
+              "signature": "data class IntegrityRejected",
+              "doc": "The fetched bytes did not hash to the requested content address and were discarded.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "sealed class",
+          "name": "FfiTransferFeedItem",
+          "signature": "sealed class FfiTransferFeedItem",
+          "doc": "What one pull of a subscription yields.",
+          "members": [
+            {
+              "kind": "variant",
+              "name": "Event",
+              "signature": "data class Event",
+              "doc": "The next event.",
+              "members": []
+            },
+            {
+              "kind": "variant",
+              "name": "Lagged",
+              "signature": "data class Lagged",
+              "doc": "The subscriber fell behind and this many events never arrived. The transfers carried\non; only their progress went unseen.",
               "members": []
             }
           ]

@@ -66,14 +66,15 @@ use crate::upload::{
 };
 
 /// The `capsule-core`-facing workspace verbs: enroll/open, albums, seal + import,
-/// verify, sync-apply, escrow minting, and the signed device directory. Separated from the
+/// verify, sync-apply, escrow minting, the signed device directory, and labels and regions. Separated from the
 /// networked client/session surface below because it is the half that touches no transport.
 mod workspace;
 
 pub use workspace::{
     FfiAlbum, FfiAssetFacts, FfiAssetMetadata, FfiClientBuild, FfiDeviceTier,
-    FfiHardwareKeyAgreement, FfiHardwareSigner, FfiHardwareSignerError, FfiOpenedOriginal,
-    FfiSyncApplyOutcome, FfiSyncEntry, FfiSyncHead, FfiUploadBlob, FfiVerifyOutcome, FfiWorkspace,
+    FfiHardwareKeyAgreement, FfiHardwareSigner, FfiHardwareSignerError, FfiLabelRefusal,
+    FfiLabelTarget, FfiOpenedOriginal, FfiRegion, FfiRegionShape, FfiSyncApplyOutcome,
+    FfiSyncEntry, FfiSyncHead, FfiUploadBlob, FfiVerifyOutcome, FfiWorkspace,
     p256_hardware_dek_round_trip,
 };
 
@@ -135,6 +136,17 @@ pub enum FfiError {
     /// sync entry is a [`FfiSyncApplyOutcome::Quarantined`] verdict, not an error.
     #[error("workspace error: {detail}")]
     Workspace {
+        /// English detail (developer/log message).
+        detail: String,
+    },
+    /// A label or region edit was refused before anything was written: its target does not
+    /// exist, the label rule refused the label, or the shape broke the normalized-coordinate
+    /// contract. `refusal` says which, so an editor shows the reason rather than parsing
+    /// `detail`.
+    #[error("label edit refused ({refusal:?}): {detail}")]
+    Label {
+        /// Why the edit was refused.
+        refusal: FfiLabelRefusal,
         /// English detail (developer/log message).
         detail: String,
     },

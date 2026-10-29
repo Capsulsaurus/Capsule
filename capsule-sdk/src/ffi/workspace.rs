@@ -1,6 +1,6 @@
 //! The **workspace verbs** of the `capsule_sdk` uniffi namespace — enroll,
 //! create an album, seal + import an asset, verify, sync-apply, mint an escrow, publish a
-//! directory — over `capsule-core`'s [`Workspace`].
+//! directory, label regions, stacks and albums — over `capsule-core`'s [`Workspace`].
 //!
 //! # What this layer is, and is not
 //!
@@ -43,10 +43,12 @@ use capsule_core::crypto::keys::{
 use capsule_core::crypto::primitives::DeviceTier;
 use capsule_core::crypto::provenance::ProvenanceRecord;
 use capsule_core::crypto::verify_asset::VerifyOutcome;
-use capsule_core::sidecar::SidecarV1;
+use capsule_core::sidecar::{
+    LabelError, Region, RegionError, RegionShape, SidecarV1, normalize_label,
+};
 use capsule_library::lifecycle::{
-    QuarantineReason, RemoteAssetFacts, RemoteEntry, RemoteHead, RemoteOriginal, SyncApplyOutcome,
-    UploadBundle, Workspace, hash_ciphertext_from,
+    LifecycleError, QuarantineReason, RemoteAssetFacts, RemoteEntry, RemoteHead, RemoteOriginal,
+    SyncApplyOutcome, UploadBundle, Workspace, hash_ciphertext_from,
 };
 use uuid::Uuid;
 
@@ -655,6 +657,200 @@ impl From<SyncApplyOutcome> for FfiSyncApplyOutcome {
             }
         }
     }
+}
+
+// ─── Labels and regions ──────────────────────────────────────────────────────
+
+/// A region's outline, in coordinates normalized to `[0, 1]` over the original's display
+/// orientation. Mirrors `capsule_core::sidecar::RegionShape`, single precision included, so a
+/// shape that validates on one side validates on the other.
+#[derive(Debug, Clone, Copy, PartialEq, uniffi::Enum)]
+pub enum FfiRegionShape {
+    /// A circle centred at `(cx, cy)` (fractions of width and height) with radius `r`, a
+    /// fraction of the image's shorter side.
+    Circle {
+        /// Centre, horizontal.
+        cx: f32,
+        /// Centre, vertical.
+        cy: f32,
+        /// Radius.
+        r: f32,
+    },
+    /// A rectangle with its top-left corner at `(x, y)`.
+    Rect {
+        /// Left edge.
+        x: f32,
+        /// Top edge.
+        y: f32,
+        /// Width.
+        w: f32,
+        /// Height.
+        h: f32,
+    },
+}
+
+impl From<FfiRegionShape> for RegionShape {
+    fn from(shape: FfiRegionShape) -> Self {
+        match shape {
+            FfiRegionShape::Circle { cx, cy, r } => Self::Circle { cx, cy, r },
+            FfiRegionShape::Rect { x, y, w, h } => Self::Rect { x, y, w, h },
+        }
+    }
+}
+
+impl From<RegionShape> for FfiRegionShape {
+    fn from(shape: RegionShape) -> Self {
+        match shape {
+            RegionShape::Circle { cx, cy, r } => Self::Circle { cx, cy, r },
+            RegionShape::Rect { x, y, w, h } => Self::Rect { x, y, w, h },
+        }
+    }
+}
+
+/// One live region of an asset and its labels.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct FfiRegion {
+    /// The region id (UUIDv7, minted fresh per create, never reused).
+    pub region_id: String,
+    /// The outline.
+    pub shape: FfiRegionShape,
+    /// The region's labels, sorted.
+    pub labels: Vec<String>,
+}
+
+impl FfiRegion {
+    fn new(region_id: Uuid, region: &Region) -> Self {
+        Self {
+            region_id: region_id.to_string(),
+            shape: region.shape.into(),
+            labels: region.labels.value().into_iter().collect(),
+        }
+    }
+}
+
+/// What a label attaches to beyond the asset itself, whose own labels are its user tags. The
+/// label rule is the same at every level.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum FfiLabelTarget {
+    /// A region of an asset.
+    Region {
+        /// The asset (UUID string).
+        asset_id: String,
+        /// The region (UUID string).
+        region_id: String,
+    },
+    /// A stack (UUID string).
+    Stack {
+        /// The stack.
+        stack_id: String,
+    },
+    /// A container album (UUID string).
+    Album {
+        /// The album.
+        album_id: String,
+    },
+}
+
+/// A label target with its ids parsed.
+#[derive(Debug, Clone, Copy)]
+enum LabelTarget {
+    Region { asset_id: Uuid, region_id: Uuid },
+    Stack(Uuid),
+    Album(Uuid),
+}
+
+impl TryFrom<&FfiLabelTarget> for LabelTarget {
+    type Error = FfiError;
+
+    fn try_from(target: &FfiLabelTarget) -> Result<Self, FfiError> {
+        Ok(match target {
+            FfiLabelTarget::Region {
+                asset_id,
+                region_id,
+            } => Self::Region {
+                asset_id: parse_uuid("asset_id", asset_id)?,
+                region_id: parse_uuid("region_id", region_id)?,
+            },
+            FfiLabelTarget::Stack { stack_id } => Self::Stack(parse_uuid("stack_id", stack_id)?),
+            FfiLabelTarget::Album { album_id } => Self::Album(parse_uuid("album_id", album_id)?),
+        })
+    }
+}
+
+/// Why a label or region edit was refused ([`FfiError::Label`]). Nothing was written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum FfiLabelRefusal {
+    /// The asset, region, stack or album does not exist, or no longer does.
+    NotFound,
+    /// The label is empty once trimmed.
+    LabelEmpty,
+    /// The normalized label is this many UTF-8 bytes, past the 256-byte bound.
+    LabelTooLong {
+        /// The normalized label's length.
+        bytes: u64,
+    },
+    /// A coordinate is not a finite number in `[0, 1]`.
+    RegionOutOfRange,
+    /// A radius, width or height is zero.
+    RegionEmpty,
+    /// The shape extends past an edge of the image.
+    RegionPastEdge,
+}
+
+/// A label or region verb's failure: the refusals an editor names as [`FfiError::Label`],
+/// everything else as the workspace failure it is.
+fn label_error(error: LifecycleError) -> FfiError {
+    let refusal = match &error {
+        LifecycleError::NotFound(_) => FfiLabelRefusal::NotFound,
+        LifecycleError::InvalidLabel(LabelError::Empty) => FfiLabelRefusal::LabelEmpty,
+        LifecycleError::InvalidLabel(LabelError::TooLong(bytes)) => FfiLabelRefusal::LabelTooLong {
+            bytes: u64::try_from(*bytes).unwrap_or(u64::MAX),
+        },
+        LifecycleError::InvalidRegion(RegionError::OutOfRange) => FfiLabelRefusal::RegionOutOfRange,
+        LifecycleError::InvalidRegion(RegionError::Empty) => FfiLabelRefusal::RegionEmpty,
+        LifecycleError::InvalidRegion(RegionError::PastEdge) => FfiLabelRefusal::RegionPastEdge,
+        _ => return error.into(),
+    };
+    tracing::debug!(?refusal, %error, "ffi: label edit refused");
+    FfiError::Label {
+        refusal,
+        detail: error.to_string(),
+    }
+}
+
+/// The labels `target` carries, sorted.
+fn target_labels(ws: &Workspace, target: LabelTarget) -> Result<Vec<String>, LifecycleError> {
+    Ok(match target {
+        LabelTarget::Region {
+            asset_id,
+            region_id,
+        } => ws
+            .regions(&asset_id)
+            .into_iter()
+            .find(|(id, _)| *id == region_id)
+            .ok_or_else(|| LifecycleError::NotFound(format!("region {region_id} of {asset_id}")))?
+            .1
+            .labels
+            .value()
+            .into_iter()
+            .collect(),
+        LabelTarget::Stack(stack_id) => ws.stack_labels(stack_id)?.into_iter().collect(),
+        LabelTarget::Album(album_id) => ws.album_labels(&album_id)?.into_iter().collect(),
+    })
+}
+
+/// `asset_id`'s live regions, oldest first, or [`LifecycleError::NotFound`] for an asset the
+/// workspace does not hold.
+fn asset_regions(ws: &Workspace, asset_id: Uuid) -> Result<Vec<FfiRegion>, LifecycleError> {
+    if ws.asset(&asset_id).is_none() {
+        return Err(LifecycleError::NotFound(format!("asset {asset_id}")));
+    }
+    // Region ids are UUIDv7 and the map is ordered by id, so id order is creation order.
+    Ok(ws
+        .regions(&asset_id)
+        .iter()
+        .map(|(id, region)| FfiRegion::new(*id, region))
+        .collect())
 }
 
 // ─── The workspace object ────────────────────────────────────────────────────
@@ -1329,5 +1525,119 @@ impl FfiWorkspace {
     /// verified against.
     pub fn user_ik_public(&self) -> Result<Vec<u8>, FfiError> {
         self.with(|ws| Ok(ws.user_ik_public().to_bytes()))
+    }
+
+    // ── Labels and regions ───────────────────────────────────────────────────
+    //
+    // Every edit is metadata-only: a region edit is a `metadata-update` of the asset's signed
+    // sidecar, a stack or album label edit rewrites that record. Labels go in as typed; the
+    // workspace normalizes them (NFC, trimmed, 1–256 bytes) and refuses one the rule refuses
+    // before anything is written. Every write answers with what its target holds afterwards.
+
+    /// The labels `target` carries, sorted. An unknown target is [`FfiError::Label`] with
+    /// [`FfiLabelRefusal::NotFound`].
+    pub fn labels(&self, target: FfiLabelTarget) -> Result<Vec<String>, FfiError> {
+        let target = LabelTarget::try_from(&target)?;
+        self.with(|ws| target_labels(ws, target).map_err(label_error))
+    }
+
+    /// Add `label` to `target` and return its labels afterwards.
+    pub fn add_label(
+        &self,
+        target: FfiLabelTarget,
+        label: String,
+    ) -> Result<Vec<String>, FfiError> {
+        let target = LabelTarget::try_from(&target)?;
+        self.with(|ws| {
+            match target {
+                LabelTarget::Region {
+                    asset_id,
+                    region_id,
+                } => ws.add_region_label(&asset_id, &region_id, &label),
+                LabelTarget::Stack(stack_id) => ws.add_stack_label(stack_id, &label),
+                LabelTarget::Album(album_id) => ws.add_album_label(album_id, &label),
+            }
+            .map_err(label_error)?;
+            tracing::info!(?target, "ffi: label added");
+            target_labels(ws, target).map_err(label_error)
+        })
+    }
+
+    /// Remove `label` from `target` (every add of it this device has observed) and return its
+    /// labels afterwards. A label the target does not carry writes nothing and answers the
+    /// unchanged list.
+    pub fn remove_label(
+        &self,
+        target: FfiLabelTarget,
+        label: String,
+    ) -> Result<Vec<String>, FfiError> {
+        let target = LabelTarget::try_from(&target)?;
+        self.with(|ws| {
+            let removed = match target {
+                LabelTarget::Region {
+                    asset_id,
+                    region_id,
+                } => ws.remove_region_label(&asset_id, &region_id, &label),
+                LabelTarget::Stack(stack_id) => ws.remove_stack_label(stack_id, &label),
+                LabelTarget::Album(album_id) => ws.remove_album_label(album_id, &label),
+            }
+            .map_err(label_error)?;
+            tracing::info!(?target, removed, "ffi: label removed");
+            target_labels(ws, target).map_err(label_error)
+        })
+    }
+
+    /// The asset's live regions, oldest first.
+    pub fn regions(&self, asset_id: String) -> Result<Vec<FfiRegion>, FfiError> {
+        let asset_id = parse_uuid("asset_id", &asset_id)?;
+        self.with(|ws| asset_regions(ws, asset_id).map_err(label_error))
+    }
+
+    /// Mark a region of `asset_id` with its first `labels`, and return it.
+    ///
+    /// Every label is checked before the region is written, so a refused label leaves no
+    /// unlabelled region behind; then the shape, then the asset. A refusal writes nothing.
+    pub fn add_region(
+        &self,
+        asset_id: String,
+        shape: FfiRegionShape,
+        labels: Vec<String>,
+    ) -> Result<FfiRegion, FfiError> {
+        let asset_id = parse_uuid("asset_id", &asset_id)?;
+        for label in &labels {
+            normalize_label(label)
+                .map_err(LifecycleError::from)
+                .map_err(label_error)?;
+        }
+        self.with(|ws| {
+            let region_id = ws
+                .add_region(&asset_id, shape.into())
+                .map_err(label_error)?;
+            for label in &labels {
+                ws.add_region_label(&asset_id, &region_id, label)
+                    .map_err(label_error)?;
+            }
+            tracing::info!(%asset_id, %region_id, labels = labels.len(), "ffi: region added");
+            ws.regions(&asset_id)
+                .iter()
+                .find(|(id, _)| *id == region_id)
+                .map(|(id, region)| FfiRegion::new(*id, region))
+                .ok_or_else(|| FfiError::Workspace {
+                    detail: format!("region {region_id} was written and is not live"),
+                })
+        })
+    }
+
+    /// Delete a region. **Final**: a concurrent or later edit of it on another device does not
+    /// bring it back once the two merge, and its id is never live again.
+    pub fn delete_region(&self, asset_id: String, region_id: String) -> Result<(), FfiError> {
+        let asset_id = parse_uuid("asset_id", &asset_id)?;
+        let region_id = parse_uuid("region_id", &region_id)?;
+        self.with(|ws| {
+            ws.delete_region(&asset_id, &region_id)
+                .map_err(label_error)?;
+            tracing::info!(%asset_id, %region_id, "ffi: region deleted");
+            Ok(())
+        })
     }
 }
