@@ -64,19 +64,6 @@ public actor ManagedLibrary {
         return catalog
     }
 
-    /// Remove an asset's bytes — its media file and paired sidecar — from the store.
-    ///
-    /// Addressed by *stem* rather than by an exact path because the catalog does
-    /// not record a file extension: ``ImportService`` derives one from the source
-    /// filename, so `{uuid}.*` inside the capture-date partition is the only thing
-    /// both sides agree on. That also sweeps the `.cbor` sidecar without naming it.
-    ///
-    /// A missing file is not an error. A purge that runs twice, or after a partial
-    /// import, must still converge on "the bytes are gone".
-    ///
-    /// - Parameter captureDate: the asset's capture instant, which is what decides
-    ///   its `media/{YYYY}/{YYYY-MM}` partition. Read it from the catalog row
-    ///   *before* deleting that row, or the directory is no longer derivable.
     /// The media file an asset's bytes live in, or `nil` when none is on disk.
     ///
     /// Found by stem for the same reason ``removeAssetFiles(uuid:captureDate:)``
@@ -98,6 +85,19 @@ public actor ManagedLibrary {
     /// The extension every sidecar is written under; see ``ManagedLibraryLayout``.
     private static let sidecarExtension = "cbor"
 
+    /// Remove an asset's bytes — its media file and paired sidecar — from the store.
+    ///
+    /// Addressed by *stem* rather than by an exact path because the catalog does
+    /// not record a file extension: ``ImportService`` derives one from the source
+    /// filename, so `{uuid}.*` inside the capture-date partition is the only thing
+    /// both sides agree on. That also sweeps the `.cbor` sidecar without naming it.
+    ///
+    /// A missing file is not an error. A purge that runs twice, or after a partial
+    /// import, must still converge on "the bytes are gone".
+    ///
+    /// - Parameter captureDate: the asset's capture instant, which is what decides
+    ///   its `media/{YYYY}/{YYYY-MM}` partition. Read it from the catalog row
+    ///   *before* deleting that row, or the directory is no longer derivable.
     public func removeAssetFiles(uuid: String, captureDate: Date) async throws {
         let directory = layout.mediaDirectory(forCaptureDate: captureDate)
         guard await fileStore.fileExists(at: directory) else { return }
