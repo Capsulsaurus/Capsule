@@ -1797,6 +1797,7 @@
     <string name="error_auth_profile_invalid">Ese nombre visible no se puede usar.</string>
     <string name="error_auth_profile_not_found">Esa cuenta ya no existe.</string>
     <string name="error_auth_rate_limited">Demasiados intentos. Espera e inténtalo de nuevo.</string>
+    <string name="error_auth_registration_at_capacity">Este servidor está gestionando demasiados registros en este momento. Inténtalo de nuevo en breve.</string>
     <string name="error_auth_registration_invalid">Ese correo electrónico o contraseña no se pueden usar. Las contraseñas deben tener al menos 12 caracteres.</string>
     <string name="error_auth_revoke_proof_invalid">No se pudo confirmar que eres tú. No se cerró ninguna sesión.</string>
     <string name="error_auth_revoke_proof_required">Confirma con la clave de tu cuenta para cerrar sesión en todos los dispositivos.</string>

@@ -1806,6 +1806,7 @@
   "error.auth.profile_invalid": "해당 표시 이름은 사용할 수 없습니다.",
   "error.auth.profile_not_found": "해당 계정이 더 이상 존재하지 않습니다.",
   "error.auth.rate_limited": "시도 횟수가 너무 많습니다. 잠시 후 다시 시도해 주세요.",
+  "error.auth.registration_at_capacity": "현재 이 서버가 처리 중인 가입 요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.",
   "error.auth.registration_invalid": "해당 이메일 또는 비밀번호는 사용할 수 없습니다. 비밀번호는 12자 이상이어야 합니다.",
   "error.auth.revoke_proof_invalid": "본인 확인에 실패했습니다. 로그아웃된 기기는 없습니다.",
   "error.auth.revoke_proof_required": "모든 기기에서 로그아웃하려면 계정 키로 확인해 주세요.",

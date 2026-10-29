@@ -1797,6 +1797,7 @@
     <string name="error_auth_profile_invalid">لا يمكن استخدام هذا الاسم المعروض.</string>
     <string name="error_auth_profile_not_found">لم يعد هذا الحساب موجودًا.</string>
     <string name="error_auth_rate_limited">محاولات كثيرة جدًا. يُرجى الانتظار ثم المحاولة مرة أخرى.</string>
+    <string name="error_auth_registration_at_capacity">يتعامل هذا الخادم مع عدد كبير جدًا من عمليات التسجيل حاليًا. يُرجى المحاولة مرة أخرى بعد قليل.</string>
     <string name="error_auth_registration_invalid">لا يمكن استخدام هذا البريد الإلكتروني أو كلمة المرور. يجب أن تتكون كلمة المرور من 12 حرفًا على الأقل.</string>
     <string name="error_auth_revoke_proof_invalid">لم يتم التأكد من هويتك. لم يتم تسجيل الخروج من أي جهاز.</string>
     <string name="error_auth_revoke_proof_required">أكِّد بمفتاح حسابك لتسجيل الخروج من جميع الأجهزة.</string>
