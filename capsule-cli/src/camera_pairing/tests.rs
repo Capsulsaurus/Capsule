@@ -60,7 +60,8 @@ fn the_identity_is_created_once_and_reused_across_runs() {
 fn renaming_keeps_the_guid_a_camera_paired_with() {
     let scratch = Scratch::new();
     let (paired, _) = scratch.store().load_or_create(|| "Old".into()).unwrap();
-    let renamed = scratch.store().rename("  Darkroom  ").unwrap();
+    let (renamed, created) = scratch.store().rename("  Darkroom  ").unwrap();
+    assert!(!created, "the identity already existed");
     assert_eq!(renamed.guid, paired.guid);
     assert_eq!(renamed.name, "Darkroom", "trimmed");
     assert_eq!(scratch.store().load().unwrap(), Some(renamed));
@@ -69,7 +70,8 @@ fn renaming_keeps_the_guid_a_camera_paired_with() {
 #[test]
 fn renaming_before_any_pairing_creates_the_identity() {
     let scratch = Scratch::new();
-    let named = scratch.store().rename("Laptop").unwrap();
+    let (named, created) = scratch.store().rename("Laptop").unwrap();
+    assert!(created, "this run created the identity");
     assert!(!named.guid.is_nil());
     assert_eq!(scratch.store().load().unwrap(), Some(named));
 }

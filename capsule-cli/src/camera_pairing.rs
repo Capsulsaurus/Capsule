@@ -162,19 +162,23 @@ impl PairingStore {
     }
 
     /// Rename the identity, creating it first where there is none. The GUID is kept.
-    pub fn rename(&self, name: &str) -> Result<Pairing, PairingError> {
+    /// Returns it and whether it was created now.
+    pub fn rename(&self, name: &str) -> Result<(Pairing, bool), PairingError> {
         let name = validate_name(name)?;
-        let mut pairing = match self.load()? {
-            Some(pairing) => pairing,
-            None => Pairing {
-                guid: Uuid::new_v4(),
-                name: String::new(),
-            },
+        let (mut pairing, created) = match self.load()? {
+            Some(pairing) => (pairing, false),
+            None => (
+                Pairing {
+                    guid: Uuid::new_v4(),
+                    name: String::new(),
+                },
+                true,
+            ),
         };
         pairing.name = name;
         self.save(&pairing)?;
-        tracing::info!(guid = %pairing.guid, name = %pairing.name, "camera pairing: renamed");
-        Ok(pairing)
+        tracing::info!(guid = %pairing.guid, name = %pairing.name, created, "camera pairing: renamed");
+        Ok((pairing, created))
     }
 
     /// Write `pairing` beside the target and rename it into place, so a crash leaves the old

@@ -104,7 +104,8 @@
 //! - `library_list_json_without_a_library_is_a_usage_error` — the parser's exit status 2.
 //! - `library_list_json_of_an_unknown_view_is_a_usage_error` — the parser's exit status 2.
 //! - `camera_identity_json_reports_a_renamed_identity_and_keeps_it` — exit 0, one JSON
-//!   document: the GUID (redacted) and the name, identical on a second run.
+//!   document: the GUID (redacted) and the name, `created` on the naming run that minted it,
+//!   and otherwise identical on a second run.
 //! - `camera_import_json_with_a_blank_address_prints_nothing_on_stdout` — a run-level failure
 //!   before any library or camera is opened.
 //! - `camera_import_json_without_an_address_is_a_usage_error` — the parser's exit status 2. A
@@ -1241,7 +1242,15 @@ fn camera_identity_json_reports_a_renamed_identity_and_keeps_it() {
         &["camera", "identity", "--name", "Contract", "--json"],
     );
     let again = run(&scratch, &["camera", "identity", "--json"]);
-    assert_eq!(named, again, "the identity persists between runs");
+    assert!(
+        named.contains("\"created\": true"),
+        "the naming run created the identity:\n{named}"
+    );
+    assert_eq!(
+        named.replace("\"created\": true", "\"created\": false"),
+        again,
+        "the identity persists between runs"
+    );
     insta::assert_snapshot!(redact_guids(&again));
 }
 

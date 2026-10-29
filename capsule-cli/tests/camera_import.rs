@@ -411,6 +411,7 @@ fn the_identity_is_created_once_and_renamed_without_a_new_guid() {
         &["camera", "identity", "--name", "Darkroom", "--json"],
         false,
     ));
+    assert_eq!(renamed["created"], false, "renaming keeps the identity");
     assert_eq!(renamed["guid"], first["guid"]);
     assert_eq!(renamed["name"], "Darkroom");
 

@@ -1897,7 +1897,7 @@ fn camera_command(command: CameraCommands) -> Result<()> {
     match command {
         CameraCommands::Identity { name, json } => {
             let (pairing, created) = match name {
-                Some(name) => (store.rename(&name)?, false),
+                Some(name) => store.rename(&name)?,
                 None => store.load_or_create(default_name)?,
             };
             if json {
