@@ -2127,6 +2127,123 @@
       ]
     },
     {
+      "about": "Move assets to the trash or restore them from it, in the library and on the server",
+      "name": "trash",
+      "subcommands": [
+        {
+          "about": "Move assets to the trash: sign a delete carrying a retention window and send it to the server. Soft: each asset stays restorable until its window elapses",
+          "args": [
+            {
+              "help": "Path to the Capsule library",
+              "id": "library",
+              "long": "library",
+              "positional": false,
+              "repeatable": false,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "PATH"
+              ]
+            },
+            {
+              "help": "The asset to move to the trash (repeatable)",
+              "id": "asset",
+              "long": "asset",
+              "positional": false,
+              "repeatable": true,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "ASSET_ID"
+              ]
+            },
+            {
+              "default_values": [
+                "30"
+              ],
+              "help": "Retention window, in days, the delete signs",
+              "id": "retain_days",
+              "long": "retain-days",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": true,
+              "value_names": [
+                "DAYS"
+              ]
+            },
+            {
+              "help": "Read the library passphrase from stdin instead of prompting, so the command works in scripts and CI where there is no terminal",
+              "id": "passphrase_stdin",
+              "long": "passphrase-stdin",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            },
+            {
+              "help": "Print the run as one JSON document on stdout: the totals and each asset's outcome (applied, or failed with a stable kind and the server's code)",
+              "id": "json",
+              "long": "json",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            }
+          ],
+          "name": "delete"
+        },
+        {
+          "about": "Restore assets from the trash: sign a trash-restore and send it to the server. An asset whose retention window has closed cannot be restored, and is not retried",
+          "args": [
+            {
+              "help": "Path to the Capsule library",
+              "id": "library",
+              "long": "library",
+              "positional": false,
+              "repeatable": false,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "PATH"
+              ]
+            },
+            {
+              "help": "The asset to restore (repeatable)",
+              "id": "asset",
+              "long": "asset",
+              "positional": false,
+              "repeatable": true,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "ASSET_ID"
+              ]
+            },
+            {
+              "help": "Read the library passphrase from stdin instead of prompting, so the command works in scripts and CI where there is no terminal",
+              "id": "passphrase_stdin",
+              "long": "passphrase-stdin",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            },
+            {
+              "help": "Print the run as one JSON document on stdout: the totals and each asset's outcome (applied, or failed with a stable kind such as `retention_elapsed`, the server's code and the retention floor)",
+              "id": "json",
+              "long": "json",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            }
+          ],
+          "name": "restore"
+        }
+      ]
+    },
+    {
       "about": "Ask the server whether it durably holds this library's originals, and keep its signed answer as evidence",
       "args": [
         {

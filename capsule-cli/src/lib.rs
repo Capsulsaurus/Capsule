@@ -24,7 +24,7 @@ use capsule_sdk::cache_budget::DesktopConnectionClass;
 use cli::{
     AuthCommands, CacheCommands, Cli, Commands, EditCommands, EditLibraryArgs, ImportProviderArg,
     LabelArgs, LabelCommands, LibraryCommands, PeerCommands, RegionCommands, RepairCommands,
-    ShareCommands, SyncCommands,
+    ShareCommands, SyncCommands, TrashCommands,
 };
 use colored::*;
 use dialoguer::{Confirm, Input, Password};
@@ -615,6 +615,45 @@ async fn dispatch(command: Commands) -> Result<()> {
                     return Err(eyre!("Cull failed: {}", cull::describe_error(&error)));
                 }
             }
+        }
+
+        // ── Trash ─────────────────────────────────────────────────────────
+        Commands::Trash { command } => {
+            let (library, passphrase_stdin, json, request) = match command {
+                TrashCommands::Delete {
+                    library,
+                    asset,
+                    retain_days,
+                    passphrase_stdin,
+                    json,
+                } => (
+                    library,
+                    passphrase_stdin,
+                    json,
+                    remote::TrashRequest {
+                        action: remote::TrashAction::Delete,
+                        assets: asset,
+                        retain_days,
+                    },
+                ),
+                TrashCommands::Restore {
+                    library,
+                    asset,
+                    passphrase_stdin,
+                    json,
+                } => (
+                    library,
+                    passphrase_stdin,
+                    json,
+                    remote::TrashRequest {
+                        action: remote::TrashAction::TrashRestore,
+                        assets: asset,
+                        retain_days: cull::DEFAULT_RETAIN_DAYS,
+                    },
+                ),
+            };
+            let mut ws = open_workspace(&library, passphrase_stdin)?;
+            trash_workspace(&mut ws, &request, json).await?;
         }
 
         // ── Show ──────────────────────────────────────────────────────────
@@ -2302,6 +2341,42 @@ async fn verify_workspace(
         Some(reason) => Err(eyre!("verify failed: {reason}")),
         None => Ok(()),
     }
+}
+
+/// Run one `capsule trash delete|restore` over `workspace` and report it: one JSON document
+/// under `--json`, a summary line and one line per failed asset otherwise. A run with any
+/// failed asset exits non-zero.
+async fn trash_workspace(
+    workspace: &mut Workspace,
+    request: &remote::TrashRequest,
+    json: bool,
+) -> Result<()> {
+    let remote = remote::RemoteConfig::from_env();
+    let store = session_store()?;
+    let summary = remote::trash(&remote, &store, workspace, request)
+        .await
+        .map_err(|error| {
+            if matches!(error, remote::RemoteError::NotAuthenticated) {
+                return eyre!(NOT_AUTHENTICATED);
+            }
+            eyre!("trash failed: {}", describe_remote_error(&error))
+        })?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&summary)?);
+    } else {
+        println!("{}", remote::trash_line(&summary).cyan());
+        for outcome in summary.failures() {
+            eprintln!("{}", remote::trash_failure_line(outcome).red());
+        }
+    }
+    if summary.failed > 0 {
+        return Err(eyre!(
+            "trash failed: {} of {} assets were not applied",
+            summary.failed,
+            summary.outcomes.len()
+        ));
+    }
+    Ok(())
 }
 
 /// The flags of one `capsule share create` run.
