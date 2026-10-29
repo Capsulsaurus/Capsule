@@ -10,7 +10,7 @@ import ManagedStore
 /// the catalog; deletion is a soft delete, leaving the file in place. The
 /// import flow calls ``refresh()`` once an import completes so the timeline
 /// picks up the new assets.
-public actor ManagedProvider: AssetProvider, TrashProvider {
+public actor ManagedProvider: AssetProvider, TrashProvider, AssetOwning {
     /// Upper bound on the managed timeline window for the prototype.
     private static let timelineLimit = 10000
 
@@ -129,6 +129,14 @@ public actor ManagedProvider: AssetProvider, TrashProvider {
         }
         try await catalog.purgeAsset(id: uuid)
         await emitReload()
+    }
+
+    // MARK: AssetOwning
+
+    /// Whether the managed catalog indexes this asset — trashed rows included,
+    /// so a restore or purge of an import routes here.
+    public func owns(_ id: AssetID) async -> Bool {
+        await (try? asset(for: id)) != nil
     }
 
     // MARK: Private
