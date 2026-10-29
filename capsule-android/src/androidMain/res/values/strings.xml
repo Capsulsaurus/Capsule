@@ -1810,7 +1810,7 @@
     <string name="auth_login_title">Login</string>
     <string name="auth_new_password">New Password</string>
     <string name="auth_no_account">Don\'t have an account?</string>
-    <string name="auth_oidc_ceremony_lost">This sign-in wasn\'t started in this tab. Start again from the login page.</string>
+    <string name="auth_oidc_ceremony_lost">This tab can no longer find this sign-in. Start again from the login page.</string>
     <string name="auth_oidc_completing">Finishing sign-in…</string>
     <string name="auth_oidc_failed_title">Sign-in Not Completed</string>
     <string name="auth_oidc_not_completed">Your identity provider did not complete the sign-in.</string>

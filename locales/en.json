@@ -7312,8 +7312,8 @@
     "context": "Login prompt preceding the sign-up link."
   },
   "auth.oidc.ceremony_lost": {
-    "message": "This sign-in wasn't started in this tab. Start again from the login page.",
-    "context": "Web single sign-on callback: this browser tab holds no sign-in it began that matches the identity provider's answer (it was started in another tab, or this tab's record of it is gone), so the answer cannot be finished here."
+    "message": "This tab can no longer find this sign-in. Start again from the login page.",
+    "context": "Web single sign-on callback: this browser tab holds no record of a sign-in matching the identity provider's answer (it may have been started in another tab, cleared, or replaced by a later sign-in in this tab), so the answer cannot be finished here."
   },
   "auth.oidc.completing": {
     "message": "Finishing sign-in…",
