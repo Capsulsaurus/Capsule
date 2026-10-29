@@ -1019,10 +1019,14 @@ impl std::fmt::Display for RenderedReports<'_> {
             writeln!(f, "  report {}", report.report_id)?;
             writeln!(f, "    from: {}", report.reporting_server)?;
             writeln!(f, "    against: {}", report.reported_user)?;
+            // Debug-quoted as the reason is: intake only trims and length-caps the asset hash
+            // and album id, so each is a peer's string, and a control character in either must
+            // reach the operator's terminal as an escape.
             writeln!(
                 f,
-                "    asset: {} in album {}",
-                report.asset_hash, report.album_id
+                "    asset: {:?} in album {:?}",
+                report.asset_hash,
+                report.album_id.as_str()
             )?;
             writeln!(
                 f,

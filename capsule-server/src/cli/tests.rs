@@ -166,11 +166,37 @@ fn the_report_queue_lists_every_report_with_the_peers_reason_escaped() {
         "report 01937b7c-0000-7000-8000-0000000000r1",
         "from: other.test",
         "against: bob",
-        "in album album-1",
+        "in album \"album-1\"",
         "reason: \"spam\\u{7}\"",
     ] {
         assert!(shown.contains(fact), "{fact}: {shown}");
     }
+}
+
+#[test]
+fn the_report_queue_escapes_a_peers_asset_hash_and_album_id() {
+    // Intake trims and length-caps these and nothing more, so a pinned peer chooses them: an
+    // ANSI erase or an OSC 52 clipboard write must reach the operator's terminal escaped.
+    let at = jiff::Timestamp::UNIX_EPOCH;
+    let report = crate::moderation::FederatedReport {
+        report_id: "01937b7c-0000-7000-8000-0000000000r2".to_owned(),
+        reporting_server: "other.test".to_owned(),
+        reported_user: crate::store::UserId::new("bob"),
+        asset_hash: "\u{1b}[2J".to_owned(),
+        album_id: crate::store::AlbumId::new("\u{1b}]52;c;cHduZWQ=\u{7}"),
+        reason: None,
+        reported_at: at,
+        received_at: at,
+        signature: Vec::new(),
+        signed: Vec::new(),
+    };
+    let shown = render_reports(std::slice::from_ref(&report)).to_string();
+    assert!(!shown.contains('\u{1b}'), "{shown:?}");
+    assert!(!shown.contains('\u{7}'), "{shown:?}");
+    assert!(
+        shown.contains("asset: \"\\u{1b}[2J\" in album \"\\u{1b}]52;c;cHduZWQ=\\u{7}\""),
+        "{shown}"
+    );
 }
 
 #[test]
