@@ -88,6 +88,13 @@ const PROBLEM_JSON: &str = "application/problem+json";
 /// The extension member the i18n contract is written in terms of.
 pub const CODE_MEMBER: &str = "code";
 
+/// The extension member every problem carries its request id in.
+///
+/// Stamped by [`crate::request_span::RequestSpan`], which owns the id: the same UUIDv7 the
+/// `X-Request-Id` header carries and the request's log lines are filed under, so a user quoting
+/// a refusal hands an operator the one string that finds it.
+pub const REQUEST_ID_MEMBER: &str = "request_id";
+
 /// The code a status the mapping does not name receives.
 ///
 /// Reaching this means the surface grew a rejection nobody localized. It is a code rather than
@@ -275,7 +282,7 @@ fn retry_instant(bytes: &[u8]) -> Option<u64> {
 }
 
 /// Whether the response is an RFC 9457 problem.
-fn is_problem(headers: &http::HeaderMap) -> bool {
+pub(crate) fn is_problem(headers: &http::HeaderMap) -> bool {
     headers
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
@@ -322,7 +329,7 @@ fn coded(status: u16, bytes: Bytes) -> Bytes {
 }
 
 /// Reads a body to bytes.
-async fn collect(
+pub(crate) async fn collect(
     body: kynos::http::body::Body,
 ) -> Result<Bytes, Box<dyn std::error::Error + Send + Sync>> {
     use http_body_util::BodyExt as _;

@@ -142212,7 +142212,7 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "This sign-in was started in another tab, or too long ago. Start again from the login page."
+            "value": "This tab can no longer find this sign-in. Start again from the login page."
           }
         }
       }

@@ -1073,6 +1073,11 @@ async fn a_non_member_a_former_member_and_an_unknown_album_get_one_refusal() {
     )
     .await;
 
+    let (unknown, former, stranger) = (
+        support::without_request_id(unknown),
+        support::without_request_id(former),
+        support::without_request_id(stranger),
+    );
     assert_eq!(unknown, former, "one body for every refusal");
     assert_eq!(former, stranger, "one body for every refusal");
 }

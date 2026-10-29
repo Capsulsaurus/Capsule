@@ -1306,7 +1306,11 @@ async fn a_foreign_session_is_indistinguishable_from_an_unknown_one() {
         let never = ask(unknown).send().await;
         foreign.assert_status(StatusCode::NOT_FOUND);
         never.assert_status(StatusCode::NOT_FOUND);
-        assert_eq!(foreign.bytes(), never.bytes(), "{method} tells them apart");
+        assert_eq!(
+            support::masked_request_id(foreign.bytes()),
+            support::masked_request_id(never.bytes()),
+            "{method} tells them apart"
+        );
         if method != "HEAD" {
             assert_eq!(
                 code(&foreign.json::<serde_json::Value>()),
@@ -3131,6 +3135,11 @@ async fn a_reader_a_former_member_and_a_stranger_get_the_one_album_refusal() {
     let (fixture, bearer) = with_bob(None).await;
     let stranger = refused(&fixture, &bearer).await;
 
+    let (reader, former, stranger) = (
+        support::without_request_id(reader),
+        support::without_request_id(former),
+        support::without_request_id(stranger),
+    );
     assert_eq!(reader, former, "one body for every refusal");
     assert_eq!(former, stranger, "one body for every refusal");
 }

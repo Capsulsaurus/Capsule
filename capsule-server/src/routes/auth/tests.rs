@@ -137,3 +137,112 @@ fn every_rejection_publishes_its_catalog_code() {
         error_codes::AUTH_UNAVAILABLE
     );
 }
+
+// ===========================================================================================
+// The registration source limiter (#1001)
+// ===========================================================================================
+
+/// A counter store that cannot be reached.
+#[derive(Debug)]
+struct DownCounters;
+
+fn down<T>() -> crate::store::StoreFuture<'static, T> {
+    Box::pin(async {
+        Err(StoreError::Unavailable {
+            store: "counters",
+            detail: "down".to_owned(),
+        })
+    })
+}
+
+impl crate::counter::CounterStore for DownCounters {
+    fn charge<'a>(
+        &'a self,
+        _: &'a CounterKey,
+        _: u32,
+        _: crate::counter::Budget,
+        _: jiff::Timestamp,
+    ) -> crate::store::StoreFuture<'a, Verdict> {
+        down()
+    }
+
+    fn peek<'a>(
+        &'a self,
+        _: &'a CounterKey,
+        _: crate::counter::Budget,
+        _: jiff::Timestamp,
+    ) -> crate::store::StoreFuture<'a, Verdict> {
+        down()
+    }
+
+    fn reset<'a>(&'a self, _: &'a CounterKey) -> crate::store::StoreFuture<'a, ()> {
+        down()
+    }
+}
+
+fn counters(store: std::sync::Arc<dyn crate::counter::CounterStore>) -> CounterContext {
+    CounterContext::new(
+        store,
+        std::sync::Arc::new(crate::store::memory::ManualClock::default()),
+    )
+}
+
+fn client(address: &str) -> ClientAddr {
+    ClientAddr::new(Some(address.parse().expect("a test address")))
+}
+
+#[tokio::test]
+async fn an_unreachable_registration_limiter_refuses_rather_than_admitting() {
+    let counters = counters(std::sync::Arc::new(DownCounters));
+    let refused = charge_registration_source(&counters, client("203.0.113.9")).await;
+    assert!(
+        matches!(
+            refused,
+            Err(RegisterRejection::Unavailable { code }) if code == error_codes::AUTH_UNAVAILABLE
+        ),
+        "{refused:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_spent_registration_budget_is_a_rate_limit_with_a_retry_instant() {
+    let counters = counters(std::sync::Arc::new(crate::counter::InMemoryCounters::new()));
+    for _ in 0..budgets::REGISTRATION_SOURCE.limit {
+        charge_registration_source(&counters, client("203.0.113.9"))
+            .await
+            .expect("admitted");
+    }
+    let refused = charge_registration_source(&counters, client("203.0.113.9")).await;
+    assert!(
+        matches!(
+            refused,
+            Err(RegisterRejection::RateLimited { code, retry_after })
+                if code == error_codes::AUTH_RATE_LIMITED && retry_after > 0
+        ),
+        "{refused:?}"
+    );
+
+    // The budget is the source's, not the deployment's: another address is still admitted.
+    charge_registration_source(&counters, client("203.0.113.10"))
+        .await
+        .expect("another source has its own budget");
+}
+
+#[tokio::test]
+async fn a_full_registration_partition_is_a_rate_limit_and_not_an_outage() {
+    let counters = counters(std::sync::Arc::new(
+        crate::counter::InMemoryCounters::new().with_ceiling(1),
+    ));
+    charge_registration_source(&counters, client("203.0.113.9"))
+        .await
+        .expect("the first source fits");
+    let refused = charge_registration_source(&counters, client("203.0.113.10")).await;
+    assert!(
+        matches!(
+            refused,
+            Err(RegisterRejection::RateLimited { code, retry_after })
+                if code == error_codes::AUTH_RATE_LIMITED && retry_after > 0
+        ),
+        "{refused:?}"
+    );
+}
