@@ -12,7 +12,9 @@
 //! [`upload_status`](crate::ffi::FfiSession::upload_status),
 //! [`fetch_blob_to_path`](crate::ffi::FfiSession::fetch_blob_to_path),
 //! [`sync_pull`](crate::ffi::FfiSession::sync_pull),
-//! [`logout`](crate::ffi::FfiSession::logout)) rides that handle. **Tokens never cross the FFI
+//! [`logout`](crate::ffi::FfiSession::logout)) rides that handle, and
+//! [`transfer_events`](crate::ffi::FfiSession::transfer_events) subscribes to the step-by-step
+//! progress of the uploads and fetches it drives. **Tokens never cross the FFI
 //! boundary raw**: the SDK session store injects and auto-refreshes the bearer
 //! behind the handle, so foreign code never sees access/refresh token material.
 //!
@@ -49,6 +51,7 @@ use secrecy::{ExposeSecret as _, SecretString};
 
 use crate::auth::{AuthClient, AuthError, LoginOutcome, Session};
 use crate::directory::{DirectoryClient, DirectoryError};
+use crate::events::TransferEvents;
 use crate::fetch::{FetchError, HttpBlobSource, RangedFetcher};
 use crate::net::ConnectionClass;
 use crate::push::{AssetPushReport, PushError, PushedBlob};
@@ -72,6 +75,16 @@ pub use workspace::{
     FfiHardwareKeyAgreement, FfiHardwareSigner, FfiHardwareSignerError, FfiOpenedOriginal,
     FfiSyncApplyOutcome, FfiSyncEntry, FfiSyncHead, FfiUploadBlob, FfiVerifyOutcome, FfiWorkspace,
     p256_hardware_dek_round_trip,
+};
+
+/// The transfer event stream: the flattened mirror of `crate::events` and the subscription a
+/// real-time transfer view polls. Separated because it is the one surface that is a stream
+/// rather than a call.
+mod events;
+
+pub use events::{
+    FfiRetryReason, FfiStampedTransferEvent, FfiTransferEvent, FfiTransferFeedItem,
+    FfiTransferSubscription,
 };
 
 /// The local-alert surface: the shared `capsule_core::notify` predicate, flattened.
@@ -865,6 +878,7 @@ impl FfiCapsuleClient {
             session,
             upload_base_url: self.upload_base_url.clone(),
             protocol_version: self.protocol_version.clone(),
+            events: TransferEvents::default_channel(),
         })
     }
 }
@@ -879,6 +893,23 @@ pub struct FfiSession {
     session: Session,
     upload_base_url: String,
     protocol_version: String,
+    /// Where every upload, push and fetch this session drives publishes its steps. Nothing is
+    /// built while nobody is subscribed.
+    events: TransferEvents,
+}
+
+#[uniffi::export]
+impl FfiSession {
+    /// Subscribe to the step-by-step progress of every upload, push and fetch this session
+    /// drives from now on, each event stamped with the milliseconds since this call on a
+    /// monotonic clock.
+    ///
+    /// Progress is advisory: a transfer never waits on its observer, so a subscriber that
+    /// falls behind reads [`FfiTransferFeedItem::Lagged`] with the count it missed. The
+    /// subscription ends once this session is dropped.
+    pub fn transfer_events(&self) -> Arc<FfiTransferSubscription> {
+        FfiTransferSubscription::open(&self.events)
+    }
 }
 
 #[uniffi::export(async_runtime = "tokio")]
@@ -983,7 +1014,7 @@ impl FfiSession {
         let path = PathBuf::from(path);
         tracing::info!(%hash, size, path = %path.display(), "ffi: fetching a blob to disk");
         let source = HttpBlobSource::new(self.session.clone(), blob_base_url);
-        let result = fetch_to_file(&source, &hash, size, &path).await;
+        let result = fetch_to_file(&source, &hash, size, &path, &self.events).await;
         if let Err(error) = &result {
             tracing::warn!(%hash, %error, "ffi: blob fetch failed; removing the partial file");
             // Best effort: the file may never have been created.
@@ -1130,7 +1161,7 @@ impl FfiSession {
             self.upload_base_url.clone(),
             self.protocol_version.clone(),
         );
-        UploadClient::new(transport)
+        UploadClient::new(transport).with_events(self.events.clone())
     }
 
     /// Drive one bundle's ladder. The workspace lock is not held: the bundle is owned.
@@ -1162,6 +1193,7 @@ async fn fetch_to_file<B: crate::fetch::BlobSource>(
     hash: &str,
     size: u64,
     path: &Path,
+    events: &TransferEvents,
 ) -> Result<(), FfiError> {
     let local = |action: &str, e: std::io::Error| FfiError::Fetch {
         code: None,
@@ -1170,6 +1202,7 @@ async fn fetch_to_file<B: crate::fetch::BlobSource>(
     let file = std::fs::File::create(path).map_err(|e| local("creating", e))?;
     let mut sink = std::io::BufWriter::new(file);
     RangedFetcher::new(ConnectionClass::Unmetered)
+        .with_events(events.clone())
         .fetch_into(source, hash, size, &mut sink)
         .await?;
     sink.into_inner()

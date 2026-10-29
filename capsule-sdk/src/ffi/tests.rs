@@ -152,6 +152,7 @@ async fn ffi_login_upload_status_round_trip() {
             .unwrap(),
     );
     assert!(session.is_authenticated().await);
+    let progress = session.transfer_events();
 
     // upload file through the handle.
     let outcome = session
@@ -163,6 +164,21 @@ async fn ffi_login_upload_status_round_trip() {
         FfiUploadOutcome::AlreadyStored { asset_ref } => panic!("unexpected merge: {asset_ref}"),
     };
     assert_eq!(session_id, "sess-1");
+
+    // The subscription saw the upload step by step, stamped on a clock that never runs back.
+    let steps = drain_until_finalize(&progress).await;
+    assert!(matches!(
+        steps.first(),
+        Some(FfiTransferEvent::SessionCreated { session_id, size: SIZE, resume_offset: 0, .. })
+            if session_id == "sess-1"
+    ));
+    assert!(steps.iter().any(|step| matches!(
+        step,
+        FfiTransferEvent::ChunkAcked {
+            acked_offset: SIZE,
+            ..
+        }
+    )));
 
     // upload status (HEAD) through the handle.
     let status = session
@@ -177,6 +193,28 @@ async fn ffi_login_upload_status_round_trip() {
     // logout clears the handle.
     session.logout().await.unwrap();
     assert!(!session.is_authenticated().await);
+}
+
+/// Every event a session's subscription yields up to and including `Finalize`, asserting the
+/// stamps never run backwards. Bounded, so a missing `Finalize` fails rather than hangs.
+async fn drain_until_finalize(progress: &FfiTransferSubscription) -> Vec<FfiTransferEvent> {
+    let mut steps = Vec::new();
+    let mut last_stamp = 0;
+    loop {
+        let item = tokio::time::timeout(std::time::Duration::from_secs(5), progress.next())
+            .await
+            .expect("the upload published its finalize step");
+        let Some(FfiTransferFeedItem::Event { stamped }) = item else {
+            panic!("expected an event, got {item:?}");
+        };
+        assert!(stamped.at_ms >= last_stamp, "stamps run forwards");
+        last_stamp = stamped.at_ms;
+        let done = matches!(stamped.event, FfiTransferEvent::Finalize { .. });
+        steps.push(stamped.event);
+        if done {
+            return steps;
+        }
+    }
 }
 
 /// A `duplicate_blob` on create resolves through the FFI as the merge outcome, not a
@@ -206,6 +244,7 @@ async fn ffi_upload_surfaces_duplicate_blob_merge() {
             .await
             .unwrap(),
     );
+    let progress = session.transfer_events();
 
     let outcome = session
         .upload(ffi_request(4096), vec![7u8; 4096])
@@ -215,6 +254,17 @@ async fn ffi_upload_surfaces_duplicate_blob_merge() {
         FfiUploadOutcome::AlreadyStored { asset_ref } => assert_eq!(asset_ref, "asset-xyz"),
         FfiUploadOutcome::Completed { .. } => panic!("expected a merge, not a transfer"),
     }
+    // The merge is the one step the subscription saw.
+    let item = progress.next().await;
+    assert!(matches!(
+        item,
+        Some(FfiTransferFeedItem::Event {
+            stamped: FfiStampedTransferEvent {
+                event: FfiTransferEvent::Merged { ref asset_ref, .. },
+                ..
+            },
+        }) if asset_ref == "asset-xyz"
+    ));
 }
 
 /// Login failure maps to a typed `FfiError::Auth` carrying the stable catalog code
