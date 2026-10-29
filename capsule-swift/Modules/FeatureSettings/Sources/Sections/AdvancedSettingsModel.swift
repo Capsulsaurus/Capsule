@@ -131,8 +131,12 @@ public final class AdvancedSettingsModel {
     public func clearOverride() {
         selection.clear()
         nextLaunchScenario = nil
+        // Bound to a local because the os.Logger interpolation is an escaping
+        // autoclosure: a bare property reference there needs `self.`, which
+        // SwiftFormat's `--self remove` strips.
+        let nextScenario = launchDefaultScenario.rawValue
         CapsuleLog.app.info(
-            "mock scenario override cleared; next launch runs: \(launchDefaultScenario.rawValue, privacy: .public)"
+            "mock scenario override cleared; next launch runs: \(nextScenario, privacy: .public)"
         )
     }
 }
