@@ -138,6 +138,9 @@ async fn blob(viewer: &rest::Client, id: &str, hash: &str) -> Vec<u8> {
 }
 
 /// The public path's `404` body for `id`, or a panic when it answers anything else.
+///
+/// The body's `request_id` names the one request that drew it, so it is checked
+/// present and removed: what is left is what two `404`s must agree on.
 async fn not_found(server: &Server, id: &str) -> serde_json::Value {
     let viewer = rest::Client::new(server.base_url()).expect("the API root parses");
     match viewer.share_metadata(id).await {
@@ -145,7 +148,16 @@ async fn not_found(server: &Server, id: &str) -> serde_json::Value {
             assert_eq!(response.status().as_u16(), 404);
             match response.into_inner() {
                 rest::ShareMetadataError::Status404(problem) => {
-                    serde_json::to_value(&*problem).expect("a problem serializes")
+                    let mut body = serde_json::to_value(&*problem).expect("a problem serializes");
+                    let request_id = body
+                        .as_object_mut()
+                        .expect("a problem is an object")
+                        .remove("request_id");
+                    assert!(
+                        request_id.is_some_and(|id| id.is_string()),
+                        "a 404 names the request that drew it"
+                    );
+                    body
                 }
                 other => panic!("a 404 carries the coded problem: {other}"),
             }
