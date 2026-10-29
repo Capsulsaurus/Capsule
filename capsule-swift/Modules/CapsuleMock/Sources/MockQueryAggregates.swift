@@ -117,7 +117,9 @@ public extension MockQueryEngine {
             return TrashEntry(
                 assetID: extra.ref.uuidString(seed: library.profile.seed),
                 deletedAt: deletedAt,
-                retentionUntil: deadline
+                retentionUntil: deadline,
+                // The judgement the mock's own restore applies, on its own clock.
+                isRestorable: now < deadline
             )
         }
         let window = Self.window(entries, request: request)

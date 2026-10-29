@@ -1,5 +1,6 @@
 import CapsuleMock
 import CapsulePorts
+import ManagedStore
 
 /// The ports a lane supplies in place of the mock world's.
 ///
@@ -15,6 +16,10 @@ struct LanePorts {
     /// The step-by-step transfer event stream the real-time transfer view
     /// draws.
     let transferEvents: any TransferEventPort
+    /// The managed store over its layout: its catalog and the workspace its
+    /// writes go through. `nil` keeps the store in memory, written through a
+    /// `LocalManagedWorkspace` (``AppEnvironment/makeManagedLane(root:openLibrary:)``).
+    var openManagedLibrary: (@Sendable (ManagedLibraryLayout) -> ManagedLibrary)?
 
     /// The mock world's own adapters.
     static func mock(_ mock: MockEnvironment) -> LanePorts {
