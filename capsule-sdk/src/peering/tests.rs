@@ -28,9 +28,9 @@ use tokio::net::{TcpListener, TcpStream};
 use uuid::Uuid;
 
 use super::channel::{
-    ArtifactSecret, HandshakeRole, LocalPeer, PEERING_PROTOCOL, PEERING_PROTOCOL_MIN, PeerChannel,
-    PeerHello, PinnedTrust, UpdateDevice, VerifiedPeer, VersionWindow, accept, connect,
-    hello_proof_message, verify_hello,
+    ArtifactSecret, HandshakeRole, LocalPeer, Message, Offered, PEERING_PROTOCOL,
+    PEERING_PROTOCOL_MIN, PeerChannel, PeerClient, PeerHello, PinnedTrust, UpdateDevice,
+    VerifiedPeer, VersionWindow, accept, connect, hello_proof_message, verify_hello,
 };
 use super::delta::{
     MIN_OFFER_BUCKET, OFFER_PAGE_CAP, Offer, decode_offer_page, missing_from, offer_bucket,
@@ -44,7 +44,7 @@ use super::session::{
 };
 use super::transfer::{
     ArtifactBlobSource, DeltaExport, LocalLibrary, artifact_address, build_delta_artifact, ingest,
-    pull_artifact,
+    pull_artifact, pull_over_channel,
 };
 use super::{PeeringError, is_lan};
 use crate::fetch::FetchScope;
@@ -1445,6 +1445,85 @@ async fn ranged_transfer_resumes_across_a_lan_drop_with_zero_duplicate_bytes() {
         cursor, total,
         "the tiled ranges cover the whole artifact exactly once"
     );
+}
+
+/// A verified channel pair over a real in-process TLS handshake: device B's end (the serving
+/// peer) and device A's end (the pulling peer).
+async fn channel_pair(fx: &Fx) -> (PeerChannel, PeerChannel) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (server_trust, client_trust) = (fx.trust(false), fx.trust(false));
+    let (server_versions, client_versions) = (
+        MemoryDirectoryVersions::default(),
+        MemoryDirectoryVersions::default(),
+    );
+    let limiter = HandshakeLimiter::default();
+    let serving = async {
+        let (tcp, _) = listener.accept().await.unwrap();
+        let local = LocalPeer {
+            device_id: fx.id_b,
+            signer: &fx.dev_b,
+            trust: &server_trust,
+            versions: &server_versions,
+        };
+        accept(tcp, local, &limiter).await
+    };
+    let dialling = async {
+        let tcp = TcpStream::connect(addr).await.unwrap();
+        let local = LocalPeer {
+            device_id: fx.id_a,
+            signer: &fx.dev_a,
+            trust: &client_trust,
+            versions: &client_versions,
+        };
+        connect(tcp, local).await
+    };
+    let (server, client) = tokio::join!(serving, dialling);
+    (server.expect("B verifies A"), client.expect("A verifies B"))
+}
+
+/// A pull that breaks off mid-range reports the failure that broke it, not the generic "broke
+/// earlier" the fetch's next call on the now-broken channel gets, and keeps what arrived.
+#[tokio::test]
+async fn a_channel_pull_reports_the_first_failure_not_the_broken_channel() {
+    let fx = Fx::new();
+    let address = "e".repeat(64);
+    let len = 64_u64;
+    let (mut origin, delegate) = channel_pair(&fx).await;
+    origin
+        .send(&Message::Listing {
+            artifacts: vec![Offered {
+                address: address.clone(),
+                len,
+            }],
+        })
+        .await
+        .expect("sends");
+    let client = PeerClient::open(delegate).await.expect("opens");
+    // Eight bytes of the range arrive, then a frame larger than the bytes still owed breaks it.
+    let breaking = async {
+        assert!(matches!(
+            origin.recv().await.expect("a request"),
+            Message::Range { start: 0, .. }
+        ));
+        origin
+            .send(&Message::RangeReply { len })
+            .await
+            .expect("sends");
+        origin.send_data(&[7; 8]).await.expect("sends");
+        origin.send_data(&[0; 100]).await.expect("sends");
+    };
+    let mut held = Vec::new();
+    let ((), pulled) = tokio::join!(
+        breaking,
+        pull_over_channel(&client, &address, len, &mut held)
+    );
+    assert!(client.is_broken());
+    assert!(
+        matches!(pulled, Err(PeeringError::Codec(_))),
+        "the oversized frame is the diagnosis: {pulled:?}"
+    );
+    assert_eq!(held, [7; 8], "what arrived is kept for a resume");
 }
 
 // ── LAN sync then server reconcile (in-process shape) ─────────────────────────
