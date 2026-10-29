@@ -128,6 +128,9 @@ pub mod error_codes {
     /// `error.auth.rate_limited`
     pub const AUTH_RATE_LIMITED: &str = "error.auth.rate_limited";
 
+    /// `error.auth.registration_at_capacity`
+    pub const AUTH_REGISTRATION_AT_CAPACITY: &str = "error.auth.registration_at_capacity";
+
     /// `error.auth.registration_invalid`
     pub const AUTH_REGISTRATION_INVALID: &str = "error.auth.registration_invalid";
 

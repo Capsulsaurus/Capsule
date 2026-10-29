@@ -1797,6 +1797,7 @@
     <string name="error_auth_profile_invalid">Dieser Anzeigename kann nicht verwendet werden.</string>
     <string name="error_auth_profile_not_found">Dieses Konto existiert nicht mehr.</string>
     <string name="error_auth_rate_limited">Zu viele Versuche. Bitte warten Sie und versuchen Sie es erneut.</string>
+    <string name="error_auth_registration_at_capacity">Dieser Server verarbeitet gerade zu viele Registrierungen. Bitte versuche es in Kürze erneut.</string>
     <string name="error_auth_registration_invalid">Diese E-Mail-Adresse oder dieses Passwort kann nicht verwendet werden. Passwörter müssen mindestens 12 Zeichen lang sein.</string>
     <string name="error_auth_revoke_proof_invalid">Deine Identität konnte nicht bestätigt werden. Es wurde nichts abgemeldet.</string>
     <string name="error_auth_revoke_proof_required">Bestätige mit deinem Kontoschlüssel, um dich von allen Geräten abzumelden.</string>

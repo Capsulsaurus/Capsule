@@ -7227,6 +7227,10 @@
     "message": "बहुत अधिक प्रयास। कृपया प्रतीक्षा करें और फिर से प्रयास करें।",
     "origin": "machine"
   },
+  "error.auth.registration_at_capacity": {
+    "message": "यह सर्वर अभी बहुत अधिक साइन-अप संभाल रहा है। कृपया थोड़ी देर बाद फिर से प्रयास करें।",
+    "origin": "machine"
+  },
   "error.auth.registration_invalid": {
     "message": "उस ईमेल या पासवर्ड का उपयोग नहीं किया जा सकता। पासवर्ड में कम से कम 12 वर्ण होने चाहिए।",
     "origin": "machine"

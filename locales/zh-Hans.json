@@ -7227,6 +7227,10 @@
     "message": "尝试次数过多。请稍候再试。",
     "origin": "machine"
   },
+  "error.auth.registration_at_capacity": {
+    "message": "此服务器当前正在处理过多注册请求。请稍后再试。",
+    "origin": "machine"
+  },
   "error.auth.registration_invalid": {
     "message": "无法使用该邮箱或密码。密码至少需要 12 个字符。",
     "origin": "machine"

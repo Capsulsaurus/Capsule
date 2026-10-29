@@ -174,6 +174,10 @@ pub struct RestoreSummary {
     pub failed: usize,
     /// Assets in scope whose head is a deletion, which a restore leaves out.
     pub skipped_deleted: usize,
+    /// Assets in scope that this device purged, whose head is not yet the purge's `delete`. A
+    /// restore leaves them out as it leaves a deleted head out: the purge's tombstone means
+    /// they are never brought back.
+    pub skipped_purged: usize,
     /// Ciphertext bytes requested from the server.
     pub fetched_bytes: u64,
     /// Ciphertext bytes served from part files left by an earlier run.
@@ -208,13 +212,14 @@ impl RestoreSummary {
 #[must_use]
 pub fn summary_line(summary: &RestoreSummary) -> String {
     format!(
-        "Restored {} of {} assets to {} ({} already present, {} failed, {} deleted skipped).",
+        "Restored {} of {} assets to {} ({} already present, {} failed, {} deleted skipped, {} purged skipped).",
         summary.restored,
         summary.assets,
         summary.out,
         summary.already_present,
         summary.failed,
-        summary.skipped_deleted
+        summary.skipped_deleted,
+        summary.skipped_purged
     )
 }
 
@@ -317,6 +322,11 @@ pub async fn restore_entries<B: BlobSource + Sync>(
             summary.skipped_deleted += 1;
             continue;
         }
+        if workspace.purge_record(&head.asset).is_some() {
+            tracing::debug!(asset = %head.asset, "restore: this device purged the asset; skipped");
+            summary.skipped_purged += 1;
+            continue;
+        }
         summary.assets += 1;
         let mut outcome = AssetRestoreOutcome {
             asset_id: head.asset.to_string(),
@@ -365,6 +375,7 @@ pub async fn restore_entries<B: BlobSource + Sync>(
         already_present = summary.already_present,
         failed = summary.failed,
         skipped_deleted = summary.skipped_deleted,
+        skipped_purged = summary.skipped_purged,
         fetched_bytes = summary.fetched_bytes,
         resumed_bytes = summary.resumed_bytes,
         "restore complete"
@@ -622,6 +633,10 @@ fn refusal(verdict: &SyncApplyOutcome) -> AssetRestoreFailure {
         SyncApplyOutcome::Pending(reason) => AssetRestoreFailure::new(
             "keys_unavailable",
             format!("the album key for this asset's epoch is not held here ({reason:?})"),
+        ),
+        SyncApplyOutcome::Quarantined(QuarantineReason::Purged(asset)) => AssetRestoreFailure::new(
+            "quarantined",
+            format!("this device purged asset {asset}; its tombstone refuses the entry"),
         ),
         SyncApplyOutcome::Quarantined(reason) => AssetRestoreFailure::new(
             "quarantined",

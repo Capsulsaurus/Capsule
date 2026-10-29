@@ -151241,6 +151241,88 @@
         }
       }
     },
+    "error.auth.registration_at_capacity": {
+      "localizations": {
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "يتعامل هذا الخادم مع عدد كبير جدًا من عمليات التسجيل حاليًا. يُرجى المحاولة مرة أخرى بعد قليل."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dieser Server verarbeitet gerade zu viele Registrierungen. Bitte versuche es in Kürze erneut."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This server is handling too many sign-ups right now. Please try again shortly."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este servidor está gestionando demasiados registros en este momento. Inténtalo de nuevo en breve."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ce serveur gère trop d'inscriptions en ce moment. Veuillez réessayer sous peu."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "यह सर्वर अभी बहुत अधिक साइन-अप संभाल रहा है। कृपया थोड़ी देर बाद फिर से प्रयास करें।"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Al momento questo server sta gestendo troppe registrazioni. Riprova tra poco."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このサーバーは現在、多数の新規登録を処理しています。しばらくしてからもう一度お試しください。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "현재 이 서버가 처리 중인 가입 요청이 너무 많습니다. 잠시 후 다시 시도해 주세요."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este servidor está lidando com muitos cadastros no momento. Tente novamente em breve."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сейчас этот сервер обрабатывает слишком много регистраций. Повторите попытку чуть позже."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此服务器当前正在处理过多注册请求。请稍后再试。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此伺服器目前處理的註冊請求過多，請稍後再試。"
+          }
+        }
+      }
+    },
     "error.auth.registration_invalid": {
       "localizations": {
         "ar": {

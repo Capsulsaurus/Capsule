@@ -158,10 +158,17 @@ pub enum AuthError {
     #[error("account locked after repeated failed logins")]
     AccountLocked,
     /// The server asked the client to back off.
+    ///
+    /// One variant for every `429`, because the client's response is the same: wait
+    /// `retry_after_secs` and try again. `code` keeps which cause the server named (a spent
+    /// budget `error.auth.rate_limited`, a full limiter `error.auth.registration_at_capacity`),
+    /// so [`AuthError::error_code`] renders the server's own message.
     #[error("rate limited; retry after {retry_after_secs}s")]
     RateLimited {
         /// Seconds to wait before retrying, from the `Retry-After` header.
         retry_after_secs: u64,
+        /// The server's `error.*` code, when it sent one; `error.auth.rate_limited` otherwise.
+        code: Option<String>,
     },
     /// The session is gone (refresh token expired or revoked). The user must
     /// re-authenticate interactively.
@@ -262,7 +269,9 @@ impl AuthError {
     pub fn error_code(&self) -> Option<&str> {
         match self {
             Self::InvalidCredentials => Some(error_codes::AUTH_INVALID_CREDENTIALS),
-            Self::RateLimited { .. } => Some(error_codes::AUTH_RATE_LIMITED),
+            Self::RateLimited { code, .. } => {
+                Some(code.as_deref().unwrap_or(error_codes::AUTH_RATE_LIMITED))
+            }
             Self::OidcNotConfigured => Some(error_codes::AUTH_OIDC_NOT_CONFIGURED),
             Self::OidcRedirectInvalid => Some(error_codes::AUTH_OIDC_REDIRECT_INVALID),
             Self::OidcAddressTaken => Some(error_codes::AUTH_OIDC_ADDRESS_TAKEN),
@@ -1444,6 +1453,7 @@ fn error_for(
         423 => AuthError::AccountLocked,
         429 => AuthError::RateLimited {
             retry_after_secs: retry_after.unwrap_or(0),
+            code,
         },
         other => AuthError::Unexpected {
             status: other,

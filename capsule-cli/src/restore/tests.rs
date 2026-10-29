@@ -690,6 +690,61 @@ async fn the_last_entry_is_the_head_and_a_deleted_head_is_skipped() {
     assert_eq!(summary.outcomes[0].asset_id, fx.assets[1].to_string());
 }
 
+/// An asset this device purged is left out like a deleted head, even while the feed's head
+/// for it is still its `create`: nothing is fetched for it and the run does not fail.
+#[tokio::test]
+async fn an_asset_this_device_purged_is_skipped_not_failed() {
+    let mut fx = fixture("purged", 2);
+    let out = Scratch::new("purged-out");
+    let gone = fx.assets[0];
+    fx.workspace.soft_delete(&gone, 30).expect("the trash");
+    fx.workspace.purge(&gone).expect("the early purge");
+    let gone_original = fx.entries[0]
+        .blobs
+        .original
+        .as_ref()
+        .expect("an original")
+        .ciphertext_hash
+        .clone();
+
+    let source = MockSource::new(fx.blobs.clone());
+    let summary = restore_entries(
+        &fx.workspace,
+        &source,
+        fx.entries.clone(),
+        &options(out.path(), RestoreScope::Library),
+    )
+    .await
+    .expect("the run completes");
+    assert_eq!(summary.skipped_purged, 1);
+    assert_eq!(summary.skipped_deleted, 0);
+    assert_eq!(summary.assets, 1);
+    assert_eq!(summary.restored, 1);
+    assert_eq!(summary.failed, 0);
+    assert_eq!(summary.outcomes.len(), 1);
+    assert_eq!(summary.outcomes[0].asset_id, fx.assets[1].to_string());
+    assert!(
+        source.requests_for(&gone_original).is_empty(),
+        "nothing is fetched for a purged asset"
+    );
+    assert_eq!(failed_run_reason(&summary), None);
+    assert!(summary_line(&summary).ends_with("0 deleted skipped, 1 purged skipped)."));
+}
+
+/// The library's refusal of a purged asset's entry says so, rather than that it did not verify.
+#[test]
+fn a_purged_refusal_names_the_purge() {
+    let asset = Uuid::from_u128(7);
+    let failure = refusal(&SyncApplyOutcome::Quarantined(QuarantineReason::Purged(
+        asset,
+    )));
+    assert_eq!(failure.kind, "quarantined");
+    assert_eq!(
+        failure.message,
+        format!("this device purged asset {asset}; its tombstone refuses the entry")
+    );
+}
+
 /// A library that holds no keys for the album cannot open its originals: each asset fails with
 /// a reason that says so, nothing is written, and the run fails.
 #[tokio::test]
@@ -887,7 +942,7 @@ fn the_json_report_lists_each_assets_outcome() {
 
     assert_eq!(
         summary_line(&summary),
-        "Restored 1 of 2 assets to /tmp/out (0 already present, 1 failed, 0 deleted skipped)."
+        "Restored 1 of 2 assets to /tmp/out (0 already present, 1 failed, 0 deleted skipped, 0 purged skipped)."
     );
     assert!(failure_line(&summary.outcomes[1]).starts_with(&format!(
         "asset {} failed: fetching the original failed",

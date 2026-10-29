@@ -333,6 +333,7 @@ fn a_temporary_refresh_failure_is_transient() {
         },
         AuthError::RateLimited {
             retry_after_secs: 30,
+            code: None,
         },
         AuthError::Unexpected {
             status: 503,
