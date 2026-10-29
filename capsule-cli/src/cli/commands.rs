@@ -207,6 +207,10 @@ pub(crate) enum Commands {
         /// works in scripts and CI where there is no terminal.
         #[arg(long)]
         passphrase_stdin: bool,
+        /// Print the asset as one JSON document on stdout: every sidecar field, `null` where
+        /// unset, and its provenance history record by record
+        #[arg(long)]
+        json: bool,
     },
     /// Manage the local library
     Library {
@@ -354,6 +358,45 @@ pub(crate) enum LibraryCommands {
         /// Path to the library
         path: PathBuf,
     },
+    /// List a library's timeline, albums or stacks, as the TUI's library browser shows them
+    List {
+        /// Path to the Capsule library
+        #[arg(long, value_name = "PATH")]
+        library: PathBuf,
+        /// Which view to list
+        #[arg(long, value_name = "VIEW", default_value = "timeline")]
+        view: LibraryViewArg,
+        /// Read the library passphrase from stdin instead of prompting, so the command
+        /// works in scripts and CI where there is no terminal.
+        #[arg(long)]
+        passphrase_stdin: bool,
+        /// Print the view as one JSON document on stdout: the timeline's assets, every album
+        /// with its labels and assets, or every stack with its labels and members
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+/// A library browser view as a command-line value (`--view albums`). Maps onto the catalogue's
+/// `ListView`; kept separate so the argument surface owns its own spelling.
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LibraryViewArg {
+    /// The assets in timeline order, newest first: not in trash, not hidden, one per stack.
+    Timeline,
+    /// Every album, with its labels and the assets it lists.
+    Albums,
+    /// Every stack, with its labels and its members.
+    Stacks,
+}
+
+impl From<LibraryViewArg> for crate::tui::library::catalogue::ListView {
+    fn from(view: LibraryViewArg) -> Self {
+        match view {
+            LibraryViewArg::Timeline => Self::Timeline,
+            LibraryViewArg::Albums => Self::Albums,
+            LibraryViewArg::Stacks => Self::Stacks,
+        }
+    }
 }
 
 #[derive(Subcommand, Debug)]

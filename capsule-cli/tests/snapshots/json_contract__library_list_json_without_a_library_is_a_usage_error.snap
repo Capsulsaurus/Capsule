@@ -1,0 +1,14 @@
+---
+source: capsule-cli/tests/json_contract.rs
+expression: "run(&scratch, &[\"library\", \"list\", \"--json\"])"
+---
+status: 2
+--- stdout ---
+
+--- stderr ---
+error: the following required arguments were not provided:
+  --library <PATH>
+
+Usage: capsule library list --library <PATH> --json
+
+For more information, try '--help'.

@@ -345,6 +345,24 @@ async fn dispatch(command: Commands) -> Result<()> {
                 lib.close()
                     .map_err(|e| eyre!("Failed to close library: {e}"))?;
             }
+            LibraryCommands::List {
+                library,
+                view,
+                passphrase_stdin,
+                json,
+            } => {
+                use tui::library::catalogue;
+                let ws = open_workspace(&library, passphrase_stdin)?;
+                let listing = catalogue::listing(&catalogue::collect(&ws), view.into());
+                // The workspace holds the library's lock; the listing is owned values.
+                drop(ws);
+                tracing::info!(library = %library.display(), ?view, json, "library list");
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&listing)?);
+                } else {
+                    print!("{}", catalogue::render_listing(&listing));
+                }
+            }
         },
 
         // ── Import ────────────────────────────────────────────────────────
@@ -604,16 +622,19 @@ async fn dispatch(command: Commands) -> Result<()> {
             asset,
             library,
             passphrase_stdin,
+            json,
         } => {
             let ws = open_workspace(&library, passphrase_stdin)?;
-            let view = show::resolve(&ws, &asset).and_then(|id| {
-                show::collect(&ws, &id).ok_or_else(|| show::ShowError::UnknownAsset(id.to_string()))
-            });
-            match view {
-                Ok(view) => print!("{}", show::render(&view)),
-                Err(error) => {
-                    return Err(eyre!("Show failed: {}", show::describe_error(&error)));
-                }
+            let failed =
+                |error: &show::ShowError| eyre!("Show failed: {}", show::describe_error(error));
+            let id = show::resolve(&ws, &asset).map_err(|error| failed(&error))?;
+            let missing = || failed(&show::ShowError::UnknownAsset(id.to_string()));
+            if json {
+                let report = show::report(&ws, &id).ok_or_else(missing)?;
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                let view = show::collect(&ws, &id).ok_or_else(missing)?;
+                print!("{}", show::render(&view));
             }
         }
 

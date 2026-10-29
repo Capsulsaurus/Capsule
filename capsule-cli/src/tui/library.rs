@@ -14,8 +14,10 @@
 //! encoding comes back to the state; a frame never encodes. Where the terminal answered with
 //! no image protocol, or the encode fails or panics, the pane says so in text.
 //!
-//! The scriptable twin is `capsule show ASSET --library PATH`, which prints the same rows the
-//! detail pane draws.
+//! The scriptable twins are `capsule library list --library PATH [--view timeline|albums|stacks]
+//! --json`, which lists the same views from the same [`catalogue::collect`] snapshot, and
+//! `capsule show ASSET --library PATH [--json]`, which prints the same rows the detail pane
+//! draws and the same provenance history.
 
 pub mod catalogue;
 
@@ -1092,7 +1094,8 @@ fn render_open(frame: &mut Frame, area: Rect, screen: &LibraryScreen, title: &'s
         }
     }
     lines.push(Line::from(
-        "Scriptable: `capsule show ASSET --library PATH` prints one asset's record."
+        "Scriptable: `capsule library list --library PATH [--view albums|stacks] --json`; \
+         `capsule show ASSET --library PATH --json` prints one asset's record."
             .fg(Color::DarkGray),
     ));
     let block = Block::default().borders(Borders::ALL).title(title);

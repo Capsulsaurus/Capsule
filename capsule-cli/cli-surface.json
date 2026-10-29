@@ -926,6 +926,71 @@
           "name": "init"
         },
         {
+          "about": "List a library's timeline, albums or stacks, as the TUI's library browser shows them",
+          "args": [
+            {
+              "help": "Path to the Capsule library",
+              "id": "library",
+              "long": "library",
+              "positional": false,
+              "repeatable": false,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "PATH"
+              ]
+            },
+            {
+              "default_values": [
+                "timeline"
+              ],
+              "help": "Which view to list",
+              "id": "view",
+              "long": "view",
+              "positional": false,
+              "possible_values": [
+                {
+                  "help": "The assets in timeline order, newest first: not in trash, not hidden, one per stack",
+                  "name": "timeline"
+                },
+                {
+                  "help": "Every album, with its labels and the assets it lists",
+                  "name": "albums"
+                },
+                {
+                  "help": "Every stack, with its labels and its members",
+                  "name": "stacks"
+                }
+              ],
+              "repeatable": false,
+              "required": false,
+              "takes_value": true,
+              "value_names": [
+                "VIEW"
+              ]
+            },
+            {
+              "help": "Read the library passphrase from stdin instead of prompting, so the command works in scripts and CI where there is no terminal",
+              "id": "passphrase_stdin",
+              "long": "passphrase-stdin",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            },
+            {
+              "help": "Print the view as one JSON document on stdout: the timeline's assets, every album with its labels and assets, or every stack with its labels and members",
+              "id": "json",
+              "long": "json",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            }
+          ],
+          "name": "list"
+        },
+        {
           "about": "Rebuild the SQLite index from sidecar files",
           "args": [
             {
@@ -1939,6 +2004,15 @@
           "help": "Read the library passphrase from stdin instead of prompting, so the command works in scripts and CI where there is no terminal",
           "id": "passphrase_stdin",
           "long": "passphrase-stdin",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "takes_value": false
+        },
+        {
+          "help": "Print the asset as one JSON document on stdout: every sidecar field, `null` where unset, and its provenance history record by record",
+          "id": "json",
+          "long": "json",
           "positional": false,
           "repeatable": false,
           "required": false,
