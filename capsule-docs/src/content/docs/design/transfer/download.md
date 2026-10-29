@@ -19,7 +19,7 @@ The per-library [synchronization scope](/design/sync/#synchronization-scope) set
 
 ### Render Ladder
 
-What a client *shows* follows the same ladder, extended with what is already on the device. The order is computed once, in Rust, and reaches every app through the FFI; apps render the representation it names and keep no ladder of their own. From least to most faithful:
+What a client *shows* follows the same ladder, extended with what is already on the device. The order is computed once, in Rust, and reaches every native app through the FFI (the keyless web client shows what the sync feed and its share paths serve); apps render the representation it names and keep no ladder of their own. From least to most faithful:
 
 1. **LQIP** from the metadata blob, or its dominant colour when the LQIP cannot be decoded ([LQIP](/design/thumbnails/#lqip)).
 2. **Thumbnail**: the encoded tier, or, until it exists, an [embedded preview](/design/thumbnails/#embedded-previews) whose long edge reaches the Thumbnail tier's.

@@ -14,7 +14,7 @@ each one natively costs a second UI codebase per platform. A cross-platform UI f
 remove that cost, so the maintainer has re-evaluated the question every year, with Compose Multiplatform as
 the candidate each time.
 
-Two things have kept the answer the same:
+Three things have kept the answer the same: the two below, and the design language described after them.
 
 - **Compose Multiplatform's desktop target still runs on the JVM.** That target is what
   Windows and Linux would use, and it still needs a JVM runtime after several years. A JVM in a
