@@ -224,15 +224,57 @@ fn reclaim_keeps_the_original_order_of_revoked_jobs() {
     for name in ["a1", "a2", "a3"] {
         queue.enqueue(&a, job(UploadTier::Index, 1, name));
     }
+    for name in ["a4", "a5"] {
+        queue.enqueue(&a, job(UploadTier::Index, 1, name));
+    }
     let granted = admit_all(&mut queue, now);
-    assert_eq!(granted.len(), 3);
+    assert_eq!(granted.len(), 4);
+    // Finishing a job out of order must not reorder the ones still in flight.
+    assert!(queue.complete(granted[0].id, now));
     assert_eq!(queue.reclaim_stalled(now + STALL).len(), 3);
 
     let order: Vec<_> = admit_all(&mut queue, now + 2 * STALL)
         .into_iter()
         .map(|grant| grant.job)
         .collect();
-    assert_eq!(order, ["a1", "a2", "a3"]);
+    assert_eq!(order, ["a2", "a3", "a4", "a5"]);
+}
+
+#[test]
+fn reclaim_never_shortens_a_longer_server_deadline() {
+    let now = Instant::now();
+    let a = key("a");
+    let mut queue = UploadQueue::new(100, STALL);
+    queue.enqueue(&a, job(UploadTier::Index, 10, "a1"));
+    let a1 = queue.next(now).expect("a1");
+    let retry_after = now + 10 * STALL;
+    queue.defer(&a, retry_after);
+
+    assert_eq!(queue.reclaim_stalled(now + STALL), vec![a1.id]);
+    assert_eq!(
+        queue.next(now + 2 * STALL),
+        None,
+        "the server's Retry-After outlasts the stall hold-off"
+    );
+    assert_eq!(queue.next(retry_after).expect("a1 again").job, "a1");
+}
+
+#[test]
+fn rebuild_keeps_a_running_server_deadline() {
+    let now = Instant::now();
+    let a = key("a");
+    let mut queue = UploadQueue::new(100, STALL);
+    let retry_after = now + Duration::from_secs(60);
+    queue.defer(&a, retry_after);
+    let superseded = queue.rebuild_lane(&a, [job(UploadTier::Index, 10, "a1")]);
+    assert!(superseded.is_empty());
+
+    assert_eq!(
+        queue.next(now),
+        None,
+        "a rebuilt lane still waits out Retry-After"
+    );
+    assert_eq!(queue.next(retry_after).expect("a1").job, "a1");
 }
 
 #[test]

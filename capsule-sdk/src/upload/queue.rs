@@ -231,7 +231,8 @@ impl<J: Clone> UploadQueue<J> {
     /// Replace everything `server`'s lane holds with `jobs`, derived from that server's own
     /// truth on resume. Any job still in flight on the lane is superseded and its reservation
     /// released (the caller has stopped it); its id is returned and later reports on it are
-    /// ignored. The lane's window is kept; its pause is cleared.
+    /// ignored. The lane's window is kept, and so is any pause still running (a server's
+    /// `Retry-After` binds whatever work the lane holds).
     pub fn rebuild_lane(
         &mut self,
         server: &ServerKey,
@@ -243,7 +244,6 @@ impl<J: Clone> UploadQueue<J> {
             tier.clear();
         }
         let superseded: Vec<InFlight<J>> = lane.in_flight.drain(..).collect();
-        lane.paused_until = None;
         lane.last_progress = None;
         for job in jobs {
             lane.queued[tier_slot(job.tier)].push_back(job);
@@ -373,7 +373,8 @@ impl<J: Clone> UploadQueue<J> {
 
     /// Take the budget back from every lane whose jobs in flight have made no progress for the
     /// stall bound. Each such lane's jobs return to the front of their tiers, and the lane is
-    /// not served for one more stall bound, so the budget goes to the lanes still moving.
+    /// not served for at least one more stall bound (longer where a later deadline is already
+    /// held), so the budget goes to the lanes still moving.
     /// Returns the revoked grants, which the caller stops.
     pub fn reclaim_stalled(&mut self, now: Instant) -> Vec<GrantId> {
         let stall_after = self.stall_after;
@@ -396,7 +397,12 @@ impl<J: Clone> UploadQueue<J> {
                 revoked.push(flight.id);
                 lane.queued[tier_slot(flight.job.tier)].push_front(flight.job);
             }
-            lane.paused_until = Some(now + stall_after);
+            // Keep a later deadline (a server's `Retry-After`) rather than shortening it.
+            let hold_off = now + stall_after;
+            lane.paused_until = Some(
+                lane.paused_until
+                    .map_or(hold_off, |held| held.max(hold_off)),
+            );
             tracing::info!(
                 server = %lane.server,
                 stall_after_ms = stall_after.as_millis(),
@@ -436,7 +442,8 @@ impl<J: Clone> UploadQueue<J> {
     /// Remove grant `id` from flight and release its reservation.
     fn take(&mut self, id: GrantId) -> Option<(usize, InFlight<J>)> {
         let (lane, at) = self.locate(id)?;
-        let flight = self.lanes[lane].in_flight.swap_remove(at);
+        // `remove`, not `swap_remove`: flights stay in grant order for `reclaim_stalled`.
+        let flight = self.lanes[lane].in_flight.remove(at);
         self.in_use -= flight.reserved;
         Some((lane, flight))
     }
