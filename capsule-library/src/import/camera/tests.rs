@@ -634,6 +634,50 @@ fn a_stack_interrupted_midway_finishes_in_the_folder_it_started_in() {
 }
 
 #[test]
+fn a_rerun_listing_part_of_a_staged_stack_finds_its_members_already_staged() {
+    // The JPEG was deleted in-camera after the pair was staged; its staged copy is the
+    // group's own, so the RAW is still recognised in place rather than staged again.
+    let tmp = TempDir::new().unwrap();
+    let adapter = CameraAdapter::new(tmp.path());
+    let mut camera = FakeCamera::new(tmp.path())
+        .file(0x20, DCIM_100, "DSC00001.ARW", &shot(1, 64))
+        .file(0x21, DCIM_100, "DSC00001.JPG", &shot(2, 32));
+    let first = adapter.receive(&mut camera).unwrap();
+    camera.objects.remove(&0x21);
+    camera.reads.clear();
+
+    let rerun = adapter.receive(&mut camera).unwrap();
+
+    let [raw] = &rerun.received[..] else {
+        panic!("one object received");
+    };
+    assert!(raw.already_staged);
+    assert_eq!(raw.path, first.received[0].path);
+    assert!(camera.reads.is_empty(), "nothing is transferred again");
+    assert_eq!(stacked_names(&adapter, &rerun.objects_root).len(), 1);
+}
+
+#[test]
+fn an_unreadable_staging_folder_halts_the_run_before_any_transfer() {
+    let tmp = TempDir::new().unwrap();
+    let adapter = CameraAdapter::new(tmp.path());
+    let folder = adapter
+        .objects_root()
+        .join(format!("{STORAGE:08x}"))
+        .join(format!("{DCIM_100:08x}"));
+    fs::create_dir_all(folder.parent().unwrap()).unwrap();
+    // A file where the folder directory belongs cannot be listed.
+    fs::write(&folder, b"not a directory").unwrap();
+    let mut camera = FakeCamera::new(tmp.path()).file(0x20, DCIM_100, "DSC00001.ARW", &shot(1, 64));
+
+    let error = adapter.receive(&mut camera).unwrap_err();
+
+    assert!(matches!(error, CameraError::Staging { ref path, .. } if *path == folder));
+    assert!(error.is_fatal());
+    assert!(camera.reads.is_empty(), "no object is transferred");
+}
+
+#[test]
 fn two_objects_of_one_run_under_one_name_are_both_kept() {
     let tmp = TempDir::new().unwrap();
     let adapter = CameraAdapter::new(tmp.path());

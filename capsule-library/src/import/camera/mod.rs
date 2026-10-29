@@ -677,10 +677,11 @@ fn list_folder(dir: &Path) -> Result<FolderListing, CameraError> {
 
 /// The folder generation each stem group among `objects` is staged in.
 ///
-/// A group goes to the first generation whose directory holds no file of its stem other than
-/// its own members' verified copies, so a stack's members always land side by side and never
-/// beside an unrelated earlier object of the same stem (a reformatted card that restarted its
-/// counter, shot RAW-only before and RAW+JPEG now). Each folder directory is listed once.
+/// A group goes to the first generation whose directory either already holds one of its members
+/// (with that member's own identity) or holds no file of its stem at all, so a stack's members always land side by side
+/// and never beside an unrelated earlier object of the same stem (a reformatted card that
+/// restarted its counter, shot RAW-only before and RAW+JPEG now). Each folder directory is listed
+/// once.
 fn group_generations(
     root: &Path,
     objects: &[CameraObject],
@@ -717,8 +718,8 @@ fn group_generations(
     Ok(generations)
 }
 
-/// The first folder generation where every staged file of `group`'s stem is one of `members`
-/// holding its own identity record.
+/// The first folder generation where a staged file of `group`'s stem is one of `members` holding
+/// its own identity record, or where no file of that stem is staged at all.
 fn group_generation(
     root: &Path,
     group: &StemGroup,
@@ -736,12 +737,24 @@ fn group_generation(
         let staged = listings[&dir]
             .get(&group.stem)
             .map_or(&[][..], Vec::as_slice);
-        let ours = staged.iter().all(|name| {
+        let own = |name: &OsString| {
             members.iter().any(|member| {
                 staged_name(member) == *name && holds_identity(root, member, generation)
             })
-        });
-        if ours {
+        };
+        // A member already staged here pins the group to this generation, even when the run
+        // lists only part of it (a member deleted in-camera or unreadable this time): the
+        // absent member's copy is the group's own, not an unrelated object of its stem.
+        if staged.iter().any(own) {
+            tracing::trace!(
+                dir = %dir.display(),
+                stem = %group.stem,
+                generation,
+                "camera import: stem group already staged in this folder generation"
+            );
+            return Ok(generation);
+        }
+        if staged.is_empty() {
             return Ok(generation);
         }
         tracing::debug!(
