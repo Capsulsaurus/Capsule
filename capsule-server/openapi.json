@@ -343,6 +343,13 @@
                   "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
                 }
               },
+              "X-Request-Id": {
+                "description": "The UUIDv7 this server minted for the request. Quote it when reporting a failure: it names the request's log lines. Never taken from the client.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              },
               "Retry-After": {
                 "description": "Seconds to wait before retrying (RFC 9110 delta-seconds): the problem's `retry_after` instant, measured from the server's clock.",
                 "schema": {
@@ -33873,6 +33880,10 @@
           "code": {
             "type": "string",
             "description": "The stable `error.*` catalog code. The client localizes this; `detail` stays English. Present on every problem this server renders."
+          },
+          "request_id": {
+            "type": "string",
+            "description": "The UUIDv7 this server minted for the request, as the `X-Request-Id` header carries it. Quote it when reporting the failure: it names the request's log lines."
           },
           "retry_after": {
             "type": "integer",
