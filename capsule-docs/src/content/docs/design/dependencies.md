@@ -91,6 +91,10 @@ Bindings come from the single uniffi version; Tuist, SwiftLint and SwiftFormat a
 
 Bindings ride the same uniffi version, loaded through JNA. JUnit 5 is the test harness.
 
+| Domain | Canonical choice | Notes |
+| --- | --- | --- |
+| In-app language (Android 8 to 12) | `androidx.appcompat` **1.7.0** (`AppCompatDelegate.setApplicationLocales`, `autoStoreLocales`) | Only the per-app language below Android 13, where the system has no per-app setting; Android 13+ uses the system's. The choice stays on the device and is never synced; region stays the system's. |
+
 ## Validation
 
 - `mise run architecture-check` runs `cargo tree -p <crate> -i chrono -e no-dev` per crate (must be
