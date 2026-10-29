@@ -235,6 +235,68 @@ fn xcresult_matches_display_names_when_identifiers_differ() {
 }
 
 #[test]
+fn xcresult_scroll_reads_camel_case_identifiers_and_xctest_display_names() {
+    // XCTest's shape: camelCase identifiers, worded display names suffixed with the signpost,
+    // and hitches named "Number of Hitches". Ratio and duration measures must not match.
+    let source = "Scroll_DecelerationAnimation";
+    let signpost = format!("com.apple.dt.XCTMetric_OSSignpost-{source}");
+    let named = |id: &str, display: &str, unit: &str, value: f64| {
+        json!({
+            "identifier": format!("{signpost}.{id}"),
+            "displayName": format!("{display} ({source})"),
+            "unitOfMeasurement": unit,
+            "measurements": [value],
+        })
+    };
+    let worded = |display: &str, unit: &str, value: f64| {
+        json!({
+            "identifier": format!("opaque.{value}"),
+            "displayName": format!("{display} ({source})"),
+            "unitOfMeasurement": unit,
+            "measurements": [value],
+        })
+    };
+    let report = json!([
+        {
+            "testIdentifier": "ParityBenchmarkTests/testCapsuleScroll()",
+            "testRuns": [{ "metrics": [
+                named("hitchTimeRatio", "Hitch Time Ratio", "ms per s", 9.0),
+                named("hitchesTotalDuration", "Hitches Total Duration", "ms", 33.0),
+                named("frameRate", "Frame Rate", "fps", 118.0),
+                named("frameCount", "Frame Count", "frames", 240.0),
+                named("hitchCount", "Number of Hitches", "hitches", 6.0),
+            ] }],
+        },
+        {
+            "testIdentifier": "ParityBenchmarkTests/testPlatformAppScroll()",
+            "testRuns": [{ "metrics": [
+                worded("Hitch Time Ratio", "ms per s", 7.0),
+                worded("Frame Rate", "fps", 120.0),
+                worded("Frame Count", "frames", 200.0),
+                worded("Number of Hitches", "hitches", 1.0),
+            ] }],
+        },
+    ]);
+    let results = import(Format::Xcresult, &report, "iphone-17-pro", 100_000).expect("imports");
+    assert_eq!(
+        results.get(Client::Capsule, Metric::ScrollFrameRateFps),
+        Some(118.0)
+    );
+    assert_eq!(
+        results.get(Client::Capsule, Metric::ScrollDroppedFramesPct),
+        Some(2.5)
+    );
+    assert_eq!(
+        results.get(Client::PlatformApp, Metric::ScrollFrameRateFps),
+        Some(120.0)
+    );
+    assert_eq!(
+        results.get(Client::PlatformApp, Metric::ScrollDroppedFramesPct),
+        Some(0.5)
+    );
+}
+
+#[test]
 fn xcresult_refuses_unmapped_tests_and_unknown_units() {
     let unmapped =
         json!([{ "testIdentifier": "ParityBenchmarkTests/testLaunch()", "testRuns": [] }]);

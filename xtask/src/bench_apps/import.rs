@@ -232,13 +232,21 @@ fn macrobenchmark(report: &Value, device: &str, library_size: u64) -> Result<Res
 }
 
 /// One XCTest metric's identifier and display name, folded so either can be matched by suffix.
+///
+/// XCTest names a signpost measure in camelCase in its identifier
+/// (`…OSSignpost-Scroll_DecelerationAnimation.frameRate`) and in words in its display name,
+/// followed by the signpost it came from (`Frame Rate (Scroll_DecelerationAnimation)`). Folding
+/// drops that parenthesized source, lower-cases, and keeps only letters and digits, so both read
+/// `…framerate` whatever their casing or separators.
 fn xc_names(metric: &Value) -> (String, String) {
     let fold = |key: &str| {
-        metric[key]
-            .as_str()
-            .unwrap_or_default()
-            .to_ascii_lowercase()
-            .replace([' ', '-'], "_")
+        let raw = metric[key].as_str().unwrap_or_default();
+        let named = raw.split('(').next().unwrap_or(raw);
+        named
+            .chars()
+            .filter(char::is_ascii_alphanumeric)
+            .map(|c| c.to_ascii_lowercase())
+            .collect::<String>()
     };
     (fold("identifier"), fold("displayName"))
 }
@@ -318,17 +326,20 @@ fn xcresult(report: &Value, device: &str, library_size: u64) -> Result<Results> 
                 )?;
             }
             Measure::Scroll => {
-                let suffix = |want: &'static str| {
+                let suffix = |wants: &'static [&'static str]| {
                     move |identifier: &str, display: &str| {
-                        identifier.ends_with(want) || display.ends_with(want)
+                        wants
+                            .iter()
+                            .any(|want| identifier.ends_with(want) || display.ends_with(want))
                     }
                 };
-                let (fps, _) = xc_median(runs, suffix("frame_rate"))
+                let (fps, _) = xc_median(runs, suffix(&["framerate"]))
                     .with_context(|| format!("`{identifier}` reports no frame rate"))?;
                 put(&mut results, client, Metric::ScrollFrameRateFps, fps)?;
-                let (frames, _) = xc_median(runs, suffix("frame_count"))
+                let (frames, _) = xc_median(runs, suffix(&["framecount"]))
                     .with_context(|| format!("`{identifier}` reports no frame count"))?;
-                let (hitches, _) = xc_median(runs, suffix("hitch_count"))
+                // The display name says "Number of Hitches"; an identifier says `hitchCount`.
+                let (hitches, _) = xc_median(runs, suffix(&["hitchcount", "numberofhitches"]))
                     .with_context(|| format!("`{identifier}` reports no hitch count"))?;
                 ensure!(frames > 0.0, "`{identifier}` recorded no frames");
                 put(
