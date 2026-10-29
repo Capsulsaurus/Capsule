@@ -76,7 +76,7 @@ jobs:
 
       - name: Upload the report and results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: bench-apps-android-${{ inputs.device }}
           path: target/bench-apps/android/
@@ -108,7 +108,7 @@ jobs:
 
       - name: Upload the report and results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: bench-apps-apple-${{ inputs.device }}
           path: target/bench-apps/apple/

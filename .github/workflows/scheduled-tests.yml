@@ -57,7 +57,7 @@ jobs:
           -- -max_total_time=600 -max_len=65536
       - name: Upload the crashing input
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fuzz-artifacts-${{ matrix.target }}
           path: ${{ matrix.crate }}/fuzz/artifacts/${{ matrix.target }}/
@@ -106,7 +106,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Upload mutants.out
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mutants-shard-${{ matrix.shard }}
           path: mutants.out/
@@ -177,7 +177,7 @@ jobs:
           fi
       - name: Upload the processes' logs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: kill-anywhere-logs-${{ matrix.shard }}
           path: target/kill-anywhere-logs/
