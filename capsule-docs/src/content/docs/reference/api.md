@@ -66,6 +66,11 @@ problem this server renders carries a **`code`**: a stable identifier from the `
 namespace described in [Internationalization](/design/i18n/). Clients localize the code; the
 `detail` message stays English.
 
+Every problem also carries a **`request_id`**: the same UUIDv7 as that response's `X-Request-Id`
+header, which the server mints per request and files the request's log lines under. Quote it when
+reporting a failure; never parse or switch on it. It is declared on every problem schema but never
+required, so a client stays lenient toward a server that predates it.
+
 **Switch on the code, never on the status alone.** HTTP status is deliberately coarse:
 
 | Rejection class | HTTP status |
