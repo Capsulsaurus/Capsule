@@ -218,14 +218,25 @@ const EXTRAS: &[Extra] = &[
         component: "StaleRevivalProblem",
         operation: "album_lifecycle_op",
         status: 409,
-        members: &[Member {
-            name: "chain_head",
-            json_type: "string",
-            format: None,
-            description: "The manifest hash the asset's chain is actually at. Absent when the \
-                          conflict is not a chain conflict, which is why it is nullable.",
-            nullable: true,
-        }],
+        members: &[
+            Member {
+                name: "chain_head",
+                json_type: "string",
+                format: None,
+                description: "The manifest hash the asset's chain is actually at. Absent when \
+                              the conflict is not a chain conflict, which is why it is nullable.",
+                nullable: true,
+            },
+            Member {
+                name: "retention_until",
+                json_type: "string",
+                format: None,
+                description: "On `error.upload.retention_elapsed`, the signed retention floor \
+                              (RFC 3339) the trash-restore came too late for. Absent on every \
+                              other conflict, which is why it is nullable.",
+                nullable: true,
+            },
+        ],
     },
     Extra {
         component: "FileTooLargeProblem",

@@ -529,6 +529,10 @@ pub enum LifecycleOpError {
         /// On a `409 error.upload.stale_revival`, the chain head the manifest must name, so a
         /// caller can re-read and rebase rather than resend a losing manifest.
         chain_head: Option<String>,
+        /// On a `409 error.upload.retention_elapsed`, the signed retention floor (RFC 3339) the
+        /// trash-restore came too late for, as the server judged it — so a caller that never
+        /// held the delete can still say when the window closed.
+        retention_until: Option<String>,
     },
     /// The response could not be read as the contract describes it.
     #[error("malformed lifecycle op response: {0}")]
@@ -722,25 +726,28 @@ fn op_refusal(error: crate::rest::Error<crate::rest::AlbumLifecycleOpError>) -> 
         return LifecycleOpError::Transport(error.to_string());
     };
     let status = response.status().as_u16();
-    let (code, chain_head) = match response.into_inner() {
-        Refusal::Status409(problem) => (problem.code, problem.chain_head),
+    let (code, chain_head, retention_until) = match response.into_inner() {
+        Refusal::Status409(problem) => (problem.code, problem.chain_head, problem.retention_until),
         Refusal::Status400(problem)
         | Refusal::Status401(problem)
         | Refusal::Status403(problem)
         | Refusal::Status413(problem)
         | Refusal::Status415(problem)
         | Refusal::Status422(problem)
-        | Refusal::Status500(problem) => (problem.code, None),
-        Refusal::Status426(problem) => (problem.code, None),
+        | Refusal::Status500(problem) => (problem.code, None, None),
+        Refusal::Status426(problem) => (problem.code, None, None),
     };
+    let logged_until = retention_until.clone();
     let refusal = LifecycleOpError::Refused {
         status,
         code,
         chain_head,
+        retention_until,
     };
     tracing::warn!(
         status,
         code = refusal.error_code(),
+        retention_until = ?logged_until,
         kind = refusal.kind(),
         permanent = refusal.is_permanent(),
         "lifecycle op refused"
