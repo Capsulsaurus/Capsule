@@ -14,7 +14,7 @@ use super::*;
 use crate::oidc::{DeviceCeremony, DeviceStep};
 use crate::remote::{LoginStep, RemoteError};
 use crate::tui::driver::{Driver, frame_text};
-use crate::tui::ports::{Ports, ProviderSlot, device_sign_in};
+use crate::tui::ports::{Ports, ProviderSlot, browser_sign_in, device_sign_in};
 use crate::tui::state::{Action, AppState, Screen};
 use crate::tui::view;
 
@@ -682,10 +682,25 @@ fn account_waiting_for_a_browser_sign_in_that_could_not_open_one() {
 }
 
 /// A device ceremony on a paused clock: pending once, then approved, settling as `settled`.
+/// Its begin answers with `text`'s code and addresses.
 struct ScriptedDevice {
     settled: fn() -> LoginStep,
+    text: DeviceText,
     polls: Mutex<u32>,
 }
+
+/// The provider-written text a scripted device ceremony begins with.
+struct DeviceText {
+    user_code: &'static str,
+    verification_uri: &'static str,
+    verification_uri_complete: Option<&'static str>,
+}
+
+const PLAIN_DEVICE_TEXT: DeviceText = DeviceText {
+    user_code: "WDJB-MJHT",
+    verification_uri: "https://idp.test/device",
+    verification_uri_complete: None,
+};
 
 impl DeviceCeremony for ScriptedDevice {
     async fn begin_device(&self) -> Result<OidcDeviceAuthorization, RemoteError> {
@@ -693,9 +708,9 @@ impl DeviceCeremony for ScriptedDevice {
         Ok(OidcDeviceAuthorization {
             handle: SecretString::from("handle"),
             binding: SecretString::from("binding"),
-            user_code: "WDJB-MJHT".to_owned(),
-            verification_uri: "https://idp.test/device".to_owned(),
-            verification_uri_complete: None,
+            user_code: self.text.user_code.to_owned(),
+            verification_uri: self.text.verification_uri.to_owned(),
+            verification_uri_complete: self.text.verification_uri_complete.map(str::to_owned),
             interval_secs: 5,
             expires_by: now + 600,
         })
@@ -721,9 +736,15 @@ struct DevicePorts {
 
 impl DevicePorts {
     fn new(settled: fn() -> LoginStep) -> Self {
+        Self::writing(settled, PLAIN_DEVICE_TEXT)
+    }
+
+    /// Ports whose ceremony begins with `text`.
+    fn writing(settled: fn() -> LoginStep, text: DeviceText) -> Self {
         Self {
             ceremony: Arc::new(ScriptedDevice {
                 settled,
+                text,
                 polls: Mutex::new(0),
             }),
             slot: ProviderSlot::default(),
@@ -856,5 +877,123 @@ async fn the_code_is_on_screen_while_the_wait_runs_and_x_cancels_it() {
     assert_eq!(
         d.state().auth().status(),
         &Status::Failed("Sign-in cancelled.".to_owned())
+    );
+}
+
+/// Whether `frame` holds a control character other than the line breaks `frame_text` adds.
+fn holds_a_control_character(frame: &str) -> bool {
+    frame.chars().any(|c| c.is_control() && c != '\n')
+}
+
+/// Provider-written device text carrying escape sequences: a clear-screen, a window-title OSC
+/// ended by a bell, and a colour change.
+const ESCAPING_DEVICE_TEXT: DeviceText = DeviceText {
+    user_code: "WDJB\u{1b}[2J-MJHT",
+    verification_uri: "https://idp.test/\u{1b}]0;pwned\u{7}device",
+    verification_uri_complete: Some("https://idp.test/d?c=\u{1b}[31mWDJB"),
+};
+
+#[tokio::test(start_paused = true)]
+async fn a_device_prompt_drops_the_control_characters_the_provider_wrote() {
+    let mut d = Driver::new(
+        DevicePorts::writing(|| LoginStep::Complete, ESCAPING_DEVICE_TEXT),
+        80,
+        20,
+    );
+    d.settle().await;
+    press(&mut d, 'a');
+    press(&mut d, 'd');
+    // Run only the begin, through the real `device_sign_in`: its prompt is what the screen holds.
+    assert!(d.settle_one().await);
+    let prompt = d
+        .state()
+        .auth()
+        .provider()
+        .and_then(|wait| wait.prompt.clone());
+    let Some(ProviderPrompt::Device {
+        verification_uri,
+        user_code,
+        verification_uri_complete,
+        ..
+    }) = prompt
+    else {
+        panic!("a device prompt: {prompt:?}");
+    };
+    assert_eq!(user_code.expose(), "WDJB[2J-MJHT");
+    assert_eq!(verification_uri, "https://idp.test/]0;pwneddevice");
+    assert_eq!(
+        verification_uri_complete.as_ref().map(Secret::expose),
+        Some("https://idp.test/d?c=[31mWDJB")
+    );
+    let frame = d.frame();
+    assert!(!holds_a_control_character(&frame), "{frame:?}");
+    for shown in [
+        "and enter this code: WDJB[2J-MJHT",
+        "https://idp.test/]0;pwneddevice",
+        "https://idp.test/d?c=[31mWDJB",
+    ] {
+        assert!(frame.contains(shown), "{shown} is on screen: {frame}");
+    }
+}
+
+/// A browser ceremony whose authorization address carries a clear-screen escape, and which is
+/// never completed.
+struct EscapingBrowser;
+
+impl crate::oidc::Ceremony for EscapingBrowser {
+    async fn begin(
+        &self,
+        redirect_uri: &str,
+    ) -> Result<capsule_sdk::auth::OidcAuthorization, RemoteError> {
+        let now = u64::try_from(jiff::Timestamp::now().as_second()).unwrap_or(0);
+        Ok(capsule_sdk::auth::OidcAuthorization {
+            authorization_url: format!(
+                "https://idp.test/authorize\u{1b}[2J?redirect_uri={redirect_uri}"
+            ),
+            state: SecretString::from("state"),
+            binding: SecretString::from("binding"),
+            expires_by: now + 600,
+        })
+    }
+
+    async fn complete(
+        &self,
+        _: &capsule_sdk::auth::OidcAuthorization,
+        _: &str,
+        _: &str,
+    ) -> Result<LoginStep, RemoteError> {
+        unreachable!("no redirect is followed")
+    }
+}
+
+#[tokio::test]
+async fn a_browser_prompt_drops_the_control_characters_the_provider_wrote() {
+    let slot = ProviderSlot::default();
+    let begun = slot
+        .begin(1, |prompt| async move {
+            browser_sign_in(&EscapingBrowser, prompt, Duration::from_mins(5), |_| false).await
+        })
+        .await
+        .expect("begun");
+    slot.cancel(1);
+    let ProviderPrompt::Browser {
+        authorization_url, ..
+    } = &begun
+    else {
+        panic!("a browser prompt: {begun:?}");
+    };
+    assert!(
+        authorization_url
+            .expose()
+            .starts_with("https://idp.test/authorize[2J?redirect_uri="),
+        "{}",
+        authorization_url.expose()
+    );
+    assert!(!authorization_url.expose().contains(char::is_control));
+    let frame = draw_tall(&on_auth_with(begun, ProviderFlow::Browser));
+    assert!(!holds_a_control_character(&frame), "{frame:?}");
+    assert!(
+        frame.contains("https://idp.test/authorize[2J?redirect_uri="),
+        "{frame}"
     );
 }
