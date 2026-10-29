@@ -5,7 +5,7 @@
 - **Supersedes:** —
 - **Superseded by:** —
 - **Contract:** [Transfer — Upload](../capsule-docs/src/content/docs/design/transfer/upload.md#chunk-rules-and-strictness), [Network Resilience](../capsule-docs/src/content/docs/design/networking.md#http-transport)
-- **Issues:** #1040, #1041, #1042, #1043, #1044, #1045, #1046, #1047
+- **Issues:** #1040, #1041, #1042, #1043, #1044, #1045, #1046, #1047, #1050
 
 ## Context
 
@@ -53,4 +53,4 @@ The server steers clients only through `X-Capsule-Advice`, which the client clam
   - content-defined chunking (no gain on compressed media);
   - tail-chunk hedging (wasted metered bytes on a session whose writes are idempotent anyway);
   - relaying OS hints to the server for a decision (the round trip fails exactly when the network does).
-- **The code lags the contract until the linked issues land:** non-blocking finalize, the stall deadline, block-grid admission, advice and expiry headers, the SDK range scheduler and source guard, the in-flight windows, the path snapshot, and restart-safe downloads.
+- **The code lags the contract until the linked issues land:** non-blocking finalize, the stall deadline, block-grid admission, advice and expiry headers, the SDK range scheduler and source guard, the in-flight windows, the path snapshot, restart-safe downloads, and the drop status probe.
