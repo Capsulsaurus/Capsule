@@ -155,6 +155,25 @@ public protocol UploadPort: Sendable {
     func changes() -> AsyncStream<[UploadSession]>
 }
 
+// MARK: - TransferEventPort
+
+/// The live transfer event stream: every step an upload, a custody check, or
+/// a ranged fetch takes, for the real-time transfer view.
+///
+/// Distinct from ``UploadPort/changes()``, which reports session state: this
+/// is the step-by-step account of the bytes, chunk by chunk, that the SDK
+/// publishes as it moves them. It is advisory — a transfer never waits on its
+/// observer, so a slow consumer reads ``TransferFeedItem/lagged(_:)`` with the
+/// count it missed, and the transfer carries on.
+public protocol TransferEventPort: Sendable {
+    /// Every event published from now on, each stamped with the milliseconds
+    /// since this subscription opened on a monotonic clock.
+    ///
+    /// Cancelling the task that consumes the stream ends the subscription and
+    /// nothing else.
+    func events() -> AsyncStream<TransferFeedItem>
+}
+
 // MARK: - SyncPort
 
 /// Reconciliation with the home server, in both directions.
