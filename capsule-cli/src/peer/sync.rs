@@ -1,21 +1,23 @@
 //! `capsule peer offer` and `capsule peer pull` — sync between two devices of one account over
 //! the LAN peering channel ([Peering § Sync]).
 //!
-//! - **`peer offer`** (the device ahead): dials the other device's `peer pull --listen`, cuts a
-//!   delta-scoped backup artifact from its managed assets ([`Workspace::peer_export`]) sealed
-//!   under the session's artifact secret, and serves it over the channel, authorizing each of the
-//!   peer's requests against the directory the server publishes at that moment.
+//! - **`peer offer`** (the device ahead): dials the other device's `peer pull --listen`, reads
+//!   the receiver's offer ([`capsule_sdk::peering::PeerChannel::receive_offer`]), cuts a delta-scoped backup artifact
+//!   from its managed assets ([`Workspace::peer_export`]) down to what that offer is missing
+//!   ([`cut_to_missing`]), seals it under the session's artifact secret, and serves it over the
+//!   channel, authorizing each of the peer's requests against the directory the server publishes
+//!   at that moment.
 //! - **`peer pull`** (the device behind): loads the tombstones this device persisted
 //!   ([`crate::peering_state::load_tombstones`]) **before** anything touches the network, and
 //!   refuses the run when they cannot be read (fail closed: an empty set would let a peer
-//!   resurrect a purged asset). It then admits one verified session, pulls every artifact the
-//!   peer lists, ingests each through [`capsule_sdk::peering::ingest`] against this library's
+//!   resurrect a purged asset). It then admits one verified session, offers the heads it holds
+//!   and its sync cursor ([`PeerClient::open_offering`]), pulls every artifact the peer lists, ingests each through [`capsule_sdk::peering::ingest`] against this library's
 //!   heads and those tombstones, and writes every applied asset
 //!   ([`Workspace::apply_peer_restored`]).
 //!
-//! The channel carries no offer exchange yet, so the offering device cannot learn what the
-//! receiver holds: it sends every managed asset (or the ones `--asset` names), and the
-//! receiver's ingest makes each one it already holds at that head a no-op (`identical`).
+//! A receiver on an older peering protocol sends no offer: the offering device then sends every
+//! managed asset (or the ones `--asset` names), and the receiver's ingest makes each one it
+//! already holds at that head a no-op (`identical`).
 //!
 //! [Peering § Sync]: https://docs/design/peering/#sync
 
@@ -24,9 +26,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use capsule_core::crypto::hash::Hash32;
 use capsule_library::lifecycle::Workspace;
 use capsule_sdk::fetch::FetchScope;
+use capsule_sdk::peering::delta::cut_to_missing;
 use capsule_sdk::peering::{
     DelegationError, DeltaExport, DirectoryVersions, HandshakeLimiter, LocalLibrary, LocalPeer,
-    Offering, PeerClient, PeerRestore, PeeringError, PinnedTrust, TrustSource,
+    Offer, Offering, PeerClient, PeerRestore, PeeringError, PinnedTrust, TrustSource,
     build_delta_artifact, ingest, pull_over_channel, serve,
 };
 use sea_orm::ConnectionTrait;
@@ -71,6 +74,9 @@ pub struct OfferSummary {
     pub bytes: u64,
     /// The assets the artifact carries.
     pub assets: Vec<Uuid>,
+    /// How many of the chosen assets the receiver's offer excluded, because it already holds
+    /// them at the same head (`0` when the receiver sent no offer).
+    pub excluded: usize,
     /// How many bytes the receiver pulled.
     pub served_bytes: u64,
     /// What could not be offered, and why: a named asset this library does not hold
@@ -141,6 +147,7 @@ pub(crate) async fn offer_over_peer<T: TrustSource>(
         artifact: None,
         bytes: 0,
         assets: Vec::new(),
+        excluded: 0,
         served_bytes: 0,
         failed: Vec::new(),
     };
@@ -193,6 +200,26 @@ pub(crate) async fn offer_over_peer<T: TrustSource>(
             .failed
             .push(PeerFailure::new(&options.peer, "peer_mismatch", message));
     } else {
+        let offer = match channel.receive_offer().await {
+            Ok(offer) => offer,
+            Err(error) => {
+                tracing::warn!(%error, "peer offer: the receiver's offer did not read");
+                summary.failed.push(PeerFailure::new(
+                    receiver.to_string(),
+                    error.kind(),
+                    error.to_string(),
+                ));
+                return summary;
+            }
+        };
+        let chosen = if let Some(offer) = &offer {
+            let (kept, excluded) = cut_to_missing(chosen, offer);
+            summary.excluded = excluded;
+            kept
+        } else {
+            tracing::info!("peer offer: the receiver sent no offer; sending every chosen asset");
+            chosen
+        };
         let delta: BTreeSet<Hash32> = chosen.iter().filter_map(delta_address).collect();
         let input = DeltaExport {
             assets: &chosen,
@@ -211,7 +238,7 @@ pub(crate) async fn offer_over_peer<T: TrustSource>(
             });
         match built {
             Ok((address, len)) => {
-                tracing::info!(%address, len, assets = chosen.len(), "peer offer: artifact built");
+                tracing::info!(%address, len, assets = chosen.len(), excluded = summary.excluded, "peer offer: artifact built");
                 summary.artifact = Some(address);
                 summary.bytes = len;
                 summary.assets = chosen.iter().map(|asset| asset.asset_id).collect();
@@ -328,13 +355,37 @@ pub async fn pull<C: ConnectionTrait>(
     listener: &PeerListener,
 ) -> Result<PullSummary, PeerError> {
     let tombstones = ingest_tombstones(db).await?;
+    let cursor = offer_cursor(db, remote).await;
     let session = remote::resume_session(remote, store).await?;
     let outcome = match pinned_trust(remote, workspace, session.clone(), versions).await {
-        Ok(trust) => Ok(receive(workspace, &trust, versions, &tombstones, listener).await),
+        Ok(trust) => Ok(receive(workspace, &trust, versions, &tombstones, cursor, listener).await),
         Err(error) => Err(error),
     };
     remote::checkpoint(store, &session).await;
     outcome
+}
+
+/// The sync cursor a `peer pull` offers: the highest `sync_seq` this device has reconciled from
+/// the server's feed, over every album (`0` for a library that never synced). The cursor is
+/// carried for parity with server sync; the offering device cuts its delta from the addresses,
+/// so a store that cannot be read offers `0` rather than refusing the run.
+async fn offer_cursor<C: ConnectionTrait>(db: &C, remote: &RemoteConfig) -> u64 {
+    match crate::syncstore::load_sync_state(db, &remote.protocol_version).await {
+        Ok(state) => state
+            .high_water_marks()
+            .map(|(_, seq)| seq)
+            .max()
+            .unwrap_or(0),
+        Err(error) => {
+            tracing::warn!(%error, "peer pull: the sync state did not read; offering cursor 0");
+            0
+        }
+    }
+}
+
+/// This library's offer: the head of every asset it holds, and `cursor`.
+fn library_offer(workspace: &Workspace, cursor: u64) -> Offer {
+    Offer::new(workspace.local_heads().into_values().collect(), cursor)
 }
 
 /// What one verified session yielded: the peer, and each artifact it listed, pulled or not.
@@ -345,17 +396,19 @@ struct Pulled {
 }
 
 /// `peer pull`'s session and ingest: admit one verified session on `listener` (connections from
-/// off the local network, and failed handshakes, are refused and reported while it waits), pull
-/// every artifact the peer lists, end the session, then ingest each against this library's
-/// heads and `tombstones` and write what applies.
+/// off the local network, and failed handshakes, are refused and reported while it waits),
+/// offer this library's heads and `cursor`, pull every artifact the peer lists, end the session,
+/// then ingest each against this library's heads and `tombstones` and write what applies.
 pub(crate) async fn receive(
     workspace: &mut Workspace,
     trust: &PinnedTrust,
     versions: &dyn DirectoryVersions,
     tombstones: &BTreeSet<Uuid>,
+    cursor: u64,
     listener: &PeerListener,
 ) -> PullSummary {
     let mut summary = PullSummary::default();
+    let offer = library_offer(workspace, cursor);
     let pulled = {
         let local = LocalPeer {
             device_id: workspace.device_id(),
@@ -363,7 +416,7 @@ pub(crate) async fn receive(
             trust,
             versions,
         };
-        session(listener, local, &mut summary).await
+        session(listener, local, &offer, &mut summary).await
     };
     let Some(pulled) = pulled else {
         return summary;
@@ -475,13 +528,14 @@ fn admitted_client<T>(
     }
 }
 
-/// Admit one verified session on `listener` and pull every artifact its peer lists, then end
-/// it. `None` when no session was verified before the listener's timeout (recorded in
+/// Admit one verified session on `listener`, open it with `offer`, and pull every artifact its
+/// peer lists, then end it. `None` when no session was verified before the listener's timeout (recorded in
 /// `summary`). A session is not resumed by a later one: each session seals its artifact under
 /// its own secret, so a new session offers a new artifact.
 async fn session(
     listener: &PeerListener,
     local: LocalPeer<'_>,
+    offer: &Offer,
     summary: &mut PullSummary,
 ) -> Option<Pulled> {
     let subject = listener
@@ -493,7 +547,7 @@ async fn session(
     let deadline = tokio::time::Instant::now() + listener.timeout;
     let handshake = |tcp: TcpStream, source: std::net::SocketAddr| async move {
         let client = match capsule_sdk::peering::accept(tcp, local, limiter).await {
-            Ok(channel) => PeerClient::open(channel).await,
+            Ok(channel) => PeerClient::open_offering(channel, offer).await,
             Err(error) => Err(error),
         };
         (source, client)
