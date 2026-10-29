@@ -21,6 +21,14 @@ impl Scripted {
         }
     }
 
+    /// A channel replaying raw `bytes`, for a script that is not whole packets.
+    pub(crate) fn from_bytes(bytes: Vec<u8>) -> Self {
+        Self {
+            input: Cursor::new(bytes),
+            sent: Vec::new(),
+        }
+    }
+
     /// Every packet the initiator wrote, decoded.
     pub(crate) fn sent_packets(&self) -> Vec<Packet> {
         let mut cursor = Cursor::new(self.sent.clone());
