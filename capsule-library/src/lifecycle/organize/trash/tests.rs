@@ -384,21 +384,26 @@ fn a_purge_records_a_tombstone_and_keeps_the_reissue_retrievable_across_a_reopen
 }
 
 #[test]
-fn a_lost_sidecar_of_an_asset_not_in_the_trash_is_no_tombstone() {
+fn a_lost_sidecar_of_an_asset_that_was_not_purged_is_no_tombstone() {
     let (lib, src) = (TempDir::new().unwrap(), TempDir::new().unwrap());
-    let lost = {
-        let (ws, ids) = library(&lib, &src, 1);
-        fs::remove_file(ws.sidecar_path(ws.asset(&ids[0]).unwrap())).unwrap();
-        ids[0]
+    let (live, trashed) = {
+        let (mut ws, ids) = library(&lib, &src, 2);
+        ws.soft_delete(&ids[1], 30).unwrap();
+        for id in &ids {
+            fs::remove_file(ws.sidecar_path(ws.asset(id).unwrap())).unwrap();
+        }
+        (ids[0], ids[1])
     };
 
     let ws = Workspace::open(lib.path(), b"passphrase", FAST_PARAMS).unwrap();
-    assert!(ws.asset(&lost).is_none(), "the damaged asset is skipped");
+    assert!(ws.asset(&live).is_none(), "the damaged asset is skipped");
+    assert!(ws.asset(&trashed).is_none());
     assert!(
         ws.tombstones().is_empty(),
-        "a chain whose head is not a delete is damage, not a purge"
+        "a chain whose head is not a delete, or whose original is still there, is damage"
     );
-    assert!(!ws.local_heads().contains_key(&lost));
+    assert!(!ws.local_heads().contains_key(&live));
+    assert!(!ws.local_heads().contains_key(&trashed));
 }
 
 #[test]

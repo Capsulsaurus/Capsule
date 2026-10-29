@@ -186,16 +186,19 @@ fn read_chain(provenance_path: &Path) -> Result<ProvenanceChain> {
 }
 
 /// The asset id and kept chain head of a purged asset: a provenance chain that reads whole, is
-/// headed by a `delete`, and has no sidecar beside it. `None` for anything else, which is
-/// damage (a lost sidecar of a live or restored asset, a corrupt chain) rather than a purge.
+/// headed by a `delete`, and has neither a sidecar nor an original beside it. `None` for
+/// anything else, which is damage (a lost sidecar of a live, restored or trashed asset, a
+/// corrupt chain) rather than a purge.
 fn purged_head(provenance_path: &Path, stem: &str) -> Option<(Uuid, ProvenanceRecord)> {
+    let dir = provenance_path.parent()?;
+    let asset_id = Uuid::parse_str(stem).ok()?;
     if provenance_path
         .with_file_name(format!("{stem}.cbor"))
         .exists()
+        || original_extension(dir, &asset_id).is_some()
     {
         return None;
     }
-    let asset_id = Uuid::parse_str(stem).ok()?;
     let head = read_chain(provenance_path).ok()?.records().last()?.clone();
     (head.manifest.core.action == Action::Delete).then_some((asset_id, head))
 }

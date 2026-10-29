@@ -194,9 +194,10 @@ impl Workspace {
 
     /// The retention sweep's input after a sync: [`expired_trash`](Self::expired_trash) judged
     /// at the instant [`FeedDrain::judged_at`] gives, or nothing at all when no sync drained
-    /// the feed to its head (`drain` is `None`). A restore on a later feed page must land
-    /// before a deadline is judged, and a device whose clock runs slow is floored by the
-    /// server's, so neither can purge an asset the server still holds as restorable.
+    /// the feed to its head (`drain` is `None`). Waiting for the drain means a restore on a
+    /// later feed page lands before any deadline is judged, so the sweep never purges an asset
+    /// that page restored. The server clock floors a device clock that runs slow, so the
+    /// device cannot hold open a window the server has closed.
     pub fn expired_trash_after_drain(
         &self,
         clock: Timestamp,
