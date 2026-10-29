@@ -1,8 +1,10 @@
+import { useQuery } from '@tanstack/react-query';
 import { createLazyFileRoute, Link, useNavigate } from '@tanstack/react-router';
 import { MountainIcon } from 'lucide-react';
 import type React from 'react';
 import { useEffect, useState } from 'react';
 import { FormattedMessage, useIntl } from 'react-intl';
+import { signInErrorText, TotpSignInCard } from '@/components/mfa/totp-sign-in';
 import { Button } from '@/components/ui/button';
 import {
     Card,
@@ -14,9 +16,21 @@ import {
 } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { ApiError, login, needsSecondFactor, verifyTotpLogin } from '@/lib/api';
+import {
+    beginOidcLogin,
+    login,
+    needsSecondFactor,
+    oidcAvailable,
+} from '@/lib/api';
+import type { TokenPair } from '@/lib/auth';
 import { useAuth } from '@/lib/auth-context';
 import { APP_NAME } from '@/lib/constant';
+import {
+    bindingChallenge,
+    callbackUri,
+    freshBindingVerifier,
+    saveCeremony,
+} from '@/lib/oidc';
 
 export const Route = createLazyFileRoute('/login')({
     component: Login,
@@ -32,10 +46,19 @@ function Login() {
     const [step, setStep] = useState<LoginStep>('credentials');
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
-    const [totpCode, setTotpCode] = useState('');
     const [mfaToken, setMfaToken] = useState('');
     const [error, setError] = useState<string | null>(null);
     const [loading, setLoading] = useState(false);
+
+    // `server-info` publishes `auth.oidc: null` on a deployment without an identity provider, so
+    // the option is offered only where it can work. A failed read hides it rather than blocking
+    // the password form.
+    const { data: offersOidc } = useQuery({
+        queryKey: ['server-info', 'oidc'],
+        queryFn: oidcAvailable,
+        retry: false,
+        staleTime: 5 * 60 * 1000,
+    });
 
     // Redirect already-authenticated users away from login
     useEffect(() => {
@@ -43,6 +66,11 @@ function Login() {
             navigate({ to: '/photos', replace: true });
         }
     }, [isLoading, isAuthenticated, navigate]);
+
+    function signedIn(tokens: TokenPair) {
+        setTokens(tokens);
+        navigate({ to: '/photos' });
+    }
 
     async function handleCredentialsSubmit(e: React.FormEvent) {
         e.preventDefault();
@@ -56,35 +84,36 @@ function Login() {
                 setMfaToken(result.mfa_token);
                 setStep('totp');
             } else {
-                setTokens(result);
-                navigate({ to: '/photos' });
+                signedIn(result);
             }
         } catch (err) {
-            setError(
-                err instanceof ApiError
-                    ? err.message
-                    : intl.formatMessage({ id: 'auth.error.unexpected' }),
-            );
+            setError(signInErrorText(intl, err));
         } finally {
             setLoading(false);
         }
     }
 
-    async function handleTotpSubmit(e: React.FormEvent) {
-        e.preventDefault();
+    /**
+     * Begin the identity-provider ceremony and leave for the provider. The binding secret stays
+     * in this tab's `sessionStorage` until `/login/oidc-callback` takes it; only its hash goes to
+     * the server.
+     */
+    async function handleOidc() {
         setError(null);
         setLoading(true);
         try {
-            const tokens = await verifyTotpLogin(mfaToken, totpCode);
-            setTokens(tokens);
-            navigate({ to: '/photos' });
+            const verifier = freshBindingVerifier();
+            const ceremony = await beginOidcLogin({
+                redirect_uri: callbackUri(window.location.origin),
+                binding_challenge: await bindingChallenge(verifier),
+            });
+            saveCeremony(sessionStorage, {
+                state: ceremony.state,
+                verifier,
+            });
+            window.location.assign(ceremony.authorization_url);
         } catch (err) {
-            setError(
-                err instanceof ApiError
-                    ? err.message
-                    : intl.formatMessage({ id: 'auth.error.unexpected' }),
-            );
-        } finally {
+            setError(signInErrorText(intl, err));
             setLoading(false);
         }
     }
@@ -159,6 +188,22 @@ function Login() {
                                     <FormattedMessage id="common.sign_in" />
                                 )}
                             </Button>
+                            {offersOidc && (
+                                <>
+                                    <p className="text-xs text-muted-foreground text-center">
+                                        <FormattedMessage id="auth.login.or" />
+                                    </p>
+                                    <Button
+                                        className="w-full"
+                                        variant="outline"
+                                        type="button"
+                                        onClick={handleOidc}
+                                        disabled={loading}
+                                    >
+                                        <FormattedMessage id="app.auth.login.oidc" />
+                                    </Button>
+                                </>
+                            )}
                             {/* No passkey button: passkeys are not in v1, and the
                                 six operations behind this one could never authenticate. No
                                 "forgot password" link either: on an end-to-end-encrypted
@@ -176,71 +221,14 @@ function Login() {
                     </form>
                 </Card>
             ) : (
-                <Card className="w-full max-w-sm">
-                    <CardHeader>
-                        <CardTitle className="text-2xl">
-                            <FormattedMessage id="auth.totp.title" />
-                        </CardTitle>
-                        <CardDescription>
-                            <FormattedMessage id="auth.totp.description" />
-                        </CardDescription>
-                    </CardHeader>
-                    <form onSubmit={handleTotpSubmit}>
-                        <CardContent className="grid gap-4">
-                            {error && (
-                                <p className="text-sm text-destructive">
-                                    {error}
-                                </p>
-                            )}
-                            <div className="grid gap-2">
-                                <Label htmlFor="totp">
-                                    <FormattedMessage id="auth.totp.code_label" />
-                                </Label>
-                                <Input
-                                    id="totp"
-                                    type="text"
-                                    inputMode="numeric"
-                                    placeholder={intl.formatMessage({
-                                        id: 'common.code_placeholder',
-                                    })}
-                                    maxLength={6}
-                                    required
-                                    value={totpCode}
-                                    onChange={(e) =>
-                                        setTotpCode(e.target.value)
-                                    }
-                                    disabled={loading}
-                                    autoFocus
-                                />
-                            </div>
-                        </CardContent>
-                        <CardFooter className="flex flex-col gap-3">
-                            <Button
-                                className="w-full"
-                                type="submit"
-                                disabled={loading}
-                            >
-                                {loading ? (
-                                    <FormattedMessage id="auth.verifying" />
-                                ) : (
-                                    <FormattedMessage id="auth.verify" />
-                                )}
-                            </Button>
-                            <Button
-                                variant="ghost"
-                                className="w-full"
-                                type="button"
-                                onClick={() => {
-                                    setStep('credentials');
-                                    setError(null);
-                                    setTotpCode('');
-                                }}
-                            >
-                                <FormattedMessage id="common.back" />
-                            </Button>
-                        </CardFooter>
-                    </form>
-                </Card>
+                <TotpSignInCard
+                    mfaToken={mfaToken}
+                    onSignedIn={signedIn}
+                    onBack={() => {
+                        setStep('credentials');
+                        setError(null);
+                    }}
+                />
             )}
         </div>
     );

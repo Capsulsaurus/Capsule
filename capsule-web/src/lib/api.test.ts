@@ -12,8 +12,13 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import {
+    ApiError,
     authFetch,
+    beginOidcLogin,
+    completeOidcLogin,
     login,
+    needsSecondFactor,
+    oidcAvailable,
     PROTOCOL_VERSION,
     profileLabel,
     profileSubtitle,
@@ -163,6 +168,132 @@ describe('the protocol handshake', () => {
         const call = theRequest();
         expect(call.url).toEndWith('/v1/auth/login/verify-totp');
         expect(call.protocol).toBe(PROTOCOL_VERSION);
+    });
+
+    test('rides beginOidcLogin', async () => {
+        await beginOidcLogin({
+            redirect_uri: 'https://photos.example/login/oidc-callback',
+            binding_challenge: 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM',
+        });
+        const call = theRequest();
+        expect(call.url).toEndWith('/v1/auth/oidc/authorize');
+        expect(call.protocol).toBe(PROTOCOL_VERSION);
+    });
+
+    test('rides completeOidcLogin', async () => {
+        await completeOidcLogin({
+            state: 's',
+            code: 'c',
+            binding_verifier: 'v',
+        });
+        const call = theRequest();
+        expect(call.url).toEndWith('/v1/auth/oidc/callback');
+        expect(call.protocol).toBe(PROTOCOL_VERSION);
+    });
+
+    test('rides oidcAvailable', async () => {
+        await oidcAvailable();
+        const call = theRequest();
+        expect(call.url).toEndWith('/.well-known/capsule/server-info');
+        expect(call.protocol).toBe(PROTOCOL_VERSION);
+    });
+});
+
+/** Answer every request with `body` at `status`, recording what was sent. */
+function answering(status: number, body: unknown): RequestInit[] {
+    const sent: RequestInit[] = [];
+    globalThis.fetch = (async (
+        _input: RequestInfo | URL,
+        init?: RequestInit,
+    ) => {
+        sent.push(init ?? {});
+        return new Response(JSON.stringify(body), {
+            status,
+            headers: { 'Content-Type': 'application/json' },
+        });
+    }) as typeof fetch;
+    return sent;
+}
+
+describe('the OIDC sign-in', () => {
+    test('sends the authorize body as the contract names it', async () => {
+        const sent = answering(200, {
+            authorization_url: 'https://idp.example/authorize?state=s',
+            state: 's',
+            expires_by: 1000,
+        });
+        const ceremony = await beginOidcLogin({
+            redirect_uri: 'https://photos.example/login/oidc-callback',
+            binding_challenge: 'challenge',
+        });
+        expect(ceremony.state).toBe('s');
+        expect(JSON.parse(String(sent[0].body))).toEqual({
+            redirect_uri: 'https://photos.example/login/oidc-callback',
+            binding_challenge: 'challenge',
+        });
+    });
+
+    test('sends only the fields the strict callback body admits', async () => {
+        const sent = answering(200, {
+            access_token: 'a',
+            refresh_token: 'r',
+            token_type: 'Bearer',
+            expires_by: 1000,
+        });
+        const result = await completeOidcLogin({
+            state: 's',
+            code: 'c',
+            binding_verifier: 'v',
+        });
+        expect(needsSecondFactor(result)).toBe(false);
+        expect(Object.keys(JSON.parse(String(sent[0].body))).sort()).toEqual([
+            'binding_verifier',
+            'code',
+            'state',
+        ]);
+    });
+
+    test('a callback answering 202 needs the second factor', async () => {
+        answering(202, { mfa_token: 'mfa', expires_by: 1000 });
+        const result = await completeOidcLogin({
+            state: 's',
+            code: 'c',
+            binding_verifier: 'v',
+        });
+        expect(needsSecondFactor(result)).toBe(true);
+        if (needsSecondFactor(result)) expect(result.mfa_token).toBe('mfa');
+    });
+
+    test('a refused callback carries its stable code', async () => {
+        answering(401, {
+            detail: 'state invalid',
+            code: 'error.auth.oidc_state_invalid',
+        });
+        const err = await completeOidcLogin({
+            state: 's',
+            code: 'c',
+            binding_verifier: 'v',
+        }).catch((e) => e);
+        expect(err).toBeInstanceOf(ApiError);
+        expect(err.status).toBe(401);
+        expect(err.code).toBe('error.auth.oidc_state_invalid');
+    });
+
+    test('is offered when server-info publishes an identity provider', async () => {
+        answering(200, {
+            auth: {
+                oidc: {
+                    authorize: '/v1/auth/oidc/authorize',
+                    callback: '/v1/auth/oidc/callback',
+                },
+            },
+        });
+        expect(await oidcAvailable()).toBe(true);
+    });
+
+    test('is not offered when server-info publishes none', async () => {
+        answering(200, { auth: { oidc: null } });
+        expect(await oidcAvailable()).toBe(false);
     });
 });
 

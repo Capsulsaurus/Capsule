@@ -7295,6 +7295,10 @@
     "message": "Enter your email below to login to your account.",
     "context": "Login card description."
   },
+  "auth.login.or": {
+    "message": "or",
+    "context": "Web login: the word between the password sign-in button and the identity-provider (single sign-on) button."
+  },
   "auth.login.title": {
     "message": "Login",
     "context": "Login card title."
@@ -7306,6 +7310,22 @@
   "auth.no_account": {
     "message": "Don't have an account?",
     "context": "Login prompt preceding the sign-up link."
+  },
+  "auth.oidc.ceremony_lost": {
+    "message": "This sign-in was started in another tab, or too long ago. Start again from the login page.",
+    "context": "Web single sign-on callback: the browser tab holds no matching sign-in it began, or it has expired, so the identity provider's answer cannot be finished here."
+  },
+  "auth.oidc.completing": {
+    "message": "Finishing sign-in…",
+    "context": "Web single sign-on callback: title shown while the identity provider's answer is exchanged for a session."
+  },
+  "auth.oidc.failed_title": {
+    "message": "Sign-in Not Completed",
+    "context": "Web single sign-on callback: title of the card shown when the sign-in could not be finished."
+  },
+  "auth.oidc.not_completed": {
+    "message": "Your identity provider did not complete the sign-in.",
+    "context": "Web single sign-on callback: the identity provider came back with an error (for example the person declined) or without a sign-in code."
   },
   "auth.sign_up": {
     "message": "Sign up",
