@@ -11,6 +11,7 @@ status: 0
   "failed_assets": 0,
   "delegated_assets": 0,
   "trashed_assets": 0,
+  "held_records": [],
   "receipts": 0,
   "uploaded_blobs": 0,
   "merged_blobs": 0,
