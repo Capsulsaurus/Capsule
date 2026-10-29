@@ -36,6 +36,10 @@ include(":android")
 project(":android").projectDir = file("capsule-android")
 include(":core")
 project(":core").projectDir = file("capsule-core-kotlin")
+// The responsiveness parity benchmark: a Macrobenchmark test APK that drives `:android`'s
+// `benchmark` build and the platform photo app on a physical device (`mise run bench-apps`).
+include(":benchmark")
+project(":benchmark").projectDir = file("capsule-android/benchmark")
 // :cli is the Rust crate `capsule-cli` (no Gradle build) and capsule-desktop does not
 // exist yet — including them broke Gradle configuration. Re-add :desktop when it lands.
 // include(":cli")

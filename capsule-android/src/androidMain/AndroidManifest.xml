@@ -16,6 +16,9 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.AppCompat.Light.NoActionBar">
+        <!-- Lets the shell record a trace of a non-debuggable build (API 29+), which the parity
+             benchmark and field profiling need. It grants no access beyond what adb already has. -->
+        <profileable android:shell="true" />
         <!-- Below Android 13 the in-app language picker's choice is kept by AppCompat in this
              device's app storage; on Android 13+ AppCompat hands it to the system per-app
              language, so an upgraded device keeps it. -->
