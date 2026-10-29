@@ -2212,3 +2212,98 @@ fn ffi_album_labels_round_trip() {
     );
     assert_eq!(workspace.labels(target).unwrap(), ["Family"]);
 }
+
+// ─── Trash ───────────────────────────────────────────────────────────────────
+
+fn trash_refusal<T: std::fmt::Debug>(
+    result: Result<T, FfiError>,
+) -> (FfiTrashRefusal, Option<String>, Option<String>) {
+    match result {
+        Err(FfiError::Trash {
+            refusal,
+            code,
+            retention_until,
+            ..
+        }) => (refusal, code, retention_until),
+        other => panic!("expected a trash refusal, got {other:?}"),
+    }
+}
+
+/// Delete, restore and purge go through the workspace's signed records: a retried delete keeps
+/// its window, a restore leaves the trash, and an early purge hands back the signed re-issue
+/// the server needs before the asset leaves the workspace.
+#[test]
+fn ffi_trash_verbs_delete_restore_and_purge_through_signed_records() {
+    use capsule_core::crypto::provenance::{Action, ProvenanceRecord};
+
+    let lib = tempfile::TempDir::new().unwrap();
+    let (workspace, _, asset) = labelled_fixture(lib.path());
+    assert!(workspace.trash().unwrap().is_empty());
+
+    let entry = workspace.delete_asset(asset.clone(), 30).unwrap();
+    assert_eq!(entry.asset_id, asset);
+    assert!(entry.restorable);
+    assert!(entry.retention_until.is_some());
+    assert_eq!(workspace.trash().unwrap(), vec![entry.clone()]);
+    assert!(workspace.expired_trash().unwrap().is_empty());
+    assert_eq!(
+        workspace.delete_asset(asset.clone(), 1).unwrap(),
+        entry,
+        "a retried delete signs nothing and keeps the first window"
+    );
+
+    workspace.restore_asset(asset.clone()).unwrap();
+    assert!(workspace.trash().unwrap().is_empty());
+    assert_eq!(
+        trash_refusal(workspace.restore_asset(asset.clone())).0,
+        FfiTrashRefusal::NotInTrash
+    );
+    assert_eq!(
+        trash_refusal(workspace.purge_asset(asset.clone())).0,
+        FfiTrashRefusal::NotInTrash,
+        "a purge never skips the trash"
+    );
+
+    workspace.delete_asset(asset.clone(), 30).unwrap();
+    let purged = workspace.purge_asset(asset.clone()).unwrap();
+    assert_eq!(purged.asset_id, asset);
+    let record: ProvenanceRecord =
+        capsule_core::cbor::from_slice(&purged.reissue_record.expect("an early purge re-issues"))
+            .unwrap();
+    assert_eq!(record.manifest.core.action, Action::Delete);
+    assert!(!workspace.asset_ids().unwrap().contains(&asset));
+    assert!(workspace.trash().unwrap().is_empty());
+    assert_eq!(
+        trash_refusal(workspace.purge_asset(asset)).0,
+        FfiTrashRefusal::NotFound
+    );
+}
+
+/// A delete whose window has already closed is expired, refuses a restore with the server's
+/// own code and floor, and purges without a re-issue.
+#[test]
+fn ffi_trash_refuses_a_restore_after_retention_until() {
+    let lib = tempfile::TempDir::new().unwrap();
+    let (workspace, _, asset) = labelled_fixture(lib.path());
+
+    let entry = workspace.delete_asset(asset.clone(), 0).unwrap();
+    assert!(!entry.restorable);
+    assert_eq!(workspace.expired_trash().unwrap(), vec![entry.clone()]);
+
+    let (refusal, code, until) = trash_refusal(workspace.restore_asset(asset.clone()));
+    assert_eq!(refusal, FfiTrashRefusal::RetentionElapsed);
+    assert_eq!(
+        code.as_deref(),
+        Some(capsule_i18n::error_codes::UPLOAD_RETENTION_ELAPSED)
+    );
+    assert_eq!(until, entry.retention_until);
+    assert_eq!(workspace.trash().unwrap().len(), 1, "it stays in the trash");
+
+    assert!(
+        workspace
+            .purge_asset(asset)
+            .unwrap()
+            .reissue_record
+            .is_none()
+    );
+}

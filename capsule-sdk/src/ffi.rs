@@ -73,9 +73,9 @@ mod workspace;
 pub use workspace::{
     FfiAlbum, FfiAssetFacts, FfiAssetMetadata, FfiClientBuild, FfiDeviceTier,
     FfiHardwareKeyAgreement, FfiHardwareSigner, FfiHardwareSignerError, FfiLabelRefusal,
-    FfiLabelTarget, FfiOpenedOriginal, FfiRegion, FfiRegionShape, FfiSyncApplyOutcome,
-    FfiSyncEntry, FfiSyncHead, FfiUploadBlob, FfiVerifyOutcome, FfiWorkspace,
-    p256_hardware_dek_round_trip,
+    FfiLabelTarget, FfiOpenedOriginal, FfiPurgeOutcome, FfiRegion, FfiRegionShape,
+    FfiSyncApplyOutcome, FfiSyncEntry, FfiSyncHead, FfiTrashEntry, FfiTrashRefusal, FfiUploadBlob,
+    FfiVerifyOutcome, FfiWorkspace, p256_hardware_dek_round_trip,
 };
 
 /// The transfer event stream: the flattened mirror of `crate::events` and the subscription a
@@ -147,6 +147,21 @@ pub enum FfiError {
     Label {
         /// Why the edit was refused.
         refusal: FfiLabelRefusal,
+        /// English detail (developer/log message).
+        detail: String,
+    },
+    /// A trash verb (delete, restore, purge) was refused before anything was written: the asset
+    /// is unknown, not in the trash, or past its signed retention window. `refusal` says which.
+    #[error("trash verb refused ({refusal:?}): {detail}")]
+    Trash {
+        /// Why the verb was refused.
+        refusal: FfiTrashRefusal,
+        /// Stable `error.*` catalog code, when one applies: `error.upload.retention_elapsed`
+        /// for [`FfiTrashRefusal::RetentionElapsed`], the code the server answers the same
+        /// refusal with.
+        code: Option<String>,
+        /// The signed retention floor (RFC 3339) a refused restore came too late for.
+        retention_until: Option<String>,
         /// English detail (developer/log message).
         detail: String,
     },
