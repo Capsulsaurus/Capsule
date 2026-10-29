@@ -28,8 +28,12 @@ class LabelEditorViewModel(
         viewModelScope.launch { model.load() }
     }
 
-    fun addLabel(text: String) {
-        viewModelScope.launch { model.addLabel(text) }
+    /** Add [text] to the current target, calling [onStored] only once the port stores it. */
+    fun addLabel(
+        text: String,
+        onStored: () -> Unit = {},
+    ) {
+        viewModelScope.launch { if (model.addLabel(text)) onStored() }
     }
 
     fun removeLabel(text: String) {
@@ -44,10 +48,16 @@ class LabelEditorViewModel(
 
     fun cancelDrawing() = model.cancelDrawing()
 
-    /** Save the draft with [firstLabel] as its first label, or none when it is blank. */
-    fun finishDrawing(firstLabel: String) {
+    /**
+     * Save the draft with [firstLabel] as its first label, or none when it is blank,
+     * calling [onStored] only once the port stores it.
+     */
+    fun finishDrawing(
+        firstLabel: String,
+        onStored: () -> Unit = {},
+    ) {
         val labels = if (firstLabel.isBlank()) emptyList() else listOf(firstLabel)
-        viewModelScope.launch { model.finishDrawing(labels) }
+        viewModelScope.launch { if (model.finishDrawing(labels)) onStored() }
     }
 
     fun deleteSelectedRegion() {

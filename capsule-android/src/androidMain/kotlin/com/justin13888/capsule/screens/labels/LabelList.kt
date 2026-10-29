@@ -43,16 +43,14 @@ import com.justin13888.capsule.screens.domain.UserLabel
 fun LabelList(
     labels: List<String>,
     enabled: Boolean,
-    onAdd: (String) -> Unit,
+    onAdd: (text: String, onStored: () -> Unit) -> Unit,
     onRemove: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var typed by rememberSaveable { mutableStateOf("") }
     val submit = {
-        if (typed.isNotBlank()) {
-            onAdd(typed)
-            typed = ""
-        }
+        // Cleared only once stored, so a refused label keeps what was typed.
+        if (typed.isNotBlank()) onAdd(typed) { typed = "" }
     }
     Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (labels.isEmpty()) {
@@ -78,8 +76,8 @@ fun LabelList(
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedTextField(
                 value = typed,
-                // The byte bound is the store's to enforce; this only stops runaway input.
-                onValueChange = { if (it.length <= UserLabel.MAX_BYTES * 2) typed = it },
+                // The byte bound is the store's to enforce, and its refusal names it.
+                onValueChange = { typed = it },
                 label = { Text(stringResource(R.string.app_labels_field)) },
                 singleLine = true,
                 enabled = enabled,

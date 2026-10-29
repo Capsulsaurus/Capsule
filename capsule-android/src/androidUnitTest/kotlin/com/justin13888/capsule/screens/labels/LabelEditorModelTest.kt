@@ -10,14 +10,20 @@ import com.justin13888.capsule.screens.domain.RegionShape
 import com.justin13888.capsule.screens.domain.ShapeRefusal
 import com.justin13888.capsule.screens.domain.ShapeRefusalReason
 import com.justin13888.capsule.screens.domain.StackId
+import com.justin13888.capsule.screens.domain.UserLabel
 import com.justin13888.capsule.screens.mock.MockLabelStore
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 /**
  * The editor writes through the port, redraws from its answers, and leaves its state as
@@ -117,6 +123,51 @@ class LabelEditorModelTest {
         }
 
     @Test
+    fun aWriteAnswersWhetherItWasStoredSoAFieldKeepsARefusedLabel() =
+        runBlocking {
+            val stackModel = LabelEditorModel(LabelSubject.Stack(stack), port())
+            assertTrue(stackModel.addLabel("kept"))
+            assertFalse(stackModel.addLabel("x".repeat(UserLabel.MAX_BYTES + 1)))
+            assertEquals(LabelFailure.LabelTooLong(UserLabel.MAX_BYTES + 1), stackModel.state.value.failure)
+
+            val assetModel = LabelEditorModel(LabelSubject.Asset(asset), port())
+            assertFalse(assetModel.addLabel("no region selected"))
+            assetModel.startDrawing(RegionDraft.Kind.RECT)
+            assertFalse(assetModel.finishDrawing(listOf("   ")))
+            assertEquals(LabelFailure.LabelEmpty, assetModel.state.value.failure)
+            assertNotNull(assetModel.state.value.draft)
+            assertTrue(assetModel.finishDrawing(listOf("face")))
+            assertFalse(assetModel.finishDrawing(listOf("no draft left")))
+        }
+
+    @Test
+    fun aCancellationFromThePortPropagatesUnshownAndEndsTheWrite() =
+        runBlocking {
+            val model = LabelEditorModel(LabelSubject.Stack(stack), CancellingLabelPort(port()))
+            assertFailsWith<CancellationException> { model.addLabel("x") }
+            assertNull(model.state.value.failure)
+            assertFalse(model.state.value.isWriting)
+        }
+
+    @Test
+    fun cancellingAWriteInFlightEndsItWithoutAFailureAndFreesTheEditor() =
+        runBlocking {
+            val gated = GatedLabelPort(port())
+            val model = LabelEditorModel(LabelSubject.Stack(stack), gated)
+            val write = launch { model.addLabel("never") }
+            gated.entered.await()
+            assertTrue(model.state.value.isWriting)
+            write.cancelAndJoin()
+            assertTrue(write.isCancelled)
+            assertFalse(model.state.value.isWriting)
+            assertNull(model.state.value.failure)
+            assertEquals(emptyList(), model.state.value.labels)
+            gated.open.complete(Unit)
+            assertTrue(model.addLabel("next"))
+            assertEquals(listOf("next"), model.state.value.labels)
+        }
+
+    @Test
     fun aMissingSubjectIsNamedAsNotFound() =
         runBlocking {
             val model = LabelEditorModel(LabelSubject.Stack(stack), MockLabelStore(MockLabelStore.Existence.NOTHING, seed = 3))
@@ -195,6 +246,16 @@ class LabelEditorModelTest {
             model.finishDrawing(listOf("never"))
             assertEquals(emptyList(), store.regions(asset))
         }
+
+    /** Forwards to a mock store, except that adding a label throws a cancellation. */
+    private class CancellingLabelPort(
+        private val inner: LabelPort,
+    ) : LabelPort by inner {
+        override suspend fun addLabel(
+            label: String,
+            target: LabelTarget,
+        ): List<String> = throw CancellationException("cancelled under the write")
+    }
 
     /** Forwards to a mock store, holding every write until the test opens the gate. */
     private class GatedLabelPort(

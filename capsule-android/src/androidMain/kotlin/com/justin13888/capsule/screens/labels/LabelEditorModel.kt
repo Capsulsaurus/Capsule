@@ -104,8 +104,8 @@ class LabelEditorModel(
      */
     val labelTarget: LabelTarget? get() = targetFor(mutableState.value.selectedRegionId)
 
-    /** Read the subject's regions or labels from the port. */
-    suspend fun load() =
+    /** Read the subject's regions or labels from the port; `true` when they were read. */
+    suspend fun load(): Boolean =
         perform("load") {
             when (subject) {
                 is LabelSubject.Asset -> {
@@ -133,10 +133,14 @@ class LabelEditorModel(
         }
     }
 
-    /** Add a label to the current target. */
-    suspend fun addLabel(text: String) {
-        val target = labelTarget ?: return
-        perform("add label") { store(port.addLabel(text, target), target) }
+    /**
+     * Add a label to the current target.
+     *
+     * @return whether the port stored it, so a field keeps what was typed on a refusal.
+     */
+    suspend fun addLabel(text: String): Boolean {
+        val target = labelTarget ?: return false
+        return perform("add label") { store(port.addLabel(text, target), target) }
     }
 
     /** Remove a label from the current target. */
@@ -161,11 +165,15 @@ class LabelEditorModel(
         mutableState.update { it.copy(draft = null) }
     }
 
-    /** Write the draft as a region with its first labels, and select it. */
-    suspend fun finishDrawing(labels: List<String>) {
-        if (subject !is LabelSubject.Asset) return
-        val pending = mutableState.value.draft ?: return
-        perform("add region") {
+    /**
+     * Write the draft as a region with its first labels, and select it.
+     *
+     * @return whether the port stored it, so a field keeps the typed first label on a refusal.
+     */
+    suspend fun finishDrawing(labels: List<String>): Boolean {
+        if (subject !is LabelSubject.Asset) return false
+        val pending = mutableState.value.draft ?: return false
+        return perform("add region") {
             val region = port.addRegion(pending.shape, labels, subject.asset)
             mutableState.update { state ->
                 state
@@ -217,15 +225,17 @@ class LabelEditorModel(
         }
     }
 
+    /** Run [work] as the one request in flight; `true` when it completed, `false` when refused or not run. */
     private suspend fun perform(
         operation: String,
         work: suspend () -> Unit,
-    ) {
-        if (mutableState.value.isWriting) return
+    ): Boolean {
+        if (mutableState.value.isWriting) return false
         mutableState.update { it.copy(isWriting = true, failure = null) }
-        try {
+        return try {
             work()
             log.fine { "label editor $operation on $subject: done" }
+            true
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (
@@ -234,6 +244,7 @@ class LabelEditorModel(
             val failure = failureFor(error)
             log.log(Level.INFO, "label editor $operation on $subject refused: $failure", error)
             mutableState.update { it.copy(failure = failure) }
+            false
         } finally {
             mutableState.update { it.copy(isWriting = false) }
         }

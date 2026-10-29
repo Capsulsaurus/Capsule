@@ -254,10 +254,8 @@ private fun DraftControls(
     )
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Button(
-            onClick = {
-                viewModel.finishDrawing(firstLabel)
-                firstLabel = ""
-            },
+            // Cleared only once stored, so a refused label keeps what was typed.
+            onClick = { viewModel.finishDrawing(firstLabel) { firstLabel = "" } },
             enabled = !state.isWriting,
         ) {
             Text(stringResource(R.string.app_labels_regions_save))
