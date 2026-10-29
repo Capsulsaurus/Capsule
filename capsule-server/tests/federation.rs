@@ -2764,8 +2764,8 @@ async fn saturate(
 
 #[tokio::test]
 async fn a_full_mint_partition_is_a_429_never_a_500() {
-    // #912: a full partition is the limiter working, so it answers as a spent budget does, not
-    // as the outage a `500` reports.
+    // #912: a full partition is the limiter working, so it is a `429`, not the outage a `500`
+    // reports. #919: under the at-capacity code, because the account's own budget is unspent.
     let dsk = support::identity_key();
     let (fixture, bearer) = anchored(&dsk).await;
     publish_roster(&fixture, &bearer, &dsk, 1, &[(BOB, MemberRole::Reader)])
@@ -2782,7 +2782,36 @@ async fn a_full_mint_partition_is_a_429_never_a_500() {
     let refused = mint(&fixture, &bearer, mint_body("read")).await;
     refused.assert_status(StatusCode::TOO_MANY_REQUESTS);
     let refused: Value = refused.json();
-    assert_eq!(refused["code"], "error.federation.rate_budget_exceeded");
+    assert_eq!(refused["code"], "error.federation.mint_at_capacity");
+}
+
+#[tokio::test]
+async fn a_full_report_intake_partition_is_an_at_capacity_429() {
+    // #919: a report counter charged through `charge` that is full answers the at-capacity
+    // code, never the spent-budget one, since this peer's intake budget is untouched.
+    let (fixture, _) = shared().await;
+    let (signer, public) = support::peer_keypair();
+    pin(&fixture, public).await;
+    saturate(
+        &fixture,
+        &CounterKey::FederatedIntake(PEER.to_owned()),
+        budgets::FEDERATED_INTAKE,
+        |i| CounterKey::FederatedIntake(format!("filler-{i}.test")),
+    )
+    .await;
+
+    let refused = file(
+        &fixture,
+        support::sign_report(
+            &signer,
+            &claim("0192f1a8-7c4e-4b6a-9d3e-00000000000a", support::REPORTED_AT),
+        ),
+    )
+    .await;
+    refused.assert_status(StatusCode::TOO_MANY_REQUESTS);
+    let refused: Value = refused.json();
+    assert_eq!(refused["code"], "error.moderation.report_at_capacity");
+    assert_eq!(queued(&fixture).await, 0, "nothing is filed");
 }
 
 #[tokio::test]
@@ -2808,7 +2837,7 @@ async fn a_full_report_nonce_partition_is_a_429_never_a_500_or_a_replay() {
     .await;
     refused.assert_status(StatusCode::TOO_MANY_REQUESTS);
     let refused: Value = refused.json();
-    assert_eq!(refused["code"], "error.moderation.report_rate_limited");
+    assert_eq!(refused["code"], "error.moderation.report_at_capacity");
     assert_eq!(queued(&fixture).await, 0, "nothing is filed");
 }
 

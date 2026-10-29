@@ -387,7 +387,8 @@ pub enum MintRejection {
         code: &'static str,
     },
 
-    /// The account's mint budget is spent.
+    /// The account's mint budget is spent, or the mint counter is holding as many accounts as
+    /// it will hold. The code says which.
     #[error("this account has reached its capability mint budget")]
     #[problem(status = 429, title = "Rate budget exceeded")]
     RateLimited {
@@ -587,7 +588,9 @@ pub async fn issue_capability(
 
     // Every mint writes a capability row, so an account's mints are budgeted before any store is
     // read. Fail closed: a counter that cannot answer is a `500`, never an admission, and a full
-    // partition is the limiter working, so it is the same `429` a spent budget gets.
+    // partition is the limiter working, so it is a `429` — under its own at-capacity code, as
+    // every route that asks `is_at_capacity` answers it, because the caller's own budget is not
+    // what was spent.
     let key = CounterKey::CapabilityMints(UserId::new(credential.user.as_str()));
     match counters
         .hit(&key, budgets::CAPABILITY_MINTS)
@@ -596,7 +599,7 @@ pub async fn issue_capability(
             if let Some(retry_after) = counters.capacity_refusal(&error, budgets::CAPABILITY_MINTS) {
                 tracing::warn!(%error, user = %credential.user, %retry_after, "a mint was refused: the mint counter is at capacity");
                 MintRejection::RateLimited {
-                    code: error_codes::FEDERATION_RATE_BUDGET_EXCEEDED,
+                    code: error_codes::FEDERATION_MINT_AT_CAPACITY,
                 }
             } else {
                 tracing::error!(%error, user = %credential.user, "the mint counter could not be reached");
@@ -1115,7 +1118,8 @@ pub enum ReportRejection {
         code: &'static str,
     },
 
-    /// Too many reports from this peer about this account.
+    /// Too many reports from this peer about this account, or a report counter is holding as
+    /// many keys as it will hold. The code says which.
     #[error("too many reports from this server about this account")]
     #[problem(status = 429, title = "Report rate limited")]
     RateLimited {
@@ -1417,8 +1421,8 @@ pub async fn submit_federated_report(
     )
     .await?;
     // Spent by hand rather than through `charge`: a `Limited` verdict here is a replay, which
-    // is a `401`, while a full partition is the limiter at capacity, which is the `429` every
-    // other report budget gives — never the `500` of a store that could not answer.
+    // is a `401`, while a full partition is the limiter at capacity, which is the at-capacity
+    // `429` every other report counter gives — never the `500` of a store that could not answer.
     match counters
         .hit(&nonce, budgets::FEDERATED_REPORT_NONCE)
         .await
@@ -1540,8 +1544,9 @@ async fn charge(
 /// What a report counter that refused to answer tells the peer.
 ///
 /// Fail closed either way. A full partition is the limiter working as designed and clears
-/// within its window, so it is the `429` a spent budget gets; anything else is a store that
-/// could not answer, which is the `500`.
+/// within its window, so it is a `429`, under the at-capacity code rather than the spent-budget
+/// one because no budget of the peer's was spent; anything else is a store that could not
+/// answer, which is the `500`.
 fn refused_by_counter(
     counters: &CounterContext,
     error: &crate::store::StoreError,
@@ -1551,7 +1556,7 @@ fn refused_by_counter(
     if let Some(retry_after) = counters.capacity_refusal(error, budget) {
         tracing::warn!(%error, kind = key.as_str(), %retry_after, "a report counter is at capacity");
         ReportRejection::RateLimited {
-            code: error_codes::MODERATION_REPORT_RATE_LIMITED,
+            code: error_codes::MODERATION_REPORT_AT_CAPACITY,
         }
     } else {
         tracing::error!(%error, kind = key.as_str(), "a report counter could not be reached");
