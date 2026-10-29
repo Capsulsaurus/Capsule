@@ -166,47 +166,14 @@ impl Catalog {
         }
     }
 
-    /// **Index-only**: flags the row and signs nothing, so the delete never syncs and a rebuild
-    /// undoes it. It survives only for the Apple managed store, whose imports are unsigned
-    /// catalog rows with no workspace behind them. A workspace asset is deleted through
-    /// `FfiWorkspace::delete_asset`, which owns the trash state machine
-    /// ([Organization — Deletion State Machine]).
-    ///
-    /// [Organization — Deletion State Machine]: https://docs/design/organization/#deletion-state-machine
-    pub fn soft_delete(&self, uuid: String, deleted_at: i64) -> Result<(), CatalogError> {
-        tracing::debug!(%uuid, "catalog: soft_delete");
-        self.driver().soft_delete(&uuid, deleted_at)?;
-        Ok(())
-    }
-
-    /// **Index-only**, like [`soft_delete`](Self::soft_delete): no retention check and no
-    /// signed record. A workspace asset is restored through `FfiWorkspace::restore_asset`.
-    pub fn restore_asset(&self, uuid: String) -> Result<(), CatalogError> {
-        tracing::debug!(%uuid, "catalog: restore_asset");
-        self.driver().restore_asset(&uuid)?;
-        Ok(())
-    }
-
-    /// The **retention sweep** input: assets soft-deleted longer than `older_than_secs`
-    /// ago, for the background purge job ([Filesystem — Maintenance]).
-    ///
-    /// Deliberately **ungated**: the sweep runs unattended, with no user present to
-    /// authenticate, so putting it behind SR1 would only break maintenance. It is not the
-    /// Recently Deleted *view* — do not build one on it; use
-    /// [`query_trash`](Self::query_trash), which is gated.
-    ///
-    /// **Judged by `deleted_at` and a caller-chosen age**, not by the signed `retention_until`,
-    /// so it serves only the index-only rows [`soft_delete`](Self::soft_delete) writes. A
-    /// workspace's sweep is `FfiWorkspace::expired_trash`.
-    ///
-    /// [Filesystem — Maintenance]: https://docs/design/filesystem/maintenance/
-    pub fn query_expired_trash(
-        &self,
-        older_than_secs: i64,
-    ) -> Result<Vec<AssetRecord>, CatalogError> {
-        let rows = self.driver().query_expired_trash(older_than_secs)?;
-        Ok(rows.into_iter().map(AssetRecord::from).collect())
-    }
+    // ── Trash ────────────────────────────────────────────────────────────────
+    //
+    // The catalog only reads the trash. Every transition (delete, restore, purge) and the
+    // retention sweep are `FfiWorkspace` verbs, which sign the record the index row projects,
+    // so the transition syncs and survives an index rebuild ([Organization — Deletion State
+    // Machine]). A write here would flag the row and sign nothing.
+    //
+    // [Organization — Deletion State Machine]: https://docs/design/organization/#deletion-state-machine
 
     /// All currently soft-deleted assets — the Recently Deleted listing, **gated** by SR1.
     ///
@@ -259,16 +226,6 @@ impl Catalog {
     pub fn lock_views(&self) {
         tracing::debug!("catalog: lock_views");
         self.gates().lock();
-    }
-
-    /// Permanently remove an asset's rows (the files are deleted by the caller).
-    ///
-    /// **Index-only**, like [`soft_delete`](Self::soft_delete). A workspace asset is purged
-    /// through `FfiWorkspace::purge_asset`, which removes its files too.
-    pub fn purge_asset(&self, uuid: String) -> Result<(), CatalogError> {
-        tracing::debug!(%uuid, "catalog: purge_asset");
-        self.driver().purge_asset(&uuid)?;
-        Ok(())
     }
 
     // ── Stacks ───────────────────────────────────────────────────────────────

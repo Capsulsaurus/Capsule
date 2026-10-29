@@ -317,22 +317,6 @@ impl DatabaseDriver {
         Ok(())
     }
 
-    pub fn query_expired_trash(
-        &self,
-        older_than_secs: i64,
-    ) -> Result<Vec<AssetRow>, rusqlite::Error> {
-        let threshold = now_secs() - older_than_secs;
-        let mut stmt = self.conn.prepare(
-            "SELECT uuid, asset_type, capture_timestamp, capture_utc, capture_tz_source,
-             import_timestamp, hash_sha256, width, height, duration_ms, stack_id, is_stack_hidden,
-             chromahash, dominant_color, album_id, rating, is_deleted, deleted_at, is_hidden,
-             caption, latitude, longitude
-             FROM assets WHERE is_deleted = 1 AND deleted_at IS NOT NULL AND deleted_at < ?1",
-        )?;
-        let rows = stmt.query_map(params![threshold], map_asset_row)?;
-        rows.collect()
-    }
-
     /// All currently soft-deleted assets — the Recently Deleted listing,
     /// most-recently-deleted first.
     pub fn query_trash(

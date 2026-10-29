@@ -64,6 +64,16 @@ fn asset(uuid: &str, hash: &str) -> AssetRecord {
     }
 }
 
+/// A row as the index projects a trashed asset. The catalog has no trash write of its own,
+/// so a test about reading the trash inserts the row a workspace `delete` would have left.
+fn trashed(uuid: &str, hash: &str) -> AssetRecord {
+    AssetRecord {
+        is_deleted: true,
+        deleted_at: Some(1_720_000_100),
+        ..asset(uuid, hash)
+    }
+}
+
 #[test]
 fn test_open_in_memory_and_insert() {
     let cat = Catalog::open_in_memory().unwrap();
@@ -78,33 +88,81 @@ fn test_open_in_memory_and_insert() {
 }
 
 #[test]
-fn test_soft_delete_hides_from_timeline() {
-    let cat = Catalog::open_in_memory().unwrap();
-    cat.insert_asset(asset("u1", &"a".repeat(64))).unwrap();
-    cat.soft_delete("u1".to_string(), 1_720_000_100).unwrap();
-    assert!(cat.query_timeline(0, 100).unwrap().is_empty());
-    cat.restore_asset("u1".to_string()).unwrap();
-    assert_eq!(cat.query_timeline(0, 100).unwrap().len(), 1);
-}
-
-#[test]
-fn test_query_trash_and_purge() {
+fn test_query_trash_lists_only_trashed_rows() {
     let cat = Catalog::open_in_memory().unwrap();
     unlock(&cat, GatedView::RecentlyDeleted);
-    cat.insert_asset(asset("u1", &"a".repeat(64))).unwrap();
     cat.insert_asset(asset("u2", &"b".repeat(64))).unwrap();
     assert!(cat.query_trash(0, 100).unwrap().is_empty());
 
-    cat.soft_delete("u1".to_string(), 1_720_000_100).unwrap();
+    cat.insert_asset(trashed("u1", &"a".repeat(64))).unwrap();
     let trash = cat.query_trash(0, 100).unwrap();
     assert_eq!(trash.len(), 1);
     assert_eq!(trash[0].uuid, "u1");
-    // Still listed in trash but gone from the timeline.
-    assert_eq!(cat.query_timeline(0, 100).unwrap().len(), 1);
+    // Listed in the trash but absent from the timeline.
+    let timeline = cat.query_timeline(0, 100).unwrap();
+    assert_eq!(timeline.len(), 1);
+    assert_eq!(timeline[0].uuid, "u2");
+}
 
-    cat.purge_asset("u1".to_string()).unwrap();
-    assert!(cat.query_trash(0, 100).unwrap().is_empty());
-    assert!(cat.find_by_uuid("u1".to_string()).unwrap().is_none());
+/// The Apple managed store's path: an asset sealed and deleted through the workspace verbs
+/// is trashed in the index the `Catalog` reads, and stays trashed after that index is lost
+/// and rebuilt, because the delete is a signed record rather than a flag on the row.
+#[test]
+fn a_workspace_delete_is_trashed_in_the_catalog_and_survives_an_index_rebuild() {
+    use capsule_sdk::ffi::{FfiClientBuild, FfiDeviceTier, FfiWorkspace};
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = tmp.path().join("library");
+    let index = root.join("index/library.sqlite");
+    let (asset_id, kept_id) = {
+        let workspace = FfiWorkspace::create(
+            root.to_string_lossy().into_owned(),
+            b"test-passphrase".to_vec(),
+            FfiDeviceTier::LowRam,
+            FfiClientBuild {
+                client_id: "capsule-core-ffi-test".into(),
+                semver: "0.0.1".into(),
+            },
+        )
+        .unwrap();
+        let album = workspace.default_album_id().unwrap();
+        let album = workspace.ensure_album(album, "Camera Roll".into()).unwrap();
+        let asset_id = workspace
+            .seal_asset(album.clone(), "IMG_0001.JPG".into(), b"trashed".to_vec())
+            .unwrap();
+        let kept_id = workspace
+            .seal_asset(album, "IMG_0002.JPG".into(), b"kept".to_vec())
+            .unwrap();
+        workspace.delete_asset(asset_id.clone(), 30).unwrap();
+        (asset_id, kept_id)
+    };
+
+    let assert_trashed = |when: &str| {
+        let cat = Catalog::open(index.to_string_lossy().into_owned()).unwrap();
+        let timeline = cat.query_timeline(0, 100).unwrap();
+        assert_eq!(
+            timeline.iter().map(|r| r.uuid.clone()).collect::<Vec<_>>(),
+            vec![kept_id.clone()],
+            "{when}: only the kept asset is on the timeline"
+        );
+        unlock(&cat, GatedView::RecentlyDeleted);
+        let trash = cat.query_trash(0, 100).unwrap();
+        assert_eq!(trash.len(), 1, "{when}: one asset in the trash");
+        assert_eq!(trash[0].uuid, asset_id, "{when}");
+        assert!(trash[0].is_deleted, "{when}");
+    };
+    assert_trashed("before the rebuild");
+
+    for suffix in ["", "-wal", "-shm"] {
+        let file = root.join(format!("index/library.sqlite{suffix}"));
+        if file.exists() {
+            std::fs::remove_file(file).unwrap();
+        }
+    }
+    let library = capsule_library::library::open_library(&root).unwrap();
+    capsule_library::library::rebuild_index(&library).unwrap();
+    drop(library);
+    assert_trashed("after the rebuild");
 }
 
 #[test]
@@ -163,9 +221,8 @@ fn test_query_timeline_filtered_by_type() {
 fn trash_listing_refuses_without_grant_and_serves_with_one() {
     let cat = Catalog::open_in_memory().unwrap();
     // One soft-deleted asset, plus a live one that must never appear in the trash.
-    cat.insert_asset(asset("u1", &"a".repeat(64))).unwrap();
+    cat.insert_asset(trashed("u1", &"a".repeat(64))).unwrap();
     cat.insert_asset(asset("u2", &"b".repeat(64))).unwrap();
-    cat.soft_delete("u1".to_string(), 1_720_000_100).unwrap();
 
     // Refuses before a grant.
     assert!(!cat.is_view_unlocked(GatedView::RecentlyDeleted));
@@ -198,8 +255,7 @@ fn trash_listing_refuses_without_grant_and_serves_with_one() {
 #[test]
 fn platform_denial_is_passed_through_and_leaves_the_view_locked() {
     let cat = Catalog::open_in_memory().unwrap();
-    cat.insert_asset(asset("u1", &"a".repeat(64))).unwrap();
-    cat.soft_delete("u1".to_string(), 1_720_000_100).unwrap();
+    cat.insert_asset(trashed("u1", &"a".repeat(64))).unwrap();
 
     for refusal in [
         LocalAuthError::Cancelled,
@@ -226,8 +282,7 @@ fn platform_denial_is_passed_through_and_leaves_the_view_locked() {
 #[test]
 fn grant_is_reused_within_grace_and_dropped_by_lock_views() {
     let cat = Catalog::open_in_memory().unwrap();
-    cat.insert_asset(asset("u1", &"a".repeat(64))).unwrap();
-    cat.soft_delete("u1".to_string(), 1_720_000_100).unwrap();
+    cat.insert_asset(trashed("u1", &"a".repeat(64))).unwrap();
 
     let gate = Arc::new(AllowGate::new());
     cat.unlock_view(GatedView::RecentlyDeleted, gate.clone())
@@ -270,7 +325,8 @@ fn default_projections_are_ungated_and_leak_neither_deleted_nor_hidden() {
     .unwrap();
 
     cat.insert_asset(asset("visible", &"a".repeat(64))).unwrap();
-    cat.insert_asset(asset("deleted", &"b".repeat(64))).unwrap();
+    cat.insert_asset(trashed("deleted", &"b".repeat(64)))
+        .unwrap();
     let mut hidden = asset("hidden", &"c".repeat(64));
     hidden.is_hidden = true;
     cat.insert_asset(hidden).unwrap();
@@ -278,8 +334,6 @@ fn default_projections_are_ungated_and_leak_neither_deleted_nor_hidden() {
         cat.set_asset_album(uuid.to_string(), Some("alb-1".to_string()))
             .unwrap();
     }
-    cat.soft_delete("deleted".to_string(), 1_720_000_100)
-        .unwrap();
 
     // No grant anywhere.
     assert!(!cat.is_view_unlocked(GatedView::RecentlyDeleted));
@@ -351,19 +405,6 @@ fn render_lqip_never_fails_on_a_malformed_record() {
     let no_fill = render_lqip(LQIP_FORMAT_V1, vec![0xDE, 0xAD], vec![1, 2], 32, 32);
     assert_eq!((no_fill.width, no_fill.height), (1, 1));
     assert_eq!(no_fill.rgba, vec![0, 0, 0, 255]);
-}
-
-/// The retention sweep is deliberately ungated (it runs unattended) — pinned here so
-/// a future change to that decision is a deliberate one, not an accident.
-#[test]
-fn retention_sweep_stays_ungated() {
-    let cat = Catalog::open_in_memory().unwrap();
-    cat.insert_asset(asset("u1", &"a".repeat(64))).unwrap();
-    cat.soft_delete("u1".to_string(), 1_720_000_100).unwrap();
-
-    assert!(!cat.is_view_unlocked(GatedView::RecentlyDeleted));
-    // Deleted long before the cutoff, so the sweep sees it without any grant.
-    assert_eq!(cat.query_expired_trash(30 * 86_400).unwrap().len(), 1);
 }
 
 /// An import's caption and GPS fix cross the boundary on the record and read back intact.

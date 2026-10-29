@@ -208,17 +208,6 @@ fn test_soft_delete() {
 }
 
 #[test]
-fn test_query_expired_trash() {
-    let db = DatabaseDriver::open_in_memory().unwrap();
-    let asset = make_asset("uuid-1", &"a".repeat(64));
-    db.insert_asset(&asset).unwrap();
-    // Delete with a timestamp far in the past
-    db.soft_delete("uuid-1", 100).unwrap();
-    let expired = db.query_expired_trash(30 * 86400).unwrap();
-    assert_eq!(expired.len(), 1);
-}
-
-#[test]
 fn test_update_stack_hidden() {
     let db = DatabaseDriver::open_in_memory().unwrap();
     let asset = make_asset("uuid-1", &"a".repeat(64));
