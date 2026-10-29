@@ -69,10 +69,13 @@ struct MockLabelStoreTests {
         await #expect(throws: UserLabel.Refusal.empty) { try await store.addLabel(" ", to: .stack(stack)) }
         await #expect(throws: UserLabel.Refusal.empty) { try await store.removeLabel(" ", from: .album(album)) }
         await #expect(throws: UserLabel.Refusal.empty) { try await store.addLabel("", to: missingRegion) }
-        await #expect(throws: RegionShape.Refusal.pastEdge) {
+        await #expect(throws: UserLabel.Refusal.empty) {
             try await store.addRegion(.rect(left: 0.8, top: 0, width: 0.5, height: 0.5), labels: [" "], to: asset)
         }
-        await #expect(throws: LabelTargetRefusal.notFound) { try await store.addRegion(square, labels: [" "], to: asset) }
+        await #expect(throws: UserLabel.Refusal.empty) { try await store.addRegion(square, labels: [" "], to: asset) }
+        await #expect(throws: RegionShape.Refusal.pastEdge) {
+            try await store.addRegion(.rect(left: 0.8, top: 0, width: 0.5, height: 0.5), labels: ["ok"], to: asset)
+        }
     }
 
     @Test("A region is written with its first labels and takes labels of its own")

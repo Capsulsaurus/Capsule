@@ -9,11 +9,10 @@ import Foundation
 ///
 /// Refuses what the core's workspace refuses, in the same order: a label
 /// write refuses a label the rule refuses before an unknown target, and a
-/// region write refuses a shape outside the normalized-coordinate contract,
-/// then an unknown asset, then a refused first label (the workspace's
-/// `add_region` followed by `add_region_label`) — and writes nothing on any
-/// refusal. Region
-/// ids are minted deterministically from the seed, so two environments built
+/// region write refuses a refused first label, then a shape outside the
+/// normalized-coordinate contract, then an unknown asset (every first label
+/// is checked before the workspace's `add_region` writes the region) — and
+/// writes nothing on any refusal. Region ids are minted deterministically from the seed, so two environments built
 /// alike mint the same ids, and a deleted id is never minted again.
 ///
 /// Whether an asset, stack or album exists is the library's answer, asked
@@ -79,9 +78,9 @@ public actor MockLabelStore: LabelPort {
     }
 
     public func addRegion(_ shape: RegionShape, labels: [String], to assetID: AssetID) async throws -> AssetRegion {
+        let normalized = try labels.map { try UserLabel.normalize($0) }
         try shape.validate()
         guard await existence.asset(assetID) else { throw LabelTargetRefusal.notFound }
-        let normalized = try labels.map { try UserLabel.normalize($0) }
         let region = AssetRegion(
             id: MockIdentifiers.regionID(seed: seed, ordinal: minted),
             shape: shape,
