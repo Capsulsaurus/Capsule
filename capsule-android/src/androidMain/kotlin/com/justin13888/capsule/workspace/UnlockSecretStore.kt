@@ -1,7 +1,10 @@
 package com.justin13888.capsule.workspace
 
 import java.io.File
+import java.io.FileOutputStream
 import java.io.IOException
+import java.nio.channels.FileChannel
+import java.nio.file.StandardOpenOption
 import java.security.SecureRandom
 import java.util.logging.Logger
 
@@ -71,13 +74,19 @@ class UnlockSecretStore(
         val secret = random(SECRET_BYTES)
         val sealed = sealer.seal(secret)
         file.parentFile?.mkdirs()
-        // Written beside and renamed over, so a crash never leaves half a secret behind.
+        // Written beside, synced, and renamed over, then the rename synced: the library is
+        // created under this secret next, so it has to be durable before the library is, or a
+        // power loss could keep the library and lose the only secret that opens it.
         val partial = File(file.path + ".partial")
-        partial.writeBytes(sealed)
+        FileOutputStream(partial).use { out ->
+            out.write(sealed)
+            out.fd.sync()
+        }
         if (!partial.renameTo(file)) {
             partial.delete()
             throw IOException("could not store the unlock secret at ${file.path}")
         }
+        file.parentFile?.let(::syncDirectory)
         log.info("unlock secret: a new secret was sealed and stored")
         return secret
     }
@@ -89,5 +98,10 @@ class UnlockSecretStore(
         private val log: Logger = Logger.getLogger("capsule.workspace")
 
         private fun secureRandomBytes(count: Int): ByteArray = ByteArray(count).also { SecureRandom().nextBytes(it) }
+
+        /** Makes a rename into [dir] durable: on Linux, and so Android, a directory opens for reading and syncs. */
+        private fun syncDirectory(dir: File) {
+            FileChannel.open(dir.toPath(), StandardOpenOption.READ).use { it.force(true) }
+        }
     }
 }
