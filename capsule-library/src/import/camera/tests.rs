@@ -792,6 +792,24 @@ fn bytes_past_the_checkpoint_are_received_again() {
 }
 
 #[test]
+fn a_partial_is_reopened_for_writing_at_its_checkpoint_not_for_append() {
+    let tmp = TempDir::new().unwrap();
+    let partial = tmp.path().join("DSC00001.ARW.partial");
+    fs::write(&partial, b"durableTORN").unwrap();
+
+    let mut file = reopen_partial(&partial, 7).unwrap();
+
+    assert_eq!(file.stream_position().unwrap(), 7);
+    assert_eq!(fs::read(&partial).unwrap(), b"durable");
+    // An append-only handle would write past the end whatever its position; this one writes
+    // where it is told, which is the access a truncate needs on every platform.
+    file.seek(SeekFrom::Start(0)).unwrap();
+    file.write_all(b"D").unwrap();
+    drop(file);
+    assert_eq!(fs::read(&partial).unwrap(), b"Durable");
+}
+
+#[test]
 fn a_staging_failure_halts_the_run() {
     let tmp = TempDir::new().unwrap();
     // A file where the staging root's `partial/` directory must go.
