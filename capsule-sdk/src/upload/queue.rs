@@ -15,7 +15,8 @@
 //! jobs return to the front of their tiers and the lane waits out one stall bound before it
 //! is served again, so a dead server's lane cannot hold the budget every other lane needs.
 //! On resume each lane is rebuilt from its own server's truth ([`UploadQueue::rebuild_lane`]);
-//! no lane's state is derived from another's.
+//! no lane's state is derived from another's. Deleting an asset withdraws its jobs from every
+//! lane at once ([`UploadQueue::withdraw`]), so no further byte of it is sent to any server.
 //!
 //! This is a pure scheduler over values: it sends nothing and reads no clock. The caller
 //! passes `now`, runs each [`Grant`] it is handed, and reports back with
@@ -260,6 +261,44 @@ impl<J: Clone> UploadQueue<J> {
             "upload queue: lane rebuilt from server truth"
         );
         superseded.into_iter().map(|grant| grant.id).collect()
+    }
+
+    /// Remove every job `selects` picks from every lane, queued or in flight: the redaction a
+    /// delete makes of one asset's upload (Organization — Deletion State Machine), which spans
+    /// every server the asset was queued for. A job in flight is superseded and its reservation
+    /// released (the caller stops it); its id is returned and later reports on it are ignored.
+    /// Every other job keeps its place, and no lane's window or pause changes.
+    pub fn withdraw(&mut self, selects: impl Fn(&J) -> bool) -> Vec<GrantId> {
+        let mut superseded = Vec::new();
+        let mut released = 0;
+        for lane in &mut self.lanes {
+            let mut dropped = 0;
+            for tier in &mut lane.queued {
+                let before = tier.len();
+                tier.retain(|queued| !selects(&queued.job));
+                dropped += before - tier.len();
+            }
+            let (stopped, kept): (Vec<InFlight<J>>, Vec<InFlight<J>>) = lane
+                .in_flight
+                .drain(..)
+                .partition(|flight| selects(&flight.job.job));
+            lane.in_flight = kept;
+            let lane_released: u64 = stopped.iter().map(|flight| flight.reserved).sum();
+            released += lane_released;
+            if dropped > 0 || !stopped.is_empty() {
+                tracing::info!(
+                    server = %lane.server,
+                    dropped_queued = dropped,
+                    superseded = stopped.len(),
+                    released = lane_released,
+                    "upload queue: jobs withdrawn"
+                );
+            }
+            superseded.extend(stopped.into_iter().map(|flight| flight.id));
+        }
+        self.in_use -= released;
+        superseded.sort_unstable();
+        superseded
     }
 
     /// Hold `server`'s lane until `until` (its backoff, or the server's `Retry-After`). Other
