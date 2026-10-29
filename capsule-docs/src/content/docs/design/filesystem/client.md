@@ -19,11 +19,11 @@ Clients hold keys, so a client stores plaintext. A library routinely holds asset
 └── .library/
     ├── version, config, lock
     ├── docs/{albums,stacks}/{uuid}.cbor  # signed album and stack label records
-    ├── trash/{uuid}.{ext}
     └── quarantine/{uuid}.{ext} + {uuid}.reason.json
 ```
 
 - **`media/`** is canonical: original, [sidecar](/design/metadata/#sidecar-schema-v1), and [provenance chain](/design/cryptography/provenance/#provenance-of-library-modifications). The library MUST be reconstructible from these three files alone. Stems are UUIDv7; extensions lowercase. The provenance file is never deleted, so a hard-deleted asset leaves a tombstone-with-history.
+- A trashed asset keeps its original, sidecar and chain in its `media/` bundle until purge: trash is a signed `delete` record in the chain, not a location, so no file moves and a rebuild derives Trashed from the chain ([Deletion State Machine](/design/organization/#deletion-state-machine)). Purge removes the original, the sidecar and every `cache/` derivative, and leaves the chain.
 - The date bucket is fixed at import from the capture timestamp then known. A later capture-date correction does not move the bundle; the sidecar is authoritative and [maintenance](/design/filesystem/maintenance/#self-validation) repairs drift opportunistically.
 - **`cache/`** is derived and deletable at any time; never a source of truth. Formats: [Thumbnails](/design/thumbnails/#thumbnail-and-preview-formats).
 - **`index/library.sqlite`** is a query cache over the sidecars, the `sqlite-vec` index for [AI](/design/ai/), and the substrate for [view albums](/design/organization/#system--smart-albums-views). It is **migrated forward in place**, not dropped: a rebuild cannot recover projections never written to disk ([Versioning](/design/versioning/#client-catalog-migration)).
