@@ -18,11 +18,12 @@ subprojects {
             apply(plugin = "org.jlleitschuh.gradle.ktlint")
             apply(plugin = "io.gitlab.arturbosch.detekt")
 
-            // ktlint: don't lint sources a plugin generates under build/generated/.
-            // Rules themselves are configured via the root .editorconfig.
+            // ktlint: don't lint generated sources: what a plugin writes under build/generated/
+            // and `:core`'s staged uniffi bindings under build/generated-bindings/. Rules
+            // themselves are configured via the root .editorconfig.
             extensions.configure(org.jlleitschuh.gradle.ktlint.KtlintExtension::class.java) {
                 filter {
-                    exclude { it.file.path.contains("/build/generated/") }
+                    exclude { it.file.path.contains("/build/generated") }
                 }
             }
 
@@ -33,7 +34,7 @@ subprojects {
             }
             // ...and likewise keep detekt off generated sources.
             tasks.withType(io.gitlab.arturbosch.detekt.Detekt::class.java).configureEach {
-                exclude("**/build/generated/**")
+                exclude("**/build/generated*/**")
             }
         }
     }
