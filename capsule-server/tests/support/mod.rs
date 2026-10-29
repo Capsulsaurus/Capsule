@@ -4563,7 +4563,24 @@ pub(crate) fn request_keypair() -> (ring::signature::Ed25519KeyPair, [u8; 32]) {
 }
 
 /// Pin [`request_keypair`] as `peer`'s operational key, as an operator would.
+///
+/// Pinned one probation period ago, so the peer is held to the established budgets the suite's
+/// budget cases spend: a case about probation pins a peer now with [`pin_request_key_now`].
 pub(crate) async fn pin_request_key(fixture: &Fixture, peer: &str) {
+    let established = fixture
+        .clock
+        .now()
+        .checked_sub(capsule_server::counter::budgets::PEER_PROBATION)
+        .expect("the fixture clock is a probation period past the minimum instant");
+    pin_request_key_at(fixture, peer, established).await;
+}
+
+/// Pin [`request_keypair`] as `peer`'s operational key now, so the peer is on probation.
+pub(crate) async fn pin_request_key_now(fixture: &Fixture, peer: &str) {
+    pin_request_key_at(fixture, peer, fixture.clock.now()).await;
+}
+
+async fn pin_request_key_at(fixture: &Fixture, peer: &str, at: jiff::Timestamp) {
     use capsule_server::federation::PeerStore as _;
 
     fixture
@@ -4571,7 +4588,7 @@ pub(crate) async fn pin_request_key(fixture: &Fixture, peer: &str) {
         .pin(
             &capsule_server::federation::PeerId::new(peer),
             request_keypair().1,
-            fixture.clock.now(),
+            at,
         )
         .await
         .expect("the peer store pins");

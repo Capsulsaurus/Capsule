@@ -190,6 +190,36 @@ pub const UPLOAD_LIVE_SESSIONS: usize = 1_000;
 /// hour to turn rather than trickling back in.
 pub const PEER_REQUESTS: Budget = Budget::new(10_000, SignedDuration::from_hours(1));
 
+/// Ciphertext served to one federated peer, in kibibytes, at `GET /v1/blob/{hash}` (#476).
+///
+/// Twenty gibibytes an hour — the bytes half of invariant 21's transfer budget. A household's
+/// evening of photos and a few videos is a few gibibytes; twenty leaves room for a peer
+/// catching up on a large shared album, and bounds what a hostile peer can make this server
+/// read off disk and send to a little under six megabytes a second. Charged in one weighted
+/// call per delivery ([`CounterStore::charge`](super::CounterStore::charge)), so a blob bigger
+/// than what is left is refused whole rather than half-served.
+pub const PEER_KIBIBYTES: Budget = Budget::new(20 * 1024 * 1024, SignedDuration::from_hours(1));
+
+/// How long a peer is on probation, from when this server first recorded it (#476).
+///
+/// Seven days. design/federation.md's probation tier gives a new peer "tighter quotas … until
+/// it has behaved", and the serving side has one fact to measure that by: how long the operator
+/// has known the peer ([`PeerRecord::first_seen_at`](crate::federation::PeerRecord)). A week is
+/// long enough that a peer pinned in a hurry and misbehaving is noticed while its budget is still
+/// the small one, and short enough that an honest peer is not waiting on anything but the
+/// calendar. A peer with no record at all is on probation by definition.
+pub const PEER_PROBATION: SignedDuration = SignedDuration::from_hours(24 * 7);
+
+/// [`PEER_REQUESTS`] for a peer on probation: a tenth.
+///
+/// A thousand an hour is still a few hundred photos with their derivatives — a new peer can do
+/// real work — while a peer that turns out hostile in its first week gets a tenth of the reach.
+pub const PEER_REQUESTS_PROBATION: Budget = Budget::new(1_000, SignedDuration::from_hours(1));
+
+/// [`PEER_KIBIBYTES`] for a peer on probation: one gibibyte an hour.
+pub const PEER_KIBIBYTES_PROBATION: Budget =
+    Budget::new(1024 * 1024, SignedDuration::from_hours(1));
+
 /// Federated moderation reports from one peer against one account (invariant 24).
 ///
 /// Twenty an hour per `(reporting_server, reported_user)`. A real report is one message; a

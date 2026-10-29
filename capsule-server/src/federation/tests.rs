@@ -167,7 +167,7 @@ async fn a_predecessor_revoked_by_its_own_refresh_is_admitted_only_to_be_refresh
     let counters = CounterContext::new(Arc::new(InMemoryCounters::new()), clock);
     assert_eq!(
         admit(&federation, &counters, &capability, Presentation::Refresh).await,
-        Ok(())
+        Ok(PeerTier::Probation)
     );
     assert_eq!(
         admit(&federation, &counters, &capability, Presentation::Read).await,
@@ -206,7 +206,141 @@ async fn a_store_that_cannot_answer_an_admission_is_an_outage_never_an_admission
     let counters = CounterContext::new(Arc::new(InMemoryCounters::new()), clock);
     assert_eq!(
         admit(&federation, &counters, &capability, Presentation::Read).await,
+        Ok(PeerTier::Probation)
+    );
+}
+
+fn pinned(first_seen_at: Timestamp) -> PeerRecord {
+    PeerRecord {
+        server_id: PeerId::new("other.test"),
+        signing_key: Some([7; 32]),
+        first_seen_at,
+        blocked_at: None,
+        note: None,
+    }
+}
+
+#[test]
+fn a_peer_is_on_probation_until_this_server_has_known_it_for_the_probation_period() {
+    let pinned_at = Timestamp::UNIX_EPOCH;
+    let graduates = crate::store::deadline(pinned_at, budgets::PEER_PROBATION);
+    assert_eq!(PeerTier::of(None, graduates), PeerTier::Probation);
+    assert_eq!(
+        PeerTier::of(Some(&pinned(pinned_at)), pinned_at),
+        PeerTier::Probation
+    );
+    assert_eq!(
+        PeerTier::of(
+            Some(&pinned(pinned_at)),
+            crate::store::deadline(graduates, SignedDuration::from_secs(-1))
+        ),
+        PeerTier::Probation
+    );
+    assert_eq!(
+        PeerTier::of(Some(&pinned(pinned_at)), graduates),
+        PeerTier::Established
+    );
+    assert!(PeerTier::Probation.requests().limit < PeerTier::Established.requests().limit);
+    assert!(PeerTier::Probation.kibibytes().limit < PeerTier::Established.kibibytes().limit);
+}
+
+#[tokio::test]
+async fn admission_charges_the_events_budget_of_the_tier_it_answers() {
+    // Two peers spending the same requests: the one on probation runs out at its own,
+    // smaller, budget while the established one is still admitted.
+    let clock = Arc::new(ManualClock::default());
+    let peers = Arc::new(InMemoryPeers::new());
+    let established_at = clock.now();
+    peers
+        .pin(&PeerId::new("other.test"), [7; 32], established_at)
+        .await
+        .expect("pins");
+    clock.advance(budgets::PEER_PROBATION);
+    let federation = context(peers.clone(), clock.clone());
+    let counters = CounterContext::new(Arc::new(InMemoryCounters::new()), clock.clone());
+    let capability = verified(&clock);
+    assert_eq!(
+        admit(&federation, &counters, &capability, Presentation::Read).await,
+        Ok(PeerTier::Established)
+    );
+
+    let mut newcomer = verified(&clock);
+    newcomer.record.peer_id = PeerId::new("new.test");
+    peers
+        .pin(&PeerId::new("new.test"), [8; 32], clock.now())
+        .await
+        .expect("pins");
+    for _ in 0..budgets::PEER_REQUESTS_PROBATION.limit {
+        assert_eq!(
+            admit(&federation, &counters, &newcomer, Presentation::Read).await,
+            Ok(PeerTier::Probation)
+        );
+    }
+    assert!(matches!(
+        admit(&federation, &counters, &newcomer, Presentation::Read).await,
+        Err(Refusal::RateLimited { .. })
+    ));
+    assert_eq!(
+        admit(&federation, &counters, &capability, Presentation::Read).await,
+        Ok(PeerTier::Established),
+        "one peer's spent budget is not another's"
+    );
+}
+
+#[test]
+fn a_delivery_is_charged_in_whole_kibibytes_rounded_up() {
+    assert_eq!(kibibytes(0), 0);
+    assert_eq!(kibibytes(1), 1);
+    assert_eq!(kibibytes(1024), 1);
+    assert_eq!(kibibytes(1025), 2);
+    assert_eq!(
+        kibibytes(u64::MAX),
+        u32::MAX,
+        "saturates rather than wrapping"
+    );
+}
+
+#[tokio::test]
+async fn served_bytes_are_charged_in_one_call_and_refused_whole_past_the_budget() {
+    let clock = Arc::new(ManualClock::default());
+    let counters = CounterContext::new(Arc::new(InMemoryCounters::new()), clock.clone());
+    let peer = PeerId::new("other.test");
+    let budget = PeerTier::Probation.kibibytes();
+    let half = u64::from(budget.limit) * 1024 / 2;
+
+    assert_eq!(
+        charge_served_bytes(&counters, &peer, PeerTier::Probation, half).await,
         Ok(())
+    );
+    assert!(
+        matches!(
+            charge_served_bytes(&counters, &peer, PeerTier::Probation, half + 1).await,
+            Err(Refusal::RateLimited { .. })
+        ),
+        "a blob that does not fit what is left is refused whole"
+    );
+    assert_eq!(
+        charge_served_bytes(&counters, &peer, PeerTier::Probation, half).await,
+        Ok(()),
+        "and the refusal spent nothing, so exactly what was left still fits"
+    );
+    assert_eq!(
+        charge_served_bytes(
+            &counters,
+            &PeerId::new("another.test"),
+            PeerTier::Probation,
+            half
+        )
+        .await,
+        Ok(()),
+        "each peer is its own budget"
+    );
+
+    let down = CounterContext::new(Arc::new(DownCounters), clock);
+    assert_eq!(
+        charge_served_bytes(&down, &peer, PeerTier::Established, 1).await,
+        Err(Refusal::Unavailable),
+        "a counter that cannot answer refuses"
     );
 }
 

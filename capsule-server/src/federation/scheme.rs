@@ -77,7 +77,7 @@ use serde::Serialize;
 
 use super::capability::CapabilityGrant;
 use super::store::CapabilityRecord;
-use super::{FederationContext, PeerId, Refusal};
+use super::{FederationContext, PeerId, PeerTier, Refusal};
 use crate::app::App;
 use crate::auth::{AccessToken, AuthContext, AuthenticatedSession};
 use crate::counter::{CounterKey, Verdict, budgets};
@@ -475,9 +475,13 @@ impl FederationContext {
         let foreseen = if record.is_blocked() {
             Some(Refusal::PeerBlocked)
         } else {
-            over_budget(peer, context)
-                .await?
-                .map(|retry_after| Refusal::RateLimited { retry_after })
+            over_budget(
+                peer,
+                PeerTier::of(Some(&record), self.clock().now()),
+                context,
+            )
+            .await?
+            .map(|retry_after| Refusal::RateLimited { retry_after })
         };
         if let Some(refusal) = foreseen {
             tracing::debug!(%peer, ?refusal, "a request signature verified; its nonce is left unspent for the refusal the route makes");
@@ -489,15 +493,20 @@ impl FederationContext {
 }
 
 /// When `peer`'s events budget resets, if it is already spent so the route will answer `429`.
+///
+/// Read under `tier`'s budget, the one [`admit`](super::admit) charges: a probation peer the
+/// authenticator measured against the established budget would have its nonce spent for a
+/// request the route then refuses.
 async fn over_budget(
     peer: &PeerId,
+    tier: PeerTier,
     context: &App,
 ) -> Result<Option<Timestamp>, RequestSignatureError> {
     let verdict = context
         .counters()
         .peek(
             &CounterKey::PeerRequests(peer.as_str().to_owned()),
-            budgets::PEER_REQUESTS,
+            tier.requests(),
         )
         .await
         .map_err(|error| {

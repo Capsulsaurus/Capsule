@@ -257,7 +257,8 @@ pub enum Refusal {
     Revoked,
     /// The peer is on this server's blocklist. `403 error.moderation.server_blocked`.
     PeerBlocked,
-    /// The peer's events-per-hour budget is spent. `429 error.federation.rate_budget_exceeded`.
+    /// The peer's events-per-hour or bytes-per-hour budget is spent.
+    /// `429 error.federation.rate_budget_exceeded`.
     RateLimited {
         /// When the window resets.
         retry_after: jiff::Timestamp,
@@ -285,11 +286,68 @@ pub enum Presentation {
     Refresh,
 }
 
+/// Which budgets a peer is held to: design/federation.md's probation tier, on the serving side.
+///
+/// Decided from [`PeerRecord::first_seen_at`] against [`budgets::PEER_PROBATION`], at the
+/// instant of the request, by [`PeerTier::of`] — the one place both the authenticator (which
+/// foresees a spent budget) and [`admit`] (which charges it) read it, so the two cannot hold a
+/// peer to different numbers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PeerTier {
+    /// Known to this server for less than [`budgets::PEER_PROBATION`], or not known at all.
+    Probation,
+    /// Known for longer.
+    Established,
+}
+
+impl PeerTier {
+    /// The tier `record` puts its peer in at `now`.
+    ///
+    /// No record is probation: a peer this server has never recorded has not behaved yet.
+    pub fn of(record: Option<&PeerRecord>, now: jiff::Timestamp) -> Self {
+        match record {
+            Some(record)
+                if crate::store::deadline(record.first_seen_at, budgets::PEER_PROBATION) <= now =>
+            {
+                Self::Established
+            }
+            _ => Self::Probation,
+        }
+    }
+
+    /// The events-per-hour budget for this tier.
+    pub fn requests(self) -> crate::counter::Budget {
+        match self {
+            Self::Probation => budgets::PEER_REQUESTS_PROBATION,
+            Self::Established => budgets::PEER_REQUESTS,
+        }
+    }
+
+    /// The kibibytes-per-hour budget for this tier.
+    pub fn kibibytes(self) -> crate::counter::Budget {
+        match self {
+            Self::Probation => budgets::PEER_KIBIBYTES_PROBATION,
+            Self::Established => budgets::PEER_KIBIBYTES,
+        }
+    }
+
+    /// The name this tier travels under, for a log field.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Probation => "probation",
+            Self::Established => "established",
+        }
+    }
+}
+
 /// Decide whether `capability` may be presented at all, and charge the peer's budget if so.
 ///
 /// The three questions every federated request asks before it looks at what is being asked for:
 /// is the grant still live, is the peer still welcome, and is the peer within budget. Asked
 /// here once so the sync, blob and refresh routes cannot ask them in different orders.
+///
+/// Answers the [`PeerTier`] it charged under, so a route that charges a second budget — the
+/// blob route's bytes — holds the peer to the same tier without reading the peer store again.
 ///
 /// # Errors
 ///
@@ -299,7 +357,7 @@ pub async fn admit(
     counters: &CounterContext,
     capability: &VerifiedCapability,
     presentation: Presentation,
-) -> Result<(), Refusal> {
+) -> Result<PeerTier, Refusal> {
     let peer = &capability.record.peer_id;
     let live = match presentation {
         Presentation::Read => capability.record.is_live(federation.clock().now()),
@@ -317,16 +375,11 @@ pub async fn admit(
         return Err(Refusal::Revoked);
     }
 
-    let blocked = federation
-        .peers()
-        .read(peer)
-        .await
-        .map_err(|error| {
-            tracing::error!(%error, %peer, "the peer store could not answer an admission");
-            Refusal::Unavailable
-        })?
-        .is_some_and(|record| record.is_blocked());
-    if blocked {
+    let record = federation.peers().read(peer).await.map_err(|error| {
+        tracing::error!(%error, %peer, "the peer store could not answer an admission");
+        Refusal::Unavailable
+    })?;
+    if record.as_ref().is_some_and(PeerRecord::is_blocked) {
         tracing::info!(%peer, "a blocked peer presented a capability");
         return Err(Refusal::PeerBlocked);
     }
@@ -343,17 +396,58 @@ pub async fn admit(
         return Err(refusal);
     }
 
+    let tier = PeerTier::of(record.as_ref(), federation.clock().now());
     let key = CounterKey::PeerRequests(peer.as_str().to_owned());
+    match counters.hit(&key, tier.requests()).await.map_err(|error| {
+        tracing::error!(%error, %peer, "the per-peer counter could not be reached");
+        Refusal::Unavailable
+    })? {
+        crate::counter::Verdict::Admitted { .. } => Ok(tier),
+        crate::counter::Verdict::Limited { retry_after } => {
+            tracing::info!(%peer, tier = tier.as_str(), %retry_after, "a peer's events budget is spent");
+            Err(Refusal::RateLimited { retry_after })
+        }
+    }
+}
+
+/// How many kibibytes a delivery of `bytes` is charged: rounded up, so no delivery is free.
+pub fn kibibytes(bytes: u64) -> u32 {
+    u32::try_from(bytes.div_ceil(1024)).unwrap_or(u32::MAX)
+}
+
+/// Charge `bytes` served to `peer` against its bytes-per-hour budget, in one weighted call.
+///
+/// The blob route calls this once it knows what the delivery will send, and before it sends
+/// it: a refusal here is a `429` in place of the body, never a body cut off part-way. The whole
+/// blob is charged for a ranged delivery too — the range is not visible to the route, and the
+/// blob's size is an upper bound on what any range of it sends, so the budget errs toward the
+/// peer having spent more than it did and never less.
+///
+/// # Errors
+///
+/// [`Refusal::RateLimited`] when what is left of the window cannot take the charge, and
+/// [`Refusal::Unavailable`] when the counter cannot answer — a refusal, never an admission.
+pub async fn charge_served_bytes(
+    counters: &CounterContext,
+    peer: &PeerId,
+    tier: PeerTier,
+    bytes: u64,
+) -> Result<(), Refusal> {
+    let key = CounterKey::PeerBytes(peer.as_str().to_owned());
+    let units = kibibytes(bytes);
     match counters
-        .hit(&key, budgets::PEER_REQUESTS)
+        .charge(&key, units, tier.kibibytes())
         .await
         .map_err(|error| {
-            tracing::error!(%error, %peer, "the per-peer counter could not be reached");
+            tracing::error!(%error, %peer, "the per-peer bytes counter could not be reached");
             Refusal::Unavailable
         })? {
-        crate::counter::Verdict::Admitted { .. } => Ok(()),
+        crate::counter::Verdict::Admitted { remaining } => {
+            tracing::debug!(%peer, tier = tier.as_str(), kibibytes = units, remaining, "charged a peer for bytes served");
+            Ok(())
+        }
         crate::counter::Verdict::Limited { retry_after } => {
-            tracing::info!(%peer, %retry_after, "a peer's events budget is spent");
+            tracing::info!(%peer, tier = tier.as_str(), kibibytes = units, %retry_after, "a peer's bytes budget is spent");
             Err(Refusal::RateLimited { retry_after })
         }
     }

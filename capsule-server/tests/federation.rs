@@ -1039,6 +1039,80 @@ async fn a_peer_fetches_the_albums_blobs_and_a_derivative_only_grant_is_refused_
 }
 
 #[tokio::test]
+async fn a_peers_bytes_budget_refuses_a_delivery_that_does_not_fit_and_charges_no_revalidation() {
+    // Invariant 21's bytes half (#476). The budget is spent through the counter port up to its
+    // last kibibyte, and the refusal is the route's: a blob that does not fit what is left is a
+    // `429` in place of its body.
+    let (fixture, _) = shared().await;
+    let (original, _) = two_roles(&fixture, "shared-bytes", &album()).await;
+    let (bearer, _) = capability(&fixture, PEER, Scope::Read, 1).await;
+    let key = CounterKey::PeerBytes(PEER.to_owned());
+    fixture
+        .counters
+        .charge(
+            &key,
+            budgets::PEER_KIBIBYTES.limit,
+            budgets::PEER_KIBIBYTES,
+            fixture.clock.now(),
+        )
+        .await
+        .expect("the counter answers");
+
+    let refused = fetch(&fixture, &bearer, &original).await;
+    refused.assert_status(StatusCode::TOO_MANY_REQUESTS);
+    let refused: Value = refused.json();
+    assert_eq!(refused["code"], "error.federation.rate_budget_exceeded");
+
+    // A revalidation sends none of the blob, so a spent bytes budget does not refuse it.
+    let path = format!("/v1/blob/{original}");
+    let signature = support::request_signature(&fixture, "GET", &path, &bearer);
+    fixture
+        .client
+        .get(&path)
+        .header("authorization", &bearer)
+        .header(SIGNATURE, &signature)
+        .header("if-none-match", &format!("\"{original}\""))
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_MODIFIED);
+
+    // Another peer is its own boundary, and the window turning gives the bytes back.
+    let (other, _) = capability(&fixture, "third.test", Scope::Read, 1).await;
+    fetch(&fixture, &other, &original)
+        .await
+        .assert_status(StatusCode::OK);
+    fixture.clock.advance(budgets::PEER_KIBIBYTES.window);
+    fetch(&fixture, &bearer, &original)
+        .await
+        .assert_status(StatusCode::OK);
+}
+
+#[tokio::test]
+async fn a_peer_on_probation_is_held_to_the_smaller_events_budget() {
+    // A peer the operator pinned just now is on probation (#476): its events budget is the
+    // probation one, spent here through the counter port up to its last hit.
+    let (fixture, _) = shared().await;
+    let newcomer = "newcomer.test";
+    support::pin_request_key_now(&fixture, newcomer).await;
+    let (bearer, _) =
+        unpinned_capability(&fixture, &fixture.codec, newcomer, &album(), Scope::Read, 1).await;
+    let key = CounterKey::PeerRequests(newcomer.to_owned());
+    for _ in 1..budgets::PEER_REQUESTS_PROBATION.limit {
+        fixture
+            .counters
+            .hit(&key, budgets::PEER_REQUESTS_PROBATION, fixture.clock.now())
+            .await
+            .expect("the counter answers");
+    }
+    page(&fixture, &bearer, &album_query())
+        .await
+        .assert_status(StatusCode::OK);
+    page(&fixture, &bearer, &album_query())
+        .await
+        .assert_status(StatusCode::TOO_MANY_REQUESTS);
+}
+
+#[tokio::test]
 async fn a_capability_for_another_album_gets_the_answer_an_unknown_address_gets() {
     // The disclosure boundary: a `403` would confirm the address is referenced by somebody, so
     // a peer outside the album is told exactly what a stranger naming a random hash is told —

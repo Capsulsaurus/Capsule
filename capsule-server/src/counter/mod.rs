@@ -266,8 +266,7 @@ pub enum CounterKey {
     ///
     /// Keyed on the peer's origin, never on the capability: a peer holding ten capabilities is
     /// one blast-radius boundary, and a budget per token would be a budget a peer widens by
-    /// asking for more tokens. Events per hour only; bytes and CPU per hour need a weighted
-    /// counter this port does not have and are post-v1.
+    /// asking for more tokens. Events per hour; bytes per hour is [`Self::PeerBytes`].
     PeerRequests(String),
     /// Federated moderation reports from one peer against one account (invariant
     /// 24), keyed on `"{reporting_server}:{reported_user}"` as the contract bounds them.
@@ -301,6 +300,13 @@ pub enum CounterKey {
     /// under the peer's pinned key, and not for a peer that is blocked or over its events budget,
     /// so the key space is what pinned peers' admitted requests make it.
     FederatedRequestNonce(String),
+    /// Ciphertext served to one federated peer at `GET /v1/blob/{hash}`, in kibibytes (#476).
+    ///
+    /// The bytes-per-hour half of invariant 21's transfer budget, keyed on the peer's origin for
+    /// the reason [`Self::PeerRequests`] is. Charged with [`CounterStore::charge`], one weighted
+    /// call per delivery, and never as a loop of hits: kibibytes rather than bytes so a `u32`
+    /// budget reaches terabytes an hour.
+    PeerBytes(String),
     /// Capability mints by one account (#529).
     ///
     /// Keyed on the authenticated owner: every mint writes a capability row, and nothing else
@@ -365,6 +371,7 @@ impl CounterKey {
             Self::FederatedIntake(_) => "federated_intake",
             Self::FederatedReportNonce(_) => "federated_report_nonce",
             Self::FederatedRequestNonce(_) => "federated_request_nonce",
+            Self::PeerBytes(_) => "peer_bytes",
             Self::CapabilityMints(_) => "capability_mints",
         }
     }
@@ -400,6 +407,7 @@ impl CounterKey {
             Self::FederatedIntake(_) => Slot::FederatedIntake,
             Self::FederatedReportNonce(_) => Slot::FederatedReportNonce,
             Self::FederatedRequestNonce(_) => Slot::FederatedRequestNonce,
+            Self::PeerBytes(_) => Slot::PeerBytes,
             Self::CapabilityMints(_) => Slot::CapabilityMints,
         }
     }
@@ -431,7 +439,9 @@ impl CounterKey {
             Self::OidcAuthorize(_) => ceilings::OIDC_AUTHORIZE,
             Self::OidcAuthorizeRefused => ceilings::OIDC_AUTHORIZE_REFUSED,
             Self::OidcDevice => ceilings::OIDC_DEVICE,
-            Self::PeerRequests(_) | Self::PeerReports(_) => ceilings::PEER_ORIGIN,
+            Self::PeerRequests(_) | Self::PeerReports(_) | Self::PeerBytes(_) => {
+                ceilings::PEER_ORIGIN
+            }
             Self::FederatedReports(_) => ceilings::FEDERATED_REPORTS,
             Self::FederatedIntake(_) => ceilings::FEDERATED_INTAKE,
             Self::FederatedReportNonce(_) => ceilings::FEDERATED_REPORT_NONCE,
@@ -459,6 +469,7 @@ impl CounterKey {
             | Self::SecondFactor(scope)
             | Self::OidcAuthorize(scope)
             | Self::PeerRequests(scope)
+            | Self::PeerBytes(scope)
             | Self::FederatedReports(scope)
             | Self::PeerReports(scope)
             | Self::FederatedIntake(scope)
@@ -722,9 +733,10 @@ pub mod ceilings {
     /// window.
     pub const OIDC_DEVICE: usize = 1;
 
-    /// [`CounterKey::PeerRequests`](super::CounterKey::PeerRequests) and
-    /// [`CounterKey::PeerReports`](super::CounterKey::PeerReports) — both keyed on a peer's
-    /// origin, so both are bounded by the same thing and share one number.
+    /// [`CounterKey::PeerRequests`](super::CounterKey::PeerRequests),
+    /// [`CounterKey::PeerBytes`](super::CounterKey::PeerBytes) and
+    /// [`CounterKey::PeerReports`](super::CounterKey::PeerReports) — all keyed on a peer's
+    /// origin, so all are bounded by the same thing and share one number.
     ///
     /// Not caller-controlled: a peer origin reaches either key only off a capability this
     /// server minted, so the true bound is the size of the peer list an operator pinned. Ten
@@ -849,6 +861,7 @@ partition_slots!(
     FederatedIntake,
     FederatedReportNonce,
     FederatedRequestNonce,
+    PeerBytes,
     CapabilityMints,
 );
 
