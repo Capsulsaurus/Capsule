@@ -21,6 +21,8 @@ kotlin {
         androidMain.dependencies {
             implementation(libs.androidx.compose.ui.tooling.preview)
             implementation(libs.androidx.activity.compose)
+            // The in-app language picker below Android 13 (AppCompatDelegate.setApplicationLocales).
+            implementation(libs.androidx.appcompat)
             implementation(libs.androidx.viewmodel.compose)
             implementation(libs.androidx.navigation.compose)
             implementation(libs.koin.androidx.compose)
