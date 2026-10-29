@@ -137,13 +137,17 @@ struct AppEnvironment {
     var search: any SearchPort { mock.search }
 
     /// Labels on regions, stacks and albums, and the regions themselves.
-    var labels: any LabelPort { mock.labels }
+    ///
+    /// Stored rather than forwarded, like ``transferEvents``: it is one of the
+    /// ``LanePorts`` a lane supplies, so the FFI lane's Rust-backed adapter
+    /// replaces the mock one here and nowhere else.
+    let labels: any LabelPort
 
     var importing: any ImportPort { mock.importing }
     var uploads: any UploadPort { mock.uploads }
     /// The step-by-step transfer event stream the real-time transfer view
     /// draws.
-    var transferEvents: any TransferEventPort { mock.transferEvents }
+    let transferEvents: any TransferEventPort
     var sync: any SyncPort { mock.sync }
     var storage: any StoragePort { mock.storage }
     var quota: any QuotaPort { mock.quota }
@@ -220,9 +224,15 @@ struct AppEnvironment {
         return .fromLaunchArguments(processInfo, persisted: persisted)
     }
 
-    init(mock: MockEnvironment) {
+    /// The world over `mock`, with `lane`'s ports in place of the mock world's
+    /// own where it supplies them.
+    init(mock: MockEnvironment, lane: LanePorts? = nil) {
         self.mock = mock
         CapsuleLog.app.info("mock scenario: \(mock.scenario.rawValue, privacy: .public)")
+
+        let lane = lane ?? .mock(mock)
+        labels = lane.labels
+        transferEvents = lane.transferEvents
 
         // Held concretely for a moment: the info panel's metadata source wants
         // this provider's `AssetLocationSource` conformance, which the erased
