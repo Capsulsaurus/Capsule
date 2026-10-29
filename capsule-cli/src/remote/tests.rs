@@ -744,7 +744,17 @@ impl EscrowMock {
 /// Serve `mock` on an ephemeral loopback port and return its origin. Each connection answers
 /// one request and closes.
 async fn serve_escrow_mock(mock: EscrowMock) -> String {
+    serve_mock(move |line| mock.answer(line)).await
+}
+
+/// Serve `answer` on an ephemeral loopback port and return its origin: it is handed each
+/// request's `METHOD path` and returns the status, content type and body. Each connection
+/// answers one request and closes.
+async fn serve_mock(
+    answer: impl Fn(&str) -> (u16, &'static str, String) + Clone + Send + Sync + 'static,
+) -> String {
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    let mock = answer;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("a loopback port");
@@ -789,7 +799,7 @@ async fn serve_escrow_mock(mock: EscrowMock) -> String {
                     parts.next().unwrap_or_default(),
                     parts.next().unwrap_or_default()
                 );
-                let (status, content_type, body) = mock.answer(&line);
+                let (status, content_type, body) = mock(&line);
                 let response = format!(
                     "HTTP/1.1 {status} X\r\ncontent-type: {content_type}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
                     body.len()
@@ -1133,9 +1143,25 @@ async fn escrow_run() -> EscrowRun {
         seen: std::sync::Arc::default(),
     };
     let origin = serve_escrow_mock(mock.clone()).await;
+    let (remote, session) = remote_at(&origin);
+    EscrowRun {
+        _scratch: scratch,
+        ws,
+        full_album,
+        other_album,
+        held_back,
+        other,
+        mock,
+        remote,
+        session,
+    }
+}
+
+/// Every surface at `origin`, and a session resumed against it.
+fn remote_at(origin: &str) -> (RemoteConfig, Session) {
     let remote = RemoteConfig {
         auth_endpoint: format!("{origin}/v1/auth"),
-        sync_endpoint: origin.clone(),
+        sync_endpoint: origin.to_owned(),
         upload_endpoint: format!("{origin}/v1/upload"),
         albums_endpoint: format!("{origin}/v1/albums"),
         protocol_version: capsule_core::crypto::primitives::PROTOCOL_VERSION.to_owned(),
@@ -1148,15 +1174,374 @@ async fn escrow_run() -> EscrowRun {
             access_expires_at_unix: jiff::Timestamp::now().as_second() + 3600,
         })
         .expect("a resumed session");
-    EscrowRun {
-        _scratch: scratch,
-        ws,
-        full_album,
-        other_album,
-        held_back,
-        other,
-        mock,
-        remote,
-        session,
+    (remote, session)
+}
+
+// ── Trash (`capsule trash delete|restore`, #875) ────────────────────────
+
+/// A library holding one imported asset, in the default album.
+fn trash_library(scratch: &Scratch) -> (Workspace, Uuid) {
+    let lib = scratch.0.join("library");
+    std::fs::create_dir_all(&lib).unwrap();
+    let mut ws = Workspace::create_with_params(
+        &lib,
+        b"passphrase",
+        capsule_core::crypto::primitives::Argon2Params {
+            mem_kib: 64,
+            t_cost: 1,
+            p_cost: 1,
+        },
+    )
+    .unwrap();
+    let album = ws.default_album_id();
+    ws.ensure_album(album, "Default").unwrap();
+    let source = scratch.0.join("photo.jpg");
+    std::fs::write(&source, b"a photo").unwrap();
+    let opts = capsule_library::lifecycle::SignedImportOptions {
+        move_source: false,
+        defer_source_release: false,
+        stack: None,
+        enrichment: None,
+    };
+    let asset = ws
+        .import_asset_with(album, &source, &opts)
+        .unwrap()
+        .asset_id;
+    (ws, asset)
+}
+
+fn request(action: TrashAction, asset: Uuid) -> TrashRequest {
+    TrashRequest {
+        action,
+        assets: vec![asset],
+        retain_days: 30,
     }
+}
+
+fn chain_len(ws: &Workspace, asset: &Uuid) -> usize {
+    ws.asset(asset).expect("held").chain.records().len()
+}
+
+fn head_action(ws: &Workspace, asset: &Uuid) -> capsule_core::crypto::provenance::Action {
+    ws.asset(asset)
+        .expect("held")
+        .chain
+        .records()
+        .last()
+        .expect("a head")
+        .manifest
+        .core
+        .action
+}
+
+/// A delete signs one record carrying its retention floor, and its op is that record. Run again
+/// (a send that did not land), it resends the same head rather than signing a second delete.
+#[test]
+fn a_trash_delete_signs_one_delete_and_resends_it_on_a_rerun() {
+    use capsule_core::crypto::provenance::Action;
+    let scratch = Scratch::new();
+    let (mut ws, asset) = trash_library(&scratch);
+    let before = chain_len(&ws, &asset);
+    let now = jiff::Timestamp::now();
+
+    let first = prepare_trash_op(&mut ws, &asset, &request(TrashAction::Delete, asset), now)
+        .expect("prepared");
+    assert_eq!(head_action(&ws, &asset), Action::Delete);
+    assert_eq!(chain_len(&ws, &asset), before + 1);
+    let sent: capsule_sdk::rest::types::OpRequest =
+        serde_json::from_slice(&first.op).expect("an op");
+    assert_eq!(sent.manifest_envelope.action, "delete");
+    assert!(sent.manifest_envelope.retention_until.is_some());
+    assert_eq!(
+        first.retention_until,
+        sent.manifest_envelope.retention_until
+    );
+
+    let again = prepare_trash_op(&mut ws, &asset, &request(TrashAction::Delete, asset), now)
+        .expect("prepared");
+    assert_eq!(chain_len(&ws, &asset), before + 1, "no second delete");
+    assert_eq!(again.op, first.op, "the same op is resent");
+}
+
+/// A restore signs a `trash-restore` onto the delete it undoes.
+#[test]
+fn a_trash_restore_signs_a_restore_onto_the_delete() {
+    use capsule_core::crypto::provenance::Action;
+    let scratch = Scratch::new();
+    let (mut ws, asset) = trash_library(&scratch);
+    ws.soft_delete(&asset, 30).expect("deleted");
+    let prepared = prepare_trash_op(
+        &mut ws,
+        &asset,
+        &request(TrashAction::TrashRestore, asset),
+        jiff::Timestamp::now(),
+    )
+    .expect("prepared");
+    assert_eq!(head_action(&ws, &asset), Action::TrashRestore);
+    let sent: capsule_sdk::rest::types::OpRequest =
+        serde_json::from_slice(&prepared.op).expect("an op");
+    assert_eq!(sent.manifest_envelope.action, "trash-restore");
+    assert!(prepared.retention_until.is_some(), "the delete's floor");
+}
+
+/// What the library already knows refuses before anything is signed: an asset it does not
+/// hold, a restore of an asset not in the trash, and a restore after the delete's signed
+/// retention floor — the last as `retention_elapsed` with the server's code and that floor.
+#[test]
+fn a_trash_run_refuses_locally_what_it_already_knows_without_signing() {
+    let scratch = Scratch::new();
+    let (mut ws, asset) = trash_library(&scratch);
+    let now = jiff::Timestamp::now();
+    let restore = request(TrashAction::TrashRestore, asset);
+
+    let unknown = Uuid::now_v7();
+    let failure = prepare_trash_op(&mut ws, &unknown, &restore, now).expect_err("unknown");
+    assert_eq!(failure.kind, "not_found");
+
+    let before = chain_len(&ws, &asset);
+    let failure = prepare_trash_op(&mut ws, &asset, &restore, now).expect_err("not trashed");
+    assert_eq!(failure.kind, "not_in_trash");
+    assert!(failure.permanent);
+    assert_eq!(chain_len(&ws, &asset), before, "nothing signed");
+
+    ws.soft_delete(&asset, 1).expect("deleted");
+    let before = chain_len(&ws, &asset);
+    let later = now + jiff::SignedDuration::from_hours(49);
+    let failure = prepare_trash_op(&mut ws, &asset, &restore, later).expect_err("too late");
+    assert_eq!(failure.kind, "retention_elapsed");
+    assert_eq!(
+        failure.code.as_deref(),
+        Some(capsule_i18n::error_codes::UPLOAD_RETENTION_ELAPSED)
+    );
+    assert!(failure.permanent);
+    assert_eq!(
+        failure.retention_until,
+        trashed_until(ws.asset(&asset).expect("held"))
+    );
+    assert!(failure.retention_until.is_some());
+    assert_eq!(chain_len(&ws, &asset), before, "nothing signed");
+}
+
+/// Every `METHOD path` a mock answered, in order.
+type Seen = std::sync::Arc<std::sync::Mutex<Vec<String>>>;
+
+/// Serve a mock answering every request with `status` and `body`, and return the endpoints and
+/// a session against it, with the requests it answered.
+async fn ops_mock(status: u16, body: serde_json::Value) -> (RemoteConfig, Session, Seen) {
+    let seen = Seen::default();
+    let sink = seen.clone();
+    let answer = move |line: &str| {
+        sink.lock().unwrap().push(line.to_owned());
+        let content_type = if status == 200 {
+            "application/json"
+        } else {
+            "application/problem+json"
+        };
+        (status, content_type, body.to_string())
+    };
+    let (remote, session) = remote_at(&serve_mock(answer).await);
+    (remote, session, seen)
+}
+
+/// **The refusal this command exists to surface.** The server answers a restore with
+/// `409 error.upload.retention_elapsed` — its clock is past the floor this device's was not.
+/// The asset is reported failed with the stable `retention_elapsed` kind, the server's code and
+/// the delete's signed floor, permanent, and the op was sent exactly once.
+#[tokio::test]
+async fn a_restore_the_server_refuses_as_too_late_is_a_permanent_retention_elapsed() {
+    let scratch = Scratch::new();
+    let (mut ws, asset) = trash_library(&scratch);
+    ws.soft_delete(&asset, 30).expect("deleted");
+    let (remote, session, seen) = ops_mock(
+        409,
+        serde_json::json!({
+            "type": "about:blank",
+            "title": "Retention elapsed",
+            "status": 409,
+            "detail": "this asset's retention window has closed, so it can no longer be restored",
+            "code": "error.upload.retention_elapsed",
+            "retention_until": "2026-09-01T00:00:00Z",
+        }),
+    )
+    .await;
+
+    let summary = trash_with(
+        &remote,
+        &mut ws,
+        session,
+        &request(TrashAction::TrashRestore, asset),
+    )
+    .await;
+
+    assert_eq!((summary.applied, summary.failed), (0, 1));
+    let outcome = &summary.outcomes[0];
+    assert_eq!(outcome.status, TrashStatus::Failed);
+    let error = outcome.error.as_ref().expect("an error");
+    assert_eq!(error.kind, "retention_elapsed");
+    assert_eq!(
+        error.code.as_deref(),
+        Some("error.upload.retention_elapsed")
+    );
+    assert!(error.permanent, "not retried");
+    assert_eq!(
+        error.retention_until,
+        trashed_until(ws.asset(&asset).expect("held"))
+    );
+    let album = ws.asset(&asset).expect("held").album_id;
+    assert_eq!(
+        *seen.lock().unwrap(),
+        vec![format!("POST /v1/albums/{album}/ops")],
+        "sent once, to the asset's album"
+    );
+
+    let json = serde_json::to_value(&summary).expect("serializes");
+    assert_eq!(json["action"], "trash-restore");
+    assert_eq!(json["outcomes"][0]["status"], "failed");
+    assert_eq!(json["outcomes"][0]["error"]["kind"], "retention_elapsed");
+    assert_eq!(
+        json["outcomes"][0]["error"]["code"],
+        "error.upload.retention_elapsed"
+    );
+}
+
+/// An applied delete is reported with the feed position the server gave it.
+#[tokio::test]
+async fn an_applied_delete_reports_its_feed_position() {
+    let scratch = Scratch::new();
+    let (mut ws, asset) = trash_library(&scratch);
+    let (remote, session, _) = ops_mock(
+        200,
+        serde_json::json!({
+            "asset_id": asset.to_string(),
+            "sync_seq": 7,
+            "action": "delete",
+            "replayed": false,
+        }),
+    )
+    .await;
+
+    let summary = trash_with(
+        &remote,
+        &mut ws,
+        session,
+        &request(TrashAction::Delete, asset),
+    )
+    .await;
+
+    assert_eq!((summary.applied, summary.failed), (1, 0));
+    assert_eq!(summary.outcomes[0].status, TrashStatus::Applied);
+    assert_eq!(summary.outcomes[0].sync_seq, Some(7));
+    assert!(
+        summary.outcomes[0].retention_until.is_some(),
+        "the sent delete's window is reported"
+    );
+    assert_eq!(
+        trash_line(&summary),
+        "1 asset moved to the trash on the server"
+    );
+}
+
+/// An asset already deleted locally (as `capsule cull --sweep` does) is resent with the window
+/// its delete was signed with, not `--retain-days`, and the outcome reports the window sent.
+#[tokio::test]
+async fn a_resent_delete_reports_the_window_it_carries_not_the_flag() {
+    let scratch = Scratch::new();
+    let (mut ws, asset) = trash_library(&scratch);
+    ws.soft_delete(&asset, 5).expect("swept");
+    let before = chain_len(&ws, &asset);
+    let swept_until = ws
+        .asset(&asset)
+        .expect("held")
+        .chain
+        .records()
+        .last()
+        .expect("a head")
+        .manifest
+        .core
+        .retention_until
+        .clone()
+        .expect("a delete carries its floor");
+    let (remote, session, _) = ops_mock(
+        200,
+        serde_json::json!({
+            "asset_id": asset.to_string(),
+            "sync_seq": 8,
+            "action": "delete",
+            "replayed": false,
+        }),
+    )
+    .await;
+
+    // `request` asks for 30 days; the swept delete carries 5.
+    let summary = trash_with(
+        &remote,
+        &mut ws,
+        session,
+        &request(TrashAction::Delete, asset),
+    )
+    .await;
+
+    assert_eq!((summary.applied, summary.failed), (1, 0));
+    assert_eq!(chain_len(&ws, &asset), before, "no second delete signed");
+    assert_eq!(
+        summary.outcomes[0].retention_until.as_deref(),
+        Some(swept_until.as_str())
+    );
+    let json = serde_json::to_value(&summary).expect("serializes");
+    assert_eq!(json["outcomes"][0]["retention_until"], swept_until);
+}
+
+/// Held bytes no resend can fix — not an op, or an op naming no album — are refused for good
+/// before anything is sent.
+#[tokio::test]
+async fn bytes_that_are_not_a_sendable_op_are_refused_for_good() {
+    let scratch = Scratch::new();
+    let (mut ws, asset) = trash_library(&scratch);
+    ws.soft_delete(&asset, 30).expect("deleted");
+    let op = delete_op(&ws, &asset).expect("encodes").expect("a delete");
+    let mut request: capsule_sdk::rest::types::OpRequest =
+        serde_json::from_slice(&op).expect("an op");
+    request.manifest_envelope.album_id = None;
+    let albumless = serde_json::to_vec(&request).expect("encodes");
+    let (remote, session, seen) = ops_mock(500, serde_json::json!({})).await;
+
+    for bytes in [b"not an op".to_vec(), albumless] {
+        let failure = send_op(&remote, session.clone(), &bytes)
+            .await
+            .expect_err("refused");
+        assert_eq!(failure.kind, "not_an_op");
+        assert!(failure.permanent);
+    }
+    assert!(seen.lock().unwrap().is_empty(), "nothing was sent");
+}
+
+/// A server fault is not a judgement of the op: it fails the asset without being permanent,
+/// so a re-run resends the same head.
+#[tokio::test]
+async fn a_server_fault_is_a_transient_failure() {
+    let scratch = Scratch::new();
+    let (mut ws, asset) = trash_library(&scratch);
+    let (remote, session, _) = ops_mock(
+        500,
+        serde_json::json!({
+            "type": "about:blank",
+            "status": 500,
+            "detail": "the lifecycle write could not be applied",
+            "code": "error.internal",
+        }),
+    )
+    .await;
+
+    let summary = trash_with(
+        &remote,
+        &mut ws,
+        session,
+        &request(TrashAction::Delete, asset),
+    )
+    .await;
+
+    let error = summary.outcomes[0].error.as_ref().expect("an error");
+    assert_eq!(error.kind, "unavailable");
+    assert!(!error.permanent);
+    assert_eq!(error.retention_until, None);
 }

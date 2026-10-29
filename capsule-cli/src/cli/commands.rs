@@ -194,6 +194,11 @@ pub(crate) enum Commands {
         #[arg(long, value_name = "DAYS", default_value_t = crate::cull::DEFAULT_RETAIN_DAYS)]
         retain_days: i64,
     },
+    /// Move assets to the trash or restore them from it, in the library and on the server
+    Trash {
+        #[command(subcommand)]
+        command: TrashCommands,
+    },
     /// Show what an imported asset's signed sidecar records: caption, rating, tags, GPS, timestamps
     Show {
         /// The asset to show: its id, or a prefix of at least 8 hex characters of its SHA-256
@@ -313,6 +318,52 @@ pub(crate) enum Commands {
         /// Reset all data
         #[arg(long)]
         all: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum TrashCommands {
+    /// Move assets to the trash: sign a delete carrying a retention window and send it to the
+    /// server. Soft: each asset stays restorable until its window elapses
+    Delete {
+        /// Path to the Capsule library
+        #[arg(long, value_name = "PATH")]
+        library: PathBuf,
+        /// The asset to move to the trash (repeatable)
+        #[arg(long, value_name = "ASSET_ID", required = true)]
+        asset: Vec<Uuid>,
+        /// Retention window, in days, a fresh delete signs. An asset already in the trash
+        /// (for example by `capsule cull --sweep`) is resent with the window it was deleted
+        /// with; `--json` reports that window as `retention_until`.
+        #[arg(long, value_name = "DAYS", default_value_t = crate::cull::DEFAULT_RETAIN_DAYS)]
+        retain_days: i64,
+        /// Read the library passphrase from stdin instead of prompting, so the command
+        /// works in scripts and CI where there is no terminal.
+        #[arg(long)]
+        passphrase_stdin: bool,
+        /// Print the run as one JSON document on stdout: the totals and each asset's outcome
+        /// (applied, or failed with a stable kind and the server's code)
+        #[arg(long)]
+        json: bool,
+    },
+    /// Restore assets from the trash: sign a trash-restore and send it to the server. An asset
+    /// whose retention window has closed cannot be restored, and is not retried
+    Restore {
+        /// Path to the Capsule library
+        #[arg(long, value_name = "PATH")]
+        library: PathBuf,
+        /// The asset to restore (repeatable)
+        #[arg(long, value_name = "ASSET_ID", required = true)]
+        asset: Vec<Uuid>,
+        /// Read the library passphrase from stdin instead of prompting, so the command
+        /// works in scripts and CI where there is no terminal.
+        #[arg(long)]
+        passphrase_stdin: bool,
+        /// Print the run as one JSON document on stdout: the totals and each asset's outcome
+        /// (applied, or failed with a stable kind such as `retention_elapsed`, the server's
+        /// code and the retention floor)
+        #[arg(long)]
+        json: bool,
     },
 }
 
