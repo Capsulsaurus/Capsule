@@ -105,10 +105,9 @@ impl Metric {
     pub(crate) fn min_slack(self) -> f64 {
         match self {
             Metric::ColdStartFirstThumbnailMs | Metric::FullResolutionOpenMs => 10.0,
-            Metric::ScrollFrameRateFps => 1.0,
+            Metric::ScrollFrameRateFps | Metric::ScrollFrameOverrunP95Ms => 1.0,
             // Percentage points: one or two frames of a short fling.
             Metric::ScrollDroppedFramesPct => 2.0,
-            Metric::ScrollFrameOverrunP95Ms => 1.0,
             Metric::InputToFrameMs => 4.0,
         }
     }

@@ -11,6 +11,14 @@ fn results(capsule: &[(Metric, f64)], platform_app: &[(Metric, f64)]) -> Results
     results
 }
 
+/// Asserts two limits agree to well within any metric's resolution.
+fn assert_close(actual: f64, expected: f64) {
+    assert!(
+        (actual - expected).abs() < 1e-9,
+        "expected {expected}, got {actual}"
+    );
+}
+
 fn baseline(entries: &[(Metric, f64, f64)]) -> Baseline {
     Baseline {
         schema: SCHEMA,
@@ -173,14 +181,14 @@ fn the_percentage_wins_once_it_exceeds_the_floor() {
         value: 800.0,
         tolerance_pct: 10.0,
     };
-    assert_eq!(limit(Metric::ColdStartFirstThumbnailMs, entry), 880.0);
+    assert_close(limit(Metric::ColdStartFirstThumbnailMs, entry), 880.0);
     let tight = BaselineEntry {
         value: 800.0,
         tolerance_pct: 0.0,
     };
-    assert_eq!(
+    assert_close(
         limit(Metric::ColdStartFirstThumbnailMs, tight),
-        800.0 + Metric::ColdStartFirstThumbnailMs.min_slack()
+        800.0 + Metric::ColdStartFirstThumbnailMs.min_slack(),
     );
     for metric in Metric::ALL {
         assert!(metric.min_slack() > 0.0, "{}", metric.key());
