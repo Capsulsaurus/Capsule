@@ -10,7 +10,9 @@
 //!
 //! The measures are `coldStartToFirstThumbnail`, `scroll`, `fullResolutionOpen` and
 //! `inputToFrame` (capitalized after the client on Apple). Each value is the median over the
-//! harness's iterations.
+//! harness's iterations. `inputToFrame` is read from the app's own interval on both platforms
+//! (a trace section on Android, an `XCTOSSignpostMetric` duration on Apple); every other Apple
+//! duration is an `XCTClockMetric`.
 
 use eyre::{ContextCompat, Result, bail, ensure};
 use serde_json::Value;
@@ -308,20 +310,37 @@ fn xcresult(report: &Value, device: &str, library_size: u64) -> Result<Results> 
             identifier.contains("clock") || display.contains("clock")
         };
         match measure {
-            Measure::ColdStartToFirstThumbnail
-            | Measure::FullResolutionOpen
-            | Measure::InputToFrame => {
+            Measure::ColdStartToFirstThumbnail | Measure::FullResolutionOpen => {
                 let (value, unit) = xc_median(runs, clock)
                     .with_context(|| format!("`{identifier}` reports no clock metric"))?;
-                let metric = match measure {
-                    Measure::ColdStartToFirstThumbnail => Metric::ColdStartFirstThumbnailMs,
-                    Measure::FullResolutionOpen => Metric::FullResolutionOpenMs,
-                    _ => Metric::InputToFrameMs,
+                let metric = if measure == Measure::FullResolutionOpen {
+                    Metric::FullResolutionOpenMs
+                } else {
+                    Metric::ColdStartFirstThumbnailMs
                 };
                 put(
                     &mut results,
                     client,
                     metric,
+                    to_ms(value, &unit, identifier)?,
+                )?;
+            }
+            Measure::InputToFrame => {
+                // The app's own `inputToFrame` interval, read by an `XCTOSSignpostMetric`
+                // (`…OSSignpost-inputToFrame.duration`, "Duration (inputToFrame)"). A clock
+                // around the harness call would time XCUITest, not the frame, so it never
+                // stands in.
+                let signpost_duration = |identifier: &str, display: &str| {
+                    !clock(identifier, display)
+                        && (identifier.ends_with("duration") || display.ends_with("duration"))
+                };
+                let (value, unit) = xc_median(runs, signpost_duration).with_context(|| {
+                    format!("`{identifier}` reports no signpost duration metric")
+                })?;
+                put(
+                    &mut results,
+                    client,
+                    Metric::InputToFrameMs,
                     to_ms(value, &unit, identifier)?,
                 )?;
             }

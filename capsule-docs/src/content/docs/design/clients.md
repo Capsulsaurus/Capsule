@@ -54,7 +54,9 @@ Gallery or Google Photos app on Android) on the same device, at every library si
   app on a 100,000-asset library on the same physical device: cold start to first thumbnail,
   scroll frame rate and dropped frames, full-resolution open time, and input-to-frame latency.
   Both apps are timed by the same harness calls, so its overhead cancels out of the comparison.
-  Each device has a recorded baseline of the client's own numbers; a regression past it fails
+  Input-to-frame latency is the exception: a harness outside the app cannot see its frames, so
+  the client marks each tap itself, from delivery until the frame answering it has been drawn.
+  The platform app marks nothing, so that measure is reported as not compared. Each device has a recorded baseline of the client's own numbers; a regression past it fails
   the run, and a baselined measure that stops being reported counts as a regression. Parity with
   the platform app is reported beside it rather than gating, because the platform app changes
   under the device's own updates while the baseline changes only when it is re-recorded.
