@@ -104,13 +104,13 @@ run = [
   "mise run build-check-wasm",
   "mise run build-ffi",
   "mise run lint-check-ffi",
-  "mise run gen-bindings",
+  "mise run gen-bindings --check",
   "mise run verify-examples",
 ]
 
 [tasks.check-web]
 description = "Web CI gate"
-depends = ["format-check-web", "lint-check-web", "test-web", "build-web"]
+depends = ["format-check-web", "lint-check-web", "test-web", "build-web", "wasm-surface-check"]
 
 [tasks.check-docs]
 description = "Docs CI gate"
@@ -538,6 +538,21 @@ run = [
   "cargo build -p capsule-wasm --target wasm32-unknown-unknown --release",
   "wasm-bindgen target/wasm32-unknown-unknown/release/capsule_wasm.wasm --out-dir capsule-web/src/generated/wasm --target web",
 ]
+
+# Digest the public half of the capsule_wasm.d.ts `build-wasm` emits into the committed
+# capsule-wasm/wasm-surface.d.ts that /reference/sdk/wasm/ is generated from. The check is in
+# `check-web`, not `check-rust`: producing the declaration file needs wasm-bindgen-cli, which
+# only the web CI job installs. Ordered behind `drop-kat` so it is the last cargo task in the
+# web graph and never contends for the `target/` lock (see the note on `share-kat`).
+[tasks.wasm-surface]
+description = "Digest capsule_wasm.d.ts into capsule-wasm/wasm-surface.d.ts"
+depends = ["build-wasm"]
+run = "cargo run -q -p xtask -- wasm-surface"
+
+[tasks.wasm-surface-check]
+description = "Fail if capsule-wasm/wasm-surface.d.ts is stale against the wasm build"
+depends = ["drop-kat"]
+run = "cargo run -q -p xtask -- wasm-surface --check"
 
 # Generate the deterministic cross-language share-link KAT fixture the bun test reopens (Rust
 # seals via the real issuer crypto; wasm reopens — proving byte-identical interop). Written to the

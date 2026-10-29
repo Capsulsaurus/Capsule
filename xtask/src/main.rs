@@ -22,6 +22,13 @@
 //!   [`architecture`]).
 //! - `test-layout-check` rejects inline test modules under any workspace member's `src/`: unit
 //!   tests live in a sibling `tests.rs` (see [`test_layout`]).
+//! - `wasm-surface [--check]` digests the public half of the `capsule_wasm.d.ts` wasm-bindgen
+//!   emits into the committed `capsule-wasm/wasm-surface.d.ts` the docs build reads (see
+//!   [`wasm_surface`]). `--check` is the web gate's drift check.
+//! - `bindings-surface [--check]` asserts the generated `capsule_sdk` Swift and Kotlin sources
+//!   carry every declaration the native clients consume and dumps them into the committed
+//!   `capsule-sdk/bindings-surface.json` (see [`bindings_surface`]). `mise run gen-bindings`
+//!   runs it after generating the sources.
 //! - `bench-apps <import | compare | record>` normalizes the apps' responsiveness parity
 //!   benchmark reports, records per-device baselines and fails on a regression past one (see
 //!   [`bench_apps`]).
@@ -30,6 +37,7 @@
 
 mod architecture;
 mod bench_apps;
+mod bindings_surface;
 mod drop_kat;
 mod i18n;
 mod i18n_guard;
@@ -37,6 +45,7 @@ mod screenshot;
 mod share_kat;
 mod test_layout;
 mod translate_readme;
+mod wasm_surface;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -46,7 +55,7 @@ use regex::{Captures, Regex};
 use semver::Version;
 use toml_edit::Item;
 
-const USAGE: &str = "usage: xtask <set-version <X.Y.Z> | i18n [--check] | i18n-guard | translate-readme [--check | --extract] | share-kat [<out-path>] | drop-kat [<out-path>] | architecture-check | test-layout-check | bench-apps <import | compare | record> | screenshot-seed [--anchor YYYY-MM-DD] | screenshot-compose --input <png> --output <png>>";
+const USAGE: &str = "usage: xtask <set-version <X.Y.Z> | i18n [--check] | i18n-guard | translate-readme [--check | --extract] | share-kat [<out-path>] | drop-kat [<out-path>] | wasm-surface [--check] | bindings-surface [--check] | architecture-check | test-layout-check | bench-apps <import | compare | record> | screenshot-seed [--anchor YYYY-MM-DD] | screenshot-compose --input <png> --output <png>>";
 
 /// Default output path (repo-relative) for the share-link KAT fixture the bun test consumes.
 const SHARE_KAT_OUT: &str = "capsule-web/src/generated/share-kat.json";
@@ -97,11 +106,22 @@ fn main() -> Result<()> {
             let out = args.next().unwrap_or_else(|| DROP_KAT_OUT.to_string());
             drop_kat::run(&repo_root(), &out)
         }
+        Some("wasm-surface") => wasm_surface::run(&repo_root(), check_flag(args.next())?),
+        Some("bindings-surface") => bindings_surface::run(&repo_root(), check_flag(args.next())?),
         Some("bench-apps") => bench_apps::run(args),
         Some("screenshot-seed") => screenshot::run_seed(&repo_root(), args),
         Some("screenshot-compose") => screenshot::run_compose(args),
         Some(other) => bail!("unknown command `{other}`; {USAGE}"),
         None => bail!("{USAGE}"),
+    }
+}
+
+/// `--check` or nothing; anything else is a typo that must not silently mean "write".
+fn check_flag(arg: Option<String>) -> Result<bool> {
+    match arg.as_deref() {
+        None => Ok(false),
+        Some("--check") => Ok(true),
+        Some(other) => bail!("unknown flag `{other}`; expected `--check` or nothing"),
     }
 }
 

@@ -12,18 +12,30 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+    BINDINGS_SURFACE,
     bucketOperations,
     CLI_SURFACE,
     demoteHeadings,
     generate,
     OPENAPI_DOCUMENT,
+    parseWasmSurface,
+    readBindingsSurface,
     readCliSurface,
     readOpenApiDocument,
+    readWasmSurface,
     renderApiPage,
+    renderBindingsPage,
     renderCliPage,
+    renderWasmPage,
+    WASM_SURFACE,
 } from './gen-reference.mjs';
 import { headingAnchors } from './lib/markdown.mjs';
-import { API_GROUPS, groupForPath } from './reference-groups.mjs';
+import {
+    API_GROUPS,
+    groupForPath,
+    referenceSidebar,
+    SDK_PAGES,
+} from './reference-groups.mjs';
 
 /**
  * A repo-shaped temporary root: the two description artifacts at the paths the generator
@@ -37,6 +49,8 @@ function fixtureRoot() {
     const root = mkdtempSync(join(tmpdir(), 'gen-reference-'));
     mkdirSync(join(root, 'capsule-cli'), { recursive: true });
     mkdirSync(join(root, 'capsule-server'), { recursive: true });
+    mkdirSync(join(root, 'capsule-sdk'), { recursive: true });
+    mkdirSync(join(root, 'capsule-wasm'), { recursive: true });
     mkdirSync(join(root, 'capsule-docs/src/content/docs/reference'), {
         recursive: true,
     });
@@ -116,6 +130,87 @@ function writeCli(surface) {
         join(root, CLI_SURFACE),
         `${JSON.stringify(surface, null, 2)}\n`,
     );
+}
+
+const MINIMAL_BINDINGS = {
+    schema: 1,
+    namespace: 'capsule_sdk',
+    uniffi: '0.31.1',
+    languages: {
+        swift: {
+            source: 'capsule_sdk.swift',
+            declarations: [
+                {
+                    kind: 'class',
+                    name: 'FfiWorkspace',
+                    signature: 'open class FfiWorkspace: FfiWorkspaceProtocol',
+                    doc: 'A local workspace. See [`FfiSession`].',
+                    members: [
+                        {
+                            kind: 'func',
+                            name: 'sealAsset',
+                            signature:
+                                'open func sealAsset(bytes: Data) throws -> FfiAssetFacts',
+                            doc: 'Seal one asset.\n\n# Errors\n\nFails on a locked workspace.',
+                            members: [],
+                        },
+                    ],
+                },
+                {
+                    kind: 'func',
+                    name: 'evaluateAlerts',
+                    signature:
+                        'public func evaluateAlerts(input: FfiNotifyInput, now: String) throws -> [FfiAlert]',
+                    doc: '',
+                    members: [],
+                },
+            ],
+        },
+        kotlin: {
+            source: 'uniffi/capsule_sdk/capsule_sdk.kt',
+            declarations: [
+                {
+                    kind: 'fun',
+                    name: 'evaluateAlerts',
+                    signature:
+                        'fun `evaluateAlerts`(`input`: FfiNotifyInput, `now`: kotlin.String): List<FfiAlert>',
+                    doc: 'Evaluate alerts.',
+                    members: [],
+                },
+            ],
+        },
+    },
+};
+
+const MINIMAL_WASM = `// The public surface of the capsule-wasm browser module.
+
+/**
+ * Whether the link is passphrase-protected. Calls [\`open_share\`] next.
+ */
+export function shareIsPassphraseProtected(wrapped_scope_b64: string): boolean;
+/**
+ * The opened scope of a share link.
+ */
+export class ShareScope {
+  private constructor();
+  free(): void;
+  /**
+   * \`"asset"\` or \`"album"\`.
+   */
+  scopeKind(): string;
+  /**
+   * The plaintext size.
+   */
+  readonly size: number;
+}
+`;
+
+function writeSdk(bindings = MINIMAL_BINDINGS, wasm = MINIMAL_WASM) {
+    writeFileSync(
+        join(root, BINDINGS_SURFACE),
+        `${JSON.stringify(bindings, null, 2)}\n`,
+    );
+    writeFileSync(join(root, WASM_SURFACE), wasm);
 }
 
 function writeOpenApi(document) {
@@ -552,6 +647,7 @@ describe('generate', () => {
     it('is deterministic: two runs produce byte-identical pages', () => {
         writeCli(MINIMAL_CLI);
         writeOpenApi(MINIMAL_OPENAPI);
+        writeSdk();
         const first = generate(root).map((path) =>
             readFileSync(join(root, path), 'utf8'),
         );
@@ -580,6 +676,7 @@ describe('generate', () => {
     it('clears output it no longer emits', () => {
         writeCli(MINIMAL_CLI);
         writeOpenApi(MINIMAL_OPENAPI);
+        writeSdk();
         generate(root);
         const orphan = join(
             root,
@@ -595,6 +692,7 @@ describe('generate', () => {
     it('does not clear the hand-written overview beside the generated directory', () => {
         writeCli(MINIMAL_CLI);
         writeOpenApi(MINIMAL_OPENAPI);
+        writeSdk();
         const overview = join(
             root,
             'capsule-docs/src/content/docs/reference/cli.md',
@@ -602,6 +700,144 @@ describe('generate', () => {
         writeFileSync(overview, '---\ntitle: CLI\nstatus: draft\n---\n');
         generate(root);
         expect(existsSync(overview)).toBe(true);
+    });
+
+    // The SDK directory holds a hand-written page beside the generated ones, so it is
+    // cleared file by file: an orphan goes, the Rust page stays.
+    it('clears an orphan in the SDK directory but keeps the hand-written Rust page', () => {
+        writeCli(MINIMAL_CLI);
+        writeOpenApi(MINIMAL_OPENAPI);
+        writeSdk();
+        const sdk = join(root, 'capsule-docs/src/content/docs/reference/sdk');
+        mkdirSync(sdk, { recursive: true });
+        const rust = join(sdk, 'rust.md');
+        const orphan = join(sdk, 'retired-language.md');
+        writeFileSync(rust, '---\ntitle: Rust\nstatus: draft\n---\n');
+        writeFileSync(orphan, '---\ntitle: Gone\nstatus: stable\n---\n');
+        const written = generate(root);
+        expect(existsSync(rust)).toBe(true);
+        expect(existsSync(orphan)).toBe(false);
+        for (const page of SDK_PAGES.filter((p) => p.artifact !== null)) {
+            expect(written).toContain(
+                `capsule-docs/src/content/docs/reference/sdk/${page.slug}.md`,
+            );
+        }
+        expect(written).not.toContain(
+            'capsule-docs/src/content/docs/reference/sdk/rust.md',
+        );
+    });
+
+    it('fails, naming the artifact, when an SDK dump is missing', () => {
+        writeCli(MINIMAL_CLI);
+        writeOpenApi(MINIMAL_OPENAPI);
+        expect(() => generate(root)).toThrow(/bindings-surface\.json/);
+    });
+});
+
+describe('the SDK pages', () => {
+    const swift = SDK_PAGES.find((page) => page.slug === 'swift');
+    const kotlin = SDK_PAGES.find((page) => page.slug === 'kotlin');
+    const wasm = SDK_PAGES.find((page) => page.slug === 'wasm');
+
+    it('reads a wasm digest into functions and classes, members included', () => {
+        const declarations = parseWasmSurface(MINIMAL_WASM);
+        expect(declarations.map((d) => [d.kind, d.name])).toEqual([
+            ['function', 'shareIsPassphraseProtected'],
+            ['class', 'ShareScope'],
+        ]);
+        const scope = declarations[1];
+        expect(scope.signature).toBe('export class ShareScope');
+        expect(scope.doc).toBe('The opened scope of a share link.');
+        expect(scope.members.map((m) => [m.kind, m.name])).toEqual([
+            ['method', 'free'],
+            ['method', 'scopeKind'],
+            ['property', 'size'],
+        ]);
+        expect(scope.members[1].doc).toBe('`"asset"` or `"album"`.');
+        expect(scope.members[0].doc).toBe('');
+    });
+
+    it('refuses a wasm digest line it does not recognize', () => {
+        expect(() =>
+            parseWasmSurface('export const answer: number;\n'),
+        ).toThrow(/unrecognized declaration/);
+    });
+
+    it('refuses a wasm digest that declares nothing', () => {
+        expect(() => parseWasmSurface('// banner only\n')).toThrow(
+            /declares nothing/,
+        );
+    });
+
+    it('refuses a class block that never closes', () => {
+        expect(() =>
+            parseWasmSurface('export class A {\n  free(): void;\n'),
+        ).toThrow(/never closes/);
+    });
+
+    it('renders the wasm page with signatures, prose and member headings', () => {
+        const page = renderWasmPage(wasm, parseWasmSurface(MINIMAL_WASM));
+        expect(page).toMatch(/^---\ntitle: "Browser \(WASM\)"\n/);
+        expect(page).toContain('## Functions');
+        expect(page).toContain('### `shareIsPassphraseProtected`');
+        expect(page).toContain(
+            '```ts\nexport function shareIsPassphraseProtected(wrapped_scope_b64: string): boolean;\n```',
+        );
+        expect(page).toContain('## Classes');
+        expect(page).toContain('#### `scopeKind`');
+        expect(page).not.toContain('private constructor');
+        // rustdoc's shorthand link is unwrapped to its code span, not printed with brackets.
+        expect(page).toContain('Calls `open_share` next.');
+        expect(page.endsWith('\n')).toBe(true);
+        expect(page.endsWith('\n\n')).toBe(false);
+    });
+
+    it('renders each binding language from its own half of the dump', () => {
+        const swiftPage = renderBindingsPage(swift, MINIMAL_BINDINGS);
+        const kotlinPage = renderBindingsPage(kotlin, MINIMAL_BINDINGS);
+        expect(swiftPage).toContain('```swift\nopen class FfiWorkspace');
+        expect(swiftPage).toContain('#### `sealAsset`');
+        expect(swiftPage).not.toContain('```kotlin');
+        expect(kotlinPage).toContain('```kotlin\nfun `evaluateAlerts`');
+        expect(kotlinPage).not.toContain('FfiWorkspace');
+        // Functions are listed before classes, whatever order the dump holds them in.
+        expect(swiftPage.indexOf('## Functions')).toBeLessThan(
+            swiftPage.indexOf('## Classes'),
+        );
+    });
+
+    it('demotes a heading inside a member doc comment below the member', () => {
+        const page = renderBindingsPage(swift, MINIMAL_BINDINGS);
+        expect(page).toContain('##### Errors');
+        const body = page.split('\n---\n').slice(1).join('\n---\n');
+        expect(body.split('\n').filter((l) => /^# /.test(l))).toEqual([]);
+    });
+
+    it('refuses a declaration kind no section lists', () => {
+        const dump = structuredClone(MINIMAL_BINDINGS);
+        dump.languages.swift.declarations[1].kind = 'typealias';
+        expect(() => renderBindingsPage(swift, dump)).toThrow(
+            /typealias, which no section/,
+        );
+    });
+
+    it('refuses a binding dump with an unknown schema or an empty language', () => {
+        writeSdk({ ...MINIMAL_BINDINGS, schema: 2 });
+        expect(() => readBindingsSurface(root)).toThrow(/schema 2/);
+        const empty = structuredClone(MINIMAL_BINDINGS);
+        empty.languages.kotlin.declarations = [];
+        writeSdk(empty);
+        expect(() => readBindingsSurface(root)).toThrow(/no kotlin/);
+    });
+
+    it('lists every SDK page in the sidebar, then crates', () => {
+        const sidebar = referenceSidebar();
+        const sdk = sidebar.find((item) => item.label === 'SDK');
+        expect(sdk.items.map((item) => item.slug)).toEqual([
+            'reference/sdk',
+            ...SDK_PAGES.map((page) => `reference/sdk/${page.slug}`),
+        ]);
+        expect(sidebar.at(-1)).toEqual({ slug: 'reference/crates' });
     });
 });
 
@@ -1159,12 +1395,15 @@ describe('the committed artifacts', () => {
     // tree races the Astro build reading it, which fails intermittently and only under the
     // gate. The artifacts are the committed ones, so the assertion is still about this
     // repository.
-    it('generate one page per group plus the CLI page', () => {
-        copyFileSync(join(repoRoot, CLI_SURFACE), join(root, CLI_SURFACE));
-        copyFileSync(
-            join(repoRoot, OPENAPI_DOCUMENT),
-            join(root, OPENAPI_DOCUMENT),
-        );
+    it('generate one page per group, the CLI page, and the SDK pages', () => {
+        for (const artifact of [
+            CLI_SURFACE,
+            OPENAPI_DOCUMENT,
+            BINDINGS_SURFACE,
+            WASM_SURFACE,
+        ]) {
+            copyFileSync(join(repoRoot, artifact), join(root, artifact));
+        }
 
         const written = generate(root);
 
@@ -1180,7 +1419,35 @@ describe('the committed artifacts', () => {
         for (const path of written) {
             expect(existsSync(join(root, path))).toBe(true);
         }
-        expect(written).toHaveLength(API_GROUPS.length + 1);
+        const generatedSdk = SDK_PAGES.filter((page) => page.artifact !== null);
+        expect(written).toHaveLength(
+            API_GROUPS.length + 1 + generatedSdk.length,
+        );
+    });
+
+    // The verbs the native clients drive, and the browser module's two halves, reach their
+    // pages: an artifact that parsed but lost them would otherwise publish looking whole.
+    it('carry the surfaces the clients consume', () => {
+        const bindings = readBindingsSurface(repoRoot);
+        for (const language of ['swift', 'kotlin']) {
+            const names = bindings.languages[language].declarations.map(
+                (declaration) => declaration.name,
+            );
+            expect(names).toEqual(
+                expect.arrayContaining([
+                    'FfiCapsuleClient',
+                    'FfiSession',
+                    'FfiWorkspace',
+                    'evaluateAlerts',
+                ]),
+            );
+        }
+        const wasm = readWasmSurface(repoRoot).map(
+            (declaration) => declaration.name,
+        );
+        expect(wasm).toEqual(
+            expect.arrayContaining(['openShare', 'sealDrop', 'ShareScope']),
+        );
     });
 });
 

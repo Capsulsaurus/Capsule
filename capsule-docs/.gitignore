@@ -8,6 +8,10 @@ dist/
 # is its sibling file (reference/cli.md), not a file inside these directories.
 src/content/docs/reference/cli/
 src/content/docs/reference/api/
+# The SDK directory also holds the hand-written Rust page (`SDK_PAGES` in
+# scripts/reference-groups.mjs marks it), so only the generated binding pages are ignored.
+src/content/docs/reference/sdk/*
+!src/content/docs/reference/sdk/rust.md
 # generated types
 .astro/
 
