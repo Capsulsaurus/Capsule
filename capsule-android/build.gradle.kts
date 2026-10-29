@@ -90,3 +90,9 @@ android {
 dependencies {
     debugImplementation(libs.androidx.compose.ui.tooling)
 }
+
+// The adapters' JVM unit tests drive a real FfiWorkspace: JNA loads the host libcapsule_sdk
+// that `-Pcapsule.wireFfi` builds into the repo's target/debug, as `:core`'s smoke does.
+tasks.withType<Test>().configureEach {
+    systemProperty("jna.library.path", "${projectDir.parentFile}/target/debug")
+}
