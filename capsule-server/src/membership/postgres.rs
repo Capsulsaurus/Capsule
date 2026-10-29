@@ -129,6 +129,33 @@ async fn roster_of<C: ConnectionTrait>(
     }))
 }
 
+/// The accounts live on `album`'s roster, read through `connection`.
+///
+/// Read under the album's lock by `apply_roster`, so the set a removal is judged against is the
+/// set the write would replace.
+async fn live_members<C: ConnectionTrait>(
+    connection: &C,
+    album: &AlbumId,
+) -> Result<Vec<UserId>, StoreError> {
+    let rows = connection
+        .query_all_raw(Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            "SELECT user_id FROM album_members \
+             WHERE album_id = $1 AND revoked_at_version IS NULL",
+            [Value::from(album.as_str().to_owned())],
+        ))
+        .await
+        .map_err(PORT.failing("reading an album's live members"))?;
+    let failed = PORT.failing("reading an album's live members");
+    rows.iter()
+        .map(|row| {
+            row.try_get::<String>("", "user_id")
+                .map(UserId::new)
+                .map_err(&failed)
+        })
+        .collect()
+}
+
 impl MembershipStore for PostgresMembership {
     fn apply_roster(
         &self,
@@ -156,7 +183,8 @@ impl MembershipStore for PostgresMembership {
                 .map_err(PORT.failing("locking an album's roster"))?;
 
             let held = roster_of(&transaction, &roster.album_id).await?;
-            if let Some(outcome) = precheck(held.as_ref(), &roster) {
+            let live = live_members(&transaction, &roster.album_id).await?;
+            if let Some(outcome) = precheck(held.as_ref(), &live, &roster, &members) {
                 // Nothing to write; the rollback releases the lock.
                 return Ok(outcome);
             }

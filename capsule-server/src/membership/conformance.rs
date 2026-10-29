@@ -9,8 +9,10 @@
 //! - **Removal is a stored fact.** A member omitted from a later roster answers
 //!   [`Membership::Revoked`] with the version and epoch at which they vanished, never
 //!   [`Membership::Never`]. That is what the blob route's `403` is rendered from.
-//! - **A refusal changes nothing.** `Stale`, `VersionLeap` and `EpochRegressed` leave both the
-//!   roster and every member row exactly as they were.
+//! - **A refusal changes nothing.** `Stale`, `VersionLeap`, `EpochRegressed` and
+//!   `EpochNotAdvanced` leave both the roster and every member row exactly as they were.
+//! - **A removal rides a rotation.** A roster that omits a live member at the held epoch is
+//!   refused; the same removal at a higher epoch applies.
 //! - **No publish can wedge the album.** A version far above the held one is refused, and the
 //!   next legitimate roster still applies — the counter is bounded above as well as below.
 //!
@@ -358,6 +360,96 @@ pub async fn an_epoch_regression_is_refused_and_changes_nothing(h: &dyn Harness)
     );
 }
 
+/// A newer roster that drops a live member at the held epoch is refused, and changes nothing.
+///
+/// Removal is a key rotation, so the roster recording it must advance `amk_epoch`. The case
+/// asserts all three halves: the refusal names the held version and epoch, the member stays a
+/// member with their original grant, and the same removal at an advanced epoch then applies —
+/// which is also the proof that a roster reading the live set under the lock released it.
+pub async fn a_removal_that_does_not_advance_the_epoch_is_refused_and_changes_nothing(
+    h: &dyn Harness,
+) {
+    let case = "no-advance";
+    let bob = user(case, "bob");
+    let carol = user(case, "carol");
+    apply(
+        h,
+        roster(case, 1, 1, ""),
+        vec![
+            (bob.clone(), MemberRole::Writer),
+            (carol.clone(), MemberRole::Reader),
+        ],
+    )
+    .await;
+    // A role change at the same epoch drops nobody and is applied.
+    assert!(matches!(
+        apply(
+            h,
+            roster(case, 2, 1, ""),
+            vec![
+                (bob.clone(), MemberRole::Reader),
+                (carol.clone(), MemberRole::Reader)
+            ]
+        )
+        .await,
+        RosterOutcome::Applied(_)
+    ));
+
+    assert_eq!(
+        apply(
+            h,
+            roster(case, 3, 1, ""),
+            vec![(carol.clone(), MemberRole::Reader)]
+        )
+        .await,
+        RosterOutcome::EpochNotAdvanced {
+            current_version: 2,
+            stored: 1,
+            removed: 1,
+        }
+    );
+    assert_eq!(
+        membership(h, case, &bob).await,
+        Membership::Member {
+            role: MemberRole::Reader,
+            granted_epoch: 1,
+        },
+        "a refused removal revokes nobody"
+    );
+    assert_eq!(
+        ok(
+            h.members().current_roster(&album(case)).await,
+            "read the current roster"
+        )
+        .expect("held")
+        .roster_version,
+        2
+    );
+
+    assert!(matches!(
+        apply(
+            h,
+            roster(case, 3, 2, ""),
+            vec![(carol.clone(), MemberRole::Reader)]
+        )
+        .await,
+        RosterOutcome::Applied(_)
+    ));
+    assert_eq!(
+        membership(h, case, &bob).await,
+        Membership::Revoked(Revocation {
+            at_version: 3,
+            at_epoch: 2,
+        })
+    );
+    // A member already revoked is not live, so a later roster at the same epoch that still
+    // omits them removes nobody and is applied.
+    assert!(matches!(
+        apply(h, roster(case, 4, 2, ""), vec![(carol, MemberRole::Writer)]).await,
+        RosterOutcome::Applied(_)
+    ));
+}
+
 /// One application revokes, continues and admits at once.
 ///
 /// The case that runs the adapters' set arithmetic with more than one name on each side: the
@@ -589,6 +681,7 @@ pub async fn run_all(h: &dyn Harness) {
     a_version_leap_is_refused_and_the_album_still_takes_its_next_roster(h).await;
     the_version_window_binds_an_albums_first_roster(h).await;
     an_epoch_regression_is_refused_and_changes_nothing(h).await;
+    a_removal_that_does_not_advance_the_epoch_is_refused_and_changes_nothing(h).await;
     one_application_revokes_continues_and_admits(h).await;
     an_account_listed_twice_is_taken_once_last_entry_winning(h).await;
 

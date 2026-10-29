@@ -59,6 +59,16 @@
 //! The window is clamped by [`MAX_ROSTER_VERSION`] as well as by the step, which is what keeps
 //! the counter inside what a `BIGINT` holds and what the generated clients can decode, and what
 //! makes the degenerate case at the top of the type unreachable instead of merely improbable.
+//!
+//! # A removal advances the epoch
+//!
+//! The epoch may stay put across versions — a role change needs no key rotation — but a roster
+//! that omits a live member must carry a higher `amk_epoch` than the held one, or it is refused
+//! as [`RosterOutcome::EpochNotAdvanced`]. Removal is an MLS `Remove`, which rotates the group's
+//! keys, and the epoch a membership was granted at is what a federation capability is bound to:
+//! a removal at the held epoch would let a re-admission at that same epoch carry the grant the
+//! removed member held. The rule needs the held member set, so it is decided in the critical
+//! section with the version comparison, by [`precheck`] in both adapters.
 
 use std::fmt;
 
@@ -222,6 +232,19 @@ pub enum RosterOutcome {
         /// The epoch the server holds.
         stored: u64,
     },
+    /// A newer version that omits a live member and carries the **same** AMK epoch as the held
+    /// roster. A removal is an MLS `Remove`, and a `Remove` is a key rotation: a roster that
+    /// drops someone without advancing the epoch describes a membership change the group's keys
+    /// never made, and the removed member's grant would carry the epoch a later re-admission
+    /// gets, so the binding a capability's `granted_epoch` relies on could not tell them apart.
+    EpochNotAdvanced {
+        /// The version the server holds.
+        current_version: u64,
+        /// The epoch the server holds, which the removing roster must exceed.
+        stored: u64,
+        /// How many live members the roster omits.
+        removed: u64,
+    },
 }
 
 /// Where membership is kept.
@@ -234,7 +257,13 @@ pub trait MembershipStore: fmt::Debug + Send + Sync {
     /// taking the roster's epoch if they are new or re-admitted. A user listed twice is taken
     /// once, last entry winning; the route refuses such a document before it reaches here.
     ///
-    /// `Stale`, `Replayed` and `EpochRegressed` change nothing.
+    /// A roster that omits a live member must carry an `amk_epoch` above the held one; one that
+    /// does not is [`RosterOutcome::EpochNotAdvanced`], decided inside the same critical section
+    /// as the version comparison, because the held member set it is judged against is only
+    /// stable there.
+    ///
+    /// `Stale`, `Replayed`, `VersionLeap`, `EpochRegressed` and `EpochNotAdvanced` change
+    /// nothing.
     fn apply_roster(
         &self,
         roster: RosterRecord,
@@ -279,13 +308,18 @@ impl MembershipContext {
     }
 }
 
-/// Decide what `incoming` does to `held`, before any row is touched.
+/// Decide what `incoming`, naming `members`, does to `held`, whose live members are `live`,
+/// before any row is touched.
 ///
 /// Pure, so both adapters make the same decision and the rule is testable without a store. `None`
-/// is "apply it"; `Some` is the outcome that ends the operation without a write.
+/// is "apply it"; `Some` is the outcome that ends the operation without a write. Each adapter
+/// reads `held` and `live` inside its critical section, so the member set a removal is judged
+/// against is the one the write would replace.
 pub(crate) fn precheck(
     held: Option<&RosterRecord>,
+    live: &[UserId],
     incoming: &RosterRecord,
+    members: &[(UserId, MemberRole)],
 ) -> Option<RosterOutcome> {
     // The ceiling first, and against a held version of `0` when there is no roster yet: a first
     // publish at `u64::MAX` would wedge the album exactly as a later one would, and an album
@@ -327,6 +361,23 @@ pub(crate) fn precheck(
             current_version: held.roster_version,
             stored: held.amk_epoch,
         });
+    }
+    // A removal without a key rotation. Only an equal epoch reaches here — a lower one is the
+    // regression above — and an equal epoch is legitimate for every change but a removal: a role
+    // change or an addition recorded without a commit loses nothing, while a removal the epoch
+    // does not follow leaves the removed member's grant indistinguishable from the one a later
+    // re-admission at this epoch would get.
+    if incoming.amk_epoch == held.amk_epoch {
+        let listed: std::collections::BTreeSet<&UserId> =
+            members.iter().map(|(user, _)| user).collect();
+        let removed = live.iter().filter(|user| !listed.contains(user)).count();
+        if removed > 0 {
+            return Some(RosterOutcome::EpochNotAdvanced {
+                current_version: held.roster_version,
+                stored: held.amk_epoch,
+                removed: u64::try_from(removed).unwrap_or(u64::MAX),
+            });
+        }
     }
     None
 }
