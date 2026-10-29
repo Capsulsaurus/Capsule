@@ -517,6 +517,182 @@ fn a_new_object_under_a_staged_name_is_received_beside_the_old_one() {
     assert_eq!(old_again.received[0].path, first.received[0].path);
 }
 
+/// The stacks `extract` makes of `root`, as sorted lists of staged file names.
+fn stacked_names(adapter: &CameraAdapter, root: &Path) -> Vec<Vec<String>> {
+    let extracted = adapter.extract(&[root.to_path_buf()]).unwrap();
+    let mut stacks: Vec<Vec<String>> = extracted
+        .entries
+        .iter()
+        .map(|entry| {
+            let mut names: Vec<String> = entry
+                .candidate
+                .source_paths
+                .iter()
+                .map(|p| p.strip_prefix(root).unwrap().display().to_string())
+                .collect();
+            names.sort();
+            names
+        })
+        .collect();
+    stacks.sort();
+    stacks
+}
+
+#[test]
+fn a_raw_and_jpeg_pair_after_an_unrelated_raw_only_shot_share_a_new_folder() {
+    // The old card shot RAW-only; the reformatted one shoots RAW+JPEG under the same stem.
+    let tmp = TempDir::new().unwrap();
+    let adapter = CameraAdapter::new(tmp.path());
+    let mut before = FakeCamera::new(tmp.path())
+        .file(0x20, DCIM_100, "DSC00001.ARW", &shot(1, 64))
+        .record(0x20, captured(1), true);
+    let first = adapter.receive(&mut before).unwrap();
+    let mut after = FakeCamera::new(tmp.path())
+        .file(0x20, DCIM_100, "DSC00001.ARW", &shot(9, 64))
+        .file(0x21, DCIM_100, "DSC00001.JPG", &shot(8, 32))
+        .record(0x20, captured(2), true)
+        .record(0x21, captured(2), true);
+
+    let second = adapter.receive(&mut after).unwrap();
+
+    assert!(second.failures.is_empty());
+    let [raw, jpeg] = &second.received[..] else {
+        panic!("two objects received");
+    };
+    assert_eq!(
+        raw.path.parent(),
+        jpeg.path.parent(),
+        "a stack shares one folder"
+    );
+    assert_ne!(raw.path.parent(), first.received[0].path.parent());
+    assert_eq!(fs::read(&first.received[0].path).unwrap(), shot(1, 64));
+    let storage = format!("{STORAGE:08x}");
+    let old = format!("{storage}/{DCIM_100:08x}");
+    let new = format!("{storage}/{DCIM_100:08x}~1");
+    assert_eq!(
+        stacked_names(&adapter, &second.objects_root),
+        vec![
+            vec![format!("{old}/DSC00001.ARW")],
+            vec![format!("{new}/DSC00001.ARW"), format!("{new}/DSC00001.JPG")],
+        ],
+        "the old RAW stays single and the new pair stacks"
+    );
+
+    // Both cards are still recognised as staged, each in its own folder.
+    let again = adapter.receive(&mut after).unwrap();
+    assert!(again.received.iter().all(|r| r.already_staged));
+    assert!(adapter.receive(&mut before).unwrap().received[0].already_staged);
+}
+
+#[test]
+fn a_jpeg_only_shot_is_never_stacked_with_an_unrelated_staged_raw() {
+    // No path collides, yet a same-stem file in the folder would stack with the newcomer.
+    let tmp = TempDir::new().unwrap();
+    let adapter = CameraAdapter::new(tmp.path());
+    let mut before = FakeCamera::new(tmp.path()).file(0x20, DCIM_100, "DSC00001.ARW", &shot(1, 64));
+    let first = adapter.receive(&mut before).unwrap();
+    let mut after = FakeCamera::new(tmp.path()).file(0x21, DCIM_100, "dsc00001.jpg", &shot(8, 32));
+
+    let second = adapter.receive(&mut after).unwrap();
+
+    assert_ne!(
+        second.received[0].path.parent(),
+        first.received[0].path.parent()
+    );
+    let stacks = stacked_names(&adapter, &second.objects_root);
+    assert_eq!(stacks.len(), 2);
+    assert!(stacks.iter().all(|stack| stack.len() == 1));
+}
+
+#[test]
+fn a_stack_interrupted_midway_finishes_in_the_folder_it_started_in() {
+    let tmp = TempDir::new().unwrap();
+    let adapter = CameraAdapter::new(tmp.path());
+    let mut before = FakeCamera::new(tmp.path())
+        .file(0x20, DCIM_100, "DSC00001.ARW", &shot(1, 64))
+        .record(0x20, captured(1), true);
+    adapter.receive(&mut before).unwrap();
+    let mut after = FakeCamera::new(tmp.path())
+        .file(0x20, DCIM_100, "DSC00001.ARW", &shot(9, 64))
+        .file(0x21, DCIM_100, "DSC00001.JPG", &shot(8, 32))
+        .record(0x20, captured(2), true)
+        .record(0x21, captured(2), true);
+    after.faults.insert(0x21, Fault::Refuse);
+    let partway = adapter.receive(&mut after).unwrap();
+    assert_eq!(partway.failures.len(), 1);
+    after.faults.clear();
+
+    let rest = adapter.receive(&mut after).unwrap();
+
+    let [raw, jpeg] = &rest.received[..] else {
+        panic!("two objects received");
+    };
+    assert!(raw.already_staged);
+    assert!(!jpeg.already_staged);
+    assert_eq!(raw.path, partway.received[0].path);
+    assert_eq!(raw.path.parent(), jpeg.path.parent());
+}
+
+#[test]
+fn a_rerun_listing_part_of_a_staged_stack_finds_its_members_already_staged() {
+    // The JPEG was deleted in-camera after the pair was staged; its staged copy is the
+    // group's own, so the RAW is still recognised in place rather than staged again.
+    let tmp = TempDir::new().unwrap();
+    let adapter = CameraAdapter::new(tmp.path());
+    let mut camera = FakeCamera::new(tmp.path())
+        .file(0x20, DCIM_100, "DSC00001.ARW", &shot(1, 64))
+        .file(0x21, DCIM_100, "DSC00001.JPG", &shot(2, 32));
+    let first = adapter.receive(&mut camera).unwrap();
+    camera.objects.remove(&0x21);
+    camera.reads.clear();
+
+    let rerun = adapter.receive(&mut camera).unwrap();
+
+    let [raw] = &rerun.received[..] else {
+        panic!("one object received");
+    };
+    assert!(raw.already_staged);
+    assert_eq!(raw.path, first.received[0].path);
+    assert!(camera.reads.is_empty(), "nothing is transferred again");
+    assert_eq!(stacked_names(&adapter, &rerun.objects_root).len(), 1);
+}
+
+#[test]
+fn an_unreadable_staging_folder_halts_the_run_before_any_transfer() {
+    let tmp = TempDir::new().unwrap();
+    let adapter = CameraAdapter::new(tmp.path());
+    let folder = adapter
+        .objects_root()
+        .join(format!("{STORAGE:08x}"))
+        .join(format!("{DCIM_100:08x}"));
+    fs::create_dir_all(folder.parent().unwrap()).unwrap();
+    // A file where the folder directory belongs cannot be listed.
+    fs::write(&folder, b"not a directory").unwrap();
+    let mut camera = FakeCamera::new(tmp.path()).file(0x20, DCIM_100, "DSC00001.ARW", &shot(1, 64));
+
+    let error = adapter.receive(&mut camera).unwrap_err();
+
+    assert!(matches!(error, CameraError::Staging { ref path, .. } if *path == folder));
+    assert!(error.is_fatal());
+    assert!(camera.reads.is_empty(), "no object is transferred");
+}
+
+#[test]
+fn two_objects_of_one_run_under_one_name_are_both_kept() {
+    let tmp = TempDir::new().unwrap();
+    let adapter = CameraAdapter::new(tmp.path());
+    let mut camera = FakeCamera::new(tmp.path())
+        .file(0x20, DCIM_100, "DSC00001.JPG", &shot(1, 64))
+        .file(0x21, DCIM_100, "DSC00001.JPG", &shot(2, 80));
+
+    let receipt = adapter.receive(&mut camera).unwrap();
+
+    assert!(receipt.failures.is_empty());
+    assert_ne!(receipt.received[0].path, receipt.received[1].path);
+    assert_eq!(fs::read(&receipt.received[0].path).unwrap(), shot(1, 64));
+    assert_eq!(fs::read(&receipt.received[1].path).unwrap(), shot(2, 80));
+}
+
 #[test]
 fn an_object_of_unknown_size_is_matched_on_its_identity_not_its_path() {
     let tmp = TempDir::new().unwrap();
