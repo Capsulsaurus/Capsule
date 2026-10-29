@@ -35,6 +35,8 @@
 pub(crate) mod ptp_device;
 pub(crate) mod staging;
 
+use std::collections::HashMap;
+use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
@@ -256,9 +258,24 @@ impl CameraAdapter {
             "camera import: enumerated"
         );
 
+        let generations = match group_generations(root, &objects) {
+            Ok(generations) => generations,
+            Err(error) => {
+                tracing::error!(
+                    %error,
+                    "camera import: receive halted before any transfer; the staging tree is unreadable"
+                );
+                return Err(error);
+            }
+        };
+
         let mut received = Vec::new();
         for object in objects {
-            match receive_one(root, device, &object) {
+            let start = generations
+                .get(&StemGroup::of(&object))
+                .copied()
+                .unwrap_or(0);
+            match receive_one(root, device, &object, start) {
                 Ok(done) => received.push(done),
                 Err(error) if !error.is_fatal() => {
                     tracing::warn!(
@@ -440,13 +457,15 @@ fn staging_error(path: &Path) -> impl FnOnce(io::Error) -> CameraError + '_ {
     }
 }
 
-/// Receive one object into its staged path.
+/// Receive one object into its staged path, in folder generation `start` (its stem group's) or,
+/// where that is taken, the next free one.
 fn receive_one(
     root: &Path,
     device: &mut dyn CameraDevice,
     object: &CameraObject,
+    start: u32,
 ) -> Result<ReceivedObject, CameraError> {
-    let generation = match find_slot(root, object)? {
+    let generation = match find_slot(root, object, start)? {
         Slot::Staged(done) => return Ok(done),
         Slot::Free { generation } => generation,
     };
@@ -601,16 +620,162 @@ enum Slot {
     Free { generation: u32 },
 }
 
-/// Find `object`'s place in the staging tree.
+/// The scanner's stacking key for a staged object: its storage, its camera folder, and the
+/// lowercase stem of its staged file name, as `group_by_stem` computes it. Members of one group
+/// stack only when they share a directory, so each group is staged in one folder generation.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct StemGroup {
+    storage: u32,
+    parent: u32,
+    stem: String,
+}
+
+impl StemGroup {
+    fn of(object: &CameraObject) -> Self {
+        Self {
+            storage: object.storage,
+            parent: object.parent,
+            stem: stem_of(&staged_name(object)),
+        }
+    }
+}
+
+/// The file name `object` is staged under, in whichever generation.
+fn staged_name(object: &CameraObject) -> OsString {
+    staging::object_path(Path::new(""), object, 0)
+        .file_name()
+        .map(OsString::from)
+        .unwrap_or_default()
+}
+
+/// The lowercase stem of a file name, as the scanner's stem grouping compares it.
+fn stem_of(name: &std::ffi::OsStr) -> String {
+    Path::new(name)
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_lowercase()
+}
+
+/// The staged file names in one folder directory, by lowercase stem.
+type FolderListing = HashMap<String, Vec<OsString>>;
+
+/// List `dir` by stem; a directory not yet created is empty.
+fn list_folder(dir: &Path) -> Result<FolderListing, CameraError> {
+    let mut listing = FolderListing::new();
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(listing),
+        Err(error) => return Err(staging_error(dir)(error)),
+    };
+    for entry in entries {
+        let name = entry.map_err(staging_error(dir))?.file_name();
+        listing.entry(stem_of(&name)).or_default().push(name);
+    }
+    Ok(listing)
+}
+
+/// The folder generation each stem group among `objects` is staged in.
+///
+/// A group goes to the first generation whose directory holds no file of its stem other than
+/// its own members' verified copies, so a stack's members always land side by side and never
+/// beside an unrelated earlier object of the same stem (a reformatted card that restarted its
+/// counter, shot RAW-only before and RAW+JPEG now). Each folder directory is listed once.
+fn group_generations(
+    root: &Path,
+    objects: &[CameraObject],
+) -> Result<HashMap<StemGroup, u32>, CameraError> {
+    let mut groups: HashMap<StemGroup, Vec<&CameraObject>> = HashMap::new();
+    for object in objects {
+        groups
+            .entry(StemGroup::of(object))
+            .or_default()
+            .push(object);
+    }
+    let mut listings: HashMap<PathBuf, FolderListing> = HashMap::new();
+    let mut generations = HashMap::with_capacity(groups.len());
+    for (group, members) in groups {
+        let generation = group_generation(root, &group, &members, &mut listings)?;
+        if generation > 0 {
+            tracing::debug!(
+                storage = format_args!("{:08x}", group.storage),
+                parent = format_args!("{:08x}", group.parent),
+                stem = %group.stem,
+                members = members.len(),
+                generation,
+                "camera import: stem group staged in a later folder generation"
+            );
+        }
+        generations.insert(group, generation);
+    }
+    tracing::debug!(
+        groups = generations.len(),
+        moved = generations.values().filter(|g| **g > 0).count(),
+        folders_listed = listings.len(),
+        "camera import: folder generations chosen"
+    );
+    Ok(generations)
+}
+
+/// The first folder generation where every staged file of `group`'s stem is one of `members`
+/// holding its own identity record.
+fn group_generation(
+    root: &Path,
+    group: &StemGroup,
+    members: &[&CameraObject],
+    listings: &mut HashMap<PathBuf, FolderListing>,
+) -> Result<u32, CameraError> {
+    let first = members[0];
+    for generation in 0..MAX_GENERATIONS {
+        let path = staging::object_path(root, first, generation);
+        let dir = path.parent().unwrap_or(root).to_path_buf();
+        if !listings.contains_key(&dir) {
+            let listing = list_folder(&dir)?;
+            listings.insert(dir.clone(), listing);
+        }
+        let staged = listings[&dir]
+            .get(&group.stem)
+            .map_or(&[][..], Vec::as_slice);
+        let ours = staged.iter().all(|name| {
+            members.iter().any(|member| {
+                staged_name(member) == *name && holds_identity(root, member, generation)
+            })
+        });
+        if ours {
+            return Ok(generation);
+        }
+        tracing::debug!(
+            dir = %dir.display(),
+            stem = %group.stem,
+            "camera import: folder holds another object of this stem; trying the next generation"
+        );
+    }
+    Err(CameraError::Staging {
+        path: staging::object_path(root, first, 0),
+        source: io::Error::other(format!(
+            "{MAX_GENERATIONS} staged folders already hold this file stem"
+        )),
+    })
+}
+
+/// Whether the identity recorded for `object`'s path in `generation` is `object`'s own.
+fn holds_identity(root: &Path, object: &CameraObject, generation: u32) -> bool {
+    fs::read_to_string(staging::identity_path(root, object, generation))
+        .is_ok_and(|recorded| recorded.trim() == staging::identity_key(object))
+}
+
+/// Find `object`'s place in the staging tree, from folder generation `start` (its stem group's)
+/// onwards.
 ///
 /// A staged file is this object only when the identity recorded beside it is this object's
 /// identity key; a file without one, or with another object's, is left alone and the next folder
-/// generation is tried. A staged copy of this object whose size differs from the camera's declared
+/// generation is tried. That happens past `start` only where two objects of one run share a
+/// staged name. A staged copy of this object whose size differs from the camera's declared
 /// size is damaged and is received again in place. An accepted copy's bytes were verified before
 /// the rename that put them there.
-fn find_slot(root: &Path, object: &CameraObject) -> Result<Slot, CameraError> {
+fn find_slot(root: &Path, object: &CameraObject, start: u32) -> Result<Slot, CameraError> {
     let key = staging::identity_key(object);
-    for generation in 0..MAX_GENERATIONS {
+    for generation in start..MAX_GENERATIONS {
         let path = staging::object_path(root, object, generation);
         let Ok(metadata) = fs::metadata(&path) else {
             return Ok(Slot::Free { generation });
