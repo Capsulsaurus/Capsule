@@ -406,14 +406,48 @@ impl DatabaseDriver {
         Ok(changed > 0)
     }
 
-    /// Permanently remove an asset's rows — its `assets` row, its indexed tags and its cached
-    /// representations — in one transaction. The on-disk files are the caller's concern
+    /// Permanently remove an asset's rows — its `assets` row, its indexed tags, its cached
+    /// representations and its stack memberships — in one transaction, so no index row names
+    /// it afterwards. A stack whose primary or cover it was passes that role to its first
+    /// remaining member (by sequence, then id), and a stack it leaves empty is removed. An
+    /// album cover naming it is cleared. The on-disk files are the caller's concern
     /// (`Workspace::purge` removes them first).
     pub fn purge_asset(&self, uuid: &str) -> Result<(), rusqlite::Error> {
         let tx = self.conn.unchecked_transaction()?;
         tx.execute("DELETE FROM asset_tags WHERE uuid = ?1", params![uuid])?;
         tx.execute(
             "DELETE FROM cached_representations WHERE uuid = ?1",
+            params![uuid],
+        )?;
+        tx.execute(
+            "DELETE FROM stack_members WHERE asset_id = ?1",
+            params![uuid],
+        )?;
+        // The successor is the first remaining member; a stack with none keeps the purged id
+        // only until the `DELETE` below removes it.
+        let successor = "(SELECT m.asset_id FROM stack_members m WHERE m.stack_id = asset_stacks.id
+                          ORDER BY m.sequence_order, m.asset_id LIMIT 1)";
+        tx.execute(
+            &format!(
+                "UPDATE asset_stacks SET primary_asset_id = COALESCE({successor}, primary_asset_id)
+                 WHERE primary_asset_id = ?1"
+            ),
+            params![uuid],
+        )?;
+        tx.execute(
+            &format!(
+                "UPDATE asset_stacks SET cover_asset_id = {successor} WHERE cover_asset_id = ?1"
+            ),
+            params![uuid],
+        )?;
+        tx.execute(
+            "DELETE FROM asset_stacks
+             WHERE primary_asset_id = ?1
+               AND NOT EXISTS (SELECT 1 FROM stack_members m WHERE m.stack_id = asset_stacks.id)",
+            params![uuid],
+        )?;
+        tx.execute(
+            "UPDATE albums SET cover_asset_id = NULL WHERE cover_asset_id = ?1",
             params![uuid],
         )?;
         tx.execute("DELETE FROM assets WHERE uuid = ?1", params![uuid])?;
