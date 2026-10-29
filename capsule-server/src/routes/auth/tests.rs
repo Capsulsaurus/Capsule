@@ -241,7 +241,7 @@ async fn a_full_registration_partition_is_a_rate_limit_and_not_an_outage() {
         matches!(
             refused,
             Err(RegisterRejection::RateLimited { code, retry_after })
-                if code == error_codes::AUTH_RATE_LIMITED && retry_after > 0
+                if code == error_codes::AUTH_REGISTRATION_AT_CAPACITY && retry_after > 0
         ),
         "{refused:?}"
     );

@@ -1797,6 +1797,7 @@
     <string name="error_auth_profile_invalid">Это отображаемое имя нельзя использовать.</string>
     <string name="error_auth_profile_not_found">Эта учётная запись больше не существует.</string>
     <string name="error_auth_rate_limited">Слишком много попыток. Подождите и повторите попытку.</string>
+    <string name="error_auth_registration_at_capacity">Сейчас этот сервер обрабатывает слишком много регистраций. Повторите попытку чуть позже.</string>
     <string name="error_auth_registration_invalid">Этот адрес электронной почты или пароль нельзя использовать. Пароль должен содержать не менее 12 символов.</string>
     <string name="error_auth_revoke_proof_invalid">Не удалось подтвердить, что это вы. Выход ни с одного устройства не выполнен.</string>
     <string name="error_auth_revoke_proof_required">Подтвердите ключом учётной записи, чтобы выйти на всех устройствах.</string>

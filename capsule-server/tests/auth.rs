@@ -1286,8 +1286,13 @@ async fn register_from(fixture: &Fixture, peer: &str, email: &str) -> kynos::tes
 /// A `429` names its retry instant twice: as `retry_after` in the body and as a `Retry-After`
 /// delay from the server's clock, and both name the same instant.
 fn assert_rate_limited(response: &kynos::test::TestResponse, fixture: &Fixture) {
+    assert_told_to_wait(response, fixture, "error.auth.rate_limited");
+}
+
+/// A `429` carrying `code`, whose `retry_after` member and `Retry-After` header name one instant.
+fn assert_told_to_wait(response: &kynos::test::TestResponse, fixture: &Fixture, code: &str) {
     let body = response.json::<serde_json::Value>();
-    assert_eq!(code_of(&body), "error.auth.rate_limited");
+    assert_eq!(code_of(&body), code);
     let instant = body["retry_after"]
         .as_u64()
         .expect("a wait names its retry instant");
@@ -1370,7 +1375,7 @@ async fn an_ipv6_source_is_limited_per_slash_64() {
 #[tokio::test]
 async fn a_full_registration_limiter_is_a_429_and_not_an_outage() {
     // A saturated partition is the limiter working as designed: the caller is told to wait, not
-    // that the server is broken.
+    // that the server is broken. Its code is its own, not a spent budget's (#1020).
     let fixture = Fixture::with_counter_ceiling(1);
 
     register_from(&fixture, "203.0.113.7", "first@example.test")
@@ -1378,7 +1383,7 @@ async fn a_full_registration_limiter_is_a_429_and_not_an_outage() {
         .assert_status(StatusCode::OK);
     let refused = register_from(&fixture, "203.0.113.8", "second@example.test").await;
     refused.assert_status(StatusCode::TOO_MANY_REQUESTS);
-    assert_rate_limited(&refused, &fixture);
+    assert_told_to_wait(&refused, &fixture, "error.auth.registration_at_capacity");
 
     fixture.client.assert_conformance();
 }

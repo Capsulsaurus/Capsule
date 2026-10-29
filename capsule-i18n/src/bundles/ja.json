@@ -1806,6 +1806,7 @@
   "error.auth.profile_invalid": "その表示名は使用できません。",
   "error.auth.profile_not_found": "そのアカウントはもう存在しません。",
   "error.auth.rate_limited": "試行回数が多すぎます。しばらくしてからもう一度お試しください。",
+  "error.auth.registration_at_capacity": "このサーバーは現在、多数の新規登録を処理しています。しばらくしてからもう一度お試しください。",
   "error.auth.registration_invalid": "そのメールアドレスまたはパスワードは使用できません。パスワードは 12 文字以上にしてください。",
   "error.auth.revoke_proof_invalid": "本人確認ができませんでした。ログアウトは行われていません。",
   "error.auth.revoke_proof_required": "すべてのデバイスからログアウトするには、アカウントキーで確認してください。",

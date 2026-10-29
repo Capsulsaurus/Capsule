@@ -1806,6 +1806,7 @@
   "error.auth.profile_invalid": "無法使用該顯示名稱。",
   "error.auth.profile_not_found": "該帳號已不存在。",
   "error.auth.rate_limited": "嘗試次數過多。請稍候再試。",
+  "error.auth.registration_at_capacity": "此伺服器目前處理的註冊請求過多，請稍後再試。",
   "error.auth.registration_invalid": "無法使用該電子郵件或密碼。密碼至少須有 12 個字元。",
   "error.auth.revoke_proof_invalid": "無法確認是您本人，因此未登出任何裝置。",
   "error.auth.revoke_proof_required": "請使用您的帳號金鑰確認，以登出所有裝置。",

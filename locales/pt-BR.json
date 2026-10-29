@@ -7227,6 +7227,10 @@
     "message": "Muitas tentativas. Aguarde e tente novamente.",
     "origin": "machine"
   },
+  "error.auth.registration_at_capacity": {
+    "message": "Este servidor está lidando com muitos cadastros no momento. Tente novamente em breve.",
+    "origin": "machine"
+  },
   "error.auth.registration_invalid": {
     "message": "Esse e-mail ou senha não pode ser usado. As senhas precisam ter pelo menos 12 caracteres.",
     "origin": "machine"

@@ -1806,6 +1806,7 @@
   "error.auth.profile_invalid": "Ce nom d'affichage ne peut pas être utilisé.",
   "error.auth.profile_not_found": "Ce compte n'existe plus.",
   "error.auth.rate_limited": "Trop de tentatives. Veuillez patienter et réessayer.",
+  "error.auth.registration_at_capacity": "Ce serveur gère trop d'inscriptions en ce moment. Veuillez réessayer sous peu.",
   "error.auth.registration_invalid": "Cette adresse e-mail ou ce mot de passe ne peut pas être utilisé. Les mots de passe doivent comporter au moins 12 caractères.",
   "error.auth.revoke_proof_invalid": "Votre identité n'a pas pu être confirmée. Aucune session n'a été déconnectée.",
   "error.auth.revoke_proof_required": "Confirmez avec la clé de votre compte pour vous déconnecter de tous les appareils.",

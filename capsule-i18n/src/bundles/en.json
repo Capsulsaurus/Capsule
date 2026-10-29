@@ -1931,6 +1931,7 @@
   "error.auth.profile_invalid": "That display name cannot be used.",
   "error.auth.profile_not_found": "That account no longer exists.",
   "error.auth.rate_limited": "Too many attempts. Please wait and try again.",
+  "error.auth.registration_at_capacity": "This server is handling too many sign-ups right now. Please try again shortly.",
   "error.auth.registration_invalid": "That email or password can't be used. Passwords need at least 12 characters.",
   "error.auth.revoke_proof_invalid": "That didn't confirm as you. Nothing was logged out.",
   "error.auth.revoke_proof_required": "Confirm with your account key to log out of all devices.",
