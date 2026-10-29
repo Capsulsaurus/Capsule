@@ -11,7 +11,8 @@
 //! The `--json` subcommands today are `import`, `push`, `restore`, `verify`, `cache budget`,
 //! `cache sweep`, `sync`, `sync reannounce`, `share create`, `share revoke`, `auth login`,
 //! `auth logout`, `auth status`, `label add`, `label remove`, `region add`, `region delete`,
-//! `edit capture-time` and `edit location`; each has its offline cases here, and every `--json`
+//! `edit capture-time`, `edit location`, `show` and `library list`; each has its offline cases
+//! here, and every `--json`
 //! subcommand that lands joins this file the same way.
 //! What needs a live server (a push or restore that reaches its assets) is the end-to-end
 //! suites' to cover.
@@ -89,6 +90,18 @@
 //! - `edit_capture_time_json_reports_the_correction_beside_the_original` — exit 0: the
 //!   instant in UTC and the as-imported one kept.
 //! - `edit_location_json_clear_records_no_location` — `--clear`: exit 0, `location: null`.
+//! - `show_json_reports_the_sidecar_and_its_history` — exit 0, one JSON document: every sidecar
+//!   field (`null` where unset) and the provenance history record by record.
+//! - `show_json_of_an_unknown_asset_prints_nothing_on_stdout` — the selector's refusal:
+//!   non-zero exit, empty stdout, the reason on stderr.
+//! - `library_list_json_lists_the_timeline` — exit 0, one JSON document: the timeline's assets,
+//!   newest first, with their labels.
+//! - `library_list_json_lists_the_albums` — `--view albums`: every album with its labels and
+//!   its assets.
+//! - `library_list_json_lists_a_stack_primary_first` — `--view stacks`: the stack's labels and
+//!   its members, the primary first; the timeline lists only the primary.
+//! - `library_list_json_without_a_library_is_a_usage_error` — the parser's exit status 2.
+//! - `library_list_json_of_an_unknown_view_is_a_usage_error` — the parser's exit status 2.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -984,4 +997,219 @@ fn edit_location_json_clear_records_no_location() {
     assert_eq!(report["edit"], "location-clear");
     assert_eq!(report["changed"], true);
     assert_eq!(report.get("location"), Some(&Value::Null), "{report}");
+}
+
+/// `value` with every string under one of `keys` (or in an array under one) replaced by the
+/// key's marker, at any depth: ids, instants, the signing device and the build's client version
+/// are minted per run or per commit, so they are not part of the contract.
+fn redact_keys(value: &mut Value, keys: &[&str]) {
+    match value {
+        Value::Object(map) => {
+            for (key, inner) in map.iter_mut() {
+                if keys.contains(&key.as_str()) {
+                    let marker = Value::String(format!("[{}]", key.to_ascii_uppercase()));
+                    match inner {
+                        Value::String(_) => *inner = marker,
+                        Value::Array(items) => {
+                            for item in items.iter_mut() {
+                                if item.is_string() {
+                                    *item = marker.clone();
+                                } else {
+                                    redact_keys(item, keys);
+                                }
+                            }
+                        }
+                        _ => redact_keys(inner, keys),
+                    }
+                } else {
+                    redact_keys(inner, keys);
+                }
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(|item| redact_keys(item, keys)),
+        _ => {}
+    }
+}
+
+/// The run-time values a `show` or `library list` document carries.
+const MINTED: &[&str] = &[
+    "asset_id",
+    "album_id",
+    "stack_id",
+    "assets",
+    "capture_timestamp",
+    "import_timestamp",
+    "timestamp",
+    "device",
+    "client_version",
+];
+
+/// `run`, with stdout parsed as one JSON document and its [`MINTED`] values redacted.
+fn run_document(scratch: &Scratch, args: &[&str]) -> String {
+    let out = run(scratch, args);
+    let (head, rest) = out
+        .split_once("--- stdout ---\n")
+        .expect("a stdout section");
+    let (stdout, stderr) = rest
+        .split_once("\n--- stderr ---")
+        .expect("a stderr section");
+    let mut document: Value = serde_json::from_str(stdout).expect("one JSON document on stdout");
+    redact_keys(&mut document, MINTED);
+    format!(
+        "{head}--- stdout ---\n{}\n--- stderr ---{stderr}",
+        serde_json::to_string_pretty(&document).expect("render")
+    )
+}
+
+#[test]
+fn show_json_reports_the_sidecar_and_its_history() {
+    let scratch = Scratch::new();
+    library(&scratch, 1);
+    let asset = only_asset(&scratch);
+    let library = scratch.library();
+    let labelled = run(
+        &scratch,
+        &[
+            "label",
+            "add",
+            "beach",
+            "--asset",
+            &asset,
+            "--library",
+            path(&library),
+            "--passphrase-stdin",
+        ],
+    );
+    assert!(labelled.starts_with("status: 0"), "{labelled}");
+    insta::assert_snapshot!(run_document(
+        &scratch,
+        &[
+            "show",
+            &asset,
+            "--library",
+            path(&library),
+            "--passphrase-stdin",
+            "--json",
+        ],
+    ));
+}
+
+#[test]
+fn show_json_of_an_unknown_asset_prints_nothing_on_stdout() {
+    let scratch = Scratch::new();
+    library(&scratch, 0);
+    insta::assert_snapshot!(run(
+        &scratch,
+        &[
+            "show",
+            "0192f1a0-0000-7000-8000-000000000009",
+            "--library",
+            path(&scratch.library()),
+            "--passphrase-stdin",
+            "--json",
+        ],
+    ));
+}
+
+/// `capsule library list` over the scratch library with `extra` arguments and `--json`.
+fn library_list(scratch: &Scratch, extra: &[&str]) -> String {
+    let library = scratch.library();
+    let mut args = vec![
+        "library",
+        "list",
+        "--library",
+        path(&library),
+        "--passphrase-stdin",
+        "--json",
+    ];
+    args.extend_from_slice(extra);
+    run_document(scratch, &args)
+}
+
+#[test]
+fn library_list_json_lists_the_timeline() {
+    let scratch = Scratch::new();
+    library(&scratch, 2);
+    insta::assert_snapshot!(library_list(&scratch, &[]));
+}
+
+#[test]
+fn library_list_json_lists_the_albums() {
+    let scratch = Scratch::new();
+    library(&scratch, 2);
+    insta::assert_snapshot!(library_list(&scratch, &["--view", "albums"]));
+}
+
+#[test]
+fn library_list_json_lists_a_stack_primary_first() {
+    let scratch = Scratch::new();
+    library(&scratch, 2);
+    let stack = uuid::Uuid::now_v7();
+    let (primary, member) = {
+        let mut ws = Workspace::open(&scratch.library(), PASSPHRASE.as_bytes(), FAST_KDF)
+            .expect("open the library");
+        let ids = ws.asset_ids();
+        for (id, role) in [(ids[1], StackRole::Member), (ids[0], StackRole::Primary)] {
+            ws.set_stack_membership(
+                &id,
+                Some(StackMembership {
+                    stack_id: stack,
+                    stack_type: StackType::Burst,
+                    role,
+                    member_index: None,
+                }),
+            )
+            .expect("stack the asset");
+        }
+        ws.add_stack_label(stack, "best").expect("label the stack");
+        (ids[0].to_string(), ids[1].to_string())
+    };
+    let stacks = run_json(&scratch, &["library", "list", "--view", "stacks"]);
+    assert_eq!(stacks["view"], "stacks");
+    assert_eq!(stacks["stacks"][0]["stack_id"], stack.to_string());
+    assert_eq!(stacks["stacks"][0]["labels"], serde_json::json!(["best"]));
+    assert_eq!(
+        stacks["stacks"][0]["members"],
+        serde_json::json!([
+            {"asset_id": primary, "role": "primary"},
+            {"asset_id": member, "role": "member"},
+        ])
+    );
+    let timeline = run_json(&scratch, &["library", "list"]);
+    assert_eq!(timeline["view"], "timeline");
+    let listed: Vec<&Value> = timeline["assets"]
+        .as_array()
+        .expect("an asset list")
+        .iter()
+        .map(|asset| &asset["asset_id"])
+        .collect();
+    assert_eq!(
+        listed,
+        [&Value::String(primary)],
+        "only the primary stands for its stack"
+    );
+    insta::assert_snapshot!(library_list(&scratch, &["--view", "stacks"]));
+}
+
+#[test]
+fn library_list_json_without_a_library_is_a_usage_error() {
+    let scratch = Scratch::new();
+    insta::assert_snapshot!(run(&scratch, &["library", "list", "--json"]));
+}
+
+#[test]
+fn library_list_json_of_an_unknown_view_is_a_usage_error() {
+    let scratch = Scratch::new();
+    insta::assert_snapshot!(run(
+        &scratch,
+        &[
+            "library",
+            "list",
+            "--library",
+            "lib",
+            "--view",
+            "faces",
+            "--json"
+        ],
+    ));
 }

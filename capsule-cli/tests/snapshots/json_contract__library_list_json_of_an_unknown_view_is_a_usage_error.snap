@@ -1,0 +1,14 @@
+---
+source: capsule-cli/tests/json_contract.rs
+expression: "run(&scratch,\n&[\"library\", \"list\", \"--library\", \"lib\", \"--view\", \"faces\", \"--json\"],)"
+---
+status: 2
+--- stdout ---
+
+--- stderr ---
+error: invalid value 'faces' for '--view <VIEW>'
+  [possible values: timeline, albums, stacks]
+
+  tip: a similar value exists: 'stacks'
+
+For more information, try '--help'.
