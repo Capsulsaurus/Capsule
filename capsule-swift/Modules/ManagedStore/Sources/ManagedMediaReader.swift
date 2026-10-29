@@ -92,32 +92,34 @@ public final class ManagedMediaReader: Sendable {
     /// store's or its file is missing.
     public func mediaFile(uuid: String) async -> URL? {
         guard let captureDate = await catalogRow(uuid: uuid) else { return nil }
-        do {
-            return try await library.mediaFile(uuid: uuid, captureDate: captureDate)
-        } catch {
-            CapsuleLog.managedStore.error(
-                "media file lookup failed for \(uuid, privacy: .public): \(String(describing: error), privacy: .public)"
-            )
-            return nil
-        }
+        return await mediaFile(uuid: uuid, captureDate: captureDate)
     }
 
     /// The asset decoded with its longest edge at most `maxPixelEdge`, with the
     /// file's orientation applied, or `nil` when it is not this store's or its
     /// bytes are not a format ImageIO decodes.
     ///
+    /// The catalog is asked before the cache, so a purged asset's decoded
+    /// pixels are never served from memory after its row is gone.
+    ///
     /// An undecodable original is still a stored original: `nil` here is a
     /// placeholder tile, never a reason to doubt the import.
     public func image(uuid: String, maxPixelEdge: Int) async -> CGImage? {
         let edge = max(1, maxPixelEdge)
         let key = "\(uuid)@\(edge)"
+        guard let captureDate = await catalogRow(uuid: uuid) else {
+            cache.removeImage(forKey: key)
+            return nil
+        }
         if let cached = cache.image(forKey: key) { return cached }
 
         let signposter = CapsuleSignpost.imagePipeline
         let interval = signposter.beginInterval("managed-thumbnail")
         defer { signposter.endInterval("managed-thumbnail", interval) }
 
-        guard let url = await mediaFile(uuid: uuid), let data = await read(url) else { return nil }
+        guard let url = await mediaFile(uuid: uuid, captureDate: captureDate),
+              let data = await read(url)
+        else { return nil }
         guard let image = Self.downsample(data, maxPixelEdge: edge) else {
             CapsuleLog.managedStore.debug("no decodable image for \(uuid, privacy: .public)")
             return nil
@@ -143,6 +145,17 @@ public final class ManagedMediaReader: Sendable {
     }
 
     // MARK: Private
+
+    private func mediaFile(uuid: String, captureDate: Date) async -> URL? {
+        do {
+            return try await library.mediaFile(uuid: uuid, captureDate: captureDate)
+        } catch {
+            CapsuleLog.managedStore.error(
+                "media file lookup failed for \(uuid, privacy: .public): \(String(describing: error), privacy: .public)"
+            )
+            return nil
+        }
+    }
 
     /// The partition date of a catalogued asset, or `nil` when there is no row.
     private func catalogRow(uuid: String) async -> Date? {
@@ -226,6 +239,10 @@ private final class DecodedImageCache: @unchecked Sendable {
 
     func insert(_ image: CGImage, forKey key: String) {
         storage.setObject(Entry(image), forKey: key as NSString, cost: image.bytesPerRow * image.height)
+    }
+
+    func removeImage(forKey key: String) {
+        storage.removeObject(forKey: key as NSString)
     }
 
     func removeAll() {

@@ -84,6 +84,24 @@ struct ManagedMediaReaderTests {
         #expect(await reader.image(uuid: "a", maxPixelEdge: 32) == nil)
     }
 
+    @Test("a purged asset's cached pixels are not served once its row is gone")
+    func purgedAssetMissesCache() async throws {
+        let catalog = MockCatalog()
+        let fileStore = MockFileStore()
+        let row = Fixtures.catalogAsset(id: "a")
+        try await catalog.insertAsset(row)
+        let captureDate = Date(timeIntervalSince1970: TimeInterval(row.captureTimestamp))
+        let media = layout.mediaFile(uuid: "a", fileExtension: "jpg", captureDate: captureDate)
+        await fileStore.seedFile(try ImageFixture.jpeg(width: 64, height: 64), at: media)
+        let library = ManagedLibrary(layout: layout, fileStore: fileStore, catalog: catalog)
+        let reader = ManagedMediaReader(library: library, fileStore: fileStore)
+        _ = try #require(await reader.image(uuid: "a", maxPixelEdge: 32))
+
+        await catalog.purgeAsset(id: "a")
+
+        #expect(await reader.image(uuid: "a", maxPixelEdge: 32) == nil)
+    }
+
     @Test("camera and signed GPS facts are read from the container")
     func readsFacts() async throws {
         let bytes = try ImageFixture.jpeg(
