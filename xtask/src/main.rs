@@ -22,10 +22,14 @@
 //!   [`architecture`]).
 //! - `test-layout-check` rejects inline test modules under any workspace member's `src/`: unit
 //!   tests live in a sibling `tests.rs` (see [`test_layout`]).
+//! - `bench-apps <import | compare | record>` normalizes the apps' responsiveness parity
+//!   benchmark reports, records per-device baselines and fails on a regression past one (see
+//!   [`bench_apps`]).
 //! - `screenshot-seed` / `screenshot-compose` are the platform-independent halves of the
 //!   README hero screenshot pipeline driven by `mise run screenshot-ios` (see [`screenshot`]).
 
 mod architecture;
+mod bench_apps;
 mod drop_kat;
 mod i18n;
 mod i18n_guard;
@@ -42,7 +46,7 @@ use regex::{Captures, Regex};
 use semver::Version;
 use toml_edit::Item;
 
-const USAGE: &str = "usage: xtask <set-version <X.Y.Z> | i18n [--check] | i18n-guard | translate-readme [--check | --extract] | share-kat [<out-path>] | drop-kat [<out-path>] | architecture-check | test-layout-check | screenshot-seed [--anchor YYYY-MM-DD] | screenshot-compose --input <png> --output <png>>";
+const USAGE: &str = "usage: xtask <set-version <X.Y.Z> | i18n [--check] | i18n-guard | translate-readme [--check | --extract] | share-kat [<out-path>] | drop-kat [<out-path>] | architecture-check | test-layout-check | bench-apps <import | compare | record> | screenshot-seed [--anchor YYYY-MM-DD] | screenshot-compose --input <png> --output <png>>";
 
 /// Default output path (repo-relative) for the share-link KAT fixture the bun test consumes.
 const SHARE_KAT_OUT: &str = "capsule-web/src/generated/share-kat.json";
@@ -93,6 +97,7 @@ fn main() -> Result<()> {
             let out = args.next().unwrap_or_else(|| DROP_KAT_OUT.to_string());
             drop_kat::run(&repo_root(), &out)
         }
+        Some("bench-apps") => bench_apps::run(args),
         Some("screenshot-seed") => screenshot::run_seed(&repo_root(), args),
         Some("screenshot-compose") => screenshot::run_compose(args),
         Some(other) => bail!("unknown command `{other}`; {USAGE}"),
