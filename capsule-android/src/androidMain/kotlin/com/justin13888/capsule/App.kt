@@ -35,15 +35,22 @@ import com.justin13888.capsule.screens.DetailScreen
 import com.justin13888.capsule.screens.ListScreen
 import com.justin13888.capsule.screens.domain.AlbumId
 import com.justin13888.capsule.screens.domain.AssetId
+import com.justin13888.capsule.screens.domain.LabelPort
 import com.justin13888.capsule.screens.domain.StackId
+import com.justin13888.capsule.screens.domain.TransferEventPort
 import com.justin13888.capsule.screens.labels.AssetViewerScreen
 import com.justin13888.capsule.screens.labels.CollectionLabelsScreen
+import com.justin13888.capsule.screens.labels.FfiLabelPort
 import com.justin13888.capsule.screens.labels.LabelEditorViewModel
 import com.justin13888.capsule.screens.labels.LabelSubject
 import com.justin13888.capsule.screens.mock.MockEnvironment
+import com.justin13888.capsule.screens.transfer.FfiTransferEventPort
 import com.justin13888.capsule.screens.transfer.TransferBoardScreen
 import com.justin13888.capsule.screens.transfer.TransferBoardViewModel
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.serialization.Serializable
+import uniffi.capsule_sdk.FfiSessionInterface
+import uniffi.capsule_sdk.FfiWorkspaceInterface
 
 @Serializable
 object ListDestination
@@ -70,11 +77,59 @@ data class CollectionLabelsDestination(
     val albumId: String? = null,
 )
 
-/** The mock lane every new surface runs on until the Rust-backed adapters land. */
-private val environment = MockEnvironment()
+/**
+ * What the transfer view and the label editor run on: their two ports, and the subjects
+ * the home menu opens the editors on. A subject the world has none of hides its entry.
+ */
+class ScreenPorts(
+    val transferEvents: TransferEventPort,
+    val labels: LabelPort,
+    val sampleAsset: AssetId?,
+    val sampleStack: StackId?,
+    val sampleAlbum: AlbumId?,
+) {
+    companion object {
+        /** The mock world: its recorded transfer feed, its label store, and its sample subjects. */
+        fun mock(environment: MockEnvironment = MockEnvironment()): ScreenPorts =
+            ScreenPorts(
+                environment.transferEvents,
+                environment.labels,
+                environment.sampleAsset,
+                environment.sampleStack,
+                environment.sampleAlbum,
+            )
 
+        /**
+         * The Rust-backed world: labels and regions over [workspace], and the transfer
+         * events of [session], or none while nothing is signed in. The album editor opens
+         * on the workspace's default album; [sampleAsset] and [sampleStack] are whatever
+         * the caller's library shows.
+         */
+        fun rustBacked(
+            workspace: FfiWorkspaceInterface,
+            session: FfiSessionInterface?,
+            sampleAsset: AssetId? = null,
+            sampleStack: StackId? = null,
+        ): ScreenPorts =
+            ScreenPorts(
+                transferEvents = session?.let { FfiTransferEventPort(it::transferEvents) } ?: TransferEventPort { emptyFlow() },
+                labels = FfiLabelPort(workspace),
+                sampleAsset = sampleAsset,
+                sampleStack = sampleStack,
+                sampleAlbum = AlbumId(workspace.defaultAlbumId()),
+            )
+    }
+}
+
+/** The mock world, held for the life of the process so a recreated activity keeps its edits. */
+private val mockPorts by lazy { ScreenPorts.mock() }
+
+/**
+ * The app. [ports] is the mock world until the app opens a workspace and a session of
+ * its own, which then pass [ScreenPorts.rustBacked] here.
+ */
 @Composable
-fun App() {
+fun App(ports: ScreenPorts = mockPorts) {
     MaterialTheme(
         colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme(),
     ) {
@@ -84,13 +139,11 @@ fun App() {
                 composable<ListDestination> {
                     HomeShell(
                         openTransfers = { navController.navigate(TransferBoardDestination) },
-                        openSampleAsset = { navController.navigate(AssetViewerDestination(environment.sampleAsset.value)) },
-                        openStackLabels = {
-                            navController.navigate(CollectionLabelsDestination(stackId = environment.sampleStack.value))
-                        },
-                        openAlbumLabels = {
-                            navController.navigate(CollectionLabelsDestination(albumId = environment.sampleAlbum.value))
-                        },
+                        openSampleAsset = ports.sampleAsset?.let { { navController.navigate(AssetViewerDestination(it.value)) } },
+                        openStackLabels =
+                            ports.sampleStack?.let { { navController.navigate(CollectionLabelsDestination(stackId = it.value)) } },
+                        openAlbumLabels =
+                            ports.sampleAlbum?.let { { navController.navigate(CollectionLabelsDestination(albumId = it.value)) } },
                     ) {
                         ListScreen(navigateToDetails = { objectId ->
                             navController.navigate(DetailDestination(objectId))
@@ -107,12 +160,12 @@ fun App() {
                 }
                 composable<TransferBoardDestination> {
                     val boardViewModel =
-                        viewModel { TransferBoardViewModel(environment.transferEvents, SystemClock::elapsedRealtime) }
+                        viewModel { TransferBoardViewModel(ports.transferEvents, SystemClock::elapsedRealtime) }
                     TransferBoardScreen(boardViewModel, navigateBack = { navController.popBackStack() })
                 }
                 composable<AssetViewerDestination> { backStackEntry ->
                     val asset = AssetId(backStackEntry.toRoute<AssetViewerDestination>().assetId)
-                    val editor = viewModel { LabelEditorViewModel(LabelSubject.Asset(asset), environment.labels) }
+                    val editor = viewModel { LabelEditorViewModel(LabelSubject.Asset(asset), ports.labels) }
                     AssetViewerScreen(editor, navigateBack = { navController.popBackStack() })
                 }
                 composable<CollectionLabelsDestination> { backStackEntry ->
@@ -120,7 +173,7 @@ fun App() {
                     val subject =
                         route.albumId?.let { LabelSubject.Album(AlbumId(it)) }
                             ?: LabelSubject.Stack(StackId(route.stackId.orEmpty()))
-                    val editor = viewModel { LabelEditorViewModel(subject, environment.labels) }
+                    val editor = viewModel { LabelEditorViewModel(subject, ports.labels) }
                     CollectionLabelsScreen(editor, navigateBack = { navController.popBackStack() })
                 }
             }
@@ -133,9 +186,9 @@ fun App() {
 @Composable
 private fun HomeShell(
     openTransfers: () -> Unit,
-    openSampleAsset: () -> Unit,
-    openStackLabels: () -> Unit,
-    openAlbumLabels: () -> Unit,
+    openSampleAsset: (() -> Unit)?,
+    openStackLabels: (() -> Unit)?,
+    openAlbumLabels: (() -> Unit)?,
     content: @Composable () -> Unit,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
@@ -156,18 +209,24 @@ private fun HomeShell(
                             text = { Text(stringResource(R.string.app_transfer_board_title)) },
                             onClick = { choose(openTransfers) },
                         )
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.app_viewer_sample_title)) },
-                            onClick = { choose(openSampleAsset) },
-                        )
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.app_labels_title_stack)) },
-                            onClick = { choose(openStackLabels) },
-                        )
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.app_labels_title_album)) },
-                            onClick = { choose(openAlbumLabels) },
-                        )
+                        openSampleAsset?.let { open ->
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.app_viewer_sample_title)) },
+                                onClick = { choose(open) },
+                            )
+                        }
+                        openStackLabels?.let { open ->
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.app_labels_title_stack)) },
+                                onClick = { choose(open) },
+                            )
+                        }
+                        openAlbumLabels?.let { open ->
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.app_labels_title_album)) },
+                                onClick = { choose(open) },
+                            )
+                        }
                     }
                 },
             )
