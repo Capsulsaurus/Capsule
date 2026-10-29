@@ -623,5 +623,16 @@ let project = Project(
             testAction: .targets(["CapsuleAppUITests"]),
             runAction: .runAction(executable: "Capsule")
         ),
+        // The responsiveness parity benchmark (`ParityBenchmarkTests`), on a physical device via
+        // `mise run bench-apps apple <device>`. Release, because a Debug build times unoptimized
+        // code and would regress against nothing a user runs; the same bundle as the UI
+        // automation, which is the one place XCTest is sanctioned.
+        .scheme(
+            name: "CapsuleParityBenchmark",
+            shared: true,
+            buildAction: .buildAction(targets: ["Capsule", "CapsuleAppUITests"]),
+            testAction: .targets(["CapsuleAppUITests"], configuration: .release),
+            runAction: .runAction(configuration: .release, executable: "Capsule")
+        ),
     ]
 )
