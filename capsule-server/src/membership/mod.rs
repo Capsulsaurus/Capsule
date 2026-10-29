@@ -68,7 +68,7 @@
 //! keys, and the epoch a membership was granted at is what a federation capability is bound to:
 //! a removal at the held epoch would let a re-admission at that same epoch carry the grant the
 //! removed member held. The rule needs the held member set, so it is decided in the critical
-//! section with the version comparison, by [`precheck`] in both adapters.
+//! section with the version comparison, by the crate-private `precheck` in both adapters.
 
 use std::fmt;
 
