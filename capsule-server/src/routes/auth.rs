@@ -17,6 +17,7 @@
 //! | --- | --- |
 //! | register `201` | **`200` here.** Kynos's `Created` requires a `Location`, and this server exposes no URL for an account — see [`register_user`] |
 //! | register `400` / `409` / `500` | kept, and now coded (`error.auth.registration_invalid`, `error.auth.user_already_exists`, `error.auth.unavailable`) |
+//! | register `429` | **added** — the source address's registration budget is spent, or its limiter partition is full (`error.auth.rate_limited`, with `Retry-After`) |
 //! | login `200` | kept — [`TokenResponse`] |
 //! | login `202` | **added**. The account has a confirmed second factor, so the credentials were accepted and the sign-in is not finished. Salvo had the TOTP operations and never issued a challenge |
 //! | login `400` "Bad request" | **deleted as unreachable.** `LoginResponses::BadRequest` was never constructed; the 400 a malformed body actually produces comes from the `Json` extractor, and Kynos declares it |
@@ -62,6 +63,8 @@ use crate::auth::{
     AccessToken, AuthContext, Authentication, DirectoryError, IssuedTokens, MIN_PASSWORD_LENGTH,
     Registration, TokenKind, VerifiedToken,
 };
+use crate::client_addr::ClientAddr;
+use crate::counter::{CounterContext, CounterKey, Verdict, budgets, unix_seconds};
 use crate::store::{
     ChallengeToken, RevokeAllChallenge, SessionId, SessionRecord, StoreError, UserId,
 };
@@ -133,14 +136,31 @@ pub enum RegisterRejection {
     /// **This is an account oracle and it is the decided contract** — the message catalog fixes
     /// `error.auth.user_already_exists` for exactly this. The alternative, answering success and
     /// creating nothing, leaves a client that then cannot sign in and no way to tell it why.
-    /// What bounds the oracle is a rate limiter, and there is none; see
-    /// [`crate::auth::registry`] for the fact it is waiting on.
+    /// What bounds the oracle is the per-source limiter [`Self::RateLimited`] answers for; see
+    /// [`crate::auth::registry`].
     #[error("an account already exists for that address")]
     #[problem(status = 409, title = "Account already exists")]
     AlreadyExists {
         /// The stable catalog code.
         #[problem(extension)]
         code: &'static str,
+    },
+
+    /// Too many registrations from this source address, **or** the limiter is holding as many
+    /// distinct sources as it will hold (#1001).
+    ///
+    /// Both causes carry `error.auth.rate_limited` and one retry instant, because the caller's
+    /// remedy is the same — wait out `Retry-After` — and the catalog has no registration
+    /// at-capacity code yet. The detail names no budget, so it is true of either cause.
+    #[error("too many registration attempts; try again later")]
+    #[problem(status = 429, title = "Too many requests")]
+    RateLimited {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+        /// When the caller may retry, as Unix seconds. Lifted onto `Retry-After`.
+        #[problem(extension)]
+        retry_after: u64,
     },
 
     /// A collaborator could not answer.
@@ -166,6 +186,44 @@ impl RegisterRejection {
     fn unavailable() -> Self {
         Self::Unavailable {
             code: error_codes::AUTH_UNAVAILABLE,
+        }
+    }
+
+    /// The source's budget is spent, or its partition is full, until `retry_after`.
+    fn rate_limited(retry_after: jiff::Timestamp) -> Self {
+        Self::RateLimited {
+            code: error_codes::AUTH_RATE_LIMITED,
+            retry_after: unix_seconds(retry_after),
+        }
+    }
+}
+
+/// Charge [`budgets::REGISTRATION_SOURCE`] for one registration attempt from `client`, failing
+/// closed.
+///
+/// A counter store that cannot answer refuses the registration with `500`: a limiter an attacker
+/// turns off by loading the counter store is not a limiter. A full partition is the limiter
+/// working as designed, so it is a `429` with a retry instant rather than an outage.
+async fn charge_registration_source(
+    counters: &CounterContext,
+    client: ClientAddr,
+) -> Result<(), RegisterRejection> {
+    let key = CounterKey::RegistrationSource(client.source_key());
+    let budget = budgets::REGISTRATION_SOURCE;
+    let verdict = counters.hit(&key, budget).await.map_err(|error| {
+        if let Some(retry_after) = counters.capacity_refusal(&error, budget) {
+            tracing::warn!(%error, limiter = key.as_str(), "the registration limiter is at capacity");
+            RegisterRejection::rate_limited(retry_after)
+        } else {
+            tracing::error!(%error, limiter = key.as_str(), "the registration limiter could not be reached");
+            RegisterRejection::unavailable()
+        }
+    })?;
+    match verdict {
+        Verdict::Admitted { .. } => Ok(()),
+        Verdict::Limited { retry_after } => {
+            tracing::info!(limiter = key.as_str(), "a registration was rate-limited");
+            Err(RegisterRejection::rate_limited(retry_after))
         }
     }
 }
@@ -456,9 +514,14 @@ impl LogoutRejection {
 /// directory" has an honest answer for a brand-new account, and the honest answer is *no*. A
 /// client's first action after registering is `POST /v1/auth/devices/directory`.
 ///
-/// **It is not rate-limited**, and that is a real gap rather than an oversight — see
-/// [`crate::auth::registry`] for the fact the limiter is waiting on. This is the one
-/// unauthenticated write on the surface.
+/// # Rate-limited per source
+///
+/// This is the one unauthenticated write on the surface, and its `409` is an account oracle, so
+/// every attempt is charged against [`budgets::REGISTRATION_SOURCE`] for the trusted client
+/// address **before** the body is validated or the registry is asked anything: probing costs the
+/// prober whatever the answer. A spent budget, or a full limiter partition, is
+/// `429 error.auth.rate_limited` with `Retry-After`; a counter store that cannot answer is `500`,
+/// never an admission.
 ///
 /// # `200`, where Salvo answered `201`
 ///
@@ -471,8 +534,15 @@ impl LogoutRejection {
 #[kynos::post("/v1/auth/register", operation_id = "register_user", tag = AuthTag)]
 pub async fn register_user(
     Inject(auth): Inject<AuthContext>,
+    Inject(counters): Inject<CounterContext>,
+    client: ClientAddr,
     Json(request): Json<RegisterRequest>,
 ) -> Result<Json<TokenResponse>, RegisterRejection> {
+    // Charged first, so a malformed attempt and a probe of a taken address both spend the
+    // source's budget. The source is the address the router resolved through the trusted
+    // proxies (#704), never a forwarding header taken on its word.
+    charge_registration_source(&counters, client).await?;
+
     // Structural, before anything is written. An address the server cannot use and a password
     // under the floor are both the caller's to fix, and neither should reach a store.
     let email = request.email.trim();

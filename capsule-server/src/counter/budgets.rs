@@ -86,6 +86,20 @@ pub const DROP_LINK: Budget = Budget::new(30, SignedDuration::from_hours(1));
 /// the proxy's budget.
 pub const DROP_SOURCE: Budget = Budget::new(60, SignedDuration::from_hours(1));
 
+/// Registration attempts from one source address (#1001).
+///
+/// Ten an hour against each
+/// [`CounterKey::RegistrationSource`](crate::counter::CounterKey::RegistrationSource) bucket.
+/// Registration is the one unauthenticated write on the surface, and its `409` is an account
+/// oracle by decision, so this is the budget that bounds the oracle: a sweep of addresses from
+/// one source learns ten answers an hour. A household behind one address creates a handful of
+/// accounts once, so ten is far above its honest rate. Every attempt is charged, a refused one
+/// included, so probing costs the prober whatever the answer. Keyed on
+/// [`ClientAddr::source_key`](crate::client_addr::ClientAddr::source_key), so behind a proxy the
+/// deployment must name it in `TRUSTED_PROXIES` or `TRUSTED_PROXY_HOPS`, or every registrant
+/// shares the proxy's budget.
+pub const REGISTRATION_SOURCE: Budget = Budget::new(10, SignedDuration::from_hours(1));
+
 /// Code attempts against one second-factor challenge.
 ///
 /// Five in five minutes, which is the challenge's whole lifetime — so the budget is really

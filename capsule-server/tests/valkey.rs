@@ -569,6 +569,50 @@ async fn a_full_counter_partition_refuses_a_new_key_against_valkey() {
     counters::a_full_partition_refuses_only_a_new_key_in_that_partition(&store).await;
 }
 
+/// The registration budget, on the key the register route charges, against a real server (#1001).
+///
+/// The limit admits, the next hit waits out one window, and a second source keeps its own budget.
+#[tokio::test]
+async fn the_registration_source_budget_holds_against_valkey() {
+    let Some(server) = server().await else {
+        return;
+    };
+    let harness = ValkeyHarness::connect(&server.url).await;
+    let store = ValkeyCounters::new(harness.stores.valkey().clone());
+    let budget = capsule_server::counter::budgets::REGISTRATION_SOURCE;
+    let source = CounterKey::RegistrationSource("valkey-registration-203.0.113.7".to_owned());
+    let other = CounterKey::RegistrationSource("valkey-registration-203.0.113.8".to_owned());
+    for key in [&source, &other] {
+        store.reset(key).await.expect("resets");
+    }
+    let at = Timestamp::UNIX_EPOCH;
+    for _ in 0..budget.limit {
+        assert!(
+            store
+                .hit(&source, budget, at)
+                .await
+                .expect("answers")
+                .admits()
+        );
+    }
+    assert_eq!(
+        store.hit(&source, budget, at).await.expect("answers"),
+        capsule_server::counter::Verdict::Limited {
+            retry_after: at.checked_add(budget.window).expect("in range"),
+        }
+    );
+    assert!(
+        store
+            .hit(&other, budget, at)
+            .await
+            .expect("answers")
+            .admits()
+    );
+    for key in [&source, &other] {
+        store.reset(key).await.expect("cleans up");
+    }
+}
+
 /// First hits racing into one partition admit exactly its ceiling of new keys.
 ///
 /// The check and the open are one script, so a burst of first hits cannot all read the same
