@@ -145,7 +145,11 @@ impl SyncConsumer {
                     session.refresh().await?;
                     self.call_reannounce(&body).await.map_err(map_error)?
                 }
-                super::SyncAuth::Static => return Err(map_error(error)),
+                // A capability is refused here anyway (re-announce takes a session); its `401` is
+                // as final as a static token's.
+                super::SyncAuth::Static | super::SyncAuth::Signed { .. } => {
+                    return Err(map_error(error));
+                }
             },
             Err(error) => return Err(map_error(error)),
         };
