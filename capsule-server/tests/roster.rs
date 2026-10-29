@@ -356,6 +356,62 @@ async fn a_member_omitted_from_a_later_roster_is_revoked_at_its_version_and_epoc
 }
 
 #[tokio::test]
+async fn a_removal_that_does_not_advance_the_epoch_is_refused_and_revokes_nobody() {
+    let dsk = identity_key();
+    let (fixture, bearer) = ready(&dsk).await;
+    publish(
+        &fixture,
+        &bearer,
+        &album(),
+        &signed_roster(&dsk, device(), &album(), 1, 3, &[(BOB, MemberRole::Writer)]),
+    )
+    .await
+    .assert_status(StatusCode::OK);
+
+    // A removal at the held epoch: a membership change the group's keys never made.
+    let problem: Value = publish(
+        &fixture,
+        &bearer,
+        &album(),
+        &signed_roster(&dsk, device(), &album(), 2, 3, &[]),
+    )
+    .await
+    .assert_status(StatusCode::BAD_REQUEST)
+    .json();
+    assert_eq!(problem["code"], "error.album.roster_malformed");
+    assert!(
+        problem["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("amk_epoch past 3")),
+        "{problem}"
+    );
+    assert_eq!(
+        membership_of(&fixture, BOB).await,
+        Membership::Member {
+            role: MemberRole::Writer,
+            granted_epoch: 3,
+        }
+    );
+
+    // The same removal riding the rotation applies.
+    publish(
+        &fixture,
+        &bearer,
+        &album(),
+        &signed_roster(&dsk, device(), &album(), 2, 4, &[]),
+    )
+    .await
+    .assert_status(StatusCode::OK);
+    assert_eq!(
+        membership_of(&fixture, BOB).await,
+        Membership::Revoked(Revocation {
+            at_version: 2,
+            at_epoch: 4,
+        })
+    );
+}
+
+#[tokio::test]
 async fn a_roster_not_attested_by_a_live_owner_device_is_refused() {
     let dsk = identity_key();
     let fixture = Fixture::working();

@@ -97,7 +97,7 @@ Signed with the home server's operational key, classical Ed25519 ([carve-out](/d
 4. **Revocation** (`DELETE /v1/albums/{album_id}/capabilities/{jti}`) revokes the named token **and every successor refreshed from it** ([ADR 0007](https://github.com/Capsulsaurus/Capsule/blob/master/adr/0007-revoking-a-capability-revokes-every-successor-refreshed-from-it.md)); an operator revoking an issued `jti` through the list follows the same chain. Revoked `jti`s are published at `/.well-known/capsule/revoked-jti` in the same transaction; expired entries are pruned, bounding the list to 24 h. Peers cache the list for at most **15 minutes**. **Unavailability fails closed:** past 15 minutes without a fresh list, a verifier rejects any token it cannot confirm. Roster removal cuts the member's grants; blocking a peer cuts all its grants; an epoch bump that keeps the member, or a takedown, cuts none.
 5. **Expiry.** A token past `exp` is rejected (`401`).
 
-A grant is bound to the epoch its member was admitted at, so a member removed and re-admitted cannot reuse an old token.
+A grant is bound to the epoch its member was admitted at, so a member removed and re-admitted cannot reuse an old token. That binding holds because a removal always advances the epoch: `PUT /v1/albums/{album_id}/roster` refuses a roster that omits a current member at the held `amk_epoch` with `400 error.album.roster_malformed`, decided under the same lock as the version check, and changes nothing.
 
 ### What a scope hides, and what it does not
 
