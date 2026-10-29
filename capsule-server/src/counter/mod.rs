@@ -307,6 +307,20 @@ pub enum CounterKey {
     /// call per delivery, and never as a loop of hits: kibibytes rather than bytes so a `u32`
     /// budget reaches terabytes an hour.
     PeerBytes(String),
+    /// Validation failures of input pulled from one source peer by the egress pull worker (#964).
+    ///
+    /// The **error budget** design/federation.md's circuit breaker spends: one unit per pull
+    /// whose input failed validation, keyed on the source peer's origin. A transport failure
+    /// never charges it — an unreachable peer is backed off, not distrusted. A spent budget
+    /// opens the peer's circuit ([`crate::federation::pull`]).
+    PeerPullErrors(String),
+    /// Validation time the egress pull worker spent on one source peer's input, in
+    /// milliseconds (#964).
+    ///
+    /// The receiving half's CPU-per-hour budget: the one per-peer CPU this server spends that a
+    /// counter can measure. Charged with [`CounterStore::charge`], one weighted call per pull,
+    /// for the reason [`Self::PeerBytes`] is.
+    PeerPullCpu(String),
     /// Capability mints by one account (#529).
     ///
     /// Keyed on the authenticated owner: every mint writes a capability row, and nothing else
@@ -372,6 +386,8 @@ impl CounterKey {
             Self::FederatedReportNonce(_) => "federated_report_nonce",
             Self::FederatedRequestNonce(_) => "federated_request_nonce",
             Self::PeerBytes(_) => "peer_bytes",
+            Self::PeerPullErrors(_) => "peer_pull_errors",
+            Self::PeerPullCpu(_) => "peer_pull_cpu",
             Self::CapabilityMints(_) => "capability_mints",
         }
     }
@@ -408,6 +424,8 @@ impl CounterKey {
             Self::FederatedReportNonce(_) => Slot::FederatedReportNonce,
             Self::FederatedRequestNonce(_) => Slot::FederatedRequestNonce,
             Self::PeerBytes(_) => Slot::PeerBytes,
+            Self::PeerPullErrors(_) => Slot::PeerPullErrors,
+            Self::PeerPullCpu(_) => Slot::PeerPullCpu,
             Self::CapabilityMints(_) => Slot::CapabilityMints,
         }
     }
@@ -439,9 +457,11 @@ impl CounterKey {
             Self::OidcAuthorize(_) => ceilings::OIDC_AUTHORIZE,
             Self::OidcAuthorizeRefused => ceilings::OIDC_AUTHORIZE_REFUSED,
             Self::OidcDevice => ceilings::OIDC_DEVICE,
-            Self::PeerRequests(_) | Self::PeerReports(_) | Self::PeerBytes(_) => {
-                ceilings::PEER_ORIGIN
-            }
+            Self::PeerRequests(_)
+            | Self::PeerReports(_)
+            | Self::PeerBytes(_)
+            | Self::PeerPullErrors(_)
+            | Self::PeerPullCpu(_) => ceilings::PEER_ORIGIN,
             Self::FederatedReports(_) => ceilings::FEDERATED_REPORTS,
             Self::FederatedIntake(_) => ceilings::FEDERATED_INTAKE,
             Self::FederatedReportNonce(_) => ceilings::FEDERATED_REPORT_NONCE,
@@ -470,6 +490,8 @@ impl CounterKey {
             | Self::OidcAuthorize(scope)
             | Self::PeerRequests(scope)
             | Self::PeerBytes(scope)
+            | Self::PeerPullErrors(scope)
+            | Self::PeerPullCpu(scope)
             | Self::FederatedReports(scope)
             | Self::PeerReports(scope)
             | Self::FederatedIntake(scope)
@@ -735,7 +757,9 @@ pub mod ceilings {
 
     /// [`CounterKey::PeerRequests`](super::CounterKey::PeerRequests),
     /// [`CounterKey::PeerBytes`](super::CounterKey::PeerBytes) and
-    /// [`CounterKey::PeerReports`](super::CounterKey::PeerReports) — all keyed on a peer's
+    /// [`CounterKey::PeerReports`](super::CounterKey::PeerReports), and the pull worker's
+    /// [`CounterKey::PeerPullErrors`](super::CounterKey::PeerPullErrors) and
+    /// [`CounterKey::PeerPullCpu`](super::CounterKey::PeerPullCpu) — all keyed on a peer's
     /// origin, so all are bounded by the same thing and share one number.
     ///
     /// Not caller-controlled: a peer origin reaches either key only off a capability this
@@ -862,6 +886,8 @@ partition_slots!(
     FederatedReportNonce,
     FederatedRequestNonce,
     PeerBytes,
+    PeerPullErrors,
+    PeerPullCpu,
     CapabilityMints,
 );
 

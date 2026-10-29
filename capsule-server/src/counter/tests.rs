@@ -573,6 +573,8 @@ fn one_key_per_variant() -> Vec<CounterKey> {
         CounterKey::FederatedReportNonce(String::new()),
         CounterKey::FederatedRequestNonce(String::new()),
         CounterKey::PeerBytes(String::new()),
+        CounterKey::PeerPullErrors(String::new()),
+        CounterKey::PeerPullCpu(String::new()),
         CounterKey::CapabilityMints(UserId::new("u")),
     ]
 }
