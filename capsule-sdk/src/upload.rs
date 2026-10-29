@@ -13,7 +13,8 @@
 //! - the code-driven recovery matrix ([`UploadClient::upload`]): `offset_mismatch`
 //!   → HEAD re-align; `session_not_found` → re-create; `duplicate_blob` → merge
 //!   (success carrying the existing asset ref); `426` → abort-with-upgrade;
-//!   `checksum_mismatch` → re-send the chunk; `rate_limited`, `unavailable` and
+//!   `checksum_mismatch` → re-send the chunk; `chunk_timeout` → re-send at the
+//!   same offset, smaller; `rate_limited`, `unavailable` and
 //!   `storage_full` → wait out `Retry-After`, then resume from HEAD. The client
 //!   switches on the stable `error.*` code (from `capsule_i18n::error_codes`),
 //!   never on the bare status.
@@ -80,12 +81,27 @@ const MAX_RECOVERIES: u32 = 64;
 /// each one a HEAD that re-learns the offset and charges the recovery budget.
 const MAX_SERVER_BACKOFF: Duration = Duration::from_mins(5);
 
+/// Successful chunks at a size below the tier floor before the strategy tries
+/// twice that size again (see [`AdaptiveChunkSizeStrategy::shrink_after_timeout`]).
+const GROW_BACK_AFTER_SUCCESSES: u32 = 4;
+/// Windowed throughput above which the link is fast, in bytes per second: the
+/// strategy doubles, and forgets any chunk size that timed out earlier.
+const FAST_THROUGHPUT: f64 = 5.0 * 1024.0 * 1024.0;
+/// Windowed throughput below which the link is slow, in bytes per second.
+const SLOW_THROUGHPUT: f64 = 1.0 * 1024.0 * 1024.0;
+
 /// Chunk size strategy for adaptive upload.
 ///
 /// Normative for `capsule-sdk` (transfer upload doc, §Adaptive Chunk Sizing):
 /// warm-up before adjusting, double above 5 MB/s, halve below 1 MB/s, clamp to
 /// the file-size tier's range — and every tier range sits inside the protocol
-/// bounds `[256 KiB, 16 MiB]` for non-final chunks.
+/// bounds `[4 KiB, 16 MiB]` for non-final chunks.
+///
+/// A chunk the server timed out (`408 error.upload.chunk_timeout`) is the one
+/// way below the tier floor: [`shrink_after_timeout`](Self::shrink_after_timeout)
+/// halves the size, down to the protocol minimum, and the strategy grows back
+/// towards the floor after successes, never again to a size that timed out unless
+/// the link turns fast.
 #[derive(Debug, Clone)]
 pub struct AdaptiveChunkSizeStrategy {
     /// Current chunk size
@@ -108,6 +124,10 @@ pub struct AdaptiveChunkSizeStrategy {
     /// so each request is small enough to usually complete between mid-transfer
     /// resets (networking doc, "Bounded transfer windows under `adverse`").
     pinned_floor: bool,
+    /// The smallest chunk length the server timed out in this transfer. The size
+    /// never grows back to it, because the link has already shown it cannot carry
+    /// that much within the server's read deadline; a fast window clears it.
+    timeout_ceiling: Option<u64>,
 }
 
 impl AdaptiveChunkSizeStrategy {
@@ -133,7 +153,34 @@ impl AdaptiveChunkSizeStrategy {
             total_upload_time: Duration::ZERO,
             recent_chunks: VecDeque::with_capacity(32),
             pinned_floor: false,
+            timeout_ceiling: None,
         }
+    }
+
+    /// Shrink after the server timed out a chunk of `timed_out` bytes
+    /// (`408 error.upload.chunk_timeout`): the next chunk, sent at the same offset,
+    /// is half that, 4 KiB-aligned down, and at least [`PROTOCOL_MIN_CHUNK`].
+    ///
+    /// This is the only path below the tier floor. A slow link would otherwise time
+    /// out every floor-sized chunk and never progress: 4 MiB in the server's default
+    /// two minutes needs about 280 kbit/s. Returns `false` when `timed_out` is
+    /// already at or below the protocol minimum, so nothing smaller can be sent; the
+    /// size is then left as it is.
+    pub fn shrink_after_timeout(&mut self, timed_out: u64) -> bool {
+        self.timeout_ceiling = Some(self.timeout_ceiling.map_or(timed_out, |c| c.min(timed_out)));
+        if timed_out <= PROTOCOL_MIN_CHUNK {
+            return false;
+        }
+        let half = (timed_out / 2 / ALIGNMENT) * ALIGNMENT;
+        self.current_size = half.max(PROTOCOL_MIN_CHUNK);
+        self.successful_chunks = 0;
+        debug_assert!(self.current_size.is_multiple_of(ALIGNMENT));
+        true
+    }
+
+    /// Whether `size` stays below every chunk length the server has timed out.
+    fn under_timeout_ceiling(&self, size: u64) -> bool {
+        self.timeout_ceiling.is_none_or(|ceiling| size < ceiling)
     }
 
     /// Couple the chunk size to a detected [`ConnectionClass`]. On
@@ -224,6 +271,26 @@ impl AdaptiveChunkSizeStrategy {
             }
         }
 
+        let throughput = self.throughput_bytes_per_second();
+        // A fast window means the link that timed a chunk out has recovered: a size
+        // that timed out may be tried again.
+        if throughput > FAST_THROUGHPUT {
+            self.timeout_ceiling = None;
+        }
+
+        // Below the tier floor (only a timed-out chunk puts it there): grow back
+        // towards the floor after a run of successes, never to a size that timed out.
+        if self.current_size < self.min_size {
+            if self.successful_chunks >= GROW_BACK_AFTER_SUCCESSES {
+                let next = (self.current_size * 2).min(self.min_size);
+                if self.under_timeout_ceiling(next) {
+                    self.current_size = next;
+                }
+                self.successful_chunks = 0;
+            }
+            return;
+        }
+
         // Under the adverse floor pin, scaling is suppressed: the size stays at the
         // tier minimum so each request stays small across a hostile path.
         if self.pinned_floor {
@@ -235,15 +302,13 @@ impl AdaptiveChunkSizeStrategy {
         if self.bytes_uploaded >= MIN_BYTES_BEFORE_SCALING
             || self.successful_chunks >= MIN_CHUNKS_BEFORE_SCALING
         {
-            let throughput = self.throughput_bytes_per_second();
-
             // If throughput is high (> 5 MB/s) and we're not at max, double chunk size
-            if throughput > 5.0 * 1024.0 * 1024.0 && self.current_size < self.max_size {
+            if throughput > FAST_THROUGHPUT && self.current_size < self.max_size {
                 self.current_size = (self.current_size * 2).min(self.max_size);
                 self.successful_chunks = 0; // Reset counter after scaling
             }
             // If throughput is low (< 1 MB/s) and we're not at min, halve chunk size
-            else if throughput < 1.0 * 1024.0 * 1024.0 && self.current_size > self.min_size {
+            else if throughput < SLOW_THROUGHPUT && self.current_size > self.min_size {
                 self.current_size = (self.current_size / 2).max(self.min_size);
                 self.successful_chunks = 0;
             }
@@ -253,10 +318,11 @@ impl AdaptiveChunkSizeStrategy {
     /// Get the next chunk size to use.
     ///
     /// Alignment is a hard guarantee by construction: every candidate size is a
-    /// doubling/halving of a 4 KiB-aligned tier bound, so this can never return
-    /// an unaligned size — the debug_assert is a tripwire for future edits, not
-    /// a runtime dependency. The size is likewise always within the protocol
-    /// bounds because every tier range is.
+    /// doubling/halving of a 4 KiB-aligned tier bound, or a timed-out length
+    /// halved and aligned down, so this can never return an unaligned size — the
+    /// debug_assert is a tripwire for future edits, not a runtime dependency. The
+    /// size is likewise always within the protocol bounds: every tier range is,
+    /// and a timeout never shrinks below [`PROTOCOL_MIN_CHUNK`].
     pub fn next_chunk_size(&self) -> u64 {
         debug_assert!(
             self.current_size.is_multiple_of(ALIGNMENT),
@@ -740,6 +806,9 @@ enum ChunkAck {
     Recreate,
     /// `checksum_mismatch` — nothing was persisted; re-send the same chunk.
     Resend,
+    /// `chunk_timeout` — the body did not arrive within the server's read deadline
+    /// and nothing of it was written; re-send at the same offset, smaller.
+    TimedOut,
     /// `rate_limited`, `unavailable` or `storage_full` — the server asked the
     /// client to wait (for the `Retry-After` it sent, when it sent one) and then
     /// resume from HEAD. Nothing of the refused chunk was kept.
@@ -1164,6 +1233,10 @@ impl UploadClient {
                 tracing::debug!("checksum_mismatch — re-sending chunk");
                 Ok(ChunkAck::Resend)
             }
+            Some(c) if c == error_codes::UPLOAD_CHUNK_TIMEOUT => {
+                tracing::debug!("chunk_timeout — re-sending smaller");
+                Ok(ChunkAck::TimedOut)
+            }
             Some(c) if asks_to_wait(c) => {
                 tracing::debug!(code = c, ?wait, "the server asked for a wait — backing off");
                 Ok(ChunkAck::Backoff(wait))
@@ -1417,6 +1490,21 @@ impl UploadClient {
                         len: want,
                     });
                     // Offset unchanged; the loop re-sends the same chunk.
+                }
+                ChunkAck::TimedOut => {
+                    recovery.charge("timed-out chunk re-send")?;
+                    // The offset stays: the server writes nothing of a chunk that did
+                    // not arrive whole. No wait either, since the link just spent the
+                    // whole read deadline on this chunk.
+                    let shrunk = strategy.shrink_after_timeout(want);
+                    tracing::info!(
+                        %session_id,
+                        offset,
+                        timed_out_len = want,
+                        next_len = strategy.next_chunk_size().min(remaining),
+                        shrunk,
+                        "chunk_timeout — re-sending at the same offset, smaller"
+                    );
                 }
                 ChunkAck::Backoff(asked) => {
                     let wait = recovery.server_wait(asked, "server-requested wait")?;

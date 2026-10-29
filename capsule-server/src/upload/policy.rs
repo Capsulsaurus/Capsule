@@ -98,9 +98,10 @@ pub const DEFAULT_MAX_FILE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 ///
 /// Two minutes is generous to an honest client on a poor link: the 16 MiB protocol maximum
 /// lands at a sustained 1.1 Mbit/s, and the largest *suggested* chunk, 4 MiB, at 280 kbit/s. A
-/// client slower than that is told so with `408 error.upload.chunk_timeout` and resends the
-/// same chunk at the same offset, smaller — the offset never moved, because nothing of a chunk
-/// that did not arrive whole is written.
+/// client slower than that is told so with `408 error.upload.chunk_timeout`; `capsule-sdk`
+/// re-sends at the same offset with half the bytes, below its file-size tier's floor if need be
+/// and down to the 4 KiB protocol minimum, so even a link of a few hundred bit/s progresses. The
+/// offset never moved, because nothing of a chunk that did not arrive whole is written.
 pub const DEFAULT_CHUNK_READ_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// How long a chunk body may take to arrive.
