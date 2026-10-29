@@ -1510,7 +1510,7 @@
           "kind": "enum",
           "name": "FfiError",
           "signature": "public enum FfiError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError",
-          "doc": "Every failure the FFI flows can surface, flattened by originating layer. Each\nvariant carries the stable `error.*` catalog `code` (when one applies — clients\nlocalize it) and the English detail `message` (stays English), mirroring the\nSDK's `{ error, code }` contract so foreign apps switch on the code, never a\nbare HTTP status.",
+          "doc": "Every failure the FFI flows can surface, flattened by originating layer. Each\nvariant carries the stable `error.*` catalog `code` (when one applies — clients\nlocalize it) and the English `detail` (stays English), mirroring the\nSDK's `{ error, code }` contract so foreign apps switch on the code, never a\nbare HTTP status.",
           "members": [
             {
               "kind": "case",
@@ -3331,7 +3331,7 @@
           "kind": "sealed class",
           "name": "FfiException",
           "signature": "sealed class FfiException: kotlin.Exception()",
-          "doc": "Every failure the FFI flows can surface, flattened by originating layer. Each\nvariant carries the stable `error.*` catalog `code` (when one applies — clients\nlocalize it) and the English detail `message` (stays English), mirroring the\nSDK's `{ error, code }` contract so foreign apps switch on the code, never a\nbare HTTP status.",
+          "doc": "Every failure the FFI flows can surface, flattened by originating layer. Each\nvariant carries the stable `error.*` catalog `code` (when one applies — clients\nlocalize it) and the English `detail` (stays English), mirroring the\nSDK's `{ error, code }` contract so foreign apps switch on the code, never a\nbare HTTP status.",
           "members": [
             {
               "kind": "variant",
