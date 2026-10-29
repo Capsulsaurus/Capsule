@@ -26,6 +26,11 @@
 //! | `a_version_leap_carries_the_held_version_too` | the `400` too-far-ahead refusal is switchable and carries `current_version` |
 //! | `the_widest_version_the_server_can_name_still_decodes` | the recovery hint survives at the top of the server's range, where an unbounded counter would not |
 //! | `the_roster_publish_goes_through_the_generated_operation` | the path, method and body come from the committed contract, not from a hand-written request |
+//! | `a_lifecycle_op_is_posted_to_its_albums_ops_route` | the op reaches `POST /v1/albums/{album}/ops` verbatim, and the answer maps, replay included |
+//! | `a_closed_retention_window_is_its_own_permanent_kind` | `409 error.upload.retention_elapsed` is `retention_elapsed`, permanent, and sent once |
+//! | `a_stale_chain_carries_the_head_to_rebase_onto` | the other `409` is `stale_revival` and carries `chain_head` |
+//! | `a_transient_refusal_is_not_permanent` | `500` and `403` are not judgements of the op, so they are not permanent |
+//! | `an_op_naming_no_album_is_refused_before_the_wire` | nothing is sent for an envelope with no album |
 
 use std::sync::{Arc, Mutex};
 
@@ -574,4 +579,182 @@ async fn album_writes_under_a_latched_floor_never_leave() {
         1,
         "only the read reached the server"
     );
+}
+
+// ─── Lifecycle ops ────────────────────────────────────────────────────────────
+
+/// A client whose transport is the album endpoint of `server`, as production builds it.
+fn ops_client_for(server: &MockServer) -> AlbumClient {
+    AlbumClient::new(AlbumTransport::with_static_token(
+        reqwest::Client::new(),
+        format!("{}/v1/albums", server.base_url().trim_end_matches('/')),
+        StaticToken("test-token".into()),
+    ))
+}
+
+/// A `trash-restore` op for an asset of [`album`]. The bytes are placeholders: the server does
+/// not parse the manifest, and neither does this client.
+fn restore_op() -> crate::rest::types::OpRequest {
+    crate::rest::types::OpRequest {
+        manifest_envelope: crate::rest::types::ManifestEnvelope {
+            crypto_suite_id: 1,
+            protocol_version: capsule_core::crypto::primitives::PROTOCOL_VERSION.to_owned(),
+            album_id: Some(album().hyphenated().to_string()),
+            file_id: "0198f3c2-9c4a-7b3d-8f21-4d7c9a1b2e99".to_owned(),
+            amk_version: 1,
+            ciphertext_hash: "00".repeat(32),
+            plaintext_size: 3,
+            chunk_size: 65536,
+            key_mode: "derived".to_owned(),
+            metadata_blob_hash: None,
+            original_blob_hash: None,
+            derivative_role: None,
+            derivative_format: None,
+            created_by_user: "user".to_owned(),
+            created_by_device: "0198f3c2-9c4a-7b3d-8f21-4d7c9a1b2e00".to_owned(),
+            client_version: "test".to_owned(),
+            timestamp: "2026-10-29T00:00:00Z".to_owned(),
+            action: "trash-restore".to_owned(),
+            prior_provenance_hash: Some("11".repeat(32)),
+            retention_until: None,
+        },
+        manifest_cbor: "AAEC".to_owned(),
+        metadata_blob: None,
+    }
+}
+
+/// The success body the server sends for [`restore_op`].
+fn applied(replayed: bool) -> MockResponse {
+    MockResponse::new(200, "OK").json_body(format!(
+        r#"{{"asset_id":"0198f3c2-9c4a-7b3d-8f21-4d7c9a1b2e99","sync_seq":42,"action":"trash-restore","replayed":{replayed}}}"#
+    ))
+}
+
+#[tokio::test]
+async fn a_lifecycle_op_is_posted_to_its_albums_ops_route() {
+    let (server, seen) = recording(|_| applied(true)).await;
+    let op = restore_op();
+    let result = ops_client_for(&server)
+        .apply_op(&op)
+        .await
+        .expect("applied");
+    assert_eq!(
+        result,
+        AppliedOp {
+            asset_id: "0198f3c2-9c4a-7b3d-8f21-4d7c9a1b2e99".to_owned(),
+            action: "trash-restore".to_owned(),
+            sync_seq: 42,
+            replayed: true,
+        }
+    );
+
+    let requests = seen.lock().expect("recorded requests");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "POST");
+    assert_eq!(
+        requests[0].path,
+        format!("/v1/albums/{}/ops", album().hyphenated())
+    );
+    assert_eq!(
+        requests[0].header("authorization"),
+        Some("Bearer test-token")
+    );
+    let sent: serde_json::Value =
+        serde_json::from_slice(&requests[0].body).expect("the body is JSON");
+    assert_eq!(
+        sent,
+        serde_json::to_value(&op).expect("the op serializes"),
+        "the op reaches the wire as it was signed"
+    );
+}
+
+/// **The refusal #871 added.** A restore after the asset's signed retention floor is final: its
+/// own kind, the server's code, permanent — and sent exactly once.
+#[tokio::test]
+async fn a_closed_retention_window_is_its_own_permanent_kind() {
+    let (server, seen) = recording(|_| {
+        MockResponse::new(409, "Conflict").json_body(
+            r#"{"type":"about:blank","title":"Retention elapsed","status":409,"detail":"this asset's retention window has closed, so it can no longer be restored","code":"error.upload.retention_elapsed","retention_until":"2026-09-01T00:00:00Z"}"#.to_owned(),
+        )
+    })
+    .await;
+    let error = ops_client_for(&server)
+        .apply_op(&restore_op())
+        .await
+        .expect_err("refused");
+    assert_eq!(error.kind(), "retention_elapsed");
+    assert_eq!(
+        error.error_code(),
+        Some(error_codes::UPLOAD_RETENTION_ELAPSED)
+    );
+    assert!(error.is_permanent(), "no resend reopens the window");
+    assert_eq!(seen.lock().expect("requests").len(), 1, "not retried");
+}
+
+#[tokio::test]
+async fn a_stale_chain_carries_the_head_to_rebase_onto() {
+    let (server, _) = recording(|_| {
+        MockResponse::new(409, "Conflict").json_body(
+            r#"{"type":"about:blank","title":"Stale revival","status":409,"detail":"this manifest does not follow the asset's current state","code":"error.upload.stale_revival","chain_head":"abcd"}"#.to_owned(),
+        )
+    })
+    .await;
+    let error = ops_client_for(&server)
+        .apply_op(&restore_op())
+        .await
+        .expect_err("refused");
+    assert_eq!(error.kind(), "stale_revival");
+    assert!(error.is_permanent());
+    assert!(
+        matches!(
+            &error,
+            LifecycleOpError::Refused { status: 409, chain_head: Some(head), .. } if head == "abcd"
+        ),
+        "{error:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_transient_refusal_is_not_permanent() {
+    for (status, reason, code, kind) in [
+        (
+            500,
+            "Internal Server Error",
+            "error.internal",
+            "unavailable",
+        ),
+        (
+            403,
+            "Forbidden",
+            "error.upload.album_access_denied",
+            "forbidden",
+        ),
+    ] {
+        let (server, _) = recording(move |_| {
+            MockResponse::new(status, reason).json_body(format!(
+                r#"{{"type":"about:blank","status":{status},"detail":"no","code":"{code}"}}"#
+            ))
+        })
+        .await;
+        let error = ops_client_for(&server)
+            .apply_op(&restore_op())
+            .await
+            .expect_err("refused");
+        assert_eq!(error.kind(), kind, "{status}");
+        assert_eq!(error.error_code(), Some(code), "{status}");
+        assert!(!error.is_permanent(), "{status}");
+    }
+}
+
+#[tokio::test]
+async fn an_op_naming_no_album_is_refused_before_the_wire() {
+    let (server, seen) = recording(|_| applied(false)).await;
+    let mut op = restore_op();
+    op.manifest_envelope.album_id = None;
+    let error = ops_client_for(&server)
+        .apply_op(&op)
+        .await
+        .expect_err("refused");
+    assert_eq!(error.kind(), "malformed");
+    assert!(seen.lock().expect("requests").is_empty());
 }
