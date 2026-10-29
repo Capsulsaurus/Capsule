@@ -12,7 +12,7 @@ One vector per row; each defense has one owner doc.
 | --- | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------- | ----- |
 | 1   | Old client strips unknown sidecar fields | Signature covers `_unknown`; newer schema never written | [Metadata](/design/metadata/#schema-versioning-rules) |
 | 2   | Bytes mismatch declared content type | `content_type` allow-list + sandboxed decoder | [Validation](/design/threat-model/validation/#server-side-validation-invariants) |
-| 3   | Chunk retried at a conflicting range | Wholly committed → duplicate, nothing written; partial overlap → reject; changed bytes caught by the source guard and the finalize re-hash | [Upload](/design/transfer/upload/#chunk-rules-and-strictness) |
+| 3   | Chunk retried at a conflicting range | Wholly committed → duplicate, nothing written; partial overlap → reject; changed bytes stopped by the client's chunk-tag guard | [Upload](/design/transfer/upload/#chunk-rules-and-strictness) |
 | 4   | Old manifest replayed to revive a delete | `prior_provenance_hash` advance check, both sides | [Provenance](/design/cryptography/provenance/#provenance-of-library-modifications) |
 | 5   | Re-sign under a weaker suite | Signature covers suite and protocol version | [Keys](/design/cryptography/keys/#write-authorization) |
 | 6   | Concurrent captions                                         | LWW + `superseded_captions` surfaces the loser                                              | [Metadata](/design/metadata/#surfacing-concurrent-edits) |

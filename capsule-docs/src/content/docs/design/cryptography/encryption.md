@@ -33,7 +33,7 @@ An asset is content-addressed by the hash of its ciphertext and encrypted under 
 An upload re-derives each ciphertext range from the plaintext on disk, so the plaintext MUST NOT change under it. A changed plaintext re-encrypted under the same file key and nonce would hand the server two ciphertexts under one AES-GCM nonce, so two guards stand before any re-derived byte is sent:
 
 - **Source identity**, best-effort: building the bundle records the source's size, modification time and file identifier, and every later read checks them first. A file system with coarse timestamps, or a writer that preserves them, can hide a change.
-- **Chunk tags**, authoritative: the bundle's hashing pass records every STREAM chunk's authentication tag and persists them with the bundle for as long as any of its sessions is open. A re-derived chunk whose tag differs is never sent. A range is sent only from whole STREAM chunks that have been re-derived and checked, even where it starts or ends inside one.
+- **Chunk tags**, authoritative: the bundle's hashing pass records every STREAM chunk's authentication tag and persists them with the bundle, under the same key and nonce prefix, until every blob of the bundle is `Completed` or the bundle is abandoned. A re-created session reuses the key and nonce prefix, so the tags outlive any one session. A re-derived chunk whose tag differs is never sent. A range is sent only from whole STREAM chunks that have been re-derived and checked, even where it starts or ends inside one.
 
 Either mismatch aborts the blob with a typed source-changed error before that read's bytes are sent. The finalize-time content-address check remains the backstop: a changed source can cost an upload, never store bytes under the wrong address.
 
