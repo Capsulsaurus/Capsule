@@ -10,7 +10,7 @@ androidx-uiautomator = "2.3.0"
 androidx-navigationCompose = "2.8.9"
 androidx-viewmodelCompose = "2.8.7"
 clikt = "5.0.3"
-coil = "3.1.0"
+coil = "3.6.3"
 # Jetpack Compose BOM: pins every androidx.compose artifact to one tested set (Compose 1.8,
 # Material 3 1.3).
 compose-bom = "2025.04.01"
