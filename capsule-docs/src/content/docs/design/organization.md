@@ -196,6 +196,20 @@ Delete defaults to trash (a soft delete, synced as a metadata change). A hard de
 - `trash-restore` before `retention_until` recovers the asset and appends a record; the delete manifest stays in the chain.
 - A `trash-restore` the server accepts at or after `retention_until`, by the same trusted clock, is refused `409 error.upload.retention_elapsed` and writes nothing, whether or not the purge has run. A purged asset cannot be restored: a restore that reaches the asset after its purge committed is refused the same way, even if the server accepted it just before the window closed. No restore ever meets a purged row, and a refused one leaves the asset in the trash until the purge.
 
+### Deletion State Machine
+
+The client's library owns the whole machine. An app calls its verbs and keeps no retention logic or index write of its own, because a transition that is not a signed record neither syncs nor survives an index rebuild.
+
+| From | Verb | To | Record | Refused when |
+| --- | --- | --- | --- | --- |
+| live | delete | trashed | signed `delete` carrying `retention_until` | never; a delete of a trashed asset signs nothing and keeps its window |
+| trashed | restore | live | signed `trash-restore` | now is at or after `retention_until` |
+| trashed | purge | purged | before `retention_until`, a signed shorter-retention `delete` re-issue first | the asset is not trashed: a purge never skips the trash |
+
+- **Judged by the signed window.** Every expiry and restore decision reads the `retention_until` of the asset's latest `delete` record, never how long ago the delete happened. A `delete` with no readable window never expires.
+- **Purge.** Removes the original, every derivative and local cache entry, the sidecar, and the index row. The provenance chain stays as the record of the deletion, so a reopen or rebuild never brings the asset back.
+- **Index.** The trash columns are a projection of the chain, rebuilt from it.
+
 ## Validation
 
 Each rule above is a unit or smoke test; notably, purge is refused before `retention_until` and `trash-restore` at or after it, under a mocked clock, and smart-album evaluation is byte-identical across platforms.
