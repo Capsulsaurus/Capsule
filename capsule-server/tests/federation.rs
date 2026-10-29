@@ -2783,6 +2783,10 @@ async fn a_full_mint_partition_is_a_429_never_a_500() {
     refused.assert_status(StatusCode::TOO_MANY_REQUESTS);
     let refused: Value = refused.json();
     assert_eq!(refused["code"], "error.federation.mint_at_capacity");
+    assert_eq!(
+        refused["detail"], "no capability can be minted right now; try again later",
+        "the detail must not tell the caller its own budget is spent"
+    );
 }
 
 #[tokio::test]
@@ -2811,6 +2815,10 @@ async fn a_full_report_intake_partition_is_an_at_capacity_429() {
     refused.assert_status(StatusCode::TOO_MANY_REQUESTS);
     let refused: Value = refused.json();
     assert_eq!(refused["code"], "error.moderation.report_at_capacity");
+    assert_eq!(
+        refused["detail"], "no report can be filed right now; try again later",
+        "the detail must not tell the peer its own budget is spent"
+    );
     assert_eq!(queued(&fixture).await, 0, "nothing is filed");
 }
 

@@ -388,8 +388,9 @@ pub enum MintRejection {
     },
 
     /// The account's mint budget is spent, or the mint counter is holding as many accounts as
-    /// it will hold. The code says which.
-    #[error("this account has reached its capability mint budget")]
+    /// it will hold. The code says which, so the detail names neither: a full counter is not
+    /// the caller's budget spent.
+    #[error("no capability can be minted right now; try again later")]
     #[problem(status = 429, title = "Rate budget exceeded")]
     RateLimited {
         /// The stable catalog code.
@@ -1119,8 +1120,9 @@ pub enum ReportRejection {
     },
 
     /// Too many reports from this peer about this account, or a report counter is holding as
-    /// many keys as it will hold. The code says which.
-    #[error("too many reports from this server about this account")]
+    /// many keys as it will hold. The code says which, so the detail names neither: a full
+    /// counter is not this peer's budget spent.
+    #[error("no report can be filed right now; try again later")]
     #[problem(status = 429, title = "Report rate limited")]
     RateLimited {
         /// The stable catalog code.
