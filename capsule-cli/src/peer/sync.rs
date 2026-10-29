@@ -408,6 +408,11 @@ pub(crate) async fn receive(
     listener: &PeerListener,
 ) -> PullSummary {
     let mut summary = PullSummary::default();
+    // The library's own purge tombstones join the store's: an asset purged through the
+    // workspace is refused even where no sync sweep recorded it.
+    let mut tombstones = tombstones.clone();
+    tombstones.extend(workspace.tombstones());
+    let tombstones = &tombstones;
     let offer = library_offer(workspace, cursor);
     let pulled = {
         let local = LocalPeer {

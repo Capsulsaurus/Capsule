@@ -395,7 +395,7 @@ async fn every_refusal_on_the_public_path_is_one_answer() {
         format!("/s/{}/wrapped-secret", opaque(9)),
     ] {
         let body: Value = fetch(&fixture, &path, StatusCode::NOT_FOUND).await.json();
-        bodies.push(body);
+        bodies.push(support::without_request_id(body));
     }
 
     for body in &bodies[1..] {
@@ -517,8 +517,12 @@ async fn a_held_opaque_id_cannot_be_reissued_and_the_refusal_is_one_answer() {
         "serves": [hostile.as_str()],
     });
 
-    let from_stranger = issue(&fixture, &stranger, &takeover, StatusCode::BAD_REQUEST).await;
-    let from_owner = issue(&fixture, &bearer, &takeover, StatusCode::BAD_REQUEST).await;
+    let from_stranger = support::without_request_id(
+        issue(&fixture, &stranger, &takeover, StatusCode::BAD_REQUEST).await,
+    );
+    let from_owner = support::without_request_id(
+        issue(&fixture, &bearer, &takeover, StatusCode::BAD_REQUEST).await,
+    );
     assert_eq!(
         from_stranger, from_owner,
         "the refusal must not say whose the id is"

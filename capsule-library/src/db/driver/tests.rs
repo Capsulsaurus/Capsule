@@ -1,3 +1,5 @@
+use rusqlite::OptionalExtension;
+
 use super::*;
 use crate::db::rows::{AlbumRow, AssetRow, AssetStackRow, CachedRepresentationRow, StackMemberRow};
 
@@ -382,6 +384,142 @@ fn rep(uuid: &str, tier: &str, bytes: i64, last: i64) -> CachedRepresentationRow
         pinned: false,
         is_owned_original: false,
     }
+}
+
+#[test]
+fn purge_asset_drops_the_row_its_tags_and_its_cache_rows_only() {
+    let db = DatabaseDriver::open_in_memory().unwrap();
+    for (uuid, hash) in [("gone", "a"), ("kept", "b")] {
+        db.insert_asset(&make_asset(uuid, &hash.repeat(64)))
+            .unwrap();
+        db.replace_asset_tags(uuid, &["beach".to_string()]).unwrap();
+        db.upsert_representation(&rep(uuid, "thumbnail", 100, 10))
+            .unwrap();
+    }
+
+    db.purge_asset("gone").unwrap();
+
+    assert!(db.find_by_uuid("gone").unwrap().is_none());
+    assert!(db.tags_for("gone").unwrap().is_empty());
+    assert!(db.representations_for("gone").unwrap().is_empty());
+    assert!(db.find_by_uuid("kept").unwrap().is_some());
+    assert_eq!(db.tags_for("kept").unwrap(), vec!["beach".to_string()]);
+    assert_eq!(db.representations_for("kept").unwrap().len(), 1);
+}
+
+fn stack(id: &str, primary: &str, cover: Option<&str>) -> AssetStackRow {
+    AssetStackRow {
+        id: id.to_string(),
+        stack_type: "burst".to_string(),
+        primary_asset_id: primary.to_string(),
+        cover_asset_id: cover.map(str::to_string),
+        is_collapsed: true,
+        is_auto_generated: true,
+        created_at: 1,
+        modified_at: 1,
+    }
+}
+
+fn member(stack_id: &str, asset_id: &str, order: i64) -> StackMemberRow {
+    StackMemberRow {
+        id: format!("{stack_id}#{asset_id}"),
+        stack_id: stack_id.to_string(),
+        asset_id: asset_id.to_string(),
+        sequence_order: order,
+        member_role: "member".to_string(),
+        created_at: 1,
+    }
+}
+
+/// `(primary_asset_id, cover_asset_id)` of stack `id`, or `None` when the row is gone.
+fn stack_roles(db: &DatabaseDriver, id: &str) -> Option<(String, Option<String>)> {
+    db.conn
+        .query_row(
+            "SELECT primary_asset_id, cover_asset_id FROM asset_stacks WHERE id = ?1",
+            params![id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .unwrap()
+}
+
+#[test]
+fn purge_asset_leaves_no_stack_or_cover_row_naming_it() {
+    let db = DatabaseDriver::open_in_memory().unwrap();
+    for (uuid, hash) in [("gone", "a"), ("next", "b"), ("last", "c"), ("solo", "d")] {
+        db.insert_asset(&make_asset(uuid, &hash.repeat(64)))
+            .unwrap();
+    }
+    // A stack the purged asset leads, a stack it is only the cover of, and one it is alone in.
+    db.insert_stack(&stack("led", "gone", Some("gone")))
+        .unwrap();
+    db.insert_stack(&stack("covered", "next", Some("gone")))
+        .unwrap();
+    db.insert_stack(&stack("alone", "gone", None)).unwrap();
+    db.insert_stack(&stack("other", "solo", Some("solo")))
+        .unwrap();
+    for (stack_id, asset, order) in [
+        ("led", "gone", 0),
+        ("led", "last", 2),
+        ("led", "next", 1),
+        ("covered", "next", 0),
+        ("covered", "gone", 1),
+        ("alone", "gone", 0),
+        ("other", "solo", 0),
+    ] {
+        db.insert_stack_member(&member(stack_id, asset, order))
+            .unwrap();
+    }
+    db.insert_album(&AlbumRow {
+        id: "album".to_string(),
+        name: "Trip".to_string(),
+        created_at: 1,
+        modified_at: 1,
+        cover_asset_id: Some("gone".to_string()),
+    })
+    .unwrap();
+
+    db.purge_asset("gone").unwrap();
+
+    let members: Vec<String> = db
+        .list_stack_members("led")
+        .unwrap()
+        .into_iter()
+        .map(|m| m.asset_id)
+        .collect();
+    assert_eq!(members, ["next", "last"]);
+    assert_eq!(
+        stack_roles(&db, "led"),
+        Some(("next".to_string(), Some("next".to_string()))),
+        "the first remaining member by sequence takes the primary and the cover"
+    );
+    assert_eq!(
+        stack_roles(&db, "covered"),
+        Some(("next".to_string(), Some("next".to_string())))
+    );
+    assert_eq!(
+        stack_roles(&db, "alone"),
+        None,
+        "an emptied stack is removed"
+    );
+    assert_eq!(
+        stack_roles(&db, "other"),
+        Some(("solo".to_string(), Some("solo".to_string()))),
+        "another asset's stack is left alone"
+    );
+    let named: i64 = db
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM stack_members WHERE asset_id = 'gone'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(named, 0);
+    assert_eq!(
+        db.find_album("album").unwrap().unwrap().cover_asset_id,
+        None
+    );
 }
 
 fn evicted_ids(rows: &[CachedRepresentationRow]) -> Vec<&str> {

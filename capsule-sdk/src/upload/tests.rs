@@ -162,6 +162,127 @@ fn at_min_tier_slow_throughput_never_underflows() {
     assert_eq!(s.min_size, CHUNK_SIZE_256KB);
 }
 
+/// A chunk the server timed out halves, aligned, through and below the 4 MiB
+/// large-file floor, and stops at the protocol minimum.
+#[test]
+fn a_timeout_shrinks_below_the_tier_floor_down_to_the_protocol_minimum() {
+    let mut s = AdaptiveChunkSizeStrategy::for_file_size(200 * 1024 * 1024); // 4–16 MiB
+    assert_eq!(s.next_chunk_size(), CHUNK_SIZE_4MB);
+
+    let mut sizes = Vec::new();
+    while s.shrink_after_timeout(s.next_chunk_size()) {
+        let next = s.next_chunk_size();
+        assert!(next.is_multiple_of(4096), "size drifted off 4 KiB");
+        sizes.push(next);
+    }
+    assert_eq!(sizes.first(), Some(&(2 * 1024 * 1024)));
+    assert_eq!(sizes.last(), Some(&PROTOCOL_MIN_CHUNK));
+    assert_eq!(sizes.len(), 10, "4 MiB halves ten times to 4 KiB");
+    assert!(
+        !s.shrink_after_timeout(PROTOCOL_MIN_CHUNK),
+        "nothing below the protocol minimum"
+    );
+    assert_eq!(s.next_chunk_size(), PROTOCOL_MIN_CHUNK);
+}
+
+/// A timed-out final remainder halves too, aligned down; one already at or
+/// under 4 KiB cannot shrink.
+#[test]
+fn a_timed_out_remainder_halves_aligned_down() {
+    let mut s = AdaptiveChunkSizeStrategy::for_file_size(5 * 1024 * 1024);
+    assert!(s.shrink_after_timeout(100 * 1024 + 123));
+    assert_eq!(s.next_chunk_size(), 48 * 1024);
+
+    let mut s = AdaptiveChunkSizeStrategy::for_file_size(5 * 1024 * 1024);
+    assert!(!s.shrink_after_timeout(3000));
+    assert_eq!(
+        s.next_chunk_size(),
+        CHUNK_SIZE_256KB,
+        "an unshrinkable timeout leaves the size alone"
+    );
+}
+
+/// After a timeout the size grows back towards the tier floor on a run of
+/// successes, but never to a length that timed out while the link stays slow.
+#[test]
+fn after_a_timeout_successes_grow_back_but_never_to_the_timed_out_size() {
+    let mut s = AdaptiveChunkSizeStrategy::for_file_size(200 * 1024 * 1024); // floor 4 MiB
+    assert!(s.shrink_after_timeout(CHUNK_SIZE_4MB)); // 2 MiB
+    assert!(s.shrink_after_timeout(2 * 1024 * 1024)); // 1 MiB; ceiling 2 MiB
+    assert!(s.shrink_after_timeout(CHUNK_SIZE_1MB)); // 512 KiB; ceiling 1 MiB
+    assert_eq!(s.next_chunk_size(), 512 * 1024);
+
+    // A slow link: 512 KiB in 20 s, about 26 KB/s.
+    let slow = Duration::from_secs(20);
+    for _ in 0..GROW_BACK_AFTER_SUCCESSES - 1 {
+        s.record_chunk(512 * 1024, slow);
+        assert_eq!(s.next_chunk_size(), 512 * 1024, "no growth before the run");
+    }
+    s.record_chunk(512 * 1024, slow);
+    assert_eq!(
+        s.next_chunk_size(),
+        512 * 1024,
+        "doubling would reach the 1 MiB that timed out"
+    );
+    for _ in 0..3 * GROW_BACK_AFTER_SUCCESSES {
+        s.record_chunk(512 * 1024, slow);
+    }
+    assert_eq!(s.next_chunk_size(), 512 * 1024, "held under the ceiling");
+
+    // Without a lower ceiling a chunk grows back by doubling up to the floor.
+    let mut s = AdaptiveChunkSizeStrategy::for_file_size(200 * 1024 * 1024);
+    assert!(s.shrink_after_timeout(16 * 1024 * 1024)); // 8 MiB, clamped later
+    s.current_size = 256 * 1024; // below the floor, ceiling 16 MiB
+    let mut seen = vec![s.next_chunk_size()];
+    for _ in 0..8 * GROW_BACK_AFTER_SUCCESSES {
+        let cs = s.next_chunk_size();
+        s.record_chunk(cs, Duration::from_secs(60));
+        if seen.last() != Some(&s.next_chunk_size()) {
+            seen.push(s.next_chunk_size());
+        }
+    }
+    assert_eq!(
+        seen,
+        vec![
+            256 * 1024,
+            512 * 1024,
+            CHUNK_SIZE_1MB,
+            2 * 1024 * 1024,
+            CHUNK_SIZE_4MB
+        ],
+        "doubles back to the tier floor and stops there on a slow link"
+    );
+}
+
+/// A fast window forgets the timed-out size: the link recovered.
+#[test]
+fn a_fast_window_lifts_the_timeout_ceiling() {
+    let mut s = AdaptiveChunkSizeStrategy::for_file_size(200 * 1024 * 1024);
+    assert!(s.shrink_after_timeout(CHUNK_SIZE_4MB)); // 2 MiB; ceiling 4 MiB
+    for _ in 0..GROW_BACK_AFTER_SUCCESSES {
+        s.record_chunk(2 * 1024 * 1024, Duration::from_millis(10));
+    }
+    assert_eq!(
+        s.next_chunk_size(),
+        CHUNK_SIZE_4MB,
+        "grew back to the floor"
+    );
+}
+
+/// The adverse pin still holds the floor once a timeout's shrink has grown back.
+#[test]
+fn under_adverse_a_timeout_shrinks_and_grows_back_only_to_the_floor() {
+    let mut s = AdaptiveChunkSizeStrategy::for_file_size(50 * 1024 * 1024) // 1–4 MiB
+        .with_connection_class(crate::net::ConnectionClass::Adverse);
+    assert!(s.shrink_after_timeout(CHUNK_SIZE_1MB));
+    assert_eq!(s.next_chunk_size(), 512 * 1024);
+    for _ in 0..4 * GROW_BACK_AFTER_SUCCESSES {
+        let cs = s.next_chunk_size();
+        s.record_chunk(cs, Duration::from_millis(1));
+    }
+    assert_eq!(s.next_chunk_size(), CHUNK_SIZE_1MB, "pinned at the floor");
+}
+
 #[test]
 fn seeded_from_suggested_aligns_down_and_clamps_into_the_tier() {
     // 50 MiB → tier [1 MiB, 4 MiB].
@@ -895,6 +1016,112 @@ async fn recovery_checksum_mismatch_resends_same_chunk() {
     let bodies = bodies.lock().unwrap();
     assert_eq!(bodies.len(), 2, "must re-send after a checksum mismatch");
     assert_eq!(bodies[0], bodies[1], "the re-send is byte-identical");
+}
+
+/// A blob of zeroes of any declared size, produced a window at a time, so a
+/// large-file tier can be driven without holding the file.
+struct Zeroes(u64);
+
+impl UploadSource for Zeroes {
+    fn read_at(&self, offset: u64, len: usize) -> std::io::Result<Cow<'_, [u8]>> {
+        if offset + len as u64 > self.0 {
+            return Err(std::io::ErrorKind::UnexpectedEof.into());
+        }
+        Ok(Cow::Owned(vec![0u8; len]))
+    }
+}
+
+/// The `408` the server's chunk-read deadline answers a body that did not arrive.
+fn chunk_timeout() -> MockResponse {
+    MockResponse::api_error(
+        408,
+        "Request Timeout",
+        error_codes::UPLOAD_CHUNK_TIMEOUT,
+        "The chunk took too long to arrive",
+    )
+}
+
+/// **Slow link.** A large file on a link that carries at most 256 KiB inside
+/// the server's read deadline: every larger body is timed out. The client
+/// re-sends at the same offset, halving through and below the 4 MiB large-file
+/// floor, until a chunk arrives; once one does, the transfer progresses.
+#[tokio::test]
+async fn recovery_chunk_timeout_resends_smaller_below_the_large_file_floor() {
+    const LINK_LIMIT: usize = 256 * 1024;
+    let size = 200 * 1024 * 1024;
+    let patches = Arc::new(Mutex::new(Vec::<(u64, usize)>::new()));
+    let p = patches.clone();
+    let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+        ("POST", "/") => created("sess-slow", CHUNK_SIZE_4MB),
+        ("PATCH", "/sess-slow") => {
+            let offset: u64 = req.header("X-Capsule-Offset").unwrap().parse().unwrap();
+            p.lock().unwrap().push((offset, req.body.len()));
+            if req.body.len() > LINK_LIMIT {
+                return chunk_timeout();
+            }
+            let new_offset = ack_offset(req);
+            // The first chunk that arrives is enough to prove progress: the
+            // server reports every remaining byte held, so the transfer ends.
+            let acked = if new_offset == LINK_LIMIT as u64 {
+                size
+            } else {
+                new_offset
+            };
+            MockResponse::new(204, "No Content").header("X-Capsule-Offset", acked.to_string())
+        }
+        other => panic!("unexpected {other:?}"),
+    })
+    .await;
+
+    let client = server.client(PROTOCOL);
+    let outcome = client.upload(&request(size), &Zeroes(size)).await.unwrap();
+
+    assert!(matches!(outcome, UploadOutcome::Completed { .. }));
+    assert_eq!(
+        *patches.lock().unwrap(),
+        vec![
+            (0, 4 * 1024 * 1024),
+            (0, 2 * 1024 * 1024),
+            (0, 1024 * 1024),
+            (0, 512 * 1024),
+            (0, LINK_LIMIT),
+        ],
+        "each timed-out chunk is re-sent at the same offset, half the size"
+    );
+}
+
+/// A link that cannot carry even the 4 KiB protocol minimum inside the deadline
+/// fails loudly on the recovery budget rather than re-sending forever.
+#[tokio::test]
+async fn a_chunk_that_always_times_out_exhausts_the_budget() {
+    let patch_count = Arc::new(AtomicUsize::new(0));
+    let pc = patch_count.clone();
+    let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+        ("POST", "/") => created("sess-dead", CHUNK_SIZE_256KB),
+        ("PATCH", "/sess-dead") => {
+            pc.fetch_add(1, Ordering::SeqCst);
+            chunk_timeout()
+        }
+        other => panic!("unexpected {other:?}"),
+    })
+    .await;
+
+    let client = server.client(PROTOCOL);
+    let data = vec![1u8; 1024 * 1024];
+    let err = client
+        .upload(&request(data.len() as u64), &data)
+        .await
+        .unwrap_err();
+
+    assert!(
+        matches!(err, UploadError::RetriesExhausted(_)),
+        "got {err:?}"
+    );
+    assert_eq!(
+        patch_count.load(Ordering::SeqCst),
+        MAX_RECOVERIES as usize + 1,
+        "every re-send is charged to the one budget"
+    );
 }
 
 #[tokio::test]

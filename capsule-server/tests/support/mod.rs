@@ -4719,6 +4719,65 @@ pub(crate) fn checksum(bytes: &[u8]) -> String {
     capsule_core::crypto::hash::hash_bytes(bytes).to_hex()
 }
 
+// ===========================================================================================
+// Request ids
+// ===========================================================================================
+
+/// The fixed string [`masked_request_id`] writes in place of a problem's request id.
+const MASKED_REQUEST_ID: &str = "00000000-0000-7000-8000-000000000000";
+
+/// A problem body with its `request_id` member removed, after asserting it carried one.
+///
+/// Every problem names the request that produced it, so two refusals that must be one answer
+/// differ in that member by construction — it is minted per request and says nothing about the
+/// account, the album or the address being probed. An indistinguishability assertion compares
+/// everything else.
+pub(crate) fn without_request_id(mut problem: serde_json::Value) -> serde_json::Value {
+    let removed = problem
+        .as_object_mut()
+        .expect("a problem is a JSON object")
+        .remove(capsule_server::problem::REQUEST_ID_MEMBER);
+    assert!(
+        removed.as_ref().is_some_and(serde_json::Value::is_string),
+        "every problem names its request: {problem}"
+    );
+    problem
+}
+
+/// A problem body's bytes with its request id overwritten by a fixed one of the same length.
+///
+/// The byte-for-byte form of [`without_request_id`]: everything around the id — member order,
+/// spacing, every other value — is still compared exactly. An empty body (a `HEAD`'s) has no
+/// member to mask and is returned as it is.
+pub(crate) fn masked_request_id(bytes: &[u8]) -> Vec<u8> {
+    if bytes.is_empty() {
+        return Vec::new();
+    }
+    let marker = format!("\"{}\":\"", capsule_server::problem::REQUEST_ID_MEMBER);
+    let marker = marker.as_bytes();
+    let start = bytes
+        .windows(marker.len())
+        .position(|window| window == marker)
+        .map_or_else(
+            || {
+                panic!(
+                    "every problem names its request: {}",
+                    String::from_utf8_lossy(bytes)
+                )
+            },
+            |at| at + marker.len(),
+        );
+    let end = start + MASKED_REQUEST_ID.len();
+    assert!(
+        bytes.get(end) == Some(&b'"'),
+        "a request id is a hyphenated UUID: {}",
+        String::from_utf8_lossy(bytes)
+    );
+    let mut masked = bytes.to_vec();
+    masked[start..end].copy_from_slice(MASKED_REQUEST_ID.as_bytes());
+    masked
+}
+
 /// A `POST /v1/upload` body for `bytes`, internally consistent in every field the gate compares.
 ///
 /// Tests mutate the returned value to make exactly one thing wrong, which is what keeps a

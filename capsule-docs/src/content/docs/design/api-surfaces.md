@@ -52,6 +52,7 @@ Every public route applies the same headers:
 | `X-Capsule-Sidecar-Schema` | request; validated when present, absence not refused |
 | `X-Capsule-Protocol-Min` / `-Max` | response, on every response (including `401`, `413`, `426`, and an unrouted `404`/`405`) |
 | `X-Capsule-Min-Client-Build` | response, on every response; advisory (`0.0.0` = no cutoff) |
+| `X-Request-Id` | response, on every response (including an unrouted `404`/`405`); a UUIDv7 the server mints per request. An inbound `X-Request-Id` is ignored, never echoed |
 
 Rules (carriage in `capsule-server/src/negotiation.rs`; pinned by `capsule-server/tests/conformance.rs`):
 
@@ -73,6 +74,8 @@ Credentials use `Authorization: Bearer`. Session tokens and federation capabilit
 ## Rejection Mapping
 
 Status is coarse; clients MUST switch on the `error.*` code in the `ApiError` body, never on status alone.
+
+Every problem body also carries a `request_id` member: the same id as that response's `X-Request-Id` header, which names the request's server log lines. The document declares it on every problem schema but never as required, so a client stays lenient toward a server that predates it; a client surfaces it for a user to quote, and never parses or switches on it.
 
 | Rejection class | HTTP status |
 | --- | --- |

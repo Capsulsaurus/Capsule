@@ -189,7 +189,7 @@ async fn a_wrong_password_and_an_unknown_account_are_the_same_answer() {
     // tell them apart even in principle.
     let fixture = Fixture::working();
 
-    let wrong: serde_json::Value = post_json!(
+    let mut wrong: serde_json::Value = post_json!(
         fixture.client,
         "/v1/auth/login",
         json!({ "email": EMAIL, "password": "not the password" })
@@ -197,7 +197,7 @@ async fn a_wrong_password_and_an_unknown_account_are_the_same_answer() {
     .assert_status(StatusCode::UNAUTHORIZED)
     .json();
 
-    let unknown: serde_json::Value = post_json!(
+    let mut unknown: serde_json::Value = post_json!(
         fixture.client,
         "/v1/auth/login",
         json!({ "email": "nobody@example.test", "password": PASSWORD })
@@ -205,6 +205,14 @@ async fn a_wrong_password_and_an_unknown_account_are_the_same_answer() {
     .assert_status(StatusCode::UNAUTHORIZED)
     .json();
 
+    // Every problem names its own request, so the two ids differ by construction and say
+    // nothing about the account. Everything else must be identical.
+    for body in [&mut wrong, &mut unknown] {
+        body.as_object_mut()
+            .expect("a problem is an object")
+            .remove(capsule_server::problem::REQUEST_ID_MEMBER)
+            .expect("and names its request");
+    }
     assert_eq!(
         wrong, unknown,
         "the endpoint must not be an enumeration oracle"
@@ -1256,6 +1264,121 @@ async fn registration_answers_500_when_the_registry_cannot_answer() {
     .assert_status(StatusCode::INTERNAL_SERVER_ERROR)
     .json();
     assert_eq!(code_of(&problem), "error.auth.unavailable");
+
+    fixture.client.assert_conformance();
+}
+
+/// One registration attempt from `peer`, as the router sees the connection.
+async fn register_from(fixture: &Fixture, peer: &str, email: &str) -> kynos::test::TestResponse {
+    fixture
+        .client
+        .post("/v1/auth/register")
+        .header("accept", "application/json")
+        .peer(std::net::SocketAddr::new(
+            peer.parse().expect("a test address"),
+            40_000,
+        ))
+        .json(&json!({ "email": email, "password": "correct horse battery staple" }))
+        .send()
+        .await
+}
+
+/// A `429` names its retry instant twice: as `retry_after` in the body and as a `Retry-After`
+/// delay from the server's clock, and both name the same instant.
+fn assert_rate_limited(response: &kynos::test::TestResponse, fixture: &Fixture) {
+    let body = response.json::<serde_json::Value>();
+    assert_eq!(code_of(&body), "error.auth.rate_limited");
+    let instant = body["retry_after"]
+        .as_u64()
+        .expect("a wait names its retry instant");
+    let now = u64::try_from(fixture.clock.now().as_second()).expect("a post-epoch clock");
+    let header = response
+        .header("retry-after")
+        .expect("and repeats it on Retry-After")
+        .parse::<u64>()
+        .expect("in delta-seconds");
+    assert!(header > 0, "a wait is never zero seconds from now");
+    assert_eq!(
+        header,
+        instant - now,
+        "the header and the member name one instant"
+    );
+}
+
+#[tokio::test]
+async fn registration_is_rate_limited_per_source_address() {
+    // The oracle `409` is bounded by the source, not by the address being probed: a sweep across
+    // many addresses from one source spends one budget (#1001).
+    let fixture = Fixture::working();
+    let limit = capsule_server::counter::budgets::REGISTRATION_SOURCE.limit;
+
+    for n in 0..limit {
+        // A taken address spends the budget exactly as a fresh one does: probing is not free.
+        let email = if n == 0 {
+            EMAIL.to_owned()
+        } else {
+            format!("sweep-{n}@example.test")
+        };
+        let response = register_from(&fixture, "203.0.113.7", &email).await;
+        assert_ne!(
+            response.status(),
+            StatusCode::TOO_MANY_REQUESTS,
+            "attempt {n} is inside the budget"
+        );
+    }
+
+    let refused = register_from(&fixture, "203.0.113.7", "one-more@example.test").await;
+    refused.assert_status(StatusCode::TOO_MANY_REQUESTS);
+    assert_rate_limited(&refused, &fixture);
+
+    // Nothing was created by the refused attempt, so the address is still free from elsewhere —
+    // and another source has a budget of its own.
+    register_from(&fixture, "203.0.113.8", "one-more@example.test")
+        .await
+        .assert_status(StatusCode::OK);
+
+    fixture.client.assert_conformance();
+}
+
+#[tokio::test]
+async fn an_ipv6_source_is_limited_per_slash_64() {
+    // One host owns a whole /64, so rotating the interface id must not mint a fresh budget.
+    let fixture = Fixture::working();
+    let limit = capsule_server::counter::budgets::REGISTRATION_SOURCE.limit;
+
+    for n in 0..limit {
+        register_from(
+            &fixture,
+            &format!("2001:db8:1:2::{:x}", n + 1),
+            &format!("v6-{n}@example.test"),
+        )
+        .await
+        .assert_status(StatusCode::OK);
+    }
+    let refused = register_from(&fixture, "2001:db8:1:2::ffff", "v6-more@example.test").await;
+    refused.assert_status(StatusCode::TOO_MANY_REQUESTS);
+    assert_rate_limited(&refused, &fixture);
+
+    // The neighbouring /64 is another source.
+    register_from(&fixture, "2001:db8:1:3::1", "v6-more@example.test")
+        .await
+        .assert_status(StatusCode::OK);
+
+    fixture.client.assert_conformance();
+}
+
+#[tokio::test]
+async fn a_full_registration_limiter_is_a_429_and_not_an_outage() {
+    // A saturated partition is the limiter working as designed: the caller is told to wait, not
+    // that the server is broken.
+    let fixture = Fixture::with_counter_ceiling(1);
+
+    register_from(&fixture, "203.0.113.7", "first@example.test")
+        .await
+        .assert_status(StatusCode::OK);
+    let refused = register_from(&fixture, "203.0.113.8", "second@example.test").await;
+    refused.assert_status(StatusCode::TOO_MANY_REQUESTS);
+    assert_rate_limited(&refused, &fixture);
 
     fixture.client.assert_conformance();
 }
