@@ -1240,7 +1240,7 @@ async fn a_redial_retries_a_severed_dial_after_backing_off() {
     let mut redials = 0;
     let mut attempts = 0;
     let started = tokio::time::Instant::now();
-    let dialed = redial(&mut redials, || {
+    let dialed = redial(&mut redials, (), || {
         attempts += 1;
         let result = if attempts == 1 {
             Err(PeeringError::Io("the delegate is not accepting yet".into()))
@@ -1255,12 +1255,36 @@ async fn a_redial_retries_a_severed_dial_after_backing_off() {
     assert_eq!(started.elapsed(), redial_backoff(1) + redial_backoff(2));
 }
 
+/// Sets its flag when dropped, standing in for the severed channel.
+struct DropFlag(std::rc::Rc<std::cell::Cell<bool>>);
+
+impl Drop for DropFlag {
+    fn drop(&mut self) {
+        self.0.set(true);
+    }
+}
+
+/// The severed channel is closed before the first re-dial is attempted, not after it.
+#[tokio::test(start_paused = true)]
+async fn a_redial_closes_the_severed_channel_before_dialing() {
+    let closed = std::rc::Rc::new(std::cell::Cell::new(false));
+    let mut redials = 0;
+    let mut closed_at_dial = Vec::new();
+    let dialed = redial(&mut redials, DropFlag(closed.clone()), || {
+        closed_at_dial.push(closed.get());
+        async { Ok::<_, PeeringError>(()) }
+    })
+    .await;
+    assert!(dialed.is_ok());
+    assert_eq!(closed_at_dial, [true], "dialed once, after the close");
+}
+
 /// Every attempt times out: the redial gives up once it has spent the whole budget.
 #[tokio::test(start_paused = true)]
 async fn a_redial_gives_up_after_max_redials() {
     let mut redials = 0;
     let mut attempts = 0;
-    let dialed: Result<(), _> = redial(&mut redials, || {
+    let dialed: Result<(), _> = redial(&mut redials, (), || {
         attempts += 1;
         async { Err(PeeringError::Timeout("connecting to the peer")) }
     })
@@ -1275,7 +1299,7 @@ async fn a_redial_gives_up_after_max_redials() {
 async fn a_redial_spends_only_what_is_left_of_the_budget() {
     let mut redials = MAX_REDIALS - 1;
     let mut attempts = 0;
-    let dialed: Result<(), _> = redial(&mut redials, || {
+    let dialed: Result<(), _> = redial(&mut redials, (), || {
         attempts += 1;
         async { Err(PeeringError::Io("refused".into())) }
     })
@@ -1290,7 +1314,7 @@ async fn a_redial_spends_only_what_is_left_of_the_budget() {
 async fn a_redial_does_not_retry_a_refusal() {
     let mut redials = 0;
     let mut attempts = 0;
-    let dialed: Result<(), _> = redial(&mut redials, || {
+    let dialed: Result<(), _> = redial(&mut redials, (), || {
         attempts += 1;
         async { Err(PeeringError::NotLan(IpAddr::from([8, 8, 8, 8]))) }
     })

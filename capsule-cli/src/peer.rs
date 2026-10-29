@@ -876,14 +876,16 @@ fn redial_backoff(redial: u32) -> Duration {
 }
 
 /// Dial again after a sever, waiting [`redial_backoff`] before each attempt and counting each
-/// one against `redials`. A dial that fails the way a sever does (I/O or a timeout) is retried
+/// one against `redials`. The `severed` channel is closed first, so its socket does not linger
+/// beside the new session. A dial that fails the way a sever does (I/O or a timeout) is retried
 /// while `redials` is under [`MAX_REDIALS`]; any other failure, or the last allowed one, is
 /// returned.
-async fn redial<T, F, Fut>(redials: &mut u32, mut dial: F) -> Result<T, PeeringError>
+async fn redial<S, T, F, Fut>(redials: &mut u32, severed: S, mut dial: F) -> Result<T, PeeringError>
 where
     F: FnMut() -> Fut,
     Fut: Future<Output = Result<T, PeeringError>>,
 {
+    drop(severed);
     loop {
         *redials += 1;
         let wait = redial_backoff(*redials);
@@ -1001,10 +1003,11 @@ async fn delegate_over_peer(
             Ok(_) => break None,
             Err(error) if severed(&error) && redials < MAX_REDIALS => {
                 tracing::warn!(%error, redials, "peer delegate: the channel was severed; dialing again");
-                // The severed channel is closed before the next dial, so its socket does not
-                // linger beside the new session.
-                drop(channel);
-                match redial(&mut redials, || dial(sessions.peer, sessions.local)).await {
+                match redial(&mut redials, channel, || {
+                    dial(sessions.peer, sessions.local)
+                })
+                .await
+                {
                     Ok(next) if next.peer().device_id == delegate => channel = next,
                     Ok(next) => {
                         break Some((
