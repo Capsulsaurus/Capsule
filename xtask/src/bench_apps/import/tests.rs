@@ -297,6 +297,54 @@ fn xcresult_scroll_reads_camel_case_identifiers_and_xctest_display_names() {
 }
 
 #[test]
+fn xcresult_input_to_frame_reads_the_signpost_duration() {
+    // XCTOSSignpostMetric's shape for a custom interval: a camelCase identifier ending in
+    // `duration` and a worded display name suffixed with the signpost's name.
+    let report = json!([{
+        "testIdentifier": "ParityBenchmarkTests/testCapsuleInputToFrame()",
+        "testRuns": [{ "metrics": [
+            {
+                "identifier": "com.apple.dt.XCTMetric_OSSignpost-inputToFrame.duration",
+                "displayName": "Duration (inputToFrame)",
+                "unitOfMeasurement": "s",
+                "measurements": [0.012, 0.010, 0.011],
+            },
+        ] }],
+    }]);
+    let results = import(Format::Xcresult, &report, "iphone-17-pro", 100_000).expect("imports");
+    let latency = results
+        .get(Client::Capsule, Metric::InputToFrameMs)
+        .expect("measured");
+    assert!((latency - 11.0).abs() < 1e-9, "{latency}");
+
+    // Matched by display name alone, as for scroll.
+    let worded = json!([{
+        "testIdentifier": "ParityBenchmarkTests/testCapsuleInputToFrame()",
+        "testRuns": [{ "metrics": [
+            { "identifier": "opaque", "displayName": "Duration (inputToFrame)", "unitOfMeasurement": "ms", "measurements": [9.0] },
+        ] }],
+    }]);
+    let results = import(Format::Xcresult, &worded, "iphone-17-pro", 100_000).expect("imports");
+    assert_eq!(
+        results.get(Client::Capsule, Metric::InputToFrameMs),
+        Some(9.0)
+    );
+}
+
+#[test]
+fn xcresult_input_to_frame_never_falls_back_to_a_clock() {
+    // A clock around the tap times XCUITest, not the frame.
+    let clocked = json!([{
+        "testIdentifier": "ParityBenchmarkTests/testCapsuleInputToFrame()",
+        "testRuns": [{ "metrics": [
+            xc_metric("com.apple.dt.XCTMetric_Clock.time.monotonic", "s", &[0.2]),
+        ] }],
+    }]);
+    let error = import(Format::Xcresult, &clocked, "ipad", 100_000).expect_err("clock refused");
+    assert!(error.to_string().contains("signpost duration"), "{error}");
+}
+
+#[test]
 fn xcresult_refuses_unmapped_tests_and_unknown_units() {
     let unmapped =
         json!([{ "testIdentifier": "ParityBenchmarkTests/testLaunch()", "testRuns": [] }]);
@@ -313,10 +361,16 @@ fn xcresult_refuses_unmapped_tests_and_unknown_units() {
     assert!(error.to_string().contains("`min`"), "{error}");
 
     let no_clock = json!([{
-        "testIdentifier": "ParityBenchmarkTests/testCapsuleInputToFrame()",
+        "testIdentifier": "ParityBenchmarkTests/testCapsuleFullResolutionOpen()",
         "testRuns": [{ "metrics": [] }],
     }]);
     assert!(import(Format::Xcresult, &no_clock, "ipad", 100_000).is_err());
+
+    let no_signpost = json!([{
+        "testIdentifier": "ParityBenchmarkTests/testCapsuleInputToFrame()",
+        "testRuns": [{ "metrics": [] }],
+    }]);
+    assert!(import(Format::Xcresult, &no_signpost, "ipad", 100_000).is_err());
 
     assert!(import(Format::Xcresult, &json!({ "other": 1 }), "ipad", 100_000).is_err());
 }
