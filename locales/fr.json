@@ -7467,6 +7467,10 @@
     "message": "Cette personne ne figure pas dans la liste des membres de cet album.",
     "origin": "machine"
   },
+  "error.federation.mint_at_capacity": {
+    "message": "Ce serveur gère trop d'autorisations d'accès en ce moment. Veuillez réessayer sous peu.",
+    "origin": "machine"
+  },
   "error.federation.not_configured": {
     "message": "Ce serveur ne partage pas d'albums avec d'autres serveurs.",
     "origin": "machine"
@@ -7493,6 +7497,10 @@
   },
   "error.moderation.account_suspended": {
     "message": "Votre compte est suspendu. Vous ne pouvez ni téléverser ni partager tant qu'il n'est pas rétabli.",
+    "origin": "machine"
+  },
+  "error.moderation.report_at_capacity": {
+    "message": "Ce serveur gère trop de signalements en ce moment. Veuillez patienter et réessayer.",
     "origin": "machine"
   },
   "error.moderation.report_malformed": {

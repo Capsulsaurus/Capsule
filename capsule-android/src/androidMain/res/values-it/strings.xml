@@ -1857,6 +1857,7 @@
     <string name="error_federation_capability_revoked">L\'accesso a questo album condiviso è stato revocato.</string>
     <string name="error_federation_circuit_open">Questa fonte è temporaneamente sospesa dopo ripetuti errori.</string>
     <string name="error_federation_member_not_on_roster">Questa persona non è nell\'elenco dei membri dell\'album.</string>
+    <string name="error_federation_mint_at_capacity">Al momento questo server sta gestendo troppe autorizzazioni di accesso. Riprova tra poco.</string>
     <string name="error_federation_not_configured">Questo server non condivide album con altri server.</string>
     <string name="error_federation_peer_unknown">Questo server non conosce quel server.</string>
     <string name="error_federation_rate_budget_exceeded">Questa fonte ha raggiunto il limite di richieste. Attendi e riprova.</string>
@@ -1864,6 +1865,7 @@
     <string name="error_federation_scope_insufficient">Questa autorizzazione di accesso non copre il contenuto richiesto.</string>
     <string name="error_federation_unavailable">Capsule non è riuscito a raggiungere i dati di federazione. Riprova.</string>
     <string name="error_moderation_account_suspended">Il tuo account è sospeso. Non puoi caricare né condividere finché non viene ripristinato.</string>
+    <string name="error_moderation_report_at_capacity">Al momento questo server sta gestendo troppe segnalazioni. Attendi e riprova.</string>
     <string name="error_moderation_report_malformed">Questa segnalazione non è valida.</string>
     <string name="error_moderation_report_rate_limited">Troppe segnalazioni da questa fonte. Attendi e riprova.</string>
     <string name="error_moderation_report_unsigned">Impossibile verificare la segnalazione di moderazione.</string>

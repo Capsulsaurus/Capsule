@@ -7467,6 +7467,10 @@
     "message": "Этого человека нет в списке участников альбома.",
     "origin": "machine"
   },
+  "error.federation.mint_at_capacity": {
+    "message": "Сейчас этот сервер обрабатывает слишком много разрешений на доступ. Повторите попытку чуть позже.",
+    "origin": "machine"
+  },
   "error.federation.not_configured": {
     "message": "Этот сервер не делится альбомами с другими серверами.",
     "origin": "machine"
@@ -7493,6 +7497,10 @@
   },
   "error.moderation.account_suspended": {
     "message": "Ваша учётная запись приостановлена. Вы не можете загружать или делиться, пока она не будет восстановлена.",
+    "origin": "machine"
+  },
+  "error.moderation.report_at_capacity": {
+    "message": "Сейчас этот сервер обрабатывает слишком много жалоб. Подождите и повторите попытку.",
     "origin": "machine"
   },
   "error.moderation.report_malformed": {

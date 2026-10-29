@@ -7467,6 +7467,10 @@
     "message": "その人はこのアルバムのメンバー一覧に含まれていません。",
     "origin": "machine"
   },
+  "error.federation.mint_at_capacity": {
+    "message": "このサーバーは現在、多数のアクセス許可を処理しています。しばらくしてからもう一度お試しください。",
+    "origin": "machine"
+  },
   "error.federation.not_configured": {
     "message": "このサーバーは他のサーバーとアルバムを共有していません。",
     "origin": "machine"
@@ -7493,6 +7497,10 @@
   },
   "error.moderation.account_suspended": {
     "message": "アカウントが停止されています。復元されるまで、アップロードや共有はできません。",
+    "origin": "machine"
+  },
+  "error.moderation.report_at_capacity": {
+    "message": "このサーバーは現在、多数の報告を処理しています。しばらくしてからもう一度お試しください。",
     "origin": "machine"
   },
   "error.moderation.report_malformed": {

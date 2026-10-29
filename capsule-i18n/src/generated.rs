@@ -308,6 +308,9 @@ pub mod error_codes {
     /// `error.federation.member_not_on_roster`
     pub const FEDERATION_MEMBER_NOT_ON_ROSTER: &str = "error.federation.member_not_on_roster";
 
+    /// `error.federation.mint_at_capacity`
+    pub const FEDERATION_MINT_AT_CAPACITY: &str = "error.federation.mint_at_capacity";
+
     /// `error.federation.not_configured`
     pub const FEDERATION_NOT_CONFIGURED: &str = "error.federation.not_configured";
 
@@ -328,6 +331,9 @@ pub mod error_codes {
 
     /// `error.moderation.account_suspended`
     pub const MODERATION_ACCOUNT_SUSPENDED: &str = "error.moderation.account_suspended";
+
+    /// `error.moderation.report_at_capacity`
+    pub const MODERATION_REPORT_AT_CAPACITY: &str = "error.moderation.report_at_capacity";
 
     /// `error.moderation.report_malformed`
     pub const MODERATION_REPORT_MALFORMED: &str = "error.moderation.report_malformed";

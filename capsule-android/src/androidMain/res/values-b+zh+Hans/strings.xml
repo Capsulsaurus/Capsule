@@ -1857,6 +1857,7 @@
     <string name="error_federation_capability_revoked">对此共享相册的访问权限已被撤销。</string>
     <string name="error_federation_circuit_open">此来源在多次出错后暂时被退避处理。</string>
     <string name="error_federation_member_not_on_roster">此人不在该相册的成员名单中。</string>
+    <string name="error_federation_mint_at_capacity">此服务器当前正在处理过多访问授权。请稍后再试。</string>
     <string name="error_federation_not_configured">此服务器不与其他服务器共享相册。</string>
     <string name="error_federation_peer_unknown">此服务器不认识该服务器。</string>
     <string name="error_federation_rate_budget_exceeded">此来源已达到其请求上限。请稍候再试。</string>
@@ -1864,6 +1865,7 @@
     <string name="error_federation_scope_insufficient">此访问授权不涵盖所请求的内容。</string>
     <string name="error_federation_unavailable">Capsule 无法访问联合记录，请重试。</string>
     <string name="error_moderation_account_suspended">您的账户已被停用。在恢复之前，您无法上传或分享。</string>
+    <string name="error_moderation_report_at_capacity">此服务器当前正在处理过多举报。请稍候再试。</string>
     <string name="error_moderation_report_malformed">该举报无效。</string>
     <string name="error_moderation_report_rate_limited">来自此来源的举报过多。请稍候再试。</string>
     <string name="error_moderation_report_unsigned">无法验证此举报。</string>

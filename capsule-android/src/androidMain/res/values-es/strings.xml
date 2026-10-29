@@ -1857,6 +1857,7 @@
     <string name="error_federation_capability_revoked">Se ha revocado el acceso a este álbum compartido.</string>
     <string name="error_federation_circuit_open">Esta fuente está temporalmente en espera tras errores repetidos.</string>
     <string name="error_federation_member_not_on_roster">Esa persona no está en la lista de miembros de este álbum.</string>
+    <string name="error_federation_mint_at_capacity">Este servidor está gestionando demasiadas concesiones de acceso en este momento. Inténtalo de nuevo en breve.</string>
     <string name="error_federation_not_configured">Este servidor no comparte álbumes con otros servidores.</string>
     <string name="error_federation_peer_unknown">Este servidor no conoce ese servidor.</string>
     <string name="error_federation_rate_budget_exceeded">Esta fuente ha alcanzado su límite de solicitudes. Espera e inténtalo de nuevo.</string>
@@ -1864,6 +1865,7 @@
     <string name="error_federation_scope_insufficient">Esta concesión de acceso no cubre el contenido solicitado.</string>
     <string name="error_federation_unavailable">Capsule no pudo acceder a los registros de federación. Inténtalo de nuevo.</string>
     <string name="error_moderation_account_suspended">Tu cuenta está suspendida. No puedes subir ni compartir hasta que se restablezca.</string>
+    <string name="error_moderation_report_at_capacity">Este servidor está gestionando demasiados informes en este momento. Espera e inténtalo de nuevo.</string>
     <string name="error_moderation_report_malformed">Ese informe no es válido.</string>
     <string name="error_moderation_report_rate_limited">Demasiados informes de esta fuente. Espera e inténtalo de nuevo.</string>
     <string name="error_moderation_report_unsigned">No se pudo verificar el informe de moderación.</string>

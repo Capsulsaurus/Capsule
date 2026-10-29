@@ -1857,6 +1857,7 @@
     <string name="error_federation_capability_revoked">L\'accès à cet album partagé a été révoqué.</string>
     <string name="error_federation_circuit_open">Cette source est temporairement mise en attente après des erreurs répétées.</string>
     <string name="error_federation_member_not_on_roster">Cette personne ne figure pas dans la liste des membres de cet album.</string>
+    <string name="error_federation_mint_at_capacity">Ce serveur gère trop d\'autorisations d\'accès en ce moment. Veuillez réessayer sous peu.</string>
     <string name="error_federation_not_configured">Ce serveur ne partage pas d\'albums avec d\'autres serveurs.</string>
     <string name="error_federation_peer_unknown">Ce serveur n\'est pas connu de ce serveur.</string>
     <string name="error_federation_rate_budget_exceeded">Cette source a atteint sa limite de requêtes. Veuillez patienter et réessayer.</string>
@@ -1864,6 +1865,7 @@
     <string name="error_federation_scope_insufficient">Cette autorisation d\'accès ne couvre pas le contenu demandé.</string>
     <string name="error_federation_unavailable">Capsule n\'a pas pu accéder aux données de fédération. Veuillez réessayer.</string>
     <string name="error_moderation_account_suspended">Votre compte est suspendu. Vous ne pouvez ni téléverser ni partager tant qu\'il n\'est pas rétabli.</string>
+    <string name="error_moderation_report_at_capacity">Ce serveur gère trop de signalements en ce moment. Veuillez patienter et réessayer.</string>
     <string name="error_moderation_report_malformed">Ce signalement n\'est pas valide.</string>
     <string name="error_moderation_report_rate_limited">Trop de signalements provenant de cette source. Veuillez patienter et réessayer.</string>
     <string name="error_moderation_report_unsigned">Le signalement de modération n\'a pas pu être vérifié.</string>
