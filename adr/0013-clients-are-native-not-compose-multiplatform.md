@@ -26,14 +26,14 @@ Two things have kept the answer the same:
   ([ADR-0005](0005-one-uniffi-namespace-pair-reaches-the-apps.md)).
 
 The logic worth sharing (crypto, import, sync, transfer, the library) already lives in Rust and
-reaches every app through one FFI pair. A shared UI layer would sit on top of that, and the only
+reaches every app through UniFFI. A shared UI layer would sit on top of that, and the only
 thing it would share is the views. But the [design language](../capsule-docs/src/content/docs/design/clients.md#design-language)
 deliberately does not share views: HIG on Apple platforms and Material on Android.
 
 ## Decision
 
 Apple clients are SwiftUI and Android is Jetpack Compose, each over the Rust core through the
-UniFFI pair ADR-0005 fixes. No cross-platform UI framework sits between Rust and a client. Code
+UniFFI bindings ADR-0005 fixes for that platform. No cross-platform UI framework sits between Rust and a client. Code
 shared between clients is Rust; code shared between Apple clients is Swift.
 
 ## Considered and rejected
@@ -55,5 +55,6 @@ shared between clients is Rust; code shared between Apple clients is Swift.
   Android Gradle plugin and Jetpack Compose.
 - Windows and Linux are deferred. This decision rules out reaching them through Compose
   Multiplatform and leaves their toolkit to be chosen when they are built, under the same rule.
-- This decision is reopened only if Compose Multiplatform's desktop target drops the JVM. If it
-  is, the replacement ADR supersedes this one.
+- A JVM-free Compose Multiplatform desktop target would remove only one of the reasons above:
+  the design language would still not share views. Reopening this decision takes a case against
+  both, and the ADR that makes it supersedes this one.

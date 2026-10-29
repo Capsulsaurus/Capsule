@@ -43,4 +43,4 @@ Hostile paths (captive portals, congested carriers, the Great Firewall) MUST deg
 
 ## Packet Marking
 
-Capsule sets no DSCP value or IP traffic class on its own sockets. No correctness or throughput property depends on marking: most access networks strip or rewrite the field, so it carries no meaning end to end. Where a LAN or Wi-Fi network does honour it, it can only lower the priority of bulk transfers relative to other traffic, not speed them up.
+Capsule sets no DSCP value or IP traffic class on its own sockets. No correctness or throughput property depends on marking: most access networks strip or rewrite the field, so it carries no meaning end to end. Where a LAN or Wi-Fi network does honour it, the only marking that would fit is Lower Effort on bulk transfers, which makes them yield to other traffic and gains Capsule no throughput.

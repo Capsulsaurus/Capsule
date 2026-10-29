@@ -1,12 +1,12 @@
 ---
 title: Your Whole Library, Offline
-description: A full index of every photo you have ever had, on every device, with or without a connection
+description: A full index of every photo you have ever kept, in every native app, with or without a connection
 status: draft
 ---
 
 Most photo services give a device a window onto a library that lives on someone else's
 server. Without a connection, the window closes. Capsule is designed the other way round: every
-device holds a **full index of every photo and video you have ever kept**, so the whole library
+native app holds a **full index of every photo and video you have ever kept**, so the whole library
 can be browsed, searched and organized offline. Capsule has not been released yet, so this page
 describes the design.
 

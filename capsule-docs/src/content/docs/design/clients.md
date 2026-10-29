@@ -8,7 +8,7 @@ Clients are native per platform. Cross-platform logic — [`verify_asset`](/desi
 
 ## Design Priorities
 
-- **Native** per platform, for familiar usability and platform optimisation: SwiftUI on Apple platforms and Jetpack Compose on Android, each over the shared Rust core through UniFFI (`capsule-sdk` and `capsule-core-ffi`). No cross-platform UI framework sits between Rust and a client.
+- **Native** per platform, for familiar usability and platform optimisation: SwiftUI on Apple platforms and Jetpack Compose on Android, each over the shared Rust core through its UniFFI bindings ([ADR-0005](https://github.com/Capsulsaurus/Capsule/blob/master/adr/0005-one-uniffi-namespace-pair-reaches-the-apps.md)). No cross-platform UI framework sits between Rust and a client.
 - **Minimal divergence**: heavy logic is centralised in `capsule-core` / `capsule-sdk`; client code is mostly display.
 
 ### Platform Tiers
