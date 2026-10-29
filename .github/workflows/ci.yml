@@ -78,7 +78,7 @@ jobs:
               - 'locales/**'
               - 'capsule-web/src/i18n/messages/**'
               - 'capsule-swift/Generated/**'
-              - 'capsule-android/src/androidMain/res/values*/strings.xml'
+              - 'capsule-android/src/main/res/values*/strings.xml'
               - '.github/workflows/ci.yml'
             web:
               - 'capsule-web/**'

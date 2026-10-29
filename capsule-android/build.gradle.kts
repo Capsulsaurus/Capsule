@@ -1,51 +1,19 @@
-import org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
+// A plain Android application: AGP, the Kotlin Android plugin and the Compose compiler, with
+// every androidx.compose artifact versioned by the Jetpack Compose BOM. Clients are native
+// (ADR-0013), so no Kotlin or Compose Multiplatform plugin is applied, and the sources sit in
+// the standard `src/main` and `src/test` sets that ktlint and detekt read by default.
 plugins {
-    alias(libs.plugins.kotlinMultiplatform)
     alias(libs.plugins.androidApplication)
+    alias(libs.plugins.kotlinAndroid)
     alias(libs.plugins.composeCompiler)
-    alias(libs.plugins.composeMultiplatform)
     alias(libs.plugins.kotlinxSerialization)
 }
 
 kotlin {
-    androidTarget {
-        @OptIn(ExperimentalKotlinGradlePluginApi::class)
-        compilerOptions {
-            jvmTarget.set(JvmTarget.JVM_17)
-        }
-    }
-
-    sourceSets {
-        androidMain.dependencies {
-            implementation(libs.androidx.compose.ui.tooling.preview)
-            implementation(libs.androidx.activity.compose)
-            // The in-app language picker below Android 13 (AppCompatDelegate.setApplicationLocales).
-            implementation(libs.androidx.appcompat)
-            implementation(libs.androidx.viewmodel.compose)
-            implementation(libs.androidx.navigation.compose)
-            implementation(libs.koin.androidx.compose)
-            implementation(libs.coil.compose)
-            implementation(libs.coil.network.ktor)
-            // JankStats (field frame telemetry) and the trace sections the parity benchmark reads.
-            implementation(libs.androidx.metrics.performance)
-            implementation(libs.androidx.tracing.ktx)
-        }
-        // Plain JVM unit tests over the alert loop, which touches no Android API.
-        androidUnitTest.dependencies {
-            implementation(kotlin("test"))
-        }
-        commonMain.dependencies {
-            implementation(compose.runtime)
-            implementation(compose.foundation)
-            implementation(compose.material3)
-            implementation(compose.ui)
-            implementation(compose.components.resources)
-            implementation(compose.components.uiToolingPreview)
-            implementation(projects.core)
-            implementation(libs.kotlinx.serialization.core)
-        }
+    compilerOptions {
+        jvmTarget.set(JvmTarget.JVM_17)
     }
 }
 
@@ -61,6 +29,9 @@ android {
         // across every package by `mise run set-version` (xtask).
         versionCode = providers.gradleProperty("capsule.versionCode").get().toInt()
         versionName = providers.gradleProperty("capsule.versionName").get()
+    }
+    buildFeatures {
+        compose = true
     }
     packaging {
         resources {
@@ -88,7 +59,31 @@ android {
 }
 
 dependencies {
+    implementation(platform(libs.androidx.compose.bom))
+    implementation(libs.androidx.compose.runtime)
+    implementation(libs.androidx.compose.foundation)
+    implementation(libs.androidx.compose.ui)
+    implementation(libs.androidx.compose.material3)
+    implementation(libs.androidx.compose.material.icons.core)
+    implementation(libs.androidx.compose.ui.tooling.preview)
     debugImplementation(libs.androidx.compose.ui.tooling)
+
+    implementation(libs.androidx.activity.compose)
+    // The in-app language picker below Android 13 (AppCompatDelegate.setApplicationLocales).
+    implementation(libs.androidx.appcompat)
+    implementation(libs.androidx.viewmodel.compose)
+    implementation(libs.androidx.navigation.compose)
+    implementation(libs.koin.androidx.compose)
+    implementation(libs.coil.compose)
+    implementation(libs.coil.network.ktor)
+    // JankStats (field frame telemetry) and the trace sections the parity benchmark reads.
+    implementation(libs.androidx.metrics.performance)
+    implementation(libs.androidx.tracing.ktx)
+    implementation(libs.kotlinx.serialization.core)
+    implementation(projects.core)
+
+    // Plain JVM unit tests over the alert loop, which touches no Android API.
+    testImplementation(kotlin("test"))
 }
 
 // The adapters' JVM unit tests drive a real FfiWorkspace: JNA loads the host libcapsule_sdk

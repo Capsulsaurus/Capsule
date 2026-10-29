@@ -116,8 +116,10 @@ object AlertNotifications {
 
     /**
      * The title and body for [copy], from the generated `notification_*` resources, in the
-     * app language ([localized]).
+     * app language ([localized]). (The spread is `getString`'s varargs: copying a handful of
+     * arguments is free.)
      */
+    @Suppress("SpreadOperator")
     fun text(
         context: Context,
         copy: AlertCopy,
