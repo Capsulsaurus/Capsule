@@ -782,13 +782,12 @@ impl Workspace {
                 // the original (`Workspace::purge`): a chain headed by a `delete` with no
                 // sidecar beside it is that record, not damage. Anything else falls through to
                 // the warning below.
-                Err(e) => match purged_head(path, stem) {
-                    Some((asset_id, head)) => {
+                Err(e) => {
+                    if let Some((asset_id, head)) = purged_head(path, stem) {
                         purged += 1;
                         tracing::trace!(provenance = %path.display(), %asset_id, restore_error = %e, "workspace open: purged asset; only its provenance chain is kept");
                         self.purged.insert(asset_id, head);
-                    }
-                    None => {
+                    } else {
                         skipped += 1;
                         tracing::warn!(
                             provenance = %path.display(),
@@ -796,7 +795,7 @@ impl Workspace {
                             "workspace open: could not restore this asset; skipping it"
                         );
                     }
-                },
+                }
             }
         }
         tracing::info!(

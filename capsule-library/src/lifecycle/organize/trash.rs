@@ -75,8 +75,8 @@ pub struct PurgeOutcome {
     pub asset_id: Uuid,
     /// The signed shorter-retention `delete` appended before an early purge, so the server may
     /// purge too. `None` when the window had already closed. It is the asset's final chain
-    /// head and the record a client sends to the album's ops surface; the workspace no longer
-    /// holds the asset to hand it out later.
+    /// head and the record a client sends to the album's ops surface; a delivery that failed
+    /// resends it from [`Workspace::purge_record`].
     pub reissue: Option<ProvenanceRecord>,
     /// The files removed, for the caller's log.
     pub removed_files: usize,
