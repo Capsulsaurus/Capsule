@@ -20,7 +20,7 @@ Checks the [client layout](/design/filesystem/client/#desktop-library-layout):
 
 - Every original has a sidecar and provenance chain; every sidecar parses, has its required fields, a `sidecar_schema` ≤ the client's max known ([Postel's law](/design/principles/#postels-law-asymmetric)), and a valid signature from a directory device.
 - A sidecar's `uuid` matches its filename. Date-bucket drift is expected after a capture-date correction and repaired as a rename bundle; it is a fault only when unexplained.
-- Every `cache/` and `trash/` entry refers to a known asset.
+- Every `cache/` entry refers to a known asset.
 - Each provenance chain walks from `create` to head; a break is a quarantine surface, never skipped.
 - Index rows reference existing files ([index staleness](/design/filesystem/client/#local-index-staleness)).
 
