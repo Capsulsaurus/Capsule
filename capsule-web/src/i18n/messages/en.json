@@ -1822,7 +1822,7 @@
   "auth.login.title": "Login",
   "auth.new_password": "New Password",
   "auth.no_account": "Don't have an account?",
-  "auth.oidc.ceremony_lost": "This sign-in was started in another tab, or too long ago. Start again from the login page.",
+  "auth.oidc.ceremony_lost": "This tab can no longer find this sign-in. Start again from the login page.",
   "auth.oidc.completing": "Finishing sign-in…",
   "auth.oidc.failed_title": "Sign-in Not Completed",
   "auth.oidc.not_completed": "Your identity provider did not complete the sign-in.",
