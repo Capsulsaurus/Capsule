@@ -21,3 +21,13 @@ The adapter first copies every object into a client-local staging root, then han
 - **Nothing dropped silently.** An object the camera refuses, or whose record cannot be read, and a storage the camera will not list (an empty or unavailable card slot), are reported and the run continues; a lost connection or a failing local disk ends the run and keeps what was staged for the next one.
 - **Read-only.** The adapter never mutates camera storage. Any future delete-after-import MUST pass [Verify Before Destroy](/design/transfer/durability/#verify-before-destroy).
 - **Discovery** via mDNS (`_ptp._tcp`) or manual IP; pairing state is client-local config.
+
+## Pairing and the Session
+
+- **Initiator identity.** A client presents one initiator GUID and name to every camera, created on first use and persisted in client-local config, never in a library: a camera that pairs remembers the GUID, so it is stable across runs, and renaming keeps it. The GUID is random (UUIDv4), since every camera the client meets sees it. An identity file that cannot be read is an error, never silently replaced, because a fresh GUID unpairs every camera.
+- **Event channel.** The session's event channel is serviced for as long as the session is open, on its own reader beside the command channel: every keep-alive probe is answered, so a camera does not drop a client busy in a long transfer, and every event is logged. A failing event channel ends only its reader, never the import.
+- **Staging location.** The staging root lives under the library, one per camera (named from its manufacturer, model and serial number), so an interrupted run resumes only that camera's partial objects. Staged objects are kept after the import: they are what lets the next run skip every object it already holds without fetching it again.
+
+## The CLI Flow
+
+The CLI is the reference client: `capsule camera import --address HOST[:PORT] --library PATH` connects (port 15740 by default), receives into the library's staging root, reports every object and storage the camera would not hand over, then plans and executes the staged tree through the same import path `capsule import` runs. `--json` prints one document holding the camera, the identity presented, the receive tally with each failure, the import report and the event-channel tally. `capsule camera identity` shows the identity, creating it on first use, and `--name` renames it.
