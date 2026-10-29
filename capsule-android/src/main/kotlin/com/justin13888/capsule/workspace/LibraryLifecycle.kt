@@ -57,17 +57,7 @@ class LibraryLifecycle(
         val exists = File(root, LIBRARY_DIR).isDirectory
         val workspace =
             if (exists) {
-                val passphrase =
-                    if (secrets.exists()) {
-                        try {
-                            secrets.load()
-                        } catch (error: UnlockSecretUnavailableException) {
-                            throw LibraryLockedException(error)
-                        }
-                    } else {
-                        log.severe("library: ${root.path} exists but no unlock secret does; refusing to touch it")
-                        throw LibraryLockedException(null)
-                    }
+                val passphrase = existingPassphrase()
                 log.info("library: opening ${root.path}")
                 FfiWorkspace.open(root.path, passphrase, tier, client)
             } else {
@@ -94,6 +84,19 @@ class LibraryLifecycle(
             }
         log.info("library: open (assets=${if (sampleAsset == null) 0 else "1+"})")
         return OpenedLibrary(workspace, sampleAsset)
+    }
+
+    /** The unlock secret of the library already on disk. Throws [LibraryLockedException] when it is missing or does not open. */
+    private fun existingPassphrase(): ByteArray {
+        if (!secrets.exists()) {
+            log.severe("library: ${root.path} exists but no unlock secret does; refusing to touch it")
+            throw LibraryLockedException(null)
+        }
+        return try {
+            secrets.load()
+        } catch (error: UnlockSecretUnavailableException) {
+            throw LibraryLockedException(error)
+        }
     }
 
     /**

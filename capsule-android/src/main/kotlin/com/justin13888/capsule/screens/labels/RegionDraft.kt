@@ -110,7 +110,7 @@ sealed interface RegionDraft {
                     val middleX = centerX.toFloat()
                     val middleY = centerY.toFloat()
                     var fitted = radius.toFloat()
-                    while (middleX < fitted || middleY < fitted || middleX + fitted > 1f || middleY + fitted > 1f) {
+                    while (overflowsFrame(middleX, middleY, fitted)) {
                         fitted = Math.nextDown(fitted)
                     }
                     RegionShape.Circle(middleX, middleY, fitted)
@@ -152,5 +152,12 @@ sealed interface RegionDraft {
             }
             return fitted
         }
+
+        /** Whether a circle of [radius] centred on ([x], [y]) crosses an edge of the unit frame. */
+        private fun overflowsFrame(
+            x: Float,
+            y: Float,
+            radius: Float,
+        ): Boolean = x < radius || y < radius || x + radius > 1f || y + radius > 1f
     }
 }

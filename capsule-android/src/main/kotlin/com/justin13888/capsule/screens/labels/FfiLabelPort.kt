@@ -89,7 +89,7 @@ class FfiLabelPort(
                 body().also { log.fine("labels: $verb answered") }
             } catch (error: FfiException.Label) {
                 log.fine("labels: $verb refused (${error.refusal})")
-                throw error.refusal.toDomain()
+                throw error.refusal.toDomain().apply { initCause(error) }
             } catch (error: FfiException.InvalidArgument) {
                 log.fine("labels: $verb named an id that is not a UUID")
                 throw LabelTargetNotFound().apply { initCause(error) }

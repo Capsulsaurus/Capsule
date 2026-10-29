@@ -187,12 +187,12 @@ private fun RegionCanvas(
 private fun adjustActions(): List<Pair<String, (RegionDraft) -> RegionDraft>> {
     val step = RegionDraft.STEP
     return listOf(
-        stringResource(R.string.app_labels_regions_adjust_move_left) to { it: RegionDraft -> it.moved(-step, 0.0) },
-        stringResource(R.string.app_labels_regions_adjust_move_right) to { it: RegionDraft -> it.moved(step, 0.0) },
-        stringResource(R.string.app_labels_regions_adjust_move_up) to { it: RegionDraft -> it.moved(0.0, -step) },
-        stringResource(R.string.app_labels_regions_adjust_move_down) to { it: RegionDraft -> it.moved(0.0, step) },
-        stringResource(R.string.app_labels_regions_adjust_grow) to { it: RegionDraft -> it.resized(step, step) },
-        stringResource(R.string.app_labels_regions_adjust_shrink) to { it: RegionDraft -> it.resized(-step, -step) },
+        stringResource(R.string.app_labels_regions_adjust_move_left) to { draft: RegionDraft -> draft.moved(-step, 0.0) },
+        stringResource(R.string.app_labels_regions_adjust_move_right) to { draft: RegionDraft -> draft.moved(step, 0.0) },
+        stringResource(R.string.app_labels_regions_adjust_move_up) to { draft: RegionDraft -> draft.moved(0.0, -step) },
+        stringResource(R.string.app_labels_regions_adjust_move_down) to { draft: RegionDraft -> draft.moved(0.0, step) },
+        stringResource(R.string.app_labels_regions_adjust_grow) to { draft: RegionDraft -> draft.resized(step, step) },
+        stringResource(R.string.app_labels_regions_adjust_shrink) to { draft: RegionDraft -> draft.resized(-step, -step) },
     )
 }
 
