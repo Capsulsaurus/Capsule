@@ -349,8 +349,8 @@
             {
               "kind": "func",
               "name": "expiredTrash",
-              "signature": "func expiredTrash() throws -> [FfiTrashEntry]",
-              "doc": "The trash entries whose signed retention window has closed by this device's clock: the\nretention sweep's input, each one ready for [`purge_asset`](Self::purge_asset).",
+              "signature": "func expiredTrash(drain: FfiFeedDrain?) throws -> [FfiTrashEntry]",
+              "doc": "The trash entries whose signed retention window has closed: the retention sweep's\ninput, each one ready for [`purge_asset`](Self::purge_asset).\n\nA deadline is judged only after a sync drained the feed to its head, so a restore on a\nlater page lands first: pass that drain as `drain`. The deadline is judged by this\ndevice's clock floored by the drain's latest server `changed_at`. With no drain (`None`:\nthe sync failed, or this device has no server) nothing has expired, and the trash keeps\nevery asset until the user empties it.\n\n# Errors\n\n[`FfiError::InvalidArgument`] for a `latest_changed_at` that is not RFC 3339.",
               "members": []
             },
             {
@@ -379,6 +379,13 @@
               "name": "purgeAsset",
               "signature": "func purgeAsset(assetId: String) throws -> FfiPurgeOutcome",
               "doc": "Permanently delete a trashed asset: its original, every derivative and local cache\nentry, its sidecar and its index row. The provenance chain is kept as the record of the\ndeletion. Before `retention_until` a signed shorter-retention `delete` is appended first\nand handed back in [`FfiPurgeOutcome::reissue_record`] to send to the server.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "purgedRecord",
+              "signature": "func purgedRecord(assetId: String) throws -> Data?",
+              "doc": "The signed `delete` that ended a purged asset, the head of its kept provenance chain, as\nthe opaque canonical CBOR record [`FfiPurgeOutcome::reissue_record`] carries. After an\nearly purge it is that same re-issue, so a delivery to the album's ops surface that\nfailed can be resent from here, also after a reopen. `None` for an asset this workspace\nhas not purged.",
               "members": []
             },
             {
@@ -814,6 +821,21 @@
         },
         {
           "kind": "struct",
+          "name": "FfiFeedDrain",
+          "signature": "public struct FfiFeedDrain: Equatable, Hashable",
+          "doc": "A sync that drained the feed to its head, the evidence [`FfiWorkspace::expired_trash`]\nneeds before it judges a retention deadline.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "latestChangedAt",
+              "signature": "public var latestChangedAt: String?",
+              "doc": "The latest server `changed_at` the drain saw (RFC 3339), or `None` for a drain that saw\nno entry. It floors this device's clock, so a slow clock cannot hold open a window the\nserver has closed.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "struct",
           "name": "FfiFeedEntry",
           "signature": "public struct FfiFeedEntry: Equatable, Hashable",
           "doc": "FFI mirror of [`FeedEntry`] — one decoded sync feed entry. Ids/manifest/metadata\ncross as opaque bytes.",
@@ -1133,7 +1155,7 @@
               "kind": "field",
               "name": "reissueRecord",
               "signature": "public var reissueRecord: Data?",
-              "doc": "The signed shorter-retention `delete` an early purge appended, as the opaque canonical\nCBOR provenance record [`FfiWorkspace::provenance_head`] would have returned. Send it to\nthe album's ops surface so the server may purge too; the workspace no longer holds the\nasset, so this is the only copy an app is handed. `None` when the window had closed.",
+              "doc": "The signed shorter-retention `delete` an early purge appended, as the opaque canonical\nCBOR provenance record [`FfiWorkspace::provenance_head`] would have returned. Send it to\nthe album's ops surface so the server may purge too; when that delivery fails,\n[`FfiWorkspace::purged_record`] hands the same record back from the kept chain. `None`\nwhen the window had closed.",
               "members": []
             }
           ]
@@ -2693,8 +2715,8 @@
             {
               "kind": "fun",
               "name": "expiredTrash",
-              "signature": "fun expiredTrash(): List<FfiTrashEntry>",
-              "doc": "The trash entries whose signed retention window has closed by this device's clock: the\nretention sweep's input, each one ready for [`purge_asset`](Self::purge_asset).",
+              "signature": "fun expiredTrash(drain: FfiFeedDrain?): List<FfiTrashEntry>",
+              "doc": "The trash entries whose signed retention window has closed: the retention sweep's\ninput, each one ready for [`purge_asset`](Self::purge_asset).\n\nA deadline is judged only after a sync drained the feed to its head, so a restore on a\nlater page lands first: pass that drain as `drain`. The deadline is judged by this\ndevice's clock floored by the drain's latest server `changed_at`. With no drain (`None`:\nthe sync failed, or this device has no server) nothing has expired, and the trash keeps\nevery asset until the user empties it.\n\n# Errors\n\n[`FfiError::InvalidArgument`] for a `latest_changed_at` that is not RFC 3339.",
               "members": []
             },
             {
@@ -2723,6 +2745,13 @@
               "name": "purgeAsset",
               "signature": "fun purgeAsset(assetId: kotlin.String): FfiPurgeOutcome",
               "doc": "Permanently delete a trashed asset: its original, every derivative and local cache\nentry, its sidecar and its index row. The provenance chain is kept as the record of the\ndeletion. Before `retention_until` a signed shorter-retention `delete` is appended first\nand handed back in [`FfiPurgeOutcome::reissue_record`] to send to the server.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "purgedRecord",
+              "signature": "fun purgedRecord(assetId: kotlin.String): kotlin.ByteArray?",
+              "doc": "The signed `delete` that ended a purged asset, the head of its kept provenance chain, as\nthe opaque canonical CBOR record [`FfiPurgeOutcome::reissue_record`] carries. After an\nearly purge it is that same re-issue, so a delivery to the album's ops surface that\nfailed can be resent from here, also after a reopen. `None` for an asset this workspace\nhas not purged.",
               "members": []
             },
             {
@@ -3158,6 +3187,21 @@
         },
         {
           "kind": "data class",
+          "name": "FfiFeedDrain",
+          "signature": "data class FfiFeedDrain",
+          "doc": "A sync that drained the feed to its head, the evidence [`FfiWorkspace::expired_trash`]\nneeds before it judges a retention deadline.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "latestChangedAt",
+              "signature": "var latestChangedAt: kotlin.String?",
+              "doc": "The latest server `changed_at` the drain saw (RFC 3339), or `None` for a drain that saw\nno entry. It floors this device's clock, so a slow clock cannot hold open a window the\nserver has closed.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "data class",
           "name": "FfiFeedEntry",
           "signature": "data class FfiFeedEntry",
           "doc": "FFI mirror of [`FeedEntry`] — one decoded sync feed entry. Ids/manifest/metadata\ncross as opaque bytes.",
@@ -3477,7 +3521,7 @@
               "kind": "field",
               "name": "reissueRecord",
               "signature": "var reissueRecord: kotlin.ByteArray?",
-              "doc": "The signed shorter-retention `delete` an early purge appended, as the opaque canonical\nCBOR provenance record [`FfiWorkspace::provenance_head`] would have returned. Send it to\nthe album's ops surface so the server may purge too; the workspace no longer holds the\nasset, so this is the only copy an app is handed. `None` when the window had closed.",
+              "doc": "The signed shorter-retention `delete` an early purge appended, as the opaque canonical\nCBOR provenance record [`FfiWorkspace::provenance_head`] would have returned. Send it to\nthe album's ops surface so the server may purge too; when that delivery fails,\n[`FfiWorkspace::purged_record`] hands the same record back from the kept chain. `None`\nwhen the window had closed.",
               "members": []
             }
           ]

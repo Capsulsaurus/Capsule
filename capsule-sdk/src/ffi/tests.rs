@@ -2229,6 +2229,45 @@ fn trash_refusal<T: std::fmt::Debug>(
     }
 }
 
+/// A drain that saw no feed entry: the device clock alone judges.
+fn drained() -> FfiFeedDrain {
+    FfiFeedDrain {
+        latest_changed_at: None,
+    }
+}
+
+/// The retention sweep judges a deadline only after a drain, floored by the server's latest
+/// `changed_at`, and refuses a stamp that is not RFC 3339.
+#[test]
+fn ffi_expired_trash_is_gated_on_a_drain_and_floored_by_the_server_clock() {
+    let lib = tempfile::TempDir::new().unwrap();
+    let (workspace, _, asset) = labelled_fixture(lib.path());
+    let entry = workspace.delete_asset(asset.clone(), 30).unwrap();
+    let until = entry.retention_until.clone().unwrap();
+
+    assert!(workspace.expired_trash(None).unwrap().is_empty());
+    assert!(workspace.expired_trash(Some(drained())).unwrap().is_empty());
+    let floored = workspace
+        .expired_trash(Some(FfiFeedDrain {
+            latest_changed_at: Some(until),
+        }))
+        .unwrap();
+    assert_eq!(
+        floored
+            .iter()
+            .map(|e| e.asset_id.clone())
+            .collect::<Vec<_>>(),
+        vec![asset]
+    );
+    assert!(!floored[0].restorable, "judged at the same floored instant");
+    assert!(matches!(
+        workspace.expired_trash(Some(FfiFeedDrain {
+            latest_changed_at: Some("yesterday".into()),
+        })),
+        Err(FfiError::InvalidArgument { .. })
+    ));
+}
+
 /// Delete, restore and purge go through the workspace's signed records: a retried delete keeps
 /// its window, a restore leaves the trash, and an early purge hands back the signed re-issue
 /// the server needs before the asset leaves the workspace.
@@ -2245,7 +2284,7 @@ fn ffi_trash_verbs_delete_restore_and_purge_through_signed_records() {
     assert!(entry.restorable);
     assert!(entry.retention_until.is_some());
     assert_eq!(workspace.trash().unwrap(), vec![entry.clone()]);
-    assert!(workspace.expired_trash().unwrap().is_empty());
+    assert!(workspace.expired_trash(Some(drained())).unwrap().is_empty());
     assert_eq!(
         workspace.delete_asset(asset.clone(), 1).unwrap(),
         entry,
@@ -2267,10 +2306,19 @@ fn ffi_trash_verbs_delete_restore_and_purge_through_signed_records() {
     workspace.delete_asset(asset.clone(), 30).unwrap();
     let purged = workspace.purge_asset(asset.clone()).unwrap();
     assert_eq!(purged.asset_id, asset);
-    let record: ProvenanceRecord =
-        capsule_core::cbor::from_slice(&purged.reissue_record.expect("an early purge re-issues"))
-            .unwrap();
+    let record: ProvenanceRecord = capsule_core::cbor::from_slice(
+        purged
+            .reissue_record
+            .as_deref()
+            .expect("an early purge re-issues"),
+    )
+    .unwrap();
     assert_eq!(record.manifest.core.action, Action::Delete);
+    assert_eq!(
+        workspace.purged_record(asset.clone()).unwrap(),
+        purged.reissue_record,
+        "a re-issue whose delivery failed can be resent from the kept chain"
+    );
     assert!(!workspace.asset_ids().unwrap().contains(&asset));
     assert!(workspace.trash().unwrap().is_empty());
     assert_eq!(
@@ -2288,7 +2336,14 @@ fn ffi_trash_refuses_a_restore_after_retention_until() {
 
     let entry = workspace.delete_asset(asset.clone(), 0).unwrap();
     assert!(!entry.restorable);
-    assert_eq!(workspace.expired_trash().unwrap(), vec![entry.clone()]);
+    assert_eq!(
+        workspace.expired_trash(Some(drained())).unwrap(),
+        vec![entry.clone()]
+    );
+    assert!(
+        workspace.expired_trash(None).unwrap().is_empty(),
+        "without a drained feed nothing has expired"
+    );
 
     let (refusal, code, until) = trash_refusal(workspace.restore_asset(asset.clone()));
     assert_eq!(refusal, FfiTrashRefusal::RetentionElapsed);

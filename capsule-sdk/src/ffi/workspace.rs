@@ -48,8 +48,8 @@ use capsule_core::sidecar::{
     LabelError, Region, RegionError, RegionShape, SidecarV1, normalize_label,
 };
 use capsule_library::lifecycle::{
-    LifecycleError, QuarantineReason, RemoteAssetFacts, RemoteEntry, RemoteHead, RemoteOriginal,
-    SyncApplyOutcome, TrashEntry, UploadBundle, Workspace, hash_ciphertext_from,
+    FeedDrain, LifecycleError, QuarantineReason, RemoteAssetFacts, RemoteEntry, RemoteHead,
+    RemoteOriginal, SyncApplyOutcome, TrashEntry, UploadBundle, Workspace, hash_ciphertext_from,
 };
 use jiff::Timestamp;
 use uuid::Uuid;
@@ -890,9 +890,34 @@ pub struct FfiPurgeOutcome {
     pub asset_id: String,
     /// The signed shorter-retention `delete` an early purge appended, as the opaque canonical
     /// CBOR provenance record [`FfiWorkspace::provenance_head`] would have returned. Send it to
-    /// the album's ops surface so the server may purge too; the workspace no longer holds the
-    /// asset, so this is the only copy an app is handed. `None` when the window had closed.
+    /// the album's ops surface so the server may purge too; when that delivery fails,
+    /// [`FfiWorkspace::purged_record`] hands the same record back from the kept chain. `None`
+    /// when the window had closed.
     pub reissue_record: Option<Vec<u8>>,
+}
+
+/// A sync that drained the feed to its head, the evidence [`FfiWorkspace::expired_trash`]
+/// needs before it judges a retention deadline.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct FfiFeedDrain {
+    /// The latest server `changed_at` the drain saw (RFC 3339), or `None` for a drain that saw
+    /// no entry. It floors this device's clock, so a slow clock cannot hold open a window the
+    /// server has closed.
+    pub latest_changed_at: Option<String>,
+}
+
+impl FfiFeedDrain {
+    fn parse(&self) -> Result<FeedDrain, FfiError> {
+        let latest_changed_at = self
+            .latest_changed_at
+            .as_deref()
+            .map(str::parse::<Timestamp>)
+            .transpose()
+            .map_err(|e| FfiError::InvalidArgument {
+                detail: format!("latest_changed_at: not an RFC 3339 timestamp ({e})"),
+            })?;
+        Ok(FeedDrain { latest_changed_at })
+    }
 }
 
 /// Why a trash verb was refused ([`FfiError::Trash`]). Nothing was written.
@@ -1804,16 +1829,48 @@ impl FfiWorkspace {
         })
     }
 
-    /// The trash entries whose signed retention window has closed by this device's clock: the
-    /// retention sweep's input, each one ready for [`purge_asset`](Self::purge_asset).
-    pub fn expired_trash(&self) -> Result<Vec<FfiTrashEntry>, FfiError> {
-        let now = Timestamp::now();
+    /// The trash entries whose signed retention window has closed: the retention sweep's
+    /// input, each one ready for [`purge_asset`](Self::purge_asset).
+    ///
+    /// A deadline is judged only after a sync drained the feed to its head, so a restore on a
+    /// later page lands first: pass that drain as `drain`. The deadline is judged by this
+    /// device's clock floored by the drain's latest server `changed_at`. With no drain (`None`:
+    /// the sync failed, or this device has no server) nothing has expired, and the trash keeps
+    /// every asset until the user empties it.
+    ///
+    /// # Errors
+    ///
+    /// [`FfiError::InvalidArgument`] for a `latest_changed_at` that is not RFC 3339.
+    pub fn expired_trash(
+        &self,
+        drain: Option<FfiFeedDrain>,
+    ) -> Result<Vec<FfiTrashEntry>, FfiError> {
+        let drain = drain.as_ref().map(FfiFeedDrain::parse).transpose()?;
+        let clock = Timestamp::now();
+        let judged_at = drain.map_or(clock, |drain| drain.judged_at(clock));
         self.with(|ws| {
             Ok(ws
-                .expired_trash(now)
+                .expired_trash_after_drain(clock, drain)
                 .iter()
-                .map(|entry| FfiTrashEntry::new(entry, now))
+                .map(|entry| FfiTrashEntry::new(entry, judged_at))
                 .collect())
+        })
+    }
+
+    /// The signed `delete` that ended a purged asset, the head of its kept provenance chain, as
+    /// the opaque canonical CBOR record [`FfiPurgeOutcome::reissue_record`] carries. After an
+    /// early purge it is that same re-issue, so a delivery to the album's ops surface that
+    /// failed can be resent from here, also after a reopen. `None` for an asset this workspace
+    /// has not purged.
+    pub fn purged_record(&self, asset_id: String) -> Result<Option<Vec<u8>>, FfiError> {
+        let asset_id = parse_uuid("asset_id", &asset_id)?;
+        self.with(|ws| {
+            ws.purge_record(&asset_id)
+                .map(capsule_core::cbor::to_canonical_vec)
+                .transpose()
+                .map_err(|e| FfiError::Workspace {
+                    detail: format!("encoding the purge record of {asset_id}: {e}"),
+                })
         })
     }
 }

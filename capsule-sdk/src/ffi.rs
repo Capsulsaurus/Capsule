@@ -71,7 +71,7 @@ use crate::upload::{
 mod workspace;
 
 pub use workspace::{
-    FfiAlbum, FfiAssetFacts, FfiAssetMetadata, FfiClientBuild, FfiDeviceTier,
+    FfiAlbum, FfiAssetFacts, FfiAssetMetadata, FfiClientBuild, FfiDeviceTier, FfiFeedDrain,
     FfiHardwareKeyAgreement, FfiHardwareSigner, FfiHardwareSignerError, FfiLabelRefusal,
     FfiLabelTarget, FfiOpenedOriginal, FfiPurgeOutcome, FfiRegion, FfiRegionShape,
     FfiSyncApplyOutcome, FfiSyncEntry, FfiSyncHead, FfiTrashEntry, FfiTrashRefusal, FfiUploadBlob,
