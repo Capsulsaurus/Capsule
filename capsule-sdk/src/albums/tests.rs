@@ -30,6 +30,7 @@
 //! | `a_closed_retention_window_is_its_own_permanent_kind` | `409 error.upload.retention_elapsed` is `retention_elapsed`, permanent, and sent once |
 //! | `a_stale_chain_carries_the_head_to_rebase_onto` | the other `409` is `stale_revival` and carries `chain_head` |
 //! | `a_transient_refusal_is_not_permanent` | `500` and `403` are not judgements of the op, so they are not permanent |
+//! | `a_401_under_a_session_is_refreshed_and_the_op_replayed_once` | a mid-flight `401` is refreshed once and replayed once with the rotated bearer |
 //! | `an_op_naming_no_album_is_refused_before_the_wire` | nothing is sent for an envelope with no album |
 
 use std::sync::{Arc, Mutex};
@@ -744,6 +745,72 @@ async fn a_transient_refusal_is_not_permanent() {
         assert_eq!(error.error_code(), Some(code), "{status}");
         assert!(!error.is_permanent(), "{status}");
     }
+}
+
+/// **The session path.** A token the server refuses mid-flight is refreshed once and the op
+/// replayed once with the rotated bearer; the replay's answer is the one the caller sees.
+#[tokio::test]
+async fn a_401_under_a_session_is_refreshed_and_the_op_replayed_once() {
+    let ops = Arc::new(Mutex::new(0_usize));
+    let counter = ops.clone();
+    let (server, seen) = recording(move |req| {
+        if req.path == "/v1/auth/refresh" {
+            return MockResponse::new(200, "OK").json_body(
+                serde_json::json!({
+                    "access_token": "access-2",
+                    "refresh_token": "refresh-2",
+                    "token_type": "Bearer",
+                    "expires_by": jiff::Timestamp::now().as_second() + 3_600,
+                })
+                .to_string(),
+            );
+        }
+        let mut calls = counter.lock().expect("op counter");
+        *calls += 1;
+        if *calls == 1 {
+            MockResponse::new(401, "Unauthorized").json_body(format!(
+                r#"{{"type":"about:blank","status":401,"detail":"expired","code":"{}"}}"#,
+                error_codes::REQUEST_UNAUTHENTICATED
+            ))
+        } else {
+            applied(true)
+        }
+    })
+    .await;
+    let base = server.base_url();
+    let origin = base.trim_end_matches('/');
+    let session = crate::auth::AuthClient::new(&format!("{origin}/v1/auth"))
+        .expect("auth client")
+        .resume(crate::auth::PersistedSession {
+            access_token: "access-1".to_owned().into(),
+            refresh_token: "refresh-1".to_owned().into(),
+            // Far from expiry, so only the reactive `401` path can refresh.
+            access_expires_at_unix: jiff::Timestamp::now().as_second() + 3_600,
+        })
+        .expect("session");
+    let client = AlbumClient::new(AlbumTransport::with_session(
+        session,
+        format!("{origin}/v1/albums"),
+    ));
+
+    let result = client.apply_op(&restore_op()).await.expect("replayed");
+    assert_eq!(result.sync_seq, 42);
+    assert!(result.replayed);
+
+    let requests = seen.lock().expect("recorded requests");
+    let paths: Vec<&str> = requests.iter().map(|r| r.path.as_str()).collect();
+    let op_path = format!("/v1/albums/{}/ops", album().hyphenated());
+    assert_eq!(
+        paths,
+        vec![op_path.as_str(), "/v1/auth/refresh", op_path.as_str()],
+        "one attempt, one refresh, one replay"
+    );
+    assert_eq!(requests[0].header("authorization"), Some("Bearer access-1"));
+    assert_eq!(
+        requests[2].header("authorization"),
+        Some("Bearer access-2"),
+        "the replay carries the rotated token"
+    );
 }
 
 #[tokio::test]
