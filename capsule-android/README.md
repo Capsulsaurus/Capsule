@@ -20,7 +20,7 @@ The navigation graph in `App.kt` is the template's list/detail flow keyed by an
 `objectId: Int`, not by a Capsule asset. No screen reads a Capsule library, and nothing in
 this module calls `capsule-core-kotlin`.
 
-Treat every file under `src/androidMain/` as scaffolding to be replaced rather than as a
+Treat every file under `src/main/` as scaffolding to be replaced rather than as a
 partial implementation to be extended.
 
 `capsule-core-kotlin` — the shared library this app is meant to sit on — now binds the
