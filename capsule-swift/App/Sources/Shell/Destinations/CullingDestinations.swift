@@ -323,19 +323,19 @@ struct CullingView: View {
     /// reverted and the trash never reaches an asset whose flag write is still
     /// to come.
     private func sweep() async {
-        let ids = pass.sweepCandidates
-        guard !ids.isEmpty else { return }
         do {
-            try await organize.moveToTrash(ids, retentionDays: nil)
+            guard let ids = try await CullSweep.run(
+                candidates: { pass.sweepCandidates },
+                moveToTrash: { [organize] ids in try await organize.moveToTrash(ids, retentionDays: nil) }
+            ) else { return }
+            pass.remove(Set(ids))
+            let count = ids.count
+            CapsuleLog.interface.info("culling: swept \(count, privacy: .public) rejects to the trash")
+            announce(String(localized: "app.culling.sweep.done", defaultValue: "Moved \(count) photos to the Trash"))
         } catch {
             CapsuleLog.interface.error("culling: sweep failed: \(error.localizedDescription, privacy: .public)")
             failure = .sweep
-            return
         }
-        pass.remove(Set(ids))
-        let count = ids.count
-        CapsuleLog.interface.info("culling: swept \(count, privacy: .public) rejects to the trash")
-        announce(String(localized: "app.culling.sweep.done", defaultValue: "Moved \(count) photos to the Trash"))
     }
 
     private func announce(_ text: String) {
@@ -429,6 +429,25 @@ final class CullWriteQueue {
     /// Wait until every write submitted so far has finished.
     func drain() async {
         await tail?.value
+    }
+}
+
+// MARK: - CullSweep
+
+/// What sweeping the rejects does, over injected ports. The candidates are a
+/// closure read when the sweep runs, not a value captured when it was
+/// confirmed, so a sweep queued behind verdict writes sees their outcome.
+enum CullSweep {
+    /// Trash the current candidates and return them, or nil when there are none.
+    @MainActor
+    static func run(
+        candidates: () -> [AssetID],
+        moveToTrash: ([AssetID]) async throws -> Void
+    ) async throws -> [AssetID]? {
+        let ids = candidates()
+        guard !ids.isEmpty else { return nil }
+        try await moveToTrash(ids)
+        return ids
     }
 }
 

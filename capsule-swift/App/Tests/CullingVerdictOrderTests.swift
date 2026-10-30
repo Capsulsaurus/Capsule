@@ -85,6 +85,48 @@ struct CullingVerdictOrderTests {
         #expect(order.values == [true, false])
     }
 
+    @Test("a queued sweep reads its candidates after the verdict write ahead of it settles")
+    func sweepReadsCandidatesAfterQueuedWrites() async throws {
+        let gate = Gate()
+        let queue = CullWriteQueue()
+        let rejected = Rejected()
+        let trashed = Trashed()
+
+        queue.submit {
+            await gate.wait()
+            rejected.ids = [Fixture.id(1)]
+        }
+        queue.submit {
+            _ = try? await CullSweep.run(
+                candidates: { rejected.ids },
+                moveToTrash: { trashed.batches.append($0) }
+            )
+        }
+        for _ in 0 ..< 20 {
+            await Task.yield()
+        }
+        #expect(trashed.batches.isEmpty)
+
+        await gate.open()
+        await queue.drain()
+        #expect(trashed.batches == [[Fixture.id(1)]])
+    }
+
+    @Test("a sweep with no candidates trashes nothing")
+    func emptySweepIsANoOp() async throws {
+        let trashed = Trashed()
+        let result = try await CullSweep.run(candidates: { [] }, moveToTrash: { trashed.batches.append($0) })
+        #expect(result == nil)
+        #expect(trashed.batches.isEmpty)
+    }
+
+    @Test("a failed trash surfaces to the caller")
+    func failedTrashThrows() async {
+        await #expect(throws: Failure.self) {
+            _ = try await CullSweep.run(candidates: { [Fixture.id(1)] }, moveToTrash: { _ in throw Failure() })
+        }
+    }
+
     @Test("a stack verdict writes every listed member, then any target the port missed")
     func stackWriteTargets() async throws {
         let library = Library()
@@ -136,6 +178,16 @@ private struct Failure: Error {}
 @MainActor
 private final class Outcomes {
     var values: [Bool] = []
+}
+
+@MainActor
+private final class Rejected {
+    var ids: [AssetID] = []
+}
+
+@MainActor
+private final class Trashed {
+    var batches: [[AssetID]] = []
 }
 
 /// The library's cull flags, recording each write in the order it arrived.
