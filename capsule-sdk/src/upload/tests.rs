@@ -1272,6 +1272,59 @@ async fn a_chunk_too_slow_to_drain_inside_the_response_wait_is_resent_shorter() 
     );
 }
 
+/// **A ceiling-sized chunk on a link that falls to about 1 KiB/s.** A chunk grown to the
+/// 16 MiB ceiling needs twelve halvings to reach what such a link drains inside the response
+/// wait. Here the link drains only the protocol minimum until a chunk lands, then recovers.
+/// Every cut that shrinks is a stall re-send, not a transport reset, so the eight reset retries
+/// are never spent on them and the transfer completes rather than giving up at 64 KiB.
+#[tokio::test]
+async fn a_ceiling_chunk_on_a_link_that_falls_to_a_crawl_shrinks_past_the_reset_budget() {
+    let patches = Arc::new(Mutex::new(Vec::<(u64, usize)>::new()));
+    let p = patches.clone();
+    let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+        ("POST", "/") => created("sess-crawl", CHUNK_SIZE_16MB),
+        ("PATCH", "/sess-crawl") => {
+            let mut seen = p.lock().unwrap();
+            let offset = req.header("X-Capsule-Offset").unwrap().parse().unwrap();
+            seen.push((offset, req.body.len()));
+            // Slow until the first chunk lands: everything above the minimum goes unanswered.
+            if offset == 0 && req.body.len() as u64 > PROTOCOL_MIN_CHUNK {
+                return MockResponse::hold_open();
+            }
+            MockResponse::new(204, "No Content")
+                .header("X-Capsule-Offset", ack_offset(req).to_string())
+        }
+        other => panic!("unexpected {other:?}"),
+    })
+    .await;
+
+    let client = server.client(PROTOCOL).with_request_bounds(short_bounds());
+    // The 16 MiB ceiling is the >= 100 MiB tier's.
+    let data = vec![6u8; 100 * 1024 * 1024];
+    let outcome = tokio::time::timeout(
+        Duration::from_secs(60),
+        client.upload(&request(data.len() as u64), &data),
+    )
+    .await
+    .expect("shrinking cuts take no reset backoff")
+    .expect("a cut that shrinks does not spend the reset retries");
+
+    assert!(matches!(outcome, UploadOutcome::Completed { .. }));
+    let patches = patches.lock().unwrap();
+    let halvings: Vec<(u64, usize)> = (0..=12)
+        .map(|n| (0, (CHUNK_SIZE_16MB >> n) as usize))
+        .collect();
+    assert_eq!(
+        patches[..13],
+        halvings[..],
+        "each unanswered cut is re-sent at the same offset, half the size, down to the minimum"
+    );
+    assert_eq!(
+        patches[13].0, PROTOCOL_MIN_CHUNK,
+        "the minimum chunk landed"
+    );
+}
+
 /// **Slow server, live link.** A server that takes longer than the stall bound to write and
 /// answer a chunk it has received whole is inside the longer response-wait bound: the chunk is
 /// not cut, and nothing is re-sent.

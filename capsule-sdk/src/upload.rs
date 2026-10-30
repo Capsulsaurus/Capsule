@@ -941,9 +941,10 @@ enum ChunkAck {
     /// The client handed the whole body off and no response head came within the response
     /// wait. The tail may still have been in the HTTP stack's or the kernel's send buffer on a
     /// link too slow to drain it, or the server may have kept the chunk and never answered:
-    /// back off as for a reset, then re-send at the same offset, shorter — so a slow link
-    /// converges on a chunk it drains in time, and a `409 offset_mismatch` re-aligns where the
-    /// server did keep it.
+    /// re-send at the same offset, shorter — so a slow link converges on a chunk it drains in
+    /// time, and a `409 offset_mismatch` re-aligns where the server did keep it. A cut that
+    /// shrinks is charged as a stall re-send; only one at the protocol minimum backs off as for
+    /// a reset.
     Unanswered,
     /// `rate_limited`, `unavailable` or `storage_full` — the server asked the
     /// client to wait (for the `Retry-After` it sent, when it sent one) and then
@@ -1718,9 +1719,9 @@ impl UploadClient {
                     );
                 }
                 ChunkAck::Unanswered => {
-                    // Shrink before backing off: a link too slow to drain the buffered tail
-                    // inside the response wait would otherwise be cut at the same size until
-                    // the retries ran out, though the server accepts every byte it receives.
+                    // Shrink first: a link too slow to drain the buffered tail inside the
+                    // response wait would otherwise be cut at the same size until the retries
+                    // ran out, though the server accepts every byte it receives.
                     let shrunk = strategy.shrink_after_stall(want);
                     tracing::info!(
                         %session_id,
@@ -1728,8 +1729,18 @@ impl UploadClient {
                         unanswered_len = want,
                         next_len = strategy.next_chunk_size().min(remaining),
                         shrunk,
-                        "a chunk got no answer — backing off, then re-sending at the same offset, shorter"
+                        "a chunk got no answer — re-sending at the same offset, shorter where it can be"
                     );
+                    if shrunk {
+                        // A cut that shrank is a stall re-send, charged like one: halving is
+                        // bounded by the protocol minimum, so it cannot hot-loop, and spending
+                        // the reset retries on it would give up on a 16 MiB chunk at 64 KiB.
+                        // No wait either, since the link just spent a whole response wait.
+                        recovery.charge("unanswered chunk re-send")?;
+                        continue;
+                    }
+                    // Nothing smaller can be sent: an unanswered minimum chunk is a dead path
+                    // until shown otherwise, and backs off under the reset budget.
                     self.back_off_reset(
                         recovery,
                         request,
@@ -1887,7 +1898,8 @@ impl UploadClient {
         });
     }
 
-    /// Back off after a mid-transfer transport reset — or a chunk that got no answer — through
+    /// Back off after a mid-transfer transport reset — or a chunk at the protocol minimum that
+    /// got no answer — through
     /// the shared retry engine, so the caller resumes from the same offset; the server holds
     /// nothing new, so no bytes are re-sent beyond this chunk. The `(offset, len)` pair names
     /// the chunk that was cut.
