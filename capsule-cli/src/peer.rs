@@ -19,6 +19,8 @@
 //!   own custody check of its own hashes and a read-back of its own copy, and lists every
 //!   hand-off this device quarantined.
 //! - **`peer discard`** (the delegate): deletes one quarantined hand-off, on the user's word.
+//! - **`peer forget-delete`** (the origin): drops the released delete `peer status` keeps
+//!   retrying for an asset whose chain the library no longer holds, on the user's word.
 //! - **`peer offer`** and **`peer pull`**: sync a delta-scoped backup artifact from one device
 //!   to the other over the channel, ingested against the receiver's persisted tombstones
 //!   ([`sync`]).
@@ -113,6 +115,15 @@ pub enum PeerError {
     /// `peer discard` named a hand-off this device does not hold in quarantine.
     #[error("no quarantined hand-off {0} on this device")]
     NotQuarantined(String),
+    /// `peer forget-delete` named an asset with no entry in this device's delete outbox.
+    #[error("no released delete for asset {0} waits on this device")]
+    NothingOwed(Uuid),
+    /// `peer forget-delete` named an asset whose chain the library still holds (live, trashed or
+    /// in the tombstone its purge kept), so `peer status` can still send what it owes.
+    #[error(
+        "the library holds asset {0}'s chain, so `capsule peer status` can still send its delete; nothing is forgotten"
+    )]
+    StillDeliverable(Uuid),
     /// A hand-off written to files names no delegate (`--to`).
     #[error("a hand-off written to files must name the device it is for")]
     NoDelegate,
@@ -1965,6 +1976,10 @@ fn sealed_head(
 /// - **withheld** ([`remote::held::HoldReason::RestoreTooLate`]) — `withheld`, dropped. Sent,
 ///   the server would apply the delete, refuse the restore and purge an asset restored in time;
 ///   it keeps the asset live instead, and the library keeps every record;
+/// - **no chain** (the library holds neither the asset nor the tombstone its purge kept, one
+///   this build cannot read, say) — `failed`, kept, judged before the feed is consulted: nothing
+///   shows the delete cannot be sent by a later build, so it is never dropped on its own;
+///   `capsule peer forget-delete` ([`forget_delete`]) drops it on the user's word;
 /// - **not applied, and resending could succeed** (the feed or the server unreachable, the
 ///   session not accepted, a server fault) — `failed`, kept;
 /// - **refused for good** ([`remote::OpFailure::permanent`]: a stale chain, a regressed epoch,
@@ -1995,6 +2010,21 @@ async fn send_deletes(
             code,
             message,
         };
+        // A purged asset is compared by the chain its purge kept, the tombstone it is sent from.
+        let Some(chain) = remote::held::local_chain(workspace, &asset_id) else {
+            tracing::warn!(%asset_id, "peer status: the library holds neither the asset nor its tombstone; kept for the next run");
+            retry.insert(asset_id);
+            views.push(view(
+                None,
+                "failed",
+                None,
+                Some(format!(
+                    "the library holds neither asset {asset_id} nor its tombstone, so nothing \
+                     is sent; kept for the next run (`capsule peer forget-delete` drops it)"
+                )),
+            ));
+            continue;
+        };
         let chains = match chains {
             Ok(chains) => chains,
             Err(error) => {
@@ -2009,10 +2039,7 @@ async fn send_deletes(
                 continue;
             }
         };
-        // A purged asset is compared by the chain its purge kept, the tombstone it is sent from.
-        let level = remote::held::local_chain(workspace, &asset_id)
-            .is_some_and(|chain| chains.is_level(&asset_id, chain.records));
-        if level {
+        if chains.is_level(&asset_id, chain.records) {
             tracing::info!(%asset_id, "peer status: the server already holds the chain's head; nothing to send");
             views.push(view(
                 None,
@@ -2068,6 +2095,14 @@ async fn send_deletes(
         .filter(|pending| retry.contains(&pending.asset_id))
         .collect();
     (kept, views)
+}
+
+/// Whether delivering `outbox` needs the server's feed: some entry names an asset the library
+/// holds a chain for. An empty outbox, or one whose every asset has no chain, sends nothing.
+fn needs_feed(workspace: &Workspace, outbox: &[PendingDelete]) -> bool {
+    outbox
+        .iter()
+        .any(|pending| remote::held::local_chain(workspace, &pending.asset_id).is_some())
 }
 
 /// `capsule peer status`: take `acks`, re-queue what is due, and release what the server holds
@@ -2183,11 +2218,12 @@ async fn status_with(
     state.save_outbox(&outbox)?;
     state.save_ledger(&ledger)?;
     // What is sent is re-derived from the chain against the server's heads, so the feed is
-    // drained only when something was released to deliver.
-    let chains = if outbox.is_empty() {
-        Ok(remote::held::ServerChains::default())
-    } else {
+    // drained only when an entry has a chain to send: entries the library holds no chain for
+    // are kept without consulting it, rather than re-reading the whole feed on every run.
+    let chains = if needs_feed(workspace, &outbox) {
         remote::server_chains(remote, session.clone()).await
+    } else {
+        Ok(remote::held::ServerChains::default())
     };
     let (unsent, mut deletes) = send_deletes(
         remote,
@@ -2267,6 +2303,58 @@ pub fn discard(state: &PeerState, address: &str) -> Result<Discarded, PeerError>
         hand_off: address.to_owned(),
         asset_id: note.asset_id,
         kind: note.kind,
+    })
+}
+
+// ─── peer forget-delete ──────────────────────────────────────────────────────
+
+/// The `capsule peer forget-delete` run, as `--json` prints it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ForgottenDelete {
+    /// The asset whose released delete is no longer retried.
+    pub asset_id: Uuid,
+    /// How many outbox entries (the delete and the records before it) were dropped.
+    pub entries: usize,
+}
+
+/// `capsule peer forget-delete`: drop `asset_id`'s entries from the delete outbox, on the
+/// user's word, so `capsule peer status` stops retrying a delete it has no chain to send. Local
+/// only: nothing reaches the network, and the server keeps the asset as it holds it.
+///
+/// Only an asset the library holds no chain for (neither the asset nor a readable tombstone)
+/// can be forgotten: while the chain is there, `peer status` can still send what it owes, so
+/// dropping it would lose a delete that could succeed.
+///
+/// # Errors
+///
+/// [`PeerError::StillDeliverable`] when the library holds the asset's chain,
+/// [`PeerError::NothingOwed`] when the outbox holds no entry for it, or [`PeerError::State`]
+/// when the outbox cannot be read or written.
+#[instrument(skip_all, fields(%asset_id))]
+pub fn forget_delete(
+    state: &PeerState,
+    workspace: &Workspace,
+    asset_id: Uuid,
+) -> Result<ForgottenDelete, PeerError> {
+    if remote::held::local_chain(workspace, &asset_id).is_some() {
+        tracing::info!("peer forget-delete: the library holds the chain; nothing is forgotten");
+        return Err(PeerError::StillDeliverable(asset_id));
+    }
+    let (dropped, kept): (Vec<_>, Vec<_>) = state
+        .load_outbox()?
+        .into_iter()
+        .partition(|pending| pending.asset_id == asset_id);
+    if dropped.is_empty() {
+        return Err(PeerError::NothingOwed(asset_id));
+    }
+    state.save_outbox(&kept)?;
+    tracing::warn!(
+        entries = dropped.len(),
+        "peer forget-delete: the released delete is dropped and no longer retried"
+    );
+    Ok(ForgottenDelete {
+        asset_id,
+        entries: dropped.len(),
     })
 }
 

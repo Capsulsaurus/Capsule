@@ -920,6 +920,15 @@ async fn dispatch(command: Commands) -> Result<()> {
                 let ws = open_workspace(&library, passphrase_stdin)?;
                 peer_discard(&ws, &hand_off, json)?;
             }
+            PeerCommands::ForgetDelete {
+                library,
+                asset,
+                passphrase_stdin,
+                json,
+            } => {
+                let ws = open_workspace(&library, passphrase_stdin)?;
+                peer_forget_delete(&ws, asset, json)?;
+            }
             PeerCommands::Offer {
                 library,
                 peer,
@@ -2939,6 +2948,27 @@ fn peer_discard(workspace: &Workspace, hand_off: &str, json: bool) -> Result<()>
                 discarded.hand_off, discarded.asset_id
             )
             .green()
+        );
+    }
+    Ok(())
+}
+
+/// `capsule peer forget-delete`: stop retrying one asset's undeliverable released delete.
+fn peer_forget_delete(workspace: &Workspace, asset: uuid::Uuid, json: bool) -> Result<()> {
+    let state = peer::PeerState::for_device(workspace.device_id())
+        .map_err(|error| peer_run_error("Forget", &error))?;
+    let forgotten = peer::forget_delete(&state, workspace, asset)
+        .map_err(|error| peer_run_error("Forget", &error))?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&forgotten)?);
+    } else {
+        println!(
+            "{}",
+            format!(
+                "{}: released delete dropped ({} outbox entries); no longer retried",
+                forgotten.asset_id, forgotten.entries
+            )
+            .yellow()
         );
     }
     Ok(())
