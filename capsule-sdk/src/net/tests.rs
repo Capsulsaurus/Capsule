@@ -683,6 +683,7 @@ fn lower_effort_is_dscp_one_with_ecn_clear() {
 }
 
 /// A connected loopback pair on `bind` (`None` where this host has no such loopback).
+#[cfg(unix)]
 async fn loopback_pair(bind: &str) -> Option<(tokio::net::TcpStream, tokio::net::TcpStream)> {
     let listener = tokio::net::TcpListener::bind(bind).await.ok()?;
     let addr = listener.local_addr().ok()?;
@@ -691,7 +692,8 @@ async fn loopback_pair(bind: &str) -> Option<(tokio::net::TcpStream, tokio::net:
 }
 
 /// **An IPv4 socket is marked through `IP_TOS`**, on both ends of a connection, and reads back
-/// the Lower Effort octet.
+/// the Lower Effort octet. Unix only: Windows accepts `IP_TOS` without applying it.
+#[cfg(unix)]
 #[tokio::test]
 async fn an_ipv4_socket_is_marked_lower_effort() {
     let (dialed, accepted) = loopback_pair("127.0.0.1:0").await.expect("IPv4 loopback");
