@@ -12247,6 +12247,342 @@
         }
       }
     },
+    "app.culling.action.collapse_stack": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Collapse Stack"
+          }
+        }
+      }
+    },
+    "app.culling.action.expand_stack": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Expand Stack"
+          }
+        }
+      }
+    },
+    "app.culling.action.next": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Next Photo"
+          }
+        }
+      }
+    },
+    "app.culling.action.pick": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pick"
+          }
+        }
+      }
+    },
+    "app.culling.action.previous": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Previous Photo"
+          }
+        }
+      }
+    },
+    "app.culling.action.reject": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reject"
+          }
+        }
+      }
+    },
+    "app.culling.action.shortcuts": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keyboard Shortcuts"
+          }
+        }
+      }
+    },
+    "app.culling.action.sweep": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Move Rejects to Trash"
+          }
+        }
+      }
+    },
+    "app.culling.action.unflag": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unflag"
+          }
+        }
+      }
+    },
+    "app.culling.announcement": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@, %2$@"
+          }
+        }
+      }
+    },
+    "app.culling.empty.body": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Photos in this view appear here for review."
+          }
+        }
+      }
+    },
+    "app.culling.empty.title": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nothing to Cull"
+          }
+        }
+      }
+    },
+    "app.culling.error.flag": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The flag could not be saved, so the photo keeps the flag it had."
+          }
+        }
+      }
+    },
+    "app.culling.error.load": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The photos could not be loaded."
+          }
+        }
+      }
+    },
+    "app.culling.error.sweep": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The rejected photos could not be moved to the Trash."
+          }
+        }
+      }
+    },
+    "app.culling.flag.pick": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Picked"
+          }
+        }
+      }
+    },
+    "app.culling.flag.reject": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rejected"
+          }
+        }
+      }
+    },
+    "app.culling.flag.unflagged": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unflagged"
+          }
+        }
+      }
+    },
+    "app.culling.open": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cull"
+          }
+        }
+      }
+    },
+    "app.culling.position": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ of %2$@"
+          }
+        }
+      }
+    },
+    "app.culling.stack.all_rejected": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stack, all rejected"
+          }
+        }
+      }
+    },
+    "app.culling.stack.any_pick": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stack with a pick"
+          }
+        }
+      }
+    },
+    "app.culling.stack.members": {
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld photo"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld photos"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "app.culling.stack.mixed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stack, undecided"
+          }
+        }
+      }
+    },
+    "app.culling.stack.summary": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@, %2$@"
+          }
+        }
+      }
+    },
+    "app.culling.sweep.confirm": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Move to Trash"
+          }
+        }
+      }
+    },
+    "app.culling.sweep.done": {
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Moved %lld photo to the Trash"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Moved %lld photos to the Trash"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "app.culling.sweep.message": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You can restore them from Recently Deleted until their retention window closes."
+          }
+        }
+      }
+    },
+    "app.culling.sweep.title": {
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Move %lld rejected photo to the Trash?"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Move %lld rejected photos to the Trash?"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "app.culling.title": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Culling"
+          }
+        }
+      }
+    },
     "app.custody.action.blocked.footer": {
       "localizations": {
         "ar": {
@@ -139733,6 +140069,76 @@
           "stringUnit": {
             "state": "translated",
             "value": "關閉視窗"
+          }
+        }
+      }
+    },
+    "apple.menu.culling": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Culling"
+          }
+        }
+      }
+    },
+    "apple.menu.culling.collapse_stack": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Collapse Stack"
+          }
+        }
+      }
+    },
+    "apple.menu.culling.expand_stack": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Expand Stack"
+          }
+        }
+      }
+    },
+    "apple.menu.culling.pick": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pick"
+          }
+        }
+      }
+    },
+    "apple.menu.culling.reject": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reject"
+          }
+        }
+      }
+    },
+    "apple.menu.culling.sweep": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Move Rejects to Trash"
+          }
+        }
+      }
+    },
+    "apple.menu.culling.unflag": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unflag"
           }
         }
       }
