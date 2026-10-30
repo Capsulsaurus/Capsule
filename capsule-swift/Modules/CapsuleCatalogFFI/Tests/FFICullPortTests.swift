@@ -234,14 +234,41 @@ struct FFICullPortTests {
         #expect(FFICullPort.defaultRetainDays == 30)
     }
 
-    @Test("a sweep that fails partway stops there and reports the failure")
+    @Test("a sweep that fails partway stops there and names the assets already moved")
     func sweepStopsAtTheFirstFailure() async {
         let workspace = RecordingWorkspace()
         workspace.deleteFailsAt = 1
         let port = FFICullPort(source: workspace)
         let ids = (1 ... 3).map { AssetID.managed(uuid: Self.uuid($0)) }
 
-        await #expect(throws: Failure.self) { try await port.moveToTrash(ids) }
+        let incomplete = await Self.sweepFailure(port, ids)
+        #expect(incomplete?.moved == [ids[0]])
+        #expect(incomplete?.underlying is Failure)
         #expect(workspace.calls == [.deleteAsset(Self.uuid(1), 30), .deleteAsset(Self.uuid(2), 30)])
+    }
+
+    @Test("a sweep whose first delete fails names no asset moved")
+    func sweepFailingAtOnceMovesNothing() async {
+        let workspace = RecordingWorkspace()
+        workspace.deleteFailsAt = 0
+        let port = FFICullPort(source: workspace)
+
+        let incomplete = await Self.sweepFailure(port, [.managed(uuid: Self.uuid(1))])
+        #expect(incomplete?.moved.isEmpty == true)
+        #expect(workspace.calls == [.deleteAsset(Self.uuid(1), 30)])
+    }
+
+    /// The ``CullSweepIncomplete`` sweeping `ids` throws, recording an issue
+    /// when the sweep succeeds or throws anything else.
+    private static func sweepFailure(_ port: FFICullPort, _ ids: [AssetID]) async -> CullSweepIncomplete? {
+        do {
+            try await port.moveToTrash(ids)
+            Issue.record("the sweep did not fail")
+        } catch let incomplete as CullSweepIncomplete {
+            return incomplete
+        } catch {
+            Issue.record("the sweep threw \(error), not CullSweepIncomplete")
+        }
+        return nil
     }
 }

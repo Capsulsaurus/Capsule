@@ -331,7 +331,11 @@ struct CullingView: View {
             CapsuleLog.interface.info("culling: swept \(count, privacy: .public) rejects to the trash")
             announce(String(localized: "app.culling.sweep.done", defaultValue: "Moved \(count) photos to the Trash"))
         } catch {
-            CapsuleLog.interface.error("culling: sweep failed: \(error.localizedDescription, privacy: .public)")
+            let moved = CullSweep.moved(before: error)
+            pass.remove(Set(moved))
+            CapsuleLog.interface.error(
+                "culling: sweep failed after \(moved.count, privacy: .public): \(error.localizedDescription, privacy: .public)"
+            )
             failure = .sweep
         }
     }
@@ -450,6 +454,13 @@ enum CullSweep {
         guard !ids.isEmpty else { return nil }
         try await moveToTrash(ids)
         return ids
+    }
+
+    /// The assets a failed sweep already moved to the trash, which leave the
+    /// pass: the ones ``CullSweepIncomplete`` names, or none for any other
+    /// failure.
+    static func moved(before failure: any Error) -> [AssetID] {
+        (failure as? CullSweepIncomplete)?.moved ?? []
     }
 }
 

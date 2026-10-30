@@ -43,7 +43,9 @@ extension FfiWorkspace: FFICullWorkspace {}
 /// The sweep deletes exactly the assets it is given, one signed `delete` each,
 /// rather than calling `reject_sweep`, which trashes every reject in the
 /// workspace: a reject synced in after the pass was read is not one the user
-/// confirmed. Workspace failures are rethrown as they came.
+/// confirmed. A sweep that stops partway throws ``CullSweepIncomplete`` naming
+/// the assets already moved; every other workspace failure is rethrown as it
+/// came.
 public struct FFICullPort: CullPort {
     /// The retention window a swept reject gets: the CLI's `cull sweep`
     /// default.
@@ -105,14 +107,14 @@ public struct FFICullPort: CullPort {
 
     public func moveToTrash(_ assetIDs: [AssetID]) async throws {
         let ids = try assetIDs.map(workspaceAssetID)
-        for (moved, id) in ids.enumerated() {
+        for (count, id) in ids.enumerated() {
             do {
                 _ = try workspace.deleteAsset(assetId: id, retainDays: retainDays)
             } catch {
                 cullLog.error(
-                    "sweep stopped after \(moved, privacy: .public) of \(ids.count, privacy: .public): \(error.localizedDescription, privacy: .public)"
+                    "sweep stopped after \(count, privacy: .public) of \(ids.count, privacy: .public): \(error.localizedDescription, privacy: .public)"
                 )
-                throw error
+                throw CullSweepIncomplete(moved: Array(assetIDs.prefix(count)), underlying: error)
             }
         }
         cullLog.info("moved \(ids.count, privacy: .public) to the trash for \(retainDays, privacy: .public) days")

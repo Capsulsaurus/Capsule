@@ -81,7 +81,25 @@ public protocol CullPort: Sendable {
     /// retention window. Moving an asset already in the trash is not an error
     /// and does not extend its window, so a sweep that failed partway is
     /// retried whole.
+    ///
+    /// An adapter that moves the assets one at a time throws
+    /// ``CullSweepIncomplete`` when it stops partway, naming the ones already
+    /// moved: they stay in the trash, and the pass drops them. Any other error
+    /// means no asset is known to have moved.
     func moveToTrash(_ assetIDs: [AssetID]) async throws
+}
+
+/// A sweep that stopped partway: ``moved`` reached the trash, the rest did not.
+public struct CullSweepIncomplete: Error, Sendable {
+    /// The assets moved to the trash before the sweep stopped, in sweep order.
+    public let moved: [AssetID]
+    /// The failure that stopped it.
+    public let underlying: any Error
+
+    public init(moved: [AssetID], underlying: any Error) {
+        self.moved = moved
+        self.underlying = underlying
+    }
 }
 
 /// Why a ``CullPort`` refused a request without reaching its store.
