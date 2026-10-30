@@ -2325,40 +2325,73 @@ fn trash_refusal<T: std::fmt::Debug>(
     }
 }
 
-/// A drain that saw no feed entry: the device clock alone judges.
-fn drained() -> FfiFeedDrain {
+/// A drain whose feed lists `asset` at its current chain head (its `delete`, once trashed),
+/// with `changed_at` as the latest server clock reading it saw.
+fn drained(workspace: &FfiWorkspace, asset: &str, changed_at: Option<String>) -> FfiFeedDrain {
+    let head = workspace.provenance_head(asset.to_owned()).unwrap();
     FfiFeedDrain {
-        latest_changed_at: None,
+        latest_changed_at: changed_at,
+        server_heads: std::collections::HashMap::from([(asset.to_owned(), head)]),
     }
 }
 
-/// The retention sweep judges a deadline only after a drain, floored by the server's latest
-/// `changed_at`, and refuses a stamp that is not RFC 3339.
+/// The retention sweep judges a deadline only after a drain, by the server's latest
+/// `changed_at` alone, never expires a delete the server has not indexed, and refuses a stamp
+/// that is not RFC 3339.
 #[test]
-fn ffi_expired_trash_is_gated_on_a_drain_and_floored_by_the_server_clock() {
+fn ffi_expired_trash_is_gated_on_a_drain_and_judged_by_the_server_clock() {
     let lib = tempfile::TempDir::new().unwrap();
     let (workspace, _, asset) = labelled_fixture(lib.path());
-    let entry = workspace.delete_asset(asset.clone(), 30).unwrap();
+    let entry = workspace.delete_asset(asset.clone(), 0).unwrap();
     let until = entry.retention_until.clone().unwrap();
+    let before: jiff::Timestamp = until.parse().unwrap();
+    let before = (before - jiff::SignedDuration::from_secs(1)).to_string();
 
     assert!(workspace.expired_trash(None).unwrap().is_empty());
-    assert!(workspace.expired_trash(Some(drained())).unwrap().is_empty());
-    let floored = workspace
-        .expired_trash(Some(FfiFeedDrain {
-            latest_changed_at: Some(until),
-        }))
+    assert!(
+        workspace
+            .expired_trash(Some(drained(&workspace, &asset, None)))
+            .unwrap()
+            .is_empty(),
+        "no server clock reading, though this device's clock is past the window"
+    );
+    assert!(
+        workspace
+            .expired_trash(Some(drained(&workspace, &asset, Some(before))))
+            .unwrap()
+            .is_empty(),
+        "the server's clock has not reached the window"
+    );
+    let expired = workspace
+        .expired_trash(Some(drained(&workspace, &asset, Some(until.clone()))))
         .unwrap();
     assert_eq!(
-        floored
+        expired
             .iter()
             .map(|e| e.asset_id.clone())
             .collect::<Vec<_>>(),
-        vec![asset]
+        vec![asset.clone()]
     );
-    assert!(!floored[0].restorable, "judged at the same floored instant");
+    assert!(!expired[0].restorable, "judged at the server's instant");
+
+    let mut held = drained(&workspace, &asset, Some(until.clone()));
+    held.server_heads.clear();
+    held.server_heads
+        .insert("not-a-uuid".into(), b"ignored".to_vec());
+    assert!(
+        workspace.expired_trash(Some(held)).unwrap().is_empty(),
+        "a held delete never expires"
+    );
+    let mut no_record = drained(&workspace, &asset, Some(until));
+    no_record.server_heads.insert(asset, Vec::new());
+    assert!(
+        workspace.expired_trash(Some(no_record)).unwrap().is_empty(),
+        "an entry with no record is no evidence the delete was indexed"
+    );
     assert!(matches!(
         workspace.expired_trash(Some(FfiFeedDrain {
             latest_changed_at: Some("yesterday".into()),
+            server_heads: std::collections::HashMap::new(),
         })),
         Err(FfiError::InvalidArgument { .. })
     ));
@@ -2380,7 +2413,14 @@ fn ffi_trash_verbs_delete_restore_and_purge_through_signed_records() {
     assert!(entry.restorable);
     assert!(entry.retention_until.is_some());
     assert_eq!(workspace.trash().unwrap(), vec![entry.clone()]);
-    assert!(workspace.expired_trash(Some(drained())).unwrap().is_empty());
+    let signed_at = Some(entry.deleted_at.clone());
+    assert!(
+        workspace
+            .expired_trash(Some(drained(&workspace, &asset, signed_at)))
+            .unwrap()
+            .is_empty(),
+        "the window is open at the instant the delete was signed"
+    );
     assert_eq!(
         workspace.delete_asset(asset.clone(), 1).unwrap(),
         entry,
@@ -2459,8 +2499,11 @@ fn ffi_trash_refuses_a_restore_after_retention_until() {
 
     let entry = workspace.delete_asset(asset.clone(), 0).unwrap();
     assert!(!entry.restorable);
+    let server_now = Some(jiff::Timestamp::now().to_string());
     assert_eq!(
-        workspace.expired_trash(Some(drained())).unwrap(),
+        workspace
+            .expired_trash(Some(drained(&workspace, &asset, server_now)))
+            .unwrap(),
         vec![entry.clone()]
     );
     assert!(

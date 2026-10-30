@@ -56,7 +56,7 @@ use capsule_core::crypto::keys::{
     Account, DeviceDirectory, DirectoryError, HybridSigningKey, HybridVerifyingKey, Signer,
 };
 use capsule_core::crypto::primitives::Argon2Params;
-use capsule_core::crypto::provenance::{Action, ProvenanceChain, ProvenanceRecord};
+use capsule_core::crypto::provenance::{Action, ProvenanceChain};
 use capsule_core::crypto::verify_asset::{MetadataBinding, VerifyOutcome};
 pub use capsule_core::derivative_format::DerivativeStatus;
 use capsule_core::drop::{DropId, UploadLinkId};
@@ -513,12 +513,13 @@ pub struct Workspace {
     /// [`open`](Self::open): the debris of an interrupted write, a torn or foreign file, or a
     /// retired unsigned record. Empty for a library with no debris.
     unanchored: Vec<UnanchoredSidecar>,
-    /// The purged assets, each with the head of the provenance chain a purge keeps on disk:
-    /// the `delete` that ended it. This is the peering tombstone the workspace owns. It is
-    /// filled by [`purge_at`](Self::purge_at) and, on [`open`](Self::open), from every kept
-    /// chain whose head is a `delete` with no sidecar beside it, so a reopen or rebuild
-    /// reproduces it from the provenance file alone.
-    purged: BTreeMap<Uuid, ProvenanceRecord>,
+    /// The purged assets, each with the whole provenance chain a purge keeps on disk, headed
+    /// by the `delete` that ended it. This is the peering tombstone the workspace owns, and the
+    /// chain a held delete (and an early purge's re-issue) is delivered from once the server
+    /// indexes the create. It is filled by [`purge_at`](Self::purge_at) and, on
+    /// [`open`](Self::open), from every kept chain whose head is a `delete` with no sidecar
+    /// beside it, so a reopen or rebuild reproduces it from the provenance file alone.
+    purged: BTreeMap<Uuid, ProvenanceChain>,
 }
 
 fn now_rfc3339() -> String {

@@ -371,9 +371,9 @@ pub async fn record_purged<C: ConnectionTrait>(
 /// manifest is the local chain head, so ingest already quarantines a peer's older copy as stale.
 /// A live sync row for a purged asset is not a sequence the protocol allows (a `trash-restore`
 /// recovers only an asset still in trash, and a purge is what ends that), but it can reach the
-/// store: this device judges a retention window by its own clock, floored by the server's, so a
-/// clock running ahead records a purge a restore then beats. The device follows its sync store
-/// and logs it rather than refusing a live asset.
+/// store, for one written by a sweep that judged by a device clock running ahead (the sweep
+/// judges by the server's `changed_at` alone, [`crate::syncstore::latest_changed_at`]). The
+/// device follows its sync store and logs it rather than refusing a live asset.
 ///
 /// # Errors
 ///
