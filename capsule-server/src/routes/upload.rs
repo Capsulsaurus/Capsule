@@ -1067,15 +1067,25 @@ pub async fn create_upload(
         // A full session nobody claimed is finished here, before the offset is handed back: a
         // client told it is at its size sends nothing more, so this answer is the last request
         // it makes about these bytes (#830).
-        match finish_if_full(&upload, &attestation, existing).await {
+        let finished = finish_if_full(&upload, &attestation, existing).await;
+        match finished {
             None | Some(Ok(Outcome::Committed { .. } | Outcome::AlreadyClaimed)) => {
+                // A finish moved the session past `Uploading`, and its expiry headers are the
+                // post-finish record's: a session no longer evictable lives to the cap, so the
+                // snapshot taken before the finish would report the survival floor instead.
+                let current = if finished.is_some() {
+                    reread_finished(&upload, existing).await?
+                } else {
+                    existing.clone()
+                };
                 tracing::info!(
-                    upload_id = %existing.upload_id,
-                    received_bytes = existing.received_bytes,
+                    upload_id = %current.upload_id,
+                    received_bytes = current.received_bytes,
+                    status = current.status.as_str(),
                     "returning the active session for a duplicate create"
                 );
-                let body = describe(&existing.upload_id, existing.total_size);
-                let headers = CreateHeaders::of(&upload, existing, Some(existing.received_bytes));
+                let body = describe(&current.upload_id, current.total_size);
+                let headers = CreateHeaders::of(&upload, &current, Some(current.received_bytes));
                 return Ok(WithHeaders::new(CreateReply::Existing(body), headers));
             }
             // Whether the session finished is unknown: it is claimed and recovery drives it, or
@@ -1568,6 +1578,27 @@ async fn finish_if_full(
             "the finalization task did not finish".to_owned(),
         ))
     }))
+}
+
+/// `existing` as the finish [`finish_if_full`] ran left it, for a duplicate create's answer.
+///
+/// A session gone since the finish — swept at its cap — is answered from `existing`: its
+/// identity and size are unchanged, and the client's next request learns it is gone.
+async fn reread_finished(
+    upload: &UploadContext,
+    existing: &UploadSessionRecord,
+) -> Result<UploadSessionRecord, CreateRejection> {
+    match upload.sessions().read(&existing.upload_id).await {
+        Ok(Some(current)) => Ok(current),
+        Ok(None) => {
+            tracing::debug!(upload_id = %existing.upload_id, "a finished session was gone on re-read");
+            Ok(existing.clone())
+        }
+        Err(error) => {
+            store_unavailable(&error, "re-read a finished session");
+            Err(CreateRejection::unavailable(upload.clock()))
+        }
+    }
 }
 
 /// Report a session's progress and state.

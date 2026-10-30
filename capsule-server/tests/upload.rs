@@ -2583,6 +2583,14 @@ async fn a_duplicate_create_finalizes_a_full_session_nobody_claimed() {
     let response = create_again(&fixture, &bearer, &whole).await;
     response.assert_status(StatusCode::OK);
     response.assert_header("x-capsule-offset", "8192");
+    // The expiry is the finished session's: a completed session is never discarded under
+    // pressure and lives to the cap, so the idle count is the cap's, not the survival floor's.
+    let expires_in = response
+        .header("x-capsule-session-expires-in")
+        .expect("the cap is stated")
+        .to_owned();
+    assert_ne!(expires_in, "3600", "the cap, not the floor");
+    response.assert_header("x-capsule-session-idle-expires-in", &expires_in);
     let body: serde_json::Value = response.json();
     assert_eq!(body["id"].as_str(), Some(id.as_str()), "the same session");
 

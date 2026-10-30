@@ -4,9 +4,10 @@
 //!
 //! Quota is reserved for the declared size at session creation ([`crate::quota::charge_upload`])
 //! and released when the session is deleted, discarded, expired or ends in `FailedProcessing`
-//! (transfer upload design doc, Quota and Permissions). Each of those paths calls
-//! [`release`], so the question "may this attribution go?" has one answer however the session
-//! ended.
+//! (transfer upload design doc, Quota and Permissions). Today only cancellation and
+//! `FailedProcessing` call [`release`]; the discard and expiry paths do not release yet. Every
+//! path that does release goes through [`release`], so the question "may this attribution
+//! go?" has one answer however the session ended.
 //!
 //! # Why a release can be refused
 //!
