@@ -65,7 +65,7 @@ subtle = "2.6.1"
 # additive superset of the default `openapi31`, and Capsule emits a 3.2 document — see the
 # OpenAPI row in design/dependencies.md.
 kynos = { version = "0.4.0", features = ["openapi32"] }
-base64 = "0.22.1"
+base64 = "0.23.1"
 bb8 = "0.9.1"
 bb8-redis = "0.26.0"
 bytes = "1.12.1"
