@@ -203,6 +203,10 @@ fn a_purge_leaves_no_original_derivative_or_cache_file_and_keeps_provenance() {
     let outside = TempDir::new().unwrap();
     let (mut ws, ids) = library(&lib, &src, 2);
     let (gone, kept) = (ids[0], ids[1]);
+    // An edit keeps the blob the create binds beside the chain; a purge takes it too.
+    ws.tag_add(&gone, "beach").unwrap();
+    let create_blob = ws.create_metadata_blob_path(&gone).unwrap();
+    assert!(create_blob.exists());
     let asset = ws.asset(&gone).unwrap();
     let capture_utc = asset.capture_utc;
     let original = ws.media_path(asset);
@@ -213,7 +217,12 @@ fn a_purge_leaves_no_original_derivative_or_cache_file_and_keeps_provenance() {
     // Derivatives and cache entries for both assets, so the purge must tell them apart.
     let derivatives = media_dir(ws.root(), capture_utc).join("derivatives");
     fs::create_dir_all(&derivatives).unwrap();
-    let mut doomed = vec![original.clone(), sidecar.clone(), blob.clone()];
+    let mut doomed = vec![
+        original.clone(),
+        sidecar.clone(),
+        blob.clone(),
+        create_blob.clone(),
+    ];
     let mut survivors = Vec::new();
     for (id, list) in [(gone, &mut doomed), (kept, &mut survivors)] {
         for name in ["thumbnail.jxl", "preview.avif", "derivatives.cbor"] {

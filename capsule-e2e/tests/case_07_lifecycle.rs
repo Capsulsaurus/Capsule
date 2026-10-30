@@ -32,6 +32,56 @@ fn kind_of(entries: &[FeedEntry], asset: &Uuid) -> ChangeKind {
         .kind
 }
 
+/// **An asset edited before its first upload uploads its create, then its edit** (issue #1091).
+/// The tag re-sealed the metadata blob before anything reached the server, so the upload carries
+/// the blob the create binds, which the library kept, and the server indexes it; the
+/// `metadata-update` op then chains onto that create.
+#[tokio::test]
+async fn e2e_case_7_an_asset_edited_before_its_first_upload_uploads_its_create_then_its_edit() {
+    let server = Server::boot().await;
+    let mut a = Device::register(&server, "owner").await;
+    let asset = a.import_jpeg("edited-first.jpg");
+    a.workspace
+        .tag_add(&asset, "beach")
+        .expect("the asset is tagged before its first upload");
+    let create_binds = a
+        .workspace
+        .asset(&asset)
+        .expect("the asset")
+        .chain
+        .records()[0]
+        .manifest
+        .core
+        .metadata_blob_hash;
+    assert_ne!(
+        a.head_record(&asset).manifest.core.metadata_blob_hash,
+        create_binds,
+        "the edit re-sealed the metadata blob"
+    );
+
+    let pushed = push_asset(&a, &server, &asset).await;
+    assert_eq!(
+        pushed.bundle.metadata_blob_hash, create_binds,
+        "the upload carries the create's own metadata blob"
+    );
+
+    let consumer =
+        SyncConsumer::with_session(server.base_url(), a.session.clone()).expect("a consumer");
+    let mut state = SyncState::new(PROTOCOL_VERSION);
+    assert_eq!(
+        kind_of(&next(&consumer, &mut state).await, &asset),
+        ChangeKind::Created
+    );
+
+    let op = post_lifecycle_head(&a, &server, &asset).await;
+    assert_eq!(op.action, "metadata-update");
+    assert!(!op.replayed);
+    assert_eq!(
+        kind_of(&next(&consumer, &mut state).await, &asset),
+        ChangeKind::Updated
+    );
+}
+
 #[tokio::test]
 async fn e2e_case_7_the_chain_advances_through_every_transition_and_purge_honours_retention() {
     let server = Server::boot().await;

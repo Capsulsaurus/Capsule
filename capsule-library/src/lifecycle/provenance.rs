@@ -163,6 +163,13 @@ impl Workspace {
         // for the binding self-check below.
         let mut sealed_blob_key: Option<[u8; 32]> = None;
 
+        // Before the first edit replaces the blob the create binds, keep it: an upload carries
+        // the create, and only these bytes answer its `metadata_blob_hash`. Written before
+        // anything of the edit is, so a failure here leaves the asset untouched.
+        if binds {
+            self.keep_create_metadata_blob(asset_id)?;
+        }
+
         // Sealing order (2)+(3) for a metadata-bearing action: mutate + re-sign the sidecar with
         // `provenance_chain_hash = H`, then re-seal it under a fresh nonce folded into the blob
         // key (refusing to reuse the superseded nonce) and compute the fresh blob hash.
@@ -241,6 +248,39 @@ impl Workspace {
             .expect("asset_id was validated above");
         self.write_signed_artifacts(asset)?;
         self.index_asset_row(asset)
+    }
+
+    /// Keep the metadata blob `asset_id`'s `create` binds when the library still holds it as
+    /// the asset's current blob, which is exactly until the first metadata-bearing edit. A
+    /// create that binds no blob, a blob an earlier edit already moved aside, and a library
+    /// written before the blob was kept (whose current blob no longer answers the create) keep
+    /// nothing.
+    fn keep_create_metadata_blob(&self, asset_id: &Uuid) -> Result<()> {
+        let asset = &self.assets[asset_id];
+        let bound = asset
+            .chain
+            .records()
+            .first()
+            .expect("provenance chain is never empty")
+            .manifest
+            .core
+            .metadata_blob_hash;
+        match bound {
+            Some(bound)
+                if !asset.metadata_blob.is_empty()
+                    && blob_ciphertext_hash(&asset.metadata_blob) == bound =>
+            {
+                self.write_create_metadata_blob(asset, &asset.metadata_blob)
+            }
+            _ => {
+                tracing::trace!(
+                    asset_id = %asset_id,
+                    create_binds_blob = bound.is_some(),
+                    "the create's metadata blob is not the current one; nothing to keep"
+                );
+                Ok(())
+            }
+        }
     }
 }
 
