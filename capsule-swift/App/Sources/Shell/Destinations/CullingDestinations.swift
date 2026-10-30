@@ -108,7 +108,7 @@ struct CullingView: View {
                 titleVisibility: .visible
             ) {
                 Button("app.culling.sweep.confirm", role: .destructive) {
-                    Task { await sweep() }
+                    writes.submit { await sweep() }
                 }
                 Button("app.common.cancel", role: .cancel) {}
             } message: {
@@ -318,6 +318,10 @@ struct CullingView: View {
         }
     }
 
+    /// Trash the rejected photos. Runs on ``writes`` behind every queued
+    /// verdict, so the candidates are read once those writes have settled or
+    /// reverted and the trash never reaches an asset whose flag write is still
+    /// to come.
     private func sweep() async {
         let ids = pass.sweepCandidates
         guard !ids.isEmpty else { return }

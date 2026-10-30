@@ -64,6 +64,27 @@ struct CullingVerdictOrderTests {
         #expect(await library.flags[Fixture.id(1)] == .pick)
     }
 
+    @Test("a sweep submitted behind a delayed verdict write runs after it")
+    func sweepWaitsForQueuedVerdicts() async {
+        let gate = Gate()
+        let queue = CullWriteQueue()
+        let order = Outcomes()
+
+        queue.submit {
+            await gate.wait()
+            order.values.append(true)
+        }
+        queue.submit { order.values.append(false) }
+        for _ in 0 ..< 20 {
+            await Task.yield()
+        }
+        #expect(order.values.isEmpty)
+
+        await gate.open()
+        await queue.drain()
+        #expect(order.values == [true, false])
+    }
+
     @Test("a stack verdict writes every listed member, then any target the port missed")
     func stackWriteTargets() async throws {
         let library = Library()
