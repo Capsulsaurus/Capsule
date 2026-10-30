@@ -26,6 +26,12 @@ public struct RenderedImage: Sendable {
         self.rendition = rendition
         self.next = next
     }
+
+    /// How many frames one ``ThumbnailProvider/renderInPlace(_:request:shown:pixelSize:onFrame:)``
+    /// delivers at most: what is held now, then the rung generated from the
+    /// original. The ladder needs no more, and the bound keeps a provider that
+    /// keeps asking from spinning.
+    public static let maximumInPlaceSteps = 3
 }
 
 public extension RenderRequest {
@@ -77,6 +83,33 @@ public extension ThumbnailProvider {
     func render(_ asset: Asset, request _: RenderRequest, shown _: Rendition?, pixelSize: CGSize) async -> RenderedImage? {
         guard let image = await thumbnail(for: asset, pixelSize: pixelSize) else { return nil }
         return RenderedImage(image: image, rendition: nil)
+    }
+
+    /// Render `asset` for one surface and upgrade it in place: hands each frame
+    /// to `onFrame` as it arrives — first the best rung held, then, where the
+    /// ladder says to generate `request`'s rung, that rung — passing each
+    /// frame's rendition back as the next call's `shown`.
+    ///
+    /// Stops when a frame names no ``RenderNextStep/generate(_:)`` (a fetch is
+    /// not this provider's to make), when the task is cancelled, or after
+    /// ``RenderedImage/maximumInPlaceSteps`` frames.
+    @MainActor
+    func renderInPlace(
+        _ asset: Asset,
+        request: RenderRequest,
+        shown: Rendition?,
+        pixelSize: CGSize,
+        onFrame: (RenderedImage) -> Void
+    ) async {
+        var current = shown
+        for _ in 0 ..< RenderedImage.maximumInPlaceSteps {
+            let frame = await render(asset, request: request, shown: current, pixelSize: pixelSize)
+            guard let frame, !Task.isCancelled else { return }
+            onFrame(frame)
+            guard let rendition = frame.rendition, case .generate = frame.next else { return }
+            current = rendition
+        }
+        CapsuleLog.imagePipeline.notice("render stopped at its step bound")
     }
 }
 

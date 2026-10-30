@@ -61,12 +61,6 @@ public final class ViewerMediaLoader {
         return await photoKitImage(phAsset, targetSize: targetSize)
     }
 
-    /// How many frames one ``loadViewerImage(for:surface:targetSize:shown:onFrame:)``
-    /// delivers at most: what is held now, then the rung generated from the
-    /// original. The ladder needs no more, and the bound keeps a provider that
-    /// keeps asking from spinning.
-    static let maximumRenderSteps = 3
-
     /// The single-asset view's pixels, through the render ladder.
     ///
     /// Asks for ``RepresentationTier/preview`` at `surface`, the view's size in
@@ -93,16 +87,13 @@ public final class ViewerMediaLoader {
             return
         }
         guard let fallback else { return }
-        let request = RenderRequest(intent: .preview, pixelSize: surface)
-        var current = shown
-        for _ in 0 ..< Self.maximumRenderSteps {
-            let frame = await fallback.render(asset, request: request, shown: current, pixelSize: targetSize)
-            guard let frame, !Task.isCancelled else { return }
-            onFrame(frame)
-            guard let rendition = frame.rendition, case .generate = frame.next else { return }
-            current = rendition
-        }
-        CapsuleLog.imagePipeline.notice("viewer render stopped at its step bound")
+        await fallback.renderInPlace(
+            asset,
+            request: RenderRequest(intent: .preview, pixelSize: surface),
+            shown: shown,
+            pixelSize: targetSize,
+            onFrame: onFrame
+        )
     }
 
     private func photoKitImage(_ phAsset: PHAsset, targetSize: CGSize) async -> PlatformImage? {

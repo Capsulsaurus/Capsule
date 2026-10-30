@@ -390,7 +390,12 @@ struct CullingView: View {
         guard let id = pass.currentAsset?.id,
               let asset = try? await assetProvider.asset(for: id)
         else { return }
-        image = await thumbnails.thumbnail(for: asset, pixelSize: Self.photoPixels)
+        // A Preview render, not a tile: a RAW's embedded preview short of the
+        // surface is replaced by the Preview generated from the original.
+        let request = RenderRequest(intent: .preview, pixelSize: Self.photoPixels)
+        await thumbnails.renderInPlace(asset, request: request, shown: nil, pixelSize: Self.photoPixels) {
+            image = $0.image
+        }
     }
 }
 
