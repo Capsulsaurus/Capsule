@@ -45,8 +45,8 @@ use capsule_server::auth::oidc::{
 use capsule_server::auth::{
     AccountDirectory, AccountProfiles, ActivateOutcome, AuthCollaborators, AuthContext,
     Authentication, BeginOutcome, ConsumeOutcome, DirectoryError, DirectoryFuture, EnrollmentState,
-    PasswordChange, PasswordChanged, ProfileRecord, ProfileUpdate, SessionTokens, TotpCodes,
-    TotpContext, TotpEnrollment, TotpSecret, TotpStore,
+    PasswordChange, PasswordChanged, PasswordSetting, ProfileRecord, ProfileUpdate, SessionTokens,
+    TotpCodes, TotpContext, TotpEnrollment, TotpSecret, TotpStore,
 };
 use capsule_server::blob::{
     BlobError, BlobFuture, BlobPage, BlobStat, BlobStore, ContentAddress, InMemoryBlobStore,
@@ -1552,6 +1552,37 @@ impl SwitchableFederation {
 impl FederationSetting for SwitchableFederation {
     fn is_enabled(&self) -> bool {
         self.enabled.load(Ordering::SeqCst)
+    }
+}
+
+/// Whether the fixture server refuses password sign-in (`PASSWORD_AUTH_DISABLED`, #1004),
+/// switchable per request.
+///
+/// A switch for the reason [`SwitchableFederation`] is one: the `403` the password operations
+/// declare has to come from the same server that answers their `200`s. Production hands in a
+/// fixed `bool`.
+#[derive(Debug)]
+pub(crate) struct SwitchablePasswords {
+    disabled: AtomicBool,
+}
+
+impl SwitchablePasswords {
+    /// A switch starting in `disabled`.
+    pub(crate) fn new(disabled: bool) -> Self {
+        Self {
+            disabled: AtomicBool::new(disabled),
+        }
+    }
+
+    /// Refuse or accept password sign-in for every subsequent request.
+    pub(crate) fn set_disabled(&self, disabled: bool) {
+        self.disabled.store(disabled, Ordering::SeqCst);
+    }
+}
+
+impl PasswordSetting for SwitchablePasswords {
+    fn passwords_disabled(&self) -> bool {
+        self.disabled.load(Ordering::SeqCst)
     }
 }
 
@@ -4077,6 +4108,8 @@ pub(crate) struct Fixture {
     /// Whether the server federates — the *same* switch it reads, so a case can turn the whole
     /// federation surface off for the requests it is about.
     pub(crate) federation: Arc<SwitchableFederation>,
+    /// Whether the server refuses password sign-in — the *same* switch it reads.
+    pub(crate) passwords: Arc<SwitchablePasswords>,
     /// The capability codec the server mints with — the *same* one, over the *same* key as
     /// `tokens`, so a test can mint a capability the server will accept, or one it must not.
     pub(crate) codec: Arc<CapabilityCodec>,
@@ -4124,13 +4157,13 @@ impl Fixture {
 
     /// The same server, with a deployment's quota thresholds.
     pub(crate) fn with_quota(quota_limits: QuotaLimits) -> Self {
-        Self::build(quota_limits, None, None, true)
+        Self::build(quota_limits, None, None, true, false)
     }
 
     /// The working server over a **real** identity provider adapter, for the cases that drive
     /// the wire against the mock provider in [`idp`]. `fixture.idp` is present but unused.
     pub(crate) fn with_identity_provider(provider: Arc<dyn IdentityProvider>) -> Self {
-        Self::build(QuotaLimits::unlimited(), Some(provider), None, true)
+        Self::build(QuotaLimits::unlimited(), Some(provider), None, true, false)
     }
 
     /// The working server whose rate-limit counters hold at most `ceiling` keys **per
@@ -4142,7 +4175,7 @@ impl Fixture {
     /// at-capacity code rather than a `500` that impersonates an outage — does not depend on how
     /// wide it is, so the tests that assert it shrink the partitions and spend two requests.
     pub(crate) fn with_counter_ceiling(ceiling: usize) -> Self {
-        Self::build(QuotaLimits::unlimited(), None, Some(ceiling), true)
+        Self::build(QuotaLimits::unlimited(), None, Some(ceiling), true, false)
     }
 
     /// The same server on a deployment that does **not** federate: `FEDERATION_ENABLED` off,
@@ -4152,7 +4185,16 @@ impl Fixture {
     /// observes the server federating. [`Fixture::federation`] still turns it on, which is how
     /// a case mints a grant "while federation was on" and then asks what off does to it.
     pub(crate) fn without_federation() -> Self {
-        Self::build(QuotaLimits::unlimited(), None, None, false)
+        Self::build(QuotaLimits::unlimited(), None, None, false, false)
+    }
+
+    /// The same server on an OIDC-only deployment: `PASSWORD_AUTH_DISABLED` on (#1004).
+    ///
+    /// Built off rather than switched off, so `server-info` publishes the refusal too.
+    /// [`Fixture::passwords`] still switches it, which is how a case opens a session while
+    /// passwords were accepted and then asks what the switch does to it.
+    pub(crate) fn without_passwords() -> Self {
+        Self::build(QuotaLimits::unlimited(), None, None, true, true)
     }
 
     fn build(
@@ -4160,6 +4202,7 @@ impl Fixture {
         provider: Option<Arc<dyn IdentityProvider>>,
         counter_ceiling: Option<usize>,
         federating: bool,
+        passwords_disabled: bool,
     ) -> Self {
         let clock = Arc::new(ManualClock::default());
         let sessions = Arc::new(SwitchableSessions::new(clock.clone()));
@@ -4206,6 +4249,7 @@ impl Fixture {
         let revocations = Arc::new(SwitchableRevocations::new(clock.clone()));
         let peers = Arc::new(InMemoryPeers::new());
         let federation = Arc::new(SwitchableFederation::new(federating));
+        let passwords = Arc::new(SwitchablePasswords::new(passwords_disabled));
         let chunk_pace = Arc::new(SwitchableChunkPace::new(ChunkPace::default()));
         let challenges = Arc::new(SwitchableChallenges::new(clock.clone()));
         let escrows = Arc::new(SwitchableEscrow::new());
@@ -4239,7 +4283,8 @@ impl Fixture {
                 cohorts: cohorts.clone(),
                 tokens: tokens.clone(),
                 clock: clock.clone(),
-            }),
+            })
+            .with_password_setting(passwords.clone()),
             // Every module reads the index **through** the crash seam, so an armed fault is a
             // property of the server rather than of one module's wiring — and a disarmed one is
             // a delegating pass-through, which is what every other case sees.
@@ -4286,7 +4331,14 @@ impl Fixture {
                 ledger.clone(),
                 index.clone(),
             ))),
-            discovery: DiscoveryContext::new(Arc::new(server_info(&tokens)), revocations.clone()),
+            discovery: DiscoveryContext::new(
+                Arc::new(if passwords_disabled {
+                    server_info(&tokens).without_passwords()
+                } else {
+                    server_info(&tokens)
+                }),
+                revocations.clone(),
+            ),
             escrow: EscrowContext::new(escrows.clone(), clock.clone()),
             // On unless the case asked otherwise ([`Fixture::without_federation`]).
             federation: FederationContext::new(FederationCollaborators {
@@ -4346,6 +4398,7 @@ impl Fixture {
             revocations,
             peers,
             federation,
+            passwords,
             codec,
             challenges,
             escrows,

@@ -1012,26 +1012,20 @@ fn compose(
     // index the rebuild and the scrub verify the ledger against (#757).
     .with_ledger(Arc::new(AnchoredLedger::new(ledger, index.clone())));
 
-    let auth = AuthContext::new(AuthCollaborators {
-        sessions,
-        accounts: accounts.accounts,
-        registry: accounts.registry,
-        profiles: accounts.profiles,
-        passwords: accounts.passwords,
-        challenges,
-        cohorts,
-        tokens: tokens.clone(),
-        clock: clock.clone(),
-    });
-    // The same switch the discovery record above publishes, read once from the same field.
-    let auth = if config.password_auth_disabled {
-        auth.without_passwords()
-    } else {
-        auth
-    };
-
     let app = App::new(Modules {
-        auth,
+        auth: AuthContext::new(AuthCollaborators {
+            sessions,
+            accounts: accounts.accounts,
+            registry: accounts.registry,
+            profiles: accounts.profiles,
+            passwords: accounts.passwords,
+            challenges,
+            cohorts,
+            tokens: tokens.clone(),
+            clock: clock.clone(),
+        })
+        // The same switch the discovery record above publishes, read from the same field.
+        .with_password_setting(Arc::new(config.password_auth_disabled)),
         totp: TotpContext::new(
             totp,
             // The issuer is what an authenticator app shows beside the code, so it is this

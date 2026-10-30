@@ -31,7 +31,7 @@
 //! # Password sign-in can be switched off
 //!
 //! An OIDC-only deployment (`PASSWORD_AUTH_DISABLED`, #1004) builds its context with
-//! [`AuthContext::without_passwords`]. The password operations — register, login,
+//! [`AuthContext::with_password_setting`] over `true`; see [`PasswordSetting`]. The password operations — register, login,
 //! reauthenticate — then refuse with `error.auth.password_disabled` before any password reaches
 //! a directory, so no Argon2 runs on an unauthenticated request. Every local account is refused,
 //! including one created before the switch: there is no break-glass account, because a named
@@ -130,7 +130,29 @@ pub struct AuthContext {
     cohorts: Arc<dyn crate::store::CohortStore>,
     tokens: Arc<SessionTokens>,
     clock: Arc<dyn Clock>,
-    passwords_disabled: bool,
+    password_setting: Arc<dyn PasswordSetting>,
+}
+
+/// Whether this deployment refuses password registration and sign-in (`PASSWORD_AUTH_DISABLED`,
+/// #1004).
+///
+/// # Why a port and not a `bool`
+///
+/// For the reason [`crate::federation::FederationSetting`] is one. Production reads the setting
+/// once at boot and hands in a plain `bool`, which implements this trait. The conformance walk
+/// proves every declared response through **one** server, and the `403` the password operations
+/// declare has to come from the same server that answers their `200`s, so the test double is a
+/// switch.
+pub trait PasswordSetting: std::fmt::Debug + Send + Sync {
+    /// Whether password registration and sign-in are refused.
+    fn passwords_disabled(&self) -> bool;
+}
+
+/// The setting as boot reads it: fixed for the life of the process.
+impl PasswordSetting for bool {
+    fn passwords_disabled(&self) -> bool {
+        *self
+    }
 }
 
 impl AuthContext {
@@ -162,23 +184,24 @@ impl AuthContext {
             cohorts,
             tokens,
             clock,
-            passwords_disabled: false,
+            password_setting: Arc::new(false),
         }
     }
 
-    /// The same module on a deployment that refuses password registration and sign-in.
+    /// The same module, refusing password registration and sign-in whenever `setting` says so.
     ///
-    /// See the module docs: the password operations answer `error.auth.password_disabled`
-    /// before any password is verified, for every account.
+    /// Passwords are accepted unless this is called. See the module docs: a refusing deployment's
+    /// password operations answer `error.auth.password_disabled` before any password is
+    /// verified, for every account.
     #[must_use]
-    pub fn without_passwords(mut self) -> Self {
-        self.passwords_disabled = true;
+    pub fn with_password_setting(mut self, setting: Arc<dyn PasswordSetting>) -> Self {
+        self.password_setting = setting;
         self
     }
 
     /// Whether password registration and sign-in are refused on this deployment.
     pub fn passwords_disabled(&self) -> bool {
-        self.passwords_disabled
+        self.password_setting.passwords_disabled()
     }
 
     /// The session-state store.

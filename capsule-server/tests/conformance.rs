@@ -366,6 +366,21 @@ async fn every_declared_response_is_exercised() {
         .send()
         .await
         .assert_status(StatusCode::TOO_MANY_REQUESTS);
+    // 403: the deployment refuses passwords (#1004), and so does login below.
+    fixture.passwords.set_disabled(true);
+    client
+        .post("/v1/auth/register")
+        .json(&json!({ "email": "oidc-only@example.test", "password": PASSWORD }))
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    client
+        .post("/v1/auth/login")
+        .json(&json!({ "email": EMAIL, "password": PASSWORD }))
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    fixture.passwords.set_disabled(false);
 
     // ── POST /v1/auth/login ────────────────────────────────────────────────────────────────
     // 400, 415, 422 are the `Json` extractor's, declared on every operation that takes a body.
