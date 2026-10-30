@@ -29,7 +29,7 @@ class LibraryHolderTest {
         root: File = File(dir, "library"),
         secrets: UnlockSecretStore = unlockStore(dir),
     ) = LibraryHolder(
-        LibraryLifecycle(root, secrets, FfiDeviceTier.LOW_RAM, FfiClientBuild("capsule-android", "0.0.0"), "Library"),
+        LibraryLifecycle(root, secrets, FfiDeviceTier.LOW_RAM, FfiClientBuild("capsule-android", "0.0.0"), "Library", signer = null),
         scope,
         Dispatchers.Unconfined,
     )

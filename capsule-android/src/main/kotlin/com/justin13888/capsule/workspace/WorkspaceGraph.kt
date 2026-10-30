@@ -2,7 +2,9 @@ package com.justin13888.capsule.workspace
 
 import android.app.ActivityManager
 import android.content.Context
+import android.content.pm.PackageManager
 import com.justin13888.capsule.R
+import com.justin13888.capsule.hardware.StrongBoxSigner
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -94,6 +96,9 @@ class WorkspaceGraph(
             tier = deviceTier(app),
             client = FfiClientBuild(CLIENT_ID, versionName(app)),
             defaultAlbumName = app.getString(R.string.app_albums_default_name),
+            // StrongBox where the device has a secure element, the TEE where it does not: the
+            // key is in hardware either way, and requesting StrongBox where there is none fails.
+            signer = StrongBoxSigner(strongBoxBacked = app.packageManager.hasSystemFeature(PackageManager.FEATURE_STRONGBOX_KEYSTORE)),
         )
 
     val library: LibraryHolder by lazy { LibraryHolder(lifecycle, scope) }
