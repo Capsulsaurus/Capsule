@@ -136,13 +136,7 @@ async fn e2e_case_7_the_chain_advances_through_every_transition_and_purge_honour
     assert!(matches!(gone, FetchError::Gone), "got {gone:?}");
     assert!(
         server
-            .blob_path(
-                &a.workspace
-                    .upload_bundle(&kept)
-                    .expect("a bundle")
-                    .ciphertext_hash
-                    .to_hex()
-            )
+            .blob_path(&a.head_record(&kept).manifest.core.ciphertext_hash.to_hex())
             .exists(),
         "the retained tombstone's bytes are untouched"
     );

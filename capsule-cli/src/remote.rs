@@ -1117,6 +1117,11 @@ pub enum AssetPushStatus {
     /// still inside its deadline ([`PushRun::delegated`]), so that device uploads it. Not a
     /// failure; a re-queued delegation is pushed like any other asset.
     Delegated,
+    /// Skipped: the server already holds the asset's create (its feed lists the asset and holds
+    /// the original the create pins), and an edit since replaced the metadata blob that create
+    /// binds, so the library cannot rebuild the create and nothing of it is left to upload. Not
+    /// a failure; the records after the create reach the server in `live_records`.
+    Indexed,
 }
 
 /// Why an asset failed, in the shape `--json` reports it.
@@ -1259,6 +1264,9 @@ pub struct PushSummary {
     /// Assets skipped because another device of the account holds an open hand-off for them
     /// ([`AssetPushStatus::Delegated`]).
     pub delegated_assets: usize,
+    /// Assets skipped because the server already holds their create and an edit since replaced
+    /// the metadata blob it binds ([`AssetPushStatus::Indexed`]).
+    pub indexed_assets: usize,
     /// Assets skipped because they are in the trash: a deleted asset's upload is redacted, so
     /// nothing of it is planned or sent and it has no entry in `outcomes`.
     pub trashed_assets: usize,
@@ -1270,6 +1278,13 @@ pub struct PushSummary {
     /// purged asset's kept chain is delivered the same way, from the tombstone, once the feed
     /// lists it with a head before the chain's.
     pub held_records: Vec<TrashOutcome>,
+    /// What the run did with the records after the create of each live asset it considered:
+    /// an upload carries only the create, so a delete, a restore or an edit signed since is sent
+    /// as a lifecycle op once the server has indexed the create, read off a feed drained after
+    /// this run's uploads (Organization — Deletion State Machine). One entry per live asset
+    /// whose chain the server is not level with; none for a lone create, none for an asset
+    /// handed to another device, and none on a dry run.
+    pub live_records: Vec<TrashOutcome>,
     /// Verified custody receipts persisted to the library this run.
     pub receipts: usize,
     /// Blobs transferred and finalized: the server reported each session `completed`.
@@ -1341,25 +1356,27 @@ fn blobs_held(entries: &[FeedEntry]) -> HashSet<String> {
     held
 }
 
-/// Send the lifecycle records of each `trashed` asset the server does not hold yet, now that
+/// Send the lifecycle records of each of `assets` the server does not hold yet, now that
 /// `chains` says which creates it has indexed ([`deliver_chain`]). An asset the server is level
-/// with has no entry; one whose create is still not indexed is reported held.
+/// with has no entry; one whose create is still not indexed is reported held. An outcome
+/// carries a `retention_until` only for an asset in the trash.
 async fn deliver_held_records(
     remote: &RemoteConfig,
     session: &Session,
     workspace: &Workspace,
-    trashed: &[Uuid],
+    assets: &[Uuid],
     chains: &held::ServerChains,
 ) -> Vec<TrashOutcome> {
     let mut outcomes = Vec::new();
-    for asset_id in trashed {
+    for asset_id in assets {
         let Some(asset) = workspace.asset(asset_id) else {
             continue;
         };
         if chains.is_level(asset_id, asset.chain.records()) {
-            tracing::debug!(%asset_id, "push: the server holds this trashed asset's head; nothing to send");
+            tracing::debug!(%asset_id, "push: the server holds this asset's head; nothing to send");
             continue;
         }
+        let trashed = workspace.is_trashed(asset_id);
         let delivered = deliver_chain(
             remote,
             session,
@@ -1370,13 +1387,54 @@ async fn deliver_held_records(
         )
         .await;
         let outcome = TrashOutcome {
-            retention_until: trashed_until(asset),
+            retention_until: trashed.then(|| trashed_until(asset)).flatten(),
             ..trash_outcome(*asset_id, delivered, trashed_until(asset))
         };
-        tracing::info!(%asset_id, status = ?outcome.status, "push: a trashed asset's held records");
+        tracing::info!(%asset_id, trashed, status = ?outcome.status, "push: an asset's held records");
         outcomes.push(outcome);
     }
     outcomes
+}
+
+/// Send the records after the create of each `live` asset, once this run's uploads are done:
+/// the feed is drained afresh, so a create this run uploaded is indexed by the time its later
+/// records are judged ([`deliver_held_records`]). A feed that cannot be read sends nothing, and
+/// each asset fails as `unavailable`, which a re-run clears.
+async fn deliver_live_records(
+    remote: &RemoteConfig,
+    session: &Session,
+    workspace: &Workspace,
+    live: &[Uuid],
+) -> Vec<TrashOutcome> {
+    if live.is_empty() {
+        return Vec::new();
+    }
+    tracing::info!(
+        assets = live.len(),
+        "push: delivering the records after each live asset's create"
+    );
+    match server_chains(remote, session.clone()).await {
+        Ok(chains) => deliver_held_records(remote, session, workspace, live, &chains).await,
+        Err(message) => live
+            .iter()
+            .map(|asset_id| {
+                failed_trash(
+                    *asset_id,
+                    TrashFailure {
+                        kind: "unavailable",
+                        code: None,
+                        message: format!(
+                            "the server's feed could not be read after the uploads, so whether \
+                             it has indexed the asset is unknown; its later records are held in \
+                             the library and nothing was sent: {message}"
+                        ),
+                        permanent: false,
+                        retention_until: None,
+                    },
+                )
+            })
+            .collect(),
+    }
 }
 
 /// Send the stretch of each `purged` asset's kept chain the server lacks, from the tombstone
@@ -1757,21 +1815,22 @@ async fn push_with(
     }
 
     // Server truth first — the whole resume story. `--force` deliberately reads nothing.
-    let held = if options.force {
+    let (held, indexed) = if options.force {
         tracing::info!("push: --force, re-driving every blob regardless of server truth");
-        HashSet::new()
+        (HashSet::new(), HashSet::new())
     } else {
         let entries = drain_feed(remote, session.clone(), DEFAULT_SYNC_PAGE_SIZE).await?;
         let held = blobs_held(&entries);
+        let chains = held::ServerChains::from_feed(&entries);
         if !options.dry_run {
-            let chains = held::ServerChains::from_feed(&entries);
             summary.held_records =
                 deliver_held_records(remote, &session, workspace, &trashed, &chains).await;
             summary.held_records.extend(
                 deliver_purged_records(remote, &session, workspace, &purged, &chains).await,
             );
         }
-        held
+        let indexed = creates_on_server(workspace, &asset_ids, &chains, &held);
+        (held, indexed)
     };
     if asset_ids.is_empty() {
         summary.log();
@@ -1791,7 +1850,7 @@ async fn push_with(
     ));
     // `sync_endpoint` is the bare server origin; the storage and receipt routes hang off `/v1`.
     let verify = StorageVerifyClient::new(VerifyTransport::with_session(
-        session,
+        session.clone(),
         format!("{}/v1", remote.sync_endpoint.trim_end_matches('/')),
     ));
     let scheduler = StagedScheduler::new(options.policy, options.connection);
@@ -1801,7 +1860,14 @@ async fn push_with(
             let outcome = if run.delegated.contains(&asset_id) {
                 delegated(asset_id)
             } else {
-                plan_asset(workspace, &scheduler, &held, options.force, asset_id)
+                plan_asset(
+                    workspace,
+                    &scheduler,
+                    &held,
+                    &indexed,
+                    options.force,
+                    asset_id,
+                )
             };
             run.tell(|| AssetProgress::Finished(outcome.clone()));
             summary.record(outcome);
@@ -1814,6 +1880,21 @@ async fn push_with(
     // could be confirmed: that is a failure of the run, not of an asset.
     let attestation_keys = pinned_attestation_keys(remote, workspace, &verify).await?;
 
+    // An upload carries only an asset's create, so every live asset whose chain moved past it
+    // (a delete and a restore, or an edit) has records to deliver as lifecycle ops once the
+    // server indexes the create, whether this run uploads it or another device did. An asset
+    // handed to another device is left to its hand-off.
+    let later_records: Vec<Uuid> = asset_ids
+        .iter()
+        .filter(|asset_id| !run.delegated.contains(asset_id))
+        .filter(|asset_id| {
+            workspace
+                .asset(asset_id)
+                .is_some_and(|asset| asset.chain.records().len() > 1)
+        })
+        .copied()
+        .collect();
+
     let mut pusher = AssetPusher {
         workspace,
         upload,
@@ -1823,6 +1904,7 @@ async fn push_with(
         attestation_keys,
         scheduler,
         held,
+        indexed,
         force: options.force,
         provisioned: HashSet::new(),
         uncovered,
@@ -1846,6 +1928,8 @@ async fn push_with(
         run.tell(|| AssetProgress::Finished(outcome.clone()));
         summary.record(outcome);
     }
+    summary.live_records =
+        deliver_live_records(remote, &session, pusher.workspace, &later_records).await;
     summary.log();
     Ok(summary)
 }
@@ -1897,12 +1981,14 @@ fn plan_asset<H: std::hash::BuildHasher>(
     workspace: &Workspace,
     scheduler: &StagedScheduler,
     held: &HashSet<String, H>,
+    indexed: &HashSet<Uuid>,
     force: bool,
     asset_id: Uuid,
 ) -> AssetPushOutcome {
     let mut outcome = AssetPushOutcome::new(asset_id, AssetPushStatus::Planned);
-    match workspace.upload_bundle(&asset_id) {
-        Ok(bundle) => {
+    match create_bundle(workspace, indexed, asset_id) {
+        Ok(None) => outcome.status = AssetPushStatus::Indexed,
+        Ok(Some(bundle)) => {
             let planned = push::plan(scheduler, &bundle, held, force);
             outcome.uploaded = planned.blobs.len();
             outcome.already_held = planned.already_held;
@@ -1921,6 +2007,59 @@ fn plan_asset<H: std::hash::BuildHasher>(
         }
     }
     outcome
+}
+
+/// The assets of `asset_ids` whose create the server already holds: its feed lists the asset
+/// and holds the original that create pins. Nothing of such a create is left to upload.
+fn creates_on_server<H: std::hash::BuildHasher>(
+    workspace: &Workspace,
+    asset_ids: &[Uuid],
+    chains: &held::ServerChains,
+    held: &HashSet<String, H>,
+) -> HashSet<Uuid> {
+    let indexed: HashSet<Uuid> = asset_ids
+        .iter()
+        .filter(|asset_id| chains.head(asset_id).is_some())
+        .filter(|asset_id| {
+            workspace.asset(asset_id).is_some_and(|asset| {
+                asset.chain.records().first().is_some_and(|create| {
+                    held.contains(&create.manifest.core.ciphertext_hash.to_hex())
+                })
+            })
+        })
+        .copied()
+        .collect();
+    tracing::debug!(
+        assets = asset_ids.len(),
+        indexed = indexed.len(),
+        "push: assets whose create the server already holds"
+    );
+    indexed
+}
+
+/// `asset_id`'s upload bundle, or `None` when there is nothing of its create to upload: the
+/// server already holds it (`indexed`), and an edit since replaced the metadata blob it binds,
+/// so the library cannot rebuild it ([`LifecycleError::CreateMetadataSuperseded`]). The records
+/// after the create are delivered as lifecycle ops ([`deliver_live_records`]), so such an asset
+/// is never a failure. One the server does not hold yet still fails: its create has to be
+/// uploaded, and cannot be.
+fn create_bundle(
+    workspace: &Workspace,
+    indexed: &HashSet<Uuid>,
+    asset_id: Uuid,
+) -> Result<Option<capsule_library::lifecycle::UploadBundle>, LifecycleError> {
+    match workspace.upload_bundle(&asset_id) {
+        Ok(bundle) => Ok(Some(bundle)),
+        Err(LifecycleError::CreateMetadataSuperseded(_)) if indexed.contains(&asset_id) => {
+            tracing::info!(
+                %asset_id,
+                "push: skipped; the server holds this asset's create, which an edit here has \
+                 superseded, so nothing of it is uploaded"
+            );
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
 }
 
 /// The outcome of an asset skipped because another device holds its open hand-off: nothing of
@@ -1944,6 +2083,8 @@ struct AssetPusher<'a> {
     attestation_keys: Vec<HybridVerifyingKey>,
     scheduler: StagedScheduler,
     held: HashSet<String>,
+    /// Assets whose create the server already holds ([`creates_on_server`]).
+    indexed: HashSet<Uuid>,
     force: bool,
     /// Albums registered this run. Provisioning is idempotent server-side, so this only saves
     /// making the same request once per asset; an album whose registration failed is not in
@@ -1966,7 +2107,10 @@ impl AssetPusher<'_> {
         summary: &mut PushSummary,
         run: &mut PushRun<'_>,
     ) -> Result<(), AssetError> {
-        let bundle = self.workspace.upload_bundle(&asset_id)?;
+        let Some(bundle) = create_bundle(self.workspace, &self.indexed, asset_id)? else {
+            outcome.status = AssetPushStatus::Indexed;
+            return Ok(());
+        };
         run.tell(|| started(&bundle));
         if self.uncovered.contains(&bundle.album_id) {
             return Err(AssetError::KeysNotEscrowed(bundle.album_id));
@@ -2096,6 +2240,7 @@ impl PushSummary {
             AssetPushStatus::Verified => self.verified_assets += 1,
             AssetPushStatus::Failed => self.failed_assets += 1,
             AssetPushStatus::Delegated => self.delegated_assets += 1,
+            AssetPushStatus::Indexed => self.indexed_assets += 1,
             AssetPushStatus::Planned => {}
         }
         self.outcomes.push(outcome);
@@ -2112,7 +2257,10 @@ impl PushSummary {
             verified_assets = self.verified_assets,
             failed_assets = self.failed_assets,
             delegated_assets = self.delegated_assets,
+            indexed_assets = self.indexed_assets,
             trashed_assets = self.trashed_assets,
+            held_records = self.held_records.len(),
+            live_records = self.live_records.len(),
             receipts = self.receipts,
             uploaded = self.uploaded_blobs,
             merged = self.merged_blobs,
@@ -2140,6 +2288,14 @@ pub fn custody_line(summary: &PushSummary) -> String {
             summary.delegated_assets
         );
     }
+    if summary.indexed_assets > 0 {
+        let _ = write!(
+            line,
+            " Skipped {} the server already holds; an edit here replaced what their upload \
+             carried, so only the records after it are sent.",
+            summary.indexed_assets
+        );
+    }
     if summary.trashed_assets > 0 {
         let _ = write!(
             line,
@@ -2147,17 +2303,16 @@ pub fn custody_line(summary: &PushSummary) -> String {
             summary.trashed_assets
         );
     }
-    let count = |status| {
-        summary
-            .held_records
+    let count = |outcomes: &[TrashOutcome], status| {
+        outcomes
             .iter()
             .filter(|outcome| outcome.status == status)
             .count()
     };
     let (sent, held, failed) = (
-        count(TrashStatus::Applied),
-        count(TrashStatus::Held),
-        count(TrashStatus::Failed),
+        count(&summary.held_records, TrashStatus::Applied),
+        count(&summary.held_records, TrashStatus::Held),
+        count(&summary.held_records, TrashStatus::Failed),
     );
     if sent > 0 {
         let _ = write!(
@@ -2175,6 +2330,29 @@ pub fn custody_line(summary: &PushSummary) -> String {
         let _ = write!(
             line,
             " {failed} deleted assets' held records were not applied; `--json` says why."
+        );
+    }
+    let (sent, held, failed) = (
+        count(&summary.live_records, TrashStatus::Applied),
+        count(&summary.live_records, TrashStatus::Held),
+        count(&summary.live_records, TrashStatus::Failed),
+    );
+    if sent > 0 {
+        let _ = write!(
+            line,
+            " Sent the records after the create of {sent} assets the server now indexes."
+        );
+    }
+    if held > 0 {
+        let _ = write!(
+            line,
+            " {held} assets keep the records after their create held in the library."
+        );
+    }
+    if failed > 0 {
+        let _ = write!(
+            line,
+            " {failed} assets' records after their create were not applied; `--json` says why."
         );
     }
     line
@@ -3121,19 +3299,21 @@ async fn release_moved_with(
     Ok(release_sources(workspace, &verifier, moved))
 }
 
-/// The custody question for each distinct asset behind `moved`. An asset whose bundle cannot be
-/// built is left out, so the verifier cannot answer for it and its source is kept.
+/// The custody question for each distinct asset behind `moved`, read off its chain head as the
+/// release gate declares it ([`HeldRelease::for_head`]), so an asset edited since its create is
+/// asked about like any other. An asset the library does not hold is left out, so the verifier
+/// cannot answer for it and its source is kept.
 fn held_releases(workspace: &Workspace, moved: &[MovedSource]) -> Vec<HeldRelease> {
     let mut seen = HashSet::new();
     moved
         .iter()
         .filter(|m| seen.insert(m.asset_id))
-        .filter_map(|m| match workspace.upload_bundle(&m.asset_id) {
-            Ok(bundle) => Some(HeldRelease::for_original(&bundle)),
-            Err(error) => {
-                tracing::warn!(asset_id = %m.asset_id, %error, "move release: no bundle; the source is kept");
-                None
+        .filter_map(|m| {
+            let release = workspace.asset(&m.asset_id).map(HeldRelease::for_head);
+            if release.is_none() {
+                tracing::warn!(asset_id = %m.asset_id, "move release: the library does not hold the asset; the source is kept");
             }
+            release
         })
         .collect()
 }

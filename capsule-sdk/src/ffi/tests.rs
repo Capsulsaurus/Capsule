@@ -2450,6 +2450,13 @@ fn ffi_trash_verbs_delete_restore_and_purge_through_signed_records() {
     assert!(workspace.trash().unwrap().is_empty());
 
     let entry = workspace.delete_asset(asset.clone(), 30).unwrap();
+    let head: ProvenanceRecord =
+        capsule_core::cbor::from_slice(&workspace.provenance_head(asset.clone()).unwrap()).unwrap();
+    assert_eq!(
+        head.manifest.core.action,
+        Action::Delete,
+        "the provenance head is the chain's head, not the create an upload carries"
+    );
     assert_eq!(entry.asset_id, asset);
     assert!(entry.restorable);
     assert!(entry.retention_until.is_some());
