@@ -43,6 +43,36 @@ pub const RETENTION: SignedDuration = SignedDuration::from_hours(90 * 24);
 /// per attempt — and the largest page the listing serves.
 pub const MAX_EVENTS_PER_ACCOUNT: usize = 1_000;
 
+/// The window inside which [`ActivityContext::record_detached`] records one event of a kind per
+/// account, and coalesces every later one into it.
+///
+/// A refused or locked sign-in can be caused by anyone who knows an address, and the login route
+/// charges no budget, so without this bound a scripted loop would push the account's whole log
+/// out through [`MAX_EVENTS_PER_ACCOUNT`] in minutes. With it, the two detached kinds add at
+/// most two events an hour to one account's log, and a flood needs weeks of uninterrupted
+/// attempts to displace the rest. Every attempt is still in the request log.
+pub const DETACHED_COALESCE_WINDOW: SignedDuration = SignedDuration::from_hours(1);
+
+/// The most detached writes in flight at once, across every account.
+///
+/// Each one holds a store connection while it runs, from the pool every request shares, so a
+/// password spray across many accounts must not be able to queue writes faster than the store
+/// lands them. An event past the bound is dropped and logged whole at `error`.
+pub const MAX_DETACHED_IN_FLIGHT: usize = 16;
+
+/// What [`ActivityContext::record_detached`] did with an event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Detached {
+    /// The event was stamped and its write started.
+    Started,
+    /// An event of the same kind for the same account was recorded inside
+    /// [`DETACHED_COALESCE_WINDOW`]; this one is counted into it and not written.
+    Coalesced,
+    /// [`MAX_DETACHED_IN_FLIGHT`] writes were already running; the event is logged at `error`
+    /// and not written.
+    Dropped,
+}
+
 /// Every event the activity log records. The set is closed: nothing else is written.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ActivityKind {
@@ -255,6 +285,96 @@ pub struct ActivityContext {
     clock: Arc<dyn Clock>,
     /// Writes [`Self::record_detached`] started and nobody has awaited, shared by every clone.
     detached: Arc<Mutex<tokio::task::JoinSet<()>>>,
+    /// The open coalescing window of each account and detached kind, shared by every clone.
+    windows: Arc<Mutex<Windows>>,
+}
+
+/// The coalescing windows [`ActivityContext::record_detached`] keeps.
+#[derive(Debug, Default)]
+struct Windows {
+    /// When each account's window for a kind opened, and how many events it has absorbed.
+    open: std::collections::HashMap<(UserId, ActivityKind), Window>,
+    /// The size past which the next opening sweeps out closed windows; doubles with the live
+    /// set, so the sweep's cost stays amortized constant per opening.
+    sweep_at: usize,
+}
+
+/// One account's coalescing window for one kind.
+#[derive(Debug, Clone, Copy)]
+struct Window {
+    /// The instant of the event that opened it, the one that was written.
+    opened: Timestamp,
+    /// The events counted into it and not written.
+    coalesced: u64,
+}
+
+impl Window {
+    /// Whether an event at `now` falls inside this window. A clock that stepped back is inside.
+    fn holds(&self, now: Timestamp) -> bool {
+        now.duration_since(self.opened) < DETACHED_COALESCE_WINDOW
+    }
+}
+
+/// The fewest open windows that trigger a sweep.
+const MIN_SWEEP_AT: usize = 1_024;
+
+impl Windows {
+    /// Count `user`'s `kind` at `now` into its open window, or open one.
+    ///
+    /// Returns `true` when the event opened a window and so must be written.
+    fn admit(&mut self, user: &UserId, kind: ActivityKind, now: Timestamp) -> bool {
+        let key = (user.clone(), kind);
+        if let Some(window) = self.open.get_mut(&key)
+            && window.holds(now)
+        {
+            window.coalesced += 1;
+            tracing::debug!(
+                user_id = %user,
+                kind = kind.as_str(),
+                coalesced = window.coalesced,
+                opened = %window.opened,
+                "coalesced an account activity event into its open window"
+            );
+            return false;
+        }
+        if let Some(closed) = self.open.insert(
+            key,
+            Window {
+                opened: now,
+                coalesced: 0,
+            },
+        ) && closed.coalesced > 0
+        {
+            tracing::info!(
+                user_id = %user,
+                kind = kind.as_str(),
+                coalesced = closed.coalesced,
+                opened = %closed.opened,
+                "an account activity window closed with events coalesced into it"
+            );
+        }
+        if self.open.len() > self.sweep_at.max(MIN_SWEEP_AT) {
+            self.open.retain(|(user, kind), window| {
+                let open = window.holds(now);
+                if !open && window.coalesced > 0 {
+                    tracing::info!(
+                        user_id = %user,
+                        kind = kind.as_str(),
+                        coalesced = window.coalesced,
+                        opened = %window.opened,
+                        "an account activity window closed with events coalesced into it"
+                    );
+                }
+                open
+            });
+            self.sweep_at = self.open.len() * 2;
+            tracing::debug!(
+                open = self.open.len(),
+                "swept closed account activity windows"
+            );
+        }
+        true
+    }
 }
 
 impl ActivityContext {
@@ -264,6 +384,7 @@ impl ActivityContext {
             store,
             clock,
             detached: Arc::default(),
+            windows: Arc::default(),
         }
     }
 
@@ -300,17 +421,23 @@ impl ActivityContext {
     /// a write awaited on the response path would tell a caller which addresses exist. The
     /// event is stamped here — its instant and the current request's id — and only the store
     /// write runs on a task of its own, inside the current span so its log line still names the
-    /// request. Every guarantee of [`Self::record`] holds; the event is merely written a moment
-    /// after the response rather than before it.
+    /// request. It is never awaited on any path, so a known address costs the caller the same as
+    /// an unknown one, whatever the store does.
     ///
-    /// A write still in flight when the last clone of this context is dropped is abandoned, and
-    /// its event is lost; the log line that would have recorded it is lost with it.
-    /// [`Self::settled`] waits for every write started so far.
-    pub fn record_detached(&self, user: &UserId, kind: ActivityKind) {
+    /// It keeps fewer guarantees than [`Self::record`], because its events are caused by whoever
+    /// knows an address rather than by the account's own sessions:
+    ///
+    /// - **Coalesced.** One event of a kind is written per account per
+    ///   [`DETACHED_COALESCE_WINDOW`]; the rest are counted into it, each at `debug`, and the
+    ///   count at `info` once the window is over and the next event or a sweep replaces it. The
+    ///   request log still holds every attempt.
+    /// - **Bounded.** Past [`MAX_DETACHED_IN_FLIGHT`] running writes, the event is dropped and
+    ///   logged whole at `error`, as a refused write is.
+    /// - **Drained, not durable, at exit.** A write still in flight when the process stops is
+    ///   lost unless the shutdown awaits [`Self::settled`]; `serve` does, for a bounded time.
+    pub fn record_detached(&self, user: &UserId, kind: ActivityKind) -> Detached {
         use tracing::Instrument as _;
 
-        let event = self.stamp(user, kind, None, None);
-        let store = Arc::clone(&self.store);
         let mut detached = lock(&self.detached);
         // Reap what has finished, so the set holds only writes in flight.
         while let Some(finished) = detached.try_join_next() {
@@ -318,6 +445,27 @@ impl ActivityContext {
                 tracing::error!(%error, "a detached activity write did not finish");
             }
         }
+        let event = self.stamp(user, kind, None, None);
+        let mut windows = lock(&self.windows);
+        if !windows.admit(user, kind, event.at) {
+            return Detached::Coalesced;
+        }
+        if detached.len() >= MAX_DETACHED_IN_FLIGHT {
+            // Nothing was written for this window, so the next attempt opens it again.
+            windows.open.remove(&(user.clone(), kind));
+            tracing::error!(
+                user_id = %event.user_id,
+                kind = kind.as_str(),
+                event_id = event.event_id,
+                at = %event.at,
+                request_id = ?event.request_id,
+                in_flight = detached.len(),
+                "an account activity event was dropped: too many detached writes in flight"
+            );
+            return Detached::Dropped;
+        }
+        drop(windows);
+        let store = Arc::clone(&self.store);
         detached.spawn(
             async move { write(store.as_ref(), event).await }.instrument(tracing::Span::current()),
         );
@@ -327,6 +475,7 @@ impl ActivityContext {
             in_flight = detached.len(),
             "detached an account activity write"
         );
+        Detached::Started
     }
 
     /// Wait until every write [`Self::record_detached`] started before this call has finished.

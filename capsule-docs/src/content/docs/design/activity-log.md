@@ -23,8 +23,8 @@ It is not the [provenance](/design/cryptography/provenance/) chain, which signs 
 | --- | --- | --- |
 | `account.registered` | an account is created, by registration or by the first identity-provider sign-in of an identity | its first session, when registration opened one; absent for an account an identity-provider sign-in created, whose `sign_in.oidc` names the session |
 | `sign_in.password` | a password sign-in opens a session | the new session |
-| `sign_in.password_refused` | a password sign-in is refused because the password is wrong for this account | — |
-| `sign_in.locked` | a password sign-in is refused because this account is locked | — |
+| `sign_in.password_refused` | a password sign-in is refused because the password is wrong for this account; at most one an hour per account, see [Retention](#retention) | — |
+| `sign_in.locked` | a password sign-in is refused because this account is locked; at most one an hour per account, see [Retention](#retention) | — |
 | `sign_in.second_factor` | a sign-in completes its second factor and opens a session | the new session |
 | `sign_in.second_factor_refused` | a second-factor code is refused for a sign-in whose first factor verified | — |
 | `sign_in.oidc` | an identity-provider sign-in (browser or device flow) opens a session | the new session |
@@ -71,7 +71,9 @@ An account's log keeps events for **90 days** and at most **1,000 events**, whic
 - A read never returns an event older than 90 days, whether or not it has been deleted yet.
 - Recording an event deletes the same account's events beyond either bound, in the same operation, so the log of an active account never exceeds its bound.
 - An account that records nothing more keeps its expired rows, unread, until it next records. Deleting them sooner is an operator sweep over the table, not a request's work.
-- The count bound is what keeps a burst of events (a scripted sign-in loop against the second factor, or wrong passwords presented for somebody else's address) from growing the table without limit; the rate limits below already slow it. The cost of the bound is that such a flood pushes the account's older events out of its log; the request log still holds them for as long as the operator keeps it.
+- The count bound is what keeps a burst of events (a scripted loop against the second factor) from growing the table without limit. The cost of the bound is that such a flood pushes the account's older events out of its log; the request log still holds them for as long as the operator keeps it.
+- `sign_in.password_refused` and `sign_in.locked` are caused by anyone who knows an address, and the password sign-in route charges no budget for them. So each is **coalesced**: one is written per account per hour, the attempts after it in that hour are counted into it, and the count goes to the operator's log once the hour is over. Every attempt is still in the request log. A wrong-password flood therefore adds at most two events an hour to an account's log, and needs weeks of uninterrupted attempts to push out the events before it. Coalescing is per server process, and decides nothing about the sign-in's answer.
+- Those two events are written off the response path, at most 16 at a time per server process. One past that bound is not written and is logged at `error` with its fields. A server that is stopping waits a few seconds for the ones in flight; any still in flight after that are lost, and the stop logs it at `error`.
 
 ## The Port
 
@@ -83,4 +85,4 @@ The log is a durable port in the PostgreSQL family, beside the asset index, acco
 
 ## Rate Limits
 
-No event feeds a [counter budget](/design/authentication/#the-second-factor). Budgets are charged at the request edge, before the action and against a counter store built for that; the log is written after the action, to PostgreSQL. A budget fed from the log would make a log outage disable a limiter. The events that matter for abuse — sign-ins and second-factor attempts, link creation — are already budgeted at the routes that cause them.
+No event feeds a [counter budget](/design/authentication/#the-second-factor). Budgets are charged at the request edge, before the action and against a counter store built for that; the log is written after the action, to PostgreSQL. A budget fed from the log would make a log outage disable a limiter. Second-factor attempts and link creation are budgeted at the routes that cause them. A password sign-in is bounded by the account lockout, not by a budget, so its refusal events are coalesced instead (see [Retention](#retention)).

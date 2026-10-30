@@ -142,3 +142,121 @@ async fn a_store_that_cannot_record_does_not_fail_the_caller() {
         .record(&UserId::new("alice"), ActivityKind::SignOut, None, None)
         .await;
 }
+
+/// A store whose writes never finish, for the bound on writes in flight.
+#[derive(Debug)]
+struct Stalled;
+
+impl ActivityStore for Stalled {
+    fn record(&self, _: ActivityEvent, _: Timestamp) -> StoreFuture<'_, ()> {
+        Box::pin(std::future::pending())
+    }
+
+    fn recent<'a>(
+        &'a self,
+        _: &'a UserId,
+        _: Timestamp,
+        _: usize,
+    ) -> StoreFuture<'a, Vec<ActivityEvent>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+}
+
+#[tokio::test]
+async fn a_detached_kind_is_written_once_per_account_per_window() {
+    let (activity, clock) = context();
+    let alice = UserId::new("alice");
+    let refused = ActivityKind::SignInPasswordRefused;
+
+    assert_eq!(activity.record_detached(&alice, refused), Detached::Started);
+    clock.advance(DETACHED_COALESCE_WINDOW - SignedDuration::from_secs(1));
+    assert_eq!(
+        activity.record_detached(&alice, refused),
+        Detached::Coalesced
+    );
+    activity.settled().await;
+    assert_eq!(
+        activity.recent(&alice, 10).await.expect("a read").len(),
+        1,
+        "a second refusal inside the window is counted, not written"
+    );
+
+    clock.advance(SignedDuration::from_secs(1));
+    assert_eq!(
+        activity.record_detached(&alice, refused),
+        Detached::Started,
+        "the window is measured from the event that opened it"
+    );
+    activity.settled().await;
+    assert_eq!(activity.recent(&alice, 10).await.expect("a read").len(), 2);
+}
+
+#[tokio::test]
+async fn windows_are_per_account_and_per_kind() {
+    let (activity, _clock) = context();
+    let alice = UserId::new("alice");
+    let bob = UserId::new("bob");
+
+    assert_eq!(
+        activity.record_detached(&alice, ActivityKind::SignInPasswordRefused),
+        Detached::Started
+    );
+    assert_eq!(
+        activity.record_detached(&alice, ActivityKind::SignInLocked),
+        Detached::Started,
+        "a lockout is not coalesced into a wrong password"
+    );
+    assert_eq!(
+        activity.record_detached(&bob, ActivityKind::SignInPasswordRefused),
+        Detached::Started,
+        "one account's flood does not silence another's log"
+    );
+    activity.settled().await;
+    assert_eq!(activity.recent(&alice, 10).await.expect("a read").len(), 2);
+    assert_eq!(activity.recent(&bob, 10).await.expect("a read").len(), 1);
+}
+
+#[tokio::test]
+async fn a_write_past_the_in_flight_bound_is_dropped_and_opens_no_window() {
+    let activity = ActivityContext::new(Arc::new(Stalled), Arc::new(ManualClock::default()));
+    let refused = ActivityKind::SignInPasswordRefused;
+    for account in 0..MAX_DETACHED_IN_FLIGHT {
+        assert_eq!(
+            activity.record_detached(&UserId::new(format!("user-{account}")), refused),
+            Detached::Started
+        );
+    }
+    let last = UserId::new("one too many");
+    assert_eq!(activity.record_detached(&last, refused), Detached::Dropped);
+    assert_eq!(
+        activity.record_detached(&last, refused),
+        Detached::Dropped,
+        "a dropped event opened no window, so the next attempt is not coalesced into it"
+    );
+}
+
+#[test]
+fn closed_windows_are_swept_once_the_set_outgrows_its_bound() {
+    let mut windows = Windows::default();
+    let at = Timestamp::UNIX_EPOCH;
+    for account in 0..MIN_SWEEP_AT {
+        assert!(windows.admit(
+            &UserId::new(format!("user-{account}")),
+            ActivityKind::SignInLocked,
+            at
+        ));
+    }
+    assert_eq!(
+        windows.open.len(),
+        MIN_SWEEP_AT,
+        "nothing is swept up to the bound"
+    );
+
+    let later = at + DETACHED_COALESCE_WINDOW;
+    assert!(windows.admit(&UserId::new("late"), ActivityKind::SignInLocked, later));
+    assert_eq!(
+        windows.open.len(),
+        1,
+        "only the window opened just now survives"
+    );
+}
