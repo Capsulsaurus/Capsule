@@ -80,6 +80,16 @@ Rules:
 
 **Configuration** (`capsule-server/src/config.rs`): `OIDC_ISSUER` (absent = off), `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` (optional; absent = public PKCE-only client, RFC 8252 §8.5), `OIDC_REDIRECT_URL`, `OIDC_ALLOW_LOOPBACK_REDIRECT`, `OIDC_CA_BUNDLE`. Issuer without client id, or vice versa, is a startup fault. Ceremonies live on Valkey (in-memory in development); `capsule-server/compose.yaml` ships a dex service (`--profile oidc`).
 
+#### OIDC-Only Deployments
+
+`PASSWORD_AUTH_DISABLED` (default off) narrows the audited surface to the identity provider:
+
+- **`serve` refuses it without `OIDC_ISSUER`**: a server with neither door admits nobody.
+- **Register, login and reauthenticate answer `403 error.auth.password_disabled`** before anything else: no rate-limit charge, no body validation, no directory lookup, no Argon2. A malformed body, an unknown address and a locked account get the same answer.
+- **Every local account is refused**, including one created before the switch. There is no break-glass account: a named exception keeps a password door open on the account an attacker most wants, and the operator's recovery is turning the switch off.
+- **Existing sessions are not revoked.** A session opened with a password lives out its sliding and hard expiry; it cannot re-authenticate with a password, so freshness-gated operations are closed to it.
+- **`server-info` publishes `auth.password_disabled: true`** beside `auth.oidc`, so a client hides its password form. Absent means `false`, which is what a server predating the switch does.
+
 #### Signing In From the CLI
 
 `capsule auth login --oidc` is the RFC 8252 native-app flow; no extra server surface.
