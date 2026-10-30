@@ -113,6 +113,7 @@ pub(crate) const REQUIRED: &[(&str, &str)] = &[
         "createWithP256HardwareSigner",
         "createWithP256HardwareSigner",
     ),
+    ("openWithP256HardwareSigner", "openWithP256HardwareSigner"),
     ("FfiHardwareKeyAgreement", "FfiHardwareKeyAgreement"),
     ("FfiHardwareSignerError", "FfiHardwareSignerException"),
     ("FfiDeviceTier", "FfiDeviceTier"),

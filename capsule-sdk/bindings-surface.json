@@ -82,7 +82,7 @@
           "kind": "protocol",
           "name": "FfiHardwareSigner",
           "signature": "public protocol FfiHardwareSigner: AnyObject, Sendable",
-          "doc": "The per-platform secure element (Secure Enclave, StrongBox, TPM), implemented by native\nSwift/Kotlin over the uniffi foreign-trait boundary.\n\nThe byte shapes are fixed by the constructor the element is handed to, not by the trait:\n\n- [`FfiWorkspace::create_with_p256_hardware_signer`] — the **P-256** shape shipping\nelements actually provide: [`enroll`](Self::enroll) /\n[`classical_public_key`](Self::classical_public_key) return a SEC1 public key and\n[`sign_classical`](Self::sign_classical) a **DER-encoded ECDSA** signature over\n`SHA-256(msg)`.\n- [`FfiWorkspace::create_with_hardware_signer`] — the **Ed25519** shape: a 32-byte public\nkey and a 64-byte signature over `msg`. No shipping secure element holds Ed25519 keys, so\nthis is the software/TPM reference path.\n\nEither way Rust composes the classical half with a software-sealed ML-DSA-65 half into the\npublished hybrid device key.",
+          "doc": "The per-platform secure element (Secure Enclave, StrongBox, TPM), implemented by native\nSwift/Kotlin over the uniffi foreign-trait boundary.\n\nThe byte shapes are fixed by the constructor the element is handed to, not by the trait:\n\n- [`FfiWorkspace::create_with_p256_hardware_signer`] and\n[`FfiWorkspace::open_with_p256_hardware_signer`] — the **P-256** shape shipping\nelements actually provide: [`enroll`](Self::enroll) /\n[`classical_public_key`](Self::classical_public_key) return a SEC1 public key and\n[`sign_classical`](Self::sign_classical) a **DER-encoded ECDSA** signature over\n`SHA-256(msg)`.\n- [`FfiWorkspace::create_with_hardware_signer`] — the **Ed25519** shape: a 32-byte public\nkey and a 64-byte signature over `msg`. No shipping secure element holds Ed25519 keys, so\nthis is the software/TPM reference path.\n\nEither way Rust composes the classical half with a software-sealed ML-DSA-65 half into the\npublished hybrid device key.",
           "members": [
             {
               "kind": "func",
@@ -245,7 +245,7 @@
               "kind": "static func",
               "name": "createWithP256HardwareSigner",
               "signature": "public static func createWithP256HardwareSigner(root: String, passphrase: Data, tier: FfiDeviceTier, hardware: FfiHardwareSigner, keyAlias: String, mlSeed: Data, client: FfiClientBuild) throws -> FfiWorkspace",
-              "doc": "**Enroll with a hardware-bound device key**: as [`create`](Self::create), but the\nclassical half of the device signing key is produced by `hardware` (a native Secure\nEnclave / StrongBox / TPM element) under `key_alias`, over **ECDSA-P256** — the\ncomposition shipping secure elements actually provide, none of which do Ed25519. The\npost-quantum ML-DSA-65 half is the software-sealed `ml_seed` (32 bytes).\n\nThe published device key carries the P-256 tag and `verify_asset` dispatches on it, so\nthis is constructor parity with `capsule-core`'s own\n`create_with_p256_hardware_signer` — the same core call, reached through this\nnamespace's [`FfiHardwareSigner`] seam.",
+              "doc": "**Enroll with a hardware-bound device key**: as [`create`](Self::create), but the\nclassical half of the device signing key is produced by `hardware` (a native Secure\nEnclave / StrongBox / TPM element) under `key_alias`, over **ECDSA-P256** — the\ncomposition shipping secure elements actually provide, none of which do Ed25519. The\npost-quantum ML-DSA-65 half is the software-sealed `ml_seed` (32 bytes).\n\nThe published device key carries the P-256 tag and `verify_asset` dispatches on it. The\nlibrary records the binding (the alias, `ml_seed` sealed under the account master key,\nand the published key), so every later launch reopens it with\n[`open_with_p256_hardware_signer`](Self::open_with_p256_hardware_signer) on the same\nkey; plain [`open`](Self::open) refuses such a library. An element that refuses\nenrollment fails this call before anything is written under `root`.",
               "members": []
             },
             {
@@ -253,6 +253,13 @@
               "name": "open",
               "signature": "public static func `open`(root: String, passphrase: Data, tier: FfiDeviceTier, client: FfiClientBuild) throws -> FfiWorkspace",
               "doc": "**Open** the existing library at `root` under `passphrase`, restoring its album keys and\nauthorities, every managed asset, and the `add_id` counter from disk. This is\nwhat makes an app relaunch resume rather than re-enroll.",
+              "members": []
+            },
+            {
+              "kind": "static func",
+              "name": "openWithP256HardwareSigner",
+              "signature": "public static func openWithP256HardwareSigner(root: String, passphrase: Data, tier: FfiDeviceTier, hardware: FfiHardwareSigner, keyAlias: String, client: FfiClientBuild) throws -> FfiWorkspace",
+              "doc": "**Open** the existing library at `root` as [`open`](Self::open) does, re-attaching\n`hardware`, the element that holds this device's P-256 signing key. Required for a\nlibrary made by\n[`create_with_p256_hardware_signer`](Self::create_with_p256_hardware_signer): the element\nis asked for the key under the alias the library recorded, never to make a new one, and\nthe rebuilt key must be the one this device published. An element that lost the key or\nis unavailable fails the open with [`FfiError::Workspace`] rather than letting the\nlibrary sign with another key.\n\nThe library's record decides, not the caller: a library created with the software key\nopens on it and `hardware` is not used. `key_alias` is used only when `root` holds a\nlaid-out library with no account yet, whose fresh account is then enrolled under it.",
               "members": []
             },
             {
@@ -2448,7 +2455,7 @@
           "kind": "interface",
           "name": "FfiHardwareSigner",
           "signature": "public interface FfiHardwareSigner",
-          "doc": "The per-platform secure element (Secure Enclave, StrongBox, TPM), implemented by native\nSwift/Kotlin over the uniffi foreign-trait boundary.\n\nThe byte shapes are fixed by the constructor the element is handed to, not by the trait:\n\n- [`FfiWorkspace::create_with_p256_hardware_signer`] — the **P-256** shape shipping\nelements actually provide: [`enroll`](Self::enroll) /\n[`classical_public_key`](Self::classical_public_key) return a SEC1 public key and\n[`sign_classical`](Self::sign_classical) a **DER-encoded ECDSA** signature over\n`SHA-256(msg)`.\n- [`FfiWorkspace::create_with_hardware_signer`] — the **Ed25519** shape: a 32-byte public\nkey and a 64-byte signature over `msg`. No shipping secure element holds Ed25519 keys, so\nthis is the software/TPM reference path.\n\nEither way Rust composes the classical half with a software-sealed ML-DSA-65 half into the\npublished hybrid device key.",
+          "doc": "The per-platform secure element (Secure Enclave, StrongBox, TPM), implemented by native\nSwift/Kotlin over the uniffi foreign-trait boundary.\n\nThe byte shapes are fixed by the constructor the element is handed to, not by the trait:\n\n- [`FfiWorkspace::create_with_p256_hardware_signer`] and\n[`FfiWorkspace::open_with_p256_hardware_signer`] — the **P-256** shape shipping\nelements actually provide: [`enroll`](Self::enroll) /\n[`classical_public_key`](Self::classical_public_key) return a SEC1 public key and\n[`sign_classical`](Self::sign_classical) a **DER-encoded ECDSA** signature over\n`SHA-256(msg)`.\n- [`FfiWorkspace::create_with_hardware_signer`] — the **Ed25519** shape: a 32-byte public\nkey and a 64-byte signature over `msg`. No shipping secure element holds Ed25519 keys, so\nthis is the software/TPM reference path.\n\nEither way Rust composes the classical half with a software-sealed ML-DSA-65 half into the\npublished hybrid device key.",
           "members": [
             {
               "kind": "fun",
@@ -2611,7 +2618,7 @@
               "kind": "fun",
               "name": "createWithP256HardwareSigner",
               "signature": "@Throws(FfiException::class) fun createWithP256HardwareSigner(root: kotlin.String, passphrase: kotlin.ByteArray, tier: FfiDeviceTier, hardware: FfiHardwareSigner, keyAlias: kotlin.String, mlSeed: kotlin.ByteArray, client: FfiClientBuild): FfiWorkspace",
-              "doc": "**Enroll with a hardware-bound device key**: as [`create`](Self::create), but the\nclassical half of the device signing key is produced by `hardware` (a native Secure\nEnclave / StrongBox / TPM element) under `key_alias`, over **ECDSA-P256** — the\ncomposition shipping secure elements actually provide, none of which do Ed25519. The\npost-quantum ML-DSA-65 half is the software-sealed `ml_seed` (32 bytes).\n\nThe published device key carries the P-256 tag and `verify_asset` dispatches on it, so\nthis is constructor parity with `capsule-core`'s own\n`create_with_p256_hardware_signer` — the same core call, reached through this\nnamespace's [`FfiHardwareSigner`] seam.",
+              "doc": "**Enroll with a hardware-bound device key**: as [`create`](Self::create), but the\nclassical half of the device signing key is produced by `hardware` (a native Secure\nEnclave / StrongBox / TPM element) under `key_alias`, over **ECDSA-P256** — the\ncomposition shipping secure elements actually provide, none of which do Ed25519. The\npost-quantum ML-DSA-65 half is the software-sealed `ml_seed` (32 bytes).\n\nThe published device key carries the P-256 tag and `verify_asset` dispatches on it. The\nlibrary records the binding (the alias, `ml_seed` sealed under the account master key,\nand the published key), so every later launch reopens it with\n[`open_with_p256_hardware_signer`](Self::open_with_p256_hardware_signer) on the same\nkey; plain [`open`](Self::open) refuses such a library. An element that refuses\nenrollment fails this call before anything is written under `root`.",
               "members": []
             },
             {
@@ -2619,6 +2626,13 @@
               "name": "open",
               "signature": "@Throws(FfiException::class) fun open(root: kotlin.String, passphrase: kotlin.ByteArray, tier: FfiDeviceTier, client: FfiClientBuild): FfiWorkspace",
               "doc": "**Open** the existing library at `root` under `passphrase`, restoring its album keys and\nauthorities, every managed asset, and the `add_id` counter from disk. This is\nwhat makes an app relaunch resume rather than re-enroll.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "openWithP256HardwareSigner",
+              "signature": "@Throws(FfiException::class) fun openWithP256HardwareSigner(root: kotlin.String, passphrase: kotlin.ByteArray, tier: FfiDeviceTier, hardware: FfiHardwareSigner, keyAlias: kotlin.String, client: FfiClientBuild): FfiWorkspace",
+              "doc": "**Open** the existing library at `root` as [`open`](Self::open) does, re-attaching\n`hardware`, the element that holds this device's P-256 signing key. Required for a\nlibrary made by\n[`create_with_p256_hardware_signer`](Self::create_with_p256_hardware_signer): the element\nis asked for the key under the alias the library recorded, never to make a new one, and\nthe rebuilt key must be the one this device published. An element that lost the key or\nis unavailable fails the open with [`FfiError::Workspace`] rather than letting the\nlibrary sign with another key.\n\nThe library's record decides, not the caller: a library created with the software key\nopens on it and `hardware` is not used. `key_alias` is used only when `root` holds a\nlaid-out library with no account yet, whose fresh account is then enrolled under it.",
               "members": []
             },
             {
