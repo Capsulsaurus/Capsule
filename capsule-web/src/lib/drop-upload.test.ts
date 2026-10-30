@@ -9,9 +9,12 @@ import type { SealedDropWire } from './drop-seal';
 import {
     DropUploadError,
     MAX_CHUNK_WAITS,
+    MAX_STATUS_POLLS,
     MAX_WAIT_MS,
     retryDelayMs,
+    STATUS_POLL_MAX_MS,
     sha256Hex,
+    statusPollDelayMs,
     uploadDrop,
 } from './drop-upload';
 
@@ -392,6 +395,217 @@ describe('uploadDrop — waiting out 503 and 507', () => {
 
         expect((err as DropUploadError).code).toBe('generic');
         expect(slept).toEqual([]);
+    });
+});
+
+describe('uploadDrop — reading the deposit’s outcome', () => {
+    const waiting = (newOffset: number) =>
+        new Response(null, {
+            status: 204,
+            headers: {
+                'X-Capsule-Offset': String(newOffset),
+                'X-Capsule-Upload-Status': 'waiting_for_processing',
+            },
+        });
+
+    const status = (body: Record<string, unknown>) =>
+        new Response(JSON.stringify(body), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+        });
+
+    const statusOf = (
+        state: string,
+        receivedBytes: number,
+        errorCode?: string,
+    ) =>
+        status({
+            status: state,
+            received_bytes: receivedBytes,
+            total_size: receivedBytes,
+            ...(errorCode ? { error_code: errorCode } : {}),
+        });
+
+    test('a deposit still re-hashing is polled with backoff until it is filed', async () => {
+        const slept: number[] = [];
+        const answers = [
+            statusOf('waiting_for_processing', 10),
+            new Response(null, { status: 500 }),
+            statusOf('waiting_for_processing', 10),
+            statusOf('completed', 10),
+        ];
+        const { impl, calls } = mockFetch((call) => {
+            if (call.method === 'POST') return created();
+            if (call.method === 'PATCH') return waiting(10);
+            return answers.shift() ?? statusOf('completed', 10);
+        });
+
+        await uploadDrop({
+            base: '',
+            opaqueId: 'o',
+            sealed: fakeSealed(10),
+            fetchImpl: impl,
+            sleep: async (ms) => {
+                slept.push(ms);
+            },
+        });
+
+        const probes = calls.filter((c) => c.method === 'GET');
+        expect(probes.length).toBe(4);
+        expect(probes[0].url).toBe('/d/o/upload-123');
+        expect(probes[0].headers.get('Accept')).toBe('application/json');
+        // A probe the server could not answer is one more poll, not a failure.
+        expect(slept).toEqual([1000, 2000, 4000, 8000]);
+    });
+
+    test('a refused deposit is the failure class of its code', async () => {
+        const { impl } = mockFetch((call) => {
+            if (call.method === 'POST') return created();
+            if (call.method === 'PATCH') return waiting(10);
+            return statusOf(
+                'failed_processing',
+                10,
+                'error.upload.content_hash_mismatch',
+            );
+        });
+
+        const err = await uploadDrop({
+            base: '',
+            opaqueId: 'o',
+            sealed: fakeSealed(10),
+            fetchImpl: impl,
+            sleep: async () => {},
+        }).catch((e) => e);
+
+        expect(err).toBeInstanceOf(DropUploadError);
+        expect((err as DropUploadError).code).toBe('generic');
+    });
+
+    test('a link that stops answering for the session is "unavailable"', async () => {
+        const { impl } = mockFetch((call) => {
+            if (call.method === 'POST') return created();
+            if (call.method === 'PATCH') return waiting(10);
+            return new Response(null, { status: 404 });
+        });
+
+        const err = await uploadDrop({
+            base: '',
+            opaqueId: 'o',
+            sealed: fakeSealed(10),
+            fetchImpl: impl,
+            sleep: async () => {},
+        }).catch((e) => e);
+
+        expect((err as DropUploadError).code).toBe('unavailable');
+    });
+
+    test('a deposit with no outcome after the bounded polls fails', async () => {
+        const slept: number[] = [];
+        const { impl, calls } = mockFetch((call) => {
+            if (call.method === 'POST') return created();
+            if (call.method === 'PATCH') return waiting(10);
+            return statusOf('waiting_for_processing', 10);
+        });
+
+        const err = await uploadDrop({
+            base: '',
+            opaqueId: 'o',
+            sealed: fakeSealed(10),
+            fetchImpl: impl,
+            sleep: async (ms) => {
+                slept.push(ms);
+            },
+        }).catch((e) => e);
+
+        expect((err as DropUploadError).code).toBe('generic');
+        expect(calls.filter((c) => c.method === 'GET').length).toBe(
+            MAX_STATUS_POLLS,
+        );
+        expect(Math.max(...slept)).toBe(STATUS_POLL_MAX_MS);
+    });
+
+    test('a proxy timeout on the completing chunk reads the deposit instead of failing', async () => {
+        const answers = [
+            statusOf('waiting_for_processing', 10),
+            statusOf('completed', 10),
+        ];
+        const { impl, calls } = mockFetch((call) => {
+            if (call.method === 'POST') return created();
+            if (call.method === 'PATCH')
+                return new Response(null, { status: 504 });
+            return answers.shift() ?? statusOf('completed', 10);
+        });
+        const progress: number[] = [];
+
+        await uploadDrop({
+            base: '',
+            opaqueId: 'o',
+            sealed: fakeSealed(10),
+            onProgress: (f) => progress.push(f),
+            fetchImpl: impl,
+            sleep: async () => {},
+        });
+
+        // One chunk, never resent: the session said it already holds every byte.
+        expect(calls.filter((c) => c.method === 'PATCH').length).toBe(1);
+        expect(calls.filter((c) => c.method === 'GET').length).toBe(2);
+        expect(progress).toEqual([1]);
+    });
+
+    test('a proxy timeout mid-upload resumes from the session’s offset', async () => {
+        const sealed = fakeSealed(2 * CHUNK_SIZE + 100);
+        let patchCount = 0;
+        let offset = 0;
+        const { impl, calls } = mockFetch((call) => {
+            if (call.method === 'POST') return created();
+            if (call.method === 'GET') return statusOf('uploading', offset);
+            patchCount += 1;
+            offset += (call.body as Uint8Array).length;
+            // The first chunk lands, and its answer is lost behind a proxy.
+            if (patchCount === 1) return new Response(null, { status: 502 });
+            return chunkOk(offset);
+        });
+
+        await uploadDrop({
+            base: '',
+            opaqueId: 'o',
+            sealed,
+            fetchImpl: impl,
+            sleep: async () => {},
+        });
+
+        const patches = calls.filter((c) => c.method === 'PATCH');
+        expect(patches.map((p) => p.headers.get('X-Capsule-Offset'))).toEqual([
+            '0',
+            String(CHUNK_SIZE),
+            String(2 * CHUNK_SIZE),
+        ]);
+    });
+
+    test('a proxy timeout over a deposit already refused names its class', async () => {
+        const { impl } = mockFetch((call) => {
+            if (call.method === 'POST') return created();
+            if (call.method === 'PATCH')
+                return new Response(null, { status: 504 });
+            return statusOf('failed_processing', 10, 'error.quota.exceeded');
+        });
+
+        const err = await uploadDrop({
+            base: '',
+            opaqueId: 'o',
+            sealed: fakeSealed(10),
+            fetchImpl: impl,
+            sleep: async () => {},
+        }).catch((e) => e);
+
+        expect((err as DropUploadError).code).toBe('quota');
+    });
+
+    test('the backoff doubles from a second to its ceiling', () => {
+        expect(statusPollDelayMs(0)).toBe(1000);
+        expect(statusPollDelayMs(3)).toBe(8000);
+        expect(statusPollDelayMs(5)).toBe(STATUS_POLL_MAX_MS);
+        expect(statusPollDelayMs(1000)).toBe(STATUS_POLL_MAX_MS);
     });
 });
 
