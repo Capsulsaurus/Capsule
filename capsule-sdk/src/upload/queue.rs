@@ -2,33 +2,94 @@
 //! Servers).
 //!
 //! A client signed in to more than one server drives one **lane** per server. Each lane owns
-//! its own work and its own pacing: the jobs still to send, the protocol window (how many of
-//! its transfers may be in flight at once), and the time before which it must not be served
-//! (a backoff, or a server's `Retry-After`). What the lanes share is one bounded **byte
-//! budget**: every job in flight holds a reservation of its size against it, so the device
-//! never buffers more than the budget however many servers it talks to.
+//! its own work and its own pacing: the jobs still to send, its two **in-flight windows**, its
+//! shared **retry budget**, and the time before which it must not be served (a backoff, or a
+//! server's `Retry-After`).
+//!
+//! - **W, the sessions window**: how many of the lane's sessions may be open at once. Several
+//!   sessions in flight, each on its own HTTP/1.1 connection, are what keep a high-latency or
+//!   lossy link busy, because one connection's throughput is bounded by its round trip.
+//! - **P, the ranges window**: how many ranges each session may hold in flight. A session's P is
+//!   fixed when it is granted and can only be narrowed afterwards, by the cap the server
+//!   advertised for that session ([`UploadQueue::set_session_ranges`]).
+//!
+//! Both are client-local caps ([`LaneWindows`], at most the compiled [`MAX_SESSIONS_WINDOW`] and
+//! [`MAX_RANGES_WINDOW`]) that the server's `X-Capsule-Advice` can only lower
+//! ([`UploadQueue::set_advice`]), and W never exceeds the account's live-session cap
+//! ([`UploadQueue::set_session_cap`]). They are not the protocol window, which says which
+//! protocol dates a server accepts and bounds nothing in flight.
+//!
+//! What the lanes share is one bounded **byte budget**. A session admitted to run reserves
+//! nothing; every *range* it sends reserves its length while in flight
+//! ([`UploadQueue::reserve_range`]), so the device never buffers more than the budget however
+//! many servers and sessions it drives, and a large blob costs no more than the windows it is
+//! sending.
 //!
 //! [`UploadQueue::next`] serves the lanes **round-robin**, so one server's backlog cannot
 //! starve another's, and inside a lane it always takes the lowest [`UploadTier`] first, so the
 //! staged ladder (T0 → T1 → T2) holds per server. A lane whose transfers report no progress
-//! for the stall bound gives its reservations back ([`UploadQueue::reclaim_stalled`]); its
-//! jobs return to the front of their tiers and the lane waits out one stall bound before it
-//! is served again, so a dead server's lane cannot hold the budget every other lane needs.
-//! On resume each lane is rebuilt from its own server's truth ([`UploadQueue::rebuild_lane`]);
-//! no lane's state is derived from another's. Deleting an asset withdraws its jobs from every
-//! lane at once ([`UploadQueue::withdraw`]), so no further byte of it is sent to any server.
+//! for the stall bound gives its sessions and their range reservations back
+//! ([`UploadQueue::reclaim_stalled`]); its jobs return to the front of their tiers and the lane
+//! waits out one stall bound before it is served again, so a dead server's lane cannot hold the
+//! budget every other lane needs. A job that failed and may run again spends one retry from its
+//! lane's shared budget ([`UploadQueue::retry`]), so a server that fails everything costs a
+//! bounded number of retries however many jobs are queued for it. On resume each lane is
+//! rebuilt from its own server's truth ([`UploadQueue::rebuild_lane`]); no lane's state is
+//! derived from another's. Deleting an asset withdraws its jobs from every lane at once
+//! ([`UploadQueue::withdraw`]), so no further byte of it is sent to any server.
 //!
 //! This is a pure scheduler over values: it sends nothing and reads no clock. The caller
 //! passes `now`, runs each [`Grant`] it is handed, and reports back with
-//! [`UploadQueue::progress`], [`UploadQueue::complete`] or [`UploadQueue::requeue`]. With one
-//! lane and a window of one it hands out exactly one job at a time, in tier order - the
-//! single-server push unchanged.
+//! [`UploadQueue::progress`], [`UploadQueue::complete`], [`UploadQueue::requeue`] or
+//! [`UploadQueue::retry`]. With one lane and a sessions window of one it hands out exactly one
+//! job at a time, in tier order - the single-server sequential push.
 
 use std::collections::VecDeque;
 use std::fmt;
 use std::time::{Duration, Instant};
 
 use capsule_library::import::UploadTier;
+
+use super::advice::{MAX_ADVISED_RANGES, MAX_ADVISED_SESSIONS, ServerAdvice};
+use crate::net::{DEFAULT_LANE_RETRY_BUDGET, LaneRetries};
+
+/// The widest sessions window (W) any lane holds: the most advice can ever grant.
+pub const MAX_SESSIONS_WINDOW: u32 = MAX_ADVISED_SESSIONS;
+/// The widest ranges window (P) any session holds: the protocol's ceiling on a session's
+/// in-flight cap.
+pub const MAX_RANGES_WINDOW: u32 = MAX_ADVISED_RANGES;
+/// The sessions a lane holds open at once when nothing narrower applies. Four connections keep
+/// a 600 ms, lossy path busy without opening more sessions than a small server's live-session
+/// cap admits.
+pub const DEFAULT_SESSIONS_WINDOW: u32 = 4;
+/// The ranges a session holds in flight when nothing narrower applies.
+pub const DEFAULT_RANGES_WINDOW: u32 = 4;
+
+/// A lane's own in-flight caps, before the server's advice lowers them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LaneWindows {
+    /// W: sessions open at once on the lane.
+    pub sessions: u32,
+    /// P: ranges in flight per session.
+    pub ranges: u32,
+}
+
+impl Default for LaneWindows {
+    fn default() -> Self {
+        Self::new(DEFAULT_SESSIONS_WINDOW, DEFAULT_RANGES_WINDOW)
+    }
+}
+
+impl LaneWindows {
+    /// Caps of `sessions` and `ranges`, each clamped into `1..=` its compiled maximum.
+    #[must_use]
+    pub fn new(sessions: u32, ranges: u32) -> Self {
+        Self {
+            sessions: sessions.clamp(1, MAX_SESSIONS_WINDOW),
+            ranges: ranges.clamp(1, MAX_RANGES_WINDOW),
+        }
+    }
+}
 
 /// The key a lane is held under: the server's canonical origin (`scheme://host[:port]`), so
 /// one server reached through differently written endpoints shares one lane.
@@ -53,28 +114,30 @@ impl fmt::Display for ServerKey {
     }
 }
 
-/// One unit of upload work queued on a lane: a session to drive, at its tier, holding `bytes`
-/// of the shared budget while it runs.
+/// One unit of upload work queued on a lane: a session to drive, at its tier. Queuing or
+/// running it reserves none of the byte budget; only the ranges it sends do.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueuedJob<J> {
     /// The staged tier the job belongs to; a lane always serves its lowest tier first.
     pub tier: UploadTier,
-    /// The bytes the job buffers while in flight (its blob's size).
-    pub bytes: u64,
     /// What the caller needs to run it.
     pub job: J,
 }
 
 impl<J> QueuedJob<J> {
-    /// A job at `tier` that holds `bytes` of the budget while in flight.
-    pub fn new(tier: UploadTier, bytes: u64, job: J) -> Self {
-        Self { tier, bytes, job }
+    /// A job at `tier`.
+    pub fn new(tier: UploadTier, job: J) -> Self {
+        Self { tier, job }
     }
 }
 
 /// The handle of one job in flight, unique for the life of the queue.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct GrantId(u64);
+
+/// The handle of one range reservation, unique for the life of the queue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct RangeId(u64);
 
 /// A job the queue admitted: run it, then report on it by its [`GrantId`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,27 +148,66 @@ pub struct Grant<J> {
     pub server: ServerKey,
     /// The job's tier.
     pub tier: UploadTier,
-    /// The bytes reserved against the shared budget: the job's size, clamped to the budget so
-    /// a job larger than the whole budget still runs once the budget is otherwise free.
-    pub reserved: u64,
+    /// P: the most ranges this session may hold in flight, fixed at the grant. The server's
+    /// own cap for the session can only narrow it ([`UploadQueue::set_session_ranges`]).
+    pub ranges: u32,
     /// The work itself.
     pub job: J,
+}
+
+/// Why [`UploadQueue::reserve_range`] reserved nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RangeRefused {
+    /// The grant is no longer in flight (completed, requeued, revoked or superseded): stop
+    /// sending for it.
+    NotInFlight,
+    /// The session already holds its P ranges in flight: wait for one to return.
+    WindowFull,
+    /// The shared byte budget cannot hold the range now: wait for a reservation to be released.
+    BudgetFull,
+}
+
+/// What [`UploadQueue::retry`] decided for a job that failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RetryAdmission<J> {
+    /// The lane's budget paid for a retry: the job is back at the front of its tier.
+    Requeued,
+    /// The lane's retry budget is spent: the job leaves the queue, and the caller surfaces it as
+    /// the failure it is.
+    BudgetSpent(QueuedJob<J>),
+    /// The grant was no longer in flight; nothing changed.
+    NotInFlight,
 }
 
 /// A job in flight, kept so a revoked or requeued grant can return to its lane.
 #[derive(Debug, Clone)]
 struct InFlight<J> {
     id: GrantId,
-    reserved: u64,
     job: QueuedJob<J>,
+    /// P for this session.
+    ranges_window: u32,
+    /// The session's ranges in flight and the bytes each holds of the budget.
+    ranges: Vec<(RangeId, u64)>,
+}
+
+impl<J> InFlight<J> {
+    fn reserved(&self) -> u64 {
+        self.ranges.iter().map(|(_, bytes)| bytes).sum()
+    }
 }
 
 /// One server's lane.
 #[derive(Debug)]
 struct Lane<J> {
     server: ServerKey,
-    /// The most jobs this lane may hold in flight at once; at least one.
-    window: usize,
+    /// The client's own caps for this lane.
+    windows: LaneWindows,
+    /// The last advice the server sent for this lane, and when it arrived.
+    advice: Option<(ServerAdvice, Instant)>,
+    /// The account's live-session cap on this server, when known.
+    session_cap: Option<u32>,
+    /// The lane's shared retry budget; the client driving the lane holds a clone.
+    retries: LaneRetries,
     /// Queued jobs, one FIFO per tier, indexed in ladder order.
     queued: [VecDeque<QueuedJob<J>>; 3],
     in_flight: Vec<InFlight<J>>,
@@ -125,10 +227,13 @@ fn tier_slot(tier: UploadTier) -> usize {
 }
 
 impl<J> Lane<J> {
-    fn new(server: ServerKey, window: usize) -> Self {
+    fn new(server: ServerKey, windows: LaneWindows, retry_budget: u32) -> Self {
         Self {
             server,
-            window: window.max(1),
+            windows,
+            advice: None,
+            session_cap: None,
+            retries: LaneRetries::new(retry_budget),
             queued: [VecDeque::new(), VecDeque::new(), VecDeque::new()],
             in_flight: Vec::new(),
             last_progress: None,
@@ -136,11 +241,26 @@ impl<J> Lane<J> {
         }
     }
 
-    /// The job this lane serves next: the front of its lowest non-empty tier.
-    fn head(&self) -> Option<&QueuedJob<J>> {
-        self.queued.iter().find_map(VecDeque::front)
+    /// W at `now`: the lane's own cap, lowered by advice still within its `ttl` and by the
+    /// account's live-session cap. Never below one.
+    fn sessions_window(&self, now: Instant) -> u32 {
+        let own = self.windows.sessions;
+        let advised = self.advice.map_or(own, |(advice, received)| {
+            advice.sessions_window(own, now.saturating_duration_since(received))
+        });
+        let capped = self.session_cap.map_or(advised, |cap| advised.min(cap));
+        capped.max(1)
     }
 
+    /// P for a session granted now: the lane's own cap, lowered by the last `ranges` the server
+    /// advised. A session's own advice narrows it further once its create answers.
+    fn ranges_window(&self) -> u32 {
+        let own = self.windows.ranges;
+        self.advice
+            .map_or(own, |(advice, _)| advice.ranges_window(own))
+    }
+
+    /// Take the job this lane serves next: the front of its lowest non-empty tier.
     fn pop_head(&mut self) -> Option<QueuedJob<J>> {
         self.queued.iter_mut().find_map(VecDeque::pop_front)
     }
@@ -160,25 +280,49 @@ pub struct UploadQueue<J> {
     budget: u64,
     in_use: u64,
     stall_after: Duration,
+    /// The caps a newly opened lane starts with.
+    windows: LaneWindows,
+    /// The retry budget a newly opened lane starts with.
+    retry_budget: u32,
     /// Lanes in the order they were opened; round-robin walks this order.
     lanes: Vec<Lane<J>>,
     /// The lane the next round-robin pass starts from.
     cursor: usize,
     next_grant: u64,
+    next_range: u64,
 }
 
 impl<J: Clone> UploadQueue<J> {
     /// An empty queue whose lanes share `budget` bytes in flight (at least one byte), and give
-    /// their reservations up after `stall_after` without progress.
+    /// their reservations up after `stall_after` without progress. Lanes open with the default
+    /// [`LaneWindows`] and a [`DEFAULT_LANE_RETRY_BUDGET`].
     pub fn new(budget: u64, stall_after: Duration) -> Self {
         Self {
             budget: budget.max(1),
             in_use: 0,
             stall_after,
+            windows: LaneWindows::default(),
+            retry_budget: DEFAULT_LANE_RETRY_BUDGET,
             lanes: Vec::new(),
             cursor: 0,
             next_grant: 0,
+            next_range: 0,
         }
+    }
+
+    /// Open every lane after this with `windows` as its own caps. A lane already open keeps its
+    /// caps; [`Self::set_windows`] changes one.
+    #[must_use]
+    pub fn with_windows(mut self, windows: LaneWindows) -> Self {
+        self.windows = windows;
+        self
+    }
+
+    /// Open every lane after this with a retry budget of `retries`.
+    #[must_use]
+    pub fn with_retry_budget(mut self, retries: u32) -> Self {
+        self.retry_budget = retries;
+        self
     }
 
     /// The shared byte budget.
@@ -186,9 +330,25 @@ impl<J: Clone> UploadQueue<J> {
         self.budget
     }
 
-    /// The bytes reserved by jobs in flight, across every lane.
+    /// The bytes reserved by ranges in flight, across every lane.
     pub fn in_use(&self) -> u64 {
         self.in_use
+    }
+
+    /// `server`'s shared retry budget, opening its lane if it has none. Hand it to the client
+    /// that drives the lane's sessions ([`UploadClient::with_lane_retries`]) so the client's
+    /// request retries and this queue's [`Self::retry`] spend from one pool.
+    ///
+    /// [`UploadClient::with_lane_retries`]: crate::upload::UploadClient::with_lane_retries
+    pub fn lane_retries(&mut self, server: &ServerKey) -> LaneRetries {
+        self.lane_mut_or_open(server).retries.clone()
+    }
+
+    /// W for `server` at `now`: the lane's own cap lowered by fresh advice and the live-session
+    /// cap; the default cap for a server with no lane.
+    pub fn sessions_window(&self, server: &ServerKey, now: Instant) -> u32 {
+        self.lane(server)
+            .map_or(self.windows.sessions, |lane| lane.sessions_window(now))
     }
 
     /// The servers that hold a lane, in round-robin order.
@@ -213,27 +373,70 @@ impl<J: Clone> UploadQueue<J> {
             .all(|lane| lane.queued_len() == 0 && lane.in_flight.is_empty())
     }
 
-    /// Set `server`'s protocol window (at least one), opening its lane if it has none. A
-    /// narrower window takes effect as jobs finish; nothing in flight is revoked.
-    pub fn set_window(&mut self, server: &ServerKey, window: usize) {
+    /// Set `server`'s own caps (power saver or a thermal state lowers them), opening its lane if
+    /// it has none. A narrower window takes effect as work finishes; nothing in flight is
+    /// revoked, and a session already granted keeps its P.
+    pub fn set_windows(&mut self, server: &ServerKey, windows: LaneWindows) {
         let lane = self.lane_mut_or_open(server);
-        lane.window = window.max(1);
-        tracing::debug!(server = %server, window = lane.window, "upload queue: lane window set");
+        lane.windows = LaneWindows::new(windows.sessions, windows.ranges);
+        tracing::debug!(
+            server = %server,
+            sessions = lane.windows.sessions,
+            ranges = lane.windows.ranges,
+            "upload queue: lane windows set"
+        );
     }
 
-    /// Queue `job` at the back of its tier on `server`'s lane, opening the lane (window one)
-    /// if it has none.
+    /// Record the `X-Capsule-Advice` `server` sent at `received`, replacing any earlier advice.
+    /// Its `sessions` lowers W until its `ttl` runs out; its `ranges` lowers P for the sessions
+    /// granted after it. Advice can only lower the lane's own caps, never raise them.
+    pub fn set_advice(&mut self, server: &ServerKey, advice: ServerAdvice, received: Instant) {
+        let lane = self.lane_mut_or_open(server);
+        lane.advice = Some((advice, received));
+        tracing::debug!(
+            server = %server,
+            sessions = lane.sessions_window(received),
+            ranges = lane.ranges_window(),
+            ttl_s = advice.ttl().as_secs(),
+            "upload queue: lane advice applied"
+        );
+    }
+
+    /// Cap W at the account's live-session cap on `server` (at least one), so the lane never
+    /// opens a session the server would refuse for being one too many.
+    pub fn set_session_cap(&mut self, server: &ServerKey, cap: u32) {
+        let lane = self.lane_mut_or_open(server);
+        lane.session_cap = Some(cap.max(1));
+        tracing::debug!(server = %server, cap, "upload queue: live-session cap set");
+    }
+
+    /// Narrow grant `id`'s P to the in-flight cap its server advertised for that session (the
+    /// `ranges` of the advice on its create or `HEAD`). A session's P never widens. Returns the
+    /// session's P, or `None` when the grant is no longer in flight.
+    pub fn set_session_ranges(&mut self, id: GrantId, advice: &ServerAdvice) -> Option<u32> {
+        let (lane, at) = self.locate(id)?;
+        let flight = &mut self.lanes[lane].in_flight[at];
+        flight.ranges_window = advice.ranges_window(flight.ranges_window);
+        tracing::debug!(
+            grant = id.0,
+            ranges = flight.ranges_window,
+            "upload queue: session ranges window set"
+        );
+        Some(flight.ranges_window)
+    }
+
+    /// Queue `job` at the back of its tier on `server`'s lane, opening the lane if it has none.
     pub fn enqueue(&mut self, server: &ServerKey, job: QueuedJob<J>) {
         let lane = self.lane_mut_or_open(server);
-        tracing::trace!(server = %server, tier = ?job.tier, bytes = job.bytes, "upload queue: job queued");
+        tracing::trace!(server = %server, tier = ?job.tier, "upload queue: job queued");
         lane.queued[tier_slot(job.tier)].push_back(job);
     }
 
     /// Replace everything `server`'s lane holds with `jobs`, derived from that server's own
-    /// truth on resume. Any job still in flight on the lane is superseded and its reservation
-    /// released (the caller has stopped it); its id is returned and later reports on it are
-    /// ignored. The lane's window is kept, and so is any pause still running (a server's
-    /// `Retry-After` binds whatever work the lane holds).
+    /// truth on resume. Any job still in flight on the lane is superseded and its range
+    /// reservations released (the caller has stopped it); its id is returned and later reports
+    /// on it are ignored. The lane's windows, advice and retry budget are kept, and so is any
+    /// pause still running (a server's `Retry-After` binds whatever work the lane holds).
     pub fn rebuild_lane(
         &mut self,
         server: &ServerKey,
@@ -250,7 +453,7 @@ impl<J: Clone> UploadQueue<J> {
             lane.queued[tier_slot(job.tier)].push_back(job);
         }
         let queued = lane.queued_len();
-        let released: u64 = superseded.iter().map(|grant| grant.reserved).sum();
+        let released: u64 = superseded.iter().map(InFlight::reserved).sum();
         self.in_use -= released;
         tracing::info!(
             server = %server,
@@ -265,9 +468,9 @@ impl<J: Clone> UploadQueue<J> {
 
     /// Remove every job `selects` picks from every lane, queued or in flight: the redaction a
     /// delete makes of one asset's upload (Organization — Deletion State Machine), which spans
-    /// every server the asset was queued for. A job in flight is superseded and its reservation
-    /// released (the caller stops it); its id is returned and later reports on it are ignored.
-    /// Every other job keeps its place, and no lane's window or pause changes.
+    /// every server the asset was queued for. A job in flight is superseded and its range
+    /// reservations released (the caller stops it); its id is returned and later reports on it
+    /// are ignored. Every other job keeps its place, and no lane's windows or pause change.
     pub fn withdraw(&mut self, selects: impl Fn(&J) -> bool) -> Vec<GrantId> {
         let mut superseded = Vec::new();
         let mut released = 0;
@@ -283,7 +486,7 @@ impl<J: Clone> UploadQueue<J> {
                 .drain(..)
                 .partition(|flight| selects(&flight.job.job));
             lane.in_flight = kept;
-            let lane_released: u64 = stopped.iter().map(|flight| flight.reserved).sum();
+            let lane_released: u64 = stopped.iter().map(InFlight::reserved).sum();
             released += lane_released;
             if dropped > 0 || !stopped.is_empty() {
                 tracing::info!(
@@ -309,63 +512,134 @@ impl<J: Clone> UploadQueue<J> {
         tracing::debug!(server = %server, "upload queue: lane deferred");
     }
 
-    /// Admit the next job, if any lane can run one now, and reserve its bytes.
+    /// Admit the next job, if any lane can run one now. Admission reserves no bytes; the
+    /// session's ranges do, through [`Self::reserve_range`].
     ///
     /// Lanes are tried round-robin from the one after the lane served last. A lane is passed
-    /// over while it is paused, has no queued job, has its window full, or its next job does
-    /// not fit the budget that is left; a lane never skips past its own head, so tier order
-    /// holds inside it.
+    /// over while it is paused, has no queued job, or already holds its W sessions in flight; a
+    /// lane never skips past its own head, so tier order holds inside it.
     pub fn next(&mut self, now: Instant) -> Option<Grant<J>> {
         let count = self.lanes.len();
         for step in 0..count {
             let index = (self.cursor + step) % count;
-            let free = self.budget - self.in_use;
-            let budget = self.budget;
             let lane = &mut self.lanes[index];
-            if lane.paused_at(now) || lane.in_flight.len() >= lane.window {
+            if lane.paused_at(now) || lane.in_flight.len() >= lane.sessions_window(now) as usize {
                 continue;
             }
-            let Some(head) = lane.head() else { continue };
-            let reserved = head.bytes.min(budget);
-            if reserved > free {
-                tracing::trace!(
-                    server = %lane.server,
-                    reserved,
-                    free,
-                    "upload queue: head does not fit the budget left; passing the lane over"
-                );
-                continue;
-            }
-            let job = lane.pop_head()?;
+            let Some(job) = lane.pop_head() else { continue };
             let id = GrantId(self.next_grant);
             self.next_grant += 1;
+            let ranges = lane.ranges_window();
             lane.paused_until = None;
             lane.last_progress = Some(now);
             lane.in_flight.push(InFlight {
                 id,
-                reserved,
                 job: job.clone(),
+                ranges_window: ranges,
+                ranges: Vec::new(),
             });
             let server = lane.server.clone();
-            self.in_use += reserved;
+            let in_flight = lane.in_flight.len();
             self.cursor = (index + 1) % count;
             tracing::debug!(
                 server = %server,
                 grant = id.0,
                 tier = ?job.tier,
-                reserved,
-                in_use = self.in_use,
+                ranges,
+                in_flight,
                 "upload queue: job admitted"
             );
             return Some(Grant {
                 id,
                 server,
                 tier: job.tier,
-                reserved,
+                ranges,
                 job: job.job,
             });
         }
         None
+    }
+
+    /// Reserve `len` bytes of the shared budget for one range grant `id` is about to send.
+    ///
+    /// The reservation is the range's length clamped to the budget, so a range longer than the
+    /// whole budget still runs once the budget is otherwise free. It is refused while the
+    /// session holds its P ranges in flight ([`RangeRefused::WindowFull`]) or the budget left
+    /// cannot hold it ([`RangeRefused::BudgetFull`]); the caller waits for a release and asks
+    /// again. A reservation counts as progress on the lane.
+    pub fn reserve_range(
+        &mut self,
+        id: GrantId,
+        len: u64,
+        now: Instant,
+    ) -> Result<RangeId, RangeRefused> {
+        let Some((lane_at, at)) = self.locate(id) else {
+            return Err(RangeRefused::NotInFlight);
+        };
+        let reserved = len.min(self.budget);
+        let free = self.budget - self.in_use;
+        let lane = &mut self.lanes[lane_at];
+        let flight = &mut lane.in_flight[at];
+        if flight.ranges.len() >= flight.ranges_window as usize {
+            tracing::trace!(
+                grant = id.0,
+                ranges = flight.ranges_window,
+                "upload queue: session ranges window full"
+            );
+            return Err(RangeRefused::WindowFull);
+        }
+        if reserved > free {
+            tracing::trace!(
+                grant = id.0,
+                reserved,
+                free,
+                "upload queue: range does not fit the budget left"
+            );
+            return Err(RangeRefused::BudgetFull);
+        }
+        let range = RangeId(self.next_range);
+        self.next_range += 1;
+        flight.ranges.push((range, reserved));
+        lane.last_progress = Some(now);
+        self.in_use += reserved;
+        tracing::trace!(
+            server = %lane.server,
+            grant = id.0,
+            range = range.0,
+            reserved,
+            in_use = self.in_use,
+            "upload queue: range reserved"
+        );
+        Ok(range)
+    }
+
+    /// Range `range` returned (sent, refused or abandoned): release its bytes. It counts as
+    /// progress on its lane. Returns whether the reservation was still held; one released with
+    /// its session (a completion, requeue, revocation or rebuild) is already gone.
+    pub fn release_range(&mut self, range: RangeId, now: Instant) -> bool {
+        for lane in &mut self.lanes {
+            for flight in &mut lane.in_flight {
+                if let Some(at) = flight.ranges.iter().position(|(id, _)| *id == range) {
+                    let (_, reserved) = flight.ranges.remove(at);
+                    lane.last_progress = Some(now);
+                    self.in_use -= reserved;
+                    tracing::trace!(
+                        range = range.0,
+                        released = reserved,
+                        in_use = self.in_use,
+                        "upload queue: range released"
+                    );
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Ranges grant `id` holds in flight; zero for a grant no longer in flight.
+    pub fn ranges_in_flight(&self, id: GrantId) -> usize {
+        self.locate(id)
+            .map_or(0, |(lane, at)| self.lanes[lane].in_flight[at].ranges.len())
     }
 
     /// Record that grant `id` moved bytes, so its lane is not counted as stalled. Returns
@@ -380,8 +654,10 @@ impl<J: Clone> UploadQueue<J> {
         }
     }
 
-    /// Grant `id` finished (sent, merged, or failed for good): release its reservation.
-    /// Returns whether the grant was still in flight.
+    /// Grant `id` finished (sent, merged, or failed for good): release every range it still
+    /// holds. Returns whether the grant was still in flight. The successes a lane's retry budget
+    /// earns back from are the requests that succeeded, which the client driving the lane
+    /// records on the shared budget ([`Self::lane_retries`]).
     pub fn complete(&mut self, id: GrantId, now: Instant) -> bool {
         let Some((lane, flight)) = self.take(id) else {
             return false;
@@ -391,15 +667,16 @@ impl<J: Clone> UploadQueue<J> {
         tracing::debug!(
             server = %lane.server,
             grant = id.0,
-            released = flight.reserved,
+            released = flight.reserved(),
             in_use = self.in_use,
             "upload queue: job complete"
         );
         true
     }
 
-    /// Grant `id` must run again (its transfer was interrupted): release its reservation and
-    /// return its job to the front of its tier. Returns whether the grant was still in flight.
+    /// Grant `id` must run again because it was interrupted, not because it failed (a stall cut
+    /// or a cancelled task): release its ranges and return its job to the front of its tier.
+    /// Charges no retry. Returns whether the grant was still in flight.
     pub fn requeue(&mut self, id: GrantId) -> bool {
         let Some((lane, flight)) = self.take(id) else {
             return false;
@@ -410,8 +687,37 @@ impl<J: Clone> UploadQueue<J> {
         true
     }
 
+    /// Grant `id` failed with an error the classification permits retrying: release its ranges
+    /// and spend one retry from its lane's shared budget. While the budget holds, the job
+    /// returns to the front of its tier; once it is spent, the job leaves the queue and is
+    /// handed back, so a server that fails everything costs at most the lane's budget.
+    pub fn retry(&mut self, id: GrantId) -> RetryAdmission<J> {
+        let Some((lane, flight)) = self.take(id) else {
+            return RetryAdmission::NotInFlight;
+        };
+        let lane = &mut self.lanes[lane];
+        if lane.retries.try_spend() {
+            tracing::debug!(
+                server = %lane.server,
+                grant = id.0,
+                retries_left = lane.retries.remaining(),
+                "upload queue: job retried"
+            );
+            lane.queued[tier_slot(flight.job.tier)].push_front(flight.job);
+            RetryAdmission::Requeued
+        } else {
+            tracing::warn!(
+                server = %lane.server,
+                grant = id.0,
+                "upload queue: the lane's retry budget is spent; the job fails"
+            );
+            RetryAdmission::BudgetSpent(flight.job)
+        }
+    }
+
     /// Take the budget back from every lane whose jobs in flight have made no progress for the
-    /// stall bound. Each such lane's jobs return to the front of their tiers, and the lane is
+    /// stall bound: their sessions and every range reservation they hold. Each such lane's jobs
+    /// return to the front of their tiers, charging no retry, and the lane is
     /// not served for at least one more stall bound (longer where a later deadline is already
     /// held), so the budget goes to the lanes still moving.
     /// Returns the revoked grants, which the caller stops.
@@ -432,7 +738,7 @@ impl<J: Clone> UploadQueue<J> {
             let flights: Vec<InFlight<J>> = lane.in_flight.drain(..).collect();
             // Requeue in reverse so the earliest-granted job ends up at the front again.
             for flight in flights.into_iter().rev() {
-                released += flight.reserved;
+                released += flight.reserved();
                 revoked.push(flight.id);
                 lane.queued[tier_slot(flight.job.tier)].push_front(flight.job);
             }
@@ -462,7 +768,8 @@ impl<J: Clone> UploadQueue<J> {
             index
         } else {
             tracing::info!(server = %server, "upload queue: lane opened");
-            self.lanes.push(Lane::new(server.clone(), 1));
+            self.lanes
+                .push(Lane::new(server.clone(), self.windows, self.retry_budget));
             self.lanes.len() - 1
         };
         &mut self.lanes[index]
@@ -478,12 +785,12 @@ impl<J: Clone> UploadQueue<J> {
         })
     }
 
-    /// Remove grant `id` from flight and release its reservation.
+    /// Remove grant `id` from flight and release every range it holds.
     fn take(&mut self, id: GrantId) -> Option<(usize, InFlight<J>)> {
         let (lane, at) = self.locate(id)?;
         // `remove`, not `swap_remove`: flights stay in grant order for `reclaim_stalled`.
         let flight = self.lanes[lane].in_flight.remove(at);
-        self.in_use -= flight.reserved;
+        self.in_use -= flight.reserved();
         Some((lane, flight))
     }
 }
