@@ -1223,5 +1223,135 @@ pub fn http_client() -> reqwest::Result<reqwest::Client> {
     http_builder().build()
 }
 
+// ─── Packet marking ──────────────────────────────────────────────────────────
+
+/// The Lower Effort per-hop behaviour's DSCP (RFC 8622), `000001`: traffic that yields to every
+/// other class wherever a network honours the field (networking doc, Packet Marking).
+pub const LOWER_EFFORT_DSCP: u8 = 1;
+
+/// [`LOWER_EFFORT_DSCP`] as the whole IPv4 TOS / IPv6 traffic-class octet: the six DSCP bits
+/// above the two ECN bits, which stay clear for the kernel's TCP to manage.
+pub const LOWER_EFFORT_TRAFFIC_CLASS: u32 = (LOWER_EFFORT_DSCP as u32) << 2;
+
+/// What [`mark_lower_effort`] did to a socket. Every outcome leaves the socket usable: marking is
+/// a courtesy to other traffic, never a condition of the transfer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Marking {
+    /// The socket's outgoing packets now carry the Lower Effort DSCP.
+    Marked,
+    /// The platform refused the option (or the socket's address could not be read); the socket
+    /// is unmarked and otherwise unchanged.
+    Refused,
+    /// This build has no setter for the socket's address family on this platform; the socket is
+    /// unmarked.
+    Unsupported,
+}
+
+/// Mark a bulk-transfer socket the SDK holds with the Lower Effort DSCP, best effort.
+///
+/// Sets `IP_TOS` on a socket carrying IPv4 (an IPv4-mapped IPv6 socket included, since its
+/// packets are IPv4) and `IPV6_TCLASS` on one carrying IPv6, to
+/// [`LOWER_EFFORT_TRAFFIC_CLASS`]. A platform that refuses either, or a target `socket2` exposes
+/// no setter on, leaves the socket unmarked; the outcome is logged and returned, never an error,
+/// so a caller proceeds the same whichever it is.
+///
+/// Only bulk transfers are marked: interactive requests and the server's sockets stay at the
+/// default class, so marking can only make Capsule's bulk bytes yield, never make anything of
+/// Capsule's slower to answer a person.
+#[instrument(level = "debug", skip(socket))]
+pub fn mark_lower_effort(socket: &tokio::net::TcpStream) -> Marking {
+    let local = match socket.local_addr() {
+        Ok(local) => local,
+        Err(error) => {
+            tracing::debug!(%error, "packet marking: socket address unreadable; left unmarked");
+            return Marking::Refused;
+        }
+    };
+    let carries_ipv4 = match local {
+        std::net::SocketAddr::V4(_) => true,
+        std::net::SocketAddr::V6(v6) => v6.ip().to_ipv4_mapped().is_some(),
+    };
+    let sock = socket2::SockRef::from(socket);
+    let set = if carries_ipv4 {
+        set_tos_v4(&sock)
+    } else {
+        set_tclass_v6(&sock)
+    };
+    match set {
+        Some(Ok(())) => {
+            tracing::debug!(%local, carries_ipv4, "packet marking: lower effort set");
+            Marking::Marked
+        }
+        Some(Err(error)) => {
+            tracing::debug!(%local, carries_ipv4, %error, "packet marking: refused; left unmarked");
+            Marking::Refused
+        }
+        None => {
+            tracing::debug!(%local, carries_ipv4, "packet marking: unsupported here; left unmarked");
+            Marking::Unsupported
+        }
+    }
+}
+
+/// `IP_TOS`, on every target `socket2` exposes it for.
+#[cfg(not(any(
+    target_os = "fuchsia",
+    target_os = "redox",
+    target_os = "solaris",
+    target_os = "haiku",
+    target_os = "wasi",
+)))]
+#[allow(clippy::unnecessary_wraps)]
+fn set_tos_v4(sock: &socket2::SockRef<'_>) -> Option<std::io::Result<()>> {
+    Some(sock.set_tos_v4(LOWER_EFFORT_TRAFFIC_CLASS))
+}
+
+/// `IP_TOS` where `socket2` has no setter: unsupported.
+#[cfg(any(
+    target_os = "fuchsia",
+    target_os = "redox",
+    target_os = "solaris",
+    target_os = "haiku",
+    target_os = "wasi",
+))]
+fn set_tos_v4(_sock: &socket2::SockRef<'_>) -> Option<std::io::Result<()>> {
+    None
+}
+
+/// `IPV6_TCLASS`, on every target `socket2` exposes it for (not iOS or Windows).
+#[cfg(any(
+    target_os = "android",
+    target_os = "dragonfly",
+    target_os = "freebsd",
+    target_os = "fuchsia",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "netbsd",
+    target_os = "openbsd",
+    target_os = "cygwin",
+    target_os = "illumos",
+))]
+#[allow(clippy::unnecessary_wraps)]
+fn set_tclass_v6(sock: &socket2::SockRef<'_>) -> Option<std::io::Result<()>> {
+    Some(sock.set_tclass_v6(LOWER_EFFORT_TRAFFIC_CLASS))
+}
+
+/// `IPV6_TCLASS` where `socket2` has no setter: unsupported.
+#[cfg(not(any(
+    target_os = "android",
+    target_os = "dragonfly",
+    target_os = "freebsd",
+    target_os = "fuchsia",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "netbsd",
+    target_os = "openbsd",
+    target_os = "cygwin",
+    target_os = "illumos",
+)))]
+fn set_tclass_v6(_sock: &socket2::SockRef<'_>) -> Option<std::io::Result<()>> {
+    None
+}
+
 #[cfg(test)]
 mod tests;
