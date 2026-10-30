@@ -898,6 +898,26 @@ pub(crate) enum PeerCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Stop retrying a delete made after a hand-off that `capsule peer status` keeps reporting
+    /// as not applied because the library holds neither the asset nor its tombstone. Local
+    /// only: the server keeps the asset as it holds it. Refused while the library still holds
+    /// the asset's chain, since `capsule peer status` can then send the delete
+    ForgetDelete {
+        /// Path to the Capsule library holding the assets
+        #[arg(long, value_name = "PATH")]
+        library: PathBuf,
+        /// The asset, as `capsule peer status` lists it
+        #[arg(value_name = "ASSET_ID")]
+        asset: Uuid,
+        /// Read the library passphrase from stdin instead of prompting, so the command
+        /// works in scripts and CI where there is no terminal.
+        #[arg(long)]
+        passphrase_stdin: bool,
+        /// Print the run as one JSON document on stdout: the asset and how many outbox
+        /// entries were dropped
+        #[arg(long)]
+        json: bool,
+    },
     /// Send this library's assets to another device of this account over the LAN peering
     /// channel: dial its `capsule peer pull --listen`, verify it over mutual TLS as a device of
     /// this account, and serve it one backup artifact sealed for that session. The other device

@@ -1518,6 +1518,113 @@ async fn a_stretch_refused_for_good_is_dropped_and_one_with_no_chain_is_kept() {
             (other, "refused", Some("error.upload.retention_elapsed")),
         ]
     );
+    assert!(
+        views[0]
+            .message
+            .as_deref()
+            .is_some_and(|m| m.contains("capsule peer forget-delete")),
+        "the kept line names the command that drops it: {:?}",
+        views[0].message
+    );
+}
+
+/// The feed is drained only for an outbox holding an asset the library has a chain for, so an
+/// entry it holds no chain for does not re-read the whole feed on every run.
+#[test]
+fn the_feed_is_needed_only_for_an_entry_with_a_chain() {
+    let scratch = Scratch::new();
+    let (ws, held, _) = two_assets(&scratch);
+    let entry = |asset_id| PendingDelete {
+        asset_id,
+        op: b"op".to_vec(),
+    };
+    assert!(!needs_feed(&ws, &[]), "an empty outbox sends nothing");
+    let gone = Uuid::now_v7();
+    assert!(
+        !needs_feed(&ws, &[entry(gone), entry(gone)]),
+        "a chainless asset is kept without the feed"
+    );
+    assert!(needs_feed(&ws, &[entry(gone), entry(held)]));
+}
+
+/// A chainless asset still kept when the feed could not be read says why, not that the feed
+/// failed: its line does not depend on the server.
+#[tokio::test]
+async fn a_chainless_entry_is_kept_even_when_the_feed_is_unreadable() {
+    let scratch = Scratch::new();
+    let (ws, _, _) = two_assets(&scratch);
+    let gone = Uuid::now_v7();
+    let pending = vec![PendingDelete {
+        asset_id: gone,
+        op: b"op".to_vec(),
+    }];
+    let (remote, session) = remote::tests::remote_at("http://127.0.0.1:9");
+    let (kept, views) = send_deletes(
+        &remote,
+        &session,
+        &ws,
+        Err("unreachable"),
+        jiff::Timestamp::now(),
+        pending.clone(),
+    )
+    .await;
+    assert_eq!(kept, pending);
+    assert_eq!(views.len(), 1);
+    assert_eq!(views[0].outcome, "failed");
+    assert!(
+        views[0]
+            .message
+            .as_deref()
+            .is_some_and(|m| m.contains("nor its tombstone")),
+        "{:?}",
+        views[0].message
+    );
+}
+
+/// `peer forget-delete` drops only the named chainless asset's entries, refuses an asset whose
+/// chain the library holds (its delete can still be sent), and refuses one nothing is owed for.
+#[test]
+fn forget_delete_drops_only_an_undeliverable_assets_entries() {
+    let scratch = Scratch::new();
+    let (ws, held, _) = two_assets(&scratch);
+    let (_dir, state) = state();
+    let gone = Uuid::now_v7();
+    let entry = |asset_id, op: &[u8]| PendingDelete {
+        asset_id,
+        op: op.to_vec(),
+    };
+    state
+        .save_outbox(&[entry(gone, b"a"), entry(held, b"b"), entry(gone, b"c")])
+        .expect("writes");
+
+    assert!(matches!(
+        forget_delete(&state, &ws, held),
+        Err(PeerError::StillDeliverable(id)) if id == held
+    ));
+    let other = Uuid::now_v7();
+    assert!(matches!(
+        forget_delete(&state, &ws, other),
+        Err(PeerError::NothingOwed(id)) if id == other
+    ));
+    assert_eq!(
+        state.load_outbox().expect("reads").len(),
+        3,
+        "a refused run drops nothing"
+    );
+
+    let forgotten = forget_delete(&state, &ws, gone).expect("forgets");
+    assert_eq!(
+        forgotten,
+        ForgottenDelete {
+            asset_id: gone,
+            entries: 2
+        }
+    );
+    assert_eq!(state.load_outbox().expect("reads"), vec![entry(held, b"b")]);
+    assert!(matches!(
+        forget_delete(&state, &ws, gone),
+        Err(PeerError::NothingOwed(_))
+    ));
 }
 
 /// A ledger that cannot be read leaves the push skipping nothing and the browser showing no
