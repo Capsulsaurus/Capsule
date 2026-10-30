@@ -600,7 +600,7 @@ fn a_source_naming_an_unknown_asset_is_kept() {
 }
 
 /// One custody question per asset, declaring the original and its metadata blob, and none
-/// for an asset the library cannot build a bundle for.
+/// for an asset the library does not hold.
 #[test]
 fn held_releases_asks_once_per_asset_about_its_original() {
     let scratch = Scratch::new();
@@ -621,6 +621,46 @@ fn held_releases_asks_once_per_asset_about_its_original() {
         vec![
             capsule_library::library::BlobRole::Original,
             capsule_library::library::BlobRole::Metadata
+        ]
+    );
+}
+
+/// An asset edited since its create is still asked about, and about its chain head's blobs:
+/// exactly what the release gate declares, so the server's answer can release its source.
+#[test]
+fn held_releases_asks_about_an_edited_assets_head() {
+    let scratch = Scratch::new();
+    let (mut ws, moved) = moved_library(&scratch, &[b"edited"]);
+    ws.tag_add(&moved[0].asset_id, "beach").expect("tagged");
+    let head = ws
+        .asset(&moved[0].asset_id)
+        .unwrap()
+        .chain
+        .records()
+        .last()
+        .unwrap()
+        .manifest
+        .core
+        .clone();
+    assert!(
+        ws.upload_bundle(&moved[0].asset_id).is_err(),
+        "the edit superseded the create's metadata blob"
+    );
+
+    let releases = held_releases(&ws, &moved);
+
+    assert_eq!(releases.len(), 1, "{releases:#?}");
+    let hashes: Vec<_> = releases[0]
+        .blobs
+        .iter()
+        .map(|b| b.ciphertext_hash)
+        .collect();
+    assert_eq!(
+        hashes,
+        vec![
+            head.ciphertext_hash,
+            head.metadata_blob_hash
+                .expect("an edit binds a metadata blob")
         ]
     );
 }
@@ -2278,4 +2318,212 @@ async fn a_live_assets_records_wait_for_its_create_to_be_indexed() {
         "{}",
         custody_line(&summary)
     );
+}
+
+/// `listed`, with the feed also holding the original the create pins.
+fn listed_with_original(ws: &Workspace, asset: &Uuid, at: usize) -> serde_json::Value {
+    let state = ws.asset(asset).expect("held");
+    let create = &state.chain.records()[0].manifest.core;
+    let mut entry = listed(ws, asset, at);
+    entry["blobs"] = serde_json::json!([{
+        "hash": create.ciphertext_hash.to_hex(),
+        "role": "original",
+        "size": capsule_core::crypto::encryption::ciphertext_len(create.plaintext_size),
+    }]);
+    entry
+}
+
+/// **An asset edited since the server indexed its create is not a failure** (D1 of #1092's
+/// review). The edit replaced the metadata blob the create binds, so the library cannot rebuild
+/// the create; the feed lists the asset and holds its original, so nothing of the create is
+/// left to upload. The push reports it `indexed`, sends the edit as a lifecycle op, and exits
+/// zero; a dry run plans it the same way. Not listed, the same asset still fails: its create has
+/// to be uploaded and cannot be.
+#[tokio::test]
+async fn a_push_skips_an_indexed_create_an_edit_superseded_and_sends_the_edit() {
+    let EscrowRun {
+        _scratch,
+        mut ws,
+        full_album,
+        held_back,
+        ..
+    } = escrow_run().await;
+    let at_create = listed_with_original(&ws, &held_back, 0);
+    ws.tag_add(&held_back, "beach").expect("tagged");
+    assert!(matches!(
+        ws.upload_bundle(&held_back),
+        Err(LifecycleError::CreateMetadataSuperseded(_))
+    ));
+    let only = || PushRun {
+        assets: Some(vec![held_back]),
+        ..PushRun::default()
+    };
+
+    let (remote, session, seen) =
+        live_records_mock(held_back, full_album, vec![at_create.clone()]).await;
+    let dry = push_with(
+        &remote,
+        &mut ws,
+        session,
+        PushOptions {
+            dry_run: true,
+            ..PushOptions::default()
+        },
+        only(),
+    )
+    .await
+    .expect("the dry run completes");
+    assert_eq!(dry.outcomes[0].status, AssetPushStatus::Indexed, "{dry:#?}");
+    assert_eq!(dry.failed_assets, 0);
+    assert_eq!(posted_ops(&seen), 0, "a dry run sends nothing");
+
+    let (remote, session, seen) = live_records_mock(held_back, full_album, vec![at_create]).await;
+    let summary = push_with(&remote, &mut ws, session, PushOptions::default(), only())
+        .await
+        .expect("the run completes");
+
+    assert_eq!(
+        summary.outcomes[0].status,
+        AssetPushStatus::Indexed,
+        "{summary:#?}"
+    );
+    assert_eq!((summary.indexed_assets, summary.failed_assets), (1, 0));
+    assert_eq!(failed_run_reason(&summary), None);
+    let live: Vec<_> = summary
+        .live_records
+        .iter()
+        .map(|o| (o.asset_id.clone(), o.status))
+        .collect();
+    assert_eq!(live, vec![(held_back.to_string(), TrashStatus::Applied)]);
+    assert_eq!(posted_ops(&seen), 1, "the edit");
+    assert!(
+        custody_line(&summary).contains("Skipped 1 the server already holds"),
+        "{}",
+        custody_line(&summary)
+    );
+    let json = serde_json::to_value(&summary).expect("serializes");
+    assert_eq!(json["outcomes"][0]["status"], "indexed");
+
+    let (remote, session, _seen) = live_records_mock(held_back, full_album, Vec::new()).await;
+    let unlisted = push_with(&remote, &mut ws, session, PushOptions::default(), only())
+        .await
+        .expect("the run completes");
+    assert_eq!(unlisted.failed_assets, 1, "{unlisted:#?}");
+    assert_eq!(
+        unlisted.outcomes[0].error.as_ref().map(|e| e.kind),
+        Some("bundle")
+    );
+}
+
+/// **A feed that cannot be read after the uploads sends nothing** (`deliver_live_records`):
+/// whether the server indexed the create is unknown, so each live asset with records past its
+/// create is reported `unavailable`, not permanent, and a re-run clears it.
+#[tokio::test]
+async fn a_live_assets_records_are_unavailable_when_the_redrain_fails() {
+    let EscrowRun {
+        _scratch,
+        mut ws,
+        full_album,
+        held_back,
+        ..
+    } = escrow_run().await;
+    let at_create = listed(&ws, &held_back, 0);
+    ws.soft_delete(&held_back, 30).expect("deleted");
+    ws.restore(&held_back).expect("restored");
+    let escrow = EscrowMock {
+        full_for: full_album,
+        seen: std::sync::Arc::default(),
+    };
+    let seen = escrow.seen.clone();
+    let drains = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let answer = move |line: &str| {
+        if line.starts_with("GET /v1/sync") && !line.contains("cursor=") {
+            // The drain before the uploads reads the listing; the one after them fails.
+            let drain = drains.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if drain > 0 {
+                let problem = serde_json::json!({
+                    "type": "about:blank",
+                    "title": "Bad Request",
+                    "status": 400,
+                    "detail": "the feed is unavailable",
+                });
+                return (400, "application/problem+json", problem.to_string());
+            }
+        }
+        if let Some(page) = feed_answer(line, std::slice::from_ref(&at_create)) {
+            return page;
+        }
+        escrow.answer(line)
+    };
+    let (remote, session) = remote_at(&serve_mock(answer).await);
+
+    let summary = push_with(
+        &remote,
+        &mut ws,
+        session,
+        PushOptions::default(),
+        PushRun {
+            assets: Some(vec![held_back]),
+            ..PushRun::default()
+        },
+    )
+    .await
+    .expect("the run completes");
+
+    let live: Vec<_> = summary
+        .live_records
+        .iter()
+        .map(|o| {
+            (
+                o.asset_id.clone(),
+                o.status,
+                o.error.as_ref().map(|e| (e.kind, e.permanent)),
+            )
+        })
+        .collect();
+    assert_eq!(
+        live,
+        vec![(
+            held_back.to_string(),
+            TrashStatus::Failed,
+            Some(("unavailable", false))
+        )],
+        "{summary:#?}"
+    );
+    assert_eq!(posted_ops(&seen), 0, "nothing reached the ops surface");
+}
+
+/// An asset handed to another device is left to its hand-off: its records after the create are
+/// neither sent nor reported, even when the server indexes the create.
+#[tokio::test]
+async fn a_delegated_assets_records_are_left_to_its_hand_off() {
+    let EscrowRun {
+        _scratch,
+        mut ws,
+        full_album,
+        held_back,
+        ..
+    } = escrow_run().await;
+    let at_create = listed(&ws, &held_back, 0);
+    ws.soft_delete(&held_back, 30).expect("deleted");
+    ws.restore(&held_back).expect("restored");
+    let (remote, session, seen) = live_records_mock(held_back, full_album, vec![at_create]).await;
+
+    let summary = push_with(
+        &remote,
+        &mut ws,
+        session,
+        PushOptions::default(),
+        PushRun {
+            assets: Some(vec![held_back]),
+            delegated: BTreeSet::from([held_back]),
+            ..PushRun::default()
+        },
+    )
+    .await
+    .expect("the run completes");
+
+    assert_eq!(summary.outcomes[0].status, AssetPushStatus::Delegated);
+    assert!(summary.live_records.is_empty(), "{summary:#?}");
+    assert_eq!(posted_ops(&seen), 0, "nothing reached the ops surface");
 }

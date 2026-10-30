@@ -10,6 +10,7 @@ status: 0
   "verified_assets": 0,
   "failed_assets": 0,
   "delegated_assets": 0,
+  "indexed_assets": 0,
   "trashed_assets": 0,
   "held_records": [],
   "live_records": [],
