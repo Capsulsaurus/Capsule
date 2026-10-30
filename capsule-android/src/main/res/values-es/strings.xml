@@ -1793,6 +1793,7 @@
     <string name="error_auth_oidc_state_invalid">Ese inicio de sesión ha caducado. Empieza de nuevo.</string>
     <string name="error_auth_oidc_token_invalid">No se pudo verificar la respuesta de tu proveedor de identidad.</string>
     <string name="error_auth_oidc_unavailable">Capsule no pudo conectar con tu proveedor de identidad en este momento. Inténtalo de nuevo.</string>
+    <string name="error_auth_password_disabled">Este servidor solo admite el inicio de sesión mediante inicio de sesión único.</string>
     <string name="error_auth_password_invalid">Esa contraseña no se puede usar.</string>
     <string name="error_auth_profile_invalid">Ese nombre visible no se puede usar.</string>
     <string name="error_auth_profile_not_found">Esa cuenta ya no existe.</string>

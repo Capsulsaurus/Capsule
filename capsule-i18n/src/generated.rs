@@ -116,6 +116,9 @@ pub mod error_codes {
     /// `error.auth.oidc_unavailable`
     pub const AUTH_OIDC_UNAVAILABLE: &str = "error.auth.oidc_unavailable";
 
+    /// `error.auth.password_disabled`
+    pub const AUTH_PASSWORD_DISABLED: &str = "error.auth.password_disabled";
+
     /// `error.auth.password_invalid`
     pub const AUTH_PASSWORD_INVALID: &str = "error.auth.password_invalid";
 

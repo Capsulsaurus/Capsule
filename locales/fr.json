@@ -7211,6 +7211,10 @@
     "message": "Capsule n'a pas pu joindre votre fournisseur d'identité pour le moment. Veuillez réessayer.",
     "origin": "machine"
   },
+  "error.auth.password_disabled": {
+    "message": "Ce serveur n'accepte la connexion que par authentification unique.",
+    "origin": "machine"
+  },
   "error.auth.password_invalid": {
     "message": "Ce mot de passe ne peut pas être utilisé.",
     "origin": "machine"

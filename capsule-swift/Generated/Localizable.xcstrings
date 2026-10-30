@@ -151319,6 +151319,88 @@
         }
       }
     },
+    "error.auth.password_disabled": {
+      "localizations": {
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "لا يقبل هذا الخادم تسجيل الدخول إلا عبر تسجيل الدخول الموحّد."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dieser Server akzeptiert die Anmeldung nur über Single Sign-On."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This server only accepts sign-in through single sign-on."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este servidor solo admite el inicio de sesión mediante inicio de sesión único."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ce serveur n'accepte la connexion que par authentification unique."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "यह सर्वर केवल सिंगल साइन-ऑन के ज़रिए साइन इन स्वीकार करता है।"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Questo server accetta l'accesso solo tramite Single Sign-On."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このサーバーではシングルサインオンによるサインインのみ利用できます。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 서버는 싱글 사인온을 통한 로그인만 허용합니다."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este servidor só aceita login por logon único."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Этот сервер принимает вход только через единый вход (SSO)."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此服务器仅接受通过单点登录进行登录。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此伺服器僅接受透過單一登入進行登入。"
+          }
+        }
+      }
+    },
     "error.auth.password_invalid": {
       "localizations": {
         "ar": {

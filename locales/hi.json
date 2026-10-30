@@ -7211,6 +7211,10 @@
     "message": "Capsule अभी आपके पहचान प्रदाता तक नहीं पहुँच सका। कृपया फिर से प्रयास करें।",
     "origin": "machine"
   },
+  "error.auth.password_disabled": {
+    "message": "यह सर्वर केवल सिंगल साइन-ऑन के ज़रिए साइन इन स्वीकार करता है।",
+    "origin": "machine"
+  },
   "error.auth.password_invalid": {
     "message": "उस पासवर्ड का उपयोग नहीं किया जा सकता।",
     "origin": "machine"

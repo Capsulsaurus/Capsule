@@ -1793,6 +1793,7 @@
     <string name="error_auth_oidc_state_invalid">Diese Anmeldung ist abgelaufen. Beginne erneut.</string>
     <string name="error_auth_oidc_token_invalid">Die Antwort deines Identitätsanbieters konnte nicht überprüft werden.</string>
     <string name="error_auth_oidc_unavailable">Capsule konnte deinen Identitätsanbieter gerade nicht erreichen. Bitte versuche es erneut.</string>
+    <string name="error_auth_password_disabled">Dieser Server akzeptiert die Anmeldung nur über Single Sign-On.</string>
     <string name="error_auth_password_invalid">Dieses Passwort kann nicht verwendet werden.</string>
     <string name="error_auth_profile_invalid">Dieser Anzeigename kann nicht verwendet werden.</string>
     <string name="error_auth_profile_not_found">Dieses Konto existiert nicht mehr.</string>
