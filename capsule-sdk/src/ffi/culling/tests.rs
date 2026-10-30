@@ -170,6 +170,70 @@ fn a_stack_flag_reaches_every_member_and_its_state_is_derived() {
     );
 }
 
+/// Stack membership lists each stacked live asset with its cover flag and member index, and
+/// leaves out lone assets and trashed members.
+#[test]
+fn stack_memberships_list_each_stacked_live_asset() {
+    let lib = tempfile::TempDir::new().unwrap();
+    let (workspace, assets) = workspace_with(lib.path(), 4);
+    assert!(
+        workspace.stack_memberships().unwrap().is_empty(),
+        "no asset is stacked yet"
+    );
+    let stack_id = stack(&workspace, &assets[..3]);
+
+    let mut expected: Vec<FfiStackMember> = assets[..3]
+        .iter()
+        .enumerate()
+        .map(|(i, asset)| FfiStackMember {
+            asset_id: asset.clone(),
+            stack_id: stack_id.clone(),
+            is_cover: i == 0,
+            member_index: Some(i as u32),
+        })
+        .collect();
+    expected.sort_by(|a, b| a.asset_id.cmp(&b.asset_id));
+    assert_eq!(
+        workspace.stack_memberships().unwrap(),
+        expected,
+        "the lone fourth asset is absent"
+    );
+
+    workspace.delete_asset(assets[1].clone(), 30).unwrap();
+    let live: Vec<String> = workspace
+        .stack_memberships()
+        .unwrap()
+        .into_iter()
+        .map(|member| member.asset_id)
+        .collect();
+    assert_eq!(
+        live,
+        sorted(vec![assets[0].clone(), assets[2].clone()]),
+        "a trashed member leaves the listing"
+    );
+}
+
+/// A proxy or ordinary member is not the cover, and a member with no recorded index lists
+/// none.
+#[test]
+fn only_the_primary_member_is_the_cover() {
+    let membership = |role, member_index| StackMembership {
+        stack_id: Uuid::nil(),
+        stack_type: StackType::Burst,
+        role,
+        member_index,
+    };
+    let primary = FfiStackMember::new("a".into(), &membership(StackRole::Primary, Some(2)));
+    assert!(primary.is_cover);
+    assert_eq!(primary.member_index, Some(2));
+    assert_eq!(primary.stack_id, Uuid::nil().to_string());
+    for role in [StackRole::Member, StackRole::Proxy] {
+        let member = FfiStackMember::new("b".into(), &membership(role, None));
+        assert!(!member.is_cover);
+        assert_eq!(member.member_index, None);
+    }
+}
+
 /// The sweep trashes exactly the rejects, restorably, and a second sweep finds nothing.
 #[test]
 fn the_reject_sweep_trashes_only_rejects_and_they_stay_restorable() {

@@ -1,5 +1,6 @@
 //! The **cull verbs** of the `capsule_sdk` uniffi namespace: flag an asset, flag a whole stack,
-//! read a stack's derived state, list the assets carrying a flag, and the reject sweep — over
+//! read a stack's derived state, list the assets carrying a flag, list where each live asset
+//! sits in its stack, and the reject sweep — over
 //! `capsule-library`'s [`Workspace`] culling workflow ([Organization — Culling]).
 //!
 //! Every verb here is one call into the workspace under its lock. Flagging writes the trinary
@@ -15,7 +16,7 @@
 //! [Organization — Culling]: https://docs/design/organization/#culling
 
 use capsule_core::culling::GroupCullState;
-use capsule_core::sidecar::sidecar_v1::CullFlag;
+use capsule_core::sidecar::sidecar_v1::{CullFlag, StackMembership, StackRole};
 
 use super::FfiError;
 use super::workspace::{FfiWorkspace, parse_uuid, trash_error};
@@ -73,6 +74,30 @@ impl From<GroupCullState> for FfiStackCullState {
     }
 }
 
+/// Where one live asset sits in its stack, read from its signed `stack_membership` register.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct FfiStackMember {
+    /// The asset (UUID string).
+    pub asset_id: String,
+    /// The stack it belongs to (UUID string).
+    pub stack_id: String,
+    /// Whether it is the stack's cover: its `primary` member, the "best photo".
+    pub is_cover: bool,
+    /// Its position within the stack (burst sequence, chapter index), when one was recorded.
+    pub member_index: Option<u32>,
+}
+
+impl FfiStackMember {
+    fn new(asset_id: String, membership: &StackMembership) -> Self {
+        Self {
+            asset_id,
+            stack_id: membership.stack_id.to_string(),
+            is_cover: membership.role == StackRole::Primary,
+            member_index: membership.member_index,
+        }
+    }
+}
+
 #[uniffi::export]
 impl FfiWorkspace {
     /// Flag one asset. `Neutral` clears a prior flag. Signs one `metadata-update`, stamped with
@@ -102,6 +127,27 @@ impl FfiWorkspace {
                 .iter()
                 .map(ToString::to_string)
                 .collect())
+        })
+    }
+
+    /// Every managed, non-trashed asset that belongs to a stack, with its stack, whether it is
+    /// the cover and its member index, sorted by asset id. An asset in no stack is absent, so a
+    /// cull pass reads it as a lone asset; a trashed member is absent too, matching the members
+    /// [`flag_stack`](Self::flag_stack) writes.
+    pub fn stack_memberships(&self) -> Result<Vec<FfiStackMember>, FfiError> {
+        self.with(|ws| {
+            let mut ids = ws.asset_ids();
+            ids.sort();
+            let members: Vec<FfiStackMember> = ids
+                .iter()
+                .filter(|id| !ws.is_trashed(id))
+                .filter_map(|id| {
+                    let membership = ws.asset(id)?.sidecar.stack_membership.get()?.as_ref()?;
+                    Some(FfiStackMember::new(id.to_string(), membership))
+                })
+                .collect();
+            tracing::debug!(members = members.len(), "ffi: stack memberships listed");
+            Ok(members)
         })
     }
 

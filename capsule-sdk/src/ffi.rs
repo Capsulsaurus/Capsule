@@ -79,11 +79,11 @@ pub use workspace::{
 };
 
 /// The cull verbs on [`FfiWorkspace`]: flag an asset or a stack, read a stack's derived state,
-/// list by flag, and the reject sweep. Its own module because culling is one workflow with one
+/// list by flag, list stack membership, and the reject sweep. Its own module because culling is one workflow with one
 /// destructive step, and reads better as a unit than as another section of `workspace`.
 mod culling;
 
-pub use culling::{FfiCullFlag, FfiStackCullState};
+pub use culling::{FfiCullFlag, FfiStackCullState, FfiStackMember};
 
 /// The transfer event stream: the flattened mirror of `crate::events` and the subscription a
 /// real-time transfer view polls. Separated because it is the one surface that is a stream

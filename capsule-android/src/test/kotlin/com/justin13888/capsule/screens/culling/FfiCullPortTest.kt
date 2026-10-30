@@ -7,19 +7,22 @@ import kotlinx.coroutines.runBlocking
 import uniffi.capsule_sdk.FfiClientBuild
 import uniffi.capsule_sdk.FfiCullFlag
 import uniffi.capsule_sdk.FfiDeviceTier
+import uniffi.capsule_sdk.FfiStackMember
 import uniffi.capsule_sdk.FfiWorkspace
+import uniffi.capsule_sdk.FfiWorkspaceInterface
 import java.nio.file.Files
 import java.util.UUID
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
  * The cull port over a real `FfiWorkspace` (JNA loads the host `libcapsule_sdk`, as the
- * `:core` smoke does): the pass is every live asset with its flag, flags are written, and
- * the sweep trashes exactly the assets it is given.
+ * `:core` smoke does): the pass is every live asset with its flag and stack membership,
+ * flags are written, and the sweep trashes exactly the assets it is given.
  */
 class FfiCullPortTest {
     private val root = Files.createTempDirectory("capsule-android-culling")
@@ -54,6 +57,33 @@ class FfiCullPortTest {
                 pass.associate { it.id to it.flag },
             )
             assertEquals(FfiCullFlag.REJECT, workspace.cullFlag(assets[2].value))
+            assertTrue(pass.all { it.stack == null }, "an unstacked library reads as lone assets")
+        }
+
+    @Test
+    fun aTwoMemberStackReadsAsOneGroup() =
+        runBlocking {
+            // The FFI has no stack-editing verb, so the membership read is the one call this
+            // test supplies; the flags, the ids and the pass around it come from the workspace.
+            val stack = StackId(UUID.randomUUID().toString())
+            val (cover, member) = assets.sortedBy { it.value }.take(2)
+            val stacked =
+                object : FfiWorkspaceInterface by workspace {
+                    override fun stackMemberships(): List<FfiStackMember> =
+                        listOf(
+                            FfiStackMember(member.value, stack.value, isCover = false, memberIndex = 1u),
+                            FfiStackMember(cover.value, stack.value, isCover = true, memberIndex = 0u),
+                        )
+                }
+
+            val pass = FfiCullPort(stacked, Dispatchers.Unconfined).pass()
+
+            assertEquals(StackMembership(stack, isCover = true, memberIndex = 0), pass.single { it.id == cover }.stack)
+            assertEquals(StackMembership(stack, isCover = false, memberIndex = 1), pass.single { it.id == member }.stack)
+            val groups = CullingPass(pass).groups
+            assertEquals(2, groups.size, "the stack and the lone asset")
+            assertEquals(listOf(cover, member), groups.single { it.stack == stack }.members.map { it.id })
+            assertNull(pass.single { it.id !in setOf(cover, member) }.stack)
         }
 
     @Test
@@ -81,7 +111,7 @@ class FfiCullPortTest {
 
     @Test
     fun anUnknownStackFlagsNothingAndAFailedWriteIsAnError() =
-        runBlocking {
+        runBlocking<Unit> {
             assertEquals(emptyList(), port.flagStack(StackId(UUID.randomUUID().toString()), CullFlag.PICK))
             assertFailsWith<IllegalStateException> { port.setCull(AssetId("not-a-uuid"), CullFlag.PICK) }
         }

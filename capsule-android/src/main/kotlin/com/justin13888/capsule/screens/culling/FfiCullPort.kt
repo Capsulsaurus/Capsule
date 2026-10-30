@@ -7,18 +7,19 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import uniffi.capsule_sdk.FfiCullFlag
 import uniffi.capsule_sdk.FfiException
+import uniffi.capsule_sdk.FfiStackMember
 import uniffi.capsule_sdk.FfiWorkspaceInterface
 import java.util.logging.Level
 import java.util.logging.Logger
 
 /**
- * [CullPort] over the workspace's cull verbs (`FfiWorkspace::assets_by_cull`, `set_cull`,
- * `flag_stack`) and its trash (`delete_asset`).
+ * [CullPort] over the workspace's cull verbs (`FfiWorkspace::assets_by_cull`,
+ * `stack_memberships`, `set_cull`, `flag_stack`) and its trash (`delete_asset`).
  *
  * The pass is every live asset of the library, read as the three flag sets and ordered by
- * id, which for UUIDv7 ids is the order they were created. The FFI lists no stack
- * membership yet, so every asset arrives as a lone one; [CullingPass] groups whatever
- * membership a port supplies.
+ * id, which for UUIDv7 ids is the order they were created. Each asset carries the stack
+ * membership `stack_memberships` lists for it, and an asset it does not list arrives as a
+ * lone one; [CullingPass] groups by that membership.
  *
  * The sweep deletes exactly the candidates it is given, one signed `delete` each with a
  * retention window of [retainDays] days, rather than calling `reject_sweep`, which trashes
@@ -35,10 +36,12 @@ class FfiCullPort(
 ) : CullPort {
     override suspend fun pass(): List<CullAsset> =
         call("read the pass") {
+            val stacks = workspace.stackMemberships().associate { it.assetId to it.toMembership() }
             CullFlag.entries
-                .flatMap { flag -> workspace.assetsByCull(flag.toFfi()).map { CullAsset(AssetId(it), flag) } }
-                .sortedBy { it.id.value }
-        }.also { log.fine("culling: read ${it.size} assets") }
+                .flatMap { flag ->
+                    workspace.assetsByCull(flag.toFfi()).map { CullAsset(AssetId(it), flag, stacks[it]) }
+                }.sortedBy { it.id.value }
+        }.also { pass -> log.fine("culling: read ${pass.size} assets, ${pass.count { it.stack != null }} stacked") }
 
     override suspend fun setCull(
         asset: AssetId,
@@ -92,6 +95,8 @@ class FfiCullPort(
         const val DEFAULT_RETAIN_DAYS: UInt = 30u
 
         private val log: Logger = Logger.getLogger("capsule.culling")
+
+        fun FfiStackMember.toMembership(): StackMembership = StackMembership(StackId(stackId), isCover, memberIndex?.toInt())
 
         fun CullFlag.toFfi(): FfiCullFlag =
             when (this) {
