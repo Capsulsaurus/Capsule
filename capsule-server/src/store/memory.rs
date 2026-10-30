@@ -34,8 +34,8 @@ use super::ids::{
     UploadId, UserId,
 };
 use super::upload::{
-    AcceptedChunk, FinalizeClaim, LIFETIME_CAP, UploadSessionRecord, UploadSessionStatus,
-    UploadSessionStore,
+    AcceptedChunk, FinalizeClaim, LIFETIME_CAP, UnclaimedDiscard, UploadSessionRecord,
+    UploadSessionStatus, UploadSessionStore,
 };
 use super::{Clock, StoreError, StoreFuture, deadline};
 
@@ -611,6 +611,35 @@ impl UploadSessionStore for InMemoryUploadSessions {
         })
     }
 
+    fn discard_unclaimed<'a>(&'a self, upload: &'a UploadId) -> StoreFuture<'a, UnclaimedDiscard> {
+        Box::pin(async move {
+            let now = self.clock.now();
+            let mut state = lock(&self.state);
+            state.purge(now);
+            let Some(entry) = state.sessions.get(upload) else {
+                tracing::debug!(%upload, "an unclaimed discard found no session");
+                return Ok(UnclaimedDiscard::NotFound);
+            };
+            if !matches!(
+                entry.record.status,
+                UploadSessionStatus::Pending | UploadSessionStatus::Uploading
+            ) {
+                tracing::debug!(
+                    %upload,
+                    status = entry.record.status.as_str(),
+                    "an unclaimed discard found the session claimed"
+                );
+                return Ok(UnclaimedDiscard::Claimed);
+            }
+            state.chunks.remove(upload);
+            let Some(removed) = state.sessions.remove(upload) else {
+                return Ok(UnclaimedDiscard::NotFound);
+            };
+            tracing::info!(%upload, "discarded an unclaimed upload session");
+            Ok(UnclaimedDiscard::Discarded(Box::new(removed.record)))
+        })
+    }
+
     fn pending_for_address<'a>(
         &'a self,
         uploader: &'a UserId,
@@ -636,6 +665,25 @@ impl UploadSessionStore for InMemoryUploadSessions {
                 .collect();
             matches.sort();
             Ok(matches.first().map(|id| (*id).clone()))
+        })
+    }
+
+    fn live_for_address<'a>(&'a self, expected_hash: &'a str) -> StoreFuture<'a, Vec<UploadId>> {
+        Box::pin(async move {
+            let now = self.clock.now();
+            let mut state = lock(&self.state);
+            state.purge(now);
+            // A scan, as for `pending_for_address`; a real adapter indexes `expected_hash`.
+            let mut matches: Vec<UploadId> = state
+                .sessions
+                .values()
+                .map(|entry| &entry.record)
+                .filter(|record| record.status.is_active() && record.expected_hash == expected_hash)
+                .map(|record| record.upload_id.clone())
+                .collect();
+            matches.sort();
+            tracing::debug!(count = matches.len(), "listed live sessions for an address");
+            Ok(matches)
         })
     }
 

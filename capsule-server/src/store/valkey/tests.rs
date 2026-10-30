@@ -24,6 +24,20 @@ fn scripts_derive_keys_with_the_prefixes_rust_writes() {
         (&SET_STATUS, strip(album_key(&AlbumId::new("x")))),
         (&PENDING_FOR_ADDRESS, strip(upload_key(&up))),
         (&PENDING_FOR_ADDRESS, strip(chunks_key(&up))),
+        (
+            &OPEN_UPLOAD,
+            address_key("x").trim_end_matches('x').to_owned(),
+        ),
+        (
+            &SET_STATUS,
+            address_key("x").trim_end_matches('x').to_owned(),
+        ),
+        (
+            &DISCARD_UPLOAD,
+            address_key("x").trim_end_matches('x').to_owned(),
+        ),
+        (&LIVE_FOR_ADDRESS, strip(upload_key(&up))),
+        (&LIVE_FOR_ADDRESS, strip(chunks_key(&up))),
         (&IN_FLIGHT_FOR_ALBUM, strip(upload_key(&up))),
         (&LEAST_RECENTLY_PROGRESSED, strip(upload_key(&up))),
         (&CLAIMED_UPLOADS, strip(upload_key(&up))),

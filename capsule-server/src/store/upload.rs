@@ -237,6 +237,18 @@ pub enum FinalizeClaim {
     NotFound,
 }
 
+/// The outcome of discarding a session only while nobody has claimed its finalization.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UnclaimedDiscard {
+    /// The session was `Pending` or `Uploading` and is gone. The record is the session as it
+    /// was discarded.
+    Discarded(Box<UploadSessionRecord>),
+    /// The session's finalization is claimed, or it is terminal: it was left as it is.
+    Claimed,
+    /// No such session.
+    NotFound,
+}
+
 /// The lifetime cap an upload session is stored under.
 ///
 /// 24 hours, from design/filesystem/server.md: Valkey's native TTL *is* the cap. The record
@@ -344,6 +356,14 @@ pub trait UploadSessionStore: std::fmt::Debug + Send + Sync {
     /// both views, together. Returns the record that was removed, or `None`.
     fn discard<'a>(&'a self, upload: &'a UploadId) -> StoreFuture<'a, Option<UploadSessionRecord>>;
 
+    /// [`Self::discard`] `upload` only if it is `Pending` or `Uploading`.
+    ///
+    /// The compare and the discard are one step, as in [`Self::claim_finalize`], so a session
+    /// whose finalization a racing request claims is never discarded out from under its
+    /// finalizer: one of the two wins, and the other sees [`UnclaimedDiscard::Claimed`] or
+    /// [`FinalizeClaim::NotFound`].
+    fn discard_unclaimed<'a>(&'a self, upload: &'a UploadId) -> StoreFuture<'a, UnclaimedDiscard>;
+
     /// The active session `uploader` currently has open for `expected_hash`, if any.
     ///
     /// The question the blob serve path asks when nothing references an address: *are these
@@ -372,6 +392,21 @@ pub trait UploadSessionStore: std::fmt::Debug + Send + Sync {
         uploader: &'a UserId,
         expected_hash: &'a str,
     ) -> StoreFuture<'a, Option<UploadId>>;
+
+    /// Every active session declaring `expected_hash`, whoever uploads it, smallest id first.
+    ///
+    /// The question quota release asks after giving an attribution back
+    /// ([`crate::upload::reservation`]): attribution is keyed by content address globally, so a
+    /// session of **another** account may have been admitted against the attribution just
+    /// released, and is now the one that has to be charged for the bytes it will store.
+    ///
+    /// Unscoped on purpose, and therefore server-internal only. It must never back an answer to
+    /// a caller: that would tell any account that can name a hash whether somebody else is
+    /// uploading it — the signal [`Self::pending_for_address`] is uploader-scoped to withhold.
+    ///
+    /// Terminal sessions never match, as for [`Self::pending_for_address`]. Adapters need a
+    /// secondary index on `expected_hash`; scanning is acceptable only in the in-memory double.
+    fn live_for_address<'a>(&'a self, expected_hash: &'a str) -> StoreFuture<'a, Vec<UploadId>>;
 
     /// How many sessions are still in flight against `album`.
     ///

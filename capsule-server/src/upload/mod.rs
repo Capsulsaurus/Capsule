@@ -144,6 +144,12 @@ impl UploadContext {
         self.quota.quotas()
     }
 
+    /// The quota module's collaborators, for a charge that must pass the same limit and
+    /// suspension checks session creation applies ([`crate::quota::charge_upload`]).
+    pub fn quota(&self) -> &QuotaContext {
+        &self.quota
+    }
+
     /// The deployment's quota thresholds, which a reservation restored on a session's behalf
     /// is charged under. The same [`QuotaContext`] the quota module is built from, so the two
     /// never disagree about a limit.

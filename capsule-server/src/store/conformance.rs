@@ -50,8 +50,8 @@ use super::ids::{
     OidcState, OwnerId, PkceVerifier, SessionId, UploadId, UserId,
 };
 use super::upload::{
-    AcceptedChunk, BlobRole, FinalizeClaim, UploadSessionRecord, UploadSessionStatus,
-    UploadSessionStore,
+    AcceptedChunk, BlobRole, FinalizeClaim, UnclaimedDiscard, UploadSessionRecord,
+    UploadSessionStatus, UploadSessionStore,
 };
 use super::{StoreError, StoreFuture, deadline};
 
@@ -647,6 +647,83 @@ pub async fn discarding_a_session_withdraws_its_pending_address(h: &dyn Harness)
     );
 }
 
+/// Every active session declaring a hash is live for it, whoever uploads it, until the session
+/// ends, is discarded, or is re-opened declaring other bytes.
+///
+/// The question quota release asks after giving an attribution back (#1064), so unlike
+/// [`a_pending_address_is_uploader_scoped_and_ends_with_the_session`] it crosses accounts.
+pub async fn a_live_address_spans_every_uploader_and_ends_with_the_session(h: &dyn Harness) {
+    let store = h.uploads();
+    // A hash of its own, so sessions other cases leave behind on a shared backend never match.
+    let hash = "c".repeat(64);
+    let mut first = upload("live-addr", "a", "uploader-a", 0);
+    first.expected_hash.clone_from(&hash);
+    let mut second = upload("live-addr", "b", "uploader-b", 0);
+    second.expected_hash.clone_from(&hash);
+    assert_ne!(first.upload_user_id, second.upload_user_id);
+    ok(store.open(second.clone()).await, "open");
+    ok(store.open(first.clone()).await, "open");
+
+    assert_eq!(
+        ok(store.live_for_address(&hash).await, "live_for_address"),
+        vec![first.upload_id.clone(), second.upload_id.clone()],
+        "both accounts' sessions declare the bytes, smallest id first"
+    );
+    assert_eq!(
+        ok(
+            store.live_for_address(&"d".repeat(64)).await,
+            "live_for_address"
+        ),
+        Vec::<UploadId>::new(),
+        "an undeclared hash has no live session"
+    );
+
+    present(
+        ok(
+            store
+                .set_status(&first.upload_id, UploadSessionStatus::FailedProcessing)
+                .await,
+            "set_status",
+        ),
+        "set_status",
+    );
+    assert_eq!(
+        ok(store.live_for_address(&hash).await, "live_for_address"),
+        vec![second.upload_id.clone()],
+        "a terminal session is no longer live"
+    );
+
+    let mut moved = second.clone();
+    moved.expected_hash = "e".repeat(64);
+    ok(store.open(moved.clone()).await, "open");
+    assert_eq!(
+        ok(store.live_for_address(&hash).await, "live_for_address"),
+        Vec::<UploadId>::new(),
+        "a session re-opened declaring other bytes leaves the old address"
+    );
+    assert_eq!(
+        ok(
+            store.live_for_address(&moved.expected_hash).await,
+            "live_for_address"
+        ),
+        vec![moved.upload_id.clone()],
+        "and is live for the bytes it now declares"
+    );
+
+    present(
+        ok(store.discard(&moved.upload_id).await, "discard"),
+        "discard",
+    );
+    assert_eq!(
+        ok(
+            store.live_for_address(&moved.expected_hash).await,
+            "live_for_address"
+        ),
+        Vec::<UploadId>::new(),
+        "a discarded session takes its place in the index with it"
+    );
+}
+
 /// Accepting a chunk advances the byte counter, the progress clock and the replay store — as
 /// one operation, because they describe one event.
 pub async fn recording_progress_advances_bytes_clock_and_replay_together(h: &dyn Harness) {
@@ -785,6 +862,76 @@ pub async fn finalization_is_claimed_exactly_once(h: &dyn Harness) {
         FinalizeClaim::NotFound,
         "claiming an unknown session is distinguishable from losing the race"
     );
+}
+
+/// An unclaimed discard takes a `Pending` or `Uploading` session, and leaves a claimed or
+/// terminal one exactly as it is.
+pub async fn an_unclaimed_discard_never_takes_a_claimed_session(h: &dyn Harness) {
+    let store = h.uploads();
+    let open = upload("unclaimed-open", "a", "uploader", 0);
+    let claimed = upload("unclaimed-claimed", "a", "uploader", 0);
+    let failed = upload("unclaimed-failed", "a", "uploader", 0);
+    for record in [&open, &claimed, &failed] {
+        ok(store.open(record.clone()).await, "open");
+    }
+    ok(
+        store.claim_finalize(&claimed.upload_id).await,
+        "claim_finalize",
+    );
+    ok(
+        store
+            .fail_processing(&failed.upload_id, "error.upload.hash_mismatch")
+            .await,
+        "fail_processing",
+    );
+
+    match ok(
+        store.discard_unclaimed(&open.upload_id).await,
+        "discard_unclaimed",
+    ) {
+        UnclaimedDiscard::Discarded(removed) => assert_eq!(
+            removed.upload_id, open.upload_id,
+            "the discard hands back the session it removed"
+        ),
+        other => panic!("an open session must be discarded, got {other:?}"),
+    }
+    assert_eq!(
+        ok(store.read(&open.upload_id).await, "read"),
+        None,
+        "the discarded session is gone"
+    );
+    assert_eq!(
+        ok(
+            store.discard_unclaimed(&open.upload_id).await,
+            "discard_unclaimed"
+        ),
+        UnclaimedDiscard::NotFound,
+        "discarding it again finds nothing"
+    );
+
+    for (record, status) in [
+        (&claimed, UploadSessionStatus::WaitingForProcessing),
+        (&failed, UploadSessionStatus::FailedProcessing),
+    ] {
+        assert_eq!(
+            ok(
+                store.discard_unclaimed(&record.upload_id).await,
+                "discard_unclaimed"
+            ),
+            UnclaimedDiscard::Claimed,
+            "a {status:?} session is not discarded"
+        );
+        assert_eq!(
+            present(
+                ok(store.read(&record.upload_id).await, "read"),
+                "the session"
+            )
+            .status,
+            status,
+            "the refused discard left the session as it was"
+        );
+        ok(store.discard(&record.upload_id).await, "discard");
+    }
 }
 
 /// A claimed session is no longer an eviction candidate — the promise the claim makes.
@@ -1950,9 +2097,11 @@ pub async fn run_all(h: &dyn Harness) {
     uploader_listing_is_ordered_and_scoped(h).await;
     a_pending_address_is_uploader_scoped_and_ends_with_the_session(h).await;
     discarding_a_session_withdraws_its_pending_address(h).await;
+    a_live_address_spans_every_uploader_and_ends_with_the_session(h).await;
     recording_progress_advances_bytes_clock_and_replay_together(h).await;
     chunk_replay_is_offset_addressed(h).await;
     finalization_is_claimed_exactly_once(h).await;
+    an_unclaimed_discard_never_takes_a_claimed_session(h).await;
     a_claimed_session_leaves_the_eviction_view(h).await;
     reconciling_received_bytes_does_not_move_the_progress_clock(h).await;
     a_terminal_session_is_not_an_eviction_candidate(h).await;

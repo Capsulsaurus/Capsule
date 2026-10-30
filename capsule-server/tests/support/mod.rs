@@ -107,8 +107,9 @@ use capsule_server::store::{
     ChannelStore, Clock, CohortRecord, CohortStore, Direction, DrainOutcome, ENROLLMENT_CODE_TTL,
     EnrollmentCode, EnrollmentStore, FinalizeClaim, OidcAuthorizationStore, OidcState, OwnerId,
     PendingAuthorization, PendingEnrollment, RELAY_CHANNEL_TTL, RelayChannel, RelayOutcome,
-    RelayPayload, RevokeAllChallenge, SessionId, SessionRecord, StoreError, StoreFuture, UploadId,
-    UploadSessionRecord, UploadSessionStatus, UploadSessionStore, UserId,
+    RelayPayload, RevokeAllChallenge, SessionId, SessionRecord, StoreError, StoreFuture,
+    UnclaimedDiscard, UploadId, UploadSessionRecord, UploadSessionStatus, UploadSessionStore,
+    UserId,
 };
 
 pub(crate) mod idp;
@@ -2342,6 +2343,13 @@ impl UploadSessionStore for SwitchableUploads {
         self.inner.discard(upload)
     }
 
+    fn discard_unclaimed<'a>(&'a self, upload: &'a UploadId) -> StoreFuture<'a, UnclaimedDiscard> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.discard_unclaimed(upload)
+    }
+
     fn pending_for_address<'a>(
         &'a self,
         uploader: &'a UserId,
@@ -2351,6 +2359,13 @@ impl UploadSessionStore for SwitchableUploads {
             return Box::pin(async { Self::refuse() });
         }
         self.inner.pending_for_address(uploader, expected_hash)
+    }
+
+    fn live_for_address<'a>(&'a self, expected_hash: &'a str) -> StoreFuture<'a, Vec<UploadId>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.live_for_address(expected_hash)
     }
 
     fn in_flight_for_album<'a>(&'a self, album: &'a AlbumId) -> StoreFuture<'a, u64> {
