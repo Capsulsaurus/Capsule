@@ -1,100 +1,11 @@
 import AssetKit
 import AVFoundation
+import CapsuleDomain
 import CapsuleFoundation
 import CoreGraphics
 import ImageIO
 import ManagedStore
 import Photos
-
-/// How a file encodes high dynamic range, when it does.
-///
-/// A closed set on purpose. These are the three states the info panel can say
-/// something true about; a fourth format nobody recognises should read as
-/// "no HDR row" rather than as a name the reader cannot act on.
-public enum HDRFormat: String, Sendable, Equatable, CaseIterable {
-    case hdr10
-    case dolbyVision
-    case hlg
-}
-
-/// Camera, exposure, and file metadata shown in the viewer's info panel.
-///
-/// Read from an asset's embedded EXIF, its container, and its PhotoKit
-/// resource — or, in the mock lane, derived from the asset's own seed. Every
-/// field is optional because every one of them is genuinely absent for some
-/// real file: a scan has no lens, a still has no frame rate, an export has no
-/// original filename.
-public struct AssetExifMetadata: Sendable, Equatable {
-    // Camera
-    public var cameraMake: String?
-    public var cameraModel: String?
-    public var lensModel: String?
-    /// How the camera describes the lens in use — "Main Camera", "Ultra Wide".
-    /// Distinct from ``lensModel``, which is the hardware part.
-    public var lensName: String?
-    public var isoSpeed: Int?
-    public var aperture: Double?
-    public var shutterSpeed: Double?
-    public var focalLength: Double?
-
-    // File
-    /// The name the file had when it was captured or imported.
-    public var originalFilename: String?
-    /// Size on disk, in bytes.
-    public var byteCount: Int64?
-    /// The codec the bytes are in — "HEVC", "H.264", "HEIF", "JPEG".
-    ///
-    /// A display string rather than the sidecar's `content_type`: the container
-    /// MIME says `video/quicktime` where the reader wants to know it is HEVC,
-    /// and those are genuinely different facts about the same file.
-    public var codec: String?
-    /// Frames per second, for time-based media.
-    public var frameRate: Double?
-    /// Which HDR encoding the file uses, when it uses one.
-    public var hdrFormat: HDRFormat?
-
-    // Location
-    public var latitude: Double?
-    public var longitude: Double?
-
-    public init() {}
-
-    /// Whether any *camera* field could be read.
-    ///
-    /// Scoped to the camera card rather than the whole struct: a file that knows
-    /// its size and codec but nothing about the lens should still show its file
-    /// line, and asking "is the whole thing empty" would hide it.
-    public var hasCameraDetail: Bool {
-        cameraMake != nil || cameraModel != nil || lensModel != nil || lensName != nil
-            || isoSpeed != nil || aperture != nil || shutterSpeed != nil || focalLength != nil
-    }
-
-    /// Whether any file-level fact could be read.
-    public var hasFileDetail: Bool {
-        originalFilename != nil || byteCount != nil || codec != nil
-            || frameRate != nil || hdrFormat != nil
-    }
-
-    /// Whether nothing at all could be read.
-    public var isEmpty: Bool {
-        !hasCameraDetail && !hasFileDetail && latitude == nil && longitude == nil
-    }
-}
-
-// MARK: - AssetMetadataSource
-
-/// Where the info panel's metadata comes from when the asset is not a PhotoKit
-/// one.
-///
-/// The same seam ``ThumbnailProvider`` is for pixels, and it exists for the same
-/// reason: `ViewerMediaLoader` reaches PhotoKit through an identifier only a
-/// system asset carries, so a managed or mocked photo produced an entirely empty
-/// panel — the camera and location sections silently vanished, which reads as
-/// "this photo has no metadata" rather than as "this lane cannot see it".
-public protocol AssetMetadataSource: Sendable {
-    /// Metadata for an asset this source owns, or `nil` if it does not own it.
-    func metadata(for asset: Asset) async -> AssetExifMetadata?
-}
 
 /// Loads full-fidelity media for the full-screen viewer.
 ///
@@ -141,8 +52,60 @@ public final class ViewerMediaLoader {
     /// ``PlatformImage`` on both and needs no conversion here.
     public func fullImage(for asset: Asset, targetSize: CGSize) async -> PlatformImage? {
         guard let phAsset = phAsset(for: asset) else {
-            return await fallback?.thumbnail(for: asset, pixelSize: targetSize)
+            // The original's own frame, never a stand-in: an export shares
+            // these pixels and the region editor measures against them, and an
+            // embedded preview can be cropped or scaled differently.
+            let request = RenderRequest(intent: .original, pixelSize: targetSize)
+            return await fallback?.render(asset, request: request, shown: nil, pixelSize: targetSize)?.image
         }
+        return await photoKitImage(phAsset, targetSize: targetSize)
+    }
+
+    /// How many frames one ``loadViewerImage(for:surface:targetSize:shown:onFrame:)``
+    /// delivers at most: what is held now, then the rung generated from the
+    /// original. The ladder needs no more, and the bound keeps a provider that
+    /// keeps asking from spinning.
+    static let maximumRenderSteps = 3
+
+    /// The single-asset view's pixels, through the render ladder.
+    ///
+    /// Asks for ``RepresentationTier/preview`` at `surface`, the view's size in
+    /// device pixels when it opened, and hands each frame to `onFrame` as it
+    /// arrives: first the best rung held — a RAW's embedded preview where it
+    /// covers the surface — then, where the ladder says to generate the rung
+    /// from the original this device holds, that rung, so the view upgrades in
+    /// place. `shown` is the rendition the view already shows, and the view
+    /// keeps the last frame's ``RenderedImage/rendition`` to pass back.
+    ///
+    /// A system-library asset is PhotoKit's to render and is delivered once,
+    /// outside the ladder.
+    public func loadViewerImage(
+        for asset: Asset,
+        surface: CGSize,
+        targetSize: CGSize,
+        shown: Rendition?,
+        onFrame: (RenderedImage) -> Void
+    ) async {
+        if let phAsset = phAsset(for: asset) {
+            if let image = await photoKitImage(phAsset, targetSize: targetSize) {
+                onFrame(RenderedImage(image: image, rendition: nil))
+            }
+            return
+        }
+        guard let fallback else { return }
+        let request = RenderRequest(intent: .preview, pixelSize: surface)
+        var current = shown
+        for _ in 0 ..< Self.maximumRenderSteps {
+            let frame = await fallback.render(asset, request: request, shown: current, pixelSize: targetSize)
+            guard let frame, !Task.isCancelled else { return }
+            onFrame(frame)
+            guard let rendition = frame.rendition, case .generate = frame.next else { return }
+            current = rendition
+        }
+        CapsuleLog.imagePipeline.notice("viewer render stopped at its step bound")
+    }
+
+    private func photoKitImage(_ phAsset: PHAsset, targetSize: CGSize) async -> PlatformImage? {
         let options = PHImageRequestOptions()
         options.deliveryMode = .highQualityFormat
         options.isNetworkAccessAllowed = true

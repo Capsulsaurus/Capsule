@@ -1,7 +1,47 @@
 import AssetKit
+import CapsuleDomain
 import CapsuleFoundation
 import CoreGraphics
 import Photos
+
+// MARK: - RenderedImage
+
+/// One rung's pixels, and which rung they are.
+///
+/// ``rendition`` is what a surface keeps and passes back as `shown` on its next
+/// ``ThumbnailProvider/render(_:request:shown:pixelSize:)``, so the view
+/// upgrades in place and never downgrades. It is `nil` for an asset the render
+/// ladder does not govern — a system-library asset PhotoKit renders — and
+/// ``next`` then is too.
+public struct RenderedImage: Sendable {
+    public var image: PlatformImage
+    public var rendition: Rendition?
+    /// What the ladder said to obtain next. A ``RenderNextStep/generate(_:)``
+    /// is the provider's own work: asking again with ``rendition`` as `shown`
+    /// produces it.
+    public var next: RenderNextStep?
+
+    public init(image: PlatformImage, rendition: Rendition?, next: RenderNextStep? = nil) {
+        self.image = image
+        self.rendition = rendition
+        self.next = next
+    }
+}
+
+public extension RenderRequest {
+    /// A request for a surface measured in device pixels.
+    init(intent: RepresentationTier, pixelSize: CGSize) {
+        self.init(
+            intent: intent,
+            surface: Dimensions(
+                width: UInt32(clamping: Int(max(0, pixelSize.width.rounded()))),
+                height: UInt32(clamping: Int(max(0, pixelSize.height.rounded())))
+            )
+        )
+    }
+}
+
+// MARK: - ThumbnailProvider
 
 /// Loads and prefetches the thumbnails the photo grid renders.
 ///
@@ -12,6 +52,17 @@ public protocol ThumbnailProvider: Sendable {
     /// cannot be produced. `pixelSize` is in device pixels.
     func thumbnail(for asset: Asset, pixelSize: CGSize) async -> PlatformImage?
 
+    /// The rung the render ladder names for `request`, decoded to fill
+    /// `pixelSize` device pixels, or `nil` if this provider does not own the
+    /// asset or has nothing to draw for it.
+    ///
+    /// `shown` is the ``RenderedImage/rendition`` the surface already shows,
+    /// `nil` when it shows nothing yet. A provider over Capsule-managed assets
+    /// asks the ladder (``RenderLadder``) and draws what it names; the default
+    /// draws ``thumbnail(for:pixelSize:)`` outside the ladder, which is right
+    /// for a system-library asset.
+    func render(_ asset: Asset, request: RenderRequest, shown: Rendition?, pixelSize: CGSize) async -> RenderedImage?
+
     /// Warm the cache for assets about to scroll on screen.
     func beginPrefetching(for assets: [Asset], pixelSize: CGSize) async
 
@@ -20,6 +71,13 @@ public protocol ThumbnailProvider: Sendable {
 
     /// Drop every cached thumbnail — called by the app under memory pressure.
     func flushCaches() async
+}
+
+public extension ThumbnailProvider {
+    func render(_ asset: Asset, request _: RenderRequest, shown _: Rendition?, pixelSize: CGSize) async -> RenderedImage? {
+        guard let image = await thumbnail(for: asset, pixelSize: pixelSize) else { return nil }
+        return RenderedImage(image: image, rendition: nil)
+    }
 }
 
 /// The production ``ThumbnailProvider``.

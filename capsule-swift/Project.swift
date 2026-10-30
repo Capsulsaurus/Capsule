@@ -284,6 +284,9 @@ private let moduleTargets: [Target] =
     // Image decode / downsample / cache / prefetch pipeline.
     + module("ImagePipeline", dependencies: [
         .target(name: "CapsuleFoundation"),
+        // The render ladder's records (`RenderLadder`, `Rendition`) the
+        // providers draw through.
+        .target(name: "CapsuleDomain"),
         .target(name: "AssetKit"),
         // `ContainerExif`, the one ImageIO EXIF parser the viewer shares.
         .target(name: "ManagedStore"),

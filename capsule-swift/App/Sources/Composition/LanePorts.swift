@@ -1,3 +1,4 @@
+import CapsuleDomain
 import CapsuleMock
 import CapsulePorts
 import ManagedStore
@@ -20,6 +21,12 @@ struct LanePorts {
     /// writes go through. `nil` keeps the store in memory, written through a
     /// `LocalManagedWorkspace` (``AppEnvironment/makeManagedLane(root:openLibrary:)``).
     var openManagedLibrary: (@Sendable (ManagedLibraryLayout) -> ManagedLibrary)?
+    /// The render ladder every surface draws through: `render_step` in the
+    /// FFI lane, the mock lane's stand-in for it otherwise.
+    var renderLadder: RenderLadder = MockRenderLadder.ladder
+    /// Where a RAW original's embedded preview is read. `nil` without a Rust
+    /// core, which draws every rung from the original.
+    var embeddedPreviews: (any EmbeddedPreviewPort)?
 
     /// The mock world's own adapters.
     static func mock(_ mock: MockEnvironment) -> LanePorts {

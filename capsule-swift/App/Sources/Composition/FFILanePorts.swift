@@ -15,7 +15,8 @@
         /// The Rust-backed adapters over `workspace` and `session`.
         ///
         /// Labels and regions are local edits of the workspace, so they work
-        /// signed out. Transfer events come from a session; with none there is
+        /// signed out. So does the render ladder and the embedded-preview read:
+        /// both are pure exports over files this device already holds. Transfer events come from a session; with none there is
         /// nothing in flight, and the stream finishes at once rather than
         /// showing the mock world's transfers.
         ///
@@ -35,7 +36,9 @@
                 transferEvents: transferEvents,
                 openManagedLibrary: { layout in
                     ManagedLibrary(layout: layout, catalogOpener: FFICatalogOpener(), workspace: managedWorkspace)
-                }
+                },
+                renderLadder: .ffi,
+                embeddedPreviews: FFIEmbeddedPreviewReader()
             )
         }
     }
