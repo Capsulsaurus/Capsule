@@ -666,6 +666,11 @@ async fn settle_federated(
         FederatedLink::Linked(user) => user,
         FederatedLink::Created(user) => {
             tracing::info!(user_id = %user, issuer = %identity.issuer, "created an account for a federated sign-in");
+            // Recorded when the account exists, before its session does: the account stands
+            // even if no session opens, and the `sign_in.oidc` that follows names the session.
+            activity
+                .record(&user, ActivityKind::AccountRegistered, None, None)
+                .await;
             user
         }
         FederatedLink::AddressTaken => {

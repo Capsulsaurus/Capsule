@@ -757,11 +757,14 @@ async fn a_callback_opens_a_session_exactly_as_a_password_login_does() {
         )
         .expect("verifies");
     assert_eq!(second.user, verified.user);
+    // The first sign-in created the account, so its log opens with the registration; the
+    // second linked the same account and records only its sign-in.
     assert_eq!(
         fixture.activity_kinds(&verified.user).await,
         [
             capsule_server::activity::ActivityKind::SignInOidc,
-            capsule_server::activity::ActivityKind::SignInOidc
+            capsule_server::activity::ActivityKind::SignInOidc,
+            capsule_server::activity::ActivityKind::AccountRegistered
         ]
     );
 

@@ -20,7 +20,7 @@ It is not the [provenance](/design/cryptography/provenance/) chain, which signs 
 
 | Kind | Written when | `subject` |
 | --- | --- | --- |
-| `account.registered` | an account is created | its first session |
+| `account.registered` | an account is created, by registration or by the first identity-provider sign-in of an identity | its first session, when registration opened one; absent for an account an identity-provider sign-in created, whose `sign_in.oidc` names the session |
 | `sign_in.password` | a password sign-in opens a session | the new session |
 | `sign_in.second_factor` | a sign-in completes its second factor and opens a session | the new session |
 | `sign_in.second_factor_refused` | a second-factor code is refused for a sign-in whose first factor verified | — |
