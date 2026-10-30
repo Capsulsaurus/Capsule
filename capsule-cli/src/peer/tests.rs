@@ -1190,6 +1190,43 @@ fn an_edit_held_before_a_later_edit_is_not_held_twice() {
     assert_eq!(hashes.len(), held.len(), "no record is held twice");
 }
 
+/// **A delegated asset purged before custody keeps its held stretch.** The origin deletes and
+/// then purges the asset while the delegate still holds the upload, so the library no longer
+/// holds the asset; the delete and the early purge's re-issue are routed from the kept chain,
+/// in chain order, each chaining onto the one before it from the sealed head.
+#[test]
+fn a_delete_purged_before_custody_is_held_from_the_tombstone() {
+    let scratch = Scratch::new();
+    let (mut ws, asset, _) = two_assets(&scratch);
+    let sealed = ws.asset(&asset).expect("held").chain.records()[0].record_hash();
+    let mut ledger = ledger_of(vec![sealed_delegation(asset, sealed)]);
+
+    ws.soft_delete(&asset, 30).expect("deletes");
+    ws.purge(&asset).expect("purges early");
+    assert!(ws.asset(&asset).is_none(), "the asset left the library");
+
+    assert_eq!(hold_deletes(&mut ledger, &ws).expect("routes"), vec![asset]);
+    let held = &ledger.get(&asset).expect("held").held_deletes;
+    let actions: Vec<Option<String>> = held.iter().map(|op| op_action(op)).collect();
+    assert_eq!(
+        actions,
+        vec![Some("delete".to_owned()), Some("delete".to_owned())],
+        "the held delete, then the shorter-retention re-issue"
+    );
+    let kept = ws.purged_chain(&asset).expect("the tombstone");
+    for (op, prior) in held.iter().zip(kept) {
+        assert_eq!(
+            envelope_of(op).prior_provenance_hash,
+            Some(prior.record_hash().to_hex()),
+            "each op chains onto the record before it, the first onto the sealed head"
+        );
+    }
+    assert!(
+        hold_deletes(&mut ledger, &ws).expect("routes").is_empty(),
+        "nothing already held is held twice"
+    );
+}
+
 /// The feed entry naming `asset` indexed on the server, its head the record at `at` of the
 /// library's chain, changed at `changed_at` on the server's clock.
 fn listed(

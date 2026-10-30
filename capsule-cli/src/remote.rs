@@ -1267,8 +1267,8 @@ pub struct PushSummary {
     /// feed lists it, whichever device uploaded it (Organization — Deletion State Machine). One
     /// entry per trashed asset with a record to send or still held; none for one the server is
     /// level with, and none on a dry run or under `--force`, which read no server truth. A
-    /// purged asset's kept chain is delivered the same way once the feed lists it with a head
-    /// before the chain's ([`deliver_purged_records`]).
+    /// purged asset's kept chain is delivered the same way, from the tombstone, once the feed
+    /// lists it with a head before the chain's.
     pub held_records: Vec<TrashOutcome>,
     /// Verified custody receipts persisted to the library this run.
     pub receipts: usize,

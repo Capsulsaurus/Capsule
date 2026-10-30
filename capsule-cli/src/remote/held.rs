@@ -112,7 +112,9 @@ impl ServerChains {
     }
 
     /// The clock a held stretch is judged by: this device's, floored by the latest server
-    /// `changed_at` the drain saw, as every expiry decision is.
+    /// `changed_at` the drain saw, so a restore is withheld whenever either clock says the
+    /// server would refuse it. Only this rule uses it: the retention sweep judges expiry by
+    /// the server's `changed_at` alone, since a device clock running ahead would purge early.
     pub(crate) fn judging_clock(&self, now: jiff::Timestamp) -> jiff::Timestamp {
         self.latest_changed_at.map_or(now, |seen| now.max(seen))
     }
