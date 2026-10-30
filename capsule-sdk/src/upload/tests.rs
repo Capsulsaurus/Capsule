@@ -1367,6 +1367,92 @@ async fn resume_recreates_when_session_is_gone() {
     }
 }
 
+/// A resume via `HEAD` seeds its first chunk from the advice `HEAD` carries, not from the
+/// size tier alone.
+#[tokio::test]
+async fn resume_seeds_the_first_chunk_from_heads_advice() {
+    let advised = 512 * KB;
+    let size = 600 * KB;
+    let patch_offsets = Arc::new(Mutex::new(Vec::<u64>::new()));
+    let po = patch_offsets.clone();
+    let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+        ("HEAD", "/sess-HA") => MockResponse::new(200, "OK")
+            .header("X-Capsule-Offset", "0")
+            .header("X-Capsule-Content-Length", size.to_string())
+            .header("X-Capsule-Upload-Status", "pending")
+            .header(
+                "X-Capsule-Advice",
+                format!("chunk={advised}, sessions=4, ranges=1, ttl=300"),
+            ),
+        ("PATCH", "/sess-HA") => {
+            let offset: u64 = req.header("X-Capsule-Offset").unwrap().parse().unwrap();
+            po.lock().unwrap().push(offset);
+            let new_offset = ack_offset(req);
+            MockResponse::new(204, "No Content").header("X-Capsule-Offset", new_offset.to_string())
+        }
+        other => panic!("unexpected {other:?}"),
+    })
+    .await;
+
+    let data = vec![3u8; size as usize];
+    let outcome = server
+        .client(PROTOCOL)
+        .upload_resuming("sess-HA", &request(size), &data)
+        .await;
+
+    assert!(matches!(outcome, Ok(UploadOutcome::Completed { .. })));
+    assert_eq!(*patch_offsets.lock().unwrap(), vec![0, advised]);
+}
+
+/// A session lost mid-drive is re-created, and the re-created session's first chunk follows
+/// the advice its create carried rather than the size tier the drive restarts on.
+#[tokio::test]
+async fn a_mid_drive_recreate_seeds_the_first_chunk_from_the_new_advice() {
+    let advised = 512 * KB;
+    let size = 600 * KB;
+    let creates = Arc::new(AtomicUsize::new(0));
+    let cc = creates.clone();
+    let patch_offsets = Arc::new(Mutex::new(Vec::<u64>::new()));
+    let po = patch_offsets.clone();
+    let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+        ("POST", "/") => {
+            if cc.fetch_add(1, Ordering::SeqCst) == 0 {
+                created("sess-L", CHUNK_SIZE_256KB)
+            } else {
+                created_without_advice("sess-M", CHUNK_SIZE_256KB).header(
+                    "X-Capsule-Advice",
+                    format!("chunk={advised}, sessions=4, ranges=1, ttl=300"),
+                )
+            }
+        }
+        ("PATCH", "/sess-L") => MockResponse::api_error(
+            404,
+            "Not Found",
+            error_codes::UPLOAD_SESSION_NOT_FOUND,
+            "Session not found",
+        ),
+        ("PATCH", "/sess-M") => {
+            let offset: u64 = req.header("X-Capsule-Offset").unwrap().parse().unwrap();
+            po.lock().unwrap().push(offset);
+            let new_offset = ack_offset(req);
+            MockResponse::new(204, "No Content").header("X-Capsule-Offset", new_offset.to_string())
+        }
+        other => panic!("unexpected {other:?}"),
+    })
+    .await;
+
+    let data = vec![8u8; size as usize];
+    let outcome = server.client(PROTOCOL).upload(&request(size), &data).await;
+
+    assert!(matches!(outcome, Ok(UploadOutcome::Completed { .. })));
+    assert_eq!(
+        creates.load(Ordering::SeqCst),
+        2,
+        "the session is re-created"
+    );
+    assert_eq!(*patch_offsets.lock().unwrap(), vec![0, advised]);
+}
+
 // ─── HEAD / DELETE / list ───────────────────────────────────────────────────
 
 #[tokio::test]
