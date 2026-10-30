@@ -163,8 +163,10 @@ pub enum LifecycleError {
     #[error("asset {0}: re-derived ciphertext does not match the manifest's ciphertext_hash")]
     CiphertextMismatch(Uuid),
     /// [`upload_bundle`](Workspace::upload_bundle) was asked for an asset whose `create` binds a
-    /// metadata blob the library no longer holds: an edit replaced it, and the library keeps
-    /// only the latest. An upload carries the create, so it cannot be built; nothing was sent.
+    /// metadata blob the library no longer holds: an edit replaced it before the library kept
+    /// the create's blob beside the chain, so neither copy answers the create's
+    /// `metadata_blob_hash`. An upload carries the create, so it cannot be built; nothing was
+    /// sent.
     #[error(
         "asset {0}: the metadata blob its create record binds was replaced by a later edit, so \
          the create cannot be uploaded"
@@ -534,6 +536,10 @@ fn now_rfc3339() -> String {
     Timestamp::now().to_string()
 }
 
+/// The shard subdirectory holding the metadata blob each superseded `create` binds
+/// ([`Workspace::create_metadata_blob_path`]).
+const CREATE_METADATA_DIR: &str = "create-metadata";
+
 fn media_dir(root: &Path, capture_utc: i64) -> PathBuf {
     let date = Timestamp::from_second(capture_utc)
         .unwrap_or(Timestamp::UNIX_EPOCH)
@@ -641,6 +647,34 @@ impl Workspace {
     fn metadata_blob_path(&self, asset: &AssetState) -> PathBuf {
         media_dir(&self.root, asset.capture_utc)
             .join(format!("{}.metadata.bin", asset.asset_id.simple()))
+    }
+    /// `media/{YYYY}/{YYYY-MM}/create-metadata/{uuid}.bin` — the **exact** sealed metadata blob
+    /// the asset's `create` record binds, kept once a later edit has replaced
+    /// [`AssetState::metadata_blob`] (written by `append_lifecycle`, read by
+    /// [`upload_bundle`](Self::upload_bundle)).
+    ///
+    /// An upload carries the create, and the server takes the create only with the bytes its
+    /// `metadata_blob_hash` names, which cannot be re-sealed. So the first edit copies them here
+    /// before it replaces them, and they stay for the asset's life, whichever servers have since
+    /// taken the create: only a purge removes them. (A re-seal never meets one: it replaces only
+    /// a chain that is its create alone, and the file appears with the first record after it.)
+    ///
+    /// A subdirectory of the shard rather than a `{uuid}.*` sibling, so a client that predates it
+    /// cannot take it for the original (its `original_extension` reads only `{uuid}.*` names);
+    /// a library without the file reads exactly as before.
+    fn create_metadata_blob_path_of(&self, asset: &AssetState) -> PathBuf {
+        media_dir(&self.root, asset.capture_utc)
+            .join(CREATE_METADATA_DIR)
+            .join(format!("{}.bin", asset.asset_id.simple()))
+    }
+
+    /// The on-disk path of the metadata blob kept for a managed asset's `create` record, or
+    /// `None` for an unknown id. The file exists only once an edit superseded that blob. Exposed
+    /// so a client test can stand in for a library written before the blob was kept.
+    pub fn create_metadata_blob_path(&self, asset_id: &Uuid) -> Option<PathBuf> {
+        self.assets
+            .get(asset_id)
+            .map(|asset| self.create_metadata_blob_path_of(asset))
     }
 
     /// The plaintext bytes of a managed asset (reads from disk).

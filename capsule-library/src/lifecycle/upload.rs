@@ -296,13 +296,14 @@ impl Workspace {
     /// Re-derives the original ciphertext from the create's recorded `nonce_prefix` (clients
     /// hold plaintext; ciphertext is regenerated deterministically) and gates it on the
     /// manifest's own content address, so a bundle that reaches the network is one the signed
-    /// manifest vouches for. The sealed metadata blob is carried verbatim — it cannot be
-    /// regenerated, because `seal_metadata_blob` draws a fresh nonce per call.
+    /// manifest vouches for. The sealed metadata blob the create binds is carried verbatim — it
+    /// cannot be regenerated, because `seal_metadata_blob` draws a fresh nonce per call — so an
+    /// asset edited since its import carries the copy its first edit kept, not its current blob.
     ///
     /// # Errors
     ///
     /// [`LifecycleError::CreateMetadataSuperseded`] when the create binds a metadata blob the
-    /// library no longer holds: an edit replaced it, and the library keeps only the latest.
+    /// library no longer holds: an edit made before the library kept that blob replaced it.
     /// [`LifecycleError::CiphertextMismatch`] when the plaintext on disk no longer re-derives to
     /// the signed ciphertext.
     #[tracing::instrument(skip(self), fields(asset_id = %asset_id))]
@@ -325,19 +326,7 @@ impl Workspace {
         let provenance_blob = cbor::to_canonical_vec(create_record)
             .map_err(|e| LifecycleError::Cbor(format!("encoding the provenance record: {e}")))?;
 
-        // The library keeps one metadata blob, the latest. A create whose blob an edit replaced
-        // cannot be uploaded: the server would refuse other bytes under the address the create
-        // signed, so this refuses before any byte is sent rather than after.
-        if let Some(bound) = create.metadata_blob_hash
-            && blob_ciphertext_hash(&asset.metadata_blob) != bound
-        {
-            tracing::warn!(
-                asset_id = %asset.asset_id,
-                records = asset.chain.records().len(),
-                "upload bundle: the metadata blob the create binds was superseded by an edit"
-            );
-            return Err(LifecycleError::CreateMetadataSuperseded(asset.asset_id));
-        }
+        let metadata_blob = self.create_metadata_blob(asset, create.metadata_blob_hash)?;
 
         let epoch = create.amk_version.0;
         let original = self.verified_original(asset, album, create)?;
@@ -351,7 +340,7 @@ impl Workspace {
             album_id = %asset.album_id,
             amk_version = epoch,
             ciphertext_bytes = original.size(),
-            metadata_blob_bytes = asset.metadata_blob.len(),
+            metadata_blob_bytes = metadata_blob.len(),
             provenance_blob_bytes = provenance_blob.len(),
             derivatives = derivatives.len(),
             derivative_manifests = derivative_manifests.len(),
@@ -372,7 +361,7 @@ impl Workspace {
             chunk_size: create.chunk_size,
             content_type: wire_content_type(&asset.sidecar.content_type).to_owned(),
             key_mode: create.key_mode,
-            metadata_blob: asset.metadata_blob.clone(),
+            metadata_blob,
             metadata_blob_hash: create.metadata_blob_hash,
             provenance_blob,
             derivatives,
@@ -385,6 +374,60 @@ impl Workspace {
             prior_provenance_hash: create.prior_provenance_hash,
             retention_until: create.retention_until.clone(),
         })
+    }
+
+    /// The exact sealed metadata blob a create binding `bound` uploads with: the asset's current
+    /// blob while no edit has replaced it, otherwise the copy the first edit kept
+    /// ([`create_metadata_blob_path`](Self::create_metadata_blob_path)). A create that binds no
+    /// blob carries the current one, as it always has.
+    ///
+    /// Either candidate is checked against `bound` before it is used, so the bytes returned are
+    /// the ones the server accepts under that address.
+    ///
+    /// # Errors
+    ///
+    /// [`LifecycleError::CreateMetadataSuperseded`] when neither answers `bound`: an edit made
+    /// before the library kept the create's blob replaced it, and it is gone.
+    /// [`LifecycleError::Io`] when the kept copy exists and cannot be read.
+    fn create_metadata_blob(&self, asset: &AssetState, bound: Option<Hash32>) -> Result<Vec<u8>> {
+        let Some(bound) = bound else {
+            return Ok(asset.metadata_blob.clone());
+        };
+        if blob_ciphertext_hash(&asset.metadata_blob) == bound {
+            return Ok(asset.metadata_blob.clone());
+        }
+        let path = self.create_metadata_blob_path_of(asset);
+        let kept = match fs::read(&path) {
+            Ok(kept) => Some(kept),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => None,
+            Err(e) => {
+                return Err(LifecycleError::Io(format!(
+                    "the create's metadata blob {}: {e}",
+                    path.display()
+                )));
+            }
+        };
+        match kept {
+            Some(kept) if blob_ciphertext_hash(&kept) == bound => {
+                tracing::debug!(
+                    asset_id = %asset.asset_id,
+                    records = asset.chain.records().len(),
+                    "upload bundle: an edit superseded the create's metadata blob; carrying the \
+                     kept copy"
+                );
+                Ok(kept)
+            }
+            kept => {
+                tracing::warn!(
+                    asset_id = %asset.asset_id,
+                    records = asset.chain.records().len(),
+                    kept_copy = kept.is_some(),
+                    "upload bundle: the metadata blob the create binds was superseded by an edit \
+                     and no kept copy answers it"
+                );
+                Err(LifecycleError::CreateMetadataSuperseded(asset.asset_id))
+            }
+        }
     }
 
     /// The original's ciphertext as `core` pins it, checked against `core`'s content address.

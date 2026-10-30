@@ -124,17 +124,83 @@ fn a_bundle_carries_the_create_record_after_a_delete_and_a_restore() {
     assert_eq!(bundle.ciphertext_hash, before.ciphertext_hash);
 }
 
-/// **A create whose metadata blob an edit replaced is refused before anything is sent.** The
-/// library keeps only the latest blob, and the server would refuse other bytes under the
-/// address the create signed, so the bundle is a typed refusal rather than a mismatched rung.
+/// The content address the asset's `create` record binds for its metadata blob.
+fn create_binding(ws: &Workspace, asset_id: &Uuid) -> Hash32 {
+    ws.asset(asset_id).unwrap().chain.records()[0]
+        .manifest
+        .core
+        .metadata_blob_hash
+        .expect("a create binds a metadata blob")
+}
+
+/// **An asset edited before its first upload uploads its create** (issue #1091). The first edit
+/// keeps the blob the create binds before it replaces it, so the bundle carries the create's
+/// exact bytes, not the edit's, across a reopen and through a second edit, and the current blob
+/// is still the edit's.
 #[test]
-fn a_create_whose_metadata_blob_an_edit_replaced_is_refused() {
+fn an_edited_assets_bundle_carries_the_blob_its_create_binds() {
+    let lib = TempDir::new().unwrap();
+    let src = TempDir::new().unwrap();
+    let (_album, asset_id) = library_with_one_asset(&lib, &src);
+    let mut ws = Workspace::open(lib.path(), b"passphrase", FAST).unwrap();
+    let before = ws.upload_bundle(&asset_id).expect("bundle before the edit");
+    let kept = ws.create_metadata_blob_path(&asset_id).unwrap();
+    assert!(
+        !kept.exists(),
+        "nothing is kept until an edit supersedes it"
+    );
+
+    ws.tag_add(&asset_id, "beach").expect("tagged");
+    ws.set_caption(&asset_id, "at the beach")
+        .expect("captioned");
+    assert!(kept.exists(), "the first edit kept the create's blob");
+    let current = blob_ciphertext_hash(&ws.asset(&asset_id).unwrap().metadata_blob);
+    assert_ne!(
+        current,
+        create_binding(&ws, &asset_id),
+        "the edits re-sealed"
+    );
+
+    let live = ws.upload_bundle(&asset_id).expect("the create uploads");
+    drop(ws);
+    let reopened = Workspace::open(lib.path(), b"passphrase", FAST).unwrap();
+    let after_reopen = reopened
+        .upload_bundle(&asset_id)
+        .expect("and after a reopen");
+    for bundle in [live, after_reopen] {
+        assert_eq!(bundle.action, Action::Create);
+        assert_eq!(
+            bundle.metadata_blob, before.metadata_blob,
+            "the create's exact sealed bytes"
+        );
+        assert_eq!(
+            bundle.metadata_blob_hash,
+            Some(blob_ciphertext_hash(&bundle.metadata_blob))
+        );
+        assert_eq!(bundle.provenance_blob, before.provenance_blob);
+    }
+}
+
+/// **A library edited before the create's blob was kept still refuses** — typed, before anything
+/// is sent, because the server would refuse other bytes under the address the create signed. A
+/// kept copy that does not answer that address is refused the same way, never shipped.
+#[test]
+fn a_create_whose_blob_no_copy_answers_is_refused() {
     let lib = TempDir::new().unwrap();
     let src = TempDir::new().unwrap();
     let (_album, asset_id) = library_with_one_asset(&lib, &src);
     let mut ws = Workspace::open(lib.path(), b"passphrase", FAST).unwrap();
     ws.tag_add(&asset_id, "beach").expect("tagged");
+    let kept = ws.create_metadata_blob_path(&asset_id).unwrap();
 
+    let current = ws.asset(&asset_id).unwrap().metadata_blob.clone();
+    fs::write(&kept, &current).unwrap();
+    assert!(matches!(
+        ws.upload_bundle(&asset_id),
+        Err(LifecycleError::CreateMetadataSuperseded(id)) if id == asset_id
+    ));
+
+    fs::remove_file(&kept).unwrap();
     assert!(matches!(
         ws.upload_bundle(&asset_id),
         Err(LifecycleError::CreateMetadataSuperseded(id)) if id == asset_id

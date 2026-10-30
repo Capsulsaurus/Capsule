@@ -389,6 +389,7 @@ impl Workspace {
 
         remove_if_present(&self.sidecar_path(asset), &mut removed)?;
         remove_if_present(&self.metadata_blob_path(asset), &mut removed)?;
+        remove_if_present(&self.create_metadata_blob_path_of(asset), &mut removed)?;
         Ok(removed)
     }
 
