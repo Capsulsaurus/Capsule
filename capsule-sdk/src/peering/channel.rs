@@ -31,6 +31,9 @@
 //!   [`HandshakeLimiter`], so the LAN cannot probe a device for membership.
 //! - **Artifact secret.** A second exporter label yields the per-session [`ArtifactSecret`]
 //!   that seals a sync artifact: fresh per session, never stored, never a user passphrase.
+//! - **Lower Effort marking.** The channel carries bulk bytes (hand-offs, sync artifacts), so
+//!   both sides mark the socket with the Lower Effort DSCP before the handshake, best effort
+//!   ([`crate::net::mark_lower_effort`]).
 //!
 //! # After the handshake
 //!
@@ -780,6 +783,7 @@ pub async fn accept(
         tracing::warn!(%source, "peering handshake rate limit reached; refusing");
         return Err(PeeringError::RateLimited(source));
     }
+    crate::net::mark_lower_effort(&tcp);
     let acceptor = TlsAcceptor::from(Arc::new(server_config()?));
     within(HANDSHAKE_TIMEOUT, "the handshake", async {
         let mut tls = acceptor.accept(tcp).await.map_err(io_err)?;
@@ -811,6 +815,7 @@ pub async fn accept(
 /// contract.
 #[instrument(skip(tcp, local), fields(local = %local.device_id))]
 pub async fn connect(tcp: TcpStream, local: LocalPeer<'_>) -> Result<PeerChannel, PeeringError> {
+    crate::net::mark_lower_effort(&tcp);
     let connector = TlsConnector::from(Arc::new(client_config()?));
     let name = ServerName::try_from(PEER_SNI)
         .map_err(|e| PeeringError::Tls(e.to_string()))?

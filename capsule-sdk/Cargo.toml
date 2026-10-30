@@ -73,6 +73,9 @@ http = { workspace = true }
 # so the per-request stall timer cuts a stalled upload and never a slow one. Already in the
 # lock file through reqwest and hyper.
 http-body = { workspace = true }
+# Packet marking (`net::mark_lower_effort`): the Lower Effort DSCP on a bulk-transfer socket the
+# SDK holds, which neither std nor tokio can set. Already in the lock file through tokio.
+socket2 = { workspace = true }
 
 # ── LAN peering ───────────────────────────────────────────────────────
 # The peering channel is mutually-authenticated TLS 1.3 with no CA (the device keys

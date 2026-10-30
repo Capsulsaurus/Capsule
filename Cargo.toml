@@ -79,6 +79,11 @@ http-body-util = "0.1.3"
 # one. Already in the lock file through reqwest and hyper. See the HTTP body row in
 # design/dependencies.md.
 http-body = "1.0.1"
+# Socket options the standard library and tokio do not expose, for the SDK's packet marking
+# alone: the Lower Effort DSCP on a bulk-transfer socket (IP_TOS / IPV6_TCLASS). `all` carries
+# `set_tclass_v6`. Already in the lock file through tokio and hyper-util. See the Socket options
+# row in design/dependencies.md.
+socket2 = { version = "0.6.5", features = ["all"] }
 # The `http` types reqwest is built on, for the SDK's reactive refresh layer alone: it reads a
 # `401`'s problem code to decide whether the response is an expired token, then puts the body
 # back, and `reqwest::Response`'s only constructor is `From<http::Response<_>>`. Already in the

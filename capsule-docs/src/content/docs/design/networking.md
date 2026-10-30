@@ -43,4 +43,9 @@ Hostile paths (captive portals, congested carriers, the Great Firewall) MUST deg
 
 ## Packet Marking
 
-Capsule sets no DSCP value or IP traffic class on its own sockets. No correctness or throughput property depends on marking: most access networks strip or rewrite the field, so it carries no meaning end to end. Where a LAN or Wi-Fi network does honour it, marking can make bulk transfers yield to other traffic, but it gains Capsule no throughput.
+No correctness or throughput property depends on marking: most access networks strip or rewrite the field, so it carries no meaning end to end. Where a LAN or Wi-Fi network does honour it, marking makes bulk transfers yield to other traffic (home routers often map it to the Wi-Fi WMM background queue), but it gains Capsule no throughput.
+
+- **Bulk transfers are marked Lower Effort** (RFC 8622, DSCP 1): `IP_TOS` on a socket carrying IPv4, `IPV6_TCLASS` on one carrying IPv6, set on a socket the SDK holds before its first byte. The peering channel, which carries hand-offs and sync artifacts, is marked on both ends.
+- **Marking is best effort.** A platform that refuses the option, or exposes no setter for the socket's family, leaves the socket unmarked and the transfer proceeds unchanged.
+- **Interactive traffic and the server stay unmarked.** Marking may only make Capsule's bulk bytes yield; it never slows a request a person is waiting on. A server-side mark would apply to every accepted connection, interactive ones included, so the server marks nothing.
+- **A socket the HTTP stack keeps out of reach stays unmarked.** The SDK's HTTP client dials its own sockets and exposes no hook to them, so HTTP uploads carry the default class until that stack exposes one; the SDK does not reimplement the HTTP connector to reach it.
