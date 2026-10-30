@@ -373,3 +373,160 @@ fn the_handshake_headers_are_the_build_constants() {
     assert_eq!(headers.len(), 3);
     assert!(http_client().is_ok());
 }
+
+/// **The retry classification table** (networking doc, Retry Policy Classes). Transport
+/// failures, every `5xx`, `408`, `425` and `429` are retryable; a contract `4xx` is terminal
+/// unless the recovery matrix names an action for its code; nothing else is a retryable failure.
+#[test]
+fn errors_are_classified_before_any_retry() {
+    use RetryVerdict::{Recover, Retryable, Terminal};
+
+    assert_eq!(RetryVerdict::of_transport(), Retryable);
+    let table: &[(u16, bool, RetryVerdict)] = &[
+        // The transient set, whatever the code says.
+        (408, false, Retryable),
+        (408, true, Retryable),
+        (425, false, Retryable),
+        (429, false, Retryable),
+        (429, true, Retryable),
+        (500, false, Retryable),
+        (502, false, Retryable),
+        (503, false, Retryable),
+        (504, false, Retryable),
+        (507, false, Retryable),
+        (599, false, Retryable),
+        // Contract `4xx`: an action from the recovery matrix, or nothing.
+        (400, true, Recover),
+        (400, false, Terminal),
+        (403, false, Terminal),
+        (404, true, Recover),
+        (404, false, Terminal),
+        (409, true, Recover),
+        (409, false, Terminal),
+        (413, false, Terminal),
+        (415, false, Terminal),
+        (426, false, Terminal),
+        (499, false, Terminal),
+        // Not failures this table retries.
+        (200, false, Terminal),
+        (204, true, Terminal),
+        (301, false, Terminal),
+        (600, false, Terminal),
+    ];
+    for &(status, names_action, expected) in table {
+        let verdict = RetryVerdict::of_status(status, names_action);
+        assert_eq!(verdict, expected, "{status} (action named: {names_action})");
+        assert_eq!(verdict.permits_retry(), expected != Terminal, "{status}");
+    }
+}
+
+/// **A failing server costs at most the lane's retry budget.** Every retry spends one token
+/// whichever item takes it; once the budget is spent nothing more is retried until successes
+/// earn tokens back, one per [`LANE_SUCCESSES_PER_RETRY`], never above the capacity.
+#[test]
+fn a_lane_retry_budget_bounds_the_retries_of_every_item() {
+    let mut budget = LaneRetryBudget::new(3);
+    assert_eq!(budget.capacity(), 3);
+    let spent = (0..10).filter(|_| budget.try_spend()).count();
+    assert_eq!(spent, 3, "ten failing items share three retries");
+    assert_eq!(budget.remaining(), 0);
+
+    for _ in 0..LANE_SUCCESSES_PER_RETRY - 1 {
+        budget.record_success();
+    }
+    assert!(!budget.try_spend(), "not yet earned back");
+    budget.record_success();
+    assert_eq!(budget.remaining(), 1, "earned back by successes");
+
+    for _ in 0..100 {
+        budget.record_success();
+    }
+    assert_eq!(budget.remaining(), 3, "never above the capacity");
+
+    let mut never = LaneRetryBudget::new(0);
+    assert!(!never.try_spend(), "a zero budget never retries");
+    assert_eq!(
+        LaneRetryBudget::default().capacity(),
+        DEFAULT_LANE_RETRY_BUDGET
+    );
+}
+
+/// Every clone of a [`LaneRetries`] is the one budget: what one holder spends, another cannot.
+#[test]
+fn a_shared_lane_budget_is_one_pool() {
+    let lane = LaneRetries::new(2);
+    let other_item = lane.clone();
+    assert!(lane.same_as(&other_item));
+    assert!(!lane.same_as(&LaneRetries::new(2)));
+    assert!(lane.try_spend());
+    assert!(other_item.try_spend());
+    assert!(!lane.try_spend(), "the clone spent the last retry");
+    assert_eq!(other_item.remaining(), 0);
+    for _ in 0..LANE_SUCCESSES_PER_RETRY {
+        other_item.record_success();
+    }
+    assert_eq!(lane.remaining(), 1);
+}
+
+/// **Parallelism is connections, not streams.** `W` requests in flight at once through one SDK
+/// client ride `W` separate HTTP/1.1 connections: the server below answers none of them until
+/// all `W` have arrived, each on a connection of its own, so a client that multiplexed them onto
+/// one connection or sent them one at a time never gets an answer and the test times out.
+#[tokio::test]
+async fn concurrent_requests_ride_separate_connections() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    const W: usize = 4;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let all_arrived = Arc::new(tokio::sync::Barrier::new(W));
+    let server = tokio::spawn(async move {
+        let mut connections = Vec::new();
+        for _ in 0..W {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let all_arrived = all_arrived.clone();
+            connections.push(tokio::spawn(async move {
+                let mut head = Vec::new();
+                let mut buf = [0_u8; 1024];
+                while !head.windows(4).any(|w| w == b"\r\n\r\n") {
+                    let read = socket.read(&mut buf).await.unwrap();
+                    assert_ne!(read, 0, "the client closed before sending a request");
+                    head.extend_from_slice(&buf[..read]);
+                }
+                assert!(
+                    head.starts_with(b"GET / HTTP/1.1\r\n"),
+                    "an HTTP/1.1 request"
+                );
+                all_arrived.wait().await;
+                socket
+                    .write_all(b"HTTP/1.1 204 No Content\r\ncontent-length: 0\r\n\r\n")
+                    .await
+                    .unwrap();
+            }));
+        }
+        for connection in connections {
+            connection.await.unwrap();
+        }
+    });
+
+    let client = http_client().unwrap();
+    let url = format!("http://{addr}/");
+    let requests: Vec<_> = (0..W)
+        .map(|_| {
+            let (client, url) = (client.clone(), url.clone());
+            tokio::spawn(async move { client.get(url).send().await })
+        })
+        .collect();
+    let answered = tokio::time::timeout(Duration::from_secs(20), async {
+        for request in requests {
+            let response = request.await.unwrap().unwrap();
+            assert_eq!(response.status().as_u16(), 204);
+        }
+        server.await.unwrap();
+    })
+    .await;
+    assert!(
+        answered.is_ok(),
+        "{W} concurrent requests did not ride {W} connections"
+    );
+}
