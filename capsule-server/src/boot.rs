@@ -53,6 +53,7 @@ use std::sync::Arc;
 use jiff::Timestamp;
 use sea_orm::DatabaseConnection;
 
+use crate::activity::{ActivityContext, ActivityStore, InMemoryActivity, PostgresActivity};
 use crate::album::authority::ProvisionedAuthority;
 use crate::album::postgres::PostgresAlbums;
 use crate::album::{AlbumContext, AlbumStore, InMemoryAlbums};
@@ -738,6 +739,8 @@ struct Ports {
     oidc_authorizations: Arc<dyn OidcAuthorizationStore>,
     /// The pending OIDC device authorizations (issue #635), on the same terms.
     oidc_devices: Arc<dyn OidcDeviceStore>,
+    /// The account activity log: durable, so Postgres on the durable arm (design/activity-log.md).
+    activity: Arc<dyn ActivityStore>,
 }
 
 /// The credential verifier, built once.
@@ -781,6 +784,7 @@ fn memory_ports(
         counters: Arc::new(InMemoryCounters::new()),
         oidc_authorizations: Arc::new(InMemoryOidcAuthorizations::with_default_ttl(clock.clone())),
         oidc_devices: Arc::new(InMemoryOidcDevices::with_default_ttl(clock.clone())),
+        activity: Arc::new(InMemoryActivity::new()),
     })
 }
 
@@ -821,6 +825,7 @@ fn durable_ports(
         counters: Arc::new(ValkeyCounters::new(valkey.valkey().clone())),
         oidc_authorizations: valkey.oidc_authorizations(),
         oidc_devices: valkey.oidc_devices(),
+        activity: Arc::new(PostgresActivity::new(db())),
     })
 }
 
@@ -895,6 +900,7 @@ fn compose(
         counters,
         oidc_authorizations,
         oidc_devices,
+        activity,
     } = ports;
     // The production write authority, not a permissive double: it reads the
     // album's own pin and the account's published device directory, so invariants 6 and 7 mean
@@ -1083,6 +1089,7 @@ fn compose(
         share: ShareContext::new(shares, blobs.clone(), clock.clone()),
         drops: DropContext::new(drops, uploads.clone(), blobs.clone(), clock.clone()),
         counters: CounterContext::new(counters, clock.clone()),
+        activity: ActivityContext::new(activity, clock.clone()),
     });
 
     tracing::info!(

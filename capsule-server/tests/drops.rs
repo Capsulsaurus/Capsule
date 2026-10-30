@@ -640,6 +640,13 @@ async fn a_revoked_link_stops_a_drop_that_is_already_uploading() {
             .expect("drops")
             .is_empty()
     );
+    assert_eq!(
+        fixture.activity_kinds(&user()).await[..2],
+        [
+            capsule_server::activity::ActivityKind::DropLinkRevoked,
+            capsule_server::activity::ActivityKind::DropLinkCreated
+        ]
+    );
 }
 
 #[tokio::test]

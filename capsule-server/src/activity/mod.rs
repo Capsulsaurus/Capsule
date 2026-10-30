@@ -49,7 +49,7 @@ pub enum ActivityKind {
     SignInPassword,
     /// A sign-in completed its second factor and opened a session.
     SignInSecondFactor,
-    /// A second-factor code was refused for a password that had verified.
+    /// A second-factor code was refused for a sign-in whose first factor had verified.
     SignInSecondFactorRefused,
     /// An identity-provider sign-in opened a session.
     SignInOidc,

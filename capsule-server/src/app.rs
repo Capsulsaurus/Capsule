@@ -28,6 +28,7 @@
 use kynos::prelude::*;
 use kynos::security::Authenticates;
 
+use crate::activity::ActivityContext;
 use crate::album::AlbumContext;
 use crate::attestation::AttestationContext;
 use crate::auth::oidc::OidcContext;
@@ -100,6 +101,8 @@ pub struct App {
     drops: DropContext,
     /// The rate-limit counters.
     counters: CounterContext,
+    /// The account activity log's collaborators.
+    activity: ActivityContext,
 }
 
 /// The modules an [`App`] is assembled from.
@@ -151,6 +154,8 @@ pub struct Modules {
     pub drops: DropContext,
     /// The rate-limit counters.
     pub counters: CounterContext,
+    /// The account activity log's collaborators.
+    pub activity: ActivityContext,
 }
 
 impl App {
@@ -187,6 +192,7 @@ impl App {
             share,
             drops,
             counters,
+            activity,
         } = modules;
         Self {
             auth,
@@ -209,6 +215,7 @@ impl App {
             share,
             drops,
             counters,
+            activity,
         }
     }
 }

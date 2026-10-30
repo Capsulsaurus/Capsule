@@ -20,10 +20,10 @@ It is not the [provenance](/design/cryptography/provenance/) chain, which signs 
 
 | Kind | Written when | `subject` |
 | --- | --- | --- |
-| `account.registered` | an account is created | — |
+| `account.registered` | an account is created | its first session |
 | `sign_in.password` | a password sign-in opens a session | the new session |
 | `sign_in.second_factor` | a sign-in completes its second factor and opens a session | the new session |
-| `sign_in.second_factor_refused` | a second-factor code is refused for a password that verified | — |
+| `sign_in.second_factor_refused` | a second-factor code is refused for a sign-in whose first factor verified | — |
 | `sign_in.oidc` | an identity-provider sign-in (browser or device flow) opens a session | the new session |
 | `sign_out` | a session signs itself out | the closed session |
 | `session.revoked` | a session revokes another session of the account | the revoked session |

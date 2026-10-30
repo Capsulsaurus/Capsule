@@ -994,6 +994,7 @@ async fn an_escrow_write_outside_the_servers_window_is_a_426_the_sdk_reports_wit
         share: app.provide(),
         drops: app.provide(),
         counters: app.provide(),
+        activity: app.provide(),
         // The three contexts that landed after this case was written (#405, #407, #406). They
         // are the fixture's own, exactly as every other context above is: the second `App`
         // exists to turn one knob on `upload`, and anything else it built for itself would be a

@@ -1294,6 +1294,10 @@ async fn registering_creates_an_account_and_signs_it_in() {
         .expect("the store answers");
     assert_eq!(open.len(), 1, "registration opened exactly one session");
     assert_eq!(
+        fixture.activity_kinds(&verified.user).await,
+        [capsule_server::activity::ActivityKind::AccountRegistered]
+    );
+    assert_eq!(
         open[0].authenticated_at,
         fixture.clock.now(),
         "registering *is* a credential presentation, so a freshness gate has something real to \

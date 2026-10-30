@@ -46,6 +46,7 @@ use kynos::response::range::served::{Conditions, Delivery, Served};
 use kynos::response::status::NoContent;
 use serde::{Deserialize, Serialize};
 
+use crate::activity::{ActivityContext, ActivityKind};
 use crate::auth::AccessToken;
 use crate::blob::ContentAddress;
 use crate::client_addr::ClientAddr;
@@ -284,6 +285,7 @@ pub async fn issue_share(
     Auth(credential): Auth<AccessToken>,
     Inject(share): Inject<ShareContext>,
     Inject(quota): Inject<QuotaContext>,
+    Inject(activity): Inject<ActivityContext>,
     Json(request): Json<IssueShareRequest>,
 ) -> Result<IssueShareReply, IssueShareRejection> {
     let owner = UserId::new(credential.user.as_str());
@@ -395,6 +397,14 @@ pub async fn issue_share(
         ));
     }
 
+    activity
+        .record(
+            &owner,
+            ActivityKind::ShareLinkCreated,
+            Some(&credential.session),
+            Some(&request.opaque_id),
+        )
+        .await;
     Ok(IssueShareReply::Created(IssueShareResponse {
         opaque_id: request.opaque_id,
     }))
@@ -413,6 +423,7 @@ pub async fn issue_share(
 pub async fn revoke_share(
     Auth(credential): Auth<AccessToken>,
     Inject(share): Inject<ShareContext>,
+    Inject(activity): Inject<ActivityContext>,
     Path(path): Path<SharePath>,
 ) -> Result<NoContent, IssueShareRejection> {
     let owner = UserId::new(credential.user.as_str());
@@ -430,6 +441,18 @@ pub async fn revoke_share(
         })?;
 
     tracing::info!(%owner, revoked, "a share revocation was processed");
+    // Only a revocation that changed something is the owner's event; the answer stays the same
+    // either way, so this records nothing a caller can observe about somebody else's link.
+    if revoked {
+        activity
+            .record(
+                &owner,
+                ActivityKind::ShareLinkRevoked,
+                Some(&credential.session),
+                Some(&path.opaque_id),
+            )
+            .await;
+    }
     Ok(NoContent)
 }
 

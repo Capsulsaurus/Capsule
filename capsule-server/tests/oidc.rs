@@ -757,6 +757,13 @@ async fn a_callback_opens_a_session_exactly_as_a_password_login_does() {
         )
         .expect("verifies");
     assert_eq!(second.user, verified.user);
+    assert_eq!(
+        fixture.activity_kinds(&verified.user).await,
+        [
+            capsule_server::activity::ActivityKind::SignInOidc,
+            capsule_server::activity::ActivityKind::SignInOidc
+        ]
+    );
 
     // And the pair refreshes, which is the acceptance test's "immediately usable".
     fixture

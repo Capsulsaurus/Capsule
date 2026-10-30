@@ -304,9 +304,12 @@ pub fn router() -> Router<App, Propagate, ServerInterceptors, impl Sized> {
                     routes::assets::get_asset_receipts,
                     routes::drop::list_inbox,
                 ])
-                // The recovery surface's third read, past the tuple ceiling of the mount above:
-                // the account's album key escrows (#741).
-                .mount(kynos::routes![routes::escrow::list_album_keys]),
+                // The reads past the tuple ceiling of the mount above: the recovery surface's
+                // third, the account's album key escrows (#741), and the account activity log.
+                .mount(kynos::routes![
+                    routes::escrow::list_album_keys,
+                    routes::activity::list_activity,
+                ]),
         )
         // **The thirteen operations the design exempts from the gate**, in a group of their
         // own so neither gated group above covers them (`api-surfaces.md`, "Negotiation Across

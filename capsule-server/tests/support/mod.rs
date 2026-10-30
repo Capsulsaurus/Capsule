@@ -32,6 +32,9 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use base64::Engine as _;
 use capsule_core::crypto::keys::HybridSigningKey;
 use capsule_server::App;
+use capsule_server::activity::{
+    ActivityContext, ActivityEvent, ActivityKind, ActivityStore, InMemoryActivity,
+};
 use capsule_server::album::{
     AlbumContext, AlbumRecord, AlbumStore, InMemoryAlbums, ProvisionOutcome,
 };
@@ -1635,6 +1638,57 @@ impl ChunkReadPace for SwitchableChunkPace {
             std::time::Duration::from_millis(self.stall_millis.load(Ordering::SeqCst)),
             self.min_bytes_per_second.load(Ordering::SeqCst),
         )
+    }
+}
+
+/// An activity log that can be made to fail on demand.
+#[derive(Debug, Default)]
+pub(crate) struct SwitchableActivity {
+    inner: InMemoryActivity,
+    unavailable: AtomicBool,
+}
+
+impl SwitchableActivity {
+    /// A working, empty log.
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    /// Make every subsequent operation fail, or stop.
+    pub(crate) fn set_unavailable(&self, unavailable: bool) {
+        self.unavailable.store(unavailable, Ordering::SeqCst);
+    }
+
+    fn refuse<T>() -> Result<T, StoreError> {
+        Err(StoreError::Unavailable {
+            store: "activity",
+            detail: REFUSAL.to_owned(),
+        })
+    }
+
+    fn is_down(&self) -> bool {
+        self.unavailable.load(Ordering::SeqCst)
+    }
+}
+
+impl ActivityStore for SwitchableActivity {
+    fn record(&self, event: ActivityEvent, retain_from: Timestamp) -> StoreFuture<'_, ()> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.record(event, retain_from)
+    }
+
+    fn recent<'a>(
+        &'a self,
+        user: &'a UserId,
+        since: Timestamp,
+        limit: usize,
+    ) -> StoreFuture<'a, Vec<ActivityEvent>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.recent(user, since, limit)
     }
 }
 
@@ -4144,6 +4198,8 @@ pub(crate) struct Fixture {
     pub(crate) oidc_devices: Arc<SwitchableOidcDevices>,
     /// The chunk-body read pace both chunk routes read (#717, #1041).
     pub(crate) chunk_pace: Arc<SwitchableChunkPace>,
+    /// The account activity log the server records to.
+    pub(crate) activity: Arc<SwitchableActivity>,
 }
 
 impl Fixture {
@@ -4269,6 +4325,7 @@ impl Fixture {
         let oidc_authorizations = Arc::new(SwitchableOidcAuthorizations::new(clock.clone()));
         let oidc_devices = Arc::new(SwitchableOidcDevices::new(clock.clone()));
         let provider: Arc<dyn IdentityProvider> = provider.unwrap_or_else(|| idp.clone());
+        let activity = Arc::new(SwitchableActivity::new());
 
         // One index behind both modules, which is what makes "upload it, then read it back off
         // the feed" a test of the server rather than of two disconnected doubles.
@@ -4362,6 +4419,7 @@ impl Fixture {
                 clock.clone(),
             ),
             counters: CounterContext::new(counters.clone(), clock.clone()),
+            activity: ActivityContext::new(activity.clone(), clock.clone()),
             totp: TotpContext::new(totp.clone(), codes.clone()),
             oidc: OidcContext::new(OidcCollaborators {
                 provider,
@@ -4415,6 +4473,7 @@ impl Fixture {
             oidc_authorizations,
             oidc_devices,
             chunk_pace,
+            activity,
         }
     }
 
@@ -4538,6 +4597,7 @@ impl Fixture {
                 clock.clone(),
             ),
             counters: CounterContext::new(Arc::new(InMemoryCounters::new()), clock.clone()),
+            activity: ActivityContext::new(Arc::new(InMemoryActivity::new()), clock.clone()),
             totp: TotpContext::new(
                 Arc::new(InMemoryTotp::new()),
                 Arc::new(TotpCodes::new("Capsule")),
@@ -4545,6 +4605,17 @@ impl Fixture {
             oidc: OidcContext::disabled(clock.clone()),
         });
         (app, clock)
+    }
+
+    /// The kinds of `account`'s activity events, newest first, read past the HTTP surface.
+    pub(crate) async fn activity_kinds(&self, account: &UserId) -> Vec<ActivityKind> {
+        self.activity
+            .recent(account, Timestamp::MIN, 1_000)
+            .await
+            .expect("the in-memory activity log reads")
+            .into_iter()
+            .map(|event| event.kind)
+            .collect()
     }
 
     /// Sign in with the seeded account and return the pair.

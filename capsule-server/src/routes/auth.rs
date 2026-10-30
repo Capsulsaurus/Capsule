@@ -60,6 +60,7 @@ use kynos::security::auth::Auth;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::activity::{ActivityContext, ActivityKind};
 use crate::auth::{
     AccessToken, AuthContext, Authentication, DirectoryError, IssuedTokens, MIN_PASSWORD_LENGTH,
     Registration, TokenKind, VerifiedToken,
@@ -581,6 +582,7 @@ impl LogoutRejection {
 pub async fn register_user(
     Inject(auth): Inject<AuthContext>,
     Inject(counters): Inject<CounterContext>,
+    Inject(activity): Inject<ActivityContext>,
     client: ClientAddr,
     Json(request): Json<RegisterRequest>,
 ) -> Result<Json<TokenResponse>, RegisterRejection> {
@@ -665,6 +667,14 @@ pub async fn register_user(
         })?;
 
     tracing::info!(user_id = %user, session_id = %session_id, "registered an account");
+    activity
+        .record(
+            &user,
+            ActivityKind::AccountRegistered,
+            None,
+            Some(session_id.as_str()),
+        )
+        .await;
     Ok(Json(TokenResponse::from(issued)))
 }
 
@@ -689,6 +699,7 @@ pub async fn register_user(
 pub async fn login_user(
     Inject(auth): Inject<AuthContext>,
     Inject(totp): Inject<crate::auth::TotpContext>,
+    Inject(activity): Inject<ActivityContext>,
     Json(request): Json<LoginRequest>,
 ) -> Result<LoginReply, LoginRejection> {
     // Before the directory is asked anything, so no password is hashed and no account's
@@ -759,6 +770,10 @@ pub async fn login_user(
     let now = auth.clock().now();
     let issued = open_session_for(
         &auth,
+        SignIn {
+            activity: &activity,
+            kind: ActivityKind::SignInPassword,
+        },
         &user,
         request.cohort_hash.as_deref(),
         request.device_id.as_deref(),
@@ -795,6 +810,7 @@ pub async fn login_user(
 /// fault" and every caller answers them identically.
 pub(super) async fn open_session_for(
     auth: &AuthContext,
+    sign_in: SignIn<'_>,
     user: &UserId,
     cohort_hash: Option<&str>,
     device_id: Option<&str>,
@@ -851,7 +867,24 @@ pub(super) async fn open_session_for(
         })?;
 
     tracing::info!(user_id = %user, session_id = %session_id, "opened a session");
+    sign_in
+        .activity
+        .record(user, sign_in.kind, None, Some(session_id.as_str()))
+        .await;
     Ok(issued)
+}
+
+/// How a session opened by [`open_session_for`] is recorded in the account's activity log.
+///
+/// The door the sign-in came through — password, second factor, identity provider — is the
+/// caller's to name, and the session it opened is the event's subject. Recorded inside the one
+/// function every door shares, so no door can open a session the log does not show.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct SignIn<'a> {
+    /// Where the event is recorded.
+    pub(super) activity: &'a ActivityContext,
+    /// Which sign-in it was.
+    pub(super) kind: ActivityKind,
 }
 
 /// How long a refresh token minted for `record`, opened at `now`, may live.
@@ -992,6 +1025,7 @@ pub async fn refresh_token(
 pub async fn logout(
     Auth(credential): Auth<AccessToken>,
     Inject(auth): Inject<AuthContext>,
+    Inject(activity): Inject<ActivityContext>,
 ) -> Result<NoContent, LogoutRejection> {
     let closed = auth
         .sessions()
@@ -1008,6 +1042,14 @@ pub async fn logout(
             session_id = %credential.session,
             "closed a session on request"
         );
+        activity
+            .record(
+                &record.user_id,
+                ActivityKind::SignOut,
+                Some(&credential.session),
+                Some(credential.session.as_str()),
+            )
+            .await;
     } else {
         tracing::debug!(
             session_id = %credential.session,
@@ -1261,6 +1303,7 @@ pub async fn revoke_all_challenge(
 pub async fn revoke_all(
     Inject(auth): Inject<AuthContext>,
     Inject(directories): Inject<crate::directory::DeviceDirectoryContext>,
+    Inject(activity): Inject<ActivityContext>,
     Json(request): Json<RevokeAllRequest>,
 ) -> Result<Json<RevokeAllResponse>, RevokeAllRejection> {
     let proof_bytes = BASE64.decode(request.proof.trim()).map_err(|error| {
@@ -1355,6 +1398,14 @@ pub async fn revoke_all(
         revoked = closed.len(),
         "a global sign-out closed every session for an account"
     );
+    activity
+        .record(
+            &claimed.user_id,
+            ActivityKind::SessionsRevokedAll,
+            None,
+            None,
+        )
+        .await;
     Ok(Json(RevokeAllResponse {
         revoked: closed.len() as u64,
     }))

@@ -57,8 +57,9 @@ use kynos::prelude::*;
 use serde::{Deserialize, Serialize};
 use tracing::Instrument as _;
 
-use super::auth::{LoginReply, TokenResponse, open_session_for};
+use super::auth::{LoginReply, SignIn, TokenResponse, open_session_for};
 use super::totp::SecondFactorChallenge;
+use crate::activity::{ActivityContext, ActivityKind};
 use crate::auth::oidc::{
     AuthorizationRequest, DevicePoll, FederatedLink, OidcContext, ProviderError, Redemption,
     code_challenge, fresh_device_handle, fresh_nonce, fresh_state, fresh_verifier,
@@ -542,6 +543,7 @@ pub async fn complete_oidc_login(
     Inject(oidc): Inject<OidcContext>,
     Inject(auth): Inject<AuthContext>,
     Inject(totp): Inject<TotpContext>,
+    Inject(activity): Inject<ActivityContext>,
     Json(request): Json<OidcCallbackRequest>,
 ) -> Result<LoginReply, OidcCallbackRejection> {
     async move {
@@ -609,6 +611,7 @@ pub async fn complete_oidc_login(
             &oidc,
             &auth,
             &totp,
+            &activity,
             &identity,
             request.cohort_hash.as_deref(),
             request.device_id.as_deref(),
@@ -643,6 +646,7 @@ async fn settle_federated(
     oidc: &OidcContext,
     auth: &AuthContext,
     totp: &TotpContext,
+    activity: &ActivityContext,
     identity: &crate::auth::oidc::VerifiedIdentity,
     cohort_hash: Option<&str>,
     device_id: Option<&str>,
@@ -698,7 +702,11 @@ async fn settle_federated(
         }));
     }
 
-    let issued = open_session_for(auth, &user, cohort_hash, device_id, now)
+    let sign_in = SignIn {
+        activity,
+        kind: ActivityKind::SignInOidc,
+    };
+    let issued = open_session_for(auth, sign_in, &user, cohort_hash, device_id, now)
         .await
         .map_err(|error| {
             store_unavailable(&error, "open a session for a federated sign-in");
@@ -1138,6 +1146,7 @@ pub async fn poll_oidc_device_login(
     Inject(oidc): Inject<OidcContext>,
     Inject(auth): Inject<AuthContext>,
     Inject(totp): Inject<TotpContext>,
+    Inject(activity): Inject<ActivityContext>,
     Json(request): Json<OidcDevicePollRequest>,
 ) -> Result<LoginReply, OidcDevicePollRejection> {
     async move {
@@ -1233,6 +1242,7 @@ pub async fn poll_oidc_device_login(
             &oidc,
             &auth,
             &totp,
+            &activity,
             &identity,
             request.cohort_hash.as_deref(),
             request.device_id.as_deref(),
