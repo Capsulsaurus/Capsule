@@ -1851,7 +1851,7 @@ pub fn delegation_lines(
 /// One op of a delete's stretch (the delete, or a record between the sealed head and it) the
 /// origin ledger released once the create's custody was confirmed, kept until its asset's
 /// delivery is settled. It names the asset to deliver; what is sent is re-derived from the
-/// library chain ([`send_deletes`]), never read from `op`.
+/// library chain by `capsule peer status`, never read from `op`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub struct PendingDelete {
     /// The asset it changes.
