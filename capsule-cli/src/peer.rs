@@ -1966,7 +1966,8 @@ fn sealed_head(
 ///   the server would apply the delete, refuse the restore and purge an asset restored in time;
 ///   it keeps the asset live instead, and the library keeps every record;
 /// - **not applied, and resending could succeed** (the feed or the server unreachable, the
-///   session not accepted, a server fault) — `failed`, kept;
+///   session not accepted, a server fault, or a library that holds neither the asset nor the
+///   tombstone its purge kept) — `failed`, kept;
 /// - **refused for good** ([`remote::OpFailure::permanent`]: a stale chain, a regressed epoch,
 ///   a closed retention window, a malformed op) — `refused`, dropped. Not retried: the library
 ///   keeps its records, and the server keeps the asset as it was, so nothing is lost; the line

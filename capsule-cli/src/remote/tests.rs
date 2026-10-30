@@ -827,7 +827,7 @@ async fn serve_escrow_mock(mock: EscrowMock) -> String {
 /// Serve `answer` on an ephemeral loopback port and return its origin: it is handed each
 /// request's `METHOD path` and returns the status, content type and body. Each connection
 /// answers one request and closes.
-async fn serve_mock(
+pub(crate) async fn serve_mock(
     answer: impl Fn(&str) -> (u16, &'static str, String) + Clone + Send + Sync + 'static,
 ) -> String {
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
@@ -1235,7 +1235,7 @@ async fn escrow_run() -> EscrowRun {
 }
 
 /// Every surface at `origin`, and a session resumed against it.
-fn remote_at(origin: &str) -> (RemoteConfig, Session) {
+pub(crate) fn remote_at(origin: &str) -> (RemoteConfig, Session) {
     let remote = RemoteConfig {
         auth_endpoint: format!("{origin}/v1/auth"),
         sync_endpoint: origin.to_owned(),

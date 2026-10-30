@@ -2981,7 +2981,9 @@ pub(crate) enum Delivered {
 /// server has not indexed the asset's create, otherwise every record after the head it holds,
 /// in chain order, each once the one before it was applied. The chain is the library's
 /// ([`held::local_chain`]): a purged asset's is the one its purge kept, so the held `delete` and
-/// the re-issue an early purge appended are sent from the tombstone.
+/// the re-issue an early purge appended are sent from the tombstone. A library holding neither
+/// is a failure that is not [`permanent`](OpFailure::permanent): nothing shows the records
+/// cannot be delivered by a later run.
 #[instrument(skip(remote, session, workspace, chains, now))]
 pub(crate) async fn deliver_chain(
     remote: &RemoteConfig,
@@ -3000,8 +3002,18 @@ pub(crate) async fn deliver_chain(
         })
     };
     // A purged asset's chain is the one its purge kept, so its held records outlive the purge.
+    // A library that holds neither the asset nor its tombstone (one this build could not read,
+    // say) has nothing to send now, but the records it owes the server are not shown to be
+    // undeliverable: the failure is not permanent, so a caller that keeps work for a later run
+    // keeps it rather than dropping a delete the server never received.
     let Some(chain) = held::local_chain(workspace, asset_id) else {
-        return library_failure(format!("the library holds no asset {asset_id}"));
+        tracing::warn!(%asset_id, "held records: the library holds neither the asset nor its tombstone; nothing sent");
+        return Delivered::Failed(OpFailure {
+            kind: "library",
+            code: None,
+            message: format!("the library holds no asset {asset_id}"),
+            permanent: false,
+        });
     };
     let records = chain.records;
     let stretch = match held::plan(records, chains.head(asset_id), chains.judging_clock(now)) {
@@ -3480,4 +3492,4 @@ pub(crate) mod held;
 pub use held::HoldReason;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

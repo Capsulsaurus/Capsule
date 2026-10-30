@@ -1449,11 +1449,13 @@ async fn a_purged_assets_released_stretch_is_judged_level_against_its_tombstone(
     assert_eq!(outcomes, vec!["failed"], "{views:?}");
 }
 
-/// A stretch refused for good is dropped, not retried, with every entry of its asset; another
-/// asset's entries are judged on their own. Here the refusal is the library's: the asset is
-/// listed on the server but gone from this library, so there is no chain to send from.
+/// A stretch the server refuses for good is dropped, not retried, with every entry of its asset;
+/// another asset's entries are judged on their own. An asset the server lists but this library
+/// holds neither live nor as a tombstone has no chain to send from this run, which shows
+/// nothing about a later one: its entries are kept, so the delete it owes the server is not
+/// lost. The server here refuses every op with `409 error.upload.retention_elapsed`.
 #[tokio::test]
-async fn a_released_stretch_refused_for_good_is_dropped_with_the_rest_of_its_asset() {
+async fn a_stretch_refused_for_good_is_dropped_and_one_with_no_chain_is_kept() {
     let scratch = Scratch::new();
     let (mut ws, kept_back, other) = two_assets(&scratch);
     let sealed = ws.asset(&other).expect("held").chain.records()[0].record_hash();
@@ -1466,7 +1468,7 @@ async fn a_released_stretch_refused_for_good_is_dropped_with_the_rest_of_its_ass
         listed(&ws, &other, 0, "2026-10-01T00:00:00Z"),
     ]);
     let others = released(&ws, other, sealed);
-    let mut pending = vec![
+    let chainless = vec![
         PendingDelete {
             asset_id: gone,
             op: b"not an op".to_vec(),
@@ -1476,8 +1478,20 @@ async fn a_released_stretch_refused_for_good_is_dropped_with_the_rest_of_its_ass
             op: b"nor this".to_vec(),
         },
     ];
-    pending.extend(others.clone());
-    let (remote, session) = unreachable_server();
+    let mut pending = chainless.clone();
+    pending.extend(others);
+    let refusal = serde_json::json!({
+        "type": "about:blank",
+        "title": "Retention elapsed",
+        "status": 409,
+        "detail": "this asset's retention window has closed",
+        "code": "error.upload.retention_elapsed",
+    })
+    .to_string();
+    let origin =
+        remote::tests::serve_mock(move |_| (409, "application/problem+json", refusal.clone()))
+            .await;
+    let (remote, session) = remote::tests::remote_at(&origin);
 
     let (kept, views) = send_deletes(
         &remote,
@@ -1489,9 +1503,21 @@ async fn a_released_stretch_refused_for_good_is_dropped_with_the_rest_of_its_ass
     )
     .await;
 
-    assert_eq!(kept, others, "only the other asset's entries are kept");
-    let outcomes: Vec<(Uuid, &str)> = views.iter().map(|v| (v.asset_id, v.outcome)).collect();
-    assert_eq!(outcomes, vec![(gone, "refused"), (other, "failed")]);
+    assert_eq!(
+        kept, chainless,
+        "only the chainless asset's entries are kept, in order"
+    );
+    let outcomes: Vec<(Uuid, &str, Option<&str>)> = views
+        .iter()
+        .map(|v| (v.asset_id, v.outcome, v.code.as_deref()))
+        .collect();
+    assert_eq!(
+        outcomes,
+        vec![
+            (gone, "failed", None),
+            (other, "refused", Some("error.upload.retention_elapsed")),
+        ]
+    );
 }
 
 /// A ledger that cannot be read leaves the push skipping nothing and the browser showing no
