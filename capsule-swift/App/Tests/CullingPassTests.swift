@@ -1,6 +1,7 @@
 import CapsuleDomain
 import CapsuleFoundation
 import CapsuleNavigation
+import CapsulePorts
 import Foundation
 import Testing
 
@@ -196,9 +197,8 @@ struct CullingPassTests {
         pass.revert(verdict)
 
         #expect(pass.groups[0].members.allSatisfy { $0.cull == .pick })
-        pass.append([Fixture.asset(12, cull: .pick, membership: StackMembership(
-            stackID: Fixture.stackID, stackType: .burst, role: .member, memberIndex: 2
-        ))])
+        let late = CullStackPlace(stackID: Fixture.stackID, isCover: false, memberIndex: 2)
+        pass.append([Fixture.asset(12, cull: .pick, place: late)])
         #expect(pass.flags(of: [Fixture.id(12)]) == [Fixture.id(12): .pick], "the reverted verdict is not adopted")
     }
 
@@ -360,25 +360,16 @@ private enum Fixture {
         .managed(uuid: String(format: "0192f0c0-0000-7000-8000-%012d", n))
     }
 
-    static func asset(_ n: Int, cull: CullFlag = .neutral, membership: StackMembership? = nil) -> LibraryAsset {
-        LibraryAsset(
-            id: id(n),
-            mediaType: .photo,
-            contentType: .jpeg,
-            captureTime: CaptureTime(captureTimestamp: CapsuleTimestamp(epochSeconds: Int64(n))),
-            importTimestamp: CapsuleTimestamp(epochSeconds: 0),
-            cull: cull,
-            stackMembership: membership
-        )
+    static func asset(_ n: Int, cull: CullFlag = .neutral, place: CullStackPlace? = nil) -> CullAsset {
+        CullAsset(id: id(n), cull: cull, stack: place)
     }
 
     /// A burst whose first member is the cover, numbered as given.
-    static func stack(members: [Int], cull: CullFlag = .neutral) -> [LibraryAsset] {
+    static func stack(members: [Int], cull: CullFlag = .neutral) -> [CullAsset] {
         members.enumerated().map { offset, n in
-            asset(n, cull: cull, membership: StackMembership(
+            asset(n, cull: cull, place: CullStackPlace(
                 stackID: stackID,
-                stackType: .burst,
-                role: offset == 0 ? .primary : .member,
+                isCover: offset == 0,
                 memberIndex: UInt32(offset)
             ))
         }

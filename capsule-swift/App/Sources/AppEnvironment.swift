@@ -142,6 +142,9 @@ struct AppEnvironment {
     /// ``LanePorts`` a lane supplies, so the FFI lane's Rust-backed adapter
     /// replaces the mock one here and nowhere else.
     let labels: any LabelPort
+    /// What the cull pass reads and writes. Stored rather than forwarded, like
+    /// ``labels``: the FFI lane's workspace adapter replaces the mock one here.
+    let cull: any CullPort
 
     var importing: any ImportPort { mock.importing }
     var uploads: any UploadPort { mock.uploads }
@@ -232,6 +235,7 @@ struct AppEnvironment {
 
         let lane = lane ?? .mock(mock)
         labels = lane.labels
+        cull = lane.cull
         transferEvents = lane.transferEvents
 
         // Held concretely for a moment: the info panel's metadata source wants

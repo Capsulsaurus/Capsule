@@ -12,15 +12,15 @@ import SwiftUI
 /// Reached from the timeline's Cull button and from ⇧⌘R, over whatever
 /// sequence was showing. Only a timeline or an album sequence resolves; the
 /// rest keep the scaffold for the reason ``CullingPass/query(for:)`` gives.
+/// The pass reads and writes through the lane's ``CullPort``: the workspace's
+/// cull verbs where one is open, the mock world's ports otherwise.
 extension RouteDestination {
     @ViewBuilder
     func cullingDestination(_ context: ViewerContext) -> some View {
         if let query = CullingPass.query(for: context) {
             CullingView(
                 query: query,
-                library: environment.mock.library,
-                organize: environment.mock.organize,
-                stacks: environment.mock.stacks,
+                cull: environment.cull,
                 assetProvider: environment.assetProvider,
                 thumbnails: environment.thumbnails
             )
@@ -41,9 +41,7 @@ extension RouteDestination {
 /// word, never by colour alone, and every move announces the flag and position.
 struct CullingView: View {
     let query: TimelineQuery
-    let library: any LibraryPort
-    let organize: any OrganizePort
-    let stacks: any StackPort
+    let cull: any CullPort
     let assetProvider: any AssetProvider
     let thumbnails: any ThumbnailProvider
 
@@ -57,8 +55,8 @@ struct CullingView: View {
     @State private var writes = CullWriteQueue()
     @FocusState private var isFocused: Bool
 
-    /// Rows per library page. The pass shows its first page as soon as it
-    /// arrives and keeps reading behind it.
+    /// Assets per batch of the pass. The pass shows its first batch as soon as
+    /// it arrives and keeps reading behind it.
     private static let pageSize = 200
     /// The size the photo is decoded to: large enough for an iPad in landscape,
     /// small enough to stay a thumbnail-cache request.
@@ -304,8 +302,8 @@ struct CullingView: View {
         do {
             let ids = try await CullVerdictWrite.run(
                 verdict,
-                members: { [stacks] stackID in try await stacks.members(of: stackID).map(\.id) },
-                setCull: { [organize] flag, ids in try await organize.setCull(flag, for: ids) }
+                flagStack: { [cull] stackID, flag in try await cull.flagStack(stackID, as: flag) },
+                setCull: { [cull] flag, ids in try await cull.setCull(flag, for: ids) }
             )
             pass.settle(verdict, written: ids)
             CapsuleLog.interface.info(
@@ -326,14 +324,18 @@ struct CullingView: View {
         do {
             guard let ids = try await CullSweep.run(
                 candidates: { pass.sweepCandidates },
-                moveToTrash: { [organize] ids in try await organize.moveToTrash(ids, retentionDays: nil) }
+                moveToTrash: { [cull] ids in try await cull.moveToTrash(ids) }
             ) else { return }
             pass.remove(Set(ids))
             let count = ids.count
             CapsuleLog.interface.info("culling: swept \(count, privacy: .public) rejects to the trash")
             announce(String(localized: "app.culling.sweep.done", defaultValue: "Moved \(count) photos to the Trash"))
         } catch {
-            CapsuleLog.interface.error("culling: sweep failed: \(error.localizedDescription, privacy: .public)")
+            let moved = CullSweep.moved(before: error)
+            pass.remove(Set(moved))
+            CapsuleLog.interface.error(
+                "culling: sweep failed after \(moved.count, privacy: .public): \(error.localizedDescription, privacy: .public)"
+            )
             failure = .sweep
         }
     }
@@ -369,17 +371,14 @@ struct CullingView: View {
 
     // MARK: Loading
 
-    /// Read the sequence a page at a time, showing the pass from the first.
+    /// Read the sequence a batch at a time, showing the pass from the first.
     private func load() async {
-        var offset = 0
         do {
-            while !Task.isCancelled {
-                let page = try await library.assets(matching: query, offset: offset, limit: Self.pageSize)
-                pass.append(page.items)
+            for try await batch in cull.pass(over: query, batchSize: Self.pageSize) {
+                pass.append(batch)
                 phase = .ready
-                offset += page.items.count
-                if page.items.count < Self.pageSize { break }
             }
+            phase = .ready
             CapsuleLog.interface.info("culling: pass loaded with \(pass.steps.count, privacy: .public) steps")
         } catch {
             CapsuleLog.interface.error("culling: loading the pass failed: \(error.localizedDescription, privacy: .public)")
@@ -456,6 +455,13 @@ enum CullSweep {
         try await moveToTrash(ids)
         return ids
     }
+
+    /// The assets a failed sweep already moved to the trash, which leave the
+    /// pass: the ones ``CullSweepIncomplete`` names, or none for any other
+    /// failure.
+    static func moved(before failure: any Error) -> [AssetID] {
+        (failure as? CullSweepIncomplete)?.moved ?? []
+    }
 }
 
 // MARK: - CullVerdictWrite
@@ -463,23 +469,30 @@ enum CullSweep {
 /// What writing one verdict does to the library, over injected ports so the
 /// order of writes is a unit test rather than a tap.
 enum CullVerdictWrite {
-    /// The members of a stack, as the stack port lists them.
-    typealias Members = @Sendable (StackID) async throws -> [AssetID]
+    /// Flag every member of a stack in the library, answering the members it
+    /// reached.
+    typealias FlagStack = @Sendable (StackID, CullFlag) async throws -> [AssetID]
     /// Set a cull flag on assets in the library.
     typealias SetCull = @Sendable (CullFlag, [AssetID]) async throws -> Void
 
     /// Write `verdict` and return the assets it reached.
     ///
-    /// A collapsed stack's targets come from the stack port, not the pass: the
-    /// pass holds only the members its query and its pages have brought in,
-    /// and flagging a stack writes every member.
-    static func run(_ verdict: CullVerdict, members: Members, setCull: SetCull) async throws -> [AssetID] {
-        let ids: [AssetID] = if let stackID = verdict.stackID {
-            try await verdict.writeTargets(stackMembers: members(stackID))
-        } else {
-            verdict.targets
+    /// A collapsed stack is flagged as a stack, not through the pass: the pass
+    /// holds only the members its query and its batches have brought in, and
+    /// flagging a stack writes every member the library holds. A target the
+    /// stack no longer lists is then flagged on its own, so every asset the
+    /// pass showed the verdict on carries it.
+    static func run(_ verdict: CullVerdict, flagStack: FlagStack, setCull: SetCull) async throws -> [AssetID] {
+        guard let stackID = verdict.stackID else {
+            try await setCull(verdict.flag, verdict.targets)
+            return verdict.targets
         }
-        try await setCull(verdict.flag, ids)
+        let flagged = try await flagStack(stackID, verdict.flag)
+        let ids = verdict.writeTargets(stackMembers: flagged)
+        let rest = Array(ids.dropFirst(flagged.count))
+        if !rest.isEmpty {
+            try await setCull(verdict.flag, rest)
+        }
         return ids
     }
 }

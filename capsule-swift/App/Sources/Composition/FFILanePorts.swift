@@ -16,7 +16,9 @@
         ///
         /// Labels and regions are local edits of the workspace, so they work
         /// signed out. So does the render ladder and the embedded-preview read:
-        /// both are pure exports over files this device already holds. Transfer events come from a session; with none there is
+        /// both are pure exports over files this device already holds. So does
+        /// the cull pass: flags and the sweep are the workspace's own signed
+        /// verbs. Transfer events come from a session; with none there is
         /// nothing in flight, and the stream finishes at once rather than
         /// showing the mock world's transfers.
         ///
@@ -38,7 +40,8 @@
                     ManagedLibrary(layout: layout, catalogOpener: FFICatalogOpener(), workspace: managedWorkspace)
                 },
                 renderLadder: .ffi,
-                embeddedPreviews: FFIEmbeddedPreviewReader()
+                embeddedPreviews: FFIEmbeddedPreviewReader(),
+                cull: FFICullPort(workspace: workspace)
             )
         }
     }

@@ -1,6 +1,7 @@
 import CapsuleDomain
 import CapsuleFoundation
 import CapsuleNavigation
+import CapsulePorts
 import Foundation
 
 // MARK: - CullVerb
@@ -55,7 +56,7 @@ struct CullGroup: Equatable, Sendable {
     /// The stack the members share, or `nil` for a lone asset.
     let stackID: StackID?
     /// Cover first, then by `member_index`, then in the order they arrived.
-    var members: [LibraryAsset]
+    var members: [CullAsset]
     /// Whether the stack's members are culled one by one rather than through
     /// the cover.
     var isExpanded = false
@@ -65,7 +66,7 @@ struct CullGroup: Equatable, Sendable {
     var isStack: Bool { stackID != nil && members.count > 1 }
 
     /// What the collapsed group shows.
-    var cover: LibraryAsset { members[0] }
+    var cover: CullAsset { members[0] }
 
     /// The derived state: all-rejected, then any-pick, else mixed.
     var cullState: GroupCullState { GroupCullState(members: members.map(\.cull)) }
@@ -185,7 +186,7 @@ struct CullingPass: Equatable, Sendable {
         let flag: CullFlag
     }
 
-    init(assets: [LibraryAsset] = []) {
+    init(assets: [CullAsset] = []) {
         append(assets)
     }
 
@@ -197,7 +198,7 @@ struct CullingPass: Equatable, Sendable {
     var current: CullStep? { steps.indices.contains(index) ? steps[index] : nil }
 
     /// The asset the current step shows.
-    var currentAsset: LibraryAsset? { current.map(asset(at:)) }
+    var currentAsset: CullAsset? { current.map(asset(at:)) }
 
     /// The current step's flag state.
     var currentFlag: CullStepFlag? {
@@ -248,12 +249,12 @@ struct CullingPass: Equatable, Sendable {
     /// one step. An asset the user has already given a verdict — a stack
     /// member flagged through its cover before its page arrived — shows that
     /// verdict, whatever flag the page was read with.
-    mutating func append(_ assets: [LibraryAsset]) {
+    mutating func append(_ assets: [CullAsset]) {
         let anchor = currentAsset?.id
         for var asset in assets {
             adoptStackVerdict(for: asset)
             if let mark = shown[asset.id] { asset.cull = mark.flag }
-            guard let stackID = asset.stackMembership?.stackID else {
+            guard let stackID = asset.stack?.stackID else {
                 groups.append(CullGroup(stackID: nil, members: [asset]))
                 continue
             }
@@ -380,7 +381,7 @@ struct CullingPass: Equatable, Sendable {
 
     // MARK: Internals
 
-    func asset(at step: CullStep) -> LibraryAsset {
+    func asset(at step: CullStep) -> CullAsset {
         let group = groups[step.group]
         return step.member.map { group.members[$0] } ?? group.cover
     }
@@ -388,8 +389,8 @@ struct CullingPass: Equatable, Sendable {
     /// Give an arriving stack member its stack's verdict when that verdict is
     /// newer than any the member was given itself, remembering the flag it
     /// arrived with as the one a failed write puts back.
-    private mutating func adoptStackVerdict(for asset: LibraryAsset) {
-        guard let stackID = asset.stackMembership?.stackID,
+    private mutating func adoptStackVerdict(for asset: CullAsset) {
+        guard let stackID = asset.stack?.stackID,
               let mark = stackShown[stackID],
               (shown[asset.id]?.serial ?? 0) < mark.serial
         else { return }
@@ -425,17 +426,16 @@ struct CullingPass: Equatable, Sendable {
 
     /// Insert a stack member in cover-first, `member_index` order, after any
     /// member that sorts equal, so arrival order breaks ties.
-    private static func insert(_ asset: LibraryAsset, into members: inout [LibraryAsset]) {
+    private static func insert(_ asset: CullAsset, into members: inout [CullAsset]) {
         let key = order(of: asset)
         let at = members.firstIndex { order(of: $0) > key } ?? members.endIndex
         members.insert(asset, at: at)
     }
 
-    private static func order(of asset: LibraryAsset) -> Order {
-        let membership = asset.stackMembership
-        return Order(
-            isCover: membership?.isStackCover ?? false,
-            memberIndex: membership?.memberIndex ?? .max
+    private static func order(of asset: CullAsset) -> Order {
+        Order(
+            isCover: asset.stack?.isCover ?? false,
+            memberIndex: asset.stack?.memberIndex ?? .max
         )
     }
 
