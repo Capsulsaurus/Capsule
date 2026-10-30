@@ -582,6 +582,32 @@ describe('uploadDrop — reading the deposit’s outcome', () => {
         ]);
     });
 
+    test('a proxy timeout whose probe sees every byte but a pending session still awaits the deposit', async () => {
+        const answers = [
+            statusOf('uploading', 10),
+            statusOf('failed_processing', 10, 'error.quota.exceeded'),
+        ];
+        const { impl, calls } = mockFetch((call) => {
+            if (call.method === 'POST') return created();
+            if (call.method === 'PATCH')
+                return new Response(null, { status: 504 });
+            return answers.shift() ?? statusOf('completed', 10);
+        });
+
+        const err = await uploadDrop({
+            base: '',
+            opaqueId: 'o',
+            sealed: fakeSealed(10),
+            fetchImpl: impl,
+            sleep: async () => {},
+        }).catch((e) => e);
+
+        // Not resolved as filed: the deposit's refusal is read from the next probe.
+        expect((err as DropUploadError).code).toBe('quota');
+        expect(calls.filter((c) => c.method === 'PATCH').length).toBe(1);
+        expect(calls.filter((c) => c.method === 'GET').length).toBe(2);
+    });
+
     test('a proxy timeout over a deposit already refused names its class', async () => {
         const { impl } = mockFetch((call) => {
             if (call.method === 'POST') return created();

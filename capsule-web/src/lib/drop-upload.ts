@@ -411,6 +411,9 @@ export async function uploadDrop(opts: UploadDropOptions): Promise<void> {
                     const resumed = probe.status.receivedBytes;
                     if (Number.isFinite(resumed) && resumed > offset) {
                         offset = Math.min(resumed, total);
+                        // The session may hold every byte yet still be `uploading`: the deposit
+                        // outcome is then read after the loop, never assumed filed.
+                        uploadStatus = status;
                         onProgress?.(
                             total === 0 ? 1 : Math.min(offset / total, 1),
                         );
