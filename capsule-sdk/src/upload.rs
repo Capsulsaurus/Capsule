@@ -596,6 +596,9 @@ pub struct HeadInfo {
     pub advice: ServerAdvice,
     /// The session's remaining lifetime, relative to this response.
     pub expiry: SessionExpiry,
+    /// For a `failed_processing` session, the `error.*` code finalization failed with
+    /// (`X-Capsule-Upload-Error`). Absent for every other state, and from an older server.
+    pub error_code: Option<String>,
 }
 
 /// A row from `GET /upload/sessions` — the subset the resuming client needs.
@@ -614,6 +617,11 @@ pub struct SessionSummary {
     pub total_size: u64,
     /// Session state (serialized enum variant name).
     pub status: String,
+    /// For a `failed_processing` session, the `error.*` code finalization failed with — the
+    /// code `HEAD` carries in `X-Capsule-Upload-Error`. Absent otherwise, and from an older
+    /// server.
+    #[serde(default)]
+    pub error_code: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -650,6 +658,10 @@ pub enum CreateOutcome {
         advice: ServerAdvice,
         /// The session's remaining lifetime, relative to this response.
         expiry: SessionExpiry,
+        /// The resumed session's state (`X-Capsule-Upload-Status`) on a `200`:
+        /// `waiting_for_processing` once a duplicate create has started the finalization of a
+        /// full session. Absent on a fresh session, and from an older server.
+        status: Option<String>,
     },
     /// The server already holds this exact ciphertext (`duplicate_blob`): resolve
     /// as a [merge](https://docs/design/transfer/upload/#deduplication-and-merge),
@@ -663,7 +675,13 @@ pub enum CreateOutcome {
 /// How a full [`UploadClient::upload`] resolved.
 #[derive(Debug, Clone)]
 pub enum UploadOutcome {
-    /// Every declared byte was transferred; the server has begun finalization.
+    /// Every declared byte was transferred and the server finalized the session: `HEAD` reported
+    /// it `completed`. From an older server, which finalized before it answered the completing
+    /// chunk and so never answered `waiting_for_processing`, the accepted final chunk is the
+    /// outcome.
+    ///
+    /// A session finalization refused is not this: it is [`UploadError::Rejected`] carrying the
+    /// `error.*` code `HEAD` reported in `X-Capsule-Upload-Error`.
     Completed {
         /// The session that was driven to completion.
         session_id: String,
@@ -687,6 +705,12 @@ pub enum UploadError {
     Transport(String),
     /// A typed server rejection carrying its stable `error.*` code and status.
     /// Non-recoverable at this layer — surfaced to the caller.
+    ///
+    /// A finalization the server refused is reported the same way, with the code `HEAD` carried
+    /// in `X-Capsule-Upload-Error` (`content_hash_mismatch`, `envelope_rejected`,
+    /// `replace_incomplete`, `stale_revival`, …) and the `200` of the `HEAD` that read it: no
+    /// request waits on finalization, so its refusal is read, never answered. A caller switches
+    /// on the code, as it always has.
     #[error("upload rejected (HTTP {status}, code {code:?}): {message}")]
     Rejected {
         /// HTTP status.
@@ -826,8 +850,14 @@ fn duplicate_asset_ref(message: &str) -> String {
 /// The outcome of a single `PATCH` attempt, folded into the recovery matrix.
 #[derive(Debug)]
 enum ChunkAck {
-    /// Accepted; the new authoritative offset.
-    Accepted(u64),
+    /// Accepted: the new authoritative offset, and the session's state as the server reported it
+    /// (`X-Capsule-Upload-Status`; absent from an older server).
+    Accepted {
+        /// The authoritative offset after the chunk.
+        offset: u64,
+        /// `uploading`, or `waiting_for_processing` once the chunk completed the session.
+        status: Option<String>,
+    },
     /// `offset_mismatch` — re-align to the authoritative offset (from the 409's
     /// `X-Capsule-Offset` when present, else a follow-up HEAD).
     Realign(Option<u64>),
@@ -931,6 +961,34 @@ impl Recovery {
     }
 }
 
+/// The first wait between two `HEAD`s while the server finalizes a session.
+const FINALIZE_POLL_FIRST: Duration = Duration::from_millis(100);
+
+/// The longest wait between two `HEAD`s while the server finalizes a session. Each wait doubles
+/// the one before it up to this.
+const FINALIZE_POLL_MAX: Duration = Duration::from_secs(5);
+
+/// How long, in waits summed, the client polls a finalizing session before it gives up.
+///
+/// The server drives every claim to a terminal state — across its own restarts — so the poll
+/// ends; this bound only stops a client from polling a server that never says so. Half an hour
+/// re-hashes a 4 GiB blob on a disk slower than any the server is deployed on.
+const FINALIZE_POLL_DEADLINE: Duration = Duration::from_mins(30);
+
+/// The session states the server reports while, and once, it finalizes.
+const STATUS_WAITING: &str = "waiting_for_processing";
+const STATUS_COMPLETED: &str = "completed";
+const STATUS_FAILED: &str = "failed_processing";
+
+/// What the finalization poll found.
+enum Settled {
+    /// The session is terminal: completed, or the transfer ends here.
+    Done(UploadOutcome),
+    /// The server holds fewer bytes than declared after all; the transfer resumes at this
+    /// offset.
+    Resume(u64),
+}
+
 /// The wait a `Retry-After` header names, in its delta-seconds form.
 ///
 /// The server sends delta-seconds; the HTTP-date form is not parsed, and a value
@@ -1024,13 +1082,15 @@ impl UploadClient {
             // existing active session, whose X-Capsule-Offset says where to resume.
             let resume_offset = header_u64(resp.headers(), "X-Capsule-Offset").unwrap_or(0);
             let (advice, expiry) = advice_of(resp.headers());
+            let session_status = header_str(resp.headers(), "X-Capsule-Upload-Status");
             let body: CreateSessionResponse = resp.json().await?;
-            tracing::debug!(session_id = %body.id, resume_offset, ?advice, ?expiry, "upload session created");
+            tracing::debug!(session_id = %body.id, resume_offset, ?session_status, ?advice, ?expiry, "upload session created");
             return Ok(Ok(CreateOutcome::Created {
                 response: body,
                 resume_offset,
                 advice,
                 expiry,
+                status: session_status,
             }));
         }
 
@@ -1117,6 +1177,7 @@ impl UploadClient {
         })?;
         let total_size = header_u64(headers, "X-Capsule-Content-Length");
         let statusv = header_str(headers, "X-Capsule-Upload-Status").unwrap_or_default();
+        let error_code = header_str(headers, "X-Capsule-Upload-Error");
         let (advice, expiry) = advice_of(headers);
         Ok(Ok(Some(HeadInfo {
             offset,
@@ -1124,6 +1185,7 @@ impl UploadClient {
             status: statusv,
             advice,
             expiry,
+            error_code,
         })))
     }
 
@@ -1248,7 +1310,11 @@ impl UploadClient {
         if (200..300).contains(&status) {
             let new_offset = header_u64(resp.headers(), "X-Capsule-Offset")
                 .unwrap_or(offset + chunk.len() as u64);
-            return Ok(ChunkAck::Accepted(new_offset));
+            let session_status = header_str(resp.headers(), "X-Capsule-Upload-Status");
+            return Ok(ChunkAck::Accepted {
+                offset: new_offset,
+                status: session_status,
+            });
         }
 
         // The 409 offset_mismatch carries the authoritative offset in the header;
@@ -1294,8 +1360,12 @@ impl UploadClient {
     /// code-driven recovery matrix, starting from a fresh session.
     ///
     /// `data` is the ciphertext's source (opaque bytes); the client reads it one
-    /// chunk window at a time — never whole — and checksums each chunk. The transfer completes exactly when the received-byte count
-    /// reaches the declared size, at which point the server finalizes.
+    /// chunk window at a time — never whole — and checksums each chunk. Every byte is sent when
+    /// the received-byte count reaches the declared size, at which point the server finalizes.
+    /// The server answers the completing chunk `waiting_for_processing` without waiting for
+    /// finalization, so the client then polls `HEAD` with backoff until the session is
+    /// `completed` — the outcome — or `failed_processing`, which is an
+    /// [`UploadError::Rejected`] carrying the `X-Capsule-Upload-Error` code.
     ///
     /// A `rate_limited`, `unavailable` or `storage_full` answer to any request it
     /// makes — the create, a chunk, or a `HEAD` — is waited out, each wait charging
@@ -1317,16 +1387,17 @@ impl UploadClient {
         data: &S,
         recovery: &mut Recovery,
     ) -> Result<UploadOutcome, UploadError> {
-        let (session, suggested, start_offset) =
+        let (session, suggested, start_offset, start_status) =
             match self.create_waiting(request, recovery).await? {
                 CreateOutcome::Created {
                     response,
                     resume_offset,
                     advice,
+                    status,
                     ..
                 } => {
                     let chunk = response.starting_chunk(&advice);
-                    (response.id, chunk, resume_offset)
+                    (response.id, chunk, resume_offset, status)
                 }
                 CreateOutcome::AlreadyStored { asset_ref } => {
                     self.emit_merged(request, &asset_ref);
@@ -1343,7 +1414,7 @@ impl UploadClient {
             request,
             data,
             &mut strategy,
-            start_offset,
+            (start_offset, start_status),
             recovery,
         )
         .await
@@ -1379,7 +1450,7 @@ impl UploadClient {
                 request,
                 data,
                 &mut strategy,
-                info.offset,
+                (info.offset, Some(info.status)),
                 &mut recovery,
             )
             .await
@@ -1389,18 +1460,20 @@ impl UploadClient {
         }
     }
 
-    /// The chunk loop with the recovery matrix. `offset` is the starting
-    /// authoritative offset (0 for a fresh session, the HEAD offset on resume).
+    /// The chunk loop with the recovery matrix, then the finalization poll. `start` is the
+    /// starting authoritative offset (0 for a fresh session, the HEAD offset on resume) and the
+    /// session's state as last reported, when one was.
     async fn drive<S: UploadSource + ?Sized>(
         &self,
         mut session_id: String,
         request: &CreateUploadRequest,
         data: &S,
         strategy: &mut AdaptiveChunkSizeStrategy,
-        mut offset: u64,
+        start: (u64, Option<String>),
         recovery: &mut Recovery,
     ) -> Result<UploadOutcome, UploadError> {
         let size = request.size;
+        let (mut offset, mut state) = start;
         // The recovery's shared retry engine governs mid-transfer *transport
         // resets* (the adverse-network steady state); the code-driven recovery
         // matrix below stays switched on `error.*` codes.
@@ -1461,7 +1534,11 @@ impl UploadClient {
                 Err(other) => return Err(other),
             };
             match ack {
-                ChunkAck::Accepted(new_offset) => {
+                ChunkAck::Accepted {
+                    offset: new_offset,
+                    status,
+                } => {
+                    state = status;
                     strategy.record_chunk(want, attempt_start.elapsed());
                     // Real progress resets the transient-reset backoff budget.
                     recovery.engine.reset();
@@ -1483,6 +1560,7 @@ impl UploadClient {
                             .await?
                             .map(|info| info.offset),
                     };
+                    state = None;
                     if let Some(to) = realigned {
                         self.emit_retried(
                             request,
@@ -1514,9 +1592,11 @@ impl UploadClient {
                             response,
                             resume_offset,
                             advice,
+                            status,
                             ..
                         } => {
                             let chunk = response.starting_chunk(&advice);
+                            state = status;
                             session_id = response.id;
                             *strategy = AdaptiveChunkSizeStrategy::for_file_size(size)
                                 .seeded_from_suggested(chunk);
@@ -1577,8 +1657,10 @@ impl UploadClient {
                     // is itself asked to wait (an outage outlasting one wait) waits
                     // again under the same budget rather than failing the transfer.
                     offset = if let Some(info) = self.head_waiting(&session_id, recovery).await? {
+                        state = Some(info.status);
                         info.offset
                     } else {
+                        state = None;
                         self.emit_retried(
                             request,
                             &session_id,
@@ -1594,13 +1676,95 @@ impl UploadClient {
             }
         }
 
-        tracing::info!(%session_id, size, "upload complete — server finalizing");
+        tracing::info!(%session_id, size, "every byte sent — server finalizing");
         self.events.emit(|| TransferEvent::Finalize {
             blob: request.hash.clone(),
             session_id: session_id.clone(),
             size,
         });
-        Ok(UploadOutcome::Completed { session_id })
+        match self
+            .settle(&session_id, size, state.as_deref(), recovery)
+            .await?
+        {
+            Settled::Done(outcome) => Ok(outcome),
+            Settled::Resume(at) => {
+                tracing::info!(%session_id, offset = at, size, "the server holds fewer bytes than declared; resuming");
+                Box::pin(self.drive(session_id, request, data, strategy, (at, None), recovery))
+                    .await
+            }
+        }
+    }
+
+    /// Wait for the server to finish finalizing `session_id`, polling `HEAD` with backoff.
+    ///
+    /// `state` is the session's state as the last answer reported it. Only a session reported
+    /// `waiting_for_processing` or `failed_processing` is polled: an older server finalized
+    /// before it answered the completing chunk and sends no state, so its accepted final chunk
+    /// is the outcome. A `HEAD` the server asks to wait is waited out under the transfer's
+    /// recovery budget; the poll itself charges nothing and is bounded by
+    /// [`FINALIZE_POLL_DEADLINE`].
+    async fn settle(
+        &self,
+        session_id: &str,
+        size: u64,
+        state: Option<&str>,
+        recovery: &mut Recovery,
+    ) -> Result<Settled, UploadError> {
+        if !matches!(state, Some(STATUS_WAITING | STATUS_FAILED)) {
+            tracing::debug!(%session_id, ?state, "no finalization to wait for");
+            return Ok(Settled::Done(UploadOutcome::Completed {
+                session_id: session_id.to_owned(),
+            }));
+        }
+        let mut wait = FINALIZE_POLL_FIRST;
+        let mut waited = Duration::ZERO;
+        let mut polls: u32 = 0;
+        loop {
+            polls += 1;
+            let Some(info) = self.head_waiting(session_id, recovery).await? else {
+                tracing::warn!(%session_id, polls, "the session went away while it finalized");
+                return Err(UploadError::Rejected {
+                    status: 404,
+                    code: Some(error_codes::UPLOAD_SESSION_NOT_FOUND.to_owned()),
+                    message: format!("session {session_id} went away while it finalized"),
+                });
+            };
+            match info.status.as_str() {
+                STATUS_COMPLETED => {
+                    tracing::info!(%session_id, polls, waited_ms = millis(waited), "the server finalized the upload");
+                    return Ok(Settled::Done(UploadOutcome::Completed {
+                        session_id: session_id.to_owned(),
+                    }));
+                }
+                STATUS_FAILED => {
+                    tracing::warn!(%session_id, polls, code = ?info.error_code, "the server refused the upload at finalization");
+                    let message = format!(
+                        "the server refused session {session_id} at finalization ({})",
+                        info.error_code.as_deref().unwrap_or("no code given")
+                    );
+                    return Err(UploadError::Rejected {
+                        status: 200,
+                        code: info.error_code,
+                        message,
+                    });
+                }
+                STATUS_WAITING => {}
+                _ if info.offset < size => return Ok(Settled::Resume(info.offset)),
+                // Full and not yet claimed: this `HEAD` started its finalization, and the next
+                // one reads how it went.
+                _ => {}
+            }
+            if waited >= FINALIZE_POLL_DEADLINE {
+                return Err(UploadError::RetriesExhausted(format!(
+                    "session {session_id} was still finalizing after {polls} polls over {}s",
+                    waited.as_secs()
+                )));
+            }
+            tracing::debug!(%session_id, polls, ?wait, status = %info.status, "finalizing; polling HEAD again");
+            self.sleeper.sleep(wait).await;
+            waited += wait;
+            wait = (wait * 2).min(FINALIZE_POLL_MAX);
+        }
     }
 
     fn emit_created(&self, request: &CreateUploadRequest, session_id: &str, resume_offset: u64) {

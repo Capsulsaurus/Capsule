@@ -1453,6 +1453,188 @@ async fn a_mid_drive_recreate_seeds_the_first_chunk_from_the_new_advice() {
     assert_eq!(*patch_offsets.lock().unwrap(), vec![0, advised]);
 }
 
+// ─── Finalization is read from HEAD ─────────────────────────────────────────
+
+/// A `HEAD` answer for an 8 KiB session in `status`, with the failure code when one is given.
+fn head_at_size(status: &str, error: Option<&str>) -> MockResponse {
+    let response = MockResponse::new(200, "OK")
+        .header("X-Capsule-Offset", "8192")
+        .header("X-Capsule-Content-Length", "8192")
+        .header("X-Capsule-Upload-Status", status);
+    match error {
+        Some(code) => response.header("X-Capsule-Upload-Error", code),
+        None => response,
+    }
+}
+
+/// A server that answers the completing chunk `waiting_for_processing` and then reports
+/// `states` to successive `HEAD`s, the last of them for every `HEAD` after it. Counts the
+/// `HEAD`s it answered.
+fn finalizing_server(
+    states: Vec<(&'static str, Option<&'static str>)>,
+) -> (
+    impl Fn(&MockRequest) -> MockResponse + Send + Sync + 'static,
+    Arc<AtomicUsize>,
+) {
+    let heads = Arc::new(AtomicUsize::new(0));
+    let seen = heads.clone();
+    let handler = move |req: &MockRequest| match (req.method.as_str(), req.path.as_str()) {
+        ("POST", "/") => created("sess-fin", CHUNK_SIZE_256KB),
+        ("PATCH", "/sess-fin") => {
+            let new_offset = ack_offset(req);
+            let status = if new_offset == 8192 {
+                "waiting_for_processing"
+            } else {
+                "uploading"
+            };
+            MockResponse::new(204, "No Content")
+                .header("X-Capsule-Offset", new_offset.to_string())
+                .header("X-Capsule-Upload-Status", status)
+        }
+        ("HEAD", "/sess-fin") => {
+            let n = seen.fetch_add(1, Ordering::SeqCst);
+            let (status, error) = states[n.min(states.len() - 1)];
+            head_at_size(status, error)
+        }
+        other => panic!("unexpected {other:?}"),
+    };
+    (handler, heads)
+}
+
+/// The completing chunk is answered `waiting_for_processing`, so the client polls `HEAD` with
+/// backoff until the server reports the session `completed` — and that is the outcome.
+#[tokio::test]
+async fn a_waiting_completion_polls_head_until_the_session_completes() {
+    let (handler, heads) = finalizing_server(vec![
+        ("waiting_for_processing", None),
+        ("waiting_for_processing", None),
+        ("completed", None),
+    ]);
+    let server = MockServer::start(handler).await;
+
+    let data = vec![1u8; 8192];
+    let outcome = server
+        .client(PROTOCOL)
+        .upload(&request(8192), &data)
+        .await
+        .unwrap();
+
+    match outcome {
+        UploadOutcome::Completed { session_id } => assert_eq!(session_id, "sess-fin"),
+        other @ UploadOutcome::AlreadyStored { .. } => panic!("expected Completed, got {other:?}"),
+    }
+    assert_eq!(
+        heads.load(Ordering::SeqCst),
+        3,
+        "polled until the terminal state"
+    );
+}
+
+/// A session finalization refused is the refusal, carrying the code `HEAD` reported in
+/// `X-Capsule-Upload-Error` — the code a caller switches on, as it did when the completing chunk
+/// itself was refused.
+#[tokio::test]
+async fn a_failed_finalization_is_the_rejection_head_names() {
+    let (handler, heads) = finalizing_server(vec![
+        ("waiting_for_processing", None),
+        (
+            "failed_processing",
+            Some(error_codes::UPLOAD_CONTENT_HASH_MISMATCH),
+        ),
+    ]);
+    let server = MockServer::start(handler).await;
+
+    let data = vec![2u8; 8192];
+    let error = server
+        .client(PROTOCOL)
+        .upload(&request(8192), &data)
+        .await
+        .expect_err("a refused finalization fails the upload");
+
+    match error {
+        UploadError::Rejected { code, .. } => {
+            assert_eq!(
+                code.as_deref(),
+                Some(error_codes::UPLOAD_CONTENT_HASH_MISMATCH)
+            );
+        }
+        other => panic!("expected the finalization's rejection, got {other:?}"),
+    }
+    assert_eq!(heads.load(Ordering::SeqCst), 2);
+}
+
+/// A duplicate create that hands back a full session `waiting_for_processing` sends nothing more
+/// and reads the outcome from `HEAD`.
+#[tokio::test]
+async fn a_resumed_full_session_waiting_for_processing_is_polled_not_resent() {
+    let heads = Arc::new(AtomicUsize::new(0));
+    let seen = heads.clone();
+    let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+        ("POST", "/") => MockResponse::new(200, "OK")
+            .header("Location", "/upload/sess-full")
+            .header("X-Capsule-Offset", "8192")
+            .header("X-Capsule-Upload-Status", "waiting_for_processing")
+            .json_body(format!(
+                r#"{{"id":"sess-full","upload_url":"/upload/sess-full","suggested_chunk_size":{CHUNK_SIZE_256KB}}}"#
+            )),
+        ("HEAD", "/sess-full") => {
+            seen.fetch_add(1, Ordering::SeqCst);
+            head_at_size("completed", None)
+        }
+        other => panic!("unexpected {other:?}"),
+    })
+    .await;
+
+    let data = vec![3u8; 8192];
+    let outcome = server
+        .client(PROTOCOL)
+        .upload(&request(8192), &data)
+        .await
+        .unwrap();
+
+    assert!(matches!(outcome, UploadOutcome::Completed { .. }));
+    assert_eq!(heads.load(Ordering::SeqCst), 1);
+}
+
+/// A server that finalizes before it answers sends no state on the completing chunk; its
+/// accepted chunk is the outcome and nothing is polled. Every mock above that answers no `HEAD`
+/// is such a server; this one says so.
+#[tokio::test]
+async fn a_server_that_sends_no_state_is_not_polled() {
+    let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+        ("POST", "/") => created("sess-old", CHUNK_SIZE_256KB),
+        ("PATCH", "/sess-old") => MockResponse::new(204, "No Content")
+            .header("X-Capsule-Offset", ack_offset(req).to_string()),
+        other => panic!("an older server is never asked {other:?}"),
+    })
+    .await;
+
+    let data = vec![4u8; 4096];
+    let outcome = server
+        .client(PROTOCOL)
+        .upload(&request(4096), &data)
+        .await
+        .unwrap();
+    assert!(matches!(outcome, UploadOutcome::Completed { .. }));
+}
+
+/// The poll's waits start small and double up to their ceiling, and the poll gives up once
+/// their sum passes the deadline rather than polling a server that never answers.
+#[test]
+fn the_finalization_poll_backs_off_and_is_bounded() {
+    let mut wait = FINALIZE_POLL_FIRST;
+    let mut schedule = Vec::new();
+    for _ in 0..8 {
+        schedule.push(wait);
+        wait = (wait * 2).min(FINALIZE_POLL_MAX);
+    }
+    assert_eq!(schedule[0], Duration::from_millis(100));
+    assert_eq!(schedule[1], Duration::from_millis(200));
+    assert!(schedule.windows(2).all(|pair| pair[0] <= pair[1]));
+    assert_eq!(*schedule.last().expect("a schedule"), FINALIZE_POLL_MAX);
+    assert!(FINALIZE_POLL_DEADLINE > FINALIZE_POLL_MAX);
+}
+
 // ─── HEAD / DELETE / list ───────────────────────────────────────────────────
 
 #[tokio::test]
@@ -1470,6 +1652,26 @@ async fn head_reports_offset_and_status() {
     assert_eq!(info.offset, 100);
     assert_eq!(info.total_size, Some(200));
     assert_eq!(info.status, "uploading");
+    assert_eq!(info.error_code, None);
+}
+
+#[tokio::test]
+async fn head_reports_a_failed_sessions_error_code() {
+    let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+        ("HEAD", "/s1") => head_at_size(
+            "failed_processing",
+            Some(error_codes::UPLOAD_ENVELOPE_REJECTED),
+        ),
+        other => panic!("unexpected {other:?}"),
+    })
+    .await;
+
+    let info = server.client(PROTOCOL).head("s1").await.unwrap().unwrap();
+    assert_eq!(info.status, "failed_processing");
+    assert_eq!(
+        info.error_code.as_deref(),
+        Some(error_codes::UPLOAD_ENVELOPE_REJECTED)
+    );
 }
 
 #[tokio::test]
@@ -1483,17 +1685,23 @@ async fn head_returns_none_on_404() {
 async fn list_sessions_parses_rows() {
     let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
         ("GET", "/sessions") => MockResponse::new(200, "OK").json_body(
-            r#"{"sessions":[{"id":"s1","asset_id":"a1","received_bytes":100,"total_size":200,"status":"Uploading","extra_unknown":true}]}"#,
+            r#"{"sessions":[{"id":"s1","asset_id":"a1","received_bytes":100,"total_size":200,"status":"Uploading","extra_unknown":true},{"id":"s2","received_bytes":200,"total_size":200,"status":"failed_processing","error_code":"error.upload.stale_revival"}]}"#,
         ),
         other => panic!("unexpected {other:?}"),
     })
     .await;
 
     let rows = server.client(PROTOCOL).list_sessions().await.unwrap();
-    assert_eq!(rows.len(), 1);
+    assert_eq!(rows.len(), 2);
     assert_eq!(rows[0].id, "s1");
     assert_eq!(rows[0].received_bytes, 100);
     assert_eq!(rows[0].status, "Uploading");
+    assert_eq!(rows[0].error_code, None);
+    assert_eq!(rows[1].status, "failed_processing");
+    assert_eq!(
+        rows[1].error_code.as_deref(),
+        Some("error.upload.stale_revival")
+    );
 }
 
 #[tokio::test]
