@@ -386,12 +386,14 @@ pub struct Config {
     /// How long a client may take to send a request head, which also bounds how long a
     /// kept-alive connection may idle before its next one (`HEADER_READ_TIMEOUT_SECONDS`).
     pub header_read_timeout: std::time::Duration,
-    /// How long one upload chunk's body may take to arrive (`CHUNK_READ_TIMEOUT_SECONDS`).
+    /// When an upload chunk's body is cut: no bytes for the stall bound
+    /// (`CHUNK_STALL_TIMEOUT_SECONDS`), or a sustained rate below the floor
+    /// (`CHUNK_MIN_RATE_BYTES_PER_SECOND`). Never for its total duration.
     ///
     /// The body-read half of the per-connection bound, applied by
     /// [`ChunkBody`](crate::upload::body::ChunkBody) and therefore over before finalization
-    /// starts: see [`crate::upload::policy::DEFAULT_CHUNK_READ_TIMEOUT`].
-    pub chunk_read_timeout: std::time::Duration,
+    /// starts: see [`crate::upload::policy::DEFAULT_CHUNK_STALL_TIMEOUT`].
+    pub chunk_pace: crate::upload::policy::ChunkPace,
     /// Which reverse-proxy hops may name the client, and through which forwarding field
     /// (`TRUSTED_PROXY_HOPS`, `TRUSTED_PROXIES`, `TRUSTED_PROXY_HEADER`).
     ///
@@ -559,7 +561,7 @@ impl fmt::Debug for Config {
             shutdown_timeout,
             max_connections,
             header_read_timeout,
-            chunk_read_timeout,
+            chunk_pace,
             trusted_proxies,
             log_format,
             backends,
@@ -595,7 +597,7 @@ impl fmt::Debug for Config {
             .field("shutdown_timeout", shutdown_timeout)
             .field("max_connections", max_connections)
             .field("header_read_timeout", header_read_timeout)
-            .field("chunk_read_timeout", chunk_read_timeout)
+            .field("chunk_pace", chunk_pace)
             .field("trusted_proxies", trusted_proxies)
             .field("log_format", log_format)
             .field("backends", backends)
@@ -856,18 +858,32 @@ impl Config {
             });
         // The per-connection bounds (transfer/upload.md, Hostile Clients; #717). Zero is refused
         // for both: a zero header timeout closes every connection before its first request, and
-        // a zero chunk deadline refuses every chunk, so either is an outage spelled as a setting.
+        // a zero stall bound refuses every chunk, so either is an outage spelled as a setting. A
+        // zero minimum rate is accepted: it turns the rate floor off and leaves the stall bound.
         let header_read_timeout = parse_timeout(
             env,
             "HEADER_READ_TIMEOUT_SECONDS",
             std::time::Duration::from_secs(DEFAULT_HEADER_READ_TIMEOUT),
             &mut faults,
         );
-        let chunk_read_timeout = parse_timeout(
-            env,
-            "CHUNK_READ_TIMEOUT_SECONDS",
-            crate::upload::policy::DEFAULT_CHUNK_READ_TIMEOUT,
-            &mut faults,
+        // A chunk is cut on stall, never for its total duration (#1041), so the total-duration
+        // setting it replaces means nothing any more; warned about rather than refused, as the
+        // other retired names are, so an existing environment still boots.
+        if env.var("CHUNK_READ_TIMEOUT_SECONDS").is_some() {
+            tracing::warn!(
+                "CHUNK_READ_TIMEOUT_SECONDS is no longer read: a chunk is cut only when it stalls \
+                 (CHUNK_STALL_TIMEOUT_SECONDS) or falls below CHUNK_MIN_RATE_BYTES_PER_SECOND"
+            );
+        }
+        let chunk_pace = crate::upload::policy::ChunkPace::new(
+            parse_timeout(
+                env,
+                "CHUNK_STALL_TIMEOUT_SECONDS",
+                crate::upload::policy::DEFAULT_CHUNK_STALL_TIMEOUT,
+                &mut faults,
+            ),
+            parse_number::<u64>(env, "CHUNK_MIN_RATE_BYTES_PER_SECOND", &mut faults)
+                .unwrap_or(crate::upload::policy::DEFAULT_CHUNK_MIN_RATE),
         );
         // Which proxy hops may name the client (#704). Unset trusts nobody, the one default a
         // spoofed `X-Forwarded-For` cannot move; a malformed entry is a fault rather than an entry
@@ -997,7 +1013,7 @@ impl Config {
                 shutdown_timeout,
                 max_connections,
                 header_read_timeout,
-                chunk_read_timeout,
+                chunk_pace,
                 trusted_proxies,
                 log_format,
                 backends,

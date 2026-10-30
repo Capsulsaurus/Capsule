@@ -2009,9 +2009,9 @@ async fn send_deletes(
                 continue;
             }
         };
-        let level = workspace
-            .asset(&asset_id)
-            .is_some_and(|asset| chains.is_level(&asset_id, asset.chain.records()));
+        // A purged asset is compared by the chain its purge kept, the tombstone it is sent from.
+        let level = remote::held::local_chain(workspace, &asset_id)
+            .is_some_and(|chain| chains.is_level(&asset_id, chain.records));
         if level {
             tracing::info!(%asset_id, "peer status: the server already holds the chain's head; nothing to send");
             views.push(view(
