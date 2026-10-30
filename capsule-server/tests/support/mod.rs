@@ -1660,11 +1660,12 @@ impl ChunkReadPace for SwitchableChunkPace {
     }
 }
 
-/// An activity log that can be made to fail on demand.
+/// An activity log that can be made to fail, or to hang, on demand.
 #[derive(Debug, Default)]
 pub(crate) struct SwitchableActivity {
     inner: InMemoryActivity,
     unavailable: AtomicBool,
+    stalled: AtomicBool,
 }
 
 impl SwitchableActivity {
@@ -1676,6 +1677,11 @@ impl SwitchableActivity {
     /// Make every subsequent operation fail, or stop.
     pub(crate) fn set_unavailable(&self, unavailable: bool) {
         self.unavailable.store(unavailable, Ordering::SeqCst);
+    }
+
+    /// Make every subsequent write never finish, so a caller that awaits one never returns.
+    pub(crate) fn stall_writes(&self) {
+        self.stalled.store(true, Ordering::SeqCst);
     }
 
     fn refuse<T>() -> Result<T, StoreError> {
@@ -1692,6 +1698,9 @@ impl SwitchableActivity {
 
 impl ActivityStore for SwitchableActivity {
     fn record(&self, event: ActivityEvent, retain_from: Timestamp) -> StoreFuture<'_, ()> {
+        if self.stalled.load(Ordering::SeqCst) {
+            return Box::pin(std::future::pending());
+        }
         if self.is_down() {
             return Box::pin(async { Self::refuse() });
         }

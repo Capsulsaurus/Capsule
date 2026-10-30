@@ -258,6 +258,36 @@ async fn a_refused_sign_in_is_answered_the_same_when_the_log_is_down() {
 }
 
 #[tokio::test]
+async fn a_refused_sign_in_is_answered_without_waiting_for_its_write() {
+    let fixture = Fixture::working();
+    // A write that never lands: a login that awaited it would never answer, so the bound below
+    // is generous and still decides the case — no answer within it means the route waited.
+    fixture.activity.stall_writes();
+    let login = |password: &'static str| {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            fixture
+                .client
+                .post("/v1/auth/login")
+                .header("accept", "application/json")
+                .json(&json!({ "email": EMAIL, "password": password }))
+                .send(),
+        )
+    };
+
+    login("not the password")
+        .await
+        .expect("a wrong password is answered while its write is pending")
+        .assert_status(StatusCode::UNAUTHORIZED);
+
+    fixture.accounts.lock(EMAIL);
+    login(PASSWORD)
+        .await
+        .expect("a locked account is answered while its write is pending")
+        .assert_status(StatusCode::LOCKED);
+}
+
+#[tokio::test]
 async fn an_account_reads_only_its_own_log() {
     let fixture = Fixture::working();
     let _owner = fixture.bearer().await;
