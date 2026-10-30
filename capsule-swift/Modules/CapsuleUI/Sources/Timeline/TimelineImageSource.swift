@@ -7,7 +7,7 @@ import ImagePipeline
 
 // MARK: - TimelineImageSource
 
-/// The pixels behind a timeline tile, one rung of the degrade ladder at a time.
+/// The pixels behind a timeline tile, one rung of the render ladder at a time.
 ///
 /// Split from `ThumbnailProvider` for two reasons. It speaks ``LibraryAsset``,
 /// which is what the timeline actually holds, rather than `AssetKit.Asset`; and
@@ -31,6 +31,16 @@ public protocol TimelineImageSource: Sendable {
     /// A grid thumbnail decoded to fill `pixelSize` device pixels.
     func thumbnail(for asset: LibraryAsset, pixelSize: CGSize) async -> PlatformImage?
 
+    /// The rung the render ladder names for `request`, decoded to fill
+    /// `pixelSize`, with the rendition the tile keeps and passes back as
+    /// `shown`. See `ThumbnailProvider.render(_:request:shown:pixelSize:)`.
+    func render(
+        _ asset: LibraryAsset,
+        request: RenderRequest,
+        shown: Rendition?,
+        pixelSize: CGSize
+    ) async -> RenderedImage?
+
     /// Warm the cache for assets about to scroll on screen.
     func beginPrefetching(_ assets: [LibraryAsset], pixelSize: CGSize) async
 
@@ -43,6 +53,18 @@ public extension TimelineImageSource {
     /// and a source that does not own it degrades to the dominant colour rather
     /// than guessing at the bytes.
     func lqipImage(for _: LibraryAsset) async -> PlatformImage? { nil }
+
+    /// A source with no ladder of its own to consult draws the thumbnail,
+    /// outside the ladder.
+    func render(
+        _ asset: LibraryAsset,
+        request _: RenderRequest,
+        shown _: Rendition?,
+        pixelSize: CGSize
+    ) async -> RenderedImage? {
+        guard let image = await thumbnail(for: asset, pixelSize: pixelSize) else { return nil }
+        return RenderedImage(image: image, rendition: nil)
+    }
 }
 
 // MARK: - ThumbnailProvider adapter
@@ -65,6 +87,15 @@ public struct ThumbnailProviderImageSource: TimelineImageSource {
 
     public func thumbnail(for asset: LibraryAsset, pixelSize: CGSize) async -> PlatformImage? {
         await provider.thumbnail(for: asset.gridAsset, pixelSize: pixelSize)
+    }
+
+    public func render(
+        _ asset: LibraryAsset,
+        request: RenderRequest,
+        shown: Rendition?,
+        pixelSize: CGSize
+    ) async -> RenderedImage? {
+        await provider.render(asset.gridAsset, request: request, shown: shown, pixelSize: pixelSize)
     }
 
     public func beginPrefetching(_ assets: [LibraryAsset], pixelSize: CGSize) async {
