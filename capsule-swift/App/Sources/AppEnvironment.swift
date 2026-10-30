@@ -238,7 +238,11 @@ struct AppEnvironment {
         // this provider's `AssetLocationSource` conformance, which the erased
         // `any AssetProvider` the rest of the app sees does not carry.
         let library = PortBackedAssetProvider(library: mock.library, organize: mock.organize)
-        let managed = Self.makeManagedLane(root: Self.libraryRoot(), openLibrary: lane.openManagedLibrary)
+        let managed = Self.makeManagedLane(
+            root: Self.libraryRoot(),
+            openLibrary: lane.openManagedLibrary,
+            uploads: mock.uploads
+        )
         assetProvider = Self.composeTimeline(library: library, managed: managed.provider)
         captionStore = Self.composeCaptions(
             library: PortBackedCaptionStore(library: mock.library, organize: mock.organize),
@@ -320,9 +324,13 @@ struct AppEnvironment {
     ///   supplies one whose writes are the Rust workspace's verbs; with none,
     ///   there is no Rust core, so the store is an in-memory catalog written
     ///   through a `LocalManagedWorkspace`.
+    /// - Parameter uploads: the upload sessions a managed delete redacts the
+    ///   deleted asset's in-flight upload from. With none, a delete redacts
+    ///   nothing.
     static func makeManagedLane(
         root: URL,
-        openLibrary: (@Sendable (ManagedLibraryLayout) -> ManagedLibrary)? = nil
+        openLibrary: (@Sendable (ManagedLibraryLayout) -> ManagedLibrary)? = nil,
+        uploads: (any UploadPort)? = nil
     ) -> ManagedLane {
         let layout = ManagedLibraryLayout(root: root)
         let fileStore = SystemFileStore()
@@ -330,7 +338,7 @@ struct AppEnvironment {
             ?? ManagedLibrary(layout: layout, fileStore: fileStore, catalog: InMemoryAssetCatalog())
         let importService = ImportService(library: library, fileStore: fileStore, hasher: CryptoKitHasher())
         let trashGate = SecondaryTrashGate()
-        let provider = ManagedProvider(library: library, authGate: trashGate)
+        let provider = ManagedProvider(library: library, authGate: trashGate, uploads: uploads)
         CapsuleLog.app.debug("managed lane composed at \(root.path, privacy: .private)")
         return ManagedLane(
             provider: provider,
