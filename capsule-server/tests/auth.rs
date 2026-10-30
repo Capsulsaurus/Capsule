@@ -185,8 +185,9 @@ async fn an_unusable_advisory_field_is_dropped_rather_than_refusing_the_sign_in(
 #[tokio::test]
 async fn a_wrong_password_and_an_unknown_account_are_the_same_answer() {
     // The Salvo service went to the trouble of verifying a dummy hash so the two paths took the
-    // same time. Here they are the same *value* — `Authentication::Refused` — so no caller can
-    // tell them apart even in principle.
+    // same time. Here they are the same *variant* — `Authentication::Refused` — and the account
+    // a wrong password names goes only to that account's activity log, written off the response
+    // path (design/activity-log.md), so the answer below cannot tell them apart.
     let fixture = Fixture::working();
 
     let mut wrong: serde_json::Value = post_json!(

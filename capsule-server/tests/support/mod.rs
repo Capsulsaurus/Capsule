@@ -904,15 +904,15 @@ impl AccountDirectory for InMemoryAccounts {
 
             let accounts = self.accounts();
             let Some(account) = accounts.get(email) else {
-                return Ok(Authentication::Refused);
+                return Ok(Authentication::Refused(None));
             };
             if account.locked {
-                return Ok(Authentication::Locked);
+                return Ok(Authentication::Locked(account.user_id.clone()));
             }
             if account.password == password {
                 Ok(Authentication::Granted(account.user_id.clone()))
             } else {
-                Ok(Authentication::Refused)
+                Ok(Authentication::Refused(Some(account.user_id.clone())))
             }
         })
     }
@@ -935,13 +935,13 @@ impl AccountDirectory for InMemoryAccounts {
                 .find(|held| &held.user_id == user)
                 .cloned()
             else {
-                return Ok(Authentication::Refused);
+                return Ok(Authentication::Refused(None));
             };
             if account.locked {
-                return Ok(Authentication::Locked);
+                return Ok(Authentication::Locked(account.user_id));
             }
             if account.password != password {
-                return Ok(Authentication::Refused);
+                return Ok(Authentication::Refused(Some(account.user_id)));
             }
             if self
                 .forget_after_authentication
@@ -4219,6 +4219,8 @@ pub(crate) struct Fixture {
     pub(crate) chunk_pace: Arc<SwitchableChunkPace>,
     /// The account activity log the server records to.
     pub(crate) activity: Arc<SwitchableActivity>,
+    /// The activity module the server records through, for [`Self::activity_settled`].
+    activity_context: ActivityContext,
 }
 
 impl Fixture {
@@ -4345,6 +4347,7 @@ impl Fixture {
         let oidc_devices = Arc::new(SwitchableOidcDevices::new(clock.clone()));
         let provider: Arc<dyn IdentityProvider> = provider.unwrap_or_else(|| idp.clone());
         let activity = Arc::new(SwitchableActivity::new());
+        let activity_context = ActivityContext::new(activity.clone(), clock.clone());
 
         // One index behind both modules, which is what makes "upload it, then read it back off
         // the feed" a test of the server rather than of two disconnected doubles.
@@ -4438,7 +4441,7 @@ impl Fixture {
                 clock.clone(),
             ),
             counters: CounterContext::new(counters.clone(), clock.clone()),
-            activity: ActivityContext::new(activity.clone(), clock.clone()),
+            activity: activity_context.clone(),
             totp: TotpContext::new(totp.clone(), codes.clone()),
             oidc: OidcContext::new(OidcCollaborators {
                 provider,
@@ -4493,7 +4496,14 @@ impl Fixture {
             oidc_devices,
             chunk_pace,
             activity,
+            activity_context,
         }
+    }
+
+    /// Wait for every activity write the server took off a response path to land, so a case
+    /// can read the log after a refused sign-in.
+    pub(crate) async fn activity_settled(&self) {
+        self.activity_context.settled().await;
     }
 
     /// Just the application context, for a test that needs no handles on what is behind it.

@@ -15,6 +15,9 @@
 //!   has happened and returns nothing: a store that cannot record logs the event at `error` and
 //!   the action stands. A sign-out refused because the audit log was down is a security outage
 //!   caused by an audit outage.
+//! - **Recording never discloses an account.** A refused or locked sign-in is recorded only for
+//!   an address that has an account, so its write must not lengthen that response:
+//!   [`ActivityContext::record_detached`] takes it off the response path.
 //! - **Tied to the request log.** Each event carries the request id
 //!   [`crate::request_span`] minted for the request that caused it, which names that request's
 //!   log lines — the detailed, short-lived half of the same story.
@@ -47,6 +50,10 @@ pub enum ActivityKind {
     AccountRegistered,
     /// A password sign-in opened a session.
     SignInPassword,
+    /// A password sign-in was refused: the password was wrong for this account.
+    SignInPasswordRefused,
+    /// A password sign-in was refused because this account is locked.
+    SignInLocked,
     /// A sign-in completed its second factor and opened a session.
     SignInSecondFactor,
     /// A second-factor code was refused for a sign-in whose first factor had verified.
@@ -82,9 +89,11 @@ pub enum ActivityKind {
 
 impl ActivityKind {
     /// Every kind, in the order design/activity-log.md lists them.
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 19] = [
         Self::AccountRegistered,
         Self::SignInPassword,
+        Self::SignInPasswordRefused,
+        Self::SignInLocked,
         Self::SignInSecondFactor,
         Self::SignInSecondFactorRefused,
         Self::SignInOidc,
@@ -107,6 +116,8 @@ impl ActivityKind {
         match self {
             Self::AccountRegistered => "account.registered",
             Self::SignInPassword => "sign_in.password",
+            Self::SignInPasswordRefused => "sign_in.password_refused",
+            Self::SignInLocked => "sign_in.locked",
             Self::SignInSecondFactor => "sign_in.second_factor",
             Self::SignInSecondFactorRefused => "sign_in.second_factor_refused",
             Self::SignInOidc => "sign_in.oidc",
@@ -242,12 +253,18 @@ impl ActivityStore for InMemoryActivity {
 pub struct ActivityContext {
     store: Arc<dyn ActivityStore>,
     clock: Arc<dyn Clock>,
+    /// Writes [`Self::record_detached`] started and nobody has awaited, shared by every clone.
+    detached: Arc<Mutex<tokio::task::JoinSet<()>>>,
 }
 
 impl ActivityContext {
     /// Assembles the module.
     pub fn new(store: Arc<dyn ActivityStore>, clock: Arc<dyn Clock>) -> Self {
-        Self { store, clock }
+        Self {
+            store,
+            clock,
+            detached: Arc::default(),
+        }
     }
 
     /// Where the log lives.
@@ -272,35 +289,74 @@ impl ActivityContext {
         session: Option<&SessionId>,
         subject: Option<&str>,
     ) {
-        let now = self.clock.now();
-        let event = ActivityEvent {
+        let event = self.stamp(user, kind, session, subject);
+        write(self.store.as_ref(), event).await;
+    }
+
+    /// Record that `kind` happened to `user`, without the caller waiting for the write.
+    ///
+    /// For an event whose *presence* must not show in the response time: a refused or locked
+    /// sign-in is recorded for an address that has an account and not for one that does not, so
+    /// a write awaited on the response path would tell a caller which addresses exist. The
+    /// event is stamped here — its instant and the current request's id — and only the store
+    /// write runs on a task of its own, inside the current span so its log line still names the
+    /// request. Every guarantee of [`Self::record`] holds; the event is merely written a moment
+    /// after the response rather than before it.
+    ///
+    /// A write still in flight when the last clone of this context is dropped is abandoned, and
+    /// its event is lost; the log line that would have recorded it is lost with it.
+    /// [`Self::settled`] waits for every write started so far.
+    pub fn record_detached(&self, user: &UserId, kind: ActivityKind) {
+        use tracing::Instrument as _;
+
+        let event = self.stamp(user, kind, None, None);
+        let store = Arc::clone(&self.store);
+        let mut detached = lock(&self.detached);
+        // Reap what has finished, so the set holds only writes in flight.
+        while let Some(finished) = detached.try_join_next() {
+            if let Err(error) = finished {
+                tracing::error!(%error, "a detached activity write did not finish");
+            }
+        }
+        detached.spawn(
+            async move { write(store.as_ref(), event).await }.instrument(tracing::Span::current()),
+        );
+        tracing::trace!(
+            user_id = %user,
+            kind = kind.as_str(),
+            in_flight = detached.len(),
+            "detached an account activity write"
+        );
+    }
+
+    /// Wait until every write [`Self::record_detached`] started before this call has finished.
+    ///
+    /// What a test reads the log after, and what a shutdown that wants no event lost awaits.
+    pub async fn settled(&self) {
+        let mut pending = std::mem::take(&mut *lock(&self.detached));
+        while let Some(finished) = pending.join_next().await {
+            if let Err(error) = finished {
+                tracing::error!(%error, "a detached activity write did not finish");
+            }
+        }
+    }
+
+    /// The event `kind` happening to `user` now, in the current request.
+    fn stamp(
+        &self,
+        user: &UserId,
+        kind: ActivityKind,
+        session: Option<&SessionId>,
+        subject: Option<&str>,
+    ) -> ActivityEvent {
+        ActivityEvent {
             event_id: uuid::Uuid::now_v7().to_string(),
             user_id: user.clone(),
             kind,
-            at: now,
+            at: self.clock.now(),
             request_id: crate::request_span::current_request_id().map(|id| id.to_string()),
             session_id: session.cloned(),
             subject: subject.map(str::to_owned),
-        };
-        let event_id = event.event_id.clone();
-        match self.store.record(event, Self::horizon(now)).await {
-            Ok(()) => tracing::info!(
-                user_id = %user,
-                kind = kind.as_str(),
-                event_id,
-                session_id = ?session,
-                subject,
-                "recorded an account activity event"
-            ),
-            Err(error) => tracing::error!(
-                %error,
-                user_id = %user,
-                kind = kind.as_str(),
-                event_id,
-                session_id = ?session,
-                subject,
-                "an account activity event could not be recorded; the action stands"
-            ),
         }
     }
 
@@ -318,6 +374,38 @@ impl ActivityContext {
         self.store
             .recent(user, since, limit.min(MAX_EVENTS_PER_ACCOUNT))
             .await
+    }
+}
+
+/// Append `event` to its account's log, logging it at `error` when the store refuses.
+///
+/// Infallible for the reason [`ActivityContext::record`] gives: the action has already happened.
+async fn write(store: &dyn ActivityStore, event: ActivityEvent) {
+    // The fields the log line names, kept before the event moves into the store.
+    let kind = event.kind;
+    let event_id = event.event_id.clone();
+    let user_id = event.user_id.clone();
+    let session_id = event.session_id.clone();
+    let subject = event.subject.clone();
+    let horizon = ActivityContext::horizon(event.at);
+    match store.record(event, horizon).await {
+        Ok(()) => tracing::info!(
+            user_id = %user_id,
+            kind = kind.as_str(),
+            event_id,
+            session_id = ?session_id,
+            subject,
+            "recorded an account activity event"
+        ),
+        Err(error) => tracing::error!(
+            %error,
+            user_id = %user_id,
+            kind = kind.as_str(),
+            event_id,
+            session_id = ?session_id,
+            subject,
+            "an account activity event could not be recorded; the action stands"
+        ),
     }
 }
 
