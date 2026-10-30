@@ -65,6 +65,9 @@ pub enum ActivityKind {
     TotpEnabled,
     /// A second factor was removed.
     TotpDisabled,
+    /// The master-key escrow was stored over an earlier one, so the old recovery secret no
+    /// longer opens the account.
+    EscrowReplaced,
     /// A cross-device enrollment code was redeemed.
     DeviceEnrolled,
     /// A share link was created.
@@ -79,7 +82,7 @@ pub enum ActivityKind {
 
 impl ActivityKind {
     /// Every kind, in the order design/activity-log.md lists them.
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 17] = [
         Self::AccountRegistered,
         Self::SignInPassword,
         Self::SignInSecondFactor,
@@ -91,6 +94,7 @@ impl ActivityKind {
         Self::PasswordChanged,
         Self::TotpEnabled,
         Self::TotpDisabled,
+        Self::EscrowReplaced,
         Self::DeviceEnrolled,
         Self::ShareLinkCreated,
         Self::ShareLinkRevoked,
@@ -112,6 +116,7 @@ impl ActivityKind {
             Self::PasswordChanged => "password.changed",
             Self::TotpEnabled => "totp.enabled",
             Self::TotpDisabled => "totp.disabled",
+            Self::EscrowReplaced => "escrow.replaced",
             Self::DeviceEnrolled => "device.enrolled",
             Self::ShareLinkCreated => "share_link.created",
             Self::ShareLinkRevoked => "share_link.revoked",

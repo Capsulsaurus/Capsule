@@ -31,6 +31,7 @@ It is not the [provenance](/design/cryptography/provenance/) chain, which signs 
 | `password.changed` | the account password changes | — |
 | `totp.enabled` | a second factor is confirmed | — |
 | `totp.disabled` | a second factor is removed | — |
+| `escrow.replaced` | the master-key [escrow](/design/backup-recovery/#master-key-escrow) is stored over an earlier one, so the old recovery secret stops working | — |
 | `device.enrolled` | a cross-device enrollment code is redeemed | — |
 | `share_link.created` | a share link is created | the link's id |
 | `share_link.revoked` | a share link is revoked | the link's id |
@@ -41,6 +42,7 @@ Not recorded, each for a stated reason:
 
 - **Password sign-in failures.** The account directory answers a refused or locked sign-in without naming the account, so that the route cannot become an enumeration oracle; recording one needs the directory to name the account it refused, which is a change to that port.
 - **Blob downloads.** One event per blob per request would grow with library size and record an access pattern over content addresses. Downloads by a share link or a federated peer are the security-relevant subset; they need an aggregation (per link or peer, per window) before they are recorded.
+- **A first escrow, and the sealed identity and album-key slots beside it.** A first escrow invalidates no recovery secret, and the other slots are sealed under the master key, so replacing them changes nothing that opens the account. Only replacing the master-key escrow is a credential change.
 - **Token refresh.** It rotates a session that is already recorded, once per access-token lifetime, and would bury every other event.
 
 ## Fields
