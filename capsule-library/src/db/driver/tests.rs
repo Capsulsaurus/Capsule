@@ -34,7 +34,7 @@ fn make_asset(uuid: &str, hash: &str) -> AssetRow {
 fn test_init_schema_idempotent() {
     let db = DatabaseDriver::open_in_memory().unwrap();
     db.init_schema().unwrap(); // second call — should not fail
-    assert_eq!(db.schema_version().unwrap(), 5);
+    assert_eq!(db.schema_version().unwrap(), 6);
 }
 
 /// The caption and location projections round-trip through insert, upsert and the row
@@ -335,6 +335,90 @@ fn test_album_crud() {
 
     db.delete_album("album-1").unwrap();
     assert!(db.find_album("album-1").unwrap().is_none());
+}
+
+fn album_row(id: &str, created_at: i64) -> AlbumRow {
+    AlbumRow {
+        id: id.to_string(),
+        name: id.to_string(),
+        created_at,
+        modified_at: created_at,
+        cover_asset_id: None,
+    }
+}
+
+fn v7_at(secs: u64) -> String {
+    uuid::Uuid::new_v7(uuid::Timestamp::from_unix(uuid::NoContext, secs, 0)).to_string()
+}
+
+/// `list_albums` is the album order: most recent visible, untrashed asset first; an empty
+/// album by its id's creation time, not the row's local `created_at`; ties by id.
+#[test]
+fn list_albums_orders_by_most_recent_visible_asset() {
+    let db = DatabaseDriver::open_in_memory().unwrap();
+    // Ids minted oldest → newest; local `created_at` deliberately disagrees with them.
+    let old = v7_at(1_000);
+    let mid = v7_at(2_000);
+    let empty = v7_at(3_000);
+    let new = v7_at(4_000);
+    for (id, created_at) in [(&old, 9), (&mid, 8), (&empty, 7), (&new, 6)] {
+        db.insert_album(&album_row(id, created_at)).unwrap();
+    }
+
+    let put = |uuid: &str, album: &str, at: Option<i64>, fallback: i64| {
+        let mut row = make_asset(uuid, &format!("{uuid:0>64}"));
+        row.album_id = Some(album.to_string());
+        row.capture_utc = at;
+        row.capture_timestamp = fallback;
+        db.insert_asset(&row).unwrap();
+    };
+    // `old` holds the most recent capture; `capture_utc` NULL falls back to the local stamp.
+    put("o-1", &old, None, 10_000);
+    put("m-1", &mid, Some(5_000), 0);
+    // `new`'s only assets are hidden or trashed, so it ranks by its creation time (4_000).
+    put("n-1", &new, Some(20_000), 0);
+    put("n-2", &new, Some(30_000), 0);
+    db.update_asset_hidden("n-1", true).unwrap();
+    db.soft_delete("n-2", 1).unwrap();
+
+    let order: Vec<String> = db
+        .list_albums()
+        .unwrap()
+        .into_iter()
+        .map(|a| a.id)
+        .collect();
+    assert_eq!(
+        order,
+        vec![old.clone(), mid.clone(), new.clone(), empty.clone()]
+    );
+
+    let recency = db.album_recency().unwrap();
+    assert_eq!(recency.latest_capture(&old), Some(10_000));
+    assert_eq!(recency.latest_capture(&new), None);
+
+    // Restoring the trashed asset moves its album to the front with no other write.
+    db.restore_asset("n-2").unwrap();
+    let first = db.list_albums().unwrap().remove(0).id;
+    assert_eq!(first, new);
+}
+
+/// The recency query is served by `idx_assets_album_recency`, not a table scan.
+#[test]
+fn album_recency_reads_the_recency_index() {
+    let db = DatabaseDriver::open_in_memory().unwrap();
+    let plan: Vec<String> = db
+        .connection()
+        .prepare(&format!("EXPLAIN QUERY PLAN {ALBUM_RECENCY_SQL}"))
+        .unwrap()
+        .query_map([], |r| r.get::<_, String>(3))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert!(
+        plan.iter()
+            .any(|step| step.contains("COVERING INDEX idx_assets_album_recency")),
+        "{plan:?}"
+    );
 }
 
 #[test]

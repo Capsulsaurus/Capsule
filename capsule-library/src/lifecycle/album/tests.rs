@@ -185,6 +185,58 @@ fn a_tampered_persisted_album_record_is_refused() {
     ));
 }
 
+/// #998: `albums()` lists the album with the most recent visible asset first, an album with
+/// none by its creation time, and follows capture-date edits and hiding with no extra write.
+#[test]
+fn albums_are_listed_by_their_most_recent_visible_asset() {
+    let lib = TempDir::new().unwrap();
+    let src = TempDir::new().unwrap();
+    let img = src.path().join("p.jpg");
+    fs::write(&img, b"\xFF\xD8\xFF album order bytes").unwrap();
+
+    let mut ws = fast_workspace(lib.path());
+    let minted_at = |secs| Uuid::new_v7(uuid::Timestamp::from_unix(uuid::NoContext, secs, 0));
+    let older = ws
+        .create_album_with_id(minted_at(1_500_000_000), "Older")
+        .unwrap();
+    let newer = ws
+        .create_album_with_id(minted_at(2_000_000_000), "Newer")
+        .unwrap();
+    let names =
+        |ws: &Workspace| -> Vec<Uuid> { ws.albums().into_iter().map(|(id, _)| id).collect() };
+    assert_eq!(
+        names(&ws),
+        vec![newer, older],
+        "empty albums rank by creation time"
+    );
+
+    let asset = ws.import_asset(older, &img).unwrap();
+    ws.set_capture_timestamp(&asset, jiff::Timestamp::from_second(4_000_000_000).unwrap())
+        .unwrap();
+    assert_eq!(
+        names(&ws),
+        vec![older, newer],
+        "the latest capture ranks first"
+    );
+
+    ws.set_capture_timestamp(&asset, jiff::Timestamp::from_second(1_000_000_000).unwrap())
+        .unwrap();
+    assert_eq!(
+        names(&ws),
+        vec![newer, older],
+        "an old capture ranks below a new album"
+    );
+
+    ws.set_capture_timestamp(&asset, jiff::Timestamp::from_second(4_000_000_000).unwrap())
+        .unwrap();
+    ws.set_hidden(&asset, true).unwrap();
+    assert_eq!(
+        names(&ws),
+        vec![newer, older],
+        "a hidden asset does not rank its album"
+    );
+}
+
 #[test]
 fn epoch_rotation_keeps_old_assets_verifiable_and_backs_up() {
     let lib = TempDir::new().unwrap();

@@ -1365,7 +1365,9 @@ impl FfiWorkspace {
         self.with(|ws| Ok(ws.ensure_album(album_id, &name)?.to_string()))
     }
 
-    /// Every album this workspace holds key material for.
+    /// Every album this workspace holds key material for, in the one album order every app
+    /// shows as is: the album with the most recent visible, untrashed asset first, an empty
+    /// album by its creation time, ties by ascending id (`Workspace::albums`).
     pub fn albums(&self) -> Result<Vec<FfiAlbum>, FfiError> {
         self.with(|ws| {
             Ok(ws
