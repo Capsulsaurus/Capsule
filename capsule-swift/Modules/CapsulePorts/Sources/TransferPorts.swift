@@ -262,7 +262,8 @@ public protocol SyncPort: Sendable {
     /// opened, an original when it is exported.
     ///
     /// On a permanent failure the implementation **degrades** to the best
-    /// representation in hand and reports
+    /// representation in hand, as the render ladder names it
+    /// (``RenderLadder/bestAvailable(_:)``), and reports
     /// ``AssetSyncState/fullResolutionUnavailable(bestAvailable:)``; it never
     /// removes the asset's metadata or index entry over a missing derivative.
     ///
@@ -274,6 +275,31 @@ public protocol SyncPort: Sendable {
 
     /// A stream of sync-status updates.
     func changes() -> AsyncStream<SyncStatus>
+}
+
+// MARK: - EmbeddedPreviewPort
+
+/// A RAW original's embedded JPEG, read from the original this device holds
+/// (*Thumbnails — Embedded Previews*).
+///
+/// Local only: the preview is never uploaded or listed as a tier. Its size is
+/// what the render ladder is told in ``RenderHoldings/embeddedPreview``, and
+/// when the ladder names it, the JPEG is what the surface draws, with
+/// ``EmbeddedPreview/orientation`` applied in place of any tag the JPEG
+/// carries.
+///
+/// Maps to `capsule_sdk`'s `embedded_preview`. Reading one reads the whole
+/// original, so a caller reads it once per asset and keeps the answer.
+public protocol EmbeddedPreviewPort: Sendable {
+    /// The embedded preview of the original at `original`, whose extension
+    /// (without the dot) is `fileExtension`.
+    ///
+    /// `nil` when the original is not a RAW, carries no preview, or carries one
+    /// that does not read within the decode budget: each leaves the rung to the
+    /// next source, so none is an error.
+    ///
+    /// - Throws: when the file cannot be read.
+    func embeddedPreview(original: URL, fileExtension: String) async throws -> EmbeddedPreview?
 }
 
 // MARK: - StoragePort

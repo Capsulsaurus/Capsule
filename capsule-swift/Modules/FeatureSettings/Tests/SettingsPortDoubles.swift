@@ -213,7 +213,6 @@ actor StubStoragePort: StoragePort {
 
     static let defaultBreakdown = LocalStorageBreakdown(
         bytesByTier: [
-            .dominantColour: 1024,
             .lqip: 2048,
             .thumbnail: 4000000,
             .preview: 12000000,

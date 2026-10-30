@@ -50,8 +50,8 @@ struct StorageSettingsTests {
     func tiersAreOrdered() {
         let model = Self.model()
 
-        #expect(model.tiers == [.dominantColour, .lqip, .thumbnail, .preview, .original])
-        #expect(RepresentationTier.allCases.count == 5)
+        #expect(model.tiers == [.lqip, .thumbnail, .preview, .original])
+        #expect(RepresentationTier.allCases.count == 4)
     }
 
     @Test("a tier this device holds nothing for reads as zero rather than as missing")

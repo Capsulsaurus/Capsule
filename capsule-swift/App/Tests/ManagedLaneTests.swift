@@ -271,7 +271,7 @@ struct ManagedLaneTests {
     private static let fixtureLatitude = 48.8584
 
     /// Import a real JPEG through the lane's importer and return its asset.
-    private static func importPhoto(through lane: AppEnvironment.ManagedLane, in root: URL) async throws -> Asset {
+    static func importPhoto(through lane: AppEnvironment.ManagedLane, in root: URL) async throws -> Asset {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let url = root.appending(path: "picked-photo.jpg")
         try jpeg(width: 320, height: 240).write(to: url)
@@ -282,7 +282,7 @@ struct ManagedLaneTests {
 
     /// Real JPEG bytes with a camera make and a GPS fix, encoded at test time so
     /// no image ships in the repository.
-    private static func jpeg(width: Int, height: Int) throws -> Data {
+    static func jpeg(width: Int, height: Int) throws -> Data {
         let context = try #require(CGContext(
             data: nil,
             width: width,
@@ -316,7 +316,7 @@ struct ManagedLaneTests {
         return output as Data
     }
 
-    private static func temporaryRoot() -> URL {
+    static func temporaryRoot() -> URL {
         URL.temporaryDirectory.appending(path: "ManagedLaneTests-\(UUID().uuidString)", directoryHint: .isDirectory)
     }
 
