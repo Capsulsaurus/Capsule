@@ -72,6 +72,14 @@ pub const PROTOCOL_MAX_CHUNK: u64 = CHUNK_SIZE_16MB;
 /// "retrying with backoff and halting after a bounded number of attempts").
 const MAX_RECOVERIES: u32 = 64;
 
+/// Upper bound on shrinking cuts — a stalled or unanswered chunk re-sent at the same offset,
+/// shorter — between two accepted chunks. Unlike [`MAX_RECOVERIES`] this refills on every
+/// accepted chunk: a long upload over a link that slows down again and again cuts afresh each
+/// time, and only a link that never lands a chunk is a stuck peer. Twelve halvings take the
+/// 16 MiB ceiling to the protocol minimum, so a live link stays well inside it; it bounds a
+/// size that is re-grown (a re-created session) without anything landing.
+const MAX_CUTS_SINCE_PROGRESS: u32 = 32;
+
 /// The longest single wait a server's `Retry-After` is honoured for.
 ///
 /// A server names its own wait (transfer upload doc, §Hostile Clients), and a
@@ -999,6 +1007,8 @@ impl From<WaitAsked> for UploadError {
 struct Recovery {
     /// Recovery actions taken so far, bounded by [`MAX_RECOVERIES`].
     count: u32,
+    /// Shrinking cuts since the last accepted chunk, bounded by [`MAX_CUTS_SINCE_PROGRESS`].
+    cuts: u32,
     /// The shared retry engine, `bulk-transfer` class: exponential backoff with
     /// full jitter, bounded give-up. It governs mid-transfer transport resets and
     /// server-asked waits that name no `Retry-After`.
@@ -1009,7 +1019,28 @@ impl Recovery {
     fn new() -> Self {
         Self {
             count: 0,
+            cuts: 0,
             engine: RetryClass::BulkTransfer.engine(),
+        }
+    }
+
+    /// An accepted chunk is real progress: it refills the shrinking-cut budget and the
+    /// transient-reset backoff budget. The per-transfer [`MAX_RECOVERIES`] budget is not
+    /// refilled.
+    fn on_progress(&mut self) {
+        self.cuts = 0;
+        self.engine.reset();
+    }
+
+    /// Charge one shrinking cut, failing loudly once a run of them lands nothing.
+    fn charge_cut(&mut self, action: &str) -> Result<(), UploadError> {
+        self.cuts += 1;
+        if self.cuts > MAX_CUTS_SINCE_PROGRESS {
+            Err(UploadError::RetriesExhausted(format!(
+                "{action}: exceeded {MAX_CUTS_SINCE_PROGRESS} shrinking cuts without an accepted chunk"
+            )))
+        } else {
+            Ok(())
         }
     }
 
@@ -1622,8 +1653,8 @@ impl UploadClient {
                 } => {
                     state = status;
                     strategy.record_chunk(want, attempt_start.elapsed());
-                    // Real progress resets the transient-reset backoff budget.
-                    recovery.engine.reset();
+                    // Real progress refills the shrinking-cut and transient-reset budgets.
+                    recovery.on_progress();
                     self.events.emit(|| TransferEvent::ChunkAcked {
                         blob: request.hash.clone(),
                         session_id: session_id.clone(),
@@ -1703,11 +1734,16 @@ impl UploadClient {
                     // Offset unchanged; the loop re-sends the same chunk.
                 }
                 ack @ (ChunkAck::TimedOut | ChunkAck::Stalled) => {
-                    recovery.charge("stalled chunk re-send")?;
                     // The offset stays: the server writes nothing of a chunk that did
                     // not arrive whole. No wait either, since the link just spent a
-                    // whole stall bound on this chunk.
+                    // whole stall bound on this chunk. A cut that shrank is charged to the
+                    // budget progress refills; one at the minimum to the per-transfer one.
                     let shrunk = strategy.shrink_after_stall(want);
+                    if shrunk {
+                        recovery.charge_cut("stalled chunk re-send")?;
+                    } else {
+                        recovery.charge("stalled chunk re-send")?;
+                    }
                     tracing::info!(
                         %session_id,
                         offset,
@@ -1732,11 +1768,12 @@ impl UploadClient {
                         "a chunk got no answer — re-sending at the same offset, shorter where it can be"
                     );
                     if shrunk {
-                        // A cut that shrank is a stall re-send, charged like one: halving is
-                        // bounded by the protocol minimum, so it cannot hot-loop, and spending
-                        // the reset retries on it would give up on a 16 MiB chunk at 64 KiB.
-                        // No wait either, since the link just spent a whole response wait.
-                        recovery.charge("unanswered chunk re-send")?;
+                        // A cut that shrank is a stall re-send, charged like one: to the budget
+                        // each accepted chunk refills, so a long upload that slows down again
+                        // and again is not failed by the per-transfer ceiling, and spending the
+                        // reset retries on it would give up on a 16 MiB chunk at 64 KiB. No
+                        // wait either, since the link just spent a whole response wait.
+                        recovery.charge_cut("unanswered chunk re-send")?;
                         continue;
                     }
                     // Nothing smaller can be sent: an unanswered minimum chunk is a dead path
