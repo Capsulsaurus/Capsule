@@ -503,6 +503,96 @@ fn plan_with_applies_advice_to_the_current_path() {
     assert_eq!(monitor.plan().windows.sessions, 4);
 }
 
+#[test]
+fn an_outcome_on_a_replaced_path_is_dropped() {
+    let monitor = PathMonitor::new(sample(), bounds());
+    let started_on = monitor.snapshot().generation;
+    monitor.observe(with(|s| s.interface = PathInterface::Cellular));
+
+    for _ in 0..3 {
+        assert_eq!(
+            monitor.record_on(started_on, TransferSignal::Reset),
+            None,
+            "the old path's failure says nothing about the new one"
+        );
+    }
+    assert_eq!(monitor.plan().class, ConnectionClass::Unmetered);
+
+    let current = monitor.snapshot().generation;
+    for _ in 0..3 {
+        monitor.record_on(current, TransferSignal::Reset);
+    }
+    assert_eq!(monitor.plan().class, ConnectionClass::Adverse);
+}
+
+/// A clock a test moves by hand.
+#[derive(Clone, Default)]
+struct HandClock(std::sync::Arc<std::sync::atomic::AtomicU64>);
+
+impl HandClock {
+    fn advance(&self, by: Duration) {
+        self.0.fetch_add(
+            u64::try_from(by.as_millis()).unwrap(),
+            std::sync::atomic::Ordering::SeqCst,
+        );
+    }
+}
+
+impl MonotonicClock for HandClock {
+    fn now_millis(&self) -> u64 {
+        self.0.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+#[test]
+fn a_background_deadline_counts_down_between_reports() {
+    let clock = HandClock::default();
+    let monitor = PathMonitor::new(sample(), bounds()).with_clock(clock.clone());
+    monitor.observe(with(|s| {
+        s.execution = Execution::Background {
+            deadline: Duration::from_mins(3),
+        };
+    }));
+    let mut plans = monitor.subscribe();
+    assert_eq!(plans.borrow_and_update().admission, TierAdmission::All);
+
+    clock.advance(Duration::from_secs(90));
+    assert_eq!(
+        monitor.snapshot().sample.execution,
+        Execution::Background {
+            deadline: Duration::from_secs(90)
+        }
+    );
+    assert_eq!(monitor.plan().admission, TierAdmission::All);
+
+    // Past the bulk threshold with no new report: a push starting now holds bulk back.
+    clock.advance(Duration::from_secs(45));
+    let plans = monitor.subscribe();
+    assert_eq!(plans.borrow().hold, Some(Hold::Deadline));
+    assert_eq!(plans.borrow().admission, TierAdmission::IndexOnly);
+
+    // Long past the deadline it is zero, never negative; a fresh report restarts the count.
+    clock.advance(Duration::from_mins(10));
+    assert_eq!(
+        monitor.snapshot().sample.execution,
+        Execution::Background {
+            deadline: Duration::ZERO
+        }
+    );
+    monitor.observe(with(|s| {
+        s.execution = Execution::Background {
+            deadline: Duration::from_mins(5),
+        };
+    }));
+    assert_eq!(monitor.plan().admission, TierAdmission::All);
+}
+
+#[test]
+fn a_foreground_sample_does_not_age() {
+    let elapsed = Duration::from_hours(1);
+    assert_eq!(sample().aged(elapsed), sample());
+}
+
 // ─── Pools ───────────────────────────────────────────────────────────────────
 
 #[test]

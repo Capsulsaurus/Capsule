@@ -22,7 +22,10 @@ use capsule_library::import::{UploadPolicy, UploadTier};
 use tokio::sync::watch;
 use tracing::instrument;
 
-use super::{AdverseDetector, AdverseThresholds, ConnectionClass, TransferSignal};
+use super::{
+    AdverseDetector, AdverseThresholds, ConnectionClass, MonotonicClock, SystemClock,
+    TransferSignal,
+};
 use crate::upload::advice::ServerAdvice;
 use crate::upload::queue::LaneWindows;
 use crate::upload::{ADVERSE_TARGET_REQUEST_DURATION, TARGET_REQUEST_DURATION};
@@ -146,6 +149,17 @@ impl PathSample {
         sample
     }
 
+    /// This sample `elapsed` after it was reported: a background deadline has that much less
+    /// time left, down to zero. Everything else is the platform's to report again.
+    #[must_use]
+    pub fn aged(&self, elapsed: Duration) -> Self {
+        let mut sample = *self;
+        if let Execution::Background { deadline } = &mut sample.execution {
+            *deadline = deadline.saturating_sub(elapsed);
+        }
+        sample
+    }
+
     /// Whether `other` is a different path: its reachability, interface or cost differs.
     /// Power, thermal state and execution change the plan, never the path.
     #[must_use]
@@ -176,7 +190,9 @@ pub struct PathGeneration(pub u64);
 /// The normalized path: the latest sample, stamped with its generation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PathSnapshot {
-    /// What the platform last reported.
+    /// What the platform last reported. A [`PathMonitor`] hands it out
+    /// [aged](PathSample::aged) to the moment it is read, so a background deadline counts down
+    /// between reports.
     pub sample: PathSample,
     /// The path the sample belongs to.
     pub generation: PathGeneration,
@@ -445,7 +461,10 @@ impl PathUpdate {
 
 #[derive(Debug)]
 struct MonitorState {
+    /// The snapshot as the platform reported it.
     snapshot: PathSnapshot,
+    /// When it was reported, on the monitor's clock.
+    reported_at_ms: u64,
     detector: AdverseDetector,
 }
 
@@ -455,6 +474,19 @@ impl MonitorState {
             adverse: self.detector.is_adverse(),
         }
     }
+
+    /// The snapshot at `now_ms`: its background deadline aged by the time since the report.
+    fn current(&self, now_ms: u64) -> PathSnapshot {
+        let elapsed = Duration::from_millis(now_ms.saturating_sub(self.reported_at_ms));
+        PathSnapshot {
+            sample: self.snapshot.sample.aged(elapsed),
+            generation: self.snapshot.generation,
+        }
+    }
+
+    fn plan(&self, now_ms: u64, advice: HeldAdvice, bounds: LaneWindows) -> TransferPlan {
+        plan_transfer(&self.current(now_ms), self.link(), advice, bounds)
+    }
 }
 
 /// The current path, the link behaviour observed on it, and the plan they make, shared by
@@ -463,11 +495,26 @@ impl MonitorState {
 /// Platform shells call [`observe`](Self::observe) with each sample, transfers report their
 /// outcomes through [`record`](Self::record), and a long transfer [`subscribe`](Self::subscribe)s
 /// to learn — within the tick the change lands — that the plan it runs under has changed.
-#[derive(Debug)]
+///
+/// A background deadline is aged on the monitor's [`MonotonicClock`]: every plan read through
+/// [`plan`](Self::plan), [`subscribe`](Self::subscribe), [`plan_with`](Self::plan_with) or
+/// [`snapshot`](Self::snapshot) sees the time left now, not the time left when the app last
+/// reported, so a push started late in a background task holds bulk back without a new report.
 pub struct PathMonitor {
     state: Mutex<MonitorState>,
     bounds: LaneWindows,
     plans: watch::Sender<TransferPlan>,
+    clock: Box<dyn MonotonicClock + Send + Sync>,
+}
+
+impl std::fmt::Debug for PathMonitor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PathMonitor")
+            .field("state", &self.state)
+            .field("bounds", &self.bounds)
+            .field("plan", &*self.plans.borrow())
+            .finish_non_exhaustive()
+    }
 }
 
 impl PathMonitor {
@@ -485,11 +532,13 @@ impl PathMonitor {
         bounds: LaneWindows,
         thresholds: AdverseThresholds,
     ) -> Self {
+        let clock = SystemClock::new();
         let state = MonitorState {
             snapshot: PathSnapshot {
                 sample,
                 generation: PathGeneration(1),
             },
+            reported_at_ms: clock.now_millis(),
             detector: AdverseDetector::new(thresholds),
         };
         let plan = plan_transfer(&state.snapshot, state.link(), HeldAdvice::none(), bounds);
@@ -497,7 +546,21 @@ impl PathMonitor {
             state: Mutex::new(state),
             bounds,
             plans: watch::Sender::new(plan),
+            clock: Box::new(clock),
         }
+    }
+
+    /// Age background deadlines on `clock` instead of the process's monotonic clock. The
+    /// current sample counts as reported now, on `clock`.
+    #[must_use]
+    pub fn with_clock(mut self, clock: impl MonotonicClock + Send + Sync + 'static) -> Self {
+        let now = clock.now_millis();
+        self.clock = Box::new(clock);
+        self.state
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner)
+            .reported_at_ms = now;
+        self
     }
 
     fn state(&self) -> std::sync::MutexGuard<'_, MonitorState> {
@@ -505,28 +568,34 @@ impl PathMonitor {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// The latest snapshot.
+    /// The latest snapshot, its background deadline aged to now.
     #[must_use]
     pub fn snapshot(&self) -> PathSnapshot {
-        self.state().snapshot
+        self.state().current(self.clock.now_millis())
     }
 
-    /// The current plan, without advice.
+    /// The current plan, without advice: re-made at now, so an aged background deadline holds
+    /// bulk back, and published to subscribers when that changed it.
     #[must_use]
     pub fn plan(&self) -> TransferPlan {
-        *self.plans.borrow()
+        let state = self.state();
+        let plan = state.plan(self.clock.now_millis(), HeldAdvice::none(), self.bounds);
+        self.publish(plan);
+        drop(state);
+        plan
     }
 
     /// The current plan with `advice` applied to its windows and chunk size.
     #[must_use]
     pub fn plan_with(&self, advice: HeldAdvice) -> TransferPlan {
-        let state = self.state();
-        plan_transfer(&state.snapshot, state.link(), advice, self.bounds)
+        self.state()
+            .plan(self.clock.now_millis(), advice, self.bounds)
     }
 
-    /// A receiver that wakes each time the plan changes.
+    /// A receiver that wakes each time the plan changes, holding the plan as of now.
     #[must_use]
     pub fn subscribe(&self) -> watch::Receiver<TransferPlan> {
+        let _ = self.plan();
         self.plans.subscribe()
     }
 
@@ -541,13 +610,10 @@ impl PathMonitor {
             state.snapshot.generation = PathGeneration(state.snapshot.generation.0 + 1);
             state.detector.reset();
         }
+        let now = self.clock.now_millis();
         state.snapshot.sample = sample;
-        let plan = plan_transfer(
-            &state.snapshot,
-            state.link(),
-            HeldAdvice::none(),
-            self.bounds,
-        );
+        state.reported_at_ms = now;
+        let plan = state.plan(now, HeldAdvice::none(), self.bounds);
         // Published under the lock, so two samples racing publish in the order they planned.
         self.publish(plan);
         drop(state);
@@ -569,15 +635,38 @@ impl PathMonitor {
     pub fn record(&self, signal: TransferSignal) -> TransferPlan {
         let mut state = self.state();
         state.detector.record(signal);
-        let plan = plan_transfer(
-            &state.snapshot,
-            state.link(),
-            HeldAdvice::none(),
-            self.bounds,
-        );
+        let plan = state.plan(self.clock.now_millis(), HeldAdvice::none(), self.bounds);
         self.publish(plan);
         drop(state);
         plan
+    }
+
+    /// [`record`](Self::record) an outcome observed on the path of `generation`, only while
+    /// that is still the current path: a transfer that began on a path since replaced says
+    /// nothing about the new one, whose detector has just been reset. `None` when it was
+    /// dropped.
+    pub fn record_on(
+        &self,
+        generation: PathGeneration,
+        signal: TransferSignal,
+    ) -> Option<TransferPlan> {
+        let mut state = self.state();
+        let current = state.snapshot.generation;
+        if current != generation {
+            drop(state);
+            tracing::debug!(
+                observed_on = generation.0,
+                current = current.0,
+                ?signal,
+                "path: dropping an outcome observed on a path since replaced"
+            );
+            return None;
+        }
+        state.detector.record(signal);
+        let plan = state.plan(self.clock.now_millis(), HeldAdvice::none(), self.bounds);
+        self.publish(plan);
+        drop(state);
+        Some(plan)
     }
 
     fn publish(&self, plan: TransferPlan) {
