@@ -53,6 +53,8 @@ struct CullingView: View {
     @State private var isConfirmingSweep = false
     @State private var isShowingShortcuts = false
     @State private var failure: Failure?
+    /// Verdict writes, one at a time in the order the verdicts were given.
+    @State private var writes = CullWriteQueue()
     @FocusState private var isFocused: Bool
 
     /// Rows per library page. The pass shows its first page as soon as it
@@ -106,7 +108,7 @@ struct CullingView: View {
                 titleVisibility: .visible
             ) {
                 Button("app.culling.sweep.confirm", role: .destructive) {
-                    Task { await sweep() }
+                    writes.submit { await sweep() }
                 }
                 Button("app.common.cancel", role: .cancel) {}
             } message: {
@@ -284,7 +286,7 @@ struct CullingView: View {
         case .pick, .neutral, .reject:
             guard let flag = verb.flag else { return }
             guard let verdict = pass.verdict(flag) else { return }
-            Task { await write(verdict) }
+            writes.submit { await write(verdict) }
         case .next: _ = pass.next()
         case .previous: _ = pass.previous()
         case .expandStack: _ = pass.expandStack()
@@ -296,13 +298,15 @@ struct CullingView: View {
         announce(stepDescription)
     }
 
-    /// Write a verdict. A collapsed stack's targets come from the stack port,
-    /// not the pass: the pass holds only the members its query and its pages
-    /// have brought in, and flagging a stack writes every member.
+    /// Write a verdict. Runs on ``writes``, so it starts only once every
+    /// earlier verdict's write has finished.
     private func write(_ verdict: CullVerdict) async {
         do {
-            let ids = try await writeTargets(of: verdict)
-            try await organize.setCull(verdict.flag, for: ids)
+            let ids = try await CullVerdictWrite.run(
+                verdict,
+                members: { [stacks] stackID in try await stacks.members(of: stackID).map(\.id) },
+                setCull: { [organize] flag, ids in try await organize.setCull(flag, for: ids) }
+            )
             pass.settle(verdict, written: ids)
             CapsuleLog.interface.info(
                 "culling: flagged \(ids.count, privacy: .public) as \(verdict.flag.rawValue, privacy: .public)"
@@ -314,25 +318,24 @@ struct CullingView: View {
         }
     }
 
-    private func writeTargets(of verdict: CullVerdict) async throws -> [AssetID] {
-        guard let stackID = verdict.stackID else { return verdict.targets }
-        return try await verdict.writeTargets(stackMembers: stacks.members(of: stackID).map(\.id))
-    }
-
+    /// Trash the rejected photos. Runs on ``writes`` behind every queued
+    /// verdict, so the candidates are read once those writes have settled or
+    /// reverted and the trash never reaches an asset whose flag write is still
+    /// to come.
     private func sweep() async {
-        let ids = pass.sweepCandidates
-        guard !ids.isEmpty else { return }
         do {
-            try await organize.moveToTrash(ids, retentionDays: nil)
+            guard let ids = try await CullSweep.run(
+                candidates: { pass.sweepCandidates },
+                moveToTrash: { [organize] ids in try await organize.moveToTrash(ids, retentionDays: nil) }
+            ) else { return }
+            pass.remove(Set(ids))
+            let count = ids.count
+            CapsuleLog.interface.info("culling: swept \(count, privacy: .public) rejects to the trash")
+            announce(String(localized: "app.culling.sweep.done", defaultValue: "Moved \(count) photos to the Trash"))
         } catch {
             CapsuleLog.interface.error("culling: sweep failed: \(error.localizedDescription, privacy: .public)")
             failure = .sweep
-            return
         }
-        pass.remove(Set(ids))
-        let count = ids.count
-        CapsuleLog.interface.info("culling: swept \(count, privacy: .public) rejects to the trash")
-        announce(String(localized: "app.culling.sweep.done", defaultValue: "Moved \(count) photos to the Trash"))
     }
 
     private func announce(_ text: String) {
@@ -396,6 +399,81 @@ struct CullingView: View {
         await thumbnails.renderInPlace(asset, request: request, shown: nil, pixelSize: Self.photoPixels) {
             image = $0.image
         }
+    }
+}
+
+// MARK: - CullWriteQueue
+
+/// Runs verdict writes one at a time, in the order they were submitted.
+///
+/// Each verdict used to start its own task, so a stack verdict, whose write
+/// first asks the stack port for every member, could reach the library after a
+/// later single-asset verdict on one of those members — leaving the library on
+/// the older flag while the pass showed and stored the newer one. Every write
+/// now waits for the one submitted before it, whether that one succeeded or
+/// failed.
+@MainActor
+final class CullWriteQueue {
+    /// The last write submitted; the next one waits for it.
+    private var tail: Task<Void, Never>?
+
+    /// Queue `write` behind every write already queued.
+    func submit(_ write: @escaping @MainActor () async -> Void) {
+        let previous = tail
+        tail = Task { @MainActor in
+            await previous?.value
+            await write()
+        }
+    }
+
+    /// Wait until every write submitted so far has finished.
+    func drain() async {
+        await tail?.value
+    }
+}
+
+// MARK: - CullSweep
+
+/// What sweeping the rejects does, over injected ports. The candidates are a
+/// closure read when the sweep runs, not a value captured when it was
+/// confirmed, so a sweep queued behind verdict writes sees their outcome.
+enum CullSweep {
+    /// Trash the current candidates and return them, or nil when there are none.
+    @MainActor
+    static func run(
+        candidates: () -> [AssetID],
+        moveToTrash: ([AssetID]) async throws -> Void
+    ) async throws -> [AssetID]? {
+        let ids = candidates()
+        guard !ids.isEmpty else { return nil }
+        try await moveToTrash(ids)
+        return ids
+    }
+}
+
+// MARK: - CullVerdictWrite
+
+/// What writing one verdict does to the library, over injected ports so the
+/// order of writes is a unit test rather than a tap.
+enum CullVerdictWrite {
+    /// The members of a stack, as the stack port lists them.
+    typealias Members = @Sendable (StackID) async throws -> [AssetID]
+    /// Set a cull flag on assets in the library.
+    typealias SetCull = @Sendable (CullFlag, [AssetID]) async throws -> Void
+
+    /// Write `verdict` and return the assets it reached.
+    ///
+    /// A collapsed stack's targets come from the stack port, not the pass: the
+    /// pass holds only the members its query and its pages have brought in,
+    /// and flagging a stack writes every member.
+    static func run(_ verdict: CullVerdict, members: Members, setCull: SetCull) async throws -> [AssetID] {
+        let ids: [AssetID] = if let stackID = verdict.stackID {
+            try await verdict.writeTargets(stackMembers: members(stackID))
+        } else {
+            verdict.targets
+        }
+        try await setCull(verdict.flag, ids)
+        return ids
     }
 }
 
