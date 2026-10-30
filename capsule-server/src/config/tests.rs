@@ -66,21 +66,65 @@ fn the_connection_bounds_are_explicit_and_configurable() {
     let config = Config::load(&serveable(), &memory(), Demands::Serve).expect("it loads");
     assert_eq!(config.header_read_timeout, Duration::from_secs(30));
     assert_eq!(
-        config.chunk_read_timeout,
-        crate::upload::policy::DEFAULT_CHUNK_READ_TIMEOUT
+        config.chunk_pace,
+        crate::upload::policy::ChunkPace::new(
+            crate::upload::policy::DEFAULT_CHUNK_STALL_TIMEOUT,
+            crate::upload::policy::DEFAULT_CHUNK_MIN_RATE,
+        )
     );
 
     let mut environment = serveable();
     environment.insert("HEADER_READ_TIMEOUT_SECONDS".to_owned(), "7".to_owned());
-    environment.insert("CHUNK_READ_TIMEOUT_SECONDS".to_owned(), "45".to_owned());
+    environment.insert("CHUNK_STALL_TIMEOUT_SECONDS".to_owned(), "45".to_owned());
+    environment.insert(
+        "CHUNK_MIN_RATE_BYTES_PER_SECOND".to_owned(),
+        "512".to_owned(),
+    );
     let config = Config::load(&environment, &memory(), Demands::Serve).expect("it loads");
     assert_eq!(config.header_read_timeout, Duration::from_secs(7));
-    assert_eq!(config.chunk_read_timeout, Duration::from_secs(45));
+    assert_eq!(
+        config.chunk_pace,
+        crate::upload::policy::ChunkPace::new(Duration::from_secs(45), 512)
+    );
+}
+
+/// The stall bound must sit below the idle timeout a typical reverse proxy applies (sixty
+/// seconds for nginx and AWS ALB), or a stalled chunk is cut by the proxy with a bare `504`
+/// before this server can answer its `408`.
+#[test]
+fn the_default_stall_bound_sits_below_a_typical_proxy_idle_timeout() {
+    assert!(crate::upload::policy::DEFAULT_CHUNK_STALL_TIMEOUT <= Duration::from_secs(30));
+}
+
+/// A zero rate floor is a setting, not an outage: it leaves the stall bound alone.
+#[test]
+fn a_zero_minimum_rate_turns_the_floor_off() {
+    let mut environment = serveable();
+    environment.insert("CHUNK_MIN_RATE_BYTES_PER_SECOND".to_owned(), "0".to_owned());
+    let config = Config::load(&environment, &memory(), Demands::Serve).expect("it loads");
+    assert_eq!(config.chunk_pace.min_bytes_per_second, 0);
+    assert_eq!(
+        config.chunk_pace.stall,
+        crate::upload::policy::DEFAULT_CHUNK_STALL_TIMEOUT
+    );
+}
+
+/// The total-duration setting the stall bound replaced is no longer read, and does not stop a
+/// server that still carries it from booting.
+#[test]
+fn the_retired_chunk_read_timeout_is_ignored() {
+    let mut environment = serveable();
+    environment.insert("CHUNK_READ_TIMEOUT_SECONDS".to_owned(), "0".to_owned());
+    let config = Config::load(&environment, &memory(), Demands::Serve).expect("it loads");
+    assert_eq!(
+        config.chunk_pace.stall,
+        crate::upload::policy::DEFAULT_CHUNK_STALL_TIMEOUT
+    );
 }
 
 #[test]
 fn a_connection_bound_of_zero_or_not_a_number_is_refused() {
-    for key in ["HEADER_READ_TIMEOUT_SECONDS", "CHUNK_READ_TIMEOUT_SECONDS"] {
+    for key in ["HEADER_READ_TIMEOUT_SECONDS", "CHUNK_STALL_TIMEOUT_SECONDS"] {
         for value in ["0", "-1", "thirty"] {
             let mut environment = serveable();
             environment.insert(key.to_owned(), value.to_owned());
@@ -88,6 +132,18 @@ fn a_connection_bound_of_zero_or_not_a_number_is_refused() {
                 Config::load(&environment, &memory(), Demands::Serve).expect_err("it refuses");
             assert!(error.names(key), "{key}={value}: {error}");
         }
+    }
+    for value in ["-1", "fast"] {
+        let mut environment = serveable();
+        environment.insert(
+            "CHUNK_MIN_RATE_BYTES_PER_SECOND".to_owned(),
+            value.to_owned(),
+        );
+        let error = Config::load(&environment, &memory(), Demands::Serve).expect_err("it refuses");
+        assert!(
+            error.names("CHUNK_MIN_RATE_BYTES_PER_SECOND"),
+            "{value}: {error}"
+        );
     }
 }
 

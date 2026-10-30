@@ -69,7 +69,7 @@ pub use self::authority::{
     AlbumWriteAccess, AuthorityError, AuthorityFuture, WriteAuthority, WriteRole,
 };
 pub use self::envelope::{DeclaredBlob, GateContext, GateReject, ManifestEnvelope};
-pub use self::policy::{ChunkReadDeadline, UploadPolicy};
+pub use self::policy::{ChunkPace, ChunkReadPace, UploadPolicy};
 use crate::blob::BlobStore;
 use crate::index::AssetIndex;
 use crate::quota::{QuotaContext, QuotaLimits, QuotaStore};

@@ -746,9 +746,9 @@ async fn every_declared_response_is_exercised() {
         .send()
         .await
         .assert_status(StatusCode::UNSUPPORTED_MEDIA_TYPE);
-    // 408: the chunk read deadline passed before the body arrived (#717). An in-process body is
-    // always whole, so the deadline is switched to one that has already passed.
-    fixture.chunk_deadline.set(std::time::Duration::ZERO);
+    // 408: the chunk body was cut (#717, #1041). An in-process body is always whole, so the
+    // stall bound is switched to zero, which cuts before the first byte.
+    fixture.chunk_pace.cut_every_chunk();
     client
         .patch(&session)
         .header("authorization", &bearer)
@@ -759,9 +759,7 @@ async fn every_declared_response_is_exercised() {
         .send()
         .await
         .assert_status(StatusCode::REQUEST_TIMEOUT);
-    fixture
-        .chunk_deadline
-        .set(capsule_server::upload::policy::DEFAULT_CHUNK_READ_TIMEOUT);
+    fixture.chunk_pace.reset();
     client
         .patch(&session)
         .header("authorization", &bearer)
@@ -5009,9 +5007,9 @@ async fn drops_block(
         .send()
         .await
         .assert_status(StatusCode::BAD_REQUEST);
-    // 408: the chunk read deadline passed before the body arrived (#717). An in-process body is
-    // always whole, so the deadline is switched to one that has already passed.
-    fixture.chunk_deadline.set(std::time::Duration::ZERO);
+    // 408: the chunk body was cut (#717, #1041). An in-process body is always whole, so the
+    // stall bound is switched to zero, which cuts before the first byte.
+    fixture.chunk_pace.cut_every_chunk();
     client
         .patch(&chunk_path)
         .header("x-capsule-offset", "0")
@@ -5020,9 +5018,7 @@ async fn drops_block(
         .send()
         .await
         .assert_status(StatusCode::REQUEST_TIMEOUT);
-    fixture
-        .chunk_deadline
-        .set(capsule_server::upload::policy::DEFAULT_CHUNK_READ_TIMEOUT);
+    fixture.chunk_pace.reset();
     client
         .patch(&chunk_path)
         .header("x-capsule-offset", "512")
