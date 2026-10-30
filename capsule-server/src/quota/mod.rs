@@ -55,6 +55,13 @@
 //! by growth the session check did not project: a metadata blob, a derivative, a federated
 //! receive.
 //!
+//! One upload path does reach it, narrowly. A session admitted `AlreadyAttributed` against
+//! another account's charge is charged for itself when that account releases the attribution
+//! ([`crate::upload::reservation`]), through [`charge_upload`], and a refusal ends the session
+//! rather than letting it store uncharged bytes. A session whose finalization is already
+//! claimed cannot be ended that way — its bytes are all on the server and its finalizer owns
+//! its terminal write — so it alone is charged past the hard limit and a suspension.
+//!
 //! That is a consequence of the design rather than a gap in it, and it is worth stating because
 //! it is easy to write a test that assumes an upload can push an account over and then to
 //! "fix" the enforcement when the test fails. The states exist to describe an account that *is*

@@ -39,7 +39,7 @@ Quota is charged to `upload_user_id` (the authenticated uploader), not `owner_id
 ## Enforcement Points
 
 - **Upload session creation is the only hard enforcement point.** [`POST /v1/upload`](/design/transfer/upload/#endpoints) refuses `403 error.quota.exceeded` if `used + declared_size` crosses the hard limit, and `403 error.quota.suspended` for a suspended account, before any pending row is written. Once open, the declared size is the cap and the session may complete; finalization does no quota check.
-- **Cancellation and expiry** release the reservation.
+- **Cancellation and expiry** release the reservation. A live session of another account, admitted against the released attribution because it was deduped, is then charged for the bytes with the same hard-limit and suspension checks as session creation. If the check refuses, the session ends with that refusal's code. A session whose finalization is already claimed is the one exception. All its bytes are on the server, so it is charged past the check, and that is the one way an upload can carry an account over its hard limit.
 - **Metadata-update writes** are checked as metadata growth.
 - **[Staged uploads](/design/transfer/upload/#upload-tiering-staged-uploads) and [streaming import](/design/import/pipeline/#import-upload-streaming-mode)** need no special case: each session is charged at its own creation. Exhaustion mid-stream refuses the next session; no local original is released for an asset that did not upload.
 
@@ -54,6 +54,7 @@ Quota is charged to `upload_user_id` (the authenticated uploader), not `owner_id
 
 - Session creation crossing the hard limit is refused with `error.quota.exceeded` and writes no pending row.
 - Two users upload the same content; only the first is debited.
+- When the first cancels, the second's live session is charged, or ended with `error.quota.exceeded` or `error.quota.suspended` if its account would be refused (`upload::reservation`).
 - Trash counts until hard-purge; purge plus GC sweep credits the bytes back with no orphaned derivative still counting.
 - A departed member stays charged until the collector releases the address (`quota::conformance`).
 - Grace expiry refuses metadata growth but admits delete and restore.

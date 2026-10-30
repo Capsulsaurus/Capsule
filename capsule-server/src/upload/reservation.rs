@@ -37,6 +37,13 @@
 //! ([`crate::store::UploadSessionStore::live_for_address`]). Without that step such a session,
 //! whose own post-open re-charge passed long ago, would store its bytes charged to nobody.
 //!
+//! That charge is an upload's charge ([`crate::quota::charge_upload`]), with its hard-limit and
+//! suspension checks, so a dedup never pushes an account over its limit. A session whose
+//! uploader is refused is ended with the refusal's code, its stage dropped, and the next live
+//! session for the address is tried. The one exception is a session whose finalization is
+//! already claimed: every byte is on the server and failing it would race its finalizer, so it
+//! is charged past the check, as [`crate::quota`] records.
+//!
 //! # Racing a create for the same bytes
 //!
 //! The live-session check is not atomic with the ledger's release, so a create that charged
@@ -48,8 +55,10 @@
 //! in, one of the two second reads sees the other's write, so a session that stores bytes is
 //! charged for them.
 
+use capsule_i18n::error_codes;
+
 use crate::blob::{BlobError, ContentAddress};
-use crate::store::{StoreError, UploadSessionRecord};
+use crate::store::{FinalizeClaim, StoreError, UploadSessionRecord, UploadSessionStatus};
 use crate::upload::UploadContext;
 
 /// What giving a session's reservation back did.
@@ -132,50 +141,132 @@ pub async fn release(
     // have passed, so nothing else will charge it for the bytes it stores. The reservation is
     // put back on its uploader's behalf. A session opening after this point re-charges for
     // itself and finds nothing attributed.
-    let Some((other, holder)) = live_session_for_address(context, record).await? else {
-        return Ok(Released::Released);
-    };
-    let restored = context
-        .quotas()
-        .charge(
-            &holder.upload_user_id,
-            &address,
-            holder.total_size,
-            context.clock().now(),
-            context.quota_limits(),
-        )
-        .await?;
-    tracing::info!(
-        %other,
-        uploader = %holder.upload_user_id,
-        size = holder.total_size,
-        restored = matches!(restored, crate::quota::ChargeOutcome::Charged { .. }),
-        "a live session declares the released address; its reservation was put back"
-    );
-    Ok(Released::Restored)
-}
-
-/// The first live session of **any** uploader, other than `record`'s own, that declares the
-/// same bytes and can still be read — with its record, so its uploader can be charged.
-///
-/// Unscoped, unlike [`other_live_session`], because attribution is global: the session left
-/// owing for the bytes may be another account's. One charge is enough, since every other
-/// session for the address is then `AlreadyAttributed` against that one's charge.
-async fn live_session_for_address(
-    context: &UploadContext,
-    record: &UploadSessionRecord,
-) -> Result<Option<(crate::store::UploadId, UploadSessionRecord)>, StoreError> {
     let live = context
         .sessions()
         .live_for_address(&record.expected_hash)
         .await?;
     for other in live.into_iter().filter(|other| *other != record.upload_id) {
         match context.sessions().read(&other).await? {
-            Some(holder) if holder.status.is_active() => return Ok(Some((other, holder))),
+            Some(holder) if holder.status.is_active() => {
+                if recharge(context, &address, &holder).await? {
+                    return Ok(Released::Restored);
+                }
+            }
             _ => tracing::debug!(%other, "a live session for the address has since ended"),
         }
     }
-    Ok(None)
+    Ok(Released::Released)
+}
+
+/// Charge `holder`, a live session left owing for the released address, in the released
+/// attribution's place. `true` when the address is charged again — to `holder`'s uploader, or
+/// already to somebody else — so no other session needs charging.
+///
+/// The charge is the upload's own ([`crate::quota::charge_upload`]), so the hard limit and a
+/// suspension refuse it exactly as they would have refused the session at creation. A session
+/// whose uploader is refused may not go on to store bytes it is not charged for, and is ended
+/// the way a refused post-open re-charge ends it: its stage dropped and the session failed
+/// with the refusal's code, which its client reads from `HEAD`. The ending is claimed first
+/// ([`crate::store::UploadSessionStore::claim_finalize`]), so a session whose finalization is
+/// already under way is never failed out from under its finalizer; see [`charge_finalizing`].
+/// The next live session for the address is then tried, and `false` says so.
+async fn recharge(
+    context: &UploadContext,
+    address: &ContentAddress,
+    holder: &UploadSessionRecord,
+) -> Result<bool, StoreError> {
+    let other = &holder.upload_id;
+    let code = match crate::quota::charge_upload(
+        context.quota(),
+        &holder.upload_user_id,
+        address,
+        holder.total_size,
+    )
+    .await?
+    {
+        crate::quota::UploadCharge::Admitted | crate::quota::UploadCharge::AlreadyAttributed => {
+            tracing::info!(
+                %other,
+                uploader = %holder.upload_user_id,
+                size = holder.total_size,
+                "a live session declares the released address; its reservation was put back"
+            );
+            return Ok(true);
+        }
+        crate::quota::UploadCharge::Refused => error_codes::QUOTA_EXCEEDED,
+        crate::quota::UploadCharge::Suspended => error_codes::QUOTA_SUSPENDED,
+    };
+    match context.sessions().claim_finalize(other).await? {
+        FinalizeClaim::Won(_) => {
+            if let Err(error) = context.blobs().abandon(other).await {
+                tracing::error!(%error, %other, "a refused session's stage could not be dropped");
+            }
+            context.sessions().fail_processing(other, code).await?;
+            tracing::info!(
+                %other,
+                uploader = %holder.upload_user_id,
+                size = holder.total_size,
+                failure_code = code,
+                "a live session for the released address could not be charged; ended it"
+            );
+            Ok(false)
+        }
+        FinalizeClaim::AlreadyClaimed => match context.sessions().read(other).await? {
+            Some(current)
+                if matches!(
+                    current.status,
+                    UploadSessionStatus::WaitingForProcessing | UploadSessionStatus::Completed
+                ) =>
+            {
+                charge_finalizing(context, address, &current, code).await
+            }
+            _ => {
+                tracing::debug!(%other, "a refused session for the address has since failed");
+                Ok(false)
+            }
+        },
+        FinalizeClaim::NotFound => {
+            tracing::debug!(%other, "a refused session for the address has since gone");
+            Ok(false)
+        }
+    }
+}
+
+/// Charge `holder`, whose finalization is claimed or has completed, past the check that
+/// refused it.
+///
+/// Every byte is on the server and a finalizer is committing them (or has), so refusing now
+/// costs storage rather than saving it — the reason session creation is quota's one
+/// enforcement point ([`crate::quota`], "One hard enforcement point") — and failing the session
+/// would race the finalizer's own terminal write. The bytes are charged to their uploader
+/// through the ledger directly, which may carry the account over its hard limit: the
+/// documented exception in [`crate::quota`], "How an account reaches `HardExceeded`". Should
+/// the finalization then fail, its own [`release`] gives the charge back.
+async fn charge_finalizing(
+    context: &UploadContext,
+    address: &ContentAddress,
+    holder: &UploadSessionRecord,
+    refusal: &str,
+) -> Result<bool, StoreError> {
+    let outcome = context
+        .quotas()
+        .charge(
+            &holder.upload_user_id,
+            address,
+            holder.total_size,
+            context.clock().now(),
+            context.quota_limits(),
+        )
+        .await?;
+    tracing::warn!(
+        other = %holder.upload_id,
+        uploader = %holder.upload_user_id,
+        size = holder.total_size,
+        refusal,
+        charged = matches!(outcome, crate::quota::ChargeOutcome::Charged { .. }),
+        "a finalizing session for the released address was charged past its quota check"
+    );
+    Ok(true)
 }
 
 /// Another live session of `record`'s uploader that declares the same bytes, if one exists.
