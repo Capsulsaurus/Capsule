@@ -387,3 +387,69 @@ fn servers_lists_lanes_in_round_robin_order() {
     assert_eq!(a.to_string(), "https://a");
     assert!(!queue.is_empty());
 }
+
+/// **A delete withdraws its asset's jobs from every lane.** Queued jobs of the asset are
+/// dropped on both servers, one in flight is superseded with its reservation released, and
+/// every other job keeps its place and runs in tier order.
+#[test]
+fn withdraw_removes_one_assets_jobs_from_every_lane() {
+    let now = Instant::now();
+    let (a, b) = (key("a"), key("b"));
+    let mut queue = UploadQueue::new(100, STALL);
+    queue.set_window(&a, 2);
+    queue.set_window(&b, 2);
+    queue.enqueue(&a, job(UploadTier::Index, 10, "x-idx@a"));
+    queue.enqueue(&a, job(UploadTier::Index, 10, "y-idx@a"));
+    queue.enqueue(&a, job(UploadTier::Original, 10, "x-orig@a"));
+    queue.enqueue(&b, job(UploadTier::Index, 10, "x-idx@b"));
+    queue.enqueue(&b, job(UploadTier::Preview, 10, "y-prev@b"));
+    let running = queue.next(now).expect("x-idx@a");
+    assert_eq!(running.job, "x-idx@a");
+    assert_eq!(queue.in_use(), 10);
+
+    let superseded = queue.withdraw(|name| name.starts_with("x-"));
+
+    assert_eq!(superseded, vec![running.id]);
+    assert_eq!(
+        queue.in_use(),
+        0,
+        "the superseded grant's bytes are released"
+    );
+    assert!(
+        !queue.complete(running.id, now),
+        "a superseded grant is ignored"
+    );
+    assert_eq!(queue.queued(&a), 1);
+    assert_eq!(queue.queued(&b), 1);
+    let mut order: Vec<_> = admit_all(&mut queue, now)
+        .into_iter()
+        .map(|grant| grant.job)
+        .collect();
+    order.sort_unstable();
+    assert_eq!(order, ["y-idx@a", "y-prev@b"]);
+    assert!(
+        queue.withdraw(|name| name.starts_with("x-")).is_empty(),
+        "withdrawing again finds nothing"
+    );
+}
+
+/// Withdrawing keeps a lane's pause: a server's `Retry-After` still binds what is left.
+#[test]
+fn withdraw_keeps_a_lanes_pause() {
+    let now = Instant::now();
+    let a = key("a");
+    let mut queue = UploadQueue::new(100, STALL);
+    queue.enqueue(&a, job(UploadTier::Index, 10, "x"));
+    queue.enqueue(&a, job(UploadTier::Index, 10, "y"));
+    let retry_after = now + Duration::from_secs(60);
+    queue.defer(&a, retry_after);
+
+    assert!(queue.withdraw(|name| *name == "x").is_empty());
+
+    assert_eq!(
+        queue.next(now),
+        None,
+        "the lane still waits out Retry-After"
+    );
+    assert_eq!(queue.next(retry_after).expect("y").job, "y");
+}

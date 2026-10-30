@@ -355,11 +355,6 @@ async fn delete_after_hand_off(edit_first: bool) {
             .expect("A edits it");
     }
     a.workspace.soft_delete(&asset, 30).expect("A deletes it");
-    let sent: &[&str] = if edit_first {
-        &["sent", "sent"]
-    } else {
-        &["sent"]
-    };
     let held = peer::status(
         &remote,
         &cli_a.store,
@@ -435,25 +430,20 @@ async fn delete_after_hand_off(edit_first: bool) {
         DelegationState::Released,
         "{released:#?}"
     );
-    let outcomes: Vec<&str> = released.deletes.iter().map(|d| d.outcome).collect();
-    assert_eq!(outcomes, sent, "{released:#?}");
+    // One line per asset, naming the action the server applied last: the stretch after the
+    // server's head goes in chain order, so with an edit first the delete chains onto it, and
+    // the server applying it (rather than refusing a stale chain) shows the edit arrived first.
+    let lines: Vec<(&str, Option<&str>)> = released
+        .deletes
+        .iter()
+        .map(|d| (d.outcome, d.action.as_deref()))
+        .collect();
+    assert_eq!(lines, vec![("sent", Some("delete"))], "{released:#?}");
     let kinds = kinds_of(&a.feed(&server).await, asset);
     assert!(
         kinds.contains(&ChangeKind::Deleted),
         "the delete reached the server after the create's custody: {kinds:?}"
     );
-    if edit_first {
-        let actions: Vec<Option<&str>> = released
-            .deletes
-            .iter()
-            .map(|d| d.action.as_deref())
-            .collect();
-        assert_eq!(
-            actions,
-            vec![Some("metadata-update"), Some("delete")],
-            "the edit went first, so the delete chained onto it"
-        );
-    }
 
     // Sent once: a later run has nothing left to send.
     let after = peer::status(
