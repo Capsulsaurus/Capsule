@@ -940,3 +940,99 @@ async fn a_wrong_password_is_refused_rather_than_granted() {
         .await
         .assert_status(kynos::http::StatusCode::UNAUTHORIZED);
 }
+
+/// Sign in through the credential route at `path` and return the refresh token it issued.
+async fn signed_in_refresh_token(
+    client: &kynos::test::TestClient<App>,
+    path: &str,
+    password: &str,
+) -> String {
+    let body: serde_json::Value = client
+        .post(path)
+        .header(
+            "x-capsule-protocol",
+            capsule_core::crypto::primitives::PROTOCOL_VERSION,
+        )
+        .header("accept", "application/json")
+        .json(&serde_json::json!({ "email": "somebody@example.test", "password": password }))
+        .send()
+        .await
+        .assert_status(kynos::http::StatusCode::OK)
+        .json();
+    body["refresh_token"]
+        .as_str()
+        .expect("a sign-in issues a refresh token")
+        .to_owned()
+}
+
+/// Exchange `token` at the refresh route: the rotated refresh token, or the refusing status.
+async fn refresh(
+    client: &kynos::test::TestClient<App>,
+    token: &str,
+) -> Result<String, kynos::http::StatusCode> {
+    let response = client
+        .post("/v1/auth/refresh")
+        .header(
+            "x-capsule-protocol",
+            capsule_core::crypto::primitives::PROTOCOL_VERSION,
+        )
+        .header("accept", "application/json")
+        .json(&serde_json::json!({ "refresh_token": token }))
+        .send()
+        .await;
+    let status = response.status();
+    if status != kynos::http::StatusCode::OK {
+        return Err(status);
+    }
+    let body: serde_json::Value = response.json();
+    Ok(body["refresh_token"]
+        .as_str()
+        .expect("a refresh answers with a rotated refresh token")
+        .to_owned())
+}
+
+#[tokio::test]
+async fn the_configured_session_window_and_hard_cap_reach_the_session_store() {
+    // Through the refresh route on the assembly `serve --memory` runs, so what is asserted is
+    // that `SESSION_TTL_DAYS` and `SESSION_HARD_CAP_DAYS` reach the store boot builds, not that
+    // the store honours a lifetime it was handed (the store's own tests do that). A one-day
+    // window under a two-day cap, crossed on an injected clock that starts at the real present
+    // for the reason the lockout case above records.
+    let root = tempfile::tempdir().expect("a scratch directory");
+    let config = memory_config_with(
+        root.path(),
+        &[("SESSION_TTL_DAYS", "1"), ("SESSION_HARD_CAP_DAYS", "2")],
+    );
+    let clock = ManualClock::new(jiff::Timestamp::now());
+    let assembled = assemble_on(&config, std::sync::Arc::new(clock.clone()))
+        .await
+        .expect("it assembles");
+    let client = kynos::test::TestClient::new(assembled.service().expect("the router builds"));
+    let password = "correct horse battery staple";
+
+    let mut token = signed_in_refresh_token(&client, "/v1/auth/register", password).await;
+    // Each refresh inside the one-day window slides it on.
+    for _ in 0..2 {
+        clock.advance(jiff::SignedDuration::from_hours(23));
+        token = refresh(&client, &token)
+            .await
+            .expect("inside the sliding window the session refreshes");
+    }
+    // 49 hours after sign-in and three after the last refresh: the window is open and the
+    // two-day cap is not, so the refusal is the cap's.
+    clock.advance(jiff::SignedDuration::from_hours(3));
+    assert_eq!(
+        refresh(&client, &token).await,
+        Err(kynos::http::StatusCode::UNAUTHORIZED),
+        "the configured hard cap ends the session however recently it refreshed"
+    );
+
+    // A fresh session left idle past the one-day window ends well inside the default 180.
+    let idle = signed_in_refresh_token(&client, "/v1/auth/login", password).await;
+    clock.advance(jiff::SignedDuration::from_hours(25));
+    assert_eq!(
+        refresh(&client, &idle).await,
+        Err(kynos::http::StatusCode::UNAUTHORIZED),
+        "the configured sliding window ends an idle session"
+    );
+}

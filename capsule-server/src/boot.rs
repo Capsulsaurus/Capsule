@@ -405,11 +405,16 @@ async fn valkey(config: &Config) -> Result<ValkeyStores, BootError> {
         .valkey_url
         .as_deref()
         .ok_or(BootError::Missing { key: "VALKEY_URL" })?;
-    let stores = ValkeyStores::connect(url, Arc::new(SystemClock))
-        .await
-        .map_err(|error| BootError::Valkey {
-            detail: error.to_string(),
-        })?;
+    let stores = ValkeyStores::connect(
+        url,
+        Arc::new(SystemClock),
+        config.session_ttl,
+        config.session_hard_cap,
+    )
+    .await
+    .map_err(|error| BootError::Valkey {
+        detail: error.to_string(),
+    })?;
     tracing::info!("VALKEY_URL answers; the volatile state ports are on Valkey");
     Ok(stores)
 }
@@ -766,7 +771,10 @@ fn memory_ports(
             config.lockout_attempts,
             config.lockout_window,
         ))),
-        sessions: Arc::new(InMemoryAuthState::with_default_ttl(clock.clone())),
+        sessions: Arc::new(
+            InMemoryAuthState::new(clock.clone(), config.session_ttl)
+                .with_hard_cap(config.session_hard_cap),
+        ),
         challenges: Arc::new(InMemoryChallenges::with_default_ttl(clock.clone())),
         cohorts: Arc::new(InMemoryCohorts::new()),
         totp: Arc::new(InMemoryTotp::new()),

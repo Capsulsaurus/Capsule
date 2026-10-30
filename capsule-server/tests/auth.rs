@@ -482,6 +482,70 @@ async fn the_hard_cap_survives_rotation() {
 }
 
 #[tokio::test]
+async fn a_lowered_sliding_window_ends_an_idle_session_at_its_next_refresh() {
+    // A restart under a smaller `SESSION_TTL_DAYS`: the record was stored under the old window
+    // and is still held, but the session has been idle longer than the new one allows.
+    let fixture = Fixture::working();
+    let day = SignedDuration::from_hours(24);
+
+    let idle = login(&fixture).await;
+    fixture.clock.advance(day * 3);
+    let recent = login(&fixture).await;
+    fixture.clock.advance(day);
+    fixture.sessions.lower_lifetimes(day * 2, SESSION_HARD_CAP);
+
+    let body: serde_json::Value = post_json!(
+        fixture.client,
+        "/v1/auth/refresh",
+        json!({ "refresh_token": idle.refresh_token })
+    )
+    .assert_status(StatusCode::UNAUTHORIZED)
+    .json();
+    assert_eq!(
+        code_of(&body),
+        "error.auth.session_expired",
+        "four idle days are past the lowered two-day window, though inside the old seven"
+    );
+
+    // One idle day is inside the new window, so that session rotates as before.
+    refresh(&fixture, &recent).await;
+
+    fixture.client.assert_conformance();
+}
+
+#[tokio::test]
+async fn a_lowered_hard_cap_ends_a_lineage_past_it_rather_than_rotating_it() {
+    // A restart under a smaller `SESSION_HARD_CAP_DAYS`: the lineage is refreshed daily and so
+    // still live under the old cap, but already older than the new one. Rotating it would
+    // answer 200 with a successor that expired before it was opened.
+    let fixture = Fixture::working();
+    let day = SignedDuration::from_hours(24);
+
+    let mut pair = login(&fixture).await;
+    for _ in 0..10 {
+        fixture.clock.advance(day);
+        pair = refresh(&fixture, &pair).await;
+    }
+    fixture.sessions.lower_lifetimes(day * 2, day * 5);
+    fixture.clock.advance(SignedDuration::from_hours(1));
+
+    let body: serde_json::Value = post_json!(
+        fixture.client,
+        "/v1/auth/refresh",
+        json!({ "refresh_token": pair.refresh_token })
+    )
+    .assert_status(StatusCode::UNAUTHORIZED)
+    .json();
+    assert_eq!(
+        code_of(&body),
+        "error.auth.session_expired",
+        "a lineage ten days old is past the lowered five-day cap however recently it refreshed"
+    );
+
+    fixture.client.assert_conformance();
+}
+
+#[tokio::test]
 async fn a_refresh_token_is_spent_by_the_first_use() {
     let fixture = Fixture::working();
 

@@ -174,11 +174,13 @@ A session token stops being honoured on sliding expiry, hard expiry, or explicit
 
 ### Sliding Inactivity Expiry
 
-180 days (configurable) without an access-token issuance. Each issuance resets the clock. Activity alone does not: a request records last-used time and never extends the session.
+180 days (`SESSION_TTL_DAYS`) without an access-token issuance. Each issuance resets the clock. Activity alone does not: a request records last-used time and never extends the session.
 
 ### Hard Expiry
 
-365 days (configurable) from sign-in; **never reset**. Caps the window for a silently exfiltrated token on an active device ([malicious keyholder](/design/threat-model/#client-class-taxonomy)).
+365 days (`SESSION_HARD_CAP_DAYS`) from sign-in; **never reset**. Caps the window for a silently exfiltrated token on an active device ([malicious keyholder](/design/threat-model/#client-class-taxonomy)).
+
+Both are whole days, set per deployment and never per session. Zero, a negative count, or a cap shorter than the sliding window refuses the boot as a configuration fault. A lowered value bounds a live session from its next refresh onward: a session idle longer than the new window, or a lineage older than the new cap, is refused there as expired, while one inside both rotates and is issued only what the new values leave it. A raised value lengthens nothing until that refresh, because a stored session keeps the deadline it was opened under.
 
 Invariants:
 
