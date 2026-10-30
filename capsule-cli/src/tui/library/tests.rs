@@ -630,6 +630,54 @@ fn bytes_that_are_no_image_say_why() {
     assert!(!reason.is_empty());
 }
 
+/// A 16x8 baseline JPEG, flat orange: the embedded preview the pane tests stand in for one a
+/// RAW original carries (`capsule-core` tests the extraction itself over real ARW and DNG
+/// fixtures).
+const PREVIEW_JPEG: &str = "ffd8ffe000104a46494600010100000100010000ffdb004300100b0c0e0c0a100e0d0e1211101318281a181616183123251d283a333d3c3933383740485c4e404457453738506d51575f626768673e4d71797064785c656763ffdb0043011112121815182f1a1a2f634238426363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363ffc00011080008001003012200021101031101ffc4001500010100000000000000000000000000000002ffc40014100100000000000000000000000000000000ffc40014010100000000000000000000000000000005ffc40014110100000000000000000000000000000000ffda000c03010002110311003f009005997fffd9";
+
+fn embedded(width: u32, height: u32, jpeg: Vec<u8>) -> media::EmbeddedPreview {
+    media::EmbeddedPreview {
+        jpeg,
+        width,
+        height,
+        orientation: 1,
+    }
+}
+
+#[test]
+fn the_ladder_picks_an_embedded_preview_that_covers_the_pane() {
+    assert_eq!(preview_source(None, 1024), PreviewSource::Original);
+    let covering = embedded(1024, 683, Vec::new());
+    assert_eq!(
+        preview_source(Some(&covering), 1024),
+        PreviewSource::Embedded
+    );
+    // Large enough for a grid thumbnail, not for the pane: the original is decoded.
+    let small = embedded(800, 600, Vec::new());
+    assert_eq!(preview_source(Some(&small), 1024), PreviewSource::Original);
+}
+
+#[test]
+fn a_covering_embedded_preview_is_shown_without_decoding_the_original() {
+    let jpeg = hex::decode(PREVIEW_JPEG).expect("hex");
+    let preview = embedded(16, 8, jpeg);
+    // The panicking decoder proves the original is never touched.
+    let shown = decode_preview_from(&Panicking, Some(&preview), b"bytes", "arw", 16)
+        .expect("the embedded preview decodes");
+    assert_eq!((shown.width, shown.height), (16, 8));
+    let shown = decode_preview_from(&Panicking, Some(&preview), b"bytes", "arw", 8)
+        .expect("downscaled to the pane");
+    assert_eq!((shown.width, shown.height), (8, 4));
+}
+
+#[test]
+fn an_embedded_preview_that_does_not_decode_falls_back_to_the_original() {
+    let broken = embedded(400, 200, b"\xFF\xD8 not a JPEG".to_vec());
+    let shown = decode_preview_from(&RawshiftDecoder, Some(&broken), &png(40, 20), "png", 100)
+        .expect("the original decodes");
+    assert_eq!((shown.width, shown.height), (40, 20));
+}
+
 #[test]
 fn preview_debug_leaves_out_the_pixels() {
     assert_eq!(

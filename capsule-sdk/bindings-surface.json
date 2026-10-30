@@ -806,6 +806,42 @@
         },
         {
           "kind": "struct",
+          "name": "FfiEmbeddedPreview",
+          "signature": "public struct FfiEmbeddedPreview: Equatable, Hashable",
+          "doc": "A RAW original's embedded JPEG, as [`embedded_preview`] reads it.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "jpeg",
+              "signature": "public var jpeg: Data",
+              "doc": "The JPEG exactly as the RAW file carries it.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "width",
+              "signature": "public var width: UInt32",
+              "doc": "Upright width in pixels, once `orientation` is applied.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "height",
+              "signature": "public var height: UInt32",
+              "doc": "Upright height in pixels.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "orientation",
+              "signature": "public var orientation: UInt16",
+              "doc": "The EXIF orientation (1..=8) to apply to `jpeg`'s stored pixels, in place of any tag the\nJPEG itself carries.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "struct",
           "name": "FfiEscrowStored",
           "signature": "public struct FfiEscrowStored: Equatable, Hashable",
           "doc": "FFI mirror of [`EscrowStored`] — what [`FfiSession::escrow_put`] did.",
@@ -915,6 +951,35 @@
               "name": "changedAt",
               "signature": "public var changedAt: String",
               "doc": "When the change happened, RFC 3339, on the server's clock.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "struct",
+          "name": "FfiLocalHoldings",
+          "signature": "public struct FfiLocalHoldings: Equatable, Hashable",
+          "doc": "What this device holds for the asset. **Flat**, like `FfiNotifyInput`: an embedded preview\nis present when both of its dimensions are.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "held",
+              "signature": "public var held: [FfiRepresentation]",
+              "doc": "The encoded tiers and the original held locally; the LQIP is implied.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "embeddedPreviewWidth",
+              "signature": "public var embeddedPreviewWidth: UInt32?",
+              "doc": "The embedded preview's upright width, from [`embedded_preview`].",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "embeddedPreviewHeight",
+              "signature": "public var embeddedPreviewHeight: UInt32?",
+              "doc": "The embedded preview's upright height.",
               "members": []
             }
           ]
@@ -1250,6 +1315,86 @@
               "name": "labels",
               "signature": "public var labels: [String]",
               "doc": "The region's labels, sorted.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "struct",
+          "name": "FfiRenderRequest",
+          "signature": "public struct FfiRenderRequest: Equatable, Hashable",
+          "doc": "A surface's request: its intent and its size in device pixels when the view opened.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "intent",
+              "signature": "public var intent: FfiRepresentation",
+              "doc": "The rung the surface's intent needs: `Thumbnail` for the grid, `Preview` for the\nsingle-asset view, `Original` for a full-fidelity view.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "surfaceWidth",
+              "signature": "public var surfaceWidth: UInt32",
+              "doc": "The surface's width when the view opened. A view that grows keeps passing this.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "surfaceHeight",
+              "signature": "public var surfaceHeight: UInt32",
+              "doc": "The surface's height when the view opened.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "struct",
+          "name": "FfiRenderStep",
+          "signature": "public struct FfiRenderStep: Equatable, Hashable",
+          "doc": "The answer to one [`render_step`].",
+          "members": [
+            {
+              "kind": "field",
+              "name": "show",
+              "signature": "public var show: FfiRendition",
+              "doc": "What to show now.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "changed",
+              "signature": "public var changed: Bool",
+              "doc": "Whether `show` differs from the `shown` passed in.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "next",
+              "signature": "public var next: FfiNextStep?",
+              "doc": "What to obtain next, or `None` when the intent is met or nothing can raise it.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "struct",
+          "name": "FfiRendition",
+          "signature": "public struct FfiRendition: Equatable, Hashable",
+          "doc": "What a surface shows: a rung and its source. The caller keeps the last one and passes it\nback as `shown`.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "rung",
+              "signature": "public var rung: FfiRepresentation",
+              "doc": "The rung shown.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "source",
+              "signature": "public var source: FfiRungSource",
+              "doc": "What fills it.",
               "members": []
             }
           ]
@@ -1967,6 +2112,28 @@
         },
         {
           "kind": "enum",
+          "name": "FfiNextStep",
+          "signature": "public enum FfiNextStep: Equatable, Hashable",
+          "doc": "How to obtain the next rung.",
+          "members": [
+            {
+              "kind": "case",
+              "name": "fetch",
+              "signature": "case fetch",
+              "doc": "Fetch it from the server.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "generate",
+              "signature": "case generate",
+              "doc": "Produce it on the device from the original it holds.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum",
           "name": "FfiOpenedOriginal",
           "signature": "public enum FfiOpenedOriginal: Equatable, Hashable",
           "doc": "How [`FfiWorkspace::open_synced_original`] resolved. Only `Opened` leaves anything at the\ndestination path.",
@@ -2068,6 +2235,42 @@
         },
         {
           "kind": "enum",
+          "name": "FfiRepresentation",
+          "signature": "public enum FfiRepresentation: Equatable, Hashable",
+          "doc": "A rung of the ladder, cheapest first.",
+          "members": [
+            {
+              "kind": "case",
+              "name": "lqip",
+              "signature": "case lqip",
+              "doc": "The LQIP, embedded in the metadata blob; always present.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "thumbnail",
+              "signature": "case thumbnail",
+              "doc": "The grid thumbnail.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "preview",
+              "signature": "case preview",
+              "doc": "The single-asset view's preview.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "original",
+              "signature": "case original",
+              "doc": "The original.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum",
           "name": "FfiRetryReason",
           "signature": "public enum FfiRetryReason: Equatable, Hashable",
           "doc": "Why an upload chunk is sent again. Mirrors [`RetryReason`] variant for variant.",
@@ -2098,6 +2301,42 @@
               "name": "serverWait",
               "signature": "case serverWait",
               "doc": "The server asked the client to wait; afterwards the transfer resumes from the offset\n`HEAD` reports.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum",
+          "name": "FfiRungSource",
+          "signature": "public enum FfiRungSource: Equatable, Hashable",
+          "doc": "Where a shown rung's pixels come from.",
+          "members": [
+            {
+              "kind": "case",
+              "name": "lqip",
+              "signature": "case lqip",
+              "doc": "The LQIP (`render_lqip`), which paints the dominant colour where it does not decode.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "embedded",
+              "signature": "case embedded",
+              "doc": "The original's embedded preview ([`embedded_preview`]).",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "encoded",
+              "signature": "case encoded",
+              "doc": "The rung's encoded tier.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "original",
+              "signature": "case original",
+              "doc": "The original, decoded.",
               "members": []
             }
           ]
@@ -2345,6 +2584,20 @@
               "members": []
             }
           ]
+        },
+        {
+          "kind": "func",
+          "name": "embeddedPreview",
+          "signature": "public func embeddedPreview(originalPath: String, ext: String) throws -> FfiEmbeddedPreview?",
+          "doc": "Read the embedded preview of the original at `original_path`, whose extension (without the\ndot) is `ext`.\n\n`None` when the original is not a RAW, carries no preview, or carries one that does not read\nwithin the decode budget: each leaves the rung to the next source, so none is an error. The\nreason is logged.\n\nThis reads the whole original into memory, because the extraction's IFD bounds walk and its\nstated-length guard run over the full file before the RAW reader does. Call it once per asset\nand keep the [`FfiEmbeddedPreview`] it returns, rather than once per render.\n\n# Errors\n\n[`FfiError::Workspace`] when the file cannot be read.",
+          "members": []
+        },
+        {
+          "kind": "func",
+          "name": "renderStep",
+          "signature": "public func renderStep(request: FfiRenderRequest, shown: FfiRendition?, local: FfiLocalHoldings, fetchable: [FfiRepresentation]) -> FfiRenderStep",
+          "doc": "One step of the render ladder ([`crate::fetch::render_step`]): what to show now and what to\nobtain next. `shown` is what the surface shows, `None` when it shows nothing yet or is falling\nback below what it showed; `fetchable` is what the server lists for the asset.",
+          "members": []
         },
         {
           "kind": "func",
@@ -3179,6 +3432,42 @@
         },
         {
           "kind": "data class",
+          "name": "FfiEmbeddedPreview",
+          "signature": "data class FfiEmbeddedPreview",
+          "doc": "A RAW original's embedded JPEG, as [`embedded_preview`] reads it.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "jpeg",
+              "signature": "var jpeg: kotlin.ByteArray",
+              "doc": "The JPEG exactly as the RAW file carries it.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "width",
+              "signature": "var width: kotlin.UInt",
+              "doc": "Upright width in pixels, once `orientation` is applied.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "height",
+              "signature": "var height: kotlin.UInt",
+              "doc": "Upright height in pixels.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "orientation",
+              "signature": "var orientation: kotlin.UShort",
+              "doc": "The EXIF orientation (1..=8) to apply to `jpeg`'s stored pixels, in place of any tag the\nJPEG itself carries.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "data class",
           "name": "FfiEscrowStored",
           "signature": "data class FfiEscrowStored",
           "doc": "FFI mirror of [`EscrowStored`] — what [`FfiSession::escrow_put`] did.",
@@ -3288,6 +3577,35 @@
               "name": "changedAt",
               "signature": "var changedAt: kotlin.String",
               "doc": "When the change happened, RFC 3339, on the server's clock.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "data class",
+          "name": "FfiLocalHoldings",
+          "signature": "data class FfiLocalHoldings",
+          "doc": "What this device holds for the asset. **Flat**, like `FfiNotifyInput`: an embedded preview\nis present when both of its dimensions are.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "held",
+              "signature": "var held: List<FfiRepresentation>",
+              "doc": "The encoded tiers and the original held locally; the LQIP is implied.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "embeddedPreviewWidth",
+              "signature": "var embeddedPreviewWidth: kotlin.UInt?",
+              "doc": "The embedded preview's upright width, from [`embedded_preview`].",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "embeddedPreviewHeight",
+              "signature": "var embeddedPreviewHeight: kotlin.UInt?",
+              "doc": "The embedded preview's upright height.",
               "members": []
             }
           ]
@@ -3623,6 +3941,86 @@
               "name": "labels",
               "signature": "var labels: List<kotlin.String>",
               "doc": "The region's labels, sorted.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "data class",
+          "name": "FfiRenderRequest",
+          "signature": "data class FfiRenderRequest",
+          "doc": "A surface's request: its intent and its size in device pixels when the view opened.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "intent",
+              "signature": "var intent: FfiRepresentation",
+              "doc": "The rung the surface's intent needs: `Thumbnail` for the grid, `Preview` for the\nsingle-asset view, `Original` for a full-fidelity view.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "surfaceWidth",
+              "signature": "var surfaceWidth: kotlin.UInt",
+              "doc": "The surface's width when the view opened. A view that grows keeps passing this.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "surfaceHeight",
+              "signature": "var surfaceHeight: kotlin.UInt",
+              "doc": "The surface's height when the view opened.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "data class",
+          "name": "FfiRenderStep",
+          "signature": "data class FfiRenderStep",
+          "doc": "The answer to one [`render_step`].",
+          "members": [
+            {
+              "kind": "field",
+              "name": "show",
+              "signature": "var show: FfiRendition",
+              "doc": "What to show now.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "changed",
+              "signature": "var changed: kotlin.Boolean",
+              "doc": "Whether `show` differs from the `shown` passed in.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "next",
+              "signature": "var next: FfiNextStep?",
+              "doc": "What to obtain next, or `None` when the intent is met or nothing can raise it.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "data class",
+          "name": "FfiRendition",
+          "signature": "data class FfiRendition",
+          "doc": "What a surface shows: a rung and its source. The caller keeps the last one and passes it\nback as `shown`.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "rung",
+              "signature": "var rung: FfiRepresentation",
+              "doc": "The rung shown.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "source",
+              "signature": "var source: FfiRungSource",
+              "doc": "What fills it.",
               "members": []
             }
           ]
@@ -4340,6 +4738,28 @@
         },
         {
           "kind": "sealed class",
+          "name": "FfiNextStep",
+          "signature": "sealed class FfiNextStep",
+          "doc": "How to obtain the next rung.",
+          "members": [
+            {
+              "kind": "variant",
+              "name": "Fetch",
+              "signature": "data class Fetch",
+              "doc": "Fetch it from the server.",
+              "members": []
+            },
+            {
+              "kind": "variant",
+              "name": "Generate",
+              "signature": "data class Generate",
+              "doc": "Produce it on the device from the original it holds.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "sealed class",
           "name": "FfiOpenedOriginal",
           "signature": "sealed class FfiOpenedOriginal",
           "doc": "How [`FfiWorkspace::open_synced_original`] resolved. Only `Opened` leaves anything at the\ndestination path.",
@@ -4440,6 +4860,42 @@
           ]
         },
         {
+          "kind": "enum class",
+          "name": "FfiRepresentation",
+          "signature": "enum class FfiRepresentation",
+          "doc": "A rung of the ladder, cheapest first.",
+          "members": [
+            {
+              "kind": "entry",
+              "name": "LQIP",
+              "signature": "LQIP,",
+              "doc": "The LQIP, embedded in the metadata blob; always present.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "THUMBNAIL",
+              "signature": "THUMBNAIL,",
+              "doc": "The grid thumbnail.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "PREVIEW",
+              "signature": "PREVIEW,",
+              "doc": "The single-asset view's preview.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "ORIGINAL",
+              "signature": "ORIGINAL;",
+              "doc": "The original.",
+              "members": []
+            }
+          ]
+        },
+        {
           "kind": "sealed class",
           "name": "FfiRetryReason",
           "signature": "sealed class FfiRetryReason",
@@ -4471,6 +4927,42 @@
               "name": "ServerWait",
               "signature": "data class ServerWait",
               "doc": "The server asked the client to wait; afterwards the transfer resumes from the offset\n`HEAD` reports.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum class",
+          "name": "FfiRungSource",
+          "signature": "enum class FfiRungSource",
+          "doc": "Where a shown rung's pixels come from.",
+          "members": [
+            {
+              "kind": "entry",
+              "name": "LQIP",
+              "signature": "LQIP,",
+              "doc": "The LQIP (`render_lqip`), which paints the dominant colour where it does not decode.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "EMBEDDED",
+              "signature": "EMBEDDED,",
+              "doc": "The original's embedded preview ([`embedded_preview`]).",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "ENCODED",
+              "signature": "ENCODED,",
+              "doc": "The rung's encoded tier.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "ORIGINAL",
+              "signature": "ORIGINAL;",
+              "doc": "The original, decoded.",
               "members": []
             }
           ]
@@ -4718,6 +5210,20 @@
               "members": []
             }
           ]
+        },
+        {
+          "kind": "fun",
+          "name": "embeddedPreview",
+          "signature": "@Throws(FfiException::class) fun embeddedPreview(originalPath: kotlin.String, ext: kotlin.String): FfiEmbeddedPreview?",
+          "doc": "Read the embedded preview of the original at `original_path`, whose extension (without the\ndot) is `ext`.\n\n`None` when the original is not a RAW, carries no preview, or carries one that does not read\nwithin the decode budget: each leaves the rung to the next source, so none is an error. The\nreason is logged.\n\nThis reads the whole original into memory, because the extraction's IFD bounds walk and its\nstated-length guard run over the full file before the RAW reader does. Call it once per asset\nand keep the [`FfiEmbeddedPreview`] it returns, rather than once per render.\n\n# Errors\n\n[`FfiError::Workspace`] when the file cannot be read.",
+          "members": []
+        },
+        {
+          "kind": "fun",
+          "name": "renderStep",
+          "signature": "fun renderStep(request: FfiRenderRequest, shown: FfiRendition?, local: FfiLocalHoldings, fetchable: List<FfiRepresentation>): FfiRenderStep",
+          "doc": "One step of the render ladder ([`crate::fetch::render_step`]): what to show now and what to\nobtain next. `shown` is what the surface shows, `None` when it shows nothing yet or is falling\nback below what it showed; `fetchable` is what the server lists for the asset.",
+          "members": []
         },
         {
           "kind": "fun",
