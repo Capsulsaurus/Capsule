@@ -518,3 +518,18 @@ fn the_text_listing_prints_one_line_per_entry() {
         assert_eq!(render_listing(&empty), line);
     }
 }
+
+#[test]
+fn albums_keep_the_librarys_order_rather_than_name_order() {
+    let mut fx = Fixture::with_assets(1);
+    // "Zulu" sorts after "Imports" by name, but the library lists the newer, empty album first.
+    fx.ws
+        .create_album_with_id(Uuid::now_v7(), "Zulu")
+        .expect("create album");
+    let expected: Vec<Uuid> = fx.ws.albums().into_iter().map(|(id, _)| id).collect();
+    let catalogue = collect(&fx.ws);
+    let listed: Vec<Uuid> = catalogue.albums().iter().map(|a| a.album_id).collect();
+    assert_eq!(listed, expected);
+    assert_eq!(listed.len(), 2);
+    assert_ne!(listed[0], fx.album, "not name order (Imports, Zulu)");
+}
