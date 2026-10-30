@@ -120,6 +120,8 @@ pub(crate) enum Commands {
         /// run)
         #[arg(long)]
         json: bool,
+        #[command(flatten)]
+        path: PathArgs,
     },
     /// Download originals from the server and verify them byte for byte
     Restore {
@@ -559,6 +561,110 @@ pub(crate) enum RepairCommands {
         #[arg(long, value_name = "COUNT", value_parser = clap::value_parser!(u64).range(1..))]
         limit: Option<u64>,
     },
+}
+
+/// What the path costs, as `--path-cost` spells it.
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PathCostArg {
+    /// Bulk transfer is acceptable.
+    Unmetered,
+    /// A byte-counted link: the preview and original tiers wait.
+    Metered,
+    /// The OS data saver is on: the preview and original tiers wait.
+    Constrained,
+}
+
+/// The interface the path runs over, as `--path-interface` spells it.
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PathInterfaceArg {
+    /// Ethernet or another wired link.
+    Wired,
+    /// Wi-Fi.
+    Wifi,
+    /// A cellular radio.
+    Cellular,
+    /// Anything else, or unknown.
+    Other,
+}
+
+/// The power source, as `--power` spells it.
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PowerArg {
+    /// On external power.
+    External,
+    /// On battery.
+    Battery,
+    /// On battery in low-power mode: the bulk tiers wait, on one session.
+    LowPower,
+}
+
+/// The thermal state, as `--thermal` spells it.
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ThermalArg {
+    /// No thermal pressure.
+    Nominal,
+    /// Slightly elevated.
+    Fair,
+    /// High: the bulk tiers wait, on one session.
+    Serious,
+    /// Critical: nothing is sent.
+    Critical,
+}
+
+/// The path snapshot a push plans from. Each flag overrides what the desktop connection source
+/// reports; an omitted flag keeps it.
+#[derive(Args, Debug, Clone, Copy, Default)]
+pub(crate) struct PathArgs {
+    /// What the path costs; on `metered` or `constrained` the push is staged and the preview
+    /// and original tiers wait
+    #[arg(long, value_enum, value_name = "COST")]
+    pub(crate) path_cost: Option<PathCostArg>,
+    /// The interface the path runs over
+    #[arg(long, value_enum, value_name = "INTERFACE")]
+    pub(crate) path_interface: Option<PathInterfaceArg>,
+    /// The power source; `low-power` holds the preview and original tiers back
+    #[arg(long, value_enum, value_name = "POWER")]
+    pub(crate) power: Option<PowerArg>,
+    /// The thermal state; `serious` holds the preview and original tiers back, `critical` sends
+    /// nothing
+    #[arg(long, value_enum, value_name = "STATE")]
+    pub(crate) thermal: Option<ThermalArg>,
+    /// Run as a background task the OS ends this many seconds from now; under a minute holds
+    /// the preview and original tiers back
+    #[arg(long, value_name = "SECONDS")]
+    pub(crate) background_deadline: Option<u64>,
+}
+
+impl PathArgs {
+    /// The flags as the transfer plan reads them.
+    pub(crate) fn flags(&self) -> crate::cache::PathFlags {
+        use capsule_sdk::net::path::{PathCost, PathInterface, PowerState, ThermalState};
+        crate::cache::PathFlags {
+            cost: self.path_cost.map(|cost| match cost {
+                PathCostArg::Unmetered => PathCost::Unmetered,
+                PathCostArg::Metered => PathCost::Metered,
+                PathCostArg::Constrained => PathCost::Constrained,
+            }),
+            interface: self.path_interface.map(|interface| match interface {
+                PathInterfaceArg::Wired => PathInterface::Wired,
+                PathInterfaceArg::Wifi => PathInterface::Wifi,
+                PathInterfaceArg::Cellular => PathInterface::Cellular,
+                PathInterfaceArg::Other => PathInterface::Other,
+            }),
+            power: self.power.map(|power| match power {
+                PowerArg::External => PowerState::External,
+                PowerArg::Battery => PowerState::Battery,
+                PowerArg::LowPower => PowerState::LowPower,
+            }),
+            thermal: self.thermal.map(|thermal| match thermal {
+                ThermalArg::Nominal => ThermalState::Nominal,
+                ThermalArg::Fair => ThermalState::Fair,
+                ThermalArg::Serious => ThermalState::Serious,
+                ThermalArg::Critical => ThermalState::Critical,
+            }),
+            background_deadline: self.background_deadline.map(std::time::Duration::from_secs),
+        }
+    }
 }
 
 /// The library an edit opens, and how its outcome is printed: shared by every `label`,

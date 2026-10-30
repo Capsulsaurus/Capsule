@@ -23,8 +23,8 @@ use capsule_library::lifecycle::{DerivativeStatus, Workspace, unanchored_sidecar
 use capsule_sdk::cache_budget::DesktopConnectionClass;
 use cli::{
     AuthCommands, CacheCommands, CameraCommands, Cli, Commands, EditCommands, EditLibraryArgs,
-    ImportProviderArg, LabelArgs, LabelCommands, LibraryCommands, PeerCommands, RegionCommands,
-    RepairCommands, ShareCommands, SyncCommands, TrashCommands,
+    ImportProviderArg, LabelArgs, LabelCommands, LibraryCommands, PathArgs, PeerCommands,
+    RegionCommands, RepairCommands, ShareCommands, SyncCommands, TrashCommands,
 };
 use colored::*;
 use dialoguer::{Confirm, Input, Password};
@@ -461,7 +461,7 @@ async fn dispatch(command: Commands) -> Result<()> {
                 if push {
                     return push_workspace(
                         &mut ws,
-                        push_options(false, false, staged),
+                        push_options(false, false, staged, PathArgs::default()),
                         Vec::new(),
                         false,
                     )
@@ -522,7 +522,7 @@ async fn dispatch(command: Commands) -> Result<()> {
             if push {
                 let pushed = push_workspace(
                     &mut ws,
-                    push_options(false, false, staged),
+                    push_options(false, false, staged, PathArgs::default()),
                     Vec::new(),
                     false,
                 )
@@ -555,9 +555,16 @@ async fn dispatch(command: Commands) -> Result<()> {
             staged,
             asset,
             json,
+            path,
         } => {
             let mut ws = open_workspace(&library, passphrase_stdin)?;
-            push_workspace(&mut ws, push_options(dry_run, force, staged), asset, json).await?;
+            push_workspace(
+                &mut ws,
+                push_options(dry_run, force, staged, path),
+                asset,
+                json,
+            )
+            .await?;
         }
 
         // ── Restore ───────────────────────────────────────────────────────
@@ -887,7 +894,7 @@ async fn dispatch(command: Commands) -> Result<()> {
                 json,
             } => {
                 let ws = open_workspace(&library, passphrase_stdin)?;
-                let push = push_options(false, false, staged);
+                let push = push_options(false, false, staged, PathArgs::default());
                 let listen = match listen {
                     Some(address) => Some(
                         peer_listen(address, std::time::Duration::from_secs(listen_timeout))
@@ -2101,14 +2108,15 @@ fn restore_options(scope: restore::RestoreScope, out: PathBuf) -> restore::Resto
     }
 }
 
-/// The push configuration behind the CLI's three push flags, on the connection class the
-/// desktop source reports now. A `--staged` run opens the tier sessions in ladder order gated by
-/// the class; the default `Full` policy opens them all eagerly unless the class defers bulk
-/// transfers, which stages the push ([`cache::push_options`]). The desktop source has no OS
-/// probe, so it reports `unmetered`.
-fn push_options(dry_run: bool, force: bool, staged: bool) -> remote::PushOptions {
+/// The push configuration behind the CLI's push flags, planned from the path snapshot: the
+/// connection class the desktop source reports now, with the `path` flags laid over it
+/// ([`cache::path_plan`]). A `--staged` run opens the tier sessions in ladder order gated by
+/// the plan; the default `Full` policy opens them all eagerly unless the plan holds bulk
+/// transfers back, which stages the push ([`cache::push_options`]). The desktop source has no
+/// OS probe, so without flags the path is unmetered.
+fn push_options(dry_run: bool, force: bool, staged: bool, path: PathArgs) -> remote::PushOptions {
     cache::push_options(
-        &cache::transfer_plan(&DesktopConnectionClass::new()),
+        &cache::path_plan(&DesktopConnectionClass::new(), path.flags()),
         dry_run,
         force,
         staged,

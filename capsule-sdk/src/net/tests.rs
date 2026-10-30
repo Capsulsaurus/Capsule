@@ -123,6 +123,24 @@ fn offline_is_never_promoted_to_adverse() {
     );
 }
 
+/// A reset forgets the old link entirely: it is no longer adverse, and the window it promoted
+/// on no longer counts toward the next promotion.
+#[test]
+fn reset_forgets_every_observed_outcome() {
+    let mut detector = AdverseDetector::with_defaults();
+    for _ in 0..3 {
+        detector.record(TransferSignal::Reset);
+    }
+    assert!(detector.is_adverse());
+
+    detector.reset();
+    assert!(!detector.is_adverse());
+    // Two more resets would promote had the old three still counted.
+    detector.record(TransferSignal::Reset);
+    detector.record(TransferSignal::Reset);
+    assert!(!detector.is_adverse());
+}
+
 /// **Connection-class matrix.** The staged-upload tier gates and the
 /// reconciliation gates take exactly the expected value on every class — the
 /// single table that downstream sync/cache consumers read.

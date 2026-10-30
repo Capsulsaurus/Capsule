@@ -1716,6 +1716,130 @@
           "repeatable": false,
           "required": false,
           "takes_value": false
+        },
+        {
+          "help": "What the path costs; on `metered` or `constrained` the push is staged and the preview and original tiers wait",
+          "id": "path_cost",
+          "long": "path-cost",
+          "positional": false,
+          "possible_values": [
+            {
+              "help": "Bulk transfer is acceptable",
+              "name": "unmetered"
+            },
+            {
+              "help": "A byte-counted link: the preview and original tiers wait",
+              "name": "metered"
+            },
+            {
+              "help": "The OS data saver is on: the preview and original tiers wait",
+              "name": "constrained"
+            }
+          ],
+          "repeatable": false,
+          "required": false,
+          "takes_value": true,
+          "value_names": [
+            "COST"
+          ]
+        },
+        {
+          "help": "The interface the path runs over",
+          "id": "path_interface",
+          "long": "path-interface",
+          "positional": false,
+          "possible_values": [
+            {
+              "help": "Ethernet or another wired link",
+              "name": "wired"
+            },
+            {
+              "help": "Wi-Fi",
+              "name": "wifi"
+            },
+            {
+              "help": "A cellular radio",
+              "name": "cellular"
+            },
+            {
+              "help": "Anything else, or unknown",
+              "name": "other"
+            }
+          ],
+          "repeatable": false,
+          "required": false,
+          "takes_value": true,
+          "value_names": [
+            "INTERFACE"
+          ]
+        },
+        {
+          "help": "The power source; `low-power` holds the preview and original tiers back",
+          "id": "power",
+          "long": "power",
+          "positional": false,
+          "possible_values": [
+            {
+              "help": "On external power",
+              "name": "external"
+            },
+            {
+              "help": "On battery",
+              "name": "battery"
+            },
+            {
+              "help": "On battery in low-power mode: the bulk tiers wait, on one session",
+              "name": "low-power"
+            }
+          ],
+          "repeatable": false,
+          "required": false,
+          "takes_value": true,
+          "value_names": [
+            "POWER"
+          ]
+        },
+        {
+          "help": "The thermal state; `serious` holds the preview and original tiers back, `critical` sends nothing",
+          "id": "thermal",
+          "long": "thermal",
+          "positional": false,
+          "possible_values": [
+            {
+              "help": "No thermal pressure",
+              "name": "nominal"
+            },
+            {
+              "help": "Slightly elevated",
+              "name": "fair"
+            },
+            {
+              "help": "High: the bulk tiers wait, on one session",
+              "name": "serious"
+            },
+            {
+              "help": "Critical: nothing is sent",
+              "name": "critical"
+            }
+          ],
+          "repeatable": false,
+          "required": false,
+          "takes_value": true,
+          "value_names": [
+            "STATE"
+          ]
+        },
+        {
+          "help": "Run as a background task the OS ends this many seconds from now; under a minute holds the preview and original tiers back",
+          "id": "background_deadline",
+          "long": "background-deadline",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "takes_value": true,
+          "value_names": [
+            "SECONDS"
+          ]
         }
       ],
       "name": "push"

@@ -20,6 +20,15 @@ A closed enum, evaluated continuously on-device:
 
 Consumers: [sync criteria](/design/sync/#synchronization-criteria), [staged-upload tiers](/design/transfer/upload/#upload-tiering-staged-uploads), [cache budget](/design/filesystem/client/#automatic-cache-management), [prefetch](/design/transfer/download/#prefetch-and-frugality), and [chunk sizing](/design/transfer/upload/#adaptive-chunk-sizing).
 
+## Path Snapshot
+
+A platform shell (or the CLI's flags) reports one normalized sample of the path: **cost** (unmetered, metered, constrained), **reachability**, **interface** (wired, Wi-Fi, cellular, other), **power** (external, battery, low-power), **thermal** state (nominal, fair, serious, critical) and **execution** (foreground, or background with a deadline). The SDK stamps it with a **path generation**.
+
+- **The generation advances only when reachability, interface or cost changes.** Power, thermal state and execution change the plan, never the path.
+- **The transfer plan is a pure function** of the snapshot, the link behaviour the `adverse` detector observed, the server's advice, and the client's compiled window bounds. The server is never in the loop; its advice can only lower a window.
+- **Plan rules, in precedence order.** No path, or a critical thermal state, runs nothing. Anything but an unmetered, well-behaved link holds the bulk tiers back, as do low-power mode, a serious thermal state, and a background deadline under one minute; the index tier still runs. Low-power mode and a serious thermal state narrow a lane to one session. A user's force-sync consent lifts a hold on cost or link behaviour, never one on the path, power or heat.
+- **A new generation drops what belonged to the old path**: pooled connections are dropped, the `adverse` detector is reset, in-flight work the new plan forbids is cancelled within one scheduling tick, and the work re-plans. A plan that narrows on the same path (a critical thermal state, low-power mode) cancels the same way. Cancelled work resumes from server truth, so a cancel costs at most the bytes in flight.
+
 ## Retry Policy Classes
 
 Every retrying surface declares one class. All use exponential backoff with full jitter, honor `Retry-After`, and give up into a user-visible state; none hot-loops.

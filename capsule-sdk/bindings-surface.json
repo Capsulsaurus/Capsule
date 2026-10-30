@@ -173,7 +173,14 @@
               "kind": "func",
               "name": "pushAsset",
               "signature": "func pushAsset(workspace: FfiWorkspace, assetId: String) async throws -> FfiPushReport",
-              "doc": "**Push** one sealed asset of `workspace` — every blob of its bundle, in ladder order\n(provenance and metadata, then derivative manifests and derivatives, then the\noriginal) — driving `capsule_sdk::push::push_bundle` inside the SDK.\n\nThe original never crosses the boundary: its ciphertext is re-derived from the\nplaintext on disk one upload chunk window at a time, so memory is bounded by the\ntransfer window whatever the original's size. The workspace lock is held only while the\nbundle is built, never across the network.\n\nEvery blob is driven; one the server already holds answers `duplicate_blob` and comes\nback [`FfiUploadOutcome::AlreadyStored`], so pushing twice is safe. The album must\nalready be provisioned on the server.\n\n**A create the server refused is re-sealed and retried once** (issue #822). When the\nalbum's epoch moved past the one the asset was sealed under, the server refuses its\ncreate for good; if this device holds a newer epoch, the asset is re-sealed at it\n(`Workspace::reseal_create`) and pushed again, once. A second refusal fails the push.\nWhen this device holds no newer epoch the push fails with [`FfiError::Upload`] carrying\nthe server's code and a detail saying there is no newer epoch to re-seal at, and the\nasset stays local. That detail names no missing key: the refusal may have had nothing to\ndo with the epoch (a revoked device, withdrawn write access), or another device rotated\nthe album and its key has not reached this one yet.",
+              "doc": "**Push** one sealed asset of `workspace` — every blob of its bundle, in ladder order\n(provenance and metadata, then derivative manifests and derivatives, then the\noriginal) — driving `capsule_sdk::push::push_bundle` inside the SDK.\n\nThe original never crosses the boundary: its ciphertext is re-derived from the\nplaintext on disk one upload chunk window at a time, so memory is bounded by the\ntransfer window whatever the original's size. The workspace lock is held only while the\nbundle is built, never across the network.\n\nEvery blob the reported path admits is driven ([`set_path`](Self::set_path)); the tiers\nit holds back are counted in [`FfiPushReport::deferred`] and wait for the next push. A\nblob the server already holds answers `duplicate_blob` and comes back\n[`FfiUploadOutcome::AlreadyStored`], so pushing twice is safe. The album must already be\nprovisioned on the server.\n\n**A create the server refused is re-sealed and retried once** (issue #822). When the\nalbum's epoch moved past the one the asset was sealed under, the server refuses its\ncreate for good; if this device holds a newer epoch, the asset is re-sealed at it\n(`Workspace::reseal_create`) and pushed again, once. A second refusal fails the push.\nWhen this device holds no newer epoch the push fails with [`FfiError::Upload`] carrying\nthe server's code and a detail saying there is no newer epoch to re-seal at, and the\nasset stays local. That detail names no missing key: the refusal may have had nothing to\ndo with the epoch (a revoked device, withdrawn write access), or another device rotated\nthe album and its key has not reached this one yet.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "setPath",
+              "signature": "func setPath(snapshot: FfiPathSnapshot) -> UInt64",
+              "doc": "Report the path as the app's OS listeners see it now, and return its path generation.\n\nCall it whenever a listener fires. The generation advances only when reachability, the\ninterface or the cost changes; it then drops this session's pooled connections, forgets\nthe resets and stalls seen on the old path, and cancels — within one scheduling tick —\nany push work the new path forbids, which re-plans and resumes. Power, thermal and\nbackground-deadline changes re-plan without a new generation.",
               "members": []
             },
             {
@@ -1268,6 +1275,56 @@
         },
         {
           "kind": "struct",
+          "name": "FfiPathSnapshot",
+          "signature": "public struct FfiPathSnapshot: Equatable, Hashable",
+          "doc": "One sample of the path as the app's OS listeners report it.\n\nFlat, like [`FfiNotifyInput`](crate::ffi::FfiNotifyInput): `background_deadline_ms` present\nmeans the app runs in a background task the OS ends that many milliseconds from now; absent\nmeans the foreground.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "cost",
+              "signature": "public var cost: FfiPathCost",
+              "doc": "What the path costs.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "reachable",
+              "signature": "public var reachable: Bool",
+              "doc": "Whether the OS reports a usable path.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "interface",
+              "signature": "public var interface: FfiPathInterface",
+              "doc": "The interface the path runs over.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "power",
+              "signature": "public var power: FfiPowerState",
+              "doc": "The device's power source.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "thermal",
+              "signature": "public var thermal: FfiThermalState",
+              "doc": "The device's thermal state.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "backgroundDeadlineMs",
+              "signature": "public var backgroundDeadlineMs: UInt64?",
+              "doc": "Milliseconds before the OS ends the background task the app runs in; `None` in the\nforeground.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "struct",
           "name": "FfiPurgeOutcome",
           "signature": "public struct FfiPurgeOutcome: Equatable, Hashable",
           "doc": "What a [`FfiWorkspace::purge_asset`] did.",
@@ -1313,6 +1370,13 @@
               "name": "bytes",
               "signature": "public var bytes: UInt64",
               "doc": "Total bytes handed to the upload client, the original included.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "deferred",
+              "signature": "public var deferred: UInt32",
+              "doc": "Blobs the reported path held back ([`FfiSession::set_path`]): push the asset again once\nthe path allows them. Zero when the whole ladder ran.",
               "members": []
             }
           ]
@@ -2291,6 +2355,100 @@
         },
         {
           "kind": "enum",
+          "name": "FfiPathCost",
+          "signature": "public enum FfiPathCost: Equatable, Hashable",
+          "doc": "FFI mirror of [`PathCost`].",
+          "members": [
+            {
+              "kind": "case",
+              "name": "unmetered",
+              "signature": "case unmetered",
+              "doc": "Bulk transfer is acceptable.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "metered",
+              "signature": "case metered",
+              "doc": "The link is byte-counted (iOS `isExpensive`, Android without `NOT_METERED`).",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "constrained",
+              "signature": "case constrained",
+              "doc": "The OS data saver is on (iOS Low Data Mode, Android Data Saver).",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum",
+          "name": "FfiPathInterface",
+          "signature": "public enum FfiPathInterface: Equatable, Hashable",
+          "doc": "FFI mirror of [`PathInterface`].",
+          "members": [
+            {
+              "kind": "case",
+              "name": "wired",
+              "signature": "case wired",
+              "doc": "Ethernet or another wired link.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "wifi",
+              "signature": "case wifi",
+              "doc": "Wi-Fi.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "cellular",
+              "signature": "case cellular",
+              "doc": "A cellular radio.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "other",
+              "signature": "case other",
+              "doc": "Anything else, or unknown.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum",
+          "name": "FfiPowerState",
+          "signature": "public enum FfiPowerState: Equatable, Hashable",
+          "doc": "FFI mirror of [`PowerState`].",
+          "members": [
+            {
+              "kind": "case",
+              "name": "external",
+              "signature": "case external",
+              "doc": "On external power.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "battery",
+              "signature": "case battery",
+              "doc": "On battery.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "lowPower",
+              "signature": "case lowPower",
+              "doc": "On battery with the OS low-power mode on.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum",
           "name": "FfiQuotaAdvisory",
           "signature": "public enum FfiQuotaAdvisory: Equatable, Hashable",
           "doc": "The quota state, as `GET /v1/quota` reports it.",
@@ -2516,6 +2674,42 @@
               "name": "quarantined",
               "signature": "case quarantined",
               "doc": "Refused. `reason` is a stable, switchable code; `detail` is English developer text.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum",
+          "name": "FfiThermalState",
+          "signature": "public enum FfiThermalState: Equatable, Hashable",
+          "doc": "FFI mirror of [`ThermalState`].",
+          "members": [
+            {
+              "kind": "case",
+              "name": "nominal",
+              "signature": "case nominal",
+              "doc": "No thermal pressure.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "fair",
+              "signature": "case fair",
+              "doc": "Slightly elevated.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "serious",
+              "signature": "case serious",
+              "doc": "High: the OS asks apps to reduce work.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "critical",
+              "signature": "case critical",
+              "doc": "Critical: the OS asks apps to stop discretionary work.",
               "members": []
             }
           ]
@@ -2949,7 +3143,14 @@
               "kind": "fun",
               "name": "pushAsset",
               "signature": "suspend fun pushAsset(workspace: FfiWorkspace, assetId: kotlin.String): FfiPushReport",
-              "doc": "**Push** one sealed asset of `workspace` — every blob of its bundle, in ladder order\n(provenance and metadata, then derivative manifests and derivatives, then the\noriginal) — driving `capsule_sdk::push::push_bundle` inside the SDK.\n\nThe original never crosses the boundary: its ciphertext is re-derived from the\nplaintext on disk one upload chunk window at a time, so memory is bounded by the\ntransfer window whatever the original's size. The workspace lock is held only while the\nbundle is built, never across the network.\n\nEvery blob is driven; one the server already holds answers `duplicate_blob` and comes\nback [`FfiUploadOutcome::AlreadyStored`], so pushing twice is safe. The album must\nalready be provisioned on the server.\n\n**A create the server refused is re-sealed and retried once** (issue #822). When the\nalbum's epoch moved past the one the asset was sealed under, the server refuses its\ncreate for good; if this device holds a newer epoch, the asset is re-sealed at it\n(`Workspace::reseal_create`) and pushed again, once. A second refusal fails the push.\nWhen this device holds no newer epoch the push fails with [`FfiError::Upload`] carrying\nthe server's code and a detail saying there is no newer epoch to re-seal at, and the\nasset stays local. That detail names no missing key: the refusal may have had nothing to\ndo with the epoch (a revoked device, withdrawn write access), or another device rotated\nthe album and its key has not reached this one yet.",
+              "doc": "**Push** one sealed asset of `workspace` — every blob of its bundle, in ladder order\n(provenance and metadata, then derivative manifests and derivatives, then the\noriginal) — driving `capsule_sdk::push::push_bundle` inside the SDK.\n\nThe original never crosses the boundary: its ciphertext is re-derived from the\nplaintext on disk one upload chunk window at a time, so memory is bounded by the\ntransfer window whatever the original's size. The workspace lock is held only while the\nbundle is built, never across the network.\n\nEvery blob the reported path admits is driven ([`set_path`](Self::set_path)); the tiers\nit holds back are counted in [`FfiPushReport::deferred`] and wait for the next push. A\nblob the server already holds answers `duplicate_blob` and comes back\n[`FfiUploadOutcome::AlreadyStored`], so pushing twice is safe. The album must already be\nprovisioned on the server.\n\n**A create the server refused is re-sealed and retried once** (issue #822). When the\nalbum's epoch moved past the one the asset was sealed under, the server refuses its\ncreate for good; if this device holds a newer epoch, the asset is re-sealed at it\n(`Workspace::reseal_create`) and pushed again, once. A second refusal fails the push.\nWhen this device holds no newer epoch the push fails with [`FfiError::Upload`] carrying\nthe server's code and a detail saying there is no newer epoch to re-seal at, and the\nasset stays local. That detail names no missing key: the refusal may have had nothing to\ndo with the epoch (a revoked device, withdrawn write access), or another device rotated\nthe album and its key has not reached this one yet.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "setPath",
+              "signature": "fun setPath(snapshot: FfiPathSnapshot): kotlin.ULong",
+              "doc": "Report the path as the app's OS listeners see it now, and return its path generation.\n\nCall it whenever a listener fires. The generation advances only when reachability, the\ninterface or the cost changes; it then drops this session's pooled connections, forgets\nthe resets and stalls seen on the old path, and cancels — within one scheduling tick —\nany push work the new path forbids, which re-plans and resumes. Power, thermal and\nbackground-deadline changes re-plan without a new generation.",
               "members": []
             },
             {
@@ -4044,6 +4245,56 @@
         },
         {
           "kind": "data class",
+          "name": "FfiPathSnapshot",
+          "signature": "data class FfiPathSnapshot",
+          "doc": "One sample of the path as the app's OS listeners report it.\n\nFlat, like [`FfiNotifyInput`](crate::ffi::FfiNotifyInput): `background_deadline_ms` present\nmeans the app runs in a background task the OS ends that many milliseconds from now; absent\nmeans the foreground.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "cost",
+              "signature": "var cost: FfiPathCost",
+              "doc": "What the path costs.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "reachable",
+              "signature": "var reachable: kotlin.Boolean",
+              "doc": "Whether the OS reports a usable path.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "interface",
+              "signature": "var interface: FfiPathInterface",
+              "doc": "The interface the path runs over.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "power",
+              "signature": "var power: FfiPowerState",
+              "doc": "The device's power source.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "thermal",
+              "signature": "var thermal: FfiThermalState",
+              "doc": "The device's thermal state.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "backgroundDeadlineMs",
+              "signature": "var backgroundDeadlineMs: kotlin.ULong?",
+              "doc": "Milliseconds before the OS ends the background task the app runs in; `None` in the\nforeground.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "data class",
           "name": "FfiPurgeOutcome",
           "signature": "data class FfiPurgeOutcome",
           "doc": "What a [`FfiWorkspace::purge_asset`] did.",
@@ -4089,6 +4340,13 @@
               "name": "bytes",
               "signature": "var bytes: kotlin.ULong",
               "doc": "Total bytes handed to the upload client, the original included.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "deferred",
+              "signature": "var deferred: kotlin.UInt",
+              "doc": "Blobs the reported path held back ([`FfiSession::set_path`]): push the asset again once\nthe path allows them. Zero when the whole ladder ran.",
               "members": []
             }
           ]
@@ -5067,6 +5325,100 @@
         },
         {
           "kind": "enum class",
+          "name": "FfiPathCost",
+          "signature": "enum class FfiPathCost",
+          "doc": "FFI mirror of [`PathCost`].",
+          "members": [
+            {
+              "kind": "entry",
+              "name": "UNMETERED",
+              "signature": "UNMETERED,",
+              "doc": "Bulk transfer is acceptable.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "METERED",
+              "signature": "METERED,",
+              "doc": "The link is byte-counted (iOS `isExpensive`, Android without `NOT_METERED`).",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "CONSTRAINED",
+              "signature": "CONSTRAINED;",
+              "doc": "The OS data saver is on (iOS Low Data Mode, Android Data Saver).",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum class",
+          "name": "FfiPathInterface",
+          "signature": "enum class FfiPathInterface",
+          "doc": "FFI mirror of [`PathInterface`].",
+          "members": [
+            {
+              "kind": "entry",
+              "name": "WIRED",
+              "signature": "WIRED,",
+              "doc": "Ethernet or another wired link.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "WIFI",
+              "signature": "WIFI,",
+              "doc": "Wi-Fi.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "CELLULAR",
+              "signature": "CELLULAR,",
+              "doc": "A cellular radio.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "OTHER",
+              "signature": "OTHER;",
+              "doc": "Anything else, or unknown.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum class",
+          "name": "FfiPowerState",
+          "signature": "enum class FfiPowerState",
+          "doc": "FFI mirror of [`PowerState`].",
+          "members": [
+            {
+              "kind": "entry",
+              "name": "EXTERNAL",
+              "signature": "EXTERNAL,",
+              "doc": "On external power.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "BATTERY",
+              "signature": "BATTERY,",
+              "doc": "On battery.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "LOW_POWER",
+              "signature": "LOW_POWER;",
+              "doc": "On battery with the OS low-power mode on.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum class",
           "name": "FfiQuotaAdvisory",
           "signature": "enum class FfiQuotaAdvisory",
           "doc": "The quota state, as `GET /v1/quota` reports it.",
@@ -5292,6 +5644,42 @@
               "name": "Quarantined",
               "signature": "data class Quarantined",
               "doc": "Refused. `reason` is a stable, switchable code; `detail` is English developer text.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum class",
+          "name": "FfiThermalState",
+          "signature": "enum class FfiThermalState",
+          "doc": "FFI mirror of [`ThermalState`].",
+          "members": [
+            {
+              "kind": "entry",
+              "name": "NOMINAL",
+              "signature": "NOMINAL,",
+              "doc": "No thermal pressure.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "FAIR",
+              "signature": "FAIR,",
+              "doc": "Slightly elevated.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "SERIOUS",
+              "signature": "SERIOUS,",
+              "doc": "High: the OS asks apps to reduce work.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "CRITICAL",
+              "signature": "CRITICAL;",
+              "doc": "Critical: the OS asks apps to stop discretionary work.",
               "members": []
             }
           ]
