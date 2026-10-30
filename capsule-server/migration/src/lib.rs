@@ -23,6 +23,8 @@
 //! - `000023` (#741): `album_key_escrows`, each album's keys sealed under the master key beside
 //!   the escrow.
 //! - `000024` (#1003): `activity_events`, the account activity log.
+//! - `000025` (#1035): `federation_subscriptions`, the albums this server pulls from peers for
+//!   its own members.
 //!
 //! # Every instant is a `BIGINT` of microseconds since the Unix epoch
 //!
@@ -110,6 +112,7 @@ migrations![
     m20260902_000022_owner_ledger_heads,
     m20260902_000023_album_key_escrows,
     m20260902_000024_activity_log,
+    m20260902_000025_federation_subscriptions,
 ];
 
 /// The content checksum of one migration's source: lowercase hex SHA-256.

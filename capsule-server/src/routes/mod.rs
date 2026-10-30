@@ -28,6 +28,7 @@ pub mod roster;
 pub mod sessions;
 pub mod share;
 pub mod storage;
+pub mod subscriptions;
 pub mod sync;
 pub mod totp;
 pub mod upgrade;
