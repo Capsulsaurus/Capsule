@@ -98,6 +98,15 @@ pub use notify::{
     evaluate_alerts, next_alert_deadline, pre_arm_deadlines,
 };
 
+/// The render ladder: the one order every app renders by, and the embedded-preview read that
+/// feeds it. Separated for the reason `notify` is: pure functions of caller-supplied state.
+mod ladder;
+
+pub use ladder::{
+    FfiEmbeddedPreview, FfiLocalHoldings, FfiNextStep, FfiRenderRequest, FfiRenderStep,
+    FfiRendition, FfiRepresentation, FfiRungSource, embedded_preview, render_step,
+};
+
 // ─── Errors ──────────────────────────────────────────────────────────────────
 
 /// Every failure the FFI flows can surface, flattened by originating layer. Each
