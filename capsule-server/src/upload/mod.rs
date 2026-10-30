@@ -72,7 +72,7 @@ pub use self::envelope::{DeclaredBlob, GateContext, GateReject, ManifestEnvelope
 pub use self::policy::{ChunkReadDeadline, UploadPolicy};
 use crate::blob::BlobStore;
 use crate::index::AssetIndex;
-use crate::quota::QuotaStore;
+use crate::quota::{QuotaContext, QuotaLimits, QuotaStore};
 use crate::store::{Clock, UploadSessionStore};
 
 /// Everything the upload operations reach for, as one injectable value.
@@ -86,7 +86,7 @@ pub struct UploadContext {
     blobs: Arc<dyn BlobStore>,
     index: Arc<dyn AssetIndex>,
     authority: Arc<dyn WriteAuthority>,
-    quotas: Arc<dyn QuotaStore>,
+    quota: QuotaContext,
     clock: Arc<dyn Clock>,
     policy: Arc<UploadPolicy>,
 }
@@ -103,7 +103,7 @@ impl UploadContext {
         blobs: Arc<dyn BlobStore>,
         index: Arc<dyn AssetIndex>,
         authority: Arc<dyn WriteAuthority>,
-        quotas: Arc<dyn QuotaStore>,
+        quota: QuotaContext,
         clock: Arc<dyn Clock>,
         policy: UploadPolicy,
     ) -> Self {
@@ -112,7 +112,7 @@ impl UploadContext {
             blobs,
             index,
             authority,
-            quotas,
+            quota,
             clock,
             policy: Arc::new(policy),
         }
@@ -141,7 +141,14 @@ impl UploadContext {
 
     /// The quota ledger a session's reservation is charged to and released from.
     pub fn quotas(&self) -> &dyn QuotaStore {
-        self.quotas.as_ref()
+        self.quota.quotas()
+    }
+
+    /// The deployment's quota thresholds, which a reservation restored on a session's behalf
+    /// is charged under. The same [`QuotaContext`] the quota module is built from, so the two
+    /// never disagree about a limit.
+    pub fn quota_limits(&self) -> QuotaLimits {
+        self.quota.limits()
     }
 
     /// The clock every record, deadline and drift bound is stamped from.

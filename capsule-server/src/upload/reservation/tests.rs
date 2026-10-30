@@ -9,7 +9,7 @@ use uuid::Uuid;
 use super::*;
 use crate::blob::{BlobStore as _, InMemoryBlobStore};
 use crate::index::memory::InMemoryAssetIndex;
-use crate::quota::{ChargeOutcome, InMemoryQuota, QuotaLimits, QuotaStore as _};
+use crate::quota::{ChargeOutcome, InMemoryQuota, QuotaContext, QuotaLimits, QuotaStore as _};
 use crate::store::memory::{InMemoryUploadSessions, ManualClock};
 use crate::store::{AlbumId, AssetId, BlobRole, OwnerId, UploadId, UploadSessionStatus, UserId};
 use crate::upload::{
@@ -48,6 +48,101 @@ impl WriteAuthority for Unasked {
     }
 }
 
+/// A ledger whose release lets a create open its session first: the session `arrival` holds
+/// becomes visible after the release's live-session check and before the ledger releases.
+#[derive(Debug)]
+struct RacingQuota {
+    inner: Arc<InMemoryQuota>,
+    sessions: Arc<InMemoryUploadSessions>,
+    arrival: std::sync::Mutex<Option<UploadSessionRecord>>,
+}
+
+impl crate::quota::QuotaStore for RacingQuota {
+    fn usage<'a>(
+        &'a self,
+        user: &'a UserId,
+    ) -> crate::store::StoreFuture<'a, crate::quota::StoredUsage> {
+        self.inner.usage(user)
+    }
+
+    fn charge<'a>(
+        &'a self,
+        user: &'a UserId,
+        address: &'a ContentAddress,
+        size: u64,
+        at: Timestamp,
+        limits: QuotaLimits,
+    ) -> crate::store::StoreFuture<'a, ChargeOutcome> {
+        self.inner.charge(user, address, size, at, limits)
+    }
+
+    fn release<'a>(
+        &'a self,
+        user: &'a UserId,
+        address: &'a ContentAddress,
+    ) -> crate::store::StoreFuture<'a, bool> {
+        let arrival = self
+            .arrival
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        Box::pin(async move {
+            if let Some(arrival) = arrival {
+                crate::store::UploadSessionStore::open(self.sessions.as_ref(), arrival).await?;
+            }
+            self.inner.release(user, address).await
+        })
+    }
+
+    fn release_attribution<'a>(
+        &'a self,
+        address: &'a ContentAddress,
+    ) -> crate::store::StoreFuture<'a, Option<(UserId, u64)>> {
+        self.inner.release_attribution(address)
+    }
+
+    fn suspend<'a>(
+        &'a self,
+        user: &'a UserId,
+        at: Timestamp,
+    ) -> crate::store::StoreFuture<'a, bool> {
+        self.inner.suspend(user, at)
+    }
+
+    fn unsuspend<'a>(&'a self, user: &'a UserId) -> crate::store::StoreFuture<'a, bool> {
+        self.inner.unsuspend(user)
+    }
+}
+
+/// A harness whose ledger opens `arrival` in the middle of the next release.
+fn racing_harness(arrival: UploadSessionRecord) -> Harness {
+    let clock = Arc::new(ManualClock::new(
+        Timestamp::from_second(1_800_000_000).expect("in range"),
+    ));
+    let quotas = Arc::new(InMemoryQuota::new());
+    let sessions = Arc::new(InMemoryUploadSessions::with_default_ttl(clock.clone()));
+    let blobs = Arc::new(InMemoryBlobStore::new());
+    let racing = Arc::new(RacingQuota {
+        inner: quotas.clone(),
+        sessions: sessions.clone(),
+        arrival: std::sync::Mutex::new(Some(arrival)),
+    });
+    let context = UploadContext::new(
+        sessions,
+        blobs.clone(),
+        Arc::new(InMemoryAssetIndex::new()),
+        Arc::new(Unasked),
+        QuotaContext::new(racing, clock.clone(), QuotaLimits::unlimited()),
+        clock,
+        UploadPolicy::default(),
+    );
+    Harness {
+        context,
+        quotas,
+        blobs,
+    }
+}
+
 struct Harness {
     context: UploadContext,
     quotas: Arc<InMemoryQuota>,
@@ -65,7 +160,7 @@ fn harness() -> Harness {
         blobs.clone(),
         Arc::new(InMemoryAssetIndex::new()),
         Arc::new(Unasked),
-        quotas.clone(),
+        QuotaContext::new(quotas.clone(), clock.clone(), QuotaLimits::unlimited()),
         clock,
         UploadPolicy::default(),
     );
@@ -228,5 +323,22 @@ async fn a_declared_hash_that_is_no_address_releases_nothing() {
     assert_eq!(
         release(&h.context, &ended).await.expect("answers"),
         Released::Unaddressable
+    );
+}
+
+#[tokio::test]
+async fn a_session_that_opens_during_the_release_gets_the_reservation_back() {
+    let h = racing_harness(session("arrived", UploadSessionStatus::Pending));
+    h.charge(&uploader()).await;
+    let ended = session("cancelled", UploadSessionStatus::Pending);
+
+    assert_eq!(
+        release(&h.context, &ended).await.expect("answers"),
+        Released::Restored
+    );
+    assert_eq!(
+        h.used(&uploader()).await,
+        BYTES.len() as u64,
+        "the session that opened will store the bytes, so their reservation stands"
     );
 }

@@ -26,6 +26,17 @@
 //!
 //! The ledger's own [`crate::quota::QuotaStore::release`] then refuses an attribution that is
 //! another account's, so a session never gives back somebody else's charge.
+//!
+//! # Racing a create for the same bytes
+//!
+//! The live-session check is not atomic with the ledger's release, so a create that charged
+//! `AlreadyAttributed` could open its session after the check and before the release, and
+//! store its bytes against an attribution that is gone. Both sides write their own fact first
+//! and read the other's after: session creation opens the session and then charges the
+//! address again, and [`release`] releases and then asks for another live session again,
+//! putting the reservation back for one it finds. Whichever order the four steps run in, one
+//! of the two second reads sees the other's write, so a session that stores bytes is charged
+//! for them.
 
 use crate::blob::{BlobError, ContentAddress};
 use crate::store::{StoreError, UploadSessionRecord};
@@ -42,6 +53,9 @@ pub enum Released {
     BytesStored,
     /// Nothing was released: another live session of the uploader declares the address.
     StillReserved,
+    /// The attribution went back, and a session of the uploader that opened for the address
+    /// while it went was charged again — the release raced a create.
+    Restored,
     /// Nothing was released: the session's declared hash is not a content address.
     ///
     /// Unreachable for a session creation admitted, which parsed the hash before charging it.
@@ -84,12 +98,7 @@ pub async fn release(
         tracing::debug!("the bytes are stored, so the reservation stays with them");
         return Ok(Released::BytesStored);
     }
-    if let Some(other) = context
-        .sessions()
-        .pending_for_address(&record.upload_user_id, &record.expected_hash)
-        .await?
-        && other != record.upload_id
-    {
+    if let Some(other) = other_live_session(context, record).await? {
         tracing::debug!(%other, "another live session of the uploader still holds the reservation");
         return Ok(Released::StillReserved);
     }
@@ -97,18 +106,59 @@ pub async fn release(
         .quotas()
         .release(&record.upload_user_id, &address)
         .await?;
-    if released {
-        tracing::info!(
-            uploader = %record.upload_user_id,
-            size = record.total_size,
-            status = record.status.as_str(),
-            "released an ended session's quota reservation"
-        );
-        Ok(Released::Released)
-    } else {
+    if !released {
         tracing::debug!("the address was not attributed to the uploader");
-        Ok(Released::NotHeld)
+        return Ok(Released::NotHeld);
     }
+    tracing::info!(
+        uploader = %record.upload_user_id,
+        size = record.total_size,
+        status = record.status.as_str(),
+        "released an ended session's quota reservation"
+    );
+    // The check above and the release are two operations, and a create for the same address
+    // can open its session between them — after charging `AlreadyAttributed` against the
+    // attribution just released. Asked again now the release is done: a session open by this
+    // point is one the create's own post-open re-charge may already have passed, so the
+    // reservation is put back on its behalf. A session opening after this point re-charges for
+    // itself and finds nothing attributed.
+    let Some(other) = other_live_session(context, record).await? else {
+        return Ok(Released::Released);
+    };
+    let Some(holder) = context.sessions().read(&other).await? else {
+        tracing::debug!(%other, "the session that opened during the release is gone");
+        return Ok(Released::Released);
+    };
+    let restored = context
+        .quotas()
+        .charge(
+            &holder.upload_user_id,
+            &address,
+            holder.total_size,
+            context.clock().now(),
+            context.quota_limits(),
+        )
+        .await?;
+    tracing::info!(
+        %other,
+        uploader = %holder.upload_user_id,
+        size = holder.total_size,
+        restored = matches!(restored, crate::quota::ChargeOutcome::Charged { .. }),
+        "a session opened during the release; its reservation was put back"
+    );
+    Ok(Released::Restored)
+}
+
+/// Another live session of `record`'s uploader that declares the same bytes, if one exists.
+async fn other_live_session(
+    context: &UploadContext,
+    record: &UploadSessionRecord,
+) -> Result<Option<crate::store::UploadId>, StoreError> {
+    Ok(context
+        .sessions()
+        .pending_for_address(&record.upload_user_id, &record.expected_hash)
+        .await?
+        .filter(|other| *other != record.upload_id))
 }
 
 /// [`release`], logging rather than returning a failure — the form every terminal path uses.

@@ -1228,10 +1228,12 @@ pub async fn create_upload(
     // reservation, because a refused duplicate must not be charged; before the stage, because a
     // refusal must not leave bytes. The reserved-but-unpublished row a refusal leaves behind
     // publishes nothing and is the discard worker's, exactly as an abandoned session's is.
-    match crate::quota::charge_upload(&quota, &uploader, &address, request.size).await {
+    let charged = match crate::quota::charge_upload(&quota, &uploader, &address, request.size).await
+    {
         Ok(
-            crate::quota::UploadCharge::Admitted | crate::quota::UploadCharge::AlreadyAttributed,
-        ) => {}
+            charge @ (crate::quota::UploadCharge::Admitted
+            | crate::quota::UploadCharge::AlreadyAttributed),
+        ) => charge,
         Ok(crate::quota::UploadCharge::Refused) => return Err(CreateRejection::quota_exceeded()),
         Ok(crate::quota::UploadCharge::Suspended) => {
             return Err(CreateRejection::QuotaSuspended {
@@ -1242,7 +1244,7 @@ pub async fn create_upload(
             store_unavailable(&error, "charge an upload against its quota");
             return Err(CreateRejection::unavailable(upload.clock()));
         }
-    }
+    };
 
     let upload_id = new_upload_id();
 
@@ -1273,7 +1275,7 @@ pub async fn create_upload(
         // ungroupable and the visibility gate a conjunction over nothing.
         asset_id,
         owner_id: owner,
-        upload_user_id: uploader,
+        upload_user_id: uploader.clone(),
         album_id: Some(album),
         content_type: Some(request.content_type.clone()),
         expected_hash: request.hash.clone(),
@@ -1299,6 +1301,22 @@ pub async fn create_upload(
         store_unavailable(&error, "open an upload session");
         CreateRejection::unavailable(upload.clock())
     })?;
+
+    // An `AlreadyAttributed` charge leans on an attribution somebody else's session made, and
+    // that session can end and release it while this one was opening. Charged again now that
+    // the session is visible to a release's live-session check: see
+    // [`crate::upload::reservation`] for why the two second reads together close the race.
+    if charged == crate::quota::UploadCharge::AlreadyAttributed {
+        recharge_after_open(
+            &upload,
+            &quota,
+            &upload_id,
+            &uploader,
+            &address,
+            request.size,
+        )
+        .await?;
+    }
 
     tracing::info!(
         upload_id = %upload_id,
@@ -1578,6 +1596,49 @@ async fn finish_if_full(
             "the finalization task did not finish".to_owned(),
         ))
     }))
+}
+
+/// Charge a just-opened session's address again, after a create charged it `AlreadyAttributed`.
+///
+/// Still attributed is the common answer and changes nothing. Admitted means the attribution
+/// the create leaned on was released while it opened, and this session now pays for its bytes.
+/// A refusal or a failure to answer means the session may not hold bytes it is not charged for,
+/// so it is undone — stage and record — before the refusal is returned.
+async fn recharge_after_open(
+    upload: &UploadContext,
+    quota: &crate::quota::QuotaContext,
+    upload_id: &UploadId,
+    uploader: &UserId,
+    address: &ContentAddress,
+    size: u64,
+) -> Result<(), CreateRejection> {
+    let rejection = match crate::quota::charge_upload(quota, uploader, address, size).await {
+        Ok(crate::quota::UploadCharge::AlreadyAttributed) => return Ok(()),
+        Ok(crate::quota::UploadCharge::Admitted) => {
+            tracing::info!(
+                %upload_id,
+                size,
+                "the attribution a create leaned on was released while it opened; charged it"
+            );
+            return Ok(());
+        }
+        Ok(crate::quota::UploadCharge::Refused) => CreateRejection::quota_exceeded(),
+        Ok(crate::quota::UploadCharge::Suspended) => CreateRejection::QuotaSuspended {
+            code: error_codes::QUOTA_SUSPENDED,
+        },
+        Err(error) => {
+            store_unavailable(&error, "re-charge an opened upload against its quota");
+            CreateRejection::unavailable(upload.clock())
+        }
+    };
+    tracing::info!(%upload_id, "an opened session could not be charged; undoing it");
+    if let Err(error) = upload.blobs().abandon(upload_id).await {
+        tracing::error!(%error, %upload_id, "an uncharged session's stage could not be dropped");
+    }
+    if let Err(error) = upload.sessions().discard(upload_id).await {
+        tracing::error!(%error, %upload_id, "an uncharged session could not be discarded");
+    }
+    Err(rejection)
 }
 
 /// `existing` as the finish [`finish_if_full`] ran left it, for a duplicate create's answer.

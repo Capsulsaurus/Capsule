@@ -306,6 +306,61 @@ async fn a_blob_another_account_already_holds_costs_nothing() {
     );
 }
 
+/// Charge `bytes` to `holder` directly, as a session of theirs did at creation.
+async fn attribute(fixture: &Fixture, holder: &capsule_server::store::UserId, bytes: &[u8]) {
+    let address =
+        capsule_server::blob::ContentAddress::parse(&checksum(bytes)).expect("a content address");
+    fixture
+        .quotas
+        .charge(holder, &address, 8192, Timestamp::UNIX_EPOCH, limits())
+        .await
+        .expect("the ledger accepts");
+}
+
+/// A create that found the bytes attributed, and whose holder's reservation went back while
+/// the session was opening, pays for the bytes itself rather than storing them uncharged.
+#[tokio::test]
+async fn an_attribution_released_while_a_create_opens_is_charged_to_the_new_session() {
+    let fixture = Fixture::with_quota(limits());
+    let bearer = token(&fixture).await;
+    let bytes = payload(b'r', 8192);
+    let holder = capsule_server::store::UserId::new(user().as_str());
+    attribute(&fixture, &holder, &bytes).await;
+    assert_eq!(snapshot(&fixture, &bearer).await["used"], 8192);
+
+    // The holder's session ends between this create's charge and its open.
+    fixture.quotas.release_after_next_charge(holder);
+    open(&fixture, &bearer, &bytes, StatusCode::CREATED).await;
+
+    assert_eq!(
+        snapshot(&fixture, &bearer).await["used"],
+        8192,
+        "the session that will store the bytes holds their reservation"
+    );
+}
+
+/// The same race, where paying for the bytes now crosses the hard limit: the opened session is
+/// undone and the create refused, rather than left to store bytes nobody is charged for.
+#[tokio::test]
+async fn an_opened_session_that_cannot_be_recharged_is_undone_and_refused() {
+    let fixture = Fixture::with_quota(limits());
+    let bearer = token(&fixture).await;
+    open(&fixture, &bearer, &payload(b's', 8192), StatusCode::CREATED).await;
+    let bytes = payload(b't', 8192);
+    let somebody = capsule_server::store::UserId::new("somebody-else");
+    attribute(&fixture, &somebody, &bytes).await;
+
+    fixture.quotas.release_after_next_charge(somebody.clone());
+    let problem = open(&fixture, &bearer, &bytes, StatusCode::FORBIDDEN).await;
+    assert_eq!(problem["code"], "error.quota.exceeded");
+    assert_eq!(snapshot(&fixture, &bearer).await["used"], 8192);
+
+    // Nothing of the undone session survives: with the bytes attributed again, the same create
+    // opens a fresh session (`201`) rather than handing back a live one (`200`).
+    attribute(&fixture, &somebody, &bytes).await;
+    open(&fixture, &bearer, &bytes, StatusCode::CREATED).await;
+}
+
 /// Past the grace window, metadata growth stops — and deletes do not.
 #[tokio::test]
 async fn the_grace_window_stops_metadata_growth_but_never_a_delete() {

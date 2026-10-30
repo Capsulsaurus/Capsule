@@ -144,7 +144,11 @@ impl Server {
             blobs.clone(),
             index.clone(),
             authority.clone(),
-            quotas.clone(),
+            crate::quota::QuotaContext::new(
+                quotas.clone(),
+                clock.clone(),
+                crate::quota::QuotaLimits::unlimited(),
+            ),
             clock.clone(),
             UploadPolicy::default(),
         );

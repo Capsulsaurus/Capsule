@@ -34,6 +34,7 @@ use capsule_server::App;
 use capsule_server::app::Modules;
 use capsule_server::blob::{BlobStore, ContentAddress};
 use capsule_server::index::{AssetIndex, BlobRecord, PendingAsset};
+use capsule_server::quota::{QuotaContext, QuotaLimits};
 use capsule_server::store::{AssetId, BlobRole, Clock};
 use capsule_server::upload::{UploadContext, UploadPolicy};
 use jiff::Timestamp;
@@ -971,7 +972,11 @@ async fn an_escrow_write_outside_the_servers_window_is_a_426_the_sdk_reports_wit
             fixture.blobs.clone(),
             fixture.index.clone(),
             fixture.authority.clone(),
-            fixture.quotas.clone(),
+            QuotaContext::new(
+                fixture.quotas.clone(),
+                fixture.clock.clone(),
+                QuotaLimits::unlimited(),
+            ),
             fixture.clock.clone(),
             UploadPolicy::default().with_protocol_window("2000-01-01", "2000-01-01"),
         ),

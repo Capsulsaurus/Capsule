@@ -3124,6 +3124,9 @@ pub(crate) struct SwitchableQuota {
     unavailable: AtomicBool,
     /// Fail [`QuotaStore::charge`] alone, so a caller that reads usage first gets past the read.
     charges_unavailable: AtomicBool,
+    /// Release this account's attribution of the charged address once the next charge has
+    /// answered: another session ending between a create's charge and its open.
+    release_after_next_charge: std::sync::Mutex<Option<UserId>>,
 }
 
 impl SwitchableQuota {
@@ -3141,6 +3144,15 @@ impl SwitchableQuota {
     pub(crate) fn set_charges_unavailable(&self, unavailable: bool) {
         self.charges_unavailable
             .store(unavailable, Ordering::SeqCst);
+    }
+
+    /// Release `holder`'s attribution of whatever the next charge names, right after it
+    /// answers — the window between a create's charge and its session becoming visible.
+    pub(crate) fn release_after_next_charge(&self, holder: UserId) {
+        *self
+            .release_after_next_charge
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(holder);
     }
 
     fn refuse<T>() -> Result<T, StoreError> {
@@ -3174,7 +3186,18 @@ impl QuotaStore for SwitchableQuota {
         if self.is_down() || self.charges_unavailable.load(Ordering::SeqCst) {
             return Box::pin(async { Self::refuse() });
         }
-        self.inner.charge(user, address, size, at, limits)
+        let holder = self
+            .release_after_next_charge
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        Box::pin(async move {
+            let outcome = self.inner.charge(user, address, size, at, limits).await?;
+            if let Some(holder) = holder {
+                self.inner.release(&holder, address).await?;
+            }
+            Ok(outcome)
+        })
     }
 
     fn release<'a>(
@@ -4084,7 +4107,7 @@ impl Fixture {
                 blobs.clone(),
                 index_fault.clone(),
                 authority.clone(),
-                quotas.clone(),
+                QuotaContext::new(quotas.clone(), clock.clone(), quota_limits),
                 clock.clone(),
                 UploadPolicy::default().with_chunk_read_deadline(chunk_deadline.clone()),
             ),
@@ -4252,7 +4275,7 @@ impl Fixture {
                 blobs.clone(),
                 index.clone(),
                 authority,
-                quotas.clone(),
+                QuotaContext::new(quotas.clone(), clock.clone(), QuotaLimits::unlimited()),
                 clock.clone(),
                 UploadPolicy::default(),
             ),
