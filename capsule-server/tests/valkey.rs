@@ -181,6 +181,10 @@ impl Harness for ValkeyHarness {
     fn oidc_devices(&self) -> &dyn OidcDeviceStore {
         &*self.oidc_devices
     }
+
+    fn now(&self) -> Timestamp {
+        self.clock.now()
+    }
 }
 
 /// The whole store suite, in one pass on one server.
@@ -193,10 +197,6 @@ async fn the_store_suite_passes_against_valkey() {
     conformance::run_all(&harness).await;
 }
 
-/// A record past its logical lifetime is reported dead and is **not** deleted by the reader.
-///
-/// The read gate only answers; `PEXPIRE` collects. A reader whose clock ran ahead would
-/// otherwise delete, for every replica, state that is still live by the store's own lifetime.
 /// A session re-opened near the end of its lineage lives only until the hard cap, not for a
 /// whole sliding window — the cap survives the rotation that re-opens it.
 #[tokio::test]
@@ -378,6 +378,10 @@ async fn a_near_cap_rotation_never_shortens_the_user_index() {
     );
 }
 
+/// A record past its logical lifetime is reported dead and is **not** deleted by the reader.
+///
+/// The read gate only answers; `PEXPIRE` collects. A reader whose clock ran ahead would
+/// otherwise delete, for every replica, state that is still live by the store's own lifetime.
 #[tokio::test]
 async fn a_logically_expired_record_is_dead_but_left_for_the_collector() {
     let Some(server) = server().await else {

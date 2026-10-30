@@ -1504,6 +1504,10 @@ impl super::conformance::Harness for InMemoryStores {
     fn oidc_devices(&self) -> &dyn OidcDeviceStore {
         &self.oidc_devices
     }
+
+    fn now(&self) -> Timestamp {
+        self.clock.now()
+    }
 }
 
 #[cfg(test)]

@@ -33,6 +33,7 @@ conformance_cases! {
     touching_a_session_records_activity_without_extending_its_life,
     an_expired_session_leaves_no_listing_entry_behind,
     a_past_cap_lineage_does_not_hide_a_live_one,
+    restoring_a_session_keeps_its_original_deadline,
     upload_session_round_trips_every_field,
     uploader_listing_is_ordered_and_scoped,
     a_pending_address_is_uploader_scoped_and_ends_with_the_session,
