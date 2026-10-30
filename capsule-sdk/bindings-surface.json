@@ -2048,40 +2048,40 @@
           "kind": "enum",
           "name": "FfiHardwareSignerError",
           "signature": "public enum FfiHardwareSignerError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError",
-          "doc": "Failure surfaced by a foreign [`FfiHardwareSigner`]. Mirrors `capsule-core`'s\n`HardwareSignerError` variant for variant — it is the same contract, declared in the\n`capsule_sdk` namespace because core's own type carries no uniffi derive.",
+          "doc": "Failure surfaced by a foreign [`FfiHardwareSigner`]. Mirrors `capsule-core`'s\n`HardwareSignerError` variant for variant — it is the same contract, declared in the\n`capsule_sdk` namespace because core's own type carries no uniffi derive.\n\nThe error is **thrown by foreign code** — it is the declared error of the\n[`FfiHardwareSigner`] and [`FfiHardwareKeyAgreement`] foreign traits — so Rust must *lift*\nit, and uniffi lifts only a non-flat error. Every variant therefore carries a named\n`detail` field (the element's own English diagnostic), which also gives the Kotlin\nexceptions and Swift cases the same `(detail)` shape. Core's error keeps `detail` only on\n[`Backend`](Self::Backend); for the other variants it is logged at the seam and dropped.",
           "members": [
             {
               "kind": "case",
               "name": "AuthCancelled",
-              "signature": "case AuthCancelled(message: String)",
+              "signature": "case AuthCancelled",
               "doc": "The user cancelled the biometric / the element refused authentication.",
               "members": []
             },
             {
               "kind": "case",
               "name": "Unavailable",
-              "signature": "case Unavailable(message: String)",
+              "signature": "case Unavailable",
               "doc": "No secure element is available on this device.",
               "members": []
             },
             {
               "kind": "case",
               "name": "NotFound",
-              "signature": "case NotFound(message: String)",
+              "signature": "case NotFound",
               "doc": "No key exists for the requested alias.",
               "members": []
             },
             {
               "kind": "case",
               "name": "Exportable",
-              "signature": "case Exportable(message: String)",
+              "signature": "case Exportable",
               "doc": "The private key was readable — non-exportability is violated (a failure).",
               "members": []
             },
             {
               "kind": "case",
               "name": "Backend",
-              "signature": "case Backend(message: String)",
+              "signature": "case Backend",
               "doc": "Any other backend error.",
               "members": []
             }
@@ -4780,41 +4780,41 @@
         {
           "kind": "sealed class",
           "name": "FfiHardwareSignerException",
-          "signature": "sealed class FfiHardwareSignerException(message: String): kotlin.Exception(message)",
-          "doc": "Failure surfaced by a foreign [`FfiHardwareSigner`]. Mirrors `capsule-core`'s\n`HardwareSignerError` variant for variant — it is the same contract, declared in the\n`capsule_sdk` namespace because core's own type carries no uniffi derive.",
+          "signature": "sealed class FfiHardwareSignerException: kotlin.Exception()",
+          "doc": "Failure surfaced by a foreign [`FfiHardwareSigner`]. Mirrors `capsule-core`'s\n`HardwareSignerError` variant for variant — it is the same contract, declared in the\n`capsule_sdk` namespace because core's own type carries no uniffi derive.\n\nThe error is **thrown by foreign code** — it is the declared error of the\n[`FfiHardwareSigner`] and [`FfiHardwareKeyAgreement`] foreign traits — so Rust must *lift*\nit, and uniffi lifts only a non-flat error. Every variant therefore carries a named\n`detail` field (the element's own English diagnostic), which also gives the Kotlin\nexceptions and Swift cases the same `(detail)` shape. Core's error keeps `detail` only on\n[`Backend`](Self::Backend); for the other variants it is logged at the seam and dropped.",
           "members": [
             {
               "kind": "variant",
               "name": "AuthCancelled",
-              "signature": "class AuthCancelled(message: String) : FfiHardwareSignerException(message)",
+              "signature": "class AuthCancelled",
               "doc": "The user cancelled the biometric / the element refused authentication.",
               "members": []
             },
             {
               "kind": "variant",
               "name": "Unavailable",
-              "signature": "class Unavailable(message: String) : FfiHardwareSignerException(message)",
+              "signature": "class Unavailable",
               "doc": "No secure element is available on this device.",
               "members": []
             },
             {
               "kind": "variant",
               "name": "NotFound",
-              "signature": "class NotFound(message: String) : FfiHardwareSignerException(message)",
+              "signature": "class NotFound",
               "doc": "No key exists for the requested alias.",
               "members": []
             },
             {
               "kind": "variant",
               "name": "Exportable",
-              "signature": "class Exportable(message: String) : FfiHardwareSignerException(message)",
+              "signature": "class Exportable",
               "doc": "The private key was readable — non-exportability is violated (a failure).",
               "members": []
             },
             {
               "kind": "variant",
               "name": "Backend",
-              "signature": "class Backend(message: String) : FfiHardwareSignerException(message)",
+              "signature": "class Backend",
               "doc": "Any other backend error.",
               "members": []
             }

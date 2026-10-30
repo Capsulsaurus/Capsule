@@ -25,6 +25,8 @@
 
 use std::sync::Arc;
 
+use capsule_core::crypto::keys::HardwareSignerError;
+
 use super::*;
 // One mock server for the whole crate, not one per module: `testmock` replays the real
 // wire — statuses, headers, and the `ApiError` JSON with its stable `error.*` codes — and is
@@ -1639,7 +1641,9 @@ impl MockElement {
 
     fn guard(&self) -> Result<(), FfiHardwareSignerError> {
         match self.fails_with {
-            Some(_) => Err(FfiHardwareSignerError::Unavailable),
+            Some(detail) => Err(FfiHardwareSignerError::Unavailable {
+                detail: detail.into(),
+            }),
             None => Ok(()),
         }
     }
@@ -1674,7 +1678,9 @@ impl FfiHardwareSigner for MockElement {
     fn assert_non_exportable(&self, _key_alias: String) -> Result<(), FfiHardwareSignerError> {
         self.guard()?;
         if self.exportable {
-            Err(FfiHardwareSignerError::Exportable)
+            Err(FfiHardwareSignerError::Exportable {
+                detail: "mock key is exportable".into(),
+            })
         } else {
             Ok(())
         }
@@ -2007,7 +2013,9 @@ impl FfiHardwareKeyAgreement for MockKeyAgreement {
     fn public_key(&self, _key_alias: String) -> Result<Vec<u8>, FfiHardwareSignerError> {
         use p256::elliptic_curve::sec1::ToEncodedPoint as _;
         if self.unavailable {
-            return Err(FfiHardwareSignerError::Unavailable);
+            return Err(FfiHardwareSignerError::Unavailable {
+                detail: "no secure element".into(),
+            });
         }
         Ok(self
             .sk
@@ -2022,8 +2030,11 @@ impl FfiHardwareKeyAgreement for MockKeyAgreement {
         _key_alias: String,
         peer_public: Vec<u8>,
     ) -> Result<Vec<u8>, FfiHardwareSignerError> {
-        let peer = p256::PublicKey::from_sec1_bytes(&peer_public)
-            .map_err(|e| FfiHardwareSignerError::Backend(e.to_string()))?;
+        let peer = p256::PublicKey::from_sec1_bytes(&peer_public).map_err(|e| {
+            FfiHardwareSignerError::Backend {
+                detail: e.to_string(),
+            }
+        })?;
         let shared = p256::ecdh::diffie_hellman(self.sk.to_nonzero_scalar(), peer.as_affine());
         let mut secret = shared.raw_secret_bytes().to_vec();
         if self.corrupt {
@@ -2076,6 +2087,199 @@ fn ffi_p256_hardware_dek_round_trip_tracks_the_element() {
             "unexpected enrollment error detail: {detail}"
         ),
         other => panic!("expected Workspace for a failing element enrollment, got {other:?}"),
+    }
+}
+
+// ─── foreign-thrown element errors (issue #1061) ─────────────────────────────
+
+/// What a [`ForeignStyleElement`] throws from every call.
+#[derive(Clone)]
+enum Thrown {
+    /// A declared `FfiHardwareSignerException` / `FfiHardwareSignerError`.
+    Declared(FfiHardwareSignerError),
+    /// Anything else the foreign side throws (an unchecked `KeyStoreException`, a Swift
+    /// error of another type): uniffi reports it as an unexpected error carrying its text.
+    Undeclared(&'static str),
+}
+
+/// An element whose every call fails **the way a foreign one does**: its error does not
+/// travel as a Rust value but as the call status a Kotlin or Swift implementation writes —
+/// the lowered error buffer for a declared error, an unexpected-error string otherwise —
+/// and is lifted back through the very uniffi path a generated foreign-trait call takes.
+/// A flat error panics in that lift ("Can't lift flat errors"); this element pins that it
+/// cannot again.
+struct ForeignStyleElement(Thrown);
+
+impl ForeignStyleElement {
+    fn call<R>(&self) -> Result<R, FfiHardwareSignerError>
+    where
+        R: uniffi::LiftReturn<crate::UniFfiTag>,
+        R::ReturnType: Default,
+    {
+        let status = match self.0.clone() {
+            Thrown::Declared(err) => uniffi::RustCallStatus {
+                code: uniffi::RustCallStatusCode::Error,
+                error_buf: std::mem::ManuallyDrop::new(
+                    <FfiHardwareSignerError as uniffi::LowerError<crate::UniFfiTag>>::lower_error(
+                        err,
+                    ),
+                ),
+            },
+            Thrown::Undeclared(text) => uniffi::RustCallStatus::error(text),
+        };
+        <Result<R, FfiHardwareSignerError> as uniffi::LiftReturn<crate::UniFfiTag>>::lift_foreign_return(
+            Default::default(),
+            status,
+        )
+    }
+}
+
+impl FfiHardwareSigner for ForeignStyleElement {
+    fn enroll(&self, _key_alias: String) -> Result<Vec<u8>, FfiHardwareSignerError> {
+        self.call()
+    }
+    fn classical_public_key(&self, _key_alias: String) -> Result<Vec<u8>, FfiHardwareSignerError> {
+        self.call()
+    }
+    fn sign_classical(
+        &self,
+        _key_alias: String,
+        _msg: Vec<u8>,
+    ) -> Result<Vec<u8>, FfiHardwareSignerError> {
+        self.call()
+    }
+    fn assert_non_exportable(&self, _key_alias: String) -> Result<(), FfiHardwareSignerError> {
+        self.call()
+    }
+}
+
+impl FfiHardwareKeyAgreement for ForeignStyleElement {
+    fn enroll(&self, _key_alias: String) -> Result<Vec<u8>, FfiHardwareSignerError> {
+        self.call()
+    }
+    fn public_key(&self, _key_alias: String) -> Result<Vec<u8>, FfiHardwareSignerError> {
+        self.call()
+    }
+    fn key_agreement(
+        &self,
+        _key_alias: String,
+        _peer_public: Vec<u8>,
+    ) -> Result<Vec<u8>, FfiHardwareSignerError> {
+        self.call()
+    }
+    fn assert_non_exportable(&self, _key_alias: String) -> Result<(), FfiHardwareSignerError> {
+        self.call()
+    }
+}
+
+/// Every variant an element can throw, each with a distinct detail.
+fn every_hardware_error() -> Vec<FfiHardwareSignerError> {
+    vec![
+        FfiHardwareSignerError::AuthCancelled {
+            detail: "biometric cancelled".into(),
+        },
+        FfiHardwareSignerError::Unavailable {
+            detail: "keystore refused".into(),
+        },
+        FfiHardwareSignerError::NotFound {
+            detail: "no StrongBox key for alias".into(),
+        },
+        FfiHardwareSignerError::Exportable {
+            detail: "software key is exportable".into(),
+        },
+        FfiHardwareSignerError::Backend {
+            detail: "keymint returned 7".into(),
+        },
+    ]
+}
+
+/// Each variant a foreign element throws is lifted back **as itself**, detail included, on
+/// both return shapes the seams use (bytes and unit), and core receives the matching variant.
+#[test]
+fn ffi_foreign_thrown_hardware_errors_lift_as_themselves() {
+    for thrown in every_hardware_error() {
+        let element = ForeignStyleElement(Thrown::Declared(thrown.clone()));
+        assert_eq!(
+            FfiHardwareSigner::enroll(&element, "a".into()).unwrap_err(),
+            thrown
+        );
+        assert_eq!(
+            FfiHardwareSigner::assert_non_exportable(&element, "a".into()).unwrap_err(),
+            thrown
+        );
+        let core = HardwareSignerError::from(thrown.clone());
+        let same = match (&thrown, &core) {
+            (FfiHardwareSignerError::AuthCancelled { .. }, HardwareSignerError::AuthCancelled)
+            | (FfiHardwareSignerError::Unavailable { .. }, HardwareSignerError::Unavailable)
+            | (FfiHardwareSignerError::NotFound { .. }, HardwareSignerError::NotFound)
+            | (FfiHardwareSignerError::Exportable { .. }, HardwareSignerError::Exportable) => true,
+            (
+                FfiHardwareSignerError::Backend { detail },
+                HardwareSignerError::Backend(core_detail),
+            ) => detail == core_detail,
+            _ => false,
+        };
+        assert!(same, "{thrown:?} reached core as {core:?}");
+    }
+}
+
+/// An element that throws something it never declared is lifted as a typed `Backend`
+/// failure carrying the foreign text, rather than panicking with the workspace lock held.
+#[test]
+fn ffi_undeclared_foreign_throw_lifts_as_backend() {
+    let element = ForeignStyleElement(Thrown::Undeclared("java.security.KeyStoreException"));
+    match FfiHardwareSigner::sign_classical(&element, "a".into(), b"m".to_vec()) {
+        Err(FfiHardwareSignerError::Backend { detail }) => assert!(
+            detail.contains("java.security.KeyStoreException"),
+            "the foreign text is lost: {detail}"
+        ),
+        other => panic!("expected Backend, got {other:?}"),
+    }
+}
+
+/// **Through the verbs.** Whatever a foreign element throws — each declared variant, and an
+/// undeclared exception — creating a workspace on it, on either signer constructor, and the
+/// key-agreement round trip all fail with a typed [`FfiError::Workspace`], never a panic.
+#[test]
+fn ffi_foreign_thrown_element_errors_fail_the_verbs_typed() {
+    let throws = every_hardware_error()
+        .into_iter()
+        .map(Thrown::Declared)
+        .chain([Thrown::Undeclared("java.lang.IllegalStateException")]);
+    for thrown in throws {
+        let lib = tempfile::TempDir::new().unwrap();
+        let root = lib.path().to_string_lossy().into_owned();
+        let element = Arc::new(ForeignStyleElement(thrown));
+        for created in [
+            FfiWorkspace::create_with_p256_hardware_signer(
+                root.clone(),
+                b"pw".to_vec(),
+                FfiDeviceTier::LowRam,
+                element.clone(),
+                "capsule-device-dsk".into(),
+                vec![9u8; 32],
+                client_build(),
+            ),
+            FfiWorkspace::create_with_hardware_signer(
+                root.clone(),
+                b"pw".to_vec(),
+                FfiDeviceTier::LowRam,
+                element.clone(),
+                "capsule-device-dsk".into(),
+                vec![9u8; 32],
+                client_build(),
+            ),
+        ] {
+            match created {
+                Err(FfiError::Workspace { .. }) => {}
+                Err(other) => panic!("expected a typed workspace error, got {other:?}"),
+                Ok(_) => panic!("a throwing element must not yield a workspace"),
+            }
+        }
+        match p256_hardware_dek_round_trip(element, "device-dek".into(), vec![9u8; 32]) {
+            Err(FfiError::Workspace { .. }) => {}
+            other => panic!("expected Workspace from a throwing key agreement, got {other:?}"),
+        }
     }
 }
 

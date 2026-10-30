@@ -48,6 +48,6 @@ public final class SoftwareP256Signer: FfiHardwareSigner, @unchecked Sendable {
     public func assertNonExportable(keyAlias: String) throws {
         // Honest by design: a software key is readable, so it can never meet the hardware
         // non-exportability contract a Secure Enclave / StrongBox / TPM does.
-        throw FfiHardwareSignerError.Exportable(message: "software P-256 key is exportable")
+        throw FfiHardwareSignerError.Exportable(detail: "software P-256 key is exportable")
     }
 }

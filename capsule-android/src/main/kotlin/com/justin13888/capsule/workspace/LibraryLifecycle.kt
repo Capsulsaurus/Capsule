@@ -34,8 +34,8 @@ class HardwareEnrollmentRefusedException(
 
 /**
  * Passes every call to [element], keeping what [enroll] threw: the core reports an element's
- * own failure as an internal error, so this is the only place a refused enrollment can still
- * be told apart from any other reason creation failed.
+ * own failure as a generic [uniffi.capsule_sdk.FfiException.Workspace], so this is the only
+ * place a refused enrollment can still be told apart from any other reason creation failed.
  */
 private class EnrollmentWatch(
     private val element: FfiHardwareSigner,
