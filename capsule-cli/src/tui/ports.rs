@@ -942,7 +942,7 @@ impl Ports for LocalPorts {
                 &remote,
                 &store,
                 &mut workspace,
-                crate::push_options(false, false, false),
+                crate::push_options(false, false, false, crate::cli::PathArgs::default()),
                 run,
             )
             .await;

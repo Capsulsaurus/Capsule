@@ -27,6 +27,7 @@ use capsule_sdk::directory::{DirectoryClient, DirectoryError};
 use capsule_sdk::events::TransferEvents;
 use capsule_sdk::fetch::HttpBlobSource;
 use capsule_sdk::net::ConnectionClass;
+use capsule_sdk::net::path::TransferPlan;
 use capsule_sdk::push::{self, PushError};
 use capsule_sdk::recovery::{MintedSecret, RecoveryClient, RecoveryError};
 use capsule_sdk::staged::{StagedScheduler, TierSessionOutcome, held_from_feed};
@@ -1087,8 +1088,13 @@ pub struct PushOptions {
     /// `Full` opens every tier eagerly; `Staged` gates the above-index tiers on the
     /// connection class.
     pub policy: UploadPolicy,
-    /// The detected connection class the staged tier gate consults.
+    /// The detected connection class: it sizes the upload chunks, and gates the staged tiers
+    /// when there is no `path` plan.
     pub connection: ConnectionClass,
+    /// The plan the path snapshot made ([`crate::cache::path_plan`]); when present it gates
+    /// the staged tiers on the whole path — power, heat and the background deadline too — not
+    /// the class alone.
+    pub path: Option<TransferPlan>,
 }
 
 impl Default for PushOptions {
@@ -1098,6 +1104,7 @@ impl Default for PushOptions {
             force: false,
             policy: UploadPolicy::Full,
             connection: ConnectionClass::Unmetered,
+            path: None,
         }
     }
 }
@@ -1853,7 +1860,10 @@ async fn push_with(
         session.clone(),
         format!("{}/v1", remote.sync_endpoint.trim_end_matches('/')),
     ));
-    let scheduler = StagedScheduler::new(options.policy, options.connection);
+    let scheduler = match &options.path {
+        Some(plan) => StagedScheduler::from_plan(plan, options.policy),
+        None => StagedScheduler::new(options.policy, options.connection),
+    };
 
     if options.dry_run {
         for asset_id in asset_ids {
