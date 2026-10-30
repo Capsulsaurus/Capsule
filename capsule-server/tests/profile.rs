@@ -337,6 +337,10 @@ async fn a_password_change_ends_every_other_session_and_keeps_this_one() {
         .send()
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        fixture.activity_kinds(&user()).await[0],
+        capsule_server::activity::ActivityKind::PasswordChanged
+    );
 }
 
 #[tokio::test]

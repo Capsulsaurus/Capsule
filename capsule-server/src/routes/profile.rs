@@ -47,6 +47,7 @@ use kynos::response::status::NoContent;
 use kynos::security::auth::Auth;
 use serde::{Deserialize, Serialize};
 
+use crate::activity::{ActivityContext, ActivityKind};
 use crate::auth::{
     AccessToken, AuthContext, Authentication, DirectoryError, MIN_PASSWORD_LENGTH,
     MalformedProfile, PasswordChanged, ProfileRecord, ProfileUpdate, admissible_display_name,
@@ -404,6 +405,7 @@ pub async fn update_profile(
 pub async fn change_password(
     Auth(credential): Auth<AccessToken>,
     Inject(auth): Inject<AuthContext>,
+    Inject(activity): Inject<ActivityContext>,
     Json(request): Json<ChangePasswordRequest>,
 ) -> Result<NoContent, ChangePasswordRejection> {
     let user = UserId::new(credential.user.as_str());
@@ -515,6 +517,14 @@ pub async fn change_password(
         }
     }
 
+    activity
+        .record(
+            &user,
+            ActivityKind::PasswordChanged,
+            Some(&credential.session),
+            None,
+        )
+        .await;
     Ok(NoContent)
 }
 

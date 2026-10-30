@@ -61,6 +61,7 @@ use kynos::http::media::MediaType;
 use kynos::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::activity::{ActivityContext, ActivityKind};
 use crate::album::is_canonical_album_id;
 use crate::auth::AccessToken;
 use crate::body::{CodedMedia, OpaqueBody};
@@ -169,6 +170,7 @@ pub enum FetchEscrowRejection {
 pub async fn store_escrow(
     Auth(credential): Auth<AccessToken>,
     Inject(escrow): Inject<EscrowContext>,
+    Inject(activity): Inject<ActivityContext>,
     body: EscrowBody,
 ) -> Result<Json<StoreEscrowResponse>, StoreEscrowRejection> {
     let user = UserId::new(credential.user.as_str());
@@ -198,6 +200,19 @@ pub async fn store_escrow(
                 code: error_codes::ESCROW_UNAVAILABLE,
             }
         })?;
+
+    // A replacement is a credential change: the recovery secret the old wrap opened under stops
+    // working. The event names no key material, only that it happened and which session did it.
+    if replaced == Replaced::Yes {
+        activity
+            .record(
+                &user,
+                ActivityKind::EscrowReplaced,
+                Some(&credential.session),
+                None,
+            )
+            .await;
+    }
 
     Ok(Json(StoreEscrowResponse {
         stored_at: stored_at.to_string(),

@@ -91,6 +91,10 @@ async fn a_code_opens_a_channel_and_the_two_mailboxes_do_not_cross() {
     let fixture = Fixture::working();
     let bearer = fresh(&fixture).await;
     let channel = open_channel(&fixture, &bearer).await;
+    assert_eq!(
+        fixture.activity_kinds(&support::user()).await[0],
+        capsule_server::activity::ActivityKind::DeviceEnrolled
+    );
 
     relay(
         &fixture,

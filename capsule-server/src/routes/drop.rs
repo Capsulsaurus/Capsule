@@ -53,6 +53,7 @@ use subtle::ConstantTimeEq as _;
 use tracing::Instrument as _;
 use uuid::Uuid;
 
+use crate::activity::{ActivityContext, ActivityKind};
 use crate::auth::AccessToken;
 use crate::blob::ContentAddress;
 use crate::client_addr::ClientAddr;
@@ -632,6 +633,7 @@ pub async fn provision_link(
     Auth(credential): Auth<AccessToken>,
     Inject(drops): Inject<DropContext>,
     Inject(quota): Inject<crate::quota::QuotaContext>,
+    Inject(activity): Inject<ActivityContext>,
     Json(request): Json<ProvisionLinkRequest>,
 ) -> Result<ProvisionLinkReply, LinkRejection> {
     let owner = UserId::new(credential.user.as_str());
@@ -698,6 +700,14 @@ pub async fn provision_link(
         return Err(LinkRejection::malformed(OPAQUE_ID_HELD));
     }
 
+    activity
+        .record(
+            &owner,
+            ActivityKind::DropLinkCreated,
+            Some(&credential.session),
+            Some(&request.opaque_id),
+        )
+        .await;
     Ok(ProvisionLinkReply::Created(ProvisionLinkResponse {
         opaque_id: request.opaque_id,
     }))
@@ -748,10 +758,11 @@ async fn admit_link_growth(
 pub async fn revoke_link(
     Auth(credential): Auth<AccessToken>,
     Inject(drops): Inject<DropContext>,
+    Inject(activity): Inject<ActivityContext>,
     Path(path): Path<LinkPath>,
 ) -> Result<NoContent, LinkRejection> {
     let owner = UserId::new(credential.user.as_str());
-    drops
+    let revoked = drops
         .drops()
         .revoke(&owner, &path.opaque_id, drops.clock().now())
         .await
@@ -759,6 +770,17 @@ pub async fn revoke_link(
             tracing::error!(%error, %owner, "the drop store could not revoke a link");
             LinkRejection::unavailable()
         })?;
+    // As a share revocation: only one that changed something is the owner's event.
+    if revoked {
+        activity
+            .record(
+                &owner,
+                ActivityKind::DropLinkRevoked,
+                Some(&credential.session),
+                Some(&path.opaque_id),
+            )
+            .await;
+    }
     Ok(NoContent)
 }
 

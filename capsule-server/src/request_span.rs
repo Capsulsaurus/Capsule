@@ -185,7 +185,9 @@ impl<C: Sync + 'static> Interceptor<C> for RequestSpan {
         );
         tracing::debug!(parent: &span, "request received");
 
-        let mut continued = next.run(request).instrument(span.clone()).await;
+        let mut continued = REQUEST_ID
+            .scope(id, next.run(request).instrument(span.clone()))
+            .await;
 
         if crate::problem::is_problem(continued.headers()) {
             let status = continued.status().as_u16();
@@ -215,6 +217,21 @@ impl<C: Sync + 'static> Interceptor<C> for RequestSpan {
 
         Ok(continued.with_headers(RequestIdHeader::of(id)))
     }
+}
+
+tokio::task_local! {
+    /// The id [`RequestSpan`] minted for the request the current task is serving.
+    static REQUEST_ID: uuid::Uuid;
+}
+
+/// The id of the request the current task is serving, or `None` outside one.
+///
+/// What a durable record of the request's effect — an [activity
+/// event](crate::activity::ActivityEvent) — names so it can be matched to the request's log
+/// lines. Read from a task-local the interceptor scopes around the rest of the chain, not from
+/// the span: a span's fields are write-only to the code beneath it.
+pub fn current_request_id() -> Option<uuid::Uuid> {
+    REQUEST_ID.try_with(|id| *id).ok()
 }
 
 /// Records the account and session the bearer scheme admitted on the current request's span.

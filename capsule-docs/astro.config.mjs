@@ -87,6 +87,7 @@ export default defineConfig({
                                 { slug: 'design/authentication' },
                                 { slug: 'design/authorization' },
                                 { slug: 'design/device-enrollment' },
+                                { slug: 'design/activity-log' },
                                 { slug: 'design/mls-resilience' },
                             ],
                         },

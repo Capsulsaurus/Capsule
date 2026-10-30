@@ -216,6 +216,7 @@ async fn every_declared_response_is_exercised() {
         ("GET", "/v1/auth/devices/enroll/channel/anything"),
         ("DELETE", "/v1/auth/devices/enroll/channel/anything"),
         ("GET", "/v1/moderation/record"),
+        ("GET", "/v1/auth/activity"),
         ("POST", "/v1/shares"),
         ("DELETE", "/v1/shares/anything"),
         ("GET", "/s/anything"),
@@ -3236,6 +3237,39 @@ async fn every_declared_response_is_exercised() {
     fixture.moderation.set_unavailable(false);
     client
         .get("/v1/moderation/record")
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+
+    // ── The account activity log ─────────────────────────────────────────────────
+    client
+        .get("/v1/auth/activity")
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    client
+        .get("/v1/auth/activity")
+        .header(
+            "authorization",
+            &format!("Bearer {}", rotated.refresh_token),
+        )
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    fixture.activity.set_unavailable(true);
+    let problem: serde_json::Value = client
+        .get("/v1/auth/activity")
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR)
+        .json();
+    assert_eq!(problem["code"], "error.auth.unavailable");
+    fixture.activity.set_unavailable(false);
+    client
+        .get("/v1/auth/activity?limit=5")
         .header("authorization", &bearer)
         .header("accept", "application/json")
         .send()
