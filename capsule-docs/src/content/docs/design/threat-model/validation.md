@@ -110,7 +110,7 @@ One fail-closed, one-shot gate on every versioned surface, before any state is w
 | `X-Capsule-Protocol-Min/Max` | server, every response     | accepted protocol window                  |
 | `X-Capsule-Min-Client-Build` | server                     | semver deprecation cutoff (advisory)      |
 
-**Census of `X-Capsule-*`**: new headers MUST register here. By pointer: `X-Capsule-Offset`, `-Content-Length`, `-Upload-Status`, `-Checksum` (required on `PATCH`), `-Suggested-Chunk-Size` ([Transfer — Upload](/design/transfer/upload/#endpoints)); `X-Capsule-Identity-Key` (required on directory publish; invariant 23). `cohort_hash` is deliberately a body field ([Device Cohorts](/design/authentication/#device-cohorts)).
+**Census of `X-Capsule-*`**: new headers MUST register here. By pointer: `X-Capsule-Offset`, `-Content-Length`, `-Upload-Status`, `-Checksum` (required on `PATCH`), `-Advice`, `-Session-Expires-In`, `-Session-Idle-Expires-In` ([Transfer — Upload](/design/transfer/upload/#endpoints)); `X-Capsule-Identity-Key` (required on directory publish; invariant 23). `cohort_hash` is deliberately a body field ([Device Cohorts](/design/authentication/#device-cohorts)).
 
 ### Fail-Closed Rules
 

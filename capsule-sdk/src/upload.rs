@@ -40,7 +40,10 @@ use crate::net::{
     ConnectionClass, RetryClass, RetryDecision, RetryEngine, Sleeper, TokioSleeper, negotiation,
 };
 
+pub mod advice;
 pub mod queue;
+
+use self::advice::{ServerAdvice, SessionExpiry};
 
 // Constants for chunk sizes (4KB aligned)
 const KB: u64 = 1024;
@@ -206,7 +209,9 @@ impl AdaptiveChunkSizeStrategy {
         }
     }
 
-    /// Seed the starting chunk size from the server's `X-Capsule-Suggested-Chunk-Size`.
+    /// Seed the starting chunk size from the server's suggestion: the `chunk` member of
+    /// `X-Capsule-Advice`, or the create body's `suggested_chunk_size` from a server that
+    /// sends no advice.
     ///
     /// The suggestion is a *starting point only* (transfer upload doc, §Adaptive
     /// Chunk Sizing): 4 KiB-aligned down and clamped into this tier's range, so
@@ -563,8 +568,19 @@ pub struct CreateSessionResponse {
     pub id: String,
     /// Server-reported upload URL (advisory; the client builds its own paths).
     pub upload_url: String,
-    /// The server's starting chunk-size suggestion.
+    /// The server's starting chunk-size suggestion. The fallback for a server that sends no
+    /// `X-Capsule-Advice`; where both are present the advice's `chunk` member is used.
     pub suggested_chunk_size: u64,
+}
+
+impl CreateSessionResponse {
+    /// The starting chunk size: the advice's `chunk` member while it holds, otherwise the body's
+    /// suggestion. Read at receipt, so the advice is never stale here.
+    fn starting_chunk(&self, advice: &ServerAdvice) -> u64 {
+        advice
+            .chunk(Duration::ZERO)
+            .unwrap_or(self.suggested_chunk_size)
+    }
 }
 
 /// A `HEAD /upload/{id}` result: the resumption primitive.
@@ -576,6 +592,10 @@ pub struct HeadInfo {
     pub total_size: Option<u64>,
     /// Session state (`X-Capsule-Upload-Status`).
     pub status: String,
+    /// The server's advice (`X-Capsule-Advice`), already clamped; absent from an older server.
+    pub advice: ServerAdvice,
+    /// The session's remaining lifetime, relative to this response.
+    pub expiry: SessionExpiry,
 }
 
 /// A row from `GET /upload/sessions` — the subset the resuming client needs.
@@ -625,6 +645,11 @@ pub enum CreateOutcome {
         response: CreateSessionResponse,
         /// Where the transfer continues from (bytes the server already holds).
         resume_offset: u64,
+        /// The server's advice (`X-Capsule-Advice`), already clamped; absent from an older
+        /// server.
+        advice: ServerAdvice,
+        /// The session's remaining lifetime, relative to this response.
+        expiry: SessionExpiry,
     },
     /// The server already holds this exact ciphertext (`duplicate_blob`): resolve
     /// as a [merge](https://docs/design/transfer/upload/#deduplication-and-merge),
@@ -998,11 +1023,14 @@ impl UploadClient {
             // 201: fresh session (offset 0). 200: the idempotent re-create — the
             // existing active session, whose X-Capsule-Offset says where to resume.
             let resume_offset = header_u64(resp.headers(), "X-Capsule-Offset").unwrap_or(0);
+            let (advice, expiry) = advice_of(resp.headers());
             let body: CreateSessionResponse = resp.json().await?;
-            tracing::debug!(session_id = %body.id, resume_offset, "upload session created");
+            tracing::debug!(session_id = %body.id, resume_offset, ?advice, ?expiry, "upload session created");
             return Ok(Ok(CreateOutcome::Created {
                 response: body,
                 resume_offset,
+                advice,
+                expiry,
             }));
         }
 
@@ -1089,10 +1117,13 @@ impl UploadClient {
         })?;
         let total_size = header_u64(headers, "X-Capsule-Content-Length");
         let statusv = header_str(headers, "X-Capsule-Upload-Status").unwrap_or_default();
+        let (advice, expiry) = advice_of(headers);
         Ok(Ok(Some(HeadInfo {
             offset,
             total_size,
             status: statusv,
+            advice,
+            expiry,
         })))
     }
 
@@ -1291,7 +1322,12 @@ impl UploadClient {
                 CreateOutcome::Created {
                     response,
                     resume_offset,
-                } => (response.id, response.suggested_chunk_size, resume_offset),
+                    advice,
+                    ..
+                } => {
+                    let chunk = response.starting_chunk(&advice);
+                    (response.id, chunk, resume_offset)
+                }
                 CreateOutcome::AlreadyStored { asset_ref } => {
                     self.emit_merged(request, &asset_ref);
                     return Ok(UploadOutcome::AlreadyStored { asset_ref });
@@ -1326,8 +1362,11 @@ impl UploadClient {
     ) -> Result<UploadOutcome, UploadError> {
         let mut recovery = Recovery::new();
         if let Some(info) = self.head_waiting(session_id, &mut recovery).await? {
-            let mut strategy = AdaptiveChunkSizeStrategy::for_file_size(request.size)
-                .with_connection_class(self.connection);
+            let mut strategy = AdaptiveChunkSizeStrategy::for_file_size(request.size);
+            if let Some(chunk) = info.advice.chunk(Duration::ZERO) {
+                strategy = strategy.seeded_from_suggested(chunk);
+            }
+            let mut strategy = strategy.with_connection_class(self.connection);
             tracing::debug!(offset = info.offset, "resuming from authoritative offset");
             self.events.emit(|| TransferEvent::SessionResumed {
                 blob: request.hash.clone(),
@@ -1474,10 +1513,13 @@ impl UploadClient {
                         CreateOutcome::Created {
                             response,
                             resume_offset,
+                            advice,
+                            ..
                         } => {
+                            let chunk = response.starting_chunk(&advice);
                             session_id = response.id;
                             *strategy = AdaptiveChunkSizeStrategy::for_file_size(size)
-                                .seeded_from_suggested(response.suggested_chunk_size);
+                                .seeded_from_suggested(chunk);
                             offset = resume_offset;
                             self.emit_created(request, &session_id, offset);
                         }
@@ -1664,6 +1706,17 @@ fn header_str(headers: &reqwest::header::HeaderMap, name: &str) -> Option<String
 
 fn header_u64(headers: &reqwest::header::HeaderMap, name: &str) -> Option<u64> {
     header_str(headers, name).and_then(|s| s.parse().ok())
+}
+
+/// The advice and the relative expiry a session create or `HEAD` carries, read leniently: a
+/// server that sends neither, or sends them malformed, leaves the client on its own defaults.
+fn advice_of(headers: &reqwest::header::HeaderMap) -> (ServerAdvice, SessionExpiry) {
+    let advice = ServerAdvice::parse(header_str(headers, advice::ADVICE_HEADER).as_deref());
+    let expiry = SessionExpiry::parse(
+        header_str(headers, advice::EXPIRES_IN_HEADER).as_deref(),
+        header_str(headers, advice::IDLE_EXPIRES_IN_HEADER).as_deref(),
+    );
+    (advice, expiry)
 }
 
 #[cfg(test)]

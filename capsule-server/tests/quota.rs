@@ -150,6 +150,131 @@ async fn cancelling_a_session_releases_its_reservation() {
     open(&fixture, &bearer, &payload(b'd', 8192), StatusCode::CREATED).await;
 }
 
+/// Send `bytes` at `offset` into session `id`, asserting the status and, on a refusal, its code.
+async fn send_chunk(
+    fixture: &Fixture,
+    bearer: &str,
+    id: &str,
+    offset: u64,
+    bytes: &[u8],
+    expect: StatusCode,
+    code: Option<&str>,
+) {
+    let response = fixture.chunk(id, offset, bytes, bearer).send().await;
+    response.assert_status(expect);
+    if let Some(code) = code {
+        assert_eq!(response.json::<Value>()["code"], code);
+    }
+}
+
+/// A session finalization refuses ends `FailedProcessing`, and gives its reservation back.
+#[tokio::test]
+async fn a_session_that_fails_finalization_releases_its_reservation() {
+    let fixture = Fixture::with_quota(limits());
+    let bearer = token(&fixture).await;
+    let bytes = payload(b'f', 8192);
+    let opened = open(&fixture, &bearer, &bytes, StatusCode::CREATED).await;
+    let id = opened["id"].as_str().expect("a session id");
+    assert_eq!(snapshot(&fixture, &bearer).await["used"], 8192);
+
+    send_chunk(
+        &fixture,
+        &bearer,
+        id,
+        0,
+        &bytes[..4096],
+        StatusCode::NO_CONTENT,
+        None,
+    )
+    .await;
+    // Honest per-chunk checksums over bytes that do not hash to the declaration: only the
+    // finalize re-hash catches it.
+    send_chunk(
+        &fixture,
+        &bearer,
+        id,
+        4096,
+        &payload(b'z', 4096),
+        StatusCode::BAD_REQUEST,
+        Some("error.upload.content_hash_mismatch"),
+    )
+    .await;
+
+    assert_eq!(
+        snapshot(&fixture, &bearer).await["used"],
+        0,
+        "bytes that never reached the store must not stay charged"
+    );
+    open(&fixture, &bearer, &payload(b'g', 8192), StatusCode::CREATED).await;
+}
+
+/// A chunk that breaks the declared size fails the session, and gives its reservation back.
+#[tokio::test]
+async fn a_session_failed_by_its_declaration_releases_its_reservation() {
+    let fixture = Fixture::with_quota(limits());
+    let bearer = token(&fixture).await;
+    let bytes = payload(b'h', 8192);
+    let opened = open(&fixture, &bearer, &bytes, StatusCode::CREATED).await;
+    let id = opened["id"].as_str().expect("a session id");
+
+    send_chunk(
+        &fixture,
+        &bearer,
+        id,
+        0,
+        &bytes[..4096],
+        StatusCode::NO_CONTENT,
+        None,
+    )
+    .await;
+    send_chunk(
+        &fixture,
+        &bearer,
+        id,
+        4096,
+        &payload(b'h', 8192),
+        StatusCode::BAD_REQUEST,
+        Some("error.upload.size_exceeded"),
+    )
+    .await;
+
+    assert_eq!(snapshot(&fixture, &bearer).await["used"], 0);
+}
+
+/// A session that completes keeps its charge: the bytes are stored, and the attribution pays
+/// for them until the collector removes the blob.
+#[tokio::test]
+async fn a_completed_session_keeps_its_charge() {
+    let fixture = Fixture::with_quota(limits());
+    let bearer = token(&fixture).await;
+    let bytes = payload(b'k', 8192);
+    let opened = open(&fixture, &bearer, &bytes, StatusCode::CREATED).await;
+    let id = opened["id"].as_str().expect("a session id");
+
+    send_chunk(
+        &fixture,
+        &bearer,
+        id,
+        0,
+        &bytes[..4096],
+        StatusCode::NO_CONTENT,
+        None,
+    )
+    .await;
+    send_chunk(
+        &fixture,
+        &bearer,
+        id,
+        4096,
+        &bytes[4096..],
+        StatusCode::NO_CONTENT,
+        None,
+    )
+    .await;
+
+    assert_eq!(snapshot(&fixture, &bearer).await["used"], 8192);
+}
+
 /// Deduplicated bytes are charged to the first uploader only.
 #[tokio::test]
 async fn a_blob_another_account_already_holds_costs_nothing() {
@@ -179,6 +304,61 @@ async fn a_blob_another_account_already_holds_costs_nothing() {
         "a merge is not storage, and charging for it would let one account exhaust another's \
          quota by re-uploading blobs whose addresses it already knows"
     );
+}
+
+/// Charge `bytes` to `holder` directly, as a session of theirs did at creation.
+async fn attribute(fixture: &Fixture, holder: &capsule_server::store::UserId, bytes: &[u8]) {
+    let address =
+        capsule_server::blob::ContentAddress::parse(&checksum(bytes)).expect("a content address");
+    fixture
+        .quotas
+        .charge(holder, &address, 8192, Timestamp::UNIX_EPOCH, limits())
+        .await
+        .expect("the ledger accepts");
+}
+
+/// A create that found the bytes attributed, and whose holder's reservation went back while
+/// the session was opening, pays for the bytes itself rather than storing them uncharged.
+#[tokio::test]
+async fn an_attribution_released_while_a_create_opens_is_charged_to_the_new_session() {
+    let fixture = Fixture::with_quota(limits());
+    let bearer = token(&fixture).await;
+    let bytes = payload(b'r', 8192);
+    let holder = capsule_server::store::UserId::new(user().as_str());
+    attribute(&fixture, &holder, &bytes).await;
+    assert_eq!(snapshot(&fixture, &bearer).await["used"], 8192);
+
+    // The holder's session ends between this create's charge and its open.
+    fixture.quotas.release_after_next_charge(holder);
+    open(&fixture, &bearer, &bytes, StatusCode::CREATED).await;
+
+    assert_eq!(
+        snapshot(&fixture, &bearer).await["used"],
+        8192,
+        "the session that will store the bytes holds their reservation"
+    );
+}
+
+/// The same race, where paying for the bytes now crosses the hard limit: the opened session is
+/// undone and the create refused, rather than left to store bytes nobody is charged for.
+#[tokio::test]
+async fn an_opened_session_that_cannot_be_recharged_is_undone_and_refused() {
+    let fixture = Fixture::with_quota(limits());
+    let bearer = token(&fixture).await;
+    open(&fixture, &bearer, &payload(b's', 8192), StatusCode::CREATED).await;
+    let bytes = payload(b't', 8192);
+    let somebody = capsule_server::store::UserId::new("somebody-else");
+    attribute(&fixture, &somebody, &bytes).await;
+
+    fixture.quotas.release_after_next_charge(somebody.clone());
+    let problem = open(&fixture, &bearer, &bytes, StatusCode::FORBIDDEN).await;
+    assert_eq!(problem["code"], "error.quota.exceeded");
+    assert_eq!(snapshot(&fixture, &bearer).await["used"], 8192);
+
+    // Nothing of the undone session survives: with the bytes attributed again, the same create
+    // opens a fresh session (`201`) rather than handing back a live one (`200`).
+    attribute(&fixture, &somebody, &bytes).await;
+    open(&fixture, &bearer, &bytes, StatusCode::CREATED).await;
 }
 
 /// Past the grace window, metadata growth stops — and deletes do not.
