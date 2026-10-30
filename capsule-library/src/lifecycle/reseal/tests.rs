@@ -276,14 +276,11 @@ fn an_asset_with_more_than_its_create_is_refused() {
     let (mut ws, album, asset) = imported(&lib, &src);
     ws.tag_add(&asset, "beach").unwrap();
     ws.rotate_epoch(album).unwrap();
-    let chain_before = ws.upload_bundle(&asset).unwrap().provenance_blob;
+    let chain_before = ws.asset(&asset).unwrap().chain.records().to_vec();
 
     let error = ws.reseal_create(&asset).unwrap_err();
     assert_eq!(refusal(error), ResealRefusal::NotALoneCreate);
-    assert_eq!(
-        ws.upload_bundle(&asset).unwrap().provenance_blob,
-        chain_before
-    );
+    assert_eq!(ws.asset(&asset).unwrap().chain.records(), chain_before);
 }
 
 /// **A published asset is never re-sealed.** A custody receipt in the library is proof the

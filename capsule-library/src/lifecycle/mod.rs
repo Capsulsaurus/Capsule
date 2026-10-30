@@ -162,6 +162,14 @@ pub enum LifecycleError {
     /// on the wire is not what the asset's provenance vouches for.
     #[error("asset {0}: re-derived ciphertext does not match the manifest's ciphertext_hash")]
     CiphertextMismatch(Uuid),
+    /// [`upload_bundle`](Workspace::upload_bundle) was asked for an asset whose `create` binds a
+    /// metadata blob the library no longer holds: an edit replaced it, and the library keeps
+    /// only the latest. An upload carries the create, so it cannot be built; nothing was sent.
+    #[error(
+        "asset {0}: the metadata blob its create record binds was replaced by a later edit, so \
+         the create cannot be uploaded"
+    )]
+    CreateMetadataSuperseded(Uuid),
     /// [`create_album_with_id`](Workspace::create_album_with_id) was called for an album that
     /// already holds key material. Minting over it would discard the AMKs every existing asset in
     /// that album was encrypted under, so it is refused; use

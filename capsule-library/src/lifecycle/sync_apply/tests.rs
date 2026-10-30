@@ -80,9 +80,11 @@ fn a_delete_tombstone_applies_without_a_sidecar() {
     ws.soft_delete(&asset, 30).unwrap();
     let records = ws.asset(&asset).unwrap().chain.records();
     let create_head = records[0].record_hash();
+    // The feed serves the head record's canonical CBOR; an upload bundle carries the create.
+    let head_cbor = cbor::to_canonical_vec(records.last().unwrap()).unwrap();
     let bundle = ws.upload_bundle(&asset).unwrap();
     let wire = Wire {
-        manifest_cbor: bundle.provenance_blob.clone(),
+        manifest_cbor: head_cbor,
         // A tombstone carries no metadata blob on the wire.
         metadata_blob: Vec::new(),
         ciphertext: bundle.original.to_vec().unwrap(),

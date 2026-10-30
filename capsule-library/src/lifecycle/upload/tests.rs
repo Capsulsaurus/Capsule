@@ -83,6 +83,64 @@ fn upload_bundle_ciphertext_matches_the_manifest_hash() {
     assert_eq!(Some(blob_hash), bundle.metadata_blob_hash);
 }
 
+/// **An upload carries the create, whatever the chain holds now** (issue #1053). The server
+/// takes nothing but a `create` through an upload, so an asset deleted and restored before its
+/// first upload is bundled as the create it began as: its provenance blob is the genesis
+/// record, its envelope projection the create's, and its metadata blob the one the create
+/// binds, which a delete and a restore leave in place.
+#[test]
+fn a_bundle_carries_the_create_record_after_a_delete_and_a_restore() {
+    let lib = TempDir::new().unwrap();
+    let src = TempDir::new().unwrap();
+    let (_album, asset_id) = library_with_one_asset(&lib, &src);
+    let mut ws = Workspace::open(lib.path(), b"passphrase", FAST).unwrap();
+    let before = ws.upload_bundle(&asset_id).expect("the create's bundle");
+    ws.soft_delete(&asset_id, 30).expect("deleted");
+    ws.restore(&asset_id).expect("restored");
+
+    let records = ws.asset(&asset_id).unwrap().chain.records();
+    assert_eq!(records.len(), 3, "create, delete, restore");
+    let create = &records[0];
+    let bundle = ws.upload_bundle(&asset_id).expect("bundle");
+    assert_eq!(
+        bundle.provenance_blob,
+        cbor::to_canonical_vec(create).unwrap(),
+        "the genesis record, not the head"
+    );
+    assert_eq!(bundle.action, Action::Create);
+    assert_eq!(bundle.prior_provenance_hash, None);
+    assert_eq!(bundle.retention_until, None);
+    assert_eq!(bundle.timestamp, create.manifest.core.timestamp);
+    assert_eq!(
+        bundle.metadata_blob_hash,
+        create.manifest.core.metadata_blob_hash
+    );
+    assert_eq!(
+        Some(blob_ciphertext_hash(&bundle.metadata_blob)),
+        bundle.metadata_blob_hash
+    );
+    assert_eq!(bundle.provenance_blob, before.provenance_blob);
+    assert_eq!(bundle.metadata_blob, before.metadata_blob);
+    assert_eq!(bundle.ciphertext_hash, before.ciphertext_hash);
+}
+
+/// **A create whose metadata blob an edit replaced is refused before anything is sent.** The
+/// library keeps only the latest blob, and the server would refuse other bytes under the
+/// address the create signed, so the bundle is a typed refusal rather than a mismatched rung.
+#[test]
+fn a_create_whose_metadata_blob_an_edit_replaced_is_refused() {
+    let lib = TempDir::new().unwrap();
+    let src = TempDir::new().unwrap();
+    let (_album, asset_id) = library_with_one_asset(&lib, &src);
+    let mut ws = Workspace::open(lib.path(), b"passphrase", FAST).unwrap();
+    ws.tag_add(&asset_id, "beach").expect("tagged");
+
+    assert!(matches!(
+        ws.upload_bundle(&asset_id),
+        Err(LifecycleError::CreateMetadataSuperseded(id)) if id == asset_id
+    ));
+}
+
 /// An original is never refused for its type (issue #695): one the protocol's closed
 /// `content_type` enum names declares itself, any other declares the opaque type, and the
 /// sidecar keeps the true one either way.
