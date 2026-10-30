@@ -264,6 +264,48 @@
             },
             {
               "kind": "func",
+              "name": "assetsByCull",
+              "signature": "func assetsByCull(flag: FfiCullFlag) throws -> [String]",
+              "doc": "The managed, non-trashed assets currently carrying `flag`, sorted. `Neutral` includes\nthe never-flagged ones.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "cullFlag",
+              "signature": "func cullFlag(assetId: String) throws -> FfiCullFlag",
+              "doc": "The asset's current flag: `Neutral` when it was never flagged, and for an asset this\nworkspace does not hold.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "flagStack",
+              "signature": "func flagStack(stackId: String, flag: FfiCullFlag) throws -> [String]",
+              "doc": "Flag every non-trashed member of a stack, one `metadata-update` each — flagging a\ncollapsed stack flags its members, since a stack stores no flag of its own. Returns the\nmembers flagged, sorted; empty for a stack with no members.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "rejectSweep",
+              "signature": "func rejectSweep(retainDays: UInt32) throws -> [String]",
+              "doc": "The reject sweep: move every rejected, not-yet-trashed asset to the trash with a\nretention window of `retain_days` days, and return the swept ids, sorted. Each is a\nsigned `delete`, restorable from the trash until its window closes. A refusal partway\nis [`FfiError::Trash`]; the assets swept before it stay in the trash, and a retried\nsweep moves the rest.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "setCull",
+              "signature": "func setCull(assetId: String, flag: FfiCullFlag) throws",
+              "doc": "Flag one asset. `Neutral` clears a prior flag. Signs one `metadata-update`, stamped with\nthis device and now, so concurrent flags from two devices converge under LWW.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "stackCullState",
+              "signature": "func stackCullState(stackId: String) throws -> FfiStackCullState?",
+              "doc": "A stack's cull state, derived from its members on this read. `None` for a stack with no\nnon-trashed members.",
+              "members": []
+            },
+            {
+              "kind": "func",
               "name": "addLabel",
               "signature": "func addLabel(target: FfiLabelTarget, label: String) throws -> [String]",
               "doc": "Add `label` to `target` and return its labels afterwards.",
@@ -1861,6 +1903,35 @@
         },
         {
           "kind": "enum",
+          "name": "FfiCullFlag",
+          "signature": "public enum FfiCullFlag: Equatable, Hashable",
+          "doc": "The trinary culling flag, mirrored from core's `CullFlag`. `Neutral` is the never-flagged\nstate and what an unwritten register reads as.",
+          "members": [
+            {
+              "kind": "case",
+              "name": "pick",
+              "signature": "case pick",
+              "doc": "A keeper.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "neutral",
+              "signature": "case neutral",
+              "doc": "Not yet culled either way.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "reject",
+              "signature": "case reject",
+              "doc": "Marked for rejection: a candidate for the reject sweep.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum",
           "name": "FfiDeviceTier",
           "signature": "public enum FfiDeviceTier: Equatable, Hashable",
           "doc": "Device hardware tier, selecting the Argon2id cost at wrap time. Mirrors core's `DeviceTier`\nin this namespace (see the module docs on why it is not shared).",
@@ -2337,6 +2408,35 @@
               "name": "original",
               "signature": "case original",
               "doc": "The original, decoded.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum",
+          "name": "FfiStackCullState",
+          "signature": "public enum FfiStackCullState: Equatable, Hashable",
+          "doc": "A stack's derived cull state, by the doc's precedence `all-rejected → any-pick → else mixed`.",
+          "members": [
+            {
+              "kind": "case",
+              "name": "allRejected",
+              "signature": "case allRejected",
+              "doc": "Every member is rejected: the whole stack is a sweep candidate.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "anyPick",
+              "signature": "case anyPick",
+              "doc": "At least one member is picked.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "mixed",
+              "signature": "case mixed",
+              "doc": "Neither: undecided, or rejects mixed with neutrals.",
               "members": []
             }
           ]
@@ -2886,6 +2986,48 @@
               "name": "openWithP256HardwareSigner",
               "signature": "@Throws(FfiException::class) fun openWithP256HardwareSigner(root: kotlin.String, passphrase: kotlin.ByteArray, tier: FfiDeviceTier, hardware: FfiHardwareSigner, keyAlias: kotlin.String, client: FfiClientBuild): FfiWorkspace",
               "doc": "**Open** the existing library at `root` as [`open`](Self::open) does, re-attaching\n`hardware`, the element that holds this device's P-256 signing key. Required for a\nlibrary made by\n[`create_with_p256_hardware_signer`](Self::create_with_p256_hardware_signer): the element\nis asked for the key under the alias the library recorded, never to make a new one, and\nthe rebuilt key must be the one this device published. An element that lost the key or\nis unavailable fails the open with [`FfiError::Workspace`] rather than letting the\nlibrary sign with another key.\n\nThe library's record decides, not the caller: a library created with the software key\nopens on it and `hardware` is not used. `key_alias` is used only when `root` holds a\nlaid-out library with no account yet, whose fresh account is then enrolled under it.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "assetsByCull",
+              "signature": "fun assetsByCull(flag: FfiCullFlag): List<kotlin.String>",
+              "doc": "The managed, non-trashed assets currently carrying `flag`, sorted. `Neutral` includes\nthe never-flagged ones.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "cullFlag",
+              "signature": "fun cullFlag(assetId: kotlin.String): FfiCullFlag",
+              "doc": "The asset's current flag: `Neutral` when it was never flagged, and for an asset this\nworkspace does not hold.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "flagStack",
+              "signature": "fun flagStack(stackId: kotlin.String, flag: FfiCullFlag): List<kotlin.String>",
+              "doc": "Flag every non-trashed member of a stack, one `metadata-update` each — flagging a\ncollapsed stack flags its members, since a stack stores no flag of its own. Returns the\nmembers flagged, sorted; empty for a stack with no members.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "rejectSweep",
+              "signature": "fun rejectSweep(retainDays: kotlin.UInt): List<kotlin.String>",
+              "doc": "The reject sweep: move every rejected, not-yet-trashed asset to the trash with a\nretention window of `retain_days` days, and return the swept ids, sorted. Each is a\nsigned `delete`, restorable from the trash until its window closes. A refusal partway\nis [`FfiError::Trash`]; the assets swept before it stay in the trash, and a retried\nsweep moves the rest.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "setCull",
+              "signature": "fun setCull(assetId: kotlin.String, flag: FfiCullFlag)",
+              "doc": "Flag one asset. `Neutral` clears a prior flag. Signs one `metadata-update`, stamped with\nthis device and now, so concurrent flags from two devices converge under LWW.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "stackCullState",
+              "signature": "fun stackCullState(stackId: kotlin.String): FfiStackCullState?",
+              "doc": "A stack's cull state, derived from its members on this read. `None` for a stack with no\nnon-trashed members.",
               "members": []
             },
             {
@@ -4487,6 +4629,35 @@
         },
         {
           "kind": "enum class",
+          "name": "FfiCullFlag",
+          "signature": "enum class FfiCullFlag",
+          "doc": "The trinary culling flag, mirrored from core's `CullFlag`. `Neutral` is the never-flagged\nstate and what an unwritten register reads as.",
+          "members": [
+            {
+              "kind": "entry",
+              "name": "PICK",
+              "signature": "PICK,",
+              "doc": "A keeper.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "NEUTRAL",
+              "signature": "NEUTRAL,",
+              "doc": "Not yet culled either way.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "REJECT",
+              "signature": "REJECT;",
+              "doc": "Marked for rejection: a candidate for the reject sweep.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum class",
           "name": "FfiDeviceTier",
           "signature": "enum class FfiDeviceTier",
           "doc": "Device hardware tier, selecting the Argon2id cost at wrap time. Mirrors core's `DeviceTier`\nin this namespace (see the module docs on why it is not shared).",
@@ -4963,6 +5134,35 @@
               "name": "ORIGINAL",
               "signature": "ORIGINAL;",
               "doc": "The original, decoded.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum class",
+          "name": "FfiStackCullState",
+          "signature": "enum class FfiStackCullState",
+          "doc": "A stack's derived cull state, by the doc's precedence `all-rejected → any-pick → else mixed`.",
+          "members": [
+            {
+              "kind": "entry",
+              "name": "ALL_REJECTED",
+              "signature": "ALL_REJECTED,",
+              "doc": "Every member is rejected: the whole stack is a sweep candidate.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "ANY_PICK",
+              "signature": "ANY_PICK,",
+              "doc": "At least one member is picked.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "MIXED",
+              "signature": "MIXED;",
+              "doc": "Neither: undecided, or rejects mixed with neutrals.",
               "members": []
             }
           ]

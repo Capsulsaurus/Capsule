@@ -54,6 +54,26 @@ struct NavigationCommandTests {
         #expect(placed.count == NavigationCommand.all.count)
     }
 
+    @Test("every cull verb has one key, and only the destructive sweep needs a modifier")
+    func cullingVerbsAreOneKeyEach() {
+        let culling = NavigationCommand.commands(in: .culling)
+
+        #expect(culling.map(\.action) == [
+            .cullPick, .cullNeutral, .cullReject, .expandStack, .collapseStack, .rejectSweep,
+        ])
+        #expect(culling.allSatisfy { $0.shortcut != nil })
+        #expect(culling.filter { $0.shortcut?.modifiers.isEmpty == false }.map(\.action) == [.rejectSweep])
+        #expect(NavigationCommand.command(for: .rejectSweep)?.shortcut == CommandShortcut(.delete))
+    }
+
+    @Test("the cull pass's shortcut list is paging first, then every cull verb")
+    func cullingPassListsPagingAndVerbs() {
+        #expect(NavigationCommand.cullingPass.map(\.action) == [
+            .nextAsset, .previousAsset,
+            .cullPick, .cullNeutral, .cullReject, .expandStack, .collapseStack, .rejectSweep,
+        ])
+    }
+
     @Test("the arrow-key shortcuts stay platform-neutral")
     func arrowKeysAreNamedNotEncoded() {
         #expect(NavigationCommand.command(for: .nextAsset)?.shortcut == CommandShortcut(.rightArrow, modifiers: []))

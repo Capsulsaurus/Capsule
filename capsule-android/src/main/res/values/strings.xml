@@ -146,6 +146,33 @@
     <string name="app_crossdevice_title">Add Another Device</string>
     <string name="app_crossdevice_transferring">Transferring keys…</string>
     <string name="app_crossdevice_waiting">Waiting for the other device…</string>
+    <string name="app_culling_action_collapse_stack">Collapse Stack</string>
+    <string name="app_culling_action_expand_stack">Expand Stack</string>
+    <string name="app_culling_action_next">Next Photo</string>
+    <string name="app_culling_action_pick">Pick</string>
+    <string name="app_culling_action_previous">Previous Photo</string>
+    <string name="app_culling_action_reject">Reject</string>
+    <string name="app_culling_action_shortcuts">Keyboard Shortcuts</string>
+    <string name="app_culling_action_sweep">Move Rejects to Trash</string>
+    <string name="app_culling_action_unflag">Unflag</string>
+    <string name="app_culling_announcement">%1$s, %2$s</string>
+    <string name="app_culling_empty_body">Photos in this view appear here for review.</string>
+    <string name="app_culling_empty_title">Nothing to Cull</string>
+    <string name="app_culling_error_flag">The flag could not be saved, so the photo keeps the flag it had.</string>
+    <string name="app_culling_error_load">The photos could not be loaded.</string>
+    <string name="app_culling_error_sweep">The rejected photos could not be moved to the Trash.</string>
+    <string name="app_culling_flag_pick">Picked</string>
+    <string name="app_culling_flag_reject">Rejected</string>
+    <string name="app_culling_flag_unflagged">Unflagged</string>
+    <string name="app_culling_open">Cull</string>
+    <string name="app_culling_position">%1$s of %2$s</string>
+    <string name="app_culling_stack_all_rejected">Stack, all rejected</string>
+    <string name="app_culling_stack_any_pick">Stack with a pick</string>
+    <string name="app_culling_stack_mixed">Stack, undecided</string>
+    <string name="app_culling_stack_summary">%1$s, %2$s</string>
+    <string name="app_culling_sweep_confirm">Move to Trash</string>
+    <string name="app_culling_sweep_message">You can restore them from Recently Deleted until their retention window closes.</string>
+    <string name="app_culling_title">Culling</string>
     <string name="app_custody_action_blocked_footer">Capsule won\'t release the copy on this device until your server confirms it holds this photo.</string>
     <string name="app_custody_action_release">Release Local Copy</string>
     <string name="app_custody_action_release_footer">Your server has confirmed this photo, so the copy on this device can be freed. Capsule downloads it again when you need it.</string>
@@ -1779,6 +1806,13 @@
     <string name="app_viewer_sample_title">Sample Photo</string>
     <string name="app_name">Capsule App</string>
     <string name="apple_menu_close_window">Close Window</string>
+    <string name="apple_menu_culling">Culling</string>
+    <string name="apple_menu_culling_collapse_stack">Collapse Stack</string>
+    <string name="apple_menu_culling_expand_stack">Expand Stack</string>
+    <string name="apple_menu_culling_pick">Pick</string>
+    <string name="apple_menu_culling_reject">Reject</string>
+    <string name="apple_menu_culling_sweep">Move Rejects to Trash</string>
+    <string name="apple_menu_culling_unflag">Unflag</string>
     <string name="apple_menu_culling_review">Culling Review</string>
     <string name="apple_menu_export">Export…</string>
     <string name="apple_menu_help">Capsule Help</string>
@@ -2242,6 +2276,18 @@
     <plurals name="app_albums_photo_count">
         <item quantity="one">%d Photo</item>
         <item quantity="other">%d Photos</item>
+    </plurals>
+    <plurals name="app_culling_stack_members">
+        <item quantity="one">%d photo</item>
+        <item quantity="other">%d photos</item>
+    </plurals>
+    <plurals name="app_culling_sweep_done">
+        <item quantity="one">Moved %d photo to the Trash</item>
+        <item quantity="other">Moved %d photos to the Trash</item>
+    </plurals>
+    <plurals name="app_culling_sweep_title">
+        <item quantity="one">Move %d rejected photo to the Trash?</item>
+        <item quantity="other">Move %d rejected photos to the Trash?</item>
     </plurals>
     <plurals name="app_places_preview_accessibility">
         <item quantity="one">%d photo at this place</item>

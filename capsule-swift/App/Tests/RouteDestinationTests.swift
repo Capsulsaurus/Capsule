@@ -39,7 +39,9 @@ struct RouteDestinationTests {
         // `capsule://asset/…` deep link produces. Every other sequence needs its own
         // collection query, and nothing pushes one yet.
         UnbuiltRoute(.viewer(assetID, context: .album(albumID)), "a viewer over a non-timeline sequence has no query"),
-        UnbuiltRoute(.culling(.library), "the keyboard cull pass is not built"),
+        // The cull pass reads the timeline and an album; every other sequence
+        // needs the same collection query the viewer is waiting on.
+        UnbuiltRoute(.culling(.person(personID)), "a cull pass over a non-timeline, non-album sequence has no query"),
         UnbuiltRoute(.albumMembers(albumID), "the participant list is not built"),
         UnbuiltRoute(.albumPolicy(albumID), "the sharing and retention editor is not built"),
         UnbuiltRoute(.smartAlbum(smartAlbumID), "smart-album results have no screen of their own"),
@@ -237,7 +239,7 @@ extension RouteDestinationTests {
             .memories, .duplicates, .trash, .hidden,
             .viewer(assetID, context: .library),
             .viewer(assetID, context: .album(albumID)),
-            .culling(.library),
+            .culling(.library), .culling(.album(albumID)), .culling(.person(personID)),
             .browse,
             .albums, .album(albumID), .albumMembers(albumID), .albumPolicy(albumID),
             .smartAlbum(smartAlbumID), .smartAlbumEditor(nil), .smartAlbumEditor(smartAlbumID),

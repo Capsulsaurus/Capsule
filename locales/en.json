@@ -587,6 +587,126 @@
     "message": "Waiting for the other device…",
     "context": "Spinner label while the issued code has not been used yet."
   },
+  "app.culling.action.collapse_stack": {
+    "message": "Collapse Stack",
+    "context": "Culling surface button and accessibility action that folds an expanded stack back to its cover photo."
+  },
+  "app.culling.action.expand_stack": {
+    "message": "Expand Stack",
+    "context": "Culling surface button and accessibility action that opens a stack so each photo in it is culled on its own."
+  },
+  "app.culling.action.next": {
+    "message": "Next Photo",
+    "context": "Culling surface button and accessibility action that moves to the next photo in the pass."
+  },
+  "app.culling.action.pick": {
+    "message": "Pick",
+    "context": "Culling surface button and accessibility action that flags the photo as a keeper, then moves on."
+  },
+  "app.culling.action.previous": {
+    "message": "Previous Photo",
+    "context": "Culling surface button and accessibility action that moves back to the previous photo in the pass."
+  },
+  "app.culling.action.reject": {
+    "message": "Reject",
+    "context": "Culling surface button and accessibility action that flags the photo for rejection, then moves on."
+  },
+  "app.culling.action.shortcuts": {
+    "message": "Keyboard Shortcuts",
+    "context": "Culling surface toolbar button, and the title of the sheet it opens, listing every key the pass answers."
+  },
+  "app.culling.action.sweep": {
+    "message": "Move Rejects to Trash",
+    "context": "Culling surface toolbar button and accessibility action that moves every rejected photo in the pass to the trash, after a confirmation."
+  },
+  "app.culling.action.unflag": {
+    "message": "Unflag",
+    "context": "Culling surface button and accessibility action that clears the photo's pick or reject flag, then moves on."
+  },
+  "app.culling.announcement": {
+    "message": "{flag}, {position}",
+    "context": "What VoiceOver reads for the photo under review and announces after every move: its flag (e.g. \"Picked\"), then its position (e.g. \"3 of 120\")."
+  },
+  "app.culling.empty.body": {
+    "message": "Photos in this view appear here for review.",
+    "context": "Body of the culling surface's empty state."
+  },
+  "app.culling.empty.title": {
+    "message": "Nothing to Cull",
+    "context": "Title of the culling surface's empty state, when the view it was opened over holds no photos."
+  },
+  "app.culling.error.flag": {
+    "message": "The flag could not be saved, so the photo keeps the flag it had.",
+    "context": "Alert on the culling surface when writing a pick, reject or unflag failed and was undone."
+  },
+  "app.culling.error.load": {
+    "message": "The photos could not be loaded.",
+    "context": "Culling surface state when reading the photos to review failed."
+  },
+  "app.culling.error.sweep": {
+    "message": "The rejected photos could not be moved to the Trash.",
+    "context": "Alert on the culling surface when moving the rejects to the trash failed."
+  },
+  "app.culling.flag.pick": {
+    "message": "Picked",
+    "context": "Badge and spoken flag of a photo flagged as a keeper on the culling surface."
+  },
+  "app.culling.flag.reject": {
+    "message": "Rejected",
+    "context": "Badge and spoken flag of a photo flagged for rejection on the culling surface."
+  },
+  "app.culling.flag.unflagged": {
+    "message": "Unflagged",
+    "context": "Badge and spoken flag of a photo with no pick or reject flag on the culling surface."
+  },
+  "app.culling.open": {
+    "message": "Cull",
+    "context": "Timeline toolbar button that starts a culling pass over the library."
+  },
+  "app.culling.position": {
+    "message": "{position} of {total}",
+    "context": "Where the culling pass is: the current photo's number, then how many there are. Both arrive already formatted."
+  },
+  "app.culling.stack.all_rejected": {
+    "message": "Stack, all rejected",
+    "context": "Badge and spoken state of a collapsed stack on the culling surface whose every photo is rejected."
+  },
+  "app.culling.stack.any_pick": {
+    "message": "Stack with a pick",
+    "context": "Badge and spoken state of a collapsed stack on the culling surface in which at least one photo is picked."
+  },
+  "app.culling.stack.members": {
+    "message": "{count, plural, one {# photo} other {# photos}}",
+    "context": "How many photos a collapsed stack on the culling surface holds."
+  },
+  "app.culling.stack.mixed": {
+    "message": "Stack, undecided",
+    "context": "Badge and spoken state of a collapsed stack on the culling surface with no pick and not every photo rejected."
+  },
+  "app.culling.stack.summary": {
+    "message": "{state}, {members}",
+    "context": "A collapsed stack's badge on the culling surface: its state (e.g. \"Stack with a pick\"), then its size (e.g. \"3 photos\")."
+  },
+  "app.culling.sweep.confirm": {
+    "message": "Move to Trash",
+    "context": "Destructive confirmation button that moves the culling pass's rejected photos to the trash."
+  },
+  "app.culling.sweep.done": {
+    "message": "{count, plural, one {Moved # photo to the Trash} other {Moved # photos to the Trash}}",
+    "context": "VoiceOver announcement after the culling pass's rejected photos were moved to the trash."
+  },
+  "app.culling.sweep.message": {
+    "message": "You can restore them from Recently Deleted until their retention window closes.",
+    "context": "Message of the confirmation before the culling pass's rejected photos move to the trash."
+  },
+  "app.culling.sweep.title": {
+    "message": "{count, plural, one {Move # rejected photo to the Trash?} other {Move # rejected photos to the Trash?}}",
+    "context": "Title of the confirmation before the culling pass's rejected photos move to the trash."
+  },
+  "app.culling.title": {
+    "message": "Culling",
+    "context": "Navigation title of the keyboard-driven culling surface."
+  },
   "app.custody.action.blocked.footer": {
     "message": "Capsule won't release the copy on this device until your server confirms it holds this photo.",
     "context": "Footer under the actions when releasing is not allowed. This gate is absolute — nothing local is freed on an unconfirmed verdict."
@@ -7186,6 +7306,34 @@
   "apple.menu.close_window": {
     "message": "Close Window",
     "context": "Menu item that closes the frontmost window."
+  },
+  "apple.menu.culling": {
+    "message": "Culling",
+    "context": "Name of the menu-bar menu (and iPad shortcut-overlay group) holding the culling pass's verbs."
+  },
+  "apple.menu.culling.collapse_stack": {
+    "message": "Collapse Stack",
+    "context": "Culling menu item that folds an expanded stack back to its cover photo. Shortcut C."
+  },
+  "apple.menu.culling.expand_stack": {
+    "message": "Expand Stack",
+    "context": "Culling menu item that opens a stack so each photo in it is culled on its own. Shortcut E."
+  },
+  "apple.menu.culling.pick": {
+    "message": "Pick",
+    "context": "Culling menu item that flags the photo under review as a keeper. Shortcut P."
+  },
+  "apple.menu.culling.reject": {
+    "message": "Reject",
+    "context": "Culling menu item that flags the photo under review for rejection. Shortcut X."
+  },
+  "apple.menu.culling.sweep": {
+    "message": "Move Rejects to Trash",
+    "context": "Culling menu item that moves every rejected photo in the pass to the trash, after a confirmation. Shortcut ⌘⌫."
+  },
+  "apple.menu.culling.unflag": {
+    "message": "Unflag",
+    "context": "Culling menu item that clears the photo's pick or reject flag. Shortcut U."
   },
   "apple.menu.culling_review": {
     "message": "Culling Review",

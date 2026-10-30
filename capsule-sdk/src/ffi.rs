@@ -78,6 +78,13 @@ pub use workspace::{
     FfiVerifyOutcome, FfiWorkspace, p256_hardware_dek_round_trip,
 };
 
+/// The cull verbs on [`FfiWorkspace`]: flag an asset or a stack, read a stack's derived state,
+/// list by flag, and the reject sweep. Its own module because culling is one workflow with one
+/// destructive step, and reads better as a unit than as another section of `workspace`.
+mod culling;
+
+pub use culling::{FfiCullFlag, FfiStackCullState};
+
 /// The transfer event stream: the flattened mirror of `crate::events` and the subscription a
 /// real-time transfer view polls. Separated because it is the one surface that is a stream
 /// rather than a call.
