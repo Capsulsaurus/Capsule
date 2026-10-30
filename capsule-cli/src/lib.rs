@@ -273,6 +273,7 @@ async fn dispatch(command: Commands) -> Result<()> {
                 passphrase_stdin,
             } => auth_recover(&library, recovery_secret_stdin, passphrase_stdin).await?,
             AuthCommands::Logout { json } => auth_logout(json).await?,
+            AuthCommands::Activity { limit, json } => auth_activity(limit, json).await?,
             AuthCommands::Status { json: true } => {
                 // A machine reader gets a failure as a non-zero exit, not a line on stdout.
                 let auth_status = status::AuthStatus::check(&session_store()?)
@@ -1250,6 +1251,13 @@ struct LogoutReport {
     signed_out: bool,
 }
 
+/// What `capsule auth activity --json` prints.
+#[derive(Debug, serde::Serialize)]
+struct ActivityReport {
+    /// The account's events, newest first.
+    events: Vec<remote::ActivityEntry>,
+}
+
 /// What `capsule share revoke --json` prints.
 #[derive(Debug, serde::Serialize)]
 struct RevokeReport {
@@ -1722,6 +1730,35 @@ async fn auth_logout(json: bool) -> Result<()> {
         }
         Err(error) => Err(eyre!("{}", describe_remote_error(&error))),
     }
+}
+
+/// `capsule auth activity`: the signed-in account's recent security events, newest first.
+///
+/// With `json`, stdout carries exactly one document, [`ActivityReport`].
+async fn auth_activity(limit: Option<u32>, json: bool) -> Result<()> {
+    let remote = remote::RemoteConfig::from_env();
+    let store = session_store()?;
+    let events = remote::auth_activity(&remote, &store, limit)
+        .await
+        .map_err(|error| eyre!("{}", describe_remote_error(&error)))?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&ActivityReport { events })?
+        );
+        return Ok(());
+    }
+    if events.is_empty() {
+        println!("{}", "No recent activity.".yellow());
+        return Ok(());
+    }
+    for event in &events {
+        match &event.subject {
+            Some(subject) => println!("{}  {}  {subject}", event.at, event.kind.bold()),
+            None => println!("{}  {}", event.at, event.kind.bold()),
+        }
+    }
+    Ok(())
 }
 
 /// The flags of one `capsule sync` run.

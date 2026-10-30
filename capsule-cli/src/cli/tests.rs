@@ -275,6 +275,35 @@ fn bare_capsule_off_a_terminal_is_the_help_usage_error() {
     assert_eq!(error.exit_code(), 2);
 }
 
+/// `capsule auth activity` takes an optional limit and the `--json` switch.
+#[test]
+fn auth_activity_parses_its_limit_and_json() {
+    let cli = try_parse_from(
+        false,
+        ["capsule", "auth", "activity", "--limit", "5", "--json"],
+    )
+    .expect("parses");
+    assert!(matches!(
+        cli.command,
+        Some(Commands::Auth {
+            command: AuthCommands::Activity {
+                limit: Some(5),
+                json: true
+            }
+        })
+    ));
+    let bare = try_parse_from(false, ["capsule", "auth", "activity"]).expect("parses");
+    assert!(matches!(
+        bare.command,
+        Some(Commands::Auth {
+            command: AuthCommands::Activity {
+                limit: None,
+                json: false
+            }
+        })
+    ));
+}
+
 /// A subcommand parses the same whether or not a terminal is attached.
 #[test]
 fn a_subcommand_parses_the_same_on_and_off_a_terminal() {
