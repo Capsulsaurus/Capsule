@@ -209,7 +209,8 @@ fn best_held(request: &RenderRequest, local: &LocalHoldings) -> Rendition {
 
 /// What to obtain next so `show` reaches the intent.
 ///
-/// - The intent's encoded tier (or, for Original, the original) is shown: nothing.
+/// - The intent's encoded tier (or, for Original, the original) is shown, or a rung above the
+///   intent is shown from any source: nothing.
 /// - The intent rung is filled by the embedded preview: fetch the encoded tier where the server
 ///   lists it, since it replaces the camera's rendering; never generate it here, which is the
 ///   import's work.
@@ -226,7 +227,13 @@ fn next_step(
     if intent == Representation::Lqip {
         return None;
     }
-    let filled = show.rung >= intent;
+    // A rung above the intent (a surface passing back what a larger view showed) already
+    // outranks the intent's encoded tier, whatever fills it: obtaining that tier could never
+    // change what is shown, so only an embedded preview exactly at the intent asks for it.
+    if show.rung > intent {
+        return None;
+    }
+    let filled = show.rung == intent;
     if filled && show.source != RungSource::Embedded {
         return None;
     }

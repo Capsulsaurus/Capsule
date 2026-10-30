@@ -151,6 +151,29 @@ fn an_embedded_preview_is_replaced_by_a_fetchable_encoded_tier() {
 }
 
 #[test]
+fn an_embedded_rung_above_the_intent_asks_for_nothing() {
+    // A surface asking for Thumbnail passes back the embedded Preview a larger view showed.
+    let shown = rendition(Preview, RungSource::Embedded);
+    let local = holding(&[Original], Some((4000, 3000)));
+    let fetchable = set(&[Thumbnail, Preview]);
+    let step = render_step(&request(Thumbnail), Some(shown), &local, &fetchable);
+    assert_eq!(step.show, shown);
+    assert_eq!(step.next, None);
+
+    // Holding the Thumbnail tier changes nothing: it ranks below what is shown.
+    let held = holding(&[Thumbnail, Original], Some((4000, 3000)));
+    let step = render_step(&request(Thumbnail), Some(shown), &held, &fetchable);
+    assert_eq!(step.show, shown);
+    assert!(!step.changed);
+    assert_eq!(step.next, None);
+
+    // An embedded rung exactly at the intent still asks for its encoded tier.
+    let step = render_step(&request(Thumbnail), None, &local, &fetchable);
+    assert_eq!(step.show, rendition(Thumbnail, RungSource::Embedded));
+    assert_eq!(step.next, Some(NextStep::Fetch(Thumbnail)));
+}
+
+#[test]
 fn a_fetch_is_preferred_over_generating_from_the_original() {
     let local = holding(&[Original], None);
     let step = render_step(&request(Preview), None, &local, &set(&[Preview]));
