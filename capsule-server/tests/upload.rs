@@ -459,18 +459,16 @@ async fn a_full_upload_finalizes_and_the_bytes_become_a_blob() {
     let ack = fixture.chunk(&id, 0, &first, &bearer).send().await;
     ack.assert_status(StatusCode::NO_CONTENT);
     ack.assert_header("x-capsule-offset", "4096");
+    ack.assert_header("x-capsule-upload-status", "uploading");
 
+    // The completing chunk is answered once it holds the claim, not once finalization ends.
     let done = fixture.chunk(&id, 4096, &second, &bearer).send().await;
     done.assert_status(StatusCode::NO_CONTENT);
     done.assert_header("x-capsule-offset", "8192");
+    done.assert_header("x-capsule-upload-status", "waiting_for_processing");
 
     // The session is terminal and successful…
-    let record = fixture
-        .uploads
-        .read_for_test(&id)
-        .await
-        .expect("the session survives as a receipt");
-    assert_eq!(record.status.as_str(), "completed");
+    assert_eq!(terminal_status(&fixture, &id).await, "completed");
 
     // …the stage is gone…
     assert_eq!(fixture.blobs.staged_len_for_test(&id).await, None);
@@ -565,10 +563,8 @@ async fn a_manifest_whose_signature_does_not_verify_under_its_signer_is_refused(
         .send()
         .await
         .assert_status(StatusCode::NO_CONTENT);
-    let refused = fixture.chunk(&id, 4096, &second, &bearer).send().await;
-    refused.assert_status(StatusCode::BAD_REQUEST);
     assert_eq!(
-        code(&refused.json::<serde_json::Value>()),
+        refused_at_finalization(&fixture, &bearer, &id, 4096, &second).await,
         "error.upload.envelope_rejected"
     );
     assert_eq!(fixture.blobs.blob_for_test(&checksum(&forged)).await, None);
@@ -599,10 +595,8 @@ async fn bytes_that_are_not_a_signed_manifest_are_refused_as_a_provenance_blob()
         .send()
         .await
         .assert_status(StatusCode::NO_CONTENT);
-    let refused = fixture.chunk(&id, 4096, &second, &bearer).send().await;
-    refused.assert_status(StatusCode::BAD_REQUEST);
     assert_eq!(
-        code(&refused.json::<serde_json::Value>()),
+        refused_at_finalization(&fixture, &bearer, &id, 4096, &second).await,
         "error.upload.envelope_rejected"
     );
 }
@@ -620,10 +614,8 @@ async fn a_manifest_naming_a_revoked_device_is_refused() {
         .await
         .assert_status(StatusCode::NO_CONTENT);
     fixture.authority.revoke_device(&user(), device());
-    let refused = fixture.chunk(&id, 4096, &second, &bearer).send().await;
-    refused.assert_status(StatusCode::BAD_REQUEST);
     assert_eq!(
-        code(&refused.json::<serde_json::Value>()),
+        refused_at_finalization(&fixture, &bearer, &id, 4096, &second).await,
         "error.upload.envelope_rejected"
     );
     assert_eq!(fixture.blobs.blob_for_test(&checksum(&whole)).await, None);
@@ -740,10 +732,8 @@ async fn a_create_below_the_albums_epoch_is_refused_at_finalization() {
         .send()
         .await
         .assert_status(StatusCode::NO_CONTENT);
-    let refused = fixture.chunk(&id, 4096, &second, &bearer).send().await;
-    refused.assert_status(StatusCode::BAD_REQUEST);
     assert_eq!(
-        code(&refused.json::<serde_json::Value>()),
+        refused_at_finalization(&fixture, &bearer, &id, 4096, &second).await,
         "error.upload.envelope_rejected"
     );
 
@@ -1410,10 +1400,8 @@ async fn bytes_that_do_not_hash_to_the_declaration_fail_the_session() {
         .assert_status(StatusCode::NO_CONTENT);
 
     let substituted = payload(b'z', 4096);
-    let response = fixture.chunk(&id, 4096, &substituted, &bearer).send().await;
-    response.assert_status(StatusCode::BAD_REQUEST);
     assert_eq!(
-        code(&response.json::<serde_json::Value>()),
+        refused_at_finalization(&fixture, &bearer, &id, 4096, &substituted).await,
         "error.upload.content_hash_mismatch"
     );
 
@@ -1444,10 +1432,8 @@ async fn finalization_re_checks_the_envelope_against_the_present() {
     // directory that carried it; finalization must not.
     fixture.authority.revoke_device(&support::user(), device());
 
-    let response = fixture.chunk(&id, 4096, &second, &bearer).send().await;
-    response.assert_status(StatusCode::BAD_REQUEST);
     assert_eq!(
-        code(&response.json::<serde_json::Value>()),
+        refused_at_finalization(&fixture, &bearer, &id, 4096, &second).await,
         "error.upload.envelope_rejected"
     );
     assert_eq!(
@@ -1471,10 +1457,8 @@ async fn a_closed_album_stops_a_transfer_that_was_already_in_flight() {
         .assert_status(StatusCode::NO_CONTENT);
     fixture.authority.close_album(&owner(), &album());
 
-    let response = fixture.chunk(&id, 4096, &second, &bearer).send().await;
-    response.assert_status(StatusCode::BAD_REQUEST);
     assert_eq!(
-        code(&response.json::<serde_json::Value>()),
+        refused_at_finalization(&fixture, &bearer, &id, 4096, &second).await,
         "error.upload.envelope_rejected"
     );
 }
@@ -1500,10 +1484,8 @@ async fn unsharing_a_member_stops_a_transfer_that_was_already_in_flight() {
         .authority
         .unshare(&album(), &capsule_server::store::UserId::new(BOB));
 
-    let response = fixture.chunk(&id, 4096, &second, &bearer).send().await;
-    response.assert_status(StatusCode::BAD_REQUEST);
     assert_eq!(
-        code(&response.json::<serde_json::Value>()),
+        refused_at_finalization(&fixture, &bearer, &id, 4096, &second).await,
         "error.upload.envelope_rejected"
     );
     assert_eq!(
@@ -1535,6 +1517,52 @@ async fn losing_the_finalize_claim_is_a_race_rather_than_a_failure() {
     let response = fixture.chunk(&id, 4096, &second, &bearer).send().await;
     response.assert_status(StatusCode::NO_CONTENT);
     response.assert_header("x-capsule-offset", "8192");
+    response.assert_header("x-capsule-upload-status", "waiting_for_processing");
+}
+
+/// The completing `PATCH` and `HEAD` are answered within a bound that does not depend on the
+/// blob: a re-hash that never ends — a stage whose every read is parked — holds up neither, and
+/// the finalization they started still reaches `Completed` once the disk answers.
+#[tokio::test]
+async fn neither_the_completing_chunk_nor_head_waits_for_the_re_hash() {
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (first, second, whole) = blob();
+    let id = fixture.open_session(&whole, "original", &bearer).await;
+    fixture
+        .chunk(&id, 0, &first, &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+
+    // Every read of the stage parks: the re-hash is as slow as a 4 GiB blob on a slow disk.
+    let hold = fixture.blobs.hold_staged_reads();
+    let bound = Duration::from_secs(5);
+    let done = tokio::time::timeout(bound, fixture.chunk(&id, 4096, &second, &bearer).send())
+        .await
+        .expect("the completing chunk is answered while the re-hash is parked");
+    done.assert_status(StatusCode::NO_CONTENT);
+    done.assert_header("x-capsule-upload-status", "waiting_for_processing");
+    tokio::time::timeout(bound, hold.entered.notified())
+        .await
+        .expect("the detached finalization reached the re-hash");
+
+    let polled = tokio::time::timeout(bound, head(&fixture, &bearer, &id))
+        .await
+        .expect("HEAD is answered while the re-hash is parked");
+    polled.assert_status(StatusCode::OK);
+    polled.assert_header("x-capsule-offset", "8192");
+    polled.assert_header("x-capsule-upload-status", "waiting_for_processing");
+    assert_eq!(polled.header("x-capsule-upload-error"), None);
+
+    // The disk answers; the finalization nobody is waiting on finishes.
+    // One permit is enough: each parked read gives it back as it goes on.
+    hold.release.add_permits(1);
+    assert_eq!(terminal_status(&fixture, &id).await, "completed");
+    head(&fixture, &bearer, &id)
+        .await
+        .assert_header("x-capsule-upload-status", "completed");
+    assert_indexed_and_durable(&fixture, &bearer, &whole).await;
 }
 
 #[tokio::test]
@@ -2153,24 +2181,24 @@ async fn finalization_crash_between_rename_and_commit_leaves_no_dangling_referen
         .await
         .assert_status(StatusCode::NO_CONTENT);
 
-    // The last chunk completes the declared size, so this request is the one that finalizes.
+    // The last chunk completes the declared size, so this request is the one that claims
+    // finalization. The index call fails inside the detached finalization, never in the request.
     fixture.index_fault.arm();
-    let crashed = fixture.chunk(&id, 4096, &second, &bearer).send().await;
-    crashed.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    let accepted = fixture.chunk(&id, 4096, &second, &bearer).send().await;
+    accepted.assert_status(StatusCode::NO_CONTENT);
+    accepted.assert_header("x-capsule-upload-status", "waiting_for_processing");
+
+    // 1. Terminal and failed. A claimed session that is never driven anywhere is the state the
+    //    finalization state machine exists to make unreachable.
+    assert_eq!(terminal_status(&fixture, &id).await, "failed_processing");
     assert_eq!(
         fixture.index_fault.fired(),
         1,
         "the fault never fired, so everything below is describing an ordinary upload"
     );
-
-    // 1. Terminal and failed. A claimed session that is never driven anywhere is the state the
-    //    finalization state machine exists to make unreachable.
-    let record = fixture
-        .uploads
-        .read_for_test(&id)
+    head(&fixture, &bearer, &id)
         .await
-        .expect("the session survives as a receipt");
-    assert_eq!(record.status.as_str(), "failed_processing");
+        .assert_header("x-capsule-upload-error", "error.upload.unavailable");
 
     // 2. Custody was taken: the rename happened before the index call that was lost.
     assert_eq!(
@@ -2323,6 +2351,56 @@ async fn terminal_status(fixture: &Fixture, id: &str) -> &'static str {
     .expect("a claimed session reaches a terminal status")
 }
 
+/// Send the chunk that completes `id`, whose finalization is going to refuse it, and return the
+/// `error.*` code `HEAD` reports for it.
+///
+/// The completing chunk is accepted — `204`, `waiting_for_processing` — because it never waits
+/// for finalization. The refusal is read the way a client reads it: from `HEAD` once the session
+/// is terminal, in `X-Capsule-Upload-Error`, and from the session list.
+async fn refused_at_finalization(
+    fixture: &Fixture,
+    bearer: &str,
+    id: &str,
+    offset: u64,
+    chunk: &[u8],
+) -> String {
+    let accepted = fixture.chunk(id, offset, chunk, bearer).send().await;
+    accepted.assert_status(StatusCode::NO_CONTENT);
+    accepted.assert_header("x-capsule-upload-status", "waiting_for_processing");
+    assert_eq!(terminal_status(fixture, id).await, "failed_processing");
+
+    let reported = head(fixture, bearer, id).await;
+    reported.assert_status(StatusCode::OK);
+    reported.assert_header("x-capsule-upload-status", "failed_processing");
+    let code = reported
+        .header("x-capsule-upload-error")
+        .expect("a failed session names why")
+        .to_owned();
+
+    let listed: serde_json::Value = fixture
+        .client
+        .get("/v1/upload/sessions")
+        .header("authorization", bearer)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    let session = listed["sessions"]
+        .as_array()
+        .expect("a session list")
+        .iter()
+        .find(|session| session["id"] == id)
+        .expect("the failed session is listed");
+    assert_eq!(session["status"], "failed_processing");
+    assert_eq!(
+        session["error_code"].as_str(),
+        Some(code.as_str()),
+        "the list carries the code HEAD does"
+    );
+    code
+}
+
 /// The default asset's original is indexed at `whole`'s address, and `/storage/verify` says the
 /// server durably holds it — the two facts a client converging on its upload reads.
 async fn assert_indexed_and_durable(fixture: &Fixture, bearer: &str, whole: &[u8]) {
@@ -2374,19 +2452,18 @@ async fn a_client_that_disconnects_mid_finalize_does_not_strand_its_session() {
         .await
         .assert_status(StatusCode::NO_CONTENT);
 
-    // The last chunk claims finalization; park it after its commit has landed, then drop the
-    // request there — the client went away between the commit and the index write.
+    // The last chunk claims finalization and is answered at once; its finalization is parked
+    // after its commit has landed, with nobody left waiting on it — the client is gone between
+    // the commit and the index write.
     let hold = fixture.blobs.hold_commits();
-    {
-        let finalizing = fixture.chunk(&id, 4096, &second, &bearer).send();
-        tokio::pin!(finalizing);
-        tokio::select! {
-            response = &mut finalizing => {
-                panic!("the request answered before its commit was parked: {}", response.status());
-            }
-            () = hold.entered.notified() => {}
-        }
-    }
+    let answered = fixture.chunk(&id, 4096, &second, &bearer).send().await;
+    answered.assert_status(StatusCode::NO_CONTENT);
+    answered.assert_header("x-capsule-upload-status", "waiting_for_processing");
+    drop(answered);
+    tokio::time::timeout(Duration::from_secs(10), hold.entered.notified())
+        .await
+        .expect("the detached finalization reaches its commit");
+
     assert_eq!(
         fixture.blobs.staged_len_for_test(&id).await,
         None,
@@ -2583,8 +2660,10 @@ async fn a_duplicate_create_finalizes_a_full_session_nobody_claimed() {
     let response = create_again(&fixture, &bearer, &whole).await;
     response.assert_status(StatusCode::OK);
     response.assert_header("x-capsule-offset", "8192");
-    // The expiry is the finished session's: a completed session is never discarded under
-    // pressure and lives to the cap, so the idle count is the cap's, not the survival floor's.
+    // Started, never awaited: the answer is the claimed session as it stands.
+    response.assert_header("x-capsule-upload-status", "waiting_for_processing");
+    // The expiry is the claimed session's: a claimed session is never discarded under pressure
+    // and lives to the cap, so the idle count is the cap's, not the survival floor's.
     let expires_in = response
         .header("x-capsule-session-expires-in")
         .expect("the cap is stated")
@@ -2594,13 +2673,8 @@ async fn a_duplicate_create_finalizes_a_full_session_nobody_claimed() {
     let body: serde_json::Value = response.json();
     assert_eq!(body["id"].as_str(), Some(id.as_str()), "the same session");
 
-    // Finished before the answer, with no chunk replayed.
-    let record = fixture
-        .uploads
-        .read_for_test(&id)
-        .await
-        .expect("the session survives as a receipt");
-    assert_eq!(record.status.as_str(), "completed");
+    // Finished after the answer, with no chunk replayed.
+    assert_eq!(terminal_status(&fixture, &id).await, "completed");
     assert_indexed_and_durable(&fixture, &bearer, &whole).await;
 
     // Asked again, the bytes are held: the finalized tuple is the duplicate it always was.
@@ -2616,17 +2690,26 @@ async fn head_finalizes_a_full_session_nobody_claimed_and_reports_it_completed()
     let (first, second, whole) = blob();
     let id = leave_full_and_unclaimed(&fixture, &bearer, &first, &second, &whole).await;
 
+    // HEAD takes the claim and answers the state as it stands; it never waits for the outcome.
     let response = head(&fixture, &bearer, &id).await;
     response.assert_status(StatusCode::OK);
     response.assert_header("x-capsule-offset", "8192");
     response.assert_header("x-capsule-content-length", "8192");
-    response.assert_header("x-capsule-upload-status", "completed");
+    response.assert_header("x-capsule-upload-status", "waiting_for_processing");
+    assert_eq!(response.header("x-capsule-upload-error"), None);
+
+    // The client polls; the finalization HEAD started reaches its end without it.
+    assert_eq!(terminal_status(&fixture, &id).await, "completed");
     assert_indexed_and_durable(&fixture, &bearer, &whole).await;
 
-    // A second HEAD reads the terminal state and finalizes nothing twice.
-    head(&fixture, &bearer, &id)
-        .await
-        .assert_header("x-capsule-upload-status", "completed");
+    // A later HEAD reads the terminal state and finalizes nothing twice.
+    let settled = head(&fixture, &bearer, &id).await;
+    settled.assert_header("x-capsule-upload-status", "completed");
+    assert_eq!(
+        settled.header("x-capsule-upload-error"),
+        None,
+        "a completed session carries no failure code"
+    );
 }
 
 #[tokio::test]
@@ -2639,7 +2722,14 @@ async fn head_reports_a_full_session_whose_bytes_do_not_hash_as_failed() {
 
     head(&fixture, &bearer, &id)
         .await
-        .assert_header("x-capsule-upload-status", "failed_processing");
+        .assert_header("x-capsule-upload-status", "waiting_for_processing");
+    assert_eq!(terminal_status(&fixture, &id).await, "failed_processing");
+    let failed = head(&fixture, &bearer, &id).await;
+    failed.assert_header("x-capsule-upload-status", "failed_processing");
+    failed.assert_header(
+        "x-capsule-upload-error",
+        "error.upload.content_hash_mismatch",
+    );
     assert_eq!(
         fixture.blobs.staged_len_for_test(&id).await,
         None,
@@ -2656,12 +2746,24 @@ async fn a_duplicate_create_whose_full_session_will_not_finalize_opens_a_fresh_o
     let id =
         leave_full_and_unclaimed(&fixture, &bearer, &first, &payload(b'x', 4096), &whole).await;
 
+    // The duplicate create starts the finalization and hands the claimed session back.
+    let response = create_again(&fixture, &bearer, &whole).await;
+    response.assert_status(StatusCode::OK);
+    response.assert_header("x-capsule-upload-status", "waiting_for_processing");
+    let body: serde_json::Value = response.json();
+    assert_eq!(body["id"].as_str(), Some(id.as_str()));
+    assert_eq!(terminal_status(&fixture, &id).await, "failed_processing");
+    head(&fixture, &bearer, &id).await.assert_header(
+        "x-capsule-upload-error",
+        "error.upload.content_hash_mismatch",
+    );
+
+    // Refused, the session is terminal, so the client's next create opens a fresh one.
     let response = create_again(&fixture, &bearer, &whole).await;
     response.assert_status(StatusCode::CREATED);
     let body: serde_json::Value = response.json();
     let fresh = body["id"].as_str().expect("a session id").to_owned();
     assert_ne!(fresh, id, "the refused session is not handed back");
-    assert_eq!(terminal_status(&fixture, &id).await, "failed_processing");
 
     // The client sends its bytes again, and they land.
     let (first, second, _) = blob();
@@ -2874,12 +2976,23 @@ async fn die_mid_finalize(fixture: &Fixture, bearer: &str, died: DiedAfter) -> (
         DiedAfter::IndexWrite => fixture.index_fault.arm_after_commit(),
     }
     fixture.uploads.refuse_status_writes(true);
+    let refused_before = fixture.uploads.refused_status_writes();
+    // The request is answered once it holds the claim; the finalization it started dies later,
+    // detached, at its refused terminal write.
     fixture
         .chunk(&id, 4096, &second, bearer)
         .send()
         .await
-        .assert_status(StatusCode::SERVICE_UNAVAILABLE);
+        .assert_status(StatusCode::NO_CONTENT);
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while fixture.uploads.refused_status_writes() == refused_before {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("the detached finalization reaches its terminal write");
     fixture.uploads.refuse_status_writes(false);
+
     assert_eq!(
         fixture.index_fault.fired(),
         1,

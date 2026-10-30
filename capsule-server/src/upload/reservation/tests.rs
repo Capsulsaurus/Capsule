@@ -202,6 +202,7 @@ fn session(tag: &str, status: UploadSessionStatus) -> UploadSessionRecord {
         received_bytes: 0,
         total_size: BYTES.len() as u64,
         status,
+        failure_code: None,
         created_at: now,
         last_progress_at: now,
     }

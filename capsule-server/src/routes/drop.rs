@@ -25,7 +25,7 @@
 //! | provision `201` / revoke `204` / discard `204` | the owner's operations |
 //! | provision `403 error.quota.grace_locked` / `error.quota.suspended` | a link is metadata growth: the owner is past the quota grace window, or the operator suspended their quota (#725). A revocation is never refused |
 //! | create `201` | a drop session, with its suggested chunk size |
-//! | chunk `204` | staged, with the authoritative offset |
+//! | chunk `204` | staged, with the authoritative offset and `X-Capsule-Upload-Status`. The completing chunk is answered `waiting_for_processing` as soon as its deposit is started, never once the deposit ends (#1040) |
 //! | adopt `200` | the asset exists and the inbox row is gone |
 //! | create/chunk `404` | **one answer** for a malformed id, an unknown link, an expired one, a revoked one, a spent single-use one, and an unknown session — the guest path carries no credential |
 //! | create `409 error.drop.cap_exhausted` | invariant 26: a cumulative cap on an otherwise-live link, which is *not* the indistinguishable `404` because the guest was handed a real link and needs to ask for a new one |
@@ -37,7 +37,7 @@
 //! | adopt `404` / `409` | the row is not the caller's, or another adoption holds it |
 //! | chunk `507 error.drop.storage_full` | the server's disk is full; nothing of the chunk was kept, so the same chunk at the same offset lands later. Carries a `retry_after`, and so `Retry-After` |
 //! | chunk `503 error.drop.chunk_unavailable` | a collaborator could not answer before the chunk was recorded. Carries a `retry_after`; the guest resends the same chunk at the same offset |
-//! | chunk `500` | the stage is shorter than the session's counter, or filing the finished drop failed — neither is repaired by a retry |
+//! | chunk `500` | the stage is shorter than the session's counter, which a retry does not repair. A deposit's failure is not a chunk's answer: no chunk waits for the deposit |
 //! | `500` | elsewhere, a store could not answer, the limiter's included |
 
 use base64::Engine as _;
@@ -259,12 +259,16 @@ pub struct DropChunkHeaders {
     checksum: Option<String>,
 }
 
-/// The authoritative offset, returned on every accepted chunk.
+/// The authoritative offset and the session's state, returned on every accepted chunk.
 #[derive(HeaderParams)]
 pub struct DropOffsetHeader {
     /// Where the session is now.
     #[header(rename = "X-Capsule-Offset")]
     offset: u64,
+    /// `uploading`, or `waiting_for_processing` once the drop holds every declared byte and its
+    /// deposit is running. The deposit is never awaited by the chunk that completes it.
+    #[header(rename = "X-Capsule-Upload-Status")]
+    upload_status: String,
 }
 
 /// Why an owner operation failed.
@@ -351,9 +355,7 @@ pub enum DropChunkRejection {
     },
 
     /// A failure a retry of this chunk cannot repair, so it is not a wait: the stage is shorter
-    /// than the session's counter, or the drop's last chunk was recorded and filing the finished
-    /// drop then failed. A re-sent final chunk is answered as a replay and never files it again,
-    /// so telling the guest to wait and resend would promise a deposit nothing will make.
+    /// than the session's counter.
     #[error("the chunk could not be accepted")]
     #[problem(status = 500, title = "Internal server error")]
     Internal {
@@ -954,6 +956,7 @@ pub async fn create_drop(
         received_bytes: 0,
         total_size: request.size,
         status: UploadSessionStatus::Pending,
+        failure_code: None,
         created_at: now,
         last_progress_at: now,
     };
@@ -1077,10 +1080,13 @@ pub async fn append_drop_chunk(
         return Err(DropChunkRejection::refused("the chunk is not its checksum"));
     }
 
-    // The append and the deposit it triggers are one task, awaited here for the answer: a guest
-    // who disconnects drops this future, and neither may stop with it — a drop whose last chunk
-    // was recorded and never deposited is a full session nobody finishes, and one stopped after
-    // its commit is bytes with no inbox row (#818).
+    // The append is a task of its own, awaited here for the answer: a guest who disconnects
+    // drops this future, and the append may not stop with it — a drop whose last chunk was
+    // recorded and never deposited is a full session nobody finishes (#818). The deposit the
+    // append starts is detached and never awaited, so the completing chunk's answer does not
+    // depend on how long the deposit's re-hash takes; one stopped after its commit would be bytes
+    // with no inbox row, which is why it outlives the request either way.
+    let declared_size = record.total_size;
     let landed = tokio::spawn(
         append_and_deposit(drops.clone(), record, offset, body, received_hash)
             .instrument(tracing::Span::current()),
@@ -1098,20 +1104,7 @@ pub async fn append_drop_chunk(
         DropChunkRejection::unavailable(drops.clock())
     })?;
 
-    if let Some(deposited) = landed.deposited {
-        match deposited {
-            Ok(deposit::Outcome::Filed | deposit::Outcome::AlreadyClaimed) => {}
-            Ok(deposit::Outcome::NotFound) => return Err(DropChunkRejection::NotFound),
-            // Every failure is a `500`, never the chunk path's `503`: the session is terminal,
-            // so a resend of the same chunk could not finish it.
-            Err(failure) => {
-                tracing::error!(%failure, "a finished drop could not be deposited");
-                return Err(DropChunkRejection::internal());
-            }
-        }
-    }
-
-    let next_offset = match landed.accepted {
+    let next_offset = match landed {
         chunk::Accepted::Advanced { next_offset, .. }
         | chunk::Accepted::Replayed { next_offset, .. } => next_offset,
         chunk::Accepted::Conflict => {
@@ -1148,10 +1141,18 @@ pub async fn append_drop_chunk(
         chunk::Accepted::SessionGone => return Err(DropChunkRejection::NotFound),
     };
 
+    // A drop holding every byte has its deposit running — started by this chunk, or by the
+    // request that raced it — and anything short of that is still uploading.
+    let upload_status = if next_offset == declared_size {
+        UploadSessionStatus::WaitingForProcessing
+    } else {
+        UploadSessionStatus::Uploading
+    };
     Ok(WithHeaders::new(
         NoContent,
         DropOffsetHeader {
             offset: next_offset,
+            upload_status: upload_status.as_str().to_owned(),
         },
     ))
 }
@@ -1707,21 +1708,12 @@ pub async fn discard_drop(
     Ok(NoContent)
 }
 
-/// What one drop chunk did, with the deposit it started.
-struct Landed {
-    /// What the append did.
-    accepted: chunk::Accepted,
-    /// The deposit the chunk ran — present when it completed the session, or replayed a chunk of
-    /// a full session nobody had deposited.
-    deposited: Option<Result<deposit::Outcome, deposit::DepositFailure>>,
-}
-
 /// Append one chunk to a drop and, when the session then holds every byte and nobody has
-/// claimed its deposit, deposit it.
+/// claimed its deposit, start the deposit detached ([`start_deposit`]) without waiting for it.
 ///
 /// Run as its own task by [`append_drop_chunk`], so it reaches its end whether or not the
 /// guest's request does. Depositing on a replay is what finishes a drop whose completing
-/// request was lost before it claimed the deposit: the guest's resend is the one request left,
+/// request was lost before it claimed the deposit: the guest's resend is one request left,
 /// and [`deposit::deposit`]'s claim makes a resend that races the original stand down.
 async fn append_and_deposit(
     drops: DropContext,
@@ -1729,7 +1721,7 @@ async fn append_and_deposit(
     offset: u64,
     body: ChunkBody,
     received_hash: String,
-) -> Result<Landed, crate::store::StoreError> {
+) -> Result<chunk::Accepted, crate::store::StoreError> {
     let accepted = chunk::append(
         drops.sessions(),
         drops.blobs(),
@@ -1748,15 +1740,40 @@ async fn append_and_deposit(
                 ..
             }
     );
-    let deposited = if finishes {
-        Some(deposit::deposit(&drops, &record.upload_id).await)
-    } else {
-        None
-    };
-    Ok(Landed {
-        accepted,
-        deposited,
-    })
+    if finishes {
+        // Detached: the handle is dropped, and the deposit runs to its end regardless.
+        drop(start_deposit(drops.clone(), record.upload_id.clone()));
+    }
+    Ok(accepted)
+}
+
+/// Run `upload`'s deposit as a task of its own, detached from the request that started it.
+///
+/// The deposit's claim is the first thing it does, so two of these racing deposit once. Its
+/// outcome is logged here, because no request is waiting to hear it: a failure leaves the
+/// session `FailedProcessing` with its stage dropped, which the drop's status probe reports.
+fn start_deposit(
+    drops: DropContext,
+    upload: UploadId,
+) -> tokio::task::JoinHandle<Result<deposit::Outcome, deposit::DepositFailure>> {
+    tracing::info!(%upload, "starting a finished drop's deposit, detached from its request");
+    tokio::spawn(
+        async move {
+            let started = std::time::Instant::now();
+            let outcome = deposit::deposit(&drops, &upload).await;
+            let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+            match &outcome {
+                Ok(outcome) => {
+                    tracing::info!(%upload, ?outcome, elapsed_ms, "a detached drop deposit ended");
+                }
+                Err(failure) => {
+                    tracing::error!(%upload, %failure, elapsed_ms, "a finished drop could not be deposited");
+                }
+            }
+            outcome
+        }
+        .instrument(tracing::Span::current()),
+    )
 }
 
 /// Put a reservation back, logging rather than failing: the caller is already refusing.

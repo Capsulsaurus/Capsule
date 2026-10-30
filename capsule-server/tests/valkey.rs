@@ -290,6 +290,7 @@ async fn the_progress_sweep_drops_an_expired_session_from_the_view() {
             received_bytes: 0,
             total_size: 1,
             status: UploadSessionStatus::Pending,
+            failure_code: None,
             created_at: harness.clock.now(),
             last_progress_at: harness.clock.now(),
         })
@@ -368,6 +369,7 @@ async fn the_claimed_view_heals_a_member_its_record_no_longer_backs() {
                 received_bytes: 0,
                 total_size: 1,
                 status: UploadSessionStatus::Pending,
+                failure_code: None,
                 created_at: harness.clock.now(),
                 last_progress_at: harness.clock.now(),
             })
@@ -474,6 +476,7 @@ async fn the_progress_sweep_pages_by_score_cursor_across_ties_and_drops() {
                 received_bytes: 0,
                 total_size: 1,
                 status: UploadSessionStatus::Pending,
+                failure_code: None,
                 created_at: harness.clock.now(),
                 last_progress_at: harness.clock.now(),
             })
@@ -742,6 +745,7 @@ async fn finalization_claims_race_to_one_winner() {
             received_bytes: 0,
             total_size: 1,
             status: UploadSessionStatus::Pending,
+            failure_code: None,
             created_at,
             last_progress_at: created_at,
         })

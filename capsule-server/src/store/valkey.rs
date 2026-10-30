@@ -524,6 +524,7 @@ fn encode_upload(record: &UploadSessionRecord, expires_at: Timestamp) -> Vec<Str
         .field("received_bytes", record.received_bytes)
         .field("total_size", record.total_size)
         .field("status", record.status.as_str())
+        .optional("failure_code", record.failure_code.as_deref())
         .field("created_at", record.created_at)
         .field("last_progress_at", record.last_progress_at)
         .field("progress_score", micros(record.last_progress_at))
@@ -553,6 +554,7 @@ fn decode_upload(flat: Vec<String>) -> Result<UploadSessionRecord, StoreError> {
         received_bytes: fields.number("received_bytes")?,
         total_size: fields.number("total_size")?,
         status,
+        failure_code: fields.optional("failure_code"),
         created_at: fields.timestamp("created_at")?,
         last_progress_at: fields.timestamp("last_progress_at")?,
     })
@@ -923,11 +925,13 @@ return redis.call('HGETALL', KEYS[1])"
 );
 
 // KEYS: record, chunks, progress zset, claimed set. ARGV: now, status, upload_id, in_flight,
-// evictable.
+// evictable, [failure_code]. The failure code, when given, lands in the same step as the status
+// it explains, so no reader sees `failed_processing` without it.
 script!(
     SET_STATUS,
     "if not live(KEYS[1], ARGV[1], KEYS[2]) then return nil end
 redis.call('HSET', KEYS[1], 'status', ARGV[2])
+if ARGV[6] then redis.call('HSET', KEYS[1], 'failure_code', ARGV[6]) end
 local uploader = redis.call('HGET', KEYS[1], 'upload_user_id')
 local hash = redis.call('HGET', KEYS[1], 'expected_hash')
 local album = redis.call('HGET', KEYS[1], 'album_id')
@@ -1681,6 +1685,37 @@ impl UploadSessionStore for ValkeyUploadSessions {
                 status = status.as_str(),
                 hit = updated.is_some(),
                 "set upload status"
+            );
+            Ok(updated)
+        })
+    }
+
+    fn fail_processing<'a>(
+        &'a self,
+        upload: &'a UploadId,
+        failure_code: &'a str,
+    ) -> StoreFuture<'a, Option<UploadSessionRecord>> {
+        Box::pin(async move {
+            let status = UploadSessionStatus::FailedProcessing;
+            let updated = self
+                .record_script(
+                    &SET_STATUS,
+                    upload,
+                    &[
+                        self.now(),
+                        status.as_str().to_owned(),
+                        upload.to_string(),
+                        flag(status.is_active()),
+                        flag(status.is_evictable()),
+                        failure_code.to_owned(),
+                    ],
+                )
+                .await?;
+            tracing::debug!(
+                %upload,
+                failure_code,
+                hit = updated.is_some(),
+                "failed an upload session"
             );
             Ok(updated)
         })

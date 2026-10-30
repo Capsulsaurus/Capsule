@@ -172,6 +172,12 @@ pub struct UploadSessionRecord {
     pub total_size: u64,
     /// Where the session is in its state machine.
     pub status: UploadSessionStatus,
+    /// The `error.*` code finalization failed with, set only with `FailedProcessing` by
+    /// [`UploadSessionStore::fail_processing`].
+    ///
+    /// The one channel through which a client learns why its upload was refused: no request
+    /// waits on finalization, so `HEAD` and the session list carry this code instead.
+    pub failure_code: Option<String>,
     /// When the session was created.
     pub created_at: Timestamp,
     /// When the last chunk was accepted, or creation time if none. Anchors the survival floor
@@ -301,6 +307,18 @@ pub trait UploadSessionStore: std::fmt::Debug + Send + Sync {
         &'a self,
         upload: &'a UploadId,
         status: UploadSessionStatus,
+    ) -> StoreFuture<'a, Option<UploadSessionRecord>>;
+
+    /// Move a live session to `FailedProcessing`, recording the `error.*` code it failed with,
+    /// and return the updated record.
+    ///
+    /// [`Self::set_status`] with `FailedProcessing`, plus [`UploadSessionRecord::failure_code`]:
+    /// the code is what `HEAD` and the session list report, because the request that completed
+    /// the session never waits to hear it.
+    fn fail_processing<'a>(
+        &'a self,
+        upload: &'a UploadId,
+        failure_code: &'a str,
     ) -> StoreFuture<'a, Option<UploadSessionRecord>>;
 
     /// Claim the exclusive right to finalize `upload`.

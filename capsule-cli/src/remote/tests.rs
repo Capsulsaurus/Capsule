@@ -350,6 +350,43 @@ fn a_rejected_upload_carries_the_servers_code() {
     assert_eq!(failure.code.as_deref(), Some("error.upload.unavailable"));
 }
 
+/// **The terminal outcome reaches `--json`.** No request waits on finalization, so the SDK reads
+/// a refused finalization from `HEAD` — the `200` that reported `failed_processing` and its
+/// `X-Capsule-Upload-Error` code — and the report names the asset failed with that code.
+#[test]
+fn a_finalization_the_server_refused_reaches_the_json_report_with_its_code() {
+    let mut summary = PushSummary {
+        assets: 1,
+        ..Default::default()
+    };
+    let mut failed = AssetPushOutcome::new(Uuid::from_u128(3), AssetPushStatus::Failed);
+    failed.error = Some(
+        AssetError::from(PushError::Upload(UploadError::Rejected {
+            status: 200,
+            code: Some("error.upload.content_hash_mismatch".into()),
+            message: "the server refused session s at finalization \
+                      (error.upload.content_hash_mismatch)"
+                .into(),
+        }))
+        .failure(),
+    );
+    summary.record(failed);
+
+    let json = serde_json::to_value(&summary).expect("the summary serializes");
+    let outcome = &json["outcomes"][0];
+    assert_eq!(outcome["status"], "failed");
+    assert_eq!(
+        outcome["uploaded"], 0,
+        "a refused blob is not counted uploaded"
+    );
+    assert_eq!(outcome["error"]["kind"], "upload");
+    assert_eq!(
+        outcome["error"]["code"], "error.upload.content_hash_mismatch",
+        "the session's terminal failure code"
+    );
+    assert_eq!(json["failed_assets"], 1);
+}
+
 /// The server's refusal of a create, as finalization answers it (issue #822).
 fn refused_create() -> UploadError {
     UploadError::Rejected {

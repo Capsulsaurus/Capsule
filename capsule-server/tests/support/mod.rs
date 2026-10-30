@@ -2077,6 +2077,8 @@ pub(crate) struct SwitchableUploads {
     unavailable: AtomicBool,
     claim_after_progress: AtomicBool,
     status_writes_refused: AtomicBool,
+    /// How many status writes [`Self::refuse_status_writes`] has refused so far.
+    status_writes_refused_count: std::sync::atomic::AtomicUsize,
 }
 
 impl SwitchableUploads {
@@ -2087,7 +2089,29 @@ impl SwitchableUploads {
             unavailable: AtomicBool::new(false),
             claim_after_progress: AtomicBool::new(false),
             status_writes_refused: AtomicBool::new(false),
+            status_writes_refused_count: std::sync::atomic::AtomicUsize::new(0),
         }
+    }
+
+    /// How many status writes have been refused since the store was built.
+    ///
+    /// A finalization runs detached from the request that claimed it, so a case that refuses its
+    /// terminal write has nothing to await but this: the refused write is the last thing the
+    /// finalizer does.
+    pub(crate) fn refused_status_writes(&self) -> usize {
+        self.status_writes_refused_count.load(Ordering::SeqCst)
+    }
+
+    fn refuses_status_write(&self) -> bool {
+        if self.is_down() {
+            return true;
+        }
+        let refused = self.status_writes_refused.load(Ordering::SeqCst);
+        if refused {
+            self.status_writes_refused_count
+                .fetch_add(1, Ordering::SeqCst);
+        }
+        refused
     }
 
     /// Refuse every subsequent [`UploadSessionStore::set_status`], or stop.
@@ -2124,6 +2148,27 @@ impl SwitchableUploads {
             .read(&UploadId::new(id))
             .await
             .expect("the in-memory store answers")
+    }
+
+    /// Wait, boundedly, for `id`'s session to reach a terminal status, and return its record.
+    ///
+    /// No request waits on finalization, so a case that sent the completing chunk has nothing to
+    /// await but the store: the detached finalization writes the terminal status as it ends.
+    pub(crate) async fn terminal_for_test(&self, id: &str) -> UploadSessionRecord {
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                let record = self
+                    .read_for_test(id)
+                    .await
+                    .expect("the session survives as a receipt");
+                if record.status.is_terminal() {
+                    return record;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .expect("a claimed session reaches a terminal status")
     }
 
     /// Let a concurrent finalizer win the claim in the window the racing request cannot see:
@@ -2175,6 +2220,7 @@ impl SwitchableUploads {
                     received_bytes: 0,
                     total_size: 4096,
                     status: UploadSessionStatus::Pending,
+                    failure_code: None,
                     created_at: now,
                     last_progress_at: now,
                 })
@@ -2257,10 +2303,22 @@ impl UploadSessionStore for SwitchableUploads {
         upload: &'a UploadId,
         status: UploadSessionStatus,
     ) -> StoreFuture<'a, Option<UploadSessionRecord>> {
-        if self.is_down() || self.status_writes_refused.load(Ordering::SeqCst) {
+        if self.refuses_status_write() {
             return Box::pin(async { Self::refuse() });
         }
         self.inner.set_status(upload, status)
+    }
+
+    fn fail_processing<'a>(
+        &'a self,
+        upload: &'a UploadId,
+        failure_code: &'a str,
+    ) -> StoreFuture<'a, Option<UploadSessionRecord>> {
+        if self.refuses_status_write() {
+            return Box::pin(async { Self::refuse() });
+        }
+
+        self.inner.fail_processing(upload, failure_code)
     }
 
     fn claim_finalize<'a>(&'a self, upload: &'a UploadId) -> StoreFuture<'a, FinalizeClaim> {
@@ -2341,6 +2399,8 @@ pub(crate) struct SwallowingBlobs {
     held_appends: Mutex<Option<PutHold>>,
     /// Park every commit, *after* it has landed, until the test lets it go.
     held_commits: Mutex<Option<PutHold>>,
+    /// Park every read of a stage — the finalize re-hash's — until the test lets it go.
+    held_staged_reads: Mutex<Option<PutHold>>,
     /// Refuse every [`BlobStore::put`], as a full or read-only disk would.
     puts_unavailable: AtomicBool,
     /// Park every [`BlobStore::put`] until the test lets it go.
@@ -2369,6 +2429,7 @@ impl SwallowingBlobs {
             full_next_begin: AtomicBool::new(false),
             held_appends: Mutex::new(None),
             held_commits: Mutex::new(None),
+            held_staged_reads: Mutex::new(None),
             puts_unavailable: AtomicBool::new(false),
             held_puts: Mutex::new(None),
         }
@@ -2428,6 +2489,23 @@ impl SwallowingBlobs {
         };
         *self
             .held_commits
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(hold.clone());
+        hold
+    }
+
+    /// Park every subsequent read of a stage until the returned hold releases it.
+    ///
+    /// The finalize re-hash, and a drop deposit's, read the stage window by window, so a parked
+    /// read is a re-hash that never ends: the disk a 4 GiB blob sits on, as slow as a test needs
+    /// it to be. A request whose answer waited on the re-hash would never be answered.
+    pub(crate) fn hold_staged_reads(&self) -> PutHold {
+        let hold = PutHold {
+            entered: Arc::new(tokio::sync::Notify::new()),
+            release: Arc::new(tokio::sync::Semaphore::new(0)),
+        };
+        *self
+            .held_staged_reads
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = Some(hold.clone());
         hold
@@ -2555,7 +2633,22 @@ impl BlobStore for SwallowingBlobs {
         offset: u64,
         len: usize,
     ) -> BlobFuture<'a, Option<Vec<u8>>> {
-        self.inner.read_staged_at(upload, offset, len)
+        let hold = self
+            .held_staged_reads
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        Box::pin(async move {
+            if let Some(hold) = hold {
+                hold.entered.notify_one();
+                let _permit = hold
+                    .release
+                    .acquire()
+                    .await
+                    .expect("the hold is never closed");
+            }
+            self.inner.read_staged_at(upload, offset, len).await
+        })
     }
 
     fn abandon<'a>(&'a self, upload: &'a UploadId) -> BlobFuture<'a, bool> {
