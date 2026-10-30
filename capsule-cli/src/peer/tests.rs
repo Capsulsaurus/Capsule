@@ -1236,14 +1236,30 @@ fn listed(
     changed_at: &str,
 ) -> capsule_sdk::sync::FeedEntry {
     let state = ws.asset(asset).expect("held");
+    listed_at(
+        state.album_id,
+        asset,
+        &state.chain.records()[at],
+        changed_at,
+    )
+}
+
+/// The feed entry naming `asset` of `album_id` indexed on the server with `head` as its head
+/// record, changed at `changed_at` on the server's clock. Reaches an asset the library no
+/// longer holds, such as a purged one.
+fn listed_at(
+    album_id: Uuid,
+    asset: &Uuid,
+    head: &capsule_core::crypto::provenance::ProvenanceRecord,
+    changed_at: &str,
+) -> capsule_sdk::sync::FeedEntry {
     capsule_sdk::sync::FeedEntry {
-        album_id: state.album_id.to_string().into_bytes(),
+        album_id: album_id.to_string().into_bytes(),
         sync_seq: 1,
         protocol_version: capsule_core::crypto::primitives::PROTOCOL_VERSION.to_owned(),
         kind: capsule_sdk::sync::ChangeKind::Created,
         asset_id: asset.to_string().into_bytes(),
-        manifest_cbor: capsule_core::cbor::to_canonical_vec(&state.chain.records()[at])
-            .expect("encodes"),
+        manifest_cbor: capsule_core::cbor::to_canonical_vec(head).expect("encodes"),
         metadata_blob: Vec::new(),
         blobs: capsule_sdk::sync::BlobManifest::default(),
         derivative_manifests: Vec::new(),
@@ -1378,6 +1394,59 @@ async fn a_released_stretch_the_server_already_holds_is_not_sent_again() {
     assert!(kept.is_empty());
     let outcomes: Vec<&str> = views.iter().map(|v| v.outcome).collect();
     assert_eq!(outcomes, vec!["sent"], "{views:?}");
+}
+
+/// **A purged asset is judged level against the chain its purge kept.** The origin deleted and
+/// purged the asset before custody, so the library no longer holds it. Where the feed names the
+/// tombstone's head, another command already delivered the stretch: nothing is sent (the
+/// server here answers nothing), the line is `sent` and the outbox drops it. Where the feed
+/// names only the create, the stretch is sent from the tombstone: the send fails against the
+/// unreachable server and is kept, rather than refused as an asset the library does not hold.
+#[tokio::test]
+async fn a_purged_assets_released_stretch_is_judged_level_against_its_tombstone() {
+    let scratch = Scratch::new();
+    let (mut ws, asset, _) = two_assets(&scratch);
+    let album_id = ws.asset(&asset).expect("held").album_id;
+    let sealed = ws.asset(&asset).expect("held").chain.records()[0].record_hash();
+    ws.soft_delete(&asset, 30).expect("deletes");
+    ws.purge(&asset).expect("purges early");
+    assert!(ws.asset(&asset).is_none(), "the asset left the library");
+    let tombstone = ws.purged_chain(&asset).expect("the tombstone").to_vec();
+    let pending = released(&ws, asset, sealed);
+    assert_eq!(pending.len(), 2, "the delete and the re-issue");
+    let (remote, session) = unreachable_server();
+    let now = jiff::Timestamp::now();
+
+    let at_tombstone_head = remote::held::ServerChains::from_feed(&[listed_at(
+        album_id,
+        &asset,
+        tombstone.last().expect("a head"),
+        "2026-10-01T00:00:00Z",
+    )]);
+    let (kept, views) = send_deletes(
+        &remote,
+        &session,
+        &ws,
+        Ok(&at_tombstone_head),
+        now,
+        pending.clone(),
+    )
+    .await;
+    assert!(kept.is_empty(), "level: dropped");
+    let outcomes: Vec<&str> = views.iter().map(|v| v.outcome).collect();
+    assert_eq!(outcomes, vec!["sent"], "{views:?}");
+
+    let at_create = remote::held::ServerChains::from_feed(&[listed_at(
+        album_id,
+        &asset,
+        &tombstone[0],
+        "2026-10-01T00:00:00Z",
+    )]);
+    let (kept, views) =
+        send_deletes(&remote, &session, &ws, Ok(&at_create), now, pending.clone()).await;
+    assert_eq!(kept, pending, "not level: sent, unreachable, kept whole");
+    let outcomes: Vec<&str> = views.iter().map(|v| v.outcome).collect();
+    assert_eq!(outcomes, vec!["failed"], "{views:?}");
 }
 
 /// A stretch refused for good is dropped, not retried, with every entry of its asset; another
