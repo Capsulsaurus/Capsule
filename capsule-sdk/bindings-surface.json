@@ -2589,7 +2589,7 @@
           "kind": "func",
           "name": "embeddedPreview",
           "signature": "public func embeddedPreview(originalPath: String, ext: String) throws -> FfiEmbeddedPreview?",
-          "doc": "Read the embedded preview of the original at `original_path`, whose extension (without the\ndot) is `ext`.\n\n`None` when the original is not a RAW, carries no preview, or carries one that does not read\nwithin the decode budget: each leaves the rung to the next source, so none is an error. The\nreason is logged.\n\n# Errors\n\n[`FfiError::Workspace`] when the file cannot be read.",
+          "doc": "Read the embedded preview of the original at `original_path`, whose extension (without the\ndot) is `ext`.\n\n`None` when the original is not a RAW, carries no preview, or carries one that does not read\nwithin the decode budget: each leaves the rung to the next source, so none is an error. The\nreason is logged.\n\nThis reads the whole original into memory, because the extraction's IFD bounds walk and its\nstated-length guard run over the full file before the RAW reader does. Call it once per asset\nand keep the [`FfiEmbeddedPreview`] it returns, rather than once per render.\n\n# Errors\n\n[`FfiError::Workspace`] when the file cannot be read.",
           "members": []
         },
         {
@@ -5215,7 +5215,7 @@
           "kind": "fun",
           "name": "embeddedPreview",
           "signature": "@Throws(FfiException::class) fun embeddedPreview(originalPath: kotlin.String, ext: kotlin.String): FfiEmbeddedPreview?",
-          "doc": "Read the embedded preview of the original at `original_path`, whose extension (without the\ndot) is `ext`.\n\n`None` when the original is not a RAW, carries no preview, or carries one that does not read\nwithin the decode budget: each leaves the rung to the next source, so none is an error. The\nreason is logged.\n\n# Errors\n\n[`FfiError::Workspace`] when the file cannot be read.",
+          "doc": "Read the embedded preview of the original at `original_path`, whose extension (without the\ndot) is `ext`.\n\n`None` when the original is not a RAW, carries no preview, or carries one that does not read\nwithin the decode budget: each leaves the rung to the next source, so none is an error. The\nreason is logged.\n\nThis reads the whole original into memory, because the extraction's IFD bounds walk and its\nstated-length guard run over the full file before the RAW reader does. Call it once per asset\nand keep the [`FfiEmbeddedPreview`] it returns, rather than once per render.\n\n# Errors\n\n[`FfiError::Workspace`] when the file cannot be read.",
           "members": []
         },
         {

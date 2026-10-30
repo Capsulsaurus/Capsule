@@ -271,6 +271,10 @@ pub fn render_step(
 /// within the decode budget: each leaves the rung to the next source, so none is an error. The
 /// reason is logged.
 ///
+/// This reads the whole original into memory, because the extraction's IFD bounds walk and its
+/// stated-length guard run over the full file before the RAW reader does. Call it once per asset
+/// and keep the [`FfiEmbeddedPreview`] it returns, rather than once per render.
+///
 /// # Errors
 ///
 /// [`FfiError::Workspace`] when the file cannot be read.
