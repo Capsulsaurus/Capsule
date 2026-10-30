@@ -84,9 +84,11 @@ use crate::enrollment::EnrollmentContext;
 use crate::escrow::postgres::PostgresEscrow;
 use crate::escrow::{EscrowContext, EscrowStore, InMemoryEscrow};
 use crate::federation::postgres::{PostgresCapabilities, PostgresPeers};
+use crate::federation::subscriptions::postgres::PostgresSubscriptions;
 use crate::federation::{
     CapabilityCodec, CapabilityStore, FederationCollaborators, FederationContext,
-    InMemoryCapabilities, InMemoryPeers, PeerAdministration, PeerStore,
+    InMemoryCapabilities, InMemoryPeers, InMemorySubscriptions, PeerAdministration, PeerStore,
+    SubscriptionStore,
 };
 use crate::gc::memory::InMemoryCollection;
 use crate::gc::postgres::PostgresCollection;
@@ -469,6 +471,9 @@ struct Stores {
     capabilities: Arc<dyn CapabilityStore>,
     /// The peers: read by federation at every boundary and written by `capsule-server peer …`.
     peers: Arc<dyn PeerStore>,
+    /// The local album subscriptions: written by subscription intake, and the egress pull
+    /// worker's job source (#1035).
+    subscriptions: Arc<dyn SubscriptionStore>,
     /// The moderation store: written by report intake, read by `capsule-server moderation …`.
     moderation: Arc<dyn ModerationStore>,
 }
@@ -613,6 +618,7 @@ impl Base {
             shares: Arc::new(InMemoryShares::new()),
             capabilities: Arc::new(InMemoryCapabilities::new(self.clock.clone())),
             peers: Arc::new(InMemoryPeers::new()),
+            subscriptions: Arc::new(InMemorySubscriptions::new()),
             moderation: Arc::new(InMemoryModeration::new()),
             root: self.root,
             clock: self.clock,
@@ -634,6 +640,7 @@ impl Base {
                 self.clock.clone(),
             )),
             peers: Arc::new(PostgresPeers::new(connection.clone())),
+            subscriptions: Arc::new(PostgresSubscriptions::new(connection.clone())),
             moderation: Arc::new(PostgresModeration::new(connection.clone())),
             root: self.root,
             clock: self.clock,
@@ -878,6 +885,7 @@ fn compose(
     let shares = stores.shares.clone();
     let issued = stores.capabilities.clone();
     let peers = stores.peers.clone();
+    let subscriptions = stores.subscriptions.clone();
     let moderation = stores.moderation.clone();
 
     // The signer is built from the private key alone and derives its own public half, which is
@@ -1089,6 +1097,7 @@ fn compose(
             codec: capabilities,
             capabilities: issued,
             peers,
+            subscriptions,
             clock: clock.clone(),
             enabled: Arc::new(config.federation_endpoint().is_some()),
         }),

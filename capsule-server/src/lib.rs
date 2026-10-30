@@ -256,10 +256,11 @@ pub fn router() -> Router<App, Propagate, ServerInterceptors, impl Sized> {
                 .mount(kynos::routes![routes::upload::append_chunk]),
         )
         // Federation's lifecycle: minting, revoking and refreshing the capability a peer pulls
-        // with, and the signed report intake. The pull itself is `sync_feed` and `get_blob` in
+        // with, the signed report intake, and the receiving half — a member's subscriptions to
+        // albums other servers host (#1035). The pull itself is `sync_feed` and `get_blob` in
         // the read group below — federation adds no new data protocol (design/federation.md).
         //
-        // Its own group rather than a fifth `mount` on the one above, for two reasons: these four
+        // Its own group rather than a fifth `mount` on the one above, for two reasons: these
         // are one surface and the sixteen-operation tuple ceiling is close, and they carry a
         // **tighter body cap** than the rest of the writes — no body here is anywhere near an
         // upload chunk, and `submit_federated_report` is the server's only unauthenticated write.
@@ -278,7 +279,19 @@ pub fn router() -> Router<App, Propagate, ServerInterceptors, impl Sized> {
                     routes::federation::revoke_capability,
                     routes::federation::refresh_capability,
                     routes::federation::submit_federated_report,
+                    routes::subscriptions::subscribe_album,
+                    routes::subscriptions::unsubscribe_album,
                 ]),
+        )
+        // The one federation read: a member's own subscriptions (#1035). Behind the same gate,
+        // first, so a deployment that does not federate answers it `404` like every other
+        // federation operation; held to the read handshake, as every `GET` is.
+        .group(
+            Group::<App>::new("/")
+                .intercept(routes::federation::FederationGate::new())
+                .intercept(limits::bounded_body_size())
+                .intercept(negotiation::ProtocolReadGate::new())
+                .mount(kynos::routes![routes::subscriptions::list_subscriptions]),
         )
         // The reads: every gated `GET` and `HEAD`. Held to the handshake's grammar, admitted at
         // any protocol date, and declaring the `400` alone. None takes a body, so the bounded cap.

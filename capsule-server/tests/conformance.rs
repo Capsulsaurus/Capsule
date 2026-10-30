@@ -184,6 +184,9 @@ async fn every_declared_response_is_exercised() {
         ("DELETE", "/v1/albums/anything/capabilities/anything"),
         ("POST", "/v1/federation/capabilities/refresh"),
         ("POST", "/v1/federation/reports"),
+        ("POST", "/v1/federation/subscriptions"),
+        ("GET", "/v1/federation/subscriptions"),
+        ("DELETE", "/v1/federation/subscriptions/anything/anything"),
         ("GET", "/v1/quota"),
         ("GET", "/v1/upload/sessions"),
         ("GET", "/v1/assets/anything/receipts"),
@@ -1402,7 +1405,7 @@ async fn every_declared_response_is_exercised() {
 
     // ── A deployment that does not federate (#509) ─────────────────────────────────────────
     // Off is the default, and every federation operation declares the `404` it answers then.
-    // Switched off for these four requests and back on, so the one server this walk drives
+    // Switched off for these requests and back on, so the one server this walk drives
     // produces that `404` beside every federated `200`. No credential and no body: the gate
     // answers before either is read, which is the property `tests/federation.rs` asserts.
     fixture.federation.set_enabled(false);
@@ -1422,6 +1425,18 @@ async fn every_declared_response_is_exercised() {
         (
             kynos::http::Method::POST,
             "/v1/federation/reports".to_owned(),
+        ),
+        (
+            kynos::http::Method::POST,
+            "/v1/federation/subscriptions".to_owned(),
+        ),
+        (
+            kynos::http::Method::GET,
+            "/v1/federation/subscriptions".to_owned(),
+        ),
+        (
+            kynos::http::Method::DELETE,
+            "/v1/federation/subscriptions/anything/anything".to_owned(),
         ),
     ] {
         let refused = client
@@ -3275,6 +3290,162 @@ async fn every_declared_response_is_exercised() {
         .send()
         .await
         .assert_status(StatusCode::OK);
+
+    // ── Federation subscriptions ─────────────────────────────────────────────────
+    // A member posts the capability an album's home server minted for this server. The home
+    // server is staged as a codec of its own, whose key is pinned partway through so the
+    // walk produces the unknown peer's `403` first.
+    {
+        use capsule_server::federation::{CapabilityCodec, MintRequest, PeerId, PeerStore as _};
+        const HOME: &str = "home.subscribed.test";
+        const SUBSCRIBED_ALBUM: &str = "01937b7c-0000-7000-8000-00000000c0de";
+        let der = ring::signature::Ed25519KeyPair::generate_pkcs8(&ring::rand::SystemRandom::new())
+            .expect("the platform generates a key");
+        let home = CapabilityCodec::from_pkcs8(der.as_ref(), HOME, fixture.clock.clone())
+            .expect("a fresh key parses");
+        let invite = home
+            .mint(&MintRequest {
+                peer: PeerId::new(support::SERVER_ORIGIN),
+                album: capsule_server::store::AlbumId::new(SUBSCRIBED_ALBUM),
+                scope: capsule_server::federation::Scope::Read,
+                min_protocol_version: PROTOCOL_VERSION.to_owned(),
+                ttl: jiff::SignedDuration::from_hours(6),
+            })
+            .expect("it mints")
+            .token;
+        let subscription = json!({ "issuer": HOME, "token": invite });
+        let refresh_bearer = format!("Bearer {}", rotated.refresh_token);
+
+        client
+            .post("/v1/federation/subscriptions")
+            .json(&subscription)
+            .send()
+            .await
+            .assert_status(StatusCode::UNAUTHORIZED);
+        client
+            .post("/v1/federation/subscriptions")
+            .header("authorization", &refresh_bearer)
+            .json(&subscription)
+            .send()
+            .await
+            .assert_status(StatusCode::FORBIDDEN);
+        client
+            .post("/v1/federation/subscriptions")
+            .header("authorization", &bearer)
+            .body("text/plain", "{}")
+            .send()
+            .await
+            .assert_status(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        client
+            .post("/v1/federation/subscriptions")
+            .header("authorization", &bearer)
+            .json(&json!({ "issuer": 42 }))
+            .send()
+            .await
+            .assert_status(StatusCode::UNPROCESSABLE_ENTITY);
+        client
+            .post("/v1/federation/subscriptions")
+            .header("authorization", &bearer)
+            .json(&json!({ "issuer": "https://home.subscribed.test/", "token": "t" }))
+            .send()
+            .await
+            .assert_status(StatusCode::BAD_REQUEST);
+        // 403: nobody pinned the home server's key, so nothing it signed can be verified.
+        client
+            .post("/v1/federation/subscriptions")
+            .header("authorization", &bearer)
+            .json(&subscription)
+            .send()
+            .await
+            .assert_status(StatusCode::FORBIDDEN);
+        let key: [u8; 32] = home.public_key().try_into().expect("thirty-two bytes");
+        fixture
+            .peers
+            .pin(&PeerId::new(HOME), key, fixture.clock.now())
+            .await
+            .expect("the operator pins");
+        fixture.subscriptions.set_unavailable(true);
+        client
+            .post("/v1/federation/subscriptions")
+            .header("authorization", &bearer)
+            .json(&subscription)
+            .send()
+            .await
+            .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+        fixture.subscriptions.set_unavailable(false);
+        client
+            .post("/v1/federation/subscriptions")
+            .header("authorization", &bearer)
+            .header("accept", "application/json")
+            .json(&subscription)
+            .send()
+            .await
+            .assert_status(StatusCode::CREATED);
+        client
+            .post("/v1/federation/subscriptions")
+            .header("authorization", &bearer)
+            .header("accept", "application/json")
+            .json(&subscription)
+            .send()
+            .await
+            .assert_status(StatusCode::OK);
+
+        client
+            .get("/v1/federation/subscriptions")
+            .send()
+            .await
+            .assert_status(StatusCode::UNAUTHORIZED);
+        client
+            .get("/v1/federation/subscriptions")
+            .header("authorization", &refresh_bearer)
+            .send()
+            .await
+            .assert_status(StatusCode::FORBIDDEN);
+        fixture.subscriptions.set_unavailable(true);
+        client
+            .get("/v1/federation/subscriptions")
+            .header("authorization", &bearer)
+            .send()
+            .await
+            .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+        fixture.subscriptions.set_unavailable(false);
+        let listed: serde_json::Value = client
+            .get("/v1/federation/subscriptions")
+            .header("authorization", &bearer)
+            .header("accept", "application/json")
+            .send()
+            .await
+            .assert_status(StatusCode::OK)
+            .json();
+        assert_eq!(listed["subscriptions"][0]["album_id"], SUBSCRIBED_ALBUM);
+
+        let unsubscribe = format!("/v1/federation/subscriptions/{HOME}/{SUBSCRIBED_ALBUM}");
+        client
+            .delete(&unsubscribe)
+            .send()
+            .await
+            .assert_status(StatusCode::UNAUTHORIZED);
+        client
+            .delete(&unsubscribe)
+            .header("authorization", &refresh_bearer)
+            .send()
+            .await
+            .assert_status(StatusCode::FORBIDDEN);
+        fixture.subscriptions.set_unavailable(true);
+        client
+            .delete(&unsubscribe)
+            .header("authorization", &bearer)
+            .send()
+            .await
+            .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+        fixture.subscriptions.set_unavailable(false);
+        client
+            .delete(&unsubscribe)
+            .header("authorization", &bearer)
+            .send()
+            .await
+            .assert_status(StatusCode::NO_CONTENT);
+    }
 
     // ── The master-key escrow ────────────────────────────────────────────────────
     client

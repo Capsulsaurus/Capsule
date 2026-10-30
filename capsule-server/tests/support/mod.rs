@@ -73,10 +73,12 @@ use capsule_server::escrow::{
     AlbumKeyRecord, AlbumKeysStored, EscrowContext, EscrowRecord, EscrowStore, InMemoryEscrow,
     Replaced,
 };
+use capsule_server::federation::pull::JobKey;
 use capsule_server::federation::{
     CapabilityCodec, CapabilityFilter, CapabilityRecord, CapabilityStore, FederationCollaborators,
-    FederationContext, FederationSetting, InMemoryCapabilities, InMemoryPeers, RefreshOutcome,
-    ReportClaim, RevokeOutcome,
+    FederationContext, FederationSetting, InMemoryCapabilities, InMemoryPeers,
+    InMemorySubscriptions, PeerId, PutOutcome, RefreshOutcome, ReportClaim, RevokeOutcome,
+    Subscription, SubscriptionStore,
 };
 use capsule_server::gc::memory::InMemoryCollection;
 use capsule_server::index::memory::InMemoryAssetIndex;
@@ -1775,6 +1777,78 @@ impl ModerationStore for SwitchableModeration {
             return Box::pin(async { Self::refuse() });
         }
         self.inner.pending_reports()
+    }
+}
+
+/// A subscription store that can be made to fail on demand.
+#[derive(Debug, Default)]
+pub(crate) struct SwitchableSubscriptions {
+    inner: InMemorySubscriptions,
+    unavailable: AtomicBool,
+}
+
+impl SwitchableSubscriptions {
+    /// A working store holding no subscription.
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    /// Make every subsequent operation fail, or stop.
+    pub(crate) fn set_unavailable(&self, unavailable: bool) {
+        self.unavailable.store(unavailable, Ordering::SeqCst);
+    }
+
+    fn refuse<T>() -> Result<T, StoreError> {
+        Err(StoreError::Unavailable {
+            store: "subscriptions",
+            detail: REFUSAL.to_owned(),
+        })
+    }
+
+    fn is_down(&self) -> bool {
+        self.unavailable.load(Ordering::SeqCst)
+    }
+}
+
+impl SubscriptionStore for SwitchableSubscriptions {
+    fn put(&self, subscription: Subscription) -> StoreFuture<'_, PutOutcome> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.put(subscription)
+    }
+
+    fn of_subscriber<'a>(&'a self, subscriber: &'a UserId) -> StoreFuture<'a, Vec<Subscription>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.of_subscriber(subscriber)
+    }
+
+    fn remove<'a>(
+        &'a self,
+        subscriber: &'a UserId,
+        peer: &'a PeerId,
+        album: &'a AlbumId,
+    ) -> StoreFuture<'a, bool> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.remove(subscriber, peer, album)
+    }
+
+    fn of_job<'a>(&'a self, job: &'a JobKey) -> StoreFuture<'a, Vec<Subscription>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.of_job(job)
+    }
+
+    fn live_jobs(&self, now: Timestamp) -> StoreFuture<'_, Vec<JobKey>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.live_jobs(now)
     }
 }
 
@@ -4178,6 +4252,8 @@ pub(crate) struct Fixture {
     pub(crate) revocations: Arc<SwitchableRevocations>,
     /// The peers this server has pinned or blocked.
     pub(crate) peers: Arc<InMemoryPeers>,
+    /// The albums this server pulls from peers for its own members.
+    pub(crate) subscriptions: Arc<SwitchableSubscriptions>,
     /// Whether the server federates — the *same* switch it reads, so a case can turn the whole
     /// federation surface off for the requests it is about.
     pub(crate) federation: Arc<SwitchableFederation>,
@@ -4323,6 +4399,7 @@ impl Fixture {
         let ledger = Arc::new(SwitchableLedger::default());
         let revocations = Arc::new(SwitchableRevocations::new(clock.clone()));
         let peers = Arc::new(InMemoryPeers::new());
+        let subscriptions = Arc::new(SwitchableSubscriptions::new());
         let federation = Arc::new(SwitchableFederation::new(federating));
         let passwords = Arc::new(SwitchablePasswords::new(passwords_disabled));
         let chunk_pace = Arc::new(SwitchableChunkPace::new(ChunkPace::default()));
@@ -4421,6 +4498,7 @@ impl Fixture {
                 codec: codec.clone(),
                 capabilities: revocations.clone(),
                 peers: peers.clone(),
+                subscriptions: subscriptions.clone(),
                 clock: clock.clone(),
                 enabled: federation.clone(),
             }),
@@ -4474,6 +4552,7 @@ impl Fixture {
             ledger,
             revocations,
             peers,
+            subscriptions,
             federation,
             passwords,
             codec,
@@ -4595,6 +4674,7 @@ impl Fixture {
                 ),
                 capabilities: issued,
                 peers: Arc::new(InMemoryPeers::new()),
+                subscriptions: Arc::new(InMemorySubscriptions::new()),
                 clock: clock.clone(),
                 enabled: Arc::new(true),
             }),
