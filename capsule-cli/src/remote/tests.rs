@@ -1262,7 +1262,12 @@ fn chain_len(ws: &Workspace, asset: &Uuid) -> usize {
 /// The op body for `asset`'s chain head, as a delivery sends it.
 fn head_op(ws: &Workspace, asset: &Uuid) -> Vec<u8> {
     let state = ws.asset(asset).expect("held");
-    encode_op(state, state.chain.records().last().expect("a head")).expect("encodes")
+    encode_op(
+        asset,
+        Some(&state.metadata_blob),
+        state.chain.records().last().expect("a head"),
+    )
+    .expect("encodes")
 }
 
 fn head_action(ws: &Workspace, asset: &Uuid) -> capsule_core::crypto::provenance::Action {
