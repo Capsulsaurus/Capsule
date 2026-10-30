@@ -99,7 +99,7 @@ impl Workspace {
         let purged = self
             .purged
             .iter()
-            .map(|(id, head)| (*id, head.record_hash()));
+            .filter_map(|(id, chain)| chain.head().map(|head| (*id, head)));
         self.assets
             .iter()
             .filter_map(|(id, a)| a.chain.head().map(|h| (*id, h)))

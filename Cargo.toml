@@ -74,6 +74,11 @@ bytes = "1.12.1"
 # the canonical adapter crate for the `http-body` trait rather than a new domain. See the
 # HTTP body row in design/dependencies.md.
 http-body-util = "0.1.3"
+# The `http-body` trait itself, for the SDK's paced upload body: a request body that records
+# each piece hyper pulls, so the per-request stall timer can tell a slow upload from a stalled
+# one. Already in the lock file through reqwest and hyper. See the HTTP body row in
+# design/dependencies.md.
+http-body = "1.0.1"
 # The `http` types reqwest is built on, for the SDK's reactive refresh layer alone: it reads a
 # `401`'s problem code to decide whether the response is an expired token, then puts the body
 # back, and `reqwest::Response`'s only constructor is `From<http::Response<_>>`. Already in the

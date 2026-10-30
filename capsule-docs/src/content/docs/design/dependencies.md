@@ -32,7 +32,7 @@ Every Rust version is pinned once in the root `[workspace.dependencies]`; member
 | Identifiers | `uuid`, **UUIDv7 for every new identifier** | UUIDv4 where creation time must not leak (e.g. `device_id`); capability ids are not UUIDs. |
 | Async runtime | `tokio` | — |
 | HTTP server | Kynos `0.4.0` from crates.io, feature `openapi32` | The document is pinned to 3.2 with `openapi_as(SpecVersion::V3_2)`; the feature alone does not select it. No secondary public transport. |
-| HTTP body | `http-body-util` | Only the server's coded-problem interceptor; already transitive. |
+| HTTP body | `http-body-util`; `http-body` | `http-body-util`: only the server's coded-problem interceptor. `http-body`: only the SDK's paced upload body, which records send progress for the per-request stall timer. Both already transitive. |
 | HTTP types | `http` | Only the SDK's refresh-on-401 layer; already transitive. |
 | HTTP client | `reqwest` (`default-features = false`, `rustls-tls`, `json`) | `capsule-sdk`, and the server's OIDC relying party as its only egress. |
 | OIDC relying party | `jsonwebtoken` + hand-written discovery, JWKS cache and token exchange | Every claim check is Capsule's ([Authentication](/design/authentication/#signing-in-through-an-identity-provider)). Not `openidconnect` (pulls `chrono`, `log`, vulnerable `rsa`). |

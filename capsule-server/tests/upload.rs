@@ -15,6 +15,7 @@ mod support;
 
 use std::time::{Duration, Instant};
 
+use capsule_server::upload::ChunkPace;
 use kynos::http::StatusCode;
 use support::{
     Fixture, PROTOCOL_VERSION, album, checksum, create_request, declare_bytes, device, owner,
@@ -3618,7 +3619,7 @@ async fn a_ledger_that_cannot_append_fails_finalization_before_the_index() {
 }
 
 // ===========================================================================================
-// The chunk read deadline, on a socket (#717)
+// The chunk read pace, on a socket (#717, #1041)
 // ===========================================================================================
 
 /// A `PATCH` head for `chunk` at `offset`, declaring the whole chunk's length.
@@ -3662,10 +3663,10 @@ fn chunk_frame(piece: &[u8]) -> Vec<u8> {
     frame
 }
 
-/// A fixture with `deadline` on its chunk reads, serving on a socket, and an open session.
-async fn deadline_fixture(deadline: Duration) -> (Fixture, std::net::SocketAddr, String, String) {
+/// A fixture with `pace` on its chunk reads, serving on a socket, and an open session.
+async fn paced_fixture(pace: ChunkPace) -> (Fixture, std::net::SocketAddr, String, String) {
     let fixture = Fixture::working();
-    fixture.chunk_deadline.set(deadline);
+    fixture.chunk_pace.set(pace);
     let bearer = fixture.bearer().await;
     let (_, _, whole) = blob();
     let id = fixture.open_session(&whole, "original", &bearer).await;
@@ -3675,8 +3676,8 @@ async fn deadline_fixture(deadline: Duration) -> (Fixture, std::net::SocketAddr,
 
 #[tokio::test]
 async fn a_chunk_body_that_stalls_is_refused_and_the_connection_closed() {
-    let deadline = Duration::from_millis(300);
-    let (fixture, address, id, bearer) = deadline_fixture(deadline).await;
+    let stall = Duration::from_millis(300);
+    let (fixture, address, id, bearer) = paced_fixture(ChunkPace::new(stall, 0)).await;
     let (first, _, _) = blob();
 
     let mut stream = TcpStream::connect(address).await.expect("it connects");
@@ -3692,8 +3693,8 @@ async fn a_chunk_body_that_stalls_is_refused_and_the_connection_closed() {
     assert!(answer.starts_with("HTTP/1.1 408"), "{answer}");
     assert!(answer.contains("error.upload.chunk_timeout"), "{answer}");
     assert!(
-        started.elapsed() >= deadline,
-        "refused before the deadline passed"
+        started.elapsed() >= stall,
+        "refused before the stall bound passed"
     );
 
     // Nothing of the chunk was kept, so the client's retry at the same offset is the right one.
@@ -3707,17 +3708,18 @@ async fn a_chunk_body_that_stalls_is_refused_and_the_connection_closed() {
 }
 
 #[tokio::test]
-async fn a_chunk_body_that_trickles_past_the_deadline_is_refused() {
-    let deadline = Duration::from_millis(300);
-    let (fixture, address, id, bearer) = deadline_fixture(deadline).await;
+async fn a_chunk_body_that_trickles_below_the_minimum_rate_is_refused() {
+    // A floor of 64 KiB/s owed after a 300 ms grace.
+    let pace = ChunkPace::new(Duration::from_millis(300), 64 * 1024);
+    let (fixture, address, id, bearer) = paced_fixture(pace).await;
     let (first, _, _) = blob();
 
     let stream = TcpStream::connect(address).await.expect("it connects");
     let (mut reader, mut writer) = stream.into_split();
     let head = chunk_head(&id, 0, &first, &bearer);
-    // Every byte arrives, steadily — just too slowly: eight pieces a tenth of a second apart is
-    // most of a second for a body the deadline gives three tenths. Write errors are expected
-    // once the server has answered and stopped reading.
+    // Bytes keep arriving, so the body never stalls — but at 5 KiB/s, far below the floor:
+    // eight pieces a tenth of a second apart. Write errors are expected once the server has
+    // answered and stopped reading.
     let trickle = tokio::spawn(async move {
         if writer.write_all(head.as_bytes()).await.is_err() {
             return;
@@ -3759,30 +3761,30 @@ async fn a_chunk_body_that_trickles_past_the_deadline_is_refused() {
 }
 
 /// A chunk that declares no length is read by the body-size cap before any extractor runs, so
-/// it is timed outside that cap: trickled in with chunked coding, it is still refused.
+/// it is paced outside that cap: stalled part-way with chunked coding, it is still refused.
 #[tokio::test]
-async fn a_length_less_chunk_body_that_trickles_past_the_deadline_is_refused() {
-    let deadline = Duration::from_millis(300);
-    let (fixture, address, id, bearer) = deadline_fixture(deadline).await;
+async fn a_length_less_chunk_body_that_stalls_is_refused() {
+    let stall = Duration::from_millis(300);
+    let (fixture, address, id, bearer) = paced_fixture(ChunkPace::new(stall, 0)).await;
     let (first, _, _) = blob();
 
     let stream = TcpStream::connect(address).await.expect("it connects");
     let (mut reader, mut writer) = stream.into_split();
     let head = chunked_head(&id, 0, &first, &bearer);
     let started = Instant::now();
-    // Sixteen frames a tenth of a second apart, then the terminator: over a second and a half for
-    // a body the deadline gives three tenths. Write errors are expected once the server answered.
+    // Four frames, then nothing — the connection held open, no terminator. Without the pace the
+    // body-size cap would wait on it for ever. The writer is kept until the answer is read.
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
     let trickle = tokio::spawn(async move {
         if writer.write_all(head.as_bytes()).await.is_err() {
             return;
         }
-        for piece in first.chunks(256) {
+        for piece in first.chunks(256).take(4) {
             if writer.write_all(&chunk_frame(piece)).await.is_err() {
                 return;
             }
-            tokio::time::sleep(Duration::from_millis(100)).await;
         }
-        let _ = writer.write_all(b"0\r\n\r\n").await;
+        let _ = stopped.await;
     });
 
     let mut received = Vec::new();
@@ -3800,11 +3802,8 @@ async fn a_length_less_chunk_body_that_trickles_past_the_deadline_is_refused() {
     let answer = String::from_utf8_lossy(&received);
     assert!(answer.starts_with("HTTP/1.1 408"), "{answer}");
     assert!(answer.contains("error.upload.chunk_timeout"), "{answer}");
-    assert!(started.elapsed() >= deadline, "refused before the deadline");
-    assert!(
-        started.elapsed() < Duration::from_millis(1400),
-        "answered only once the whole trickle had arrived: the deadline did not bound it"
-    );
+    assert!(started.elapsed() >= stall, "refused before the stall bound");
+    let _ = stop.send(());
     trickle.await.expect("the writer ends");
 
     let record = fixture
@@ -3818,24 +3817,32 @@ async fn a_length_less_chunk_body_that_trickles_past_the_deadline_is_refused() {
     );
 }
 
-/// The same length-less chunk, arriving inside the deadline, is handed on whole and lands.
+/// The pace the socket tests read under: a 300 ms stall bound and a 1 KiB/s floor.
+fn trickle_pace() -> ChunkPace {
+    ChunkPace::new(Duration::from_millis(300), 1024)
+}
+
+/// A length-less chunk that keeps arriving lands however long it takes in total: sixteen frames
+/// a tenth of a second apart is over five stall bounds end to end.
 #[tokio::test]
-async fn a_length_less_chunk_body_under_the_deadline_lands() {
-    let (fixture, address, id, bearer) = deadline_fixture(Duration::from_secs(5)).await;
+async fn a_length_less_chunk_body_that_trickles_past_the_stall_bound_lands() {
+    let (fixture, address, id, bearer) = paced_fixture(trickle_pace()).await;
     let (first, _, _) = blob();
 
     let mut stream = TcpStream::connect(address).await.expect("it connects");
+    let started = Instant::now();
     stream
         .write_all(chunked_head(&id, 0, &first, &bearer).as_bytes())
         .await
         .expect("the head writes");
-    for piece in first.chunks(1024) {
+    for piece in first.chunks(256) {
         stream
             .write_all(&chunk_frame(piece))
             .await
             .expect("it writes");
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
+    assert!(started.elapsed() > 4 * trickle_pace().stall);
     stream.write_all(b"0\r\n\r\n").await.expect("it writes");
 
     let answer = support::read_response(&mut stream).await;
@@ -3848,20 +3855,24 @@ async fn a_length_less_chunk_body_under_the_deadline_lands() {
     assert_eq!(record.received_bytes, 4096);
 }
 
+/// A chunk is never cut for its total duration: a slow but steady body, above the floor and
+/// never silent for the stall bound, lands after several stall bounds end to end.
 #[tokio::test]
-async fn a_slow_but_steady_chunk_body_under_the_deadline_lands() {
-    let (fixture, address, id, bearer) = deadline_fixture(Duration::from_secs(5)).await;
+async fn a_slow_but_steady_chunk_body_past_the_stall_bound_lands() {
+    let (fixture, address, id, bearer) = paced_fixture(trickle_pace()).await;
     let (first, _, _) = blob();
 
     let mut stream = TcpStream::connect(address).await.expect("it connects");
+    let started = Instant::now();
     stream
         .write_all(chunk_head(&id, 0, &first, &bearer).as_bytes())
         .await
         .expect("the head writes");
-    for piece in first.chunks(1024) {
+    for piece in first.chunks(256) {
         stream.write_all(piece).await.expect("it writes");
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+    assert!(started.elapsed() > 4 * trickle_pace().stall);
 
     let answer = support::read_response(&mut stream).await;
     assert!(answer.starts_with("HTTP/1.1 204"), "{answer}");
