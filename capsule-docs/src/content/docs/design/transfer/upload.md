@@ -196,6 +196,7 @@ Client recovery matrix (`capsule-sdk::upload`):
 | `error.upload.duplicate_blob` | Resolve as a [merge](#deduplication-and-merge) |
 | `error.upload.replace_incomplete` | Upload the rest of the bundle, retry the manifest |
 | `error.upload.stale_revival` | Re-read the asset and rebase |
+| `error.request.too_early` (`425`) | Re-send the same request once the handshake completes, outside early data ([HTTP Transport](/design/networking/#http-transport)) |
 | `error.protocol.version_unsupported` (`426`) | Stop; prompt to update |
 | `error.quota.exceeded` | Pause; surface the remediable state |
 | `error.upload.rate_limited`, `unavailable`, `storage_full` | Back off per `Retry-After`, then resume from `HEAD` |
@@ -220,6 +221,7 @@ Clients branch on `error.*` codes ([i18n error-code contract](/design/i18n/#serv
 | `409` | `duplicate_blob`, `range_conflict`, `too_fragmented`, `too_many_in_flight`, `session_not_active`, `receipt_not_available`, `replace_incomplete`, `stale_revival` |
 | `413` | `file_too_large`, `chunk_too_large` |
 | `415` | `unsupported_media_type` |
+| `425` | `error.request.too_early` |
 | `426` | `error.protocol.version_unsupported` |
 | `429` | `rate_limited` |
 | `500` | `storage_inconsistent` |

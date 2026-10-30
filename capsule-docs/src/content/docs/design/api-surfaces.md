@@ -39,7 +39,7 @@ The server emits with `openapi_as(SpecVersion::V3_2)`, not plain `openapi()`, wh
 
 **Generated** from the contract: every request and response body, every typed parameter, and the byte-serving endpoints (blob fetch with `Range`, derivative reads). A hand-written byte path would be a second parser.
 
-**Hand-written**: only the resumable upload state machine — chunk scheduling, offset resumption, retry laddering, connection budget — which is orchestration over generated calls, not parsing.
+**Hand-written**: only the resumable upload state machine — chunk scheduling, resumption from the committed set, retry laddering, connection budget — which is orchestration over generated calls, not parsing.
 
 ## Negotiation Across Transports
 
@@ -85,6 +85,7 @@ Every problem body also carries a `request_id` member: the same id as that respo
 | Not found, including indistinguishable-404 surfaces | `404` |
 | Stale state (chain, cursor, directory regression) | `409` |
 | Payload too large | `413` |
+| Write forwarded as TLS early data ([HTTP Transport](/design/networking/#http-transport)) | `425` |
 | Unsupported chunk media type | `415` |
 | Protocol outside `[Min, Max]` | `426` |
 | Rate limited | `429` |

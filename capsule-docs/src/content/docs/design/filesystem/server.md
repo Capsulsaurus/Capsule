@@ -18,7 +18,7 @@ Rules:
 
 - The server MUST refuse to start without `DATABASE_URL` and `VALKEY_URL` unless started with `--memory`, which binds every port to its in-memory adapter and logs a `WARN` on every start. `--memory` is a development profile, never a deployment mode.
 - Each state port has exactly two adapters: volatile stores get Valkey (redis-rs) and in-memory; durable ports get PostgreSQL and in-memory. A Postgres-resident session table, or any generic TTL abstraction, MUST NOT be introduced. The map is stated in [`capsule-server::store`](https://github.com/Capsulsaurus/Capsule/blob/master/capsule-server/src/store/mod.rs).
-- The hot upload path (offsets, status) never touches the durable asset row.
+- The hot upload path (committed set, status) never touches the durable asset row.
 
 ### Schema migrations
 
