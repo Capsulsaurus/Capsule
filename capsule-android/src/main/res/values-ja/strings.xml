@@ -1793,6 +1793,7 @@
     <string name="error_auth_oidc_state_invalid">そのサインインは有効期限が切れました。もう一度やり直してください。</string>
     <string name="error_auth_oidc_token_invalid">ID プロバイダからの応答を検証できませんでした。</string>
     <string name="error_auth_oidc_unavailable">Capsule は現在 ID プロバイダにアクセスできませんでした。もう一度お試しください。</string>
+    <string name="error_auth_password_disabled">このサーバーではシングルサインオンによるサインインのみ利用できます。</string>
     <string name="error_auth_password_invalid">そのパスワードは使用できません。</string>
     <string name="error_auth_profile_invalid">その表示名は使用できません。</string>
     <string name="error_auth_profile_not_found">そのアカウントはもう存在しません。</string>

@@ -7879,6 +7879,10 @@
     "message": "Capsule couldn't reach your identity provider just now. Please try again.",
     "context": "HTTP 500 on the /v1/auth/oidc routes: the identity provider could not be reached, or its published metadata or keys could not be used. Retryable, and distinct from error.auth.unavailable because 'the identity provider is down' and 'the session store is down' are different operator actions."
   },
+  "error.auth.password_disabled": {
+    "message": "This server only accepts sign-in through single sign-on.",
+    "context": "HTTP 403 on POST /v1/auth/register, /v1/auth/login and /v1/auth/reauthenticate: the operator has switched password sign-in off (PASSWORD_AUTH_DISABLED), so no account can be created or signed in with a password, including one that already exists. The server-info record publishes auth.password_disabled as true in this case; the person signs in through the identity provider instead."
+  },
   "error.auth.password_invalid": {
     "message": "That password cannot be used.",
     "context": "HTTP 400 on POST /v1/auth/password: the proposed new password is under the 12-character floor, or is the password already in use. The second case matters because a change that changes nothing leaves the caller believing a leaked credential has been rotated."

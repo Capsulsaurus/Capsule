@@ -1793,6 +1793,7 @@
     <string name="error_auth_oidc_state_invalid">该登录已过期。请重新开始。</string>
     <string name="error_auth_oidc_token_invalid">无法验证您的身份提供方的响应。</string>
     <string name="error_auth_oidc_unavailable">Capsule 暂时无法连接您的身份提供方，请重试。</string>
+    <string name="error_auth_password_disabled">此服务器仅接受通过单点登录进行登录。</string>
     <string name="error_auth_password_invalid">无法使用该密码。</string>
     <string name="error_auth_profile_invalid">无法使用该显示名称。</string>
     <string name="error_auth_profile_not_found">该账户已不存在。</string>

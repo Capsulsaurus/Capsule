@@ -942,6 +942,12 @@ fn compose(
         // Endpoints only; the issuer and client id stay the server's.
         server_info = server_info.with_oidc();
     }
+    // Configuration refuses the switch without an issuer, so a record that says "no passwords"
+    // always also publishes where the identity provider is.
+    if config.password_auth_disabled {
+        tracing::info!("password sign-in is disabled; accounts sign in through the OIDC provider");
+        server_info = server_info.without_passwords();
+    }
     // Published only when the deployment federates (#509): a `FEDERATION_URL` without
     // `FEDERATION_ENABLED` is an endpoint nothing behind it would answer.
     if let Some(url) = config.federation_endpoint() {
@@ -1017,7 +1023,9 @@ fn compose(
             cohorts,
             tokens: tokens.clone(),
             clock: clock.clone(),
-        }),
+        })
+        // The same switch the discovery record above publishes, read from the same field.
+        .with_password_setting(Arc::new(config.password_auth_disabled)),
         totp: TotpContext::new(
             totp,
             // The issuer is what an authenticator app shows beside the code, so it is this

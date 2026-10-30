@@ -1513,3 +1513,129 @@ async fn a_full_registration_limiter_is_a_429_and_not_an_outage() {
 
     fixture.client.assert_conformance();
 }
+
+// ===========================================================================================
+// PASSWORD_AUTH_DISABLED (#1004)
+// ===========================================================================================
+
+#[tokio::test]
+async fn an_oidc_only_server_refuses_registration_and_creates_nothing() {
+    let fixture = Fixture::without_passwords();
+    let body = json!({ "email": "new@example.test", "password": "correct horse battery staple" });
+
+    let problem: serde_json::Value = post_json!(fixture.client, "/v1/auth/register", body)
+        .assert_status(StatusCode::FORBIDDEN)
+        .json();
+    assert_eq!(code_of(&problem), "error.auth.password_disabled");
+
+    // Nothing was written: with passwords accepted again, the same address is still free.
+    fixture.passwords.set_disabled(false);
+    post_json!(fixture.client, "/v1/auth/register", body).assert_status(StatusCode::OK);
+
+    fixture.client.assert_conformance();
+}
+
+#[tokio::test]
+async fn an_oidc_only_server_refuses_an_existing_account_its_correct_password() {
+    // Every local account is refused, including one created before the switch: there is no
+    // break-glass account.
+    let fixture = Fixture::without_passwords();
+
+    let problem: serde_json::Value = post_json!(
+        fixture.client,
+        "/v1/auth/login",
+        json!({ "email": EMAIL, "password": PASSWORD })
+    )
+    .assert_status(StatusCode::FORBIDDEN)
+    .json();
+    assert_eq!(code_of(&problem), "error.auth.password_disabled");
+
+    let open = fixture
+        .sessions
+        .sessions_for_user(&user())
+        .await
+        .expect("store answers");
+    assert!(open.is_empty(), "a refused sign-in opens no session");
+
+    fixture.client.assert_conformance();
+}
+
+#[tokio::test]
+async fn an_oidc_only_server_refuses_before_the_account_directory_is_asked() {
+    // The directory is down and the account locked, and the answer is still the switch's rather
+    // than an outage or a lockout: the refusal comes before any password reaches a directory, so
+    // no Argon2 runs and no account's existence or lockout state is disclosed.
+    let fixture = Fixture::without_passwords();
+    fixture.accounts.set_unavailable(true);
+    fixture.accounts.lock(EMAIL);
+
+    for body in [
+        json!({ "email": EMAIL, "password": PASSWORD }),
+        json!({ "email": "nobody@example.test", "password": "wrong" }),
+    ] {
+        let problem: serde_json::Value = post_json!(fixture.client, "/v1/auth/login", body)
+            .assert_status(StatusCode::FORBIDDEN)
+            .json();
+        assert_eq!(code_of(&problem), "error.auth.password_disabled");
+    }
+    let problem: serde_json::Value = post_json!(
+        fixture.client,
+        "/v1/auth/register",
+        json!({ "email": "x", "password": "short" })
+    )
+    .assert_status(StatusCode::FORBIDDEN)
+    .json();
+    assert_eq!(
+        code_of(&problem),
+        "error.auth.password_disabled",
+        "refused before the body is validated, so a malformed one learns nothing either"
+    );
+
+    fixture.client.assert_conformance();
+}
+
+#[tokio::test]
+async fn an_oidc_only_server_refuses_a_password_reauthentication() {
+    // A session opened while passwords were accepted cannot present one afterwards.
+    let fixture = Fixture::working();
+    let pair = login(&fixture).await;
+    fixture.passwords.set_disabled(true);
+
+    let problem: serde_json::Value = fixture
+        .client
+        .post("/v1/auth/reauthenticate")
+        .header("accept", "application/json")
+        .header("authorization", &format!("Bearer {}", pair.access_token))
+        .json(&json!({ "password": PASSWORD }))
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN)
+        .json();
+    assert_eq!(code_of(&problem), "error.auth.password_disabled");
+
+    fixture.client.assert_conformance();
+}
+
+#[tokio::test]
+async fn server_info_says_whether_passwords_are_accepted() {
+    for (fixture, disabled) in [
+        (Fixture::working(), false),
+        (Fixture::without_passwords(), true),
+    ] {
+        let record: serde_json::Value = fixture
+            .client
+            .get("/.well-known/capsule/server-info")
+            .header("accept", "application/json")
+            .send()
+            .await
+            .assert_status(StatusCode::OK)
+            .json();
+        assert_eq!(record["auth"]["password_disabled"], json!(disabled));
+        // The login endpoint is still published: the route exists, and says why it refuses.
+        assert!(record["auth"]["login"].is_string());
+        // An OIDC-only record always names where to sign in instead.
+        assert!(record["auth"]["oidc"]["authorize"].is_string());
+
+        fixture.client.assert_conformance();
+    }
+}

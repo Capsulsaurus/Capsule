@@ -7211,6 +7211,10 @@
     "message": "تعذّر على Capsule الوصول إلى موفّر الهوية حاليًا. يُرجى المحاولة مرة أخرى.",
     "origin": "machine"
   },
+  "error.auth.password_disabled": {
+    "message": "لا يقبل هذا الخادم تسجيل الدخول إلا عبر تسجيل الدخول الموحّد.",
+    "origin": "machine"
+  },
   "error.auth.password_invalid": {
     "message": "لا يمكن استخدام كلمة المرور هذه.",
     "origin": "machine"

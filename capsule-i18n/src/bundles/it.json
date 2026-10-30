@@ -1802,6 +1802,7 @@
   "error.auth.oidc_state_invalid": "Questo accesso è scaduto. Ricomincia.",
   "error.auth.oidc_token_invalid": "Non è stato possibile verificare la risposta del tuo provider di identità.",
   "error.auth.oidc_unavailable": "Capsule non è riuscito a raggiungere il tuo provider di identità. Riprova.",
+  "error.auth.password_disabled": "Questo server accetta l'accesso solo tramite Single Sign-On.",
   "error.auth.password_invalid": "Questa password non può essere usata.",
   "error.auth.profile_invalid": "Questo nome visualizzato non può essere usato.",
   "error.auth.profile_not_found": "Questo account non esiste più.",

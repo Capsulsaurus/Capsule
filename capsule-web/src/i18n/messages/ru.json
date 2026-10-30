@@ -1802,6 +1802,7 @@
   "error.auth.oidc_state_invalid": "Срок этого входа истёк. Начните заново.",
   "error.auth.oidc_token_invalid": "Не удалось проверить ответ вашего поставщика удостоверений.",
   "error.auth.oidc_unavailable": "Capsule сейчас не удалось связаться с вашим поставщиком удостоверений. Повторите попытку.",
+  "error.auth.password_disabled": "Этот сервер принимает вход только через единый вход (SSO).",
   "error.auth.password_invalid": "Этот пароль нельзя использовать.",
   "error.auth.profile_invalid": "Это отображаемое имя нельзя использовать.",
   "error.auth.profile_not_found": "Эта учётная запись больше не существует.",

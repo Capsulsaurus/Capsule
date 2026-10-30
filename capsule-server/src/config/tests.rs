@@ -679,6 +679,58 @@ fn switching_federation_on_without_a_url_or_with_a_typo_is_refused_by_name() {
     assert!(error.names("FEDERATION_ENABLED"), "{error}");
 }
 
+/// The environment a `serve --memory` with a whole OIDC relying party needs.
+fn serveable_with_oidc() -> BTreeMap<String, String> {
+    let mut environment = serveable();
+    environment.insert(
+        "OIDC_ISSUER".to_owned(),
+        "https://idp.example.test/realm".to_owned(),
+    );
+    environment.insert("OIDC_CLIENT_ID".to_owned(), "capsule".to_owned());
+    environment
+}
+
+#[test]
+fn password_auth_is_on_unless_switched_off() {
+    let config = Config::load(&serveable(), &memory(), Demands::Serve).expect("it loads");
+    assert!(!config.password_auth_disabled);
+
+    let mut environment = serveable_with_oidc();
+    for on in ["true", "1", "YES", " on "] {
+        environment.insert("PASSWORD_AUTH_DISABLED".to_owned(), on.to_owned());
+        let config = Config::load(&environment, &memory(), Demands::Serve).expect("it loads");
+        assert!(config.password_auth_disabled, "PASSWORD_AUTH_DISABLED={on}");
+    }
+    environment.insert("PASSWORD_AUTH_DISABLED".to_owned(), "off".to_owned());
+    let config = Config::load(&environment, &memory(), Demands::Serve).expect("it loads");
+    assert!(!config.password_auth_disabled);
+}
+
+#[test]
+fn disabling_passwords_without_an_identity_provider_is_refused_by_name() {
+    let mut environment = serveable();
+    environment.insert("PASSWORD_AUTH_DISABLED".to_owned(), "true".to_owned());
+    let error = Config::load(&environment, &memory(), Demands::Serve).expect_err("it refuses");
+    assert!(error.names("OIDC_ISSUER"), "{error}");
+    // Only `serve` admits anybody, so maintenance is not sent looking for a provider.
+    Config::load(&environment, &memory(), Demands::Maintenance)
+        .expect("maintenance loads without one");
+
+    // A half-configured relying party is told what it lacks, not that its issuer is missing.
+    environment.insert(
+        "OIDC_ISSUER".to_owned(),
+        "https://idp.example.test/realm".to_owned(),
+    );
+    let error = Config::load(&environment, &memory(), Demands::Serve).expect_err("it refuses");
+    assert!(error.names("OIDC_CLIENT_ID"), "{error}");
+    assert!(!error.names("OIDC_ISSUER"), "{error}");
+
+    let mut environment = serveable_with_oidc();
+    environment.insert("PASSWORD_AUTH_DISABLED".to_owned(), "sometimes".to_owned());
+    let error = Config::load(&environment, &memory(), Demands::Serve).expect_err("it refuses");
+    assert!(error.names("PASSWORD_AUTH_DISABLED"), "{error}");
+}
+
 #[test]
 fn an_oidc_relying_party_is_read_whole() {
     let mut environment = serveable();

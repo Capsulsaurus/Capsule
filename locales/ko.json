@@ -7211,6 +7211,10 @@
     "message": "Capsule이 지금 ID 제공업체에 연결하지 못했습니다. 다시 시도해 주세요.",
     "origin": "machine"
   },
+  "error.auth.password_disabled": {
+    "message": "이 서버는 싱글 사인온을 통한 로그인만 허용합니다.",
+    "origin": "machine"
+  },
   "error.auth.password_invalid": {
     "message": "해당 비밀번호는 사용할 수 없습니다.",
     "origin": "machine"

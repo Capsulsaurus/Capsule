@@ -1947,6 +1947,7 @@
     <string name="error_auth_oidc_state_invalid">That sign-in has expired. Start again.</string>
     <string name="error_auth_oidc_token_invalid">Your identity provider\'s answer couldn\'t be verified.</string>
     <string name="error_auth_oidc_unavailable">Capsule couldn\'t reach your identity provider just now. Please try again.</string>
+    <string name="error_auth_password_disabled">This server only accepts sign-in through single sign-on.</string>
     <string name="error_auth_password_invalid">That password cannot be used.</string>
     <string name="error_auth_profile_invalid">That display name cannot be used.</string>
     <string name="error_auth_profile_not_found">That account no longer exists.</string>

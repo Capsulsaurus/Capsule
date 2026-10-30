@@ -1802,6 +1802,7 @@
   "error.auth.oidc_state_invalid": "Diese Anmeldung ist abgelaufen. Beginne erneut.",
   "error.auth.oidc_token_invalid": "Die Antwort deines Identitätsanbieters konnte nicht überprüft werden.",
   "error.auth.oidc_unavailable": "Capsule konnte deinen Identitätsanbieter gerade nicht erreichen. Bitte versuche es erneut.",
+  "error.auth.password_disabled": "Dieser Server akzeptiert die Anmeldung nur über Single Sign-On.",
   "error.auth.password_invalid": "Dieses Passwort kann nicht verwendet werden.",
   "error.auth.profile_invalid": "Dieser Anzeigename kann nicht verwendet werden.",
   "error.auth.profile_not_found": "Dieses Konto existiert nicht mehr.",

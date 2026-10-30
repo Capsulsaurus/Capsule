@@ -1793,6 +1793,7 @@
     <string name="error_auth_oidc_state_invalid">वह साइन इन समाप्त हो गया है। फिर से शुरू करें।</string>
     <string name="error_auth_oidc_token_invalid">आपके पहचान प्रदाता के उत्तर को सत्यापित नहीं किया जा सका।</string>
     <string name="error_auth_oidc_unavailable">Capsule अभी आपके पहचान प्रदाता तक नहीं पहुँच सका। कृपया फिर से प्रयास करें।</string>
+    <string name="error_auth_password_disabled">यह सर्वर केवल सिंगल साइन-ऑन के ज़रिए साइन इन स्वीकार करता है।</string>
     <string name="error_auth_password_invalid">उस पासवर्ड का उपयोग नहीं किया जा सकता।</string>
     <string name="error_auth_profile_invalid">उस प्रदर्शित नाम का उपयोग नहीं किया जा सकता।</string>
     <string name="error_auth_profile_not_found">वह खाता अब मौजूद नहीं है।</string>

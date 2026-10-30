@@ -1964,6 +1964,7 @@
   "error.auth.oidc_state_invalid": "That sign-in has expired. Start again.",
   "error.auth.oidc_token_invalid": "Your identity provider's answer couldn't be verified.",
   "error.auth.oidc_unavailable": "Capsule couldn't reach your identity provider just now. Please try again.",
+  "error.auth.password_disabled": "This server only accepts sign-in through single sign-on.",
   "error.auth.password_invalid": "That password cannot be used.",
   "error.auth.profile_invalid": "That display name cannot be used.",
   "error.auth.profile_not_found": "That account no longer exists.",

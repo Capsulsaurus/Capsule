@@ -1793,6 +1793,7 @@
     <string name="error_auth_oidc_state_invalid">Questo accesso è scaduto. Ricomincia.</string>
     <string name="error_auth_oidc_token_invalid">Non è stato possibile verificare la risposta del tuo provider di identità.</string>
     <string name="error_auth_oidc_unavailable">Capsule non è riuscito a raggiungere il tuo provider di identità. Riprova.</string>
+    <string name="error_auth_password_disabled">Questo server accetta l\'accesso solo tramite Single Sign-On.</string>
     <string name="error_auth_password_invalid">Questa password non può essere usata.</string>
     <string name="error_auth_profile_invalid">Questo nome visualizzato non può essere usato.</string>
     <string name="error_auth_profile_not_found">Questo account non esiste più.</string>

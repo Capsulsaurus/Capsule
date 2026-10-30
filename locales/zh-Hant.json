@@ -7211,6 +7211,10 @@
     "message": "Capsule 目前無法連線至您的身分提供者，請再試一次。",
     "origin": "machine"
   },
+  "error.auth.password_disabled": {
+    "message": "此伺服器僅接受透過單一登入進行登入。",
+    "origin": "machine"
+  },
   "error.auth.password_invalid": {
     "message": "無法使用該密碼。",
     "origin": "machine"

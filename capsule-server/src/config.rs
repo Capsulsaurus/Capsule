@@ -379,6 +379,14 @@ pub struct Config {
     pub lockout_attempts: u32,
     /// The OIDC relying party, if `OIDC_ISSUER` is set.
     pub oidc: Option<OidcConfig>,
+    /// Whether password registration and sign-in are refused (`PASSWORD_AUTH_DISABLED`, #1004).
+    /// Off by default.
+    ///
+    /// An OIDC-only deployment: `register`, `login` and `reauthenticate` answer
+    /// `error.auth.password_disabled` before any password is hashed or verified, and
+    /// `server-info` says so. `serve` refuses it without `OIDC_ISSUER`, because a server with
+    /// neither door admits nobody.
+    pub password_auth_disabled: bool,
     /// How long a shutdown may take to drain.
     pub shutdown_timeout: std::time::Duration,
     /// The accepted-connection ceiling.
@@ -558,6 +566,7 @@ impl fmt::Debug for Config {
             lockout_window,
             lockout_attempts,
             oidc,
+            password_auth_disabled,
             shutdown_timeout,
             max_connections,
             header_read_timeout,
@@ -594,6 +603,7 @@ impl fmt::Debug for Config {
             .field("lockout_window", lockout_window)
             .field("lockout_attempts", lockout_attempts)
             .field("oidc", oidc)
+            .field("password_auth_disabled", password_auth_disabled)
             .field("shutdown_timeout", shutdown_timeout)
             .field("max_connections", max_connections)
             .field("header_read_timeout", header_read_timeout)
@@ -758,6 +768,13 @@ impl Config {
 
         // ── The OIDC relying party ──────────────────────────────────────────────────────
         let oidc = read_oidc(env, &mut faults);
+        // Off unless asked for (#1004). Read beside the relying party because it only makes
+        // sense with one: `serve` refuses it without `OIDC_ISSUER` below.
+        let password_auth_disabled = parse_flag(
+            env.var("PASSWORD_AUTH_DISABLED").as_deref(),
+            "PASSWORD_AUTH_DISABLED",
+            &mut faults,
+        );
 
         // ── Protocol window ─────────────────────────────────────────────────────────────
         //
@@ -975,6 +992,13 @@ impl Config {
                 if federation_enabled {
                     require(federation_url.is_some(), "FEDERATION_URL", &mut faults);
                 }
+                // A server that refuses passwords and has no identity provider admits nobody,
+                // not even the operator who meant to restrict it. Keyed on the issuer itself
+                // rather than on `oidc`, so a half-configured relying party — which has already
+                // faulted above for what it lacks — is not also told its issuer is missing.
+                if password_auth_disabled {
+                    require(env.var("OIDC_ISSUER").is_some(), "OIDC_ISSUER", &mut faults);
+                }
                 require_durable_backends(&mut faults);
                 if durable {
                     // Required rather than derived; see the key-material section above for what
@@ -1010,6 +1034,7 @@ impl Config {
                 lockout_window,
                 lockout_attempts,
                 oidc,
+                password_auth_disabled,
                 shutdown_timeout,
                 max_connections,
                 header_read_timeout,

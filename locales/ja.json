@@ -7211,6 +7211,10 @@
     "message": "Capsule は現在 ID プロバイダにアクセスできませんでした。もう一度お試しください。",
     "origin": "machine"
   },
+  "error.auth.password_disabled": {
+    "message": "このサーバーではシングルサインオンによるサインインのみ利用できます。",
+    "origin": "machine"
+  },
   "error.auth.password_invalid": {
     "message": "そのパスワードは使用できません。",
     "origin": "machine"
