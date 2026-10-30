@@ -731,12 +731,21 @@ impl TransferGate for QueueGate<'_> {
                 // refusal and the wait is not missed.
                 let mut freed = std::pin::pin!(self.shared.freed.notified());
                 freed.as_mut().enable();
-                let asked = self
-                    .shared
-                    .queue()
-                    .reserve_range(self.grant, len, Instant::now());
+                let (asked, still_waiting) = {
+                    let mut queue = self.shared.queue();
+                    let asked = queue.reserve_range(self.grant, len, Instant::now());
+                    (asked, queue.waiting_for_budget())
+                };
                 match asked {
-                    Ok(range) => return Some(range),
+                    Ok(range) => {
+                        // The budget serves its line first-come: a waiter woken by the release
+                        // this range was served from, and refused for being behind it, asks
+                        // again now that it is next.
+                        if still_waiting > 0 {
+                            self.shared.freed.notify_waiters();
+                        }
+                        return Some(range);
+                    }
                     Err(RangeRefused::NotInFlight) => {
                         tracing::warn!(server = %self.server, "push: a range asked for a grant no longer in flight");
                         return None;

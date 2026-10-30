@@ -23,7 +23,8 @@
 //! nothing; every *range* it sends reserves its length while in flight
 //! ([`UploadQueue::reserve_range`]), so the device never buffers more than the budget however
 //! many servers and sessions it drives, and a large blob costs no more than the windows it is
-//! sending.
+//! sending. Ranges waiting for the budget are served first-come, so a lane sending originals
+//! cannot keep re-reserving it ahead of another lane's T0 range.
 //!
 //! [`UploadQueue::next`] serves the lanes **round-robin**, so one server's backlog cannot
 //! starve another's, and inside a lane it always takes the lowest [`UploadTier`] first, so the
@@ -163,7 +164,8 @@ pub enum RangeRefused {
     NotInFlight,
     /// The session already holds its P ranges in flight: wait for one to return.
     WindowFull,
-    /// The shared byte budget cannot hold the range now: wait for a reservation to be released.
+    /// The shared byte budget cannot hold the range now, or an earlier grant waits for it
+    /// first: wait for a reservation to be released and ask again.
     BudgetFull,
 }
 
@@ -288,6 +290,9 @@ pub struct UploadQueue<J> {
     lanes: Vec<Lane<J>>,
     /// The lane the next round-robin pass starts from.
     cursor: usize,
+    /// Grants whose range the budget refused, in the order they first asked. The budget serves
+    /// them first-come: no range is reserved past the head of this line.
+    waiting: VecDeque<GrantId>,
     next_grant: u64,
     next_range: u64,
 }
@@ -305,6 +310,7 @@ impl<J: Clone> UploadQueue<J> {
             retry_budget: DEFAULT_LANE_RETRY_BUDGET,
             lanes: Vec::new(),
             cursor: 0,
+            waiting: VecDeque::new(),
             next_grant: 0,
             next_range: 0,
         }
@@ -567,6 +573,15 @@ impl<J: Clone> UploadQueue<J> {
     /// session holds its P ranges in flight ([`RangeRefused::WindowFull`]) or the budget left
     /// cannot hold it ([`RangeRefused::BudgetFull`]); the caller waits for a release and asks
     /// again. A reservation counts as progress on the lane.
+    ///
+    /// The budget serves waiting grants **first-come**: a grant refused for the budget joins a
+    /// line in the order it first asked, and while that line holds an earlier grant every later
+    /// ask is refused too, however little it wants. So a holder that releases its range and
+    /// asks for the next one in the same breath goes behind whoever was already waiting, and a
+    /// range clamped to the whole budget runs once the reservations ahead of it drain, rather
+    /// than waiting for every holder to stop on its own. A grant that leaves flight leaves the
+    /// line with it; a caller that stops asking for a grant it still holds must complete,
+    /// requeue or retry it, or the line waits on it.
     pub fn reserve_range(
         &mut self,
         id: GrantId,
@@ -578,25 +593,41 @@ impl<J: Clone> UploadQueue<J> {
         };
         let reserved = len.min(self.budget);
         let free = self.budget - self.in_use;
-        let lane = &mut self.lanes[lane_at];
-        let flight = &mut lane.in_flight[at];
-        if flight.ranges.len() >= flight.ranges_window as usize {
-            tracing::trace!(
-                grant = id.0,
-                ranges = flight.ranges_window,
-                "upload queue: session ranges window full"
-            );
-            return Err(RangeRefused::WindowFull);
+        {
+            let flight = &self.lanes[lane_at].in_flight[at];
+            if flight.ranges.len() >= flight.ranges_window as usize {
+                tracing::trace!(
+                    grant = id.0,
+                    ranges = flight.ranges_window,
+                    "upload queue: session ranges window full"
+                );
+                return Err(RangeRefused::WindowFull);
+            }
         }
-        if reserved > free {
+        self.prune_waiting();
+        let ahead = self
+            .waiting
+            .iter()
+            .take_while(|waiter| **waiter != id)
+            .count();
+        if ahead > 0 || reserved > free {
+            if !self.waiting.contains(&id) {
+                self.waiting.push_back(id);
+            }
             tracing::trace!(
                 grant = id.0,
                 reserved,
                 free,
-                "upload queue: range does not fit the budget left"
+                ahead,
+                "upload queue: range waits for the budget"
             );
             return Err(RangeRefused::BudgetFull);
         }
+        if self.waiting.front() == Some(&id) {
+            self.waiting.pop_front();
+        }
+        let lane = &mut self.lanes[lane_at];
+        let flight = &mut lane.in_flight[at];
         let range = RangeId(self.next_range);
         self.next_range += 1;
         flight.ranges.push((range, reserved));
@@ -634,6 +665,16 @@ impl<J: Clone> UploadQueue<J> {
             }
         }
         false
+    }
+
+    /// Grants still in flight that wait in the budget's line for a range, first-come. A caller
+    /// that wakes its waiters on a release wakes them again after a reservation while this is
+    /// not zero, so the next in line asks once the one ahead of it has been served.
+    pub fn waiting_for_budget(&self) -> usize {
+        self.waiting
+            .iter()
+            .filter(|waiter| self.locate(**waiter).is_some())
+            .count()
     }
 
     /// Ranges grant `id` holds in flight; zero for a grant no longer in flight.
@@ -783,6 +824,13 @@ impl<J: Clone> UploadQueue<J> {
                 .position(|flight| flight.id == id)
                 .map(|at| (lane, at))
         })
+    }
+
+    /// Drop the grants that left flight from the budget's waiting line.
+    fn prune_waiting(&mut self) {
+        let mut waiting = std::mem::take(&mut self.waiting);
+        waiting.retain(|waiter| self.locate(*waiter).is_some());
+        self.waiting = waiting;
     }
 
     /// Remove grant `id` from flight and release every range it holds.

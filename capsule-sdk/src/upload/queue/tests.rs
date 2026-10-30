@@ -131,18 +131,24 @@ fn every_lane_shares_one_byte_budget_reserved_per_range() {
         Err(RangeRefused::BudgetFull),
         "another lane's range does not fit the 40 bytes left"
     );
-    let b_range = queue.reserve_range(b2.id, 40, now).expect("40 fits");
-    assert_eq!(queue.in_use(), 100);
+    assert_eq!(
+        queue.reserve_range(b2.id, 40, now),
+        Err(RangeRefused::BudgetFull),
+        "40 would fit, but b1 waits for the budget first"
+    );
 
     assert!(queue.release_range(a_range, now));
     assert!(
         !queue.release_range(a_range, now),
         "a range is released once"
     );
-    assert_eq!(queue.in_use(), 40);
+    assert_eq!(queue.in_use(), 0);
     queue
         .reserve_range(b1.id, 60, now)
         .expect("fits once a's range returned");
+    let b_range = queue
+        .reserve_range(b2.id, 40, now)
+        .expect("40 fits once b1, ahead of it, is served");
     assert_eq!(queue.in_use(), 100);
 
     assert!(queue.complete(b2.id, now), "completing releases its ranges");
@@ -173,6 +179,81 @@ fn a_range_larger_than_the_budget_runs_once_the_budget_is_free() {
         100,
         "its reservation is clamped to the budget"
     );
+}
+
+/// **The budget serves waiting ranges first-come.** A holder of the whole budget that releases
+/// its range and asks for the next one at once goes behind the other lane's T0 range that was
+/// already waiting, so one lane's originals never starve another lane's T0 work; and a range
+/// clamped to the whole budget keeps its place at the head until the budget drains for it.
+#[test]
+fn waiting_ranges_are_served_first_come() {
+    let now = Instant::now();
+    let (a, b) = (key("a"), key("b"));
+    let mut queue = UploadQueue::new(100, STALL).with_windows(LaneWindows::new(4, 1));
+    queue.enqueue(&a, job(UploadTier::Original, "a-original"));
+    queue.enqueue(&b, job(UploadTier::Index, "b-index"));
+    let original = queue.next(now).expect("a's original");
+    let index = queue.next(now).expect("b's index");
+
+    let held = queue
+        .reserve_range(original.id, 500, now)
+        .expect("the clamped range takes the whole budget");
+    assert_eq!(
+        queue.reserve_range(index.id, 10, now),
+        Err(RangeRefused::BudgetFull)
+    );
+    assert_eq!(queue.waiting_for_budget(), 1);
+
+    assert!(queue.release_range(held, now));
+    assert_eq!(
+        queue.reserve_range(original.id, 500, now),
+        Err(RangeRefused::BudgetFull),
+        "the holder asks again behind the range already waiting"
+    );
+    assert_eq!(queue.waiting_for_budget(), 2);
+    let small = queue
+        .reserve_range(index.id, 10, now)
+        .expect("the first in line is served first");
+    assert_eq!(queue.waiting_for_budget(), 1);
+
+    assert_eq!(
+        queue.reserve_range(original.id, 500, now),
+        Err(RangeRefused::BudgetFull),
+        "the clamped range waits for the whole budget"
+    );
+    assert!(queue.release_range(small, now));
+    queue
+        .reserve_range(original.id, 500, now)
+        .expect("the budget drained for the head of the line");
+    assert_eq!(queue.waiting_for_budget(), 0);
+    assert_eq!(queue.in_use(), 100);
+}
+
+/// A grant that leaves flight while it waits leaves the budget's line with it, so the line
+/// never waits on a session that will not ask again.
+#[test]
+fn a_waiting_grant_that_leaves_flight_leaves_the_line() {
+    let now = Instant::now();
+    let a = key("a");
+    let mut queue = UploadQueue::new(100, STALL).with_windows(LaneWindows::new(4, 1));
+    for name in ["holder", "gone", "next"] {
+        queue.enqueue(&a, job(UploadTier::Original, name));
+    }
+    let holder = queue.next(now).expect("holder");
+    let gone = queue.next(now).expect("gone");
+    let next = queue.next(now).expect("next");
+
+    let held = queue.reserve_range(holder.id, 100, now).expect("held");
+    assert!(queue.reserve_range(gone.id, 10, now).is_err());
+    assert!(queue.reserve_range(next.id, 10, now).is_err());
+    assert_eq!(queue.waiting_for_budget(), 2);
+
+    assert!(queue.requeue(gone.id));
+    assert_eq!(queue.waiting_for_budget(), 1);
+    assert!(queue.release_range(held, now));
+    queue
+        .reserve_range(next.id, 10, now)
+        .expect("the requeued grant no longer holds the line");
 }
 
 /// **P bounds the ranges each session holds in flight**, independently per session.

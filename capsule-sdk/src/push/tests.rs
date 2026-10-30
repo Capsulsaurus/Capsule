@@ -1504,3 +1504,72 @@ async fn the_queue_gate_waits_for_the_budget_and_applies_advice() {
         "a finished grant reserves nothing"
     );
 }
+
+/// **The gates serve waiting ranges first-come.** A holder of the whole budget that releases it
+/// and asks again at once goes behind the ranges already waiting; and a waiter woken by that
+/// release but refused for being behind another is woken again once the one ahead is served.
+#[tokio::test]
+async fn the_queue_gates_serve_waiting_ranges_first_come() {
+    use std::time::{Duration, Instant};
+
+    let server = ServerKey::new("https://lane.test");
+    let mut queue =
+        UploadQueue::new(100, Duration::from_secs(3600)).with_windows(LaneWindows::new(4, 1));
+    for bundle in 0..3 {
+        queue.enqueue(&server, QueuedJob::new(UploadTier::Original, (0, bundle)));
+    }
+    let now = Instant::now();
+    let grants: Vec<_> = std::iter::from_fn(|| queue.next(now)).collect();
+    let shared = LaneShared {
+        queue: Mutex::new(queue),
+        freed: tokio::sync::Notify::new(),
+    };
+    let gate = |at: usize| QueueGate {
+        shared: &shared,
+        server: &server,
+        grant: grants[at].id,
+    };
+    let (holder, first, second) = (gate(0), gate(1), gate(2));
+    let pending = Duration::from_millis(50);
+
+    let whole = holder.reserve(100).await.expect("the whole budget");
+    let mut first_waits = first.reserve(10);
+    assert!(
+        tokio::time::timeout(pending, &mut first_waits)
+            .await
+            .is_err()
+    );
+    let mut second_waits = second.reserve(10);
+    assert!(
+        tokio::time::timeout(pending, &mut second_waits)
+            .await
+            .is_err()
+    );
+
+    holder.release(whole);
+    let mut again = holder.reserve(100);
+    assert!(
+        tokio::time::timeout(pending, &mut again).await.is_err(),
+        "the holder asks again behind the ranges already waiting"
+    );
+    // The second waiter is polled first: refused behind the first, it is woken again once the
+    // first is served.
+    let (second_range, first_range) = tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::join!(second_waits, first_waits)
+    })
+    .await
+    .expect("both waiting ranges are served");
+    assert_eq!(shared.queue().in_use(), 20);
+    assert!(
+        tokio::time::timeout(pending, &mut again).await.is_err(),
+        "the whole-budget range waits for the budget to drain"
+    );
+
+    first.release(first_range.expect("reserved"));
+    second.release(second_range.expect("reserved"));
+    tokio::time::timeout(Duration::from_secs(5), again)
+        .await
+        .expect("the holder is served once the line ahead of it drains")
+        .expect("reserved");
+    assert_eq!(shared.queue().in_use(), 100);
+}
