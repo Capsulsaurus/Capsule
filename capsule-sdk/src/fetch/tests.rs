@@ -1716,3 +1716,211 @@ async fn an_unsized_fetch_that_never_progresses_backs_off_then_gives_up() {
         "it backed off between attempts"
     );
 }
+
+// ─── File-backed resumable download ──────────────────────────────────────────
+
+/// The window the file-backed tests fetch in, so a blob spans several.
+const FILE_WINDOW: u64 = 1_000;
+
+/// A source that serves `data` in the windows asked for, answering `503` once `serve` windows
+/// have been served (the process "dies" between ranges), and recording every requested start.
+struct ServesThenFails {
+    data: Vec<u8>,
+    serve: Mutex<Option<u32>>,
+    starts: Mutex<Vec<u64>>,
+}
+
+impl ServesThenFails {
+    fn new(data: &[u8], serve: Option<u32>) -> Self {
+        Self {
+            data: data.to_vec(),
+            serve: Mutex::new(serve),
+            starts: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn starts(&self) -> Vec<u64> {
+        self.starts.lock().unwrap().clone()
+    }
+}
+
+impl BlobSource for ServesThenFails {
+    async fn get_range(&self, _hash: &str, start: u64, max_len: Option<u64>) -> RangeOutcome {
+        self.starts.lock().unwrap().push(start);
+        let mut serve = self.serve.lock().unwrap();
+        if let Some(left) = serve.as_mut() {
+            if *left == 0 {
+                return RangeOutcome::Status {
+                    status: 503,
+                    code: None,
+                };
+            }
+            *left -= 1;
+        }
+        let start = start as usize;
+        let end = max_len.map_or(self.data.len(), |m| {
+            (start + m as usize).min(self.data.len())
+        });
+        RangeOutcome::Complete {
+            bytes: self.data[start..end].to_vec(),
+        }
+    }
+}
+
+/// A fresh fetcher with a bounded window: each test's "restart" builds a new one, so nothing
+/// carries over between attempts but the files on disk.
+fn file_fetcher() -> RangedFetcher<NoopSleeper, SharedClock> {
+    RangedFetcher::from_parts(
+        ConnectionClass::Unmetered,
+        StallConfig::default(),
+        Some(FILE_WINDOW),
+        NoopSleeper(Arc::new(Mutex::new(Vec::new()))),
+        SharedClock(Arc::new(Mutex::new(0))),
+    )
+}
+
+#[test]
+fn the_partial_sits_beside_its_destination() {
+    let dest = std::path::Path::new("/library/blobs/abc");
+    assert_eq!(
+        partial_path(dest),
+        std::path::PathBuf::from("/library/blobs/abc.partial")
+    );
+}
+
+/// A clean download lands under its final name and leaves no partial behind.
+#[tokio::test]
+async fn a_file_download_lands_by_rename_after_verifying() {
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dir.path().join("blob");
+    let data = bytes(3_500);
+    let source = ServesThenFails::new(&data, None);
+    file_fetcher()
+        .fetch_to_file(&source, &sha(&data), data.len() as u64, &dest)
+        .await
+        .expect("the blob lands");
+    assert_eq!(std::fs::read(&dest).unwrap(), data);
+    assert!(!partial_path(&dest).exists(), "no partial is left behind");
+    assert_eq!(source.starts(), vec![0, 1_000, 2_000, 3_000]);
+}
+
+/// Killed between ranges, a download is never visible under its final name; the next attempt
+/// — a new fetcher, as after a restart — resumes from the partial's length, re-fetching zero
+/// bytes it already holds.
+#[tokio::test]
+async fn a_file_download_resumes_from_the_partial_after_a_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dir.path().join("blob");
+    let data = bytes(3_500);
+    let hash = sha(&data);
+
+    let dying = ServesThenFails::new(&data, Some(2));
+    let err = file_fetcher()
+        .fetch_to_file(&dying, &hash, data.len() as u64, &dest)
+        .await
+        .expect_err("the source dies after two windows");
+    assert!(matches!(err, FetchError::Transient(_)), "{err:?}");
+    assert!(!dest.exists(), "an unfinished download has no final name");
+    let partial = std::fs::read(partial_path(&dest)).unwrap();
+    assert_eq!(
+        partial,
+        data[..2_000],
+        "the partial holds the windows that landed"
+    );
+
+    let restarted = ServesThenFails::new(&data, None);
+    file_fetcher()
+        .fetch_to_file(&restarted, &hash, data.len() as u64, &dest)
+        .await
+        .expect("the resumed download lands");
+    assert_eq!(restarted.starts(), vec![2_000, 3_000]);
+    assert_eq!(std::fs::read(&dest).unwrap(), data);
+    assert!(!partial_path(&dest).exists());
+}
+
+/// A partial whose bytes are not the blob's is discarded on verify and never renamed into
+/// place; the next attempt starts from zero and lands the real blob.
+#[tokio::test]
+async fn a_corrupt_partial_is_discarded_and_never_renamed() {
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dir.path().join("blob");
+    let data = bytes(3_500);
+    let hash = sha(&data);
+    std::fs::write(partial_path(&dest), vec![0xFF; 1_500]).unwrap();
+
+    let source = ServesThenFails::new(&data, None);
+    let err = file_fetcher()
+        .fetch_to_file(&source, &hash, data.len() as u64, &dest)
+        .await
+        .expect_err("the spliced bytes do not verify");
+    assert!(matches!(err, FetchError::IntegrityFailed { .. }), "{err:?}");
+    assert_eq!(source.starts().first(), Some(&1_500), "it resumed first");
+    assert!(
+        !dest.exists(),
+        "an unverified file is never renamed into place"
+    );
+    assert!(!partial_path(&dest).exists(), "the corrupt partial is gone");
+
+    let retry = ServesThenFails::new(&data, None);
+    file_fetcher()
+        .fetch_to_file(&retry, &hash, data.len() as u64, &dest)
+        .await
+        .expect("the retry lands");
+    assert_eq!(retry.starts().first(), Some(&0));
+    assert_eq!(std::fs::read(&dest).unwrap(), data);
+}
+
+/// A partial longer than the blob cannot be a prefix of it: it is truncated and the fetch
+/// starts over.
+#[tokio::test]
+async fn an_oversized_partial_starts_over() {
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dir.path().join("blob");
+    let data = bytes(2_500);
+    std::fs::write(partial_path(&dest), bytes(4_000)).unwrap();
+
+    let source = ServesThenFails::new(&data, None);
+    fetch_blob_to_file(&source, &sha(&data), data.len() as u64, &dest)
+        .await
+        .expect("the blob lands");
+    assert_eq!(source.starts().first(), Some(&0));
+    assert_eq!(std::fs::read(&dest).unwrap(), data);
+}
+
+/// A partial already holding the whole blob (killed after the last window, before the rename)
+/// is verified and renamed without a request.
+#[tokio::test]
+async fn a_complete_partial_lands_without_a_request() {
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dir.path().join("blob");
+    let data = bytes(2_500);
+    std::fs::write(partial_path(&dest), &data).unwrap();
+
+    let source = ServesThenFails::new(&data, Some(0));
+    file_fetcher()
+        .fetch_to_file(&source, &sha(&data), data.len() as u64, &dest)
+        .await
+        .expect("the held blob lands");
+    assert!(source.starts().is_empty(), "nothing was re-fetched");
+    assert_eq!(std::fs::read(&dest).unwrap(), data);
+    assert!(!partial_path(&dest).exists());
+}
+
+/// A download replaces whatever stood under the final name only once it verifies; a failed
+/// one leaves the old file in place.
+#[tokio::test]
+async fn a_failed_download_leaves_the_existing_destination_untouched() {
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dir.path().join("blob");
+    std::fs::write(&dest, b"previous").unwrap();
+    let data = bytes(2_500);
+
+    let source = CorruptingSource { len: 2_500 };
+    let err = file_fetcher()
+        .fetch_to_file(&source, &sha(&data), data.len() as u64, &dest)
+        .await
+        .expect_err("the bytes do not verify");
+    assert!(matches!(err, FetchError::IntegrityFailed { .. }), "{err:?}");
+    assert_eq!(std::fs::read(&dest).unwrap(), b"previous");
+    assert!(!partial_path(&dest).exists());
+}
