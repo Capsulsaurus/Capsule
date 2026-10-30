@@ -30,7 +30,7 @@ public final class SecureEnclaveSigner: FfiHardwareSigner, @unchecked Sendable {
             return existing
         }
         guard SecureEnclave.isAvailable else {
-            throw FfiHardwareSignerError.Unavailable(detail:"Secure Enclave unavailable")
+            throw FfiHardwareSignerError.Unavailable(detail: "Secure Enclave unavailable")
         }
         let key = try SecureEnclave.P256.Signing.PrivateKey()
         keys[keyAlias] = key
