@@ -238,8 +238,9 @@ impl SubscriptionStore for PostgresSubscriptions {
                 .connection
                 .query_all_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
-                    "SELECT DISTINCT peer_id, album_id FROM federation_subscriptions \
+                    "SELECT peer_id, album_id FROM federation_subscriptions \
                      WHERE expires_at > $1 \
+                     GROUP BY peer_id, album_id \
                      ORDER BY peer_id COLLATE \"C\", album_id COLLATE \"C\"",
                     [Value::from(to_micros(now))],
                 ))
