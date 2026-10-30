@@ -9,12 +9,13 @@
 //!
 //! [Organization — Deletion State Machine]: https://docs/design/organization/#deletion-state-machine
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
-use capsule_core::crypto::provenance::{Action, ProvenanceRecord};
+use capsule_core::crypto::hash::Hash32;
+use capsule_core::crypto::provenance::{Action, ProvenanceChain, ProvenanceRecord};
 use jiff::Timestamp;
 use uuid::Uuid;
 
@@ -53,18 +54,46 @@ impl TrashEntry {
 /// judges a deadline ([Peering — Sync]).
 ///
 /// [Peering — Sync]: https://docs/design/peering/
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct FeedDrain {
     /// The latest server `changed_at` the drain saw, or `None` for a drain that saw no entry.
     pub latest_changed_at: Option<Timestamp>,
+    /// Every asset the drained feed lists (the assets the server has indexed), with the hash of
+    /// the head record its latest entry carries, or `None` for an entry that carries none (a
+    /// purged asset, or an older server). A record's hash is the SHA-256 of the entry's
+    /// `manifest_cbor`, which is that record's canonical CBOR.
+    pub server_heads: BTreeMap<Uuid, Option<Hash32>>,
 }
 
 impl FeedDrain {
-    /// The instant a deadline is judged at: this device's `clock`, floored by the latest server
-    /// `changed_at`, so a slow device clock cannot hold a window open the server has closed.
-    pub fn judged_at(self, clock: Timestamp) -> Timestamp {
+    /// The instant a deadline is judged at: the latest server `changed_at` the drain saw, and
+    /// never this device's clock. A device clock running ahead would purge early, and its
+    /// tombstone would then refuse a restore the server accepted in time; a late purge loses
+    /// nothing. `None` for a drain that saw no entry: there is no reading of the server's clock
+    /// to judge by, so nothing is judged expired.
+    pub fn judged_at(&self) -> Option<Timestamp> {
         self.latest_changed_at
-            .map_or(clock, |changed_at| clock.max(changed_at))
+    }
+
+    /// Whether the server has indexed the latest `delete` of `records` (an asset's chain, oldest
+    /// first): the feed lists the asset, and the head it carries is that `delete` or a record
+    /// after it. Anything else is a held delete, with no window running on the server: the
+    /// asset is not listed, its head precedes the delete, the entry carries no record, or the
+    /// head is one this chain does not hold.
+    fn indexes_delete_of(&self, asset_id: &Uuid, records: &[ProvenanceRecord]) -> bool {
+        let Some(delete) = records
+            .iter()
+            .rposition(|rec| rec.manifest.core.action == Action::Delete)
+        else {
+            return false;
+        };
+        let Some(Some(head)) = self.server_heads.get(asset_id) else {
+            return false;
+        };
+        records
+            .iter()
+            .position(|rec| rec.record_hash() == *head)
+            .is_some_and(|at| at >= delete)
     }
 }
 
@@ -193,23 +222,42 @@ impl Workspace {
     }
 
     /// The retention sweep's input after a sync: [`expired_trash`](Self::expired_trash) judged
-    /// at the instant [`FeedDrain::judged_at`] gives, or nothing at all when no sync drained
-    /// the feed to its head (`drain` is `None`). Waiting for the drain means a restore on a
-    /// later feed page lands before any deadline is judged, so the sweep never purges an asset
-    /// that page restored. The server clock floors a device clock that runs slow, so the
-    /// device cannot hold open a window the server has closed.
-    pub fn expired_trash_after_drain(
-        &self,
-        clock: Timestamp,
-        drain: Option<FeedDrain>,
-    ) -> Vec<TrashEntry> {
+    /// at the instant [`FeedDrain::judged_at`] gives, less every held delete. Nothing at all
+    /// when no sync drained the feed to its head (`drain` is `None`) or the drain saw no
+    /// entry, which leaves no reading of the server's clock to judge by.
+    ///
+    /// Waiting for the drain means a restore on a later feed page lands before any deadline is
+    /// judged, so the sweep never purges an asset that page restored. Judging by the server's
+    /// clock alone means a device clock running ahead never purges early. A held delete (one
+    /// the server has not indexed, [`FeedDrain::server_heads`]) never expires: the server has
+    /// no window running for it, so only the user's own [`purge`](Self::purge) removes it.
+    pub fn expired_trash_after_drain(&self, drain: Option<&FeedDrain>) -> Vec<TrashEntry> {
         let Some(drain) = drain else {
             tracing::debug!("trash: no drained feed; the retention sweep purges nothing");
             return Vec::new();
         };
-        let now = drain.judged_at(clock);
-        let expired = self.expired_trash(now);
-        tracing::debug!(%clock, %now, expired = expired.len(), "trash: retention sweep judged after a drain");
+        let Some(now) = drain.judged_at() else {
+            tracing::debug!(
+                "trash: the drain saw no server clock reading; the retention sweep purges nothing"
+            );
+            return Vec::new();
+        };
+        let mut held = 0usize;
+        let expired: Vec<TrashEntry> = self
+            .expired_trash(now)
+            .into_iter()
+            .filter(|entry| {
+                let indexed = self.assets.get(&entry.asset_id).is_some_and(|asset| {
+                    drain.indexes_delete_of(&entry.asset_id, asset.chain.records())
+                });
+                if !indexed {
+                    held += 1;
+                    tracing::debug!(asset_id = %entry.asset_id, retention_until = ?entry.retention_until, "trash: the server has not indexed this delete; held, so it never expires");
+                }
+                indexed
+            })
+            .collect();
+        tracing::debug!(%now, expired = expired.len(), held, "trash: retention sweep judged after a drain");
         expired
     }
 
@@ -224,7 +272,18 @@ impl Workspace {
     /// retried from it after [`purge`](Self::purge) returned, and after a reopen. `None` for
     /// an asset this workspace has not purged.
     pub fn purge_record(&self, asset_id: &Uuid) -> Option<&ProvenanceRecord> {
-        self.purged.get(asset_id)
+        self.purged
+            .get(asset_id)
+            .and_then(|chain| chain.records().last())
+    }
+
+    /// A purged asset's whole kept provenance chain, oldest first, headed by
+    /// [`purge_record`](Self::purge_record). A held delivery reads the stretch after the
+    /// server's head from it, so a `delete` the server never saw (and the shorter-retention
+    /// re-issue an early purge appended) is sent from the tombstone once another device's
+    /// upload of the create is indexed. `None` for an asset this workspace has not purged.
+    pub fn purged_chain(&self, asset_id: &Uuid) -> Option<&[ProvenanceRecord]> {
+        self.purged.get(asset_id).map(ProvenanceChain::records)
     }
 
     /// Purge a trashed asset by this device's clock; see [`purge_at`](Self::purge_at).
@@ -268,13 +327,10 @@ impl Workspace {
         db.purge_asset(&id)
             .and_then(|()| db.delete_embeddings_for(&id))
             .map_err(|e| LifecycleError::Db(e.to_string()))?;
-        if let Some(head) = self
-            .assets
-            .remove(asset_id)
-            .and_then(|asset| asset.chain.records().last().cloned())
-        {
-            // The peering tombstone: the kept chain's `delete` head, which a reopen reads back.
-            self.purged.insert(*asset_id, head);
+        if let Some(asset) = self.assets.remove(asset_id) {
+            // The peering tombstone: the kept chain, headed by its `delete`, which a reopen
+            // reads back from the provenance file.
+            self.purged.insert(*asset_id, asset.chain);
         }
         tracing::info!(
             removed_files,

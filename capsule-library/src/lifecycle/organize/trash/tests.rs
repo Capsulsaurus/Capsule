@@ -434,32 +434,145 @@ fn an_older_backup_or_peer_copy_never_resurrects_a_purged_asset() {
     assert!(ws.asset(&ids[0]).is_none());
 }
 
+/// A drain whose feed lists every asset in `heads` at the record at that index of its chain,
+/// with the latest server `changed_at` it saw.
+fn drain_at(ws: &Workspace, changed_at: Timestamp, heads: &[(Uuid, usize)]) -> FeedDrain {
+    FeedDrain {
+        latest_changed_at: Some(changed_at),
+        server_heads: heads
+            .iter()
+            .map(|(asset, at)| {
+                let head = ws.asset(asset).unwrap().chain.records()[*at].record_hash();
+                (*asset, Some(head))
+            })
+            .collect(),
+    }
+}
+
+fn ids_of(entries: &[TrashEntry]) -> Vec<Uuid> {
+    entries.iter().map(|e| e.asset_id).collect()
+}
+
+/// **Expiry is judged by the server's clock as the drain saw it, never the device's.** The
+/// sweep has no clock parameter at all: with no drain, or a drain that saw no entry, nothing
+/// has expired; with one, the latest `changed_at` alone decides, however far the device's own
+/// clock has run past the window.
 #[test]
-fn a_retention_sweep_purges_nothing_without_a_drain_and_is_floored_by_the_server_clock() {
+fn a_retention_sweep_judges_by_the_latest_changed_at_alone() {
     let (lib, src) = (TempDir::new().unwrap(), TempDir::new().unwrap());
     let (mut ws, ids) = library(&lib, &src, 1);
     ws.soft_delete(&ids[0], 30).unwrap();
     let until = until_of(&ws, &ids[0]);
-    let slow_clock = until - SignedDuration::from_hours(1);
+    let indexed = [(ids[0], chain_len(&ws, &ids[0]) - 1)];
 
-    assert!(ws.expired_trash_after_drain(until, None).is_empty());
+    assert!(ws.expired_trash_after_drain(None).is_empty());
+    let no_reading = FeedDrain {
+        latest_changed_at: None,
+        ..drain_at(&ws, until, &indexed)
+    };
+    assert_eq!(no_reading.judged_at(), None);
     assert!(
-        ws.expired_trash_after_drain(slow_clock, Some(FeedDrain::default()))
-            .is_empty()
+        ws.expired_trash_after_drain(Some(&no_reading)).is_empty(),
+        "no server clock reading, so nothing is judged expired"
     );
-    let floored = ws.expired_trash_after_drain(
-        slow_clock,
-        Some(FeedDrain {
-            latest_changed_at: Some(until),
-        }),
-    );
+    // The device's clock is past the window (the trash itself says so), the server's is not.
     assert_eq!(
-        floored.iter().map(|e| e.asset_id).collect::<Vec<_>>(),
+        ids_of(&ws.expired_trash(until + SignedDuration::from_hours(1))),
         vec![ids[0]]
     );
-    // An older server stamp never moves a later clock back.
-    let drain = FeedDrain {
-        latest_changed_at: Some(slow_clock),
+    let behind = drain_at(&ws, until - SignedDuration::from_secs(1), &indexed);
+    assert!(
+        ws.expired_trash_after_drain(Some(&behind)).is_empty(),
+        "a device clock running ahead never purges early"
+    );
+    let at_until = drain_at(&ws, until, &indexed);
+    assert_eq!(at_until.judged_at(), Some(until));
+    assert_eq!(
+        ids_of(&ws.expired_trash_after_drain(Some(&at_until))),
+        vec![ids[0]]
+    );
+}
+
+/// **A held delete never expires.** The server has no window running for a `delete` it has not
+/// indexed, so the sweep keeps the asset however late the server's clock is: not listed, listed
+/// at its create, or listed by an entry that carries no record. Only once the feed's head is
+/// the delete (or a record after it) does the window run; the user's own purge still removes a
+/// held one.
+#[test]
+fn a_retention_sweep_never_expires_a_held_delete() {
+    let (lib, src) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let (mut ws, ids) = library(&lib, &src, 2);
+    for id in &ids {
+        ws.soft_delete(id, 1).unwrap();
+    }
+    let late = until_of(&ws, &ids[0]).max(until_of(&ws, &ids[1])) + SignedDuration::from_hours(1);
+    let delete_at = chain_len(&ws, &ids[0]) - 1;
+
+    let unlisted = drain_at(&ws, late, &[(ids[1], delete_at)]);
+    assert_eq!(
+        ids_of(&ws.expired_trash_after_drain(Some(&unlisted))),
+        vec![ids[1]],
+        "the unlisted asset's delete is held"
+    );
+    let at_create = drain_at(&ws, late, &[(ids[0], 0), (ids[1], 0)]);
+    assert!(
+        ws.expired_trash_after_drain(Some(&at_create)).is_empty(),
+        "the server's head precedes both deletes"
+    );
+    let mut no_record = drain_at(&ws, late, &[(ids[1], delete_at)]);
+    no_record.server_heads.insert(ids[0], None);
+    assert_eq!(
+        ids_of(&ws.expired_trash_after_drain(Some(&no_record))),
+        vec![ids[1]],
+        "an entry with no record is no evidence the server indexed the delete"
+    );
+    let mut foreign = drain_at(&ws, late, &[]);
+    foreign
+        .server_heads
+        .insert(ids[0], Some(capsule_core::crypto::hash::hash_bytes(b"x")));
+    assert!(
+        ws.expired_trash_after_drain(Some(&foreign)).is_empty(),
+        "a head this chain does not hold"
+    );
+
+    ws.purge(&ids[0]).unwrap();
+    assert_eq!(ws.tombstones(), BTreeSet::from([ids[0]]));
+}
+
+/// **A purged asset's held records are delivered from its kept chain.** The whole chain stays
+/// readable after a purge and after a reopen: the create, the delete the server never saw, and
+/// the shorter-retention re-issue at its head, so a delivery can send the stretch after the
+/// server's head from the tombstone.
+#[test]
+fn a_purged_asset_keeps_its_whole_chain_across_a_reopen() {
+    let (lib, src) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let (gone, chain) = {
+        let (mut ws, ids) = library(&lib, &src, 2);
+        ws.soft_delete(&ids[0], 30).unwrap();
+        let now = until_of(&ws, &ids[0]) - SignedDuration::from_hours(24);
+        let reissue = ws.purge_at(&ids[0], now).unwrap().reissue.unwrap();
+        let chain = ws.purged_chain(&ids[0]).expect("a kept chain").to_vec();
+        assert_eq!(chain.last(), Some(&reissue));
+        assert_eq!(
+            chain.first().map(|r| r.manifest.core.action),
+            Some(Action::Create)
+        );
+        let actions: Vec<_> = chain
+            .iter()
+            .rev()
+            .take(2)
+            .map(|r| r.manifest.core.action)
+            .collect();
+        assert_eq!(
+            actions,
+            vec![Action::Delete, Action::Delete],
+            "the re-issue over the held delete"
+        );
+        assert_eq!(ws.purged_chain(&ids[1]), None);
+        (ids[0], chain)
     };
-    assert_eq!(drain.judged_at(until), until);
+
+    let ws = Workspace::open(lib.path(), b"passphrase", FAST_PARAMS).unwrap();
+    assert_eq!(ws.purged_chain(&gone), Some(chain.as_slice()));
+    assert_eq!(ws.purge_record(&gone), chain.last());
 }

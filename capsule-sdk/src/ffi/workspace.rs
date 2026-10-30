@@ -33,10 +33,11 @@
 //! [`verify_asset`]: capsule_core::crypto::verify_asset::verify_asset
 //! [`Workspace`]: capsule_library::lifecycle::Workspace
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use capsule_core::crypto::hash::Hash32;
+use capsule_core::crypto::hash::{Hash32, hash_bytes};
 use capsule_core::crypto::keys::{
     HardwareBackedSigner, HardwareKeyAgreement, HardwareSigner, HardwareSignerError, P256HybridDek,
     Signer, encapsulate_to_p256_public,
@@ -907,9 +908,14 @@ pub struct FfiPurgeOutcome {
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct FfiFeedDrain {
     /// The latest server `changed_at` the drain saw (RFC 3339), or `None` for a drain that saw
-    /// no entry. It floors this device's clock, so a slow clock cannot hold open a window the
-    /// server has closed.
+    /// no entry. Deadlines are judged at it alone, never by this device's clock, so with
+    /// `None` nothing has expired.
     pub latest_changed_at: Option<String>,
+    /// Every asset the drained feed lists, keyed by its id as the feed names it, with the
+    /// `manifest_cbor` of its latest entry (empty for an entry that carries no record). An
+    /// asset whose latest `delete` is not that head or before it is a held delete, which
+    /// never expires. Ids that are not UUIDs name no asset of this workspace and are ignored.
+    pub server_heads: HashMap<String, Vec<u8>>,
 }
 
 impl FfiFeedDrain {
@@ -922,7 +928,19 @@ impl FfiFeedDrain {
             .map_err(|e| FfiError::InvalidArgument {
                 detail: format!("latest_changed_at: not an RFC 3339 timestamp ({e})"),
             })?;
-        Ok(FeedDrain { latest_changed_at })
+        let server_heads = self
+            .server_heads
+            .iter()
+            .filter_map(|(asset_id, head)| {
+                let asset_id = Uuid::parse_str(asset_id).ok()?;
+                let head = (!head.is_empty()).then(|| hash_bytes(head));
+                Some((asset_id, head))
+            })
+            .collect();
+        Ok(FeedDrain {
+            latest_changed_at,
+            server_heads,
+        })
     }
 }
 
@@ -1876,10 +1894,11 @@ impl FfiWorkspace {
     /// input, each one ready for [`purge_asset`](Self::purge_asset).
     ///
     /// A deadline is judged only after a sync drained the feed to its head, so a restore on a
-    /// later page lands first: pass that drain as `drain`. The deadline is judged by this
-    /// device's clock floored by the drain's latest server `changed_at`. With no drain (`None`:
-    /// the sync failed, or this device has no server) nothing has expired, and the trash keeps
-    /// every asset until the user empties it.
+    /// later page lands first: pass that drain as `drain`. The deadline is judged by the
+    /// drain's latest server `changed_at` alone, never by this device's clock, and an asset
+    /// whose `delete` the server has not indexed (a held delete) never expires. With no drain
+    /// (`None`: the sync failed, or this device has no server), or a drain that saw no entry,
+    /// nothing has expired, and the trash keeps every asset until the user empties it.
     ///
     /// # Errors
     ///
@@ -1889,13 +1908,13 @@ impl FfiWorkspace {
         drain: Option<FfiFeedDrain>,
     ) -> Result<Vec<FfiTrashEntry>, FfiError> {
         let drain = drain.as_ref().map(FfiFeedDrain::parse).transpose()?;
-        let clock = Timestamp::now();
-        let judged_at = drain.map_or(clock, |drain| drain.judged_at(clock));
+        // Every entry the sweep returns was judged at this reading; with none it returns none.
+        let judged_at = drain.as_ref().and_then(FeedDrain::judged_at);
         self.with(|ws| {
             Ok(ws
-                .expired_trash_after_drain(clock, drain)
+                .expired_trash_after_drain(drain.as_ref())
                 .iter()
-                .map(|entry| FfiTrashEntry::new(entry, judged_at))
+                .filter_map(|entry| judged_at.map(|at| FfiTrashEntry::new(entry, at)))
                 .collect())
         })
     }

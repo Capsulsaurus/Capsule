@@ -186,11 +186,11 @@ fn read_chain(provenance_path: &Path) -> Result<ProvenanceChain> {
     Ok(chain)
 }
 
-/// The asset id and kept chain head of a purged asset: a provenance chain that reads whole, is
+/// The asset id and kept chain of a purged asset: a provenance chain that reads whole, is
 /// headed by a `delete`, and has neither a sidecar nor an original beside it. `None` for
 /// anything else, which is damage (a lost sidecar of a live, restored or trashed asset, a
 /// corrupt chain) rather than a purge.
-fn purged_head(provenance_path: &Path, stem: &str) -> Option<(Uuid, ProvenanceRecord)> {
+fn purged_chain(provenance_path: &Path, stem: &str) -> Option<(Uuid, ProvenanceChain)> {
     let dir = provenance_path.parent()?;
     let asset_id = Uuid::parse_str(stem).ok()?;
     if provenance_path
@@ -200,8 +200,9 @@ fn purged_head(provenance_path: &Path, stem: &str) -> Option<(Uuid, ProvenanceRe
     {
         return None;
     }
-    let head = read_chain(provenance_path).ok()?.records().last()?.clone();
-    (head.manifest.core.action == Action::Delete).then_some((asset_id, head))
+    let chain = read_chain(provenance_path).ok()?;
+    let headed_by_delete = chain.records().last()?.manifest.core.action == Action::Delete;
+    headed_by_delete.then_some((asset_id, chain))
 }
 
 impl Workspace {
@@ -908,10 +909,10 @@ impl Workspace {
                 // sidecar beside it is that record, not damage. Anything else falls through to
                 // the warning below.
                 Err(e) => {
-                    if let Some((asset_id, head)) = purged_head(path, stem) {
+                    if let Some((asset_id, chain)) = purged_chain(path, stem) {
                         purged += 1;
-                        tracing::trace!(provenance = %path.display(), %asset_id, restore_error = %e, "workspace open: purged asset; only its provenance chain is kept");
-                        self.purged.insert(asset_id, head);
+                        tracing::trace!(provenance = %path.display(), %asset_id, records = chain.records().len(), restore_error = %e, "workspace open: purged asset; only its provenance chain is kept");
+                        self.purged.insert(asset_id, chain);
                     } else {
                         skipped += 1;
                         tracing::warn!(
