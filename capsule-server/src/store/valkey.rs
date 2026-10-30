@@ -135,8 +135,8 @@ use super::ids::{
     OidcNonce, OidcState, OwnerId, PkceVerifier, SessionId, UploadId, UserId,
 };
 use super::upload::{
-    AcceptedChunk, BlobRole, FinalizeClaim, LIFETIME_CAP, UploadSessionRecord, UploadSessionStatus,
-    UploadSessionStore,
+    AcceptedChunk, BlobRole, FinalizeClaim, LIFETIME_CAP, UnclaimedDiscard, UploadSessionRecord,
+    UploadSessionStatus, UploadSessionStore,
 };
 use super::{Clock, StoreError, StoreFuture, deadline};
 
@@ -993,11 +993,19 @@ redis.call('SADD', KEYS[4], ARGV[2])
 return redis.call('HGETALL', KEYS[1])"
 );
 
-// KEYS: record, chunks, progress zset, claimed set. ARGV: now, upload_id. Record, replay
-// entries and every view entry, together.
+// KEYS: record, chunks, progress zset, claimed set. ARGV: now, upload_id, and an optional
+// `unclaimed`. Record, replay entries and every view entry, together. With `unclaimed`, only a
+// live `pending` or `uploading` session goes, and the script returns 0 (not found) or 1
+// (claimed or terminal) instead — the compare and the discard are one script, as in
+// `CLAIM_FINALIZE`.
 script!(
     DISCARD_UPLOAD,
-    "local record = redis.call('HGETALL', KEYS[1])
+    "if ARGV[3] == 'unclaimed' then
+  if not live(KEYS[1], ARGV[1], KEYS[2]) then return 0 end
+  local status = redis.call('HGET', KEYS[1], 'status')
+  if status ~= 'pending' and status ~= 'uploading' then return 1 end
+end
+local record = redis.call('HGETALL', KEYS[1])
 redis.call('DEL', KEYS[1], KEYS[2])
 redis.call('ZREM', KEYS[3], ARGV[2])
 redis.call('SREM', KEYS[4], ARGV[2])
@@ -1839,6 +1847,44 @@ impl UploadSessionStore for ValkeyUploadSessions {
                 .await?;
             tracing::info!(%upload, hit = removed.is_some(), "discarded upload session");
             Ok(removed)
+        })
+    }
+
+    fn discard_unclaimed<'a>(&'a self, upload: &'a UploadId) -> StoreFuture<'a, UnclaimedDiscard> {
+        Box::pin(async move {
+            let outcome: Value = self
+                .valkey
+                .eval(
+                    UPLOADS,
+                    &DISCARD_UPLOAD,
+                    &Self::record_keys(upload),
+                    &[self.now(), upload.to_string(), "unclaimed".to_owned()],
+                )
+                .await?;
+            match outcome {
+                Value::Int(0) | Value::Nil => {
+                    tracing::debug!(%upload, "an unclaimed discard found no session");
+                    Ok(UnclaimedDiscard::NotFound)
+                }
+                Value::Int(1) => {
+                    tracing::debug!(%upload, "an unclaimed discard found the session claimed");
+                    Ok(UnclaimedDiscard::Claimed)
+                }
+                record => {
+                    let flat = Vec::<String>::from_redis_value(record).map_err(|_| {
+                        tracing::error!(%upload, "the discard script answered a shape it should not");
+                        StoreError::Corrupt {
+                            store: UPLOADS,
+                            record: "UploadSessionRecord",
+                            detail: "the discard script answered neither a verdict nor a record"
+                                .to_owned(),
+                        }
+                    })?;
+                    let removed = decode_upload(flat)?;
+                    tracing::info!(%upload, "discarded an unclaimed upload session");
+                    Ok(UnclaimedDiscard::Discarded(Box::new(removed)))
+                }
+            }
         })
     }
 

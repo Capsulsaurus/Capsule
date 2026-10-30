@@ -449,10 +449,29 @@ impl Harness {
             .expect("the session is still readable");
         (record.status, record.failure_code)
     }
+
+    /// Whether `upload` is gone from the session store.
+    async fn discarded(&self, upload: &UploadId) -> bool {
+        self.context
+            .sessions()
+            .read(upload)
+            .await
+            .expect("the store answers")
+            .is_none()
+    }
+
+    /// Whether `upload`'s stage is gone: dropping it again finds nothing.
+    async fn unstaged(&self, upload: &UploadId) -> bool {
+        !self
+            .blobs
+            .abandon(upload)
+            .await
+            .expect("the blob store answers")
+    }
 }
 
 #[tokio::test]
-async fn another_accounts_session_over_its_hard_limit_is_ended_not_charged() {
+async fn another_accounts_session_over_its_hard_limit_is_discarded_not_charged() {
     let h = limited_harness(tight());
     let other = UserId::new("reservation-other".to_owned());
     h.charge(&uploader()).await;
@@ -470,25 +489,18 @@ async fn another_accounts_session_over_its_hard_limit_is_ended_not_charged() {
         BYTES.len() as u64,
         "the dedup never carries the other account over its hard limit"
     );
-    assert_eq!(
-        h.status(&theirs.upload_id).await,
-        (
-            UploadSessionStatus::FailedProcessing,
-            Some(error_codes::QUOTA_EXCEEDED.to_owned())
-        ),
+    assert!(
+        h.discarded(&theirs.upload_id).await,
         "a session that cannot be charged may not go on to store its bytes"
     );
     assert!(
-        !h.blobs
-            .abandon(&theirs.upload_id)
-            .await
-            .expect("the blob store answers"),
+        h.unstaged(&theirs.upload_id).await,
         "its stage was already dropped"
     );
 }
 
 #[tokio::test]
-async fn another_accounts_suspended_session_is_ended_not_charged() {
+async fn another_accounts_suspended_session_is_discarded_not_charged() {
     let h = harness();
     let other = UserId::new("reservation-other".to_owned());
     h.charge(&uploader()).await;
@@ -512,13 +524,8 @@ async fn another_accounts_suspended_session_is_ended_not_charged() {
         0,
         "a suspended account is never charged"
     );
-    assert_eq!(
-        h.status(&theirs.upload_id).await,
-        (
-            UploadSessionStatus::FailedProcessing,
-            Some(error_codes::QUOTA_SUSPENDED.to_owned())
-        )
-    );
+    assert!(h.discarded(&theirs.upload_id).await);
+    assert!(h.unstaged(&theirs.upload_id).await);
 }
 
 #[tokio::test]
@@ -541,10 +548,7 @@ async fn a_refused_session_hands_the_charge_to_the_next_live_one() {
     );
     assert_eq!(h.used(&full).await, BYTES.len() as u64);
     assert_eq!(h.used(&roomy).await, BYTES.len() as u64);
-    assert_eq!(
-        h.status(&refused.upload_id).await.0,
-        UploadSessionStatus::FailedProcessing
-    );
+    assert!(h.discarded(&refused.upload_id).await);
     assert_eq!(
         h.status(&charged.upload_id).await.0,
         UploadSessionStatus::Uploading

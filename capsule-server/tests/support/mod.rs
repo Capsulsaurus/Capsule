@@ -107,8 +107,9 @@ use capsule_server::store::{
     ChannelStore, Clock, CohortRecord, CohortStore, Direction, DrainOutcome, ENROLLMENT_CODE_TTL,
     EnrollmentCode, EnrollmentStore, FinalizeClaim, OidcAuthorizationStore, OidcState, OwnerId,
     PendingAuthorization, PendingEnrollment, RELAY_CHANNEL_TTL, RelayChannel, RelayOutcome,
-    RelayPayload, RevokeAllChallenge, SessionId, SessionRecord, StoreError, StoreFuture, UploadId,
-    UploadSessionRecord, UploadSessionStatus, UploadSessionStore, UserId,
+    RelayPayload, RevokeAllChallenge, SessionId, SessionRecord, StoreError, StoreFuture,
+    UnclaimedDiscard, UploadId, UploadSessionRecord, UploadSessionStatus, UploadSessionStore,
+    UserId,
 };
 
 pub(crate) mod idp;
@@ -2340,6 +2341,13 @@ impl UploadSessionStore for SwitchableUploads {
             return Box::pin(async { Self::refuse() });
         }
         self.inner.discard(upload)
+    }
+
+    fn discard_unclaimed<'a>(&'a self, upload: &'a UploadId) -> StoreFuture<'a, UnclaimedDiscard> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.discard_unclaimed(upload)
     }
 
     fn pending_for_address<'a>(

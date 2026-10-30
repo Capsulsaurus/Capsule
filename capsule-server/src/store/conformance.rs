@@ -50,8 +50,8 @@ use super::ids::{
     OidcState, OwnerId, PkceVerifier, SessionId, UploadId, UserId,
 };
 use super::upload::{
-    AcceptedChunk, BlobRole, FinalizeClaim, UploadSessionRecord, UploadSessionStatus,
-    UploadSessionStore,
+    AcceptedChunk, BlobRole, FinalizeClaim, UnclaimedDiscard, UploadSessionRecord,
+    UploadSessionStatus, UploadSessionStore,
 };
 use super::{StoreError, StoreFuture, deadline};
 
@@ -862,6 +862,76 @@ pub async fn finalization_is_claimed_exactly_once(h: &dyn Harness) {
         FinalizeClaim::NotFound,
         "claiming an unknown session is distinguishable from losing the race"
     );
+}
+
+/// An unclaimed discard takes a `Pending` or `Uploading` session, and leaves a claimed or
+/// terminal one exactly as it is.
+pub async fn an_unclaimed_discard_never_takes_a_claimed_session(h: &dyn Harness) {
+    let store = h.uploads();
+    let open = upload("unclaimed-open", "a", "uploader", 0);
+    let claimed = upload("unclaimed-claimed", "a", "uploader", 0);
+    let failed = upload("unclaimed-failed", "a", "uploader", 0);
+    for record in [&open, &claimed, &failed] {
+        ok(store.open(record.clone()).await, "open");
+    }
+    ok(
+        store.claim_finalize(&claimed.upload_id).await,
+        "claim_finalize",
+    );
+    ok(
+        store
+            .fail_processing(&failed.upload_id, "error.upload.hash_mismatch")
+            .await,
+        "fail_processing",
+    );
+
+    match ok(
+        store.discard_unclaimed(&open.upload_id).await,
+        "discard_unclaimed",
+    ) {
+        UnclaimedDiscard::Discarded(removed) => assert_eq!(
+            removed.upload_id, open.upload_id,
+            "the discard hands back the session it removed"
+        ),
+        other => panic!("an open session must be discarded, got {other:?}"),
+    }
+    assert_eq!(
+        ok(store.read(&open.upload_id).await, "read"),
+        None,
+        "the discarded session is gone"
+    );
+    assert_eq!(
+        ok(
+            store.discard_unclaimed(&open.upload_id).await,
+            "discard_unclaimed"
+        ),
+        UnclaimedDiscard::NotFound,
+        "discarding it again finds nothing"
+    );
+
+    for (record, status) in [
+        (&claimed, UploadSessionStatus::WaitingForProcessing),
+        (&failed, UploadSessionStatus::FailedProcessing),
+    ] {
+        assert_eq!(
+            ok(
+                store.discard_unclaimed(&record.upload_id).await,
+                "discard_unclaimed"
+            ),
+            UnclaimedDiscard::Claimed,
+            "a {status:?} session is not discarded"
+        );
+        assert_eq!(
+            present(
+                ok(store.read(&record.upload_id).await, "read"),
+                "the session"
+            )
+            .status,
+            status,
+            "the refused discard left the session as it was"
+        );
+        ok(store.discard(&record.upload_id).await, "discard");
+    }
 }
 
 /// A claimed session is no longer an eviction candidate — the promise the claim makes.
@@ -2031,6 +2101,7 @@ pub async fn run_all(h: &dyn Harness) {
     recording_progress_advances_bytes_clock_and_replay_together(h).await;
     chunk_replay_is_offset_addressed(h).await;
     finalization_is_claimed_exactly_once(h).await;
+    an_unclaimed_discard_never_takes_a_claimed_session(h).await;
     a_claimed_session_leaves_the_eviction_view(h).await;
     reconciling_received_bytes_does_not_move_the_progress_clock(h).await;
     a_terminal_session_is_not_an_eviction_candidate(h).await;

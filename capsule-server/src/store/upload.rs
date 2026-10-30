@@ -237,6 +237,18 @@ pub enum FinalizeClaim {
     NotFound,
 }
 
+/// The outcome of discarding a session only while nobody has claimed its finalization.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UnclaimedDiscard {
+    /// The session was `Pending` or `Uploading` and is gone. The record is the session as it
+    /// was discarded.
+    Discarded(Box<UploadSessionRecord>),
+    /// The session's finalization is claimed, or it is terminal: it was left as it is.
+    Claimed,
+    /// No such session.
+    NotFound,
+}
+
 /// The lifetime cap an upload session is stored under.
 ///
 /// 24 hours, from design/filesystem/server.md: Valkey's native TTL *is* the cap. The record
@@ -343,6 +355,14 @@ pub trait UploadSessionStore: std::fmt::Debug + Send + Sync {
     /// Discard a session: its record, its accepted-chunk replay entries, and its place in
     /// both views, together. Returns the record that was removed, or `None`.
     fn discard<'a>(&'a self, upload: &'a UploadId) -> StoreFuture<'a, Option<UploadSessionRecord>>;
+
+    /// [`Self::discard`] `upload` only if it is `Pending` or `Uploading`.
+    ///
+    /// The compare and the discard are one step, as in [`Self::claim_finalize`], so a session
+    /// whose finalization a racing request claims is never discarded out from under its
+    /// finalizer: one of the two wins, and the other sees [`UnclaimedDiscard::Claimed`] or
+    /// [`FinalizeClaim::NotFound`].
+    fn discard_unclaimed<'a>(&'a self, upload: &'a UploadId) -> StoreFuture<'a, UnclaimedDiscard>;
 
     /// The active session `uploader` currently has open for `expected_hash`, if any.
     ///

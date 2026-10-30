@@ -39,10 +39,13 @@
 //!
 //! That charge is an upload's charge ([`crate::quota::charge_upload`]), with its hard-limit and
 //! suspension checks, so a dedup never pushes an account over its limit. A session whose
-//! uploader is refused is ended with the refusal's code, its stage dropped, and the next live
-//! session for the address is tried. The one exception is a session whose finalization is
-//! already claimed: every byte is on the server and failing it would race its finalizer, so it
-//! is charged past the check, as [`crate::quota`] records.
+//! uploader is refused is discarded with its stage, the way a refused post-open re-charge
+//! undoes a session, and the next live session for the address is tried. Its client's next
+//! request finds no session, and re-creating it is refused with the same code. Discarding
+//! leaves the session state machine as it is: a session is claimed for finalization only once
+//! every byte has arrived. The one exception is a session whose finalization is already
+//! claimed: every byte is on the server and ending it would race its finalizer, so it is
+//! charged past the check, as [`crate::quota`] records.
 //!
 //! # Racing a create for the same bytes
 //!
@@ -58,7 +61,7 @@
 use capsule_i18n::error_codes;
 
 use crate::blob::{BlobError, ContentAddress};
-use crate::store::{FinalizeClaim, StoreError, UploadSessionRecord, UploadSessionStatus};
+use crate::store::{StoreError, UnclaimedDiscard, UploadSessionRecord, UploadSessionStatus};
 use crate::upload::UploadContext;
 
 /// What giving a session's reservation back did.
@@ -164,12 +167,14 @@ pub async fn release(
 ///
 /// The charge is the upload's own ([`crate::quota::charge_upload`]), so the hard limit and a
 /// suspension refuse it exactly as they would have refused the session at creation. A session
-/// whose uploader is refused may not go on to store bytes it is not charged for, and is ended
-/// the way a refused post-open re-charge ends it: its stage dropped and the session failed
-/// with the refusal's code, which its client reads from `HEAD`. The ending is claimed first
-/// ([`crate::store::UploadSessionStore::claim_finalize`]), so a session whose finalization is
-/// already under way is never failed out from under its finalizer; see [`charge_finalizing`].
-/// The next live session for the address is then tried, and `false` says so.
+/// whose uploader is refused may not go on to store bytes it is not charged for, and is undone
+/// the way a refused post-open re-charge undoes it: the session discarded and its stage
+/// dropped. Its client's next request is the uniform `404`, and the re-create it answers with
+/// is refused with the code this charge was. The discard is a compare-and-set
+/// ([`crate::store::UploadSessionStore::discard_unclaimed`]), so a session whose finalization
+/// is already under way is never discarded out from under its finalizer; see
+/// [`charge_finalizing`]. The next live session for the address is then tried, and `false`
+/// says so.
 async fn recharge(
     context: &UploadContext,
     address: &ContentAddress,
@@ -196,22 +201,23 @@ async fn recharge(
         crate::quota::UploadCharge::Refused => error_codes::QUOTA_EXCEEDED,
         crate::quota::UploadCharge::Suspended => error_codes::QUOTA_SUSPENDED,
     };
-    match context.sessions().claim_finalize(other).await? {
-        FinalizeClaim::Won(_) => {
+    match context.sessions().discard_unclaimed(other).await? {
+        UnclaimedDiscard::Discarded(_) => {
+            // The record first, so a finalizer can no longer claim the session; a stage left by
+            // a failed drop is an orphan the startup scrub deletes.
             if let Err(error) = context.blobs().abandon(other).await {
                 tracing::error!(%error, %other, "a refused session's stage could not be dropped");
             }
-            context.sessions().fail_processing(other, code).await?;
             tracing::info!(
                 %other,
                 uploader = %holder.upload_user_id,
                 size = holder.total_size,
-                failure_code = code,
-                "a live session for the released address could not be charged; ended it"
+                refusal = code,
+                "a live session for the released address could not be charged; discarded it"
             );
             Ok(false)
         }
-        FinalizeClaim::AlreadyClaimed => match context.sessions().read(other).await? {
+        UnclaimedDiscard::Claimed => match context.sessions().read(other).await? {
             Some(current)
                 if matches!(
                     current.status,
@@ -225,7 +231,7 @@ async fn recharge(
                 Ok(false)
             }
         },
-        FinalizeClaim::NotFound => {
+        UnclaimedDiscard::NotFound => {
             tracing::debug!(%other, "a refused session for the address has since gone");
             Ok(false)
         }
@@ -237,7 +243,7 @@ async fn recharge(
 ///
 /// Every byte is on the server and a finalizer is committing them (or has), so refusing now
 /// costs storage rather than saving it — the reason session creation is quota's one
-/// enforcement point ([`crate::quota`], "One hard enforcement point") — and failing the session
+/// enforcement point ([`crate::quota`], "One hard enforcement point") — and ending the session
 /// would race the finalizer's own terminal write. The bytes are charged to their uploader
 /// through the ledger directly, which may carry the account over its hard limit: the
 /// documented exception in [`crate::quota`], "How an account reaches `HardExceeded`". Should

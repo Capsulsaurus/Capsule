@@ -40,6 +40,7 @@ conformance_cases! {
     recording_progress_advances_bytes_clock_and_replay_together,
     chunk_replay_is_offset_addressed,
     finalization_is_claimed_exactly_once,
+    an_unclaimed_discard_never_takes_a_claimed_session,
     a_claimed_session_leaves_the_eviction_view,
     reconciling_received_bytes_does_not_move_the_progress_clock,
     a_terminal_session_is_not_an_eviction_candidate,

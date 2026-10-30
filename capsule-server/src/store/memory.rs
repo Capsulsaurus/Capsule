@@ -34,8 +34,8 @@ use super::ids::{
     UploadId, UserId,
 };
 use super::upload::{
-    AcceptedChunk, FinalizeClaim, LIFETIME_CAP, UploadSessionRecord, UploadSessionStatus,
-    UploadSessionStore,
+    AcceptedChunk, FinalizeClaim, LIFETIME_CAP, UnclaimedDiscard, UploadSessionRecord,
+    UploadSessionStatus, UploadSessionStore,
 };
 use super::{Clock, StoreError, StoreFuture, deadline};
 
@@ -608,6 +608,35 @@ impl UploadSessionStore for InMemoryUploadSessions {
             let removed = state.sessions.remove(upload).map(|entry| entry.record);
             tracing::info!(%upload, hit = removed.is_some(), "discarded upload session");
             Ok(removed)
+        })
+    }
+
+    fn discard_unclaimed<'a>(&'a self, upload: &'a UploadId) -> StoreFuture<'a, UnclaimedDiscard> {
+        Box::pin(async move {
+            let now = self.clock.now();
+            let mut state = lock(&self.state);
+            state.purge(now);
+            let Some(entry) = state.sessions.get(upload) else {
+                tracing::debug!(%upload, "an unclaimed discard found no session");
+                return Ok(UnclaimedDiscard::NotFound);
+            };
+            if !matches!(
+                entry.record.status,
+                UploadSessionStatus::Pending | UploadSessionStatus::Uploading
+            ) {
+                tracing::debug!(
+                    %upload,
+                    status = entry.record.status.as_str(),
+                    "an unclaimed discard found the session claimed"
+                );
+                return Ok(UnclaimedDiscard::Claimed);
+            }
+            state.chunks.remove(upload);
+            let Some(removed) = state.sessions.remove(upload) else {
+                return Ok(UnclaimedDiscard::NotFound);
+            };
+            tracing::info!(%upload, "discarded an unclaimed upload session");
+            Ok(UnclaimedDiscard::Discarded(Box::new(removed.record)))
         })
     }
 
