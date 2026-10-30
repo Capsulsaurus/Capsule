@@ -511,15 +511,22 @@ fn a_new_generation_builds_a_new_client() {
     let counter = built.clone();
     let pool = GenerationPool::new(move || {
         counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        crate::net::http_client().expect("client builds")
+        crate::net::http_client()
     });
     assert_eq!(pool.generation(), None);
 
-    let _ = pool.client(PathGeneration(1));
-    let _ = pool.client(PathGeneration(1));
+    pool.client(PathGeneration(1)).expect("client builds");
+    pool.client(PathGeneration(1)).expect("client builds");
     assert_eq!(built.load(std::sync::atomic::Ordering::SeqCst), 1);
 
-    let _ = pool.client(PathGeneration(2));
+    pool.client(PathGeneration(2)).expect("client builds");
     assert_eq!(built.load(std::sync::atomic::Ordering::SeqCst), 2);
     assert_eq!(pool.generation(), Some(PathGeneration(2)));
+}
+
+#[test]
+fn the_sdk_pool_builds_handshake_clients() {
+    let pool = GenerationPool::sdk();
+    pool.client(PathGeneration(1)).expect("client builds");
+    assert_eq!(pool.generation(), Some(PathGeneration(1)));
 }

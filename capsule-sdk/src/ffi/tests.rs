@@ -931,6 +931,78 @@ async fn ffi_push_asset_streams_the_original_in_bounded_windows() {
     }
 }
 
+/// **The path the app reports plans the push.** On a metered cellular path the push is staged:
+/// the index tier publishes the asset and the original waits, where the hard-coded unmetered
+/// class used to send it. Back on an unmetered path the next push sends the original.
+#[tokio::test]
+async fn ffi_push_asset_plans_from_the_reported_path() {
+    let lib = tempfile::TempDir::new().unwrap();
+    let workspace = enroll(lib.path());
+    let album = workspace
+        .ensure_album(workspace.default_album_id().unwrap(), "Camera Roll".into())
+        .unwrap();
+    let chunks = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let server = recording_upload_server(chunks.clone()).await;
+    let session = login(&server).await;
+
+    let desktop = FfiPathSnapshot {
+        cost: FfiPathCost::Unmetered,
+        reachable: true,
+        interface: FfiPathInterface::Other,
+        power: FfiPowerState::External,
+        thermal: FfiThermalState::Nominal,
+        background_deadline_ms: None,
+    };
+    assert_eq!(
+        session.set_path(desktop),
+        1,
+        "the default path is unchanged"
+    );
+    let cellular = FfiPathSnapshot {
+        cost: FfiPathCost::Metered,
+        interface: FfiPathInterface::Cellular,
+        ..desktop
+    };
+    assert_eq!(
+        session.set_path(cellular),
+        2,
+        "a new path is a new generation"
+    );
+    assert_eq!(
+        session.set_path(FfiPathSnapshot {
+            power: FfiPowerState::Battery,
+            ..cellular
+        }),
+        2,
+        "a power change is the same path"
+    );
+
+    let asset = workspace
+        .seal_asset(album, "IMG_0043.JPG".into(), original_plaintext(64 * 1024))
+        .unwrap();
+    let report = session
+        .push_asset(workspace.clone(), asset.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        report
+            .pushed
+            .iter()
+            .map(|b| b.tier.as_str())
+            .collect::<Vec<_>>(),
+        vec!["index", "index"],
+        "the original waits for an unmetered path"
+    );
+    assert_eq!(report.deferred, 1);
+
+    assert_eq!(session.set_path(desktop), 3);
+    let report = session.push_asset(workspace, asset).await.unwrap();
+    assert!(
+        report.pushed.iter().any(|b| b.tier == "original"),
+        "the original goes once the path allows it"
+    );
+}
+
 /// An unknown asset is refused before any request, and a malformed id is the caller's.
 #[tokio::test]
 async fn ffi_push_asset_refuses_an_unknown_asset() {

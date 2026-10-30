@@ -548,8 +548,9 @@ impl PathMonitor {
             HeldAdvice::none(),
             self.bounds,
         );
-        drop(state);
+        // Published under the lock, so two samples racing publish in the order they planned.
         self.publish(plan);
+        drop(state);
         if new_path {
             tracing::info!(
                 generation = plan.generation.0,
@@ -574,8 +575,8 @@ impl PathMonitor {
             HeldAdvice::none(),
             self.bounds,
         );
-        drop(state);
         self.publish(plan);
+        drop(state);
         plan
     }
 
@@ -605,7 +606,7 @@ impl PathMonitor {
 /// old one: no request on the new path rides a connection dialled over the old one. In-flight
 /// requests keep the clone they hold until they end.
 pub struct GenerationPool {
-    build: Box<dyn Fn() -> reqwest::Client + Send + Sync>,
+    build: Box<dyn Fn() -> reqwest::Result<reqwest::Client> + Send + Sync>,
     current: Mutex<Option<(PathGeneration, reqwest::Client)>>,
 }
 
@@ -621,11 +622,19 @@ impl GenerationPool {
     /// A pool whose clients come from `build`, which must start from
     /// [`http_builder`](super::http_builder) so every client carries the handshake.
     #[must_use]
-    pub fn new(build: impl Fn() -> reqwest::Client + Send + Sync + 'static) -> Self {
+    pub fn new(
+        build: impl Fn() -> reqwest::Result<reqwest::Client> + Send + Sync + 'static,
+    ) -> Self {
         Self {
             build: Box::new(build),
             current: Mutex::new(None),
         }
+    }
+
+    /// A pool of [`http_client`](super::http_client)s: the SDK's one client shape.
+    #[must_use]
+    pub fn sdk() -> Self {
+        Self::new(super::http_client)
     }
 
     /// The generation the held client was built for, if one has been built.
@@ -640,23 +649,27 @@ impl GenerationPool {
 
     /// The client for `generation`: the held one while the generation is unchanged, a fresh one
     /// — dropping the old pool — once it moves.
-    pub fn client(&self, generation: PathGeneration) -> reqwest::Client {
+    ///
+    /// # Errors
+    ///
+    /// Whatever building the fresh client refused with; the held client, if any, is kept, so
+    /// the next call tries again.
+    pub fn client(&self, generation: PathGeneration) -> reqwest::Result<reqwest::Client> {
         let mut current = self.current.lock().unwrap_or_else(PoisonError::into_inner);
-        match current.as_ref() {
-            Some((held, client)) if *held == generation => client.clone(),
-            previous => {
-                if let Some((old, _)) = previous {
-                    tracing::info!(
-                        old = old.0,
-                        new = generation.0,
-                        "path: a new generation; dropping pooled connections"
-                    );
-                }
-                let client = (self.build)();
-                *current = Some((generation, client.clone()));
-                client
-            }
+        if let Some((held, client)) = current.as_ref()
+            && *held == generation
+        {
+            return Ok(client.clone());
         }
+        let client = (self.build)()?;
+        if let Some((old, _)) = current.replace((generation, client.clone())) {
+            tracing::info!(
+                old = old.0,
+                new = generation.0,
+                "path: a new generation; dropping pooled connections"
+            );
+        }
+        Ok(client)
     }
 }
 
