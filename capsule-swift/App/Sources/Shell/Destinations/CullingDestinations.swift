@@ -20,6 +20,7 @@ extension RouteDestination {
                 query: query,
                 library: environment.mock.library,
                 organize: environment.mock.organize,
+                stacks: environment.mock.stacks,
                 assetProvider: environment.assetProvider,
                 thumbnails: environment.thumbnails
             )
@@ -42,6 +43,7 @@ struct CullingView: View {
     let query: TimelineQuery
     let library: any LibraryPort
     let organize: any OrganizePort
+    let stacks: any StackPort
     let assetProvider: any AssetProvider
     let thumbnails: any ThumbnailProvider
 
@@ -281,9 +283,8 @@ struct CullingView: View {
         switch verb {
         case .pick, .neutral, .reject:
             guard let flag = verb.flag else { return }
-            let previous = pass.flags(of: pass.verdictTargets)
-            let written = pass.verdict(flag)
-            Task { await write(flag, to: written, restoring: previous) }
+            guard let verdict = pass.verdict(flag) else { return }
+            Task { await write(verdict) }
         case .next: _ = pass.next()
         case .previous: _ = pass.previous()
         case .expandStack: _ = pass.expandStack()
@@ -295,15 +296,27 @@ struct CullingView: View {
         announce(stepDescription)
     }
 
-    private func write(_ flag: CullFlag, to ids: [AssetID], restoring previous: [AssetID: CullFlag]) async {
+    /// Write a verdict. A collapsed stack's targets come from the stack port,
+    /// not the pass: the pass holds only the members its query and its pages
+    /// have brought in, and flagging a stack writes every member.
+    private func write(_ verdict: CullVerdict) async {
         do {
-            try await organize.setCull(flag, for: ids)
-            CapsuleLog.interface.info("culling: flagged \(ids.count, privacy: .public) as \(flag.rawValue, privacy: .public)")
+            let ids = try await writeTargets(of: verdict)
+            try await organize.setCull(verdict.flag, for: ids)
+            pass.settle(verdict, written: ids)
+            CapsuleLog.interface.info(
+                "culling: flagged \(ids.count, privacy: .public) as \(verdict.flag.rawValue, privacy: .public)"
+            )
         } catch {
             CapsuleLog.interface.error("culling: flag write failed: \(error.localizedDescription, privacy: .public)")
-            pass.restore(previous)
+            pass.revert(verdict)
             failure = .flag
         }
+    }
+
+    private func writeTargets(of verdict: CullVerdict) async throws -> [AssetID] {
+        guard let stackID = verdict.stackID else { return verdict.targets }
+        return try await verdict.writeTargets(stackMembers: stacks.members(of: stackID).map(\.id))
     }
 
     private func sweep() async {

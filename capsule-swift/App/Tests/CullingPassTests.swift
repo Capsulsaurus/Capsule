@@ -17,9 +17,11 @@ struct CullingPassTests {
     func verdictAdvances() {
         var pass = CullingPass(assets: [Fixture.asset(1), Fixture.asset(2), Fixture.asset(3)])
 
-        let written = pass.verdict(.pick)
+        let verdict = pass.verdict(.pick)
 
-        #expect(written == [Fixture.id(1)])
+        #expect(verdict?.targets == [Fixture.id(1)])
+        #expect(verdict?.stackID == nil)
+        #expect(verdict?.writeTargets(stackMembers: [Fixture.id(9)]) == [Fixture.id(1)])
         #expect(pass.currentAsset?.id == Fixture.id(2))
         #expect(pass.flags(of: [Fixture.id(1)]) == [Fixture.id(1): .pick])
         #expect(pass.position == (2, 3))
@@ -30,9 +32,9 @@ struct CullingPassTests {
         var pass = CullingPass(assets: [Fixture.asset(1), Fixture.asset(2)])
         _ = pass.next()
 
-        let written = pass.verdict(.reject)
+        let verdict = pass.verdict(.reject)
 
-        #expect(written == [Fixture.id(2)])
+        #expect(verdict?.targets == [Fixture.id(2)])
         #expect(pass.currentAsset?.id == Fixture.id(2))
         #expect(pass.currentFlag == .asset(.reject))
     }
@@ -48,15 +50,61 @@ struct CullingPassTests {
     }
 
     @Test("a failed write is undone without moving the user")
-    func restoreUndoesAFailedWrite() {
+    func revertUndoesAFailedWrite() throws {
         var pass = CullingPass(assets: [Fixture.asset(1, cull: .pick), Fixture.asset(2)])
-        let before = pass.flags(of: [Fixture.id(1)])
 
-        _ = pass.verdict(.reject)
-        pass.restore(before)
+        let verdict = try pass.give(.reject)
+        pass.revert(verdict)
 
         #expect(pass.flags(of: [Fixture.id(1)]) == [Fixture.id(1): .pick])
         #expect(pass.currentAsset?.id == Fixture.id(2))
+    }
+
+    @Test("a failed write does not undo a later verdict on the same asset that was written")
+    func revertKeepsALaterWrittenVerdict() throws {
+        var pass = CullingPass(assets: [Fixture.asset(1, cull: .pick), Fixture.asset(2)])
+        let first = try pass.give(.reject)
+        _ = pass.previous()
+        let second = try pass.give(.neutral)
+
+        pass.settle(second, written: second.targets)
+        pass.revert(first)
+
+        #expect(pass.flags(of: [Fixture.id(1)]) == [Fixture.id(1): .neutral])
+    }
+
+    @Test("a failed write puts back the stored flag, not an earlier verdict's unwritten one")
+    func revertRestoresTheStoredFlag() throws {
+        var pass = CullingPass(assets: [Fixture.asset(1, cull: .pick), Fixture.asset(2)])
+        let first = try pass.give(.reject)
+        _ = pass.previous()
+        let second = try pass.give(.neutral)
+
+        pass.revert(first)
+        #expect(pass.flags(of: [Fixture.id(1)]) == [Fixture.id(1): .neutral], "the later verdict still shows")
+        pass.revert(second)
+
+        #expect(pass.flags(of: [Fixture.id(1)]) == [Fixture.id(1): .pick])
+    }
+
+    @Test("a write settled after a later verdict leaves the later one showing")
+    func lateSettleKeepsTheLaterVerdict() throws {
+        var pass = CullingPass(assets: [Fixture.asset(1), Fixture.asset(2)])
+        let first = try pass.give(.reject)
+        _ = pass.previous()
+        let second = try pass.give(.pick)
+
+        pass.settle(second, written: second.targets)
+        pass.settle(first, written: first.targets)
+        #expect(pass.flags(of: [Fixture.id(1)]) == [Fixture.id(1): .pick])
+
+        _ = pass.previous()
+        let third = try pass.give(.neutral)
+        pass.revert(third)
+        #expect(
+            pass.flags(of: [Fixture.id(1)]) == [Fixture.id(1): .pick],
+            "the newer verdict's write is the stored flag, whichever landed last"
+        )
     }
 
     // MARK: Paging
@@ -86,8 +134,7 @@ struct CullingPassTests {
         #expect(pass.isEmpty)
         #expect(pass.position == (0, 0))
         #expect(CullVerb.allCases.allSatisfy { !pass.accepts($0) })
-        let written = pass.verdict(.pick)
-        #expect(written.isEmpty)
+        #expect(pass.verdict(.pick) == nil)
         #expect(pass.currentFlag == nil)
     }
 
@@ -107,16 +154,64 @@ struct CullingPassTests {
     @Test("a verdict on a collapsed stack flags every member")
     func stackVerdictFlagsEveryMember() {
         var pass = CullingPass(assets: Fixture.stack(members: [10, 11, 12]) + [Fixture.asset(1)])
-        let targets = pass.verdictTargets
 
-        let written = pass.verdict(.reject)
+        let verdict = pass.verdict(.reject)
 
-        #expect(written == targets)
-
-        #expect(Set(written) == Set([Fixture.id(10), Fixture.id(11), Fixture.id(12)]))
+        #expect(verdict?.stackID == Fixture.stackID)
+        #expect(Set(verdict?.targets ?? []) == Set([Fixture.id(10), Fixture.id(11), Fixture.id(12)]))
         #expect(pass.currentAsset?.id == Fixture.id(1))
         _ = pass.previous()
         #expect(pass.currentFlag == .stack(.allRejected, memberCount: 3))
+    }
+
+    @Test("a verdict on a collapsed stack writes the members the pass never loaded")
+    func stackVerdictReachesUnloadedMembers() throws {
+        let members = Fixture.stack(members: [10, 11, 12, 13])
+        var pass = CullingPass(assets: [members[0], members[2], Fixture.asset(1)])
+
+        let verdict = try pass.give(.pick)
+        let written = verdict.writeTargets(stackMembers: members.map(\.id))
+
+        #expect(written == members.map(\.id), "the stack port's list, the members outside the pass included")
+        #expect(
+            verdict.writeTargets(stackMembers: [Fixture.id(10)]) == [Fixture.id(10), Fixture.id(12)],
+            "a member the pass holds is written even if the port did not list it"
+        )
+
+        pass.append([members[1]])
+        #expect(pass.flags(of: [Fixture.id(11)]) == [Fixture.id(11): .pick], "a page read before the write shows the verdict")
+
+        pass.settle(verdict, written: written)
+        pass.append([members[3]])
+        #expect(pass.groups[0].members.allSatisfy { $0.cull == .pick })
+    }
+
+    @Test("a failed stack write is undone on members that arrived while it was in flight")
+    func stackRevertReachesLateMembers() throws {
+        let members = Fixture.stack(members: [10, 11], cull: .pick)
+        var pass = CullingPass(assets: [members[0], Fixture.asset(1)])
+        let verdict = try pass.give(.reject)
+        pass.append([members[1]])
+
+        pass.revert(verdict)
+
+        #expect(pass.groups[0].members.allSatisfy { $0.cull == .pick })
+        pass.append([Fixture.asset(12, cull: .pick, membership: StackMembership(
+            stackID: Fixture.stackID, stackType: .burst, role: .member, memberIndex: 2
+        ))])
+        #expect(pass.flags(of: [Fixture.id(12)]) == [Fixture.id(12): .pick], "the reverted verdict is not adopted")
+    }
+
+    @Test("a member loaded after a write it was part of shows the written flag")
+    func settleReachesMembersLoadedMeanwhile() throws {
+        let members = Fixture.stack(members: [10, 11])
+        var pass = CullingPass(assets: [members[0], Fixture.asset(1)])
+        let verdict = try pass.give(.reject)
+
+        pass.settle(verdict, written: members.map(\.id))
+        pass.append([members[1]])
+
+        #expect(pass.flags(of: [Fixture.id(11)]) == [Fixture.id(11): .reject])
     }
 
     @Test("expanding steps through members from the cover, collapsing lands on the stack")
@@ -129,8 +224,9 @@ struct CullingPassTests {
         #expect(pass.currentAsset?.id == Fixture.id(10))
         #expect(pass.currentFlag == .asset(.neutral))
 
-        let written = pass.verdict(.pick)
-        #expect(written == [Fixture.id(10)])
+        let verdict = pass.verdict(.pick)
+        #expect(verdict?.targets == [Fixture.id(10)])
+        #expect(verdict?.stackID == nil, "a member of an expanded stack is flagged alone")
         #expect(pass.currentAsset?.id == Fixture.id(11))
         #expect(pass.accepts(.collapseStack))
 
@@ -248,6 +344,14 @@ struct CullingPassTests {
 }
 
 // MARK: - Fixtures
+
+private extension CullingPass {
+    /// A verdict on a pass that is not empty.
+    mutating func give(_ flag: CullFlag) throws -> CullVerdict {
+        let given = verdict(flag)
+        return try #require(given)
+    }
+}
 
 private enum Fixture {
     static let stackID = StackID("0192f0c0-9999-7000-8000-000000000009")

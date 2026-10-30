@@ -88,6 +88,35 @@ enum CullStepFlag: Equatable, Sendable {
     case stack(GroupCullState, memberCount: Int)
 }
 
+// MARK: - CullVerdict
+
+/// One verdict the user gave, as the surface must write it.
+///
+/// The pass applies a verdict to what it shows at once; the write follows, and
+/// its outcome comes back through ``CullingPass/settle(_:written:)`` or
+/// ``CullingPass/revert(_:)`` carrying this value, so an outcome that arrives
+/// after a later verdict on the same asset cannot undo that later one.
+struct CullVerdict: Equatable, Sendable {
+    /// The flag written.
+    let flag: CullFlag
+    /// The stack whose every member the write must reach — the whole stack,
+    /// not only the members loaded into the pass — or `nil` for one asset.
+    let stackID: StackID?
+    /// The assets in the pass the verdict flagged.
+    let targets: [AssetID]
+    /// Orders verdicts within one pass.
+    let serial: Int
+
+    /// The assets the write reaches, given the stack's members as the stack
+    /// port lists them: every one of those, then any target the port did not
+    /// list. Ignores `stackMembers` for a one-asset verdict.
+    func writeTargets(stackMembers: [AssetID]) -> [AssetID] {
+        guard stackID != nil else { return targets }
+        let listed = Set(stackMembers)
+        return stackMembers + targets.filter { !listed.contains($0) }
+    }
+}
+
 // MARK: - CullingPass
 
 /// The cull pass over one sequence of assets, as a value: where the user is,
@@ -95,11 +124,16 @@ enum CullStepFlag: Equatable, Sendable {
 ///
 /// Pure on purpose. Writing a flag, moving to the trash and announcing the
 /// result are the surface's business; this decides *what* each verb does to
-/// the pass and hands back the asset ids a write must reach, so every rule
-/// below is a unit test rather than a tap.
+/// the pass and hands back what a write must reach, so every rule below is a
+/// unit test rather than a tap.
 ///
 /// - A verdict on a collapsed stack flags every member, and any verdict
-///   advances to the next step (the last step stays put).
+///   advances to the next step (the last step stays put). The write reaches
+///   the whole stack through ``CullVerdict/stackID``: a pass over an album, a
+///   filtered timeline or a page not yet read holds only some members.
+/// - A failed write puts back the flag last known stored, on the assets no
+///   later verdict has touched since; a later verdict's own outcome governs
+///   those.
 /// - Expanding a stack replaces its one step with a step per member, starting
 ///   on the cover; collapsing folds them back and lands on the stack.
 /// - The sweep candidates are the rejects in the pass, and nothing outside it.
@@ -132,6 +166,24 @@ struct CullingPass: Equatable, Sendable {
     /// Where each stack's group sits, so a page that brings another member of
     /// an already-seen stack joins it in constant time.
     private var stackGroups: [StackID: Int] = [:]
+    /// The serial the next verdict takes.
+    private var nextSerial = 1
+    /// The newest verdict each asset was given, written or not. It is what the
+    /// pass shows, and it wins over a page read before the write landed.
+    private var shown: [AssetID: Mark] = [:]
+    /// The flag each asset is known to hold in the library: as it arrived, or
+    /// as the newest successful write left it. What a failed write puts back.
+    private var stored: [AssetID: Mark] = [:]
+    /// The newest verdict given to each collapsed stack, so a member whose page
+    /// arrives after it shows it too.
+    private var stackShown: [StackID: Mark] = [:]
+
+    /// A flag and the verdict that set it; serial 0 is the flag an asset
+    /// arrived with.
+    private struct Mark: Equatable, Sendable {
+        let serial: Int
+        let flag: CullFlag
+    }
 
     init(assets: [LibraryAsset] = []) {
         append(assets)
@@ -179,7 +231,7 @@ struct CullingPass: Equatable, Sendable {
         }
     }
 
-    /// The current flags of `ids`, for undoing a verdict whose write failed.
+    /// The flags the pass shows for those of `ids` it holds.
     func flags(of ids: [AssetID]) -> [AssetID: CullFlag] {
         let wanted = Set(ids)
         var found: [AssetID: CullFlag] = [:]
@@ -193,10 +245,14 @@ struct CullingPass: Equatable, Sendable {
 
     /// Add assets in sequence order. A member of a stack already in the pass
     /// joins it wherever it arrives, so a stack split across two pages is still
-    /// one step.
+    /// one step. An asset the user has already given a verdict — a stack
+    /// member flagged through its cover before its page arrived — shows that
+    /// verdict, whatever flag the page was read with.
     mutating func append(_ assets: [LibraryAsset]) {
         let anchor = currentAsset?.id
-        for asset in assets {
+        for var asset in assets {
+            adoptStackVerdict(for: asset)
+            if let mark = shown[asset.id] { asset.cull = mark.flag }
             guard let stackID = asset.stackMembership?.stackID else {
                 groups.append(CullGroup(stackID: nil, members: [asset]))
                 continue
@@ -231,37 +287,62 @@ struct CullingPass: Equatable, Sendable {
 
     /// Apply a verdict to the current step and advance.
     ///
-    /// - Returns: the assets whose flag the surface must write — every member of
-    ///   a collapsed stack, else the one asset. Empty for an empty pass.
-    mutating func verdict(_ flag: CullFlag) -> [AssetID] {
-        guard let step = current else { return [] }
-        let targets = verdictTargets
-        let reached = Set(targets)
-        for member in groups[step.group].members.indices where reached.contains(groups[step.group].members[member].id) {
-            groups[step.group].members[member].cull = flag
+    /// - Returns: what the surface must write — the whole stack for a
+    ///   collapsed stack, else the one asset. `nil` for an empty pass.
+    mutating func verdict(_ flag: CullFlag) -> CullVerdict? {
+        guard let step = current else { return nil }
+        let group = groups[step.group]
+        let targets = step.member.map { [group.members[$0].id] } ?? group.members.map(\.id)
+        let verdict = CullVerdict(
+            flag: flag,
+            stackID: step.member == nil ? group.stackID : nil,
+            targets: targets,
+            serial: nextSerial
+        )
+        nextSerial += 1
+        for member in group.members where targets.contains(member.id) && stored[member.id] == nil {
+            stored[member.id] = Mark(serial: 0, flag: member.cull)
         }
+        let mark = Mark(serial: verdict.serial, flag: flag)
+        for id in targets {
+            shown[id] = mark
+        }
+        if let stackID = verdict.stackID { stackShown[stackID] = mark }
+        setShownFlags(Set(targets), to: flag)
         _ = next()
-        return targets
+        return verdict
     }
 
-    /// The assets a verdict on the current step writes: every member of a
-    /// collapsed stack, else the one asset. Read before a verdict, so a write
-    /// that fails can put back exactly what it overwrote.
-    var verdictTargets: [AssetID] {
-        guard let step = current else { return [] }
-        let members = groups[step.group].members
-        return step.member.map { [members[$0].id] } ?? members.map(\.id)
-    }
-
-    /// Put flags back after their write failed. Position is left alone: the
-    /// user is told, and is already looking at the next asset.
-    mutating func restore(_ flags: [AssetID: CullFlag]) {
-        for group in groups.indices {
-            for member in groups[group].members.indices {
-                if let flag = flags[groups[group].members[member].id] {
-                    groups[group].members[member].cull = flag
-                }
+    /// Record that `verdict`'s write reached `written` — for a stack, every
+    /// member the library holds, loaded into the pass or not.
+    ///
+    /// A member in the pass that no later verdict has touched shows the flag,
+    /// which reaches members whose page arrived while the write was in flight.
+    mutating func settle(_ verdict: CullVerdict, written: [AssetID]) {
+        let mark = Mark(serial: verdict.serial, flag: verdict.flag)
+        var reached: Set<AssetID> = []
+        for id in Set(written).union(verdict.targets) {
+            if (stored[id]?.serial ?? -1) < verdict.serial { stored[id] = mark }
+            if (shown[id]?.serial ?? -1) <= verdict.serial {
+                shown[id] = mark
+                reached.insert(id)
             }
+        }
+        setShownFlags(reached, to: verdict.flag)
+    }
+
+    /// Undo `verdict` after its write failed: each asset showing it — a
+    /// target, or a stack member that arrived since — and no later verdict
+    /// goes back to the flag last known stored. Position is left alone: the
+    /// user is told, and is already looking at the next asset.
+    mutating func revert(_ verdict: CullVerdict) {
+        if let stackID = verdict.stackID, stackShown[stackID]?.serial == verdict.serial {
+            stackShown[stackID] = nil
+        }
+        for (id, mark) in shown where mark.serial == verdict.serial {
+            guard let previous = stored[id] else { continue }
+            shown[id] = previous
+            setShownFlags([id], to: previous.flag)
         }
     }
 
@@ -302,6 +383,28 @@ struct CullingPass: Equatable, Sendable {
     func asset(at step: CullStep) -> LibraryAsset {
         let group = groups[step.group]
         return step.member.map { group.members[$0] } ?? group.cover
+    }
+
+    /// Give an arriving stack member its stack's verdict when that verdict is
+    /// newer than any the member was given itself, remembering the flag it
+    /// arrived with as the one a failed write puts back.
+    private mutating func adoptStackVerdict(for asset: LibraryAsset) {
+        guard let stackID = asset.stackMembership?.stackID,
+              let mark = stackShown[stackID],
+              (shown[asset.id]?.serial ?? 0) < mark.serial
+        else { return }
+        if stored[asset.id] == nil { stored[asset.id] = Mark(serial: 0, flag: asset.cull) }
+        shown[asset.id] = mark
+    }
+
+    /// Show `flag` on every member of the pass whose id is in `ids`.
+    private mutating func setShownFlags(_ ids: Set<AssetID>, to flag: CullFlag) {
+        guard !ids.isEmpty else { return }
+        for group in groups.indices {
+            for member in groups[group].members.indices where ids.contains(groups[group].members[member].id) {
+                groups[group].members[member].cull = flag
+            }
+        }
     }
 
     /// Recompute the steps, keeping the user on the asset they were looking at
