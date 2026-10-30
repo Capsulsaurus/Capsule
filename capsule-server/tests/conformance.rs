@@ -154,7 +154,7 @@ async fn every_declared_response_is_exercised() {
         .assert_status(StatusCode::OK);
 
     // 413 is declared on *every* operation, because every group carries a body-size cap — the
-    // exempt twelve in a group holding nothing else — and a Kynos interceptor's declaration is its
+    // exempt thirteen in a group holding nothing else — and a Kynos interceptor's declaration is its
     // type (#478). So every operation produces one here, sent the cheapest way the
     // limit can be reached: a `Content-Length` over every group's cap, refused before a byte of
     // the body is read.
@@ -225,6 +225,7 @@ async fn every_declared_response_is_exercised() {
         ("DELETE", "/v1/drops/links/anything"),
         ("POST", "/d/anything"),
         ("PATCH", "/d/anything/anything"),
+        ("GET", "/d/anything/anything"),
         ("GET", "/v1/drops"),
         ("POST", "/v1/drops/anything/adopt"),
         ("DELETE", "/v1/drops/anything"),
@@ -746,9 +747,9 @@ async fn every_declared_response_is_exercised() {
         .send()
         .await
         .assert_status(StatusCode::UNSUPPORTED_MEDIA_TYPE);
-    // 408: the chunk read deadline passed before the body arrived (#717). An in-process body is
-    // always whole, so the deadline is switched to one that has already passed.
-    fixture.chunk_deadline.set(std::time::Duration::ZERO);
+    // 408: the chunk body was cut (#717, #1041). An in-process body is always whole, so the
+    // stall bound is switched to zero, which cuts before the first byte.
+    fixture.chunk_pace.cut_every_chunk();
     client
         .patch(&session)
         .header("authorization", &bearer)
@@ -759,9 +760,7 @@ async fn every_declared_response_is_exercised() {
         .send()
         .await
         .assert_status(StatusCode::REQUEST_TIMEOUT);
-    fixture
-        .chunk_deadline
-        .set(capsule_server::upload::policy::DEFAULT_CHUNK_READ_TIMEOUT);
+    fixture.chunk_pace.reset();
     client
         .patch(&session)
         .header("authorization", &bearer)
@@ -3570,7 +3569,7 @@ const HANDSHAKE_HEADERS: [&str; 3] = [
 /// client hits before it knows the window; the `/.well-known/capsule/*` records are public
 /// discovery; the `/s/{opaque_id}*` reads must answer an indistinguishable `404`
 /// (share-links.md), which a `426` would turn into a probing oracle; the `/d/{opaque_id}*`
-/// guest deposits have their protocol pinned at link issuance (web-upload.md); refreshing and
+/// guest deposits and status probe have their protocol pinned at link issuance (web-upload.md); refreshing and
 /// closing a session are upkeep an out-of-window client must still reach, since its reads are
 /// admitted at any protocol date (#527).
 const EXEMPT: &[(&str, &str)] = &[
@@ -3584,6 +3583,7 @@ const EXEMPT: &[(&str, &str)] = &[
     ("GET", "/s/{opaque_id}/blob/{hash}"),
     ("POST", "/d/{opaque_id}"),
     ("PATCH", "/d/{opaque_id}/{upload_id}"),
+    ("GET", "/d/{opaque_id}/{upload_id}"),
     ("POST", "/v1/auth/refresh"),
     ("POST", "/v1/auth/logout"),
 ];
@@ -3685,7 +3685,7 @@ fn is_exempt(method: &str, template: &str) -> bool {
 
 /// The operations declaring the handshake are exactly the ones outside [`EXEMPT`].
 #[test]
-fn the_handshake_is_declared_on_every_operation_but_the_exempt_twelve() {
+fn the_handshake_is_declared_on_every_operation_but_the_exempt_thirteen() {
     let document = capsule_server::openapi().expect("router describes itself");
     let json = serde_json::to_value(&document).expect("a document serializes");
 
@@ -3742,7 +3742,7 @@ fn the_handshake_is_declared_on_every_operation_but_the_exempt_twelve() {
         "the gated set is not \"everything but EXEMPT\"; `lib.rs::router` and this pin change \
          together"
     );
-    assert_eq!(EXEMPT.len(), 12, "the design names twelve exemptions");
+    assert_eq!(EXEMPT.len(), 13, "the design names thirteen exemptions");
 
     for (method, path) in EXEMPT {
         assert!(
@@ -5009,9 +5009,9 @@ async fn drops_block(
         .send()
         .await
         .assert_status(StatusCode::BAD_REQUEST);
-    // 408: the chunk read deadline passed before the body arrived (#717). An in-process body is
-    // always whole, so the deadline is switched to one that has already passed.
-    fixture.chunk_deadline.set(std::time::Duration::ZERO);
+    // 408: the chunk body was cut (#717, #1041). An in-process body is always whole, so the
+    // stall bound is switched to zero, which cuts before the first byte.
+    fixture.chunk_pace.cut_every_chunk();
     client
         .patch(&chunk_path)
         .header("x-capsule-offset", "0")
@@ -5020,9 +5020,7 @@ async fn drops_block(
         .send()
         .await
         .assert_status(StatusCode::REQUEST_TIMEOUT);
-    fixture
-        .chunk_deadline
-        .set(capsule_server::upload::policy::DEFAULT_CHUNK_READ_TIMEOUT);
+    fixture.chunk_pace.reset();
     client
         .patch(&chunk_path)
         .header("x-capsule-offset", "512")
@@ -5047,6 +5045,32 @@ async fn drops_block(
         .send()
         .await
         .assert_status(StatusCode::NO_CONTENT);
+
+    // The status probe: the session's state, one 404 for a session that is not the link's, the
+    // `Path` extractor's 400, and a session store that cannot answer.
+    client
+        .get(&chunk_path)
+        .header("accept", "application/json")
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+    client
+        .get(&format!("/d/{drop_link}/no-such-session"))
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    client
+        .get("/d/%FF/anything")
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    fixture.uploads.set_unavailable(true);
+    client
+        .get(&chunk_path)
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    fixture.uploads.set_unavailable(false);
 
     // The inbox, an adoption refused on its merits, and a discard.
     let inbox: serde_json::Value = client

@@ -107,8 +107,9 @@ use capsule_server::store::{
     ChannelStore, Clock, CohortRecord, CohortStore, Direction, DrainOutcome, ENROLLMENT_CODE_TTL,
     EnrollmentCode, EnrollmentStore, FinalizeClaim, OidcAuthorizationStore, OidcState, OwnerId,
     PendingAuthorization, PendingEnrollment, RELAY_CHANNEL_TTL, RelayChannel, RelayOutcome,
-    RelayPayload, RevokeAllChallenge, SessionId, SessionRecord, StoreError, StoreFuture, UploadId,
-    UploadSessionRecord, UploadSessionStatus, UploadSessionStore, UserId,
+    RelayPayload, RevokeAllChallenge, SessionId, SessionRecord, StoreError, StoreFuture,
+    UnclaimedDiscard, UploadId, UploadSessionRecord, UploadSessionStatus, UploadSessionStore,
+    UserId,
 };
 
 pub(crate) mod idp;
@@ -116,7 +117,7 @@ use capsule_server::sync::{CURSOR_KEY_LEN, CursorCodec, SyncContext};
 use capsule_server::upload::authority::{
     AlbumWriteAccess, AuthorityError, AuthorityFuture, WriteAuthority,
 };
-use capsule_server::upload::{ChunkReadDeadline, UploadContext, UploadPolicy, WriteRole};
+use capsule_server::upload::{ChunkPace, ChunkReadPace, UploadContext, UploadPolicy, WriteRole};
 use capsule_server::verify::VerifyContext;
 use jiff::{SignedDuration, Timestamp};
 use kynos::test::{TestClient, TestRequest};
@@ -1547,38 +1548,55 @@ impl FederationSetting for SwitchableFederation {
     }
 }
 
-/// The fixture server's chunk-body read deadline (#717), switchable per request.
+/// The fixture server's chunk-body read pace (#717, #1041), switchable per request.
 ///
 /// A switch for the reason [`SwitchableFederation`] is one: the `408` both chunk routes declare
 /// has to come from the same server that answers their `204`s, and an in-process body is always
-/// whole, so the walk produces it by switching to a deadline that has already passed. Production
-/// hands in a fixed `Duration`.
+/// whole, so the walk produces it by switching to a zero stall bound, which cuts before the
+/// first byte. Production hands in a fixed `ChunkPace`.
 #[derive(Debug)]
-pub(crate) struct SwitchableChunkDeadline {
-    millis: AtomicU64,
+pub(crate) struct SwitchableChunkPace {
+    stall_millis: AtomicU64,
+    min_bytes_per_second: AtomicU64,
 }
 
-impl SwitchableChunkDeadline {
-    /// A switch starting at `timeout`.
-    pub(crate) fn new(timeout: std::time::Duration) -> Self {
+impl SwitchableChunkPace {
+    /// A switch starting at `pace`.
+    pub(crate) fn new(pace: ChunkPace) -> Self {
         let switch = Self {
-            millis: AtomicU64::new(0),
+            stall_millis: AtomicU64::new(0),
+            min_bytes_per_second: AtomicU64::new(0),
         };
-        switch.set(timeout);
+        switch.set(pace);
         switch
     }
 
-    /// Move the deadline for every subsequent chunk; [`Duration::ZERO`](std::time::Duration::ZERO)
-    /// refuses every one.
-    pub(crate) fn set(&self, timeout: std::time::Duration) {
-        let millis = u64::try_from(timeout.as_millis()).expect("a test deadline fits in u64 ms");
-        self.millis.store(millis, Ordering::SeqCst);
+    /// Move the pace for every subsequent chunk; a zero stall bound refuses every one.
+    pub(crate) fn set(&self, pace: ChunkPace) {
+        let millis = u64::try_from(pace.stall.as_millis()).expect("a test stall fits in u64 ms");
+        self.stall_millis.store(millis, Ordering::SeqCst);
+        self.min_bytes_per_second
+            .store(pace.min_bytes_per_second, Ordering::SeqCst);
+    }
+
+    /// The default pace with a zero stall bound: every subsequent chunk is cut before its first
+    /// byte.
+    pub(crate) fn cut_every_chunk(&self) {
+        self.set(ChunkPace::new(std::time::Duration::ZERO, 0));
+    }
+
+    /// Back to the default pace.
+    pub(crate) fn reset(&self) {
+        self.set(ChunkPace::default());
     }
 }
 
-impl ChunkReadDeadline for SwitchableChunkDeadline {
-    fn chunk_read_timeout(&self) -> std::time::Duration {
-        std::time::Duration::from_millis(self.millis.load(Ordering::SeqCst))
+impl ChunkReadPace for SwitchableChunkPace {
+    fn chunk_pace(&self) -> ChunkPace {
+        ChunkPace::new(
+            std::time::Duration::from_millis(self.stall_millis.load(Ordering::SeqCst)),
+            self.min_bytes_per_second.load(Ordering::SeqCst),
+        )
     }
 }
 
@@ -2342,6 +2360,13 @@ impl UploadSessionStore for SwitchableUploads {
         self.inner.discard(upload)
     }
 
+    fn discard_unclaimed<'a>(&'a self, upload: &'a UploadId) -> StoreFuture<'a, UnclaimedDiscard> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.discard_unclaimed(upload)
+    }
+
     fn pending_for_address<'a>(
         &'a self,
         uploader: &'a UserId,
@@ -2351,6 +2376,13 @@ impl UploadSessionStore for SwitchableUploads {
             return Box::pin(async { Self::refuse() });
         }
         self.inner.pending_for_address(uploader, expected_hash)
+    }
+
+    fn live_for_address<'a>(&'a self, expected_hash: &'a str) -> StoreFuture<'a, Vec<UploadId>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.live_for_address(expected_hash)
     }
 
     fn in_flight_for_album<'a>(&'a self, album: &'a AlbumId) -> StoreFuture<'a, u64> {
@@ -4059,8 +4091,8 @@ pub(crate) struct Fixture {
     pub(crate) oidc_authorizations: Arc<SwitchableOidcAuthorizations>,
     /// The pending OIDC device authorizations (issue #635).
     pub(crate) oidc_devices: Arc<SwitchableOidcDevices>,
-    /// The chunk-body read deadline both chunk routes read (#717).
-    pub(crate) chunk_deadline: Arc<SwitchableChunkDeadline>,
+    /// The chunk-body read pace both chunk routes read (#717, #1041).
+    pub(crate) chunk_pace: Arc<SwitchableChunkPace>,
 }
 
 impl Fixture {
@@ -4156,9 +4188,7 @@ impl Fixture {
         let revocations = Arc::new(SwitchableRevocations::new(clock.clone()));
         let peers = Arc::new(InMemoryPeers::new());
         let federation = Arc::new(SwitchableFederation::new(federating));
-        let chunk_deadline = Arc::new(SwitchableChunkDeadline::new(
-            capsule_server::upload::policy::DEFAULT_CHUNK_READ_TIMEOUT,
-        ));
+        let chunk_pace = Arc::new(SwitchableChunkPace::new(ChunkPace::default()));
         let challenges = Arc::new(SwitchableChallenges::new(clock.clone()));
         let escrows = Arc::new(SwitchableEscrow::new());
         let cohorts = Arc::new(SwitchableCohorts::new());
@@ -4202,7 +4232,7 @@ impl Fixture {
                 authority.clone(),
                 QuotaContext::new(quotas.clone(), clock.clone(), quota_limits),
                 clock.clone(),
-                UploadPolicy::default().with_chunk_read_deadline(chunk_deadline.clone()),
+                UploadPolicy::default().with_chunk_pace(chunk_pace.clone()),
             ),
             sync: SyncContext::new(
                 index_fault.clone(),
@@ -4313,7 +4343,7 @@ impl Fixture {
             idp,
             oidc_authorizations,
             oidc_devices,
-            chunk_deadline,
+            chunk_pace,
         }
     }
 

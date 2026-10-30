@@ -69,6 +69,10 @@ reqwest = { version = "0.12.28", default-features = false, features = [
 # Rebuilds a `401` the reactive refresh layer (`client::RefreshOn401`) read the problem code
 # out of; `reqwest::Response` is constructible only from an `http::Response`.
 http = { workspace = true }
+# The paced chunk body (`net::PacedBody`): a request body that records each piece hyper pulls,
+# so the per-request stall timer cuts a stalled upload and never a slow one. Already in the
+# lock file through reqwest and hyper.
+http-body = { workspace = true }
 
 # ── LAN peering ───────────────────────────────────────────────────────
 # The peering channel is mutually-authenticated TLS 1.3 with no CA (the device keys

@@ -14,11 +14,13 @@
 //!
 //! # One hard enforcement point
 //!
-//! Session creation, and nothing else. Once a session is open, the declared size is the cap and
-//! the session is allowed to finish — a client that has already sent 900MB of a 1GB blob must
-//! not be refused at finalization, because the bytes are already on the server and refusing
-//! costs storage rather than saving it. Cancellation and expiry release the reservation; a
-//! metadata-update is checked as a growth write rather than as an upload.
+//! Session creation, and the dedup re-charge a release runs. Once a session is open and
+//! charged, the declared size is the cap and the session is allowed to finish — a client that
+//! has already sent 900MB of a 1GB blob must not be refused at finalization, because the bytes
+//! are already on the server and refusing costs storage rather than saving it. Cancellation and
+//! expiry release the reservation, and a session another account's charge admitted is then
+//! checked for itself (see below); a metadata-update is checked as a growth write rather than
+//! as an upload.
 //!
 //! # What each state refuses, and what it never refuses
 //!
@@ -54,6 +56,13 @@
 //! opens leaves the account under it. Being over is therefore reached by a **lowered limit**, or
 //! by growth the session check did not project: a metadata blob, a derivative, a federated
 //! receive.
+//!
+//! One upload path does reach it, narrowly. A session admitted `AlreadyAttributed` against
+//! another account's charge is charged for itself when that account releases the attribution
+//! ([`crate::upload::reservation`]), through [`charge_upload`], and a refusal discards the
+//! session rather than letting it store uncharged bytes. A session whose finalization is
+//! already claimed cannot be discarded — its bytes are all on the server and its finalizer owns
+//! its terminal write — so it alone is charged past the hard limit and a suspension.
 //!
 //! That is a consequence of the design rather than a gap in it, and it is worth stating because
 //! it is easy to write a test that assumes an upload can push an account over and then to

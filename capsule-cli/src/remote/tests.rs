@@ -1262,7 +1262,12 @@ fn chain_len(ws: &Workspace, asset: &Uuid) -> usize {
 /// The op body for `asset`'s chain head, as a delivery sends it.
 fn head_op(ws: &Workspace, asset: &Uuid) -> Vec<u8> {
     let state = ws.asset(asset).expect("held");
-    encode_op(state, state.chain.records().last().expect("a head")).expect("encodes")
+    encode_op(
+        asset,
+        Some(&state.metadata_blob),
+        state.chain.records().last().expect("a head"),
+    )
+    .expect("encodes")
 }
 
 fn head_action(ws: &Workspace, asset: &Uuid) -> capsule_core::crypto::provenance::Action {
@@ -2123,4 +2128,164 @@ async fn a_push_sends_a_held_delete_once_the_create_is_indexed() {
     .expect("the run completes");
     assert!(again.held_records.is_empty(), "{again:#?}");
     assert_eq!(posted_ops(&seen), 1, "nothing sent again");
+}
+
+/// A feed entry naming `asset` at `record`, a record of its chain read before a purge.
+fn listed_record(
+    album: Uuid,
+    asset: Uuid,
+    record: &capsule_core::crypto::provenance::ProvenanceRecord,
+    seq: usize,
+) -> serde_json::Value {
+    use base64::Engine as _;
+    let cbor = capsule_core::cbor::to_canonical_vec(record).expect("encodes");
+    serde_json::json!({
+        "asset_id": asset.to_string(),
+        "album_id": album.to_string(),
+        "protocol_version": capsule_core::crypto::primitives::PROTOCOL_VERSION,
+        "sync_seq": seq,
+        "change": "updated",
+        "manifest_cbor": base64::engine::general_purpose::STANDARD.encode(cbor),
+        "metadata_blob": "metadata",
+        "blobs": [],
+        "original_held": true,
+        "changed_at": "2026-10-01T00:00:00Z",
+    })
+}
+
+/// **A purged asset's held records are sent from its tombstone.** The origin deleted and then
+/// purged the asset before any upload of it was indexed, so the delete and the early purge's
+/// shorter-retention re-issue were both held. Once another device's upload of the create is on
+/// the feed, a push sends both from the kept chain, in chain order, and reports the asset sent;
+/// the server then purges by the re-issued window. A second push finds the server level with
+/// the tombstone and sends nothing. While the feed does not list the asset, nothing is sent and
+/// nothing is reported.
+#[tokio::test]
+async fn a_push_sends_a_purged_assets_held_records_from_its_tombstone() {
+    use capsule_core::crypto::provenance::Action;
+    let EscrowRun {
+        _scratch,
+        mut ws,
+        other_album,
+        held_back,
+        other,
+        ..
+    } = escrow_run().await;
+    // In the trash too, so a whole-library run uploads nothing and reads only held records.
+    ws.soft_delete(&held_back, 30).expect("deleted");
+    let at_create = listed(&ws, &other, 0);
+    ws.soft_delete(&other, 30).expect("deleted");
+    let reissue = ws
+        .purge(&other)
+        .expect("purged early")
+        .reissue
+        .expect("a shorter-retention re-issue");
+    assert!(ws.asset(&other).is_none(), "the asset left the library");
+    let kept = ws.purged_chain(&other).expect("the tombstone").to_vec();
+    let actions: Vec<_> = kept.iter().map(|r| r.manifest.core.action).collect();
+    assert_eq!(
+        actions,
+        vec![Action::Create, Action::Delete, Action::Delete]
+    );
+    let at_reissue = listed_record(other_album, other, &reissue, 3);
+
+    let escrow = EscrowMock {
+        full_for: Uuid::now_v7(),
+        seen: std::sync::Arc::default(),
+    };
+    let feed = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (seen, listing) = (escrow.seen.clone(), feed.clone());
+    let answer = move |line: &str| {
+        let entries = listing.lock().unwrap().clone();
+        if let Some(page) = feed_answer(line, &entries) {
+            return page;
+        }
+        if line.starts_with("POST /v1/albums/") {
+            escrow.seen.lock().unwrap().push(line.to_owned());
+            return (
+                200,
+                "application/json",
+                applied_body(other, "delete").to_string(),
+            );
+        }
+        escrow.answer(line)
+    };
+    let (remote, session) = remote_at(&serve_mock(answer).await);
+
+    // Not indexed: nothing to send, nothing reported.
+    let unlisted = push_with(
+        &remote,
+        &mut ws,
+        session.clone(),
+        PushOptions::default(),
+        PushRun::default(),
+    )
+    .await
+    .expect("the run completes");
+    assert!(
+        unlisted
+            .held_records
+            .iter()
+            .all(|o| o.asset_id != other.to_string()),
+        "{unlisted:#?}"
+    );
+    assert_eq!(posted_ops(&seen), 0);
+
+    *feed.lock().unwrap() = vec![at_create];
+    let summary = push_with(
+        &remote,
+        &mut ws,
+        session.clone(),
+        PushOptions::default(),
+        PushRun {
+            assets: Some(vec![other]),
+            ..PushRun::default()
+        },
+    )
+    .await
+    .expect("the run completes");
+    assert_eq!(summary.assets, 0, "a purged asset has nothing to upload");
+    assert!(summary.outcomes.is_empty(), "{summary:#?}");
+    let held: Vec<_> = summary
+        .held_records
+        .iter()
+        .map(|o| (o.asset_id.clone(), o.status, o.retention_until.clone()))
+        .collect();
+    assert_eq!(
+        held,
+        vec![(
+            other.to_string(),
+            TrashStatus::Applied,
+            reissue.manifest.core.retention_until.clone()
+        )],
+        "sent, reporting the re-issued window"
+    );
+    assert_eq!(posted_ops(&seen), 2, "the held delete, then the re-issue");
+    assert!(
+        !seen
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|line| line.contains("/v1/upload")),
+        "no upload session was opened"
+    );
+
+    *feed.lock().unwrap() = vec![at_reissue];
+    let again = push_with(
+        &remote,
+        &mut ws,
+        session,
+        PushOptions::default(),
+        PushRun::default(),
+    )
+    .await
+    .expect("the run completes");
+    assert!(
+        again
+            .held_records
+            .iter()
+            .all(|o| o.asset_id != other.to_string()),
+        "{again:#?}"
+    );
+    assert_eq!(posted_ops(&seen), 2, "nothing sent again");
 }

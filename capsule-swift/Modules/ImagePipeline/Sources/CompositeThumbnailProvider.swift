@@ -1,4 +1,5 @@
 import AssetKit
+import CapsuleDomain
 import CapsuleFoundation
 import CoreGraphics
 
@@ -26,6 +27,20 @@ public struct CompositeThumbnailProvider: ThumbnailProvider {
         for provider in providers {
             if let image = await provider.thumbnail(for: asset, pixelSize: pixelSize) {
                 return image
+            }
+        }
+        return nil
+    }
+
+    public func render(
+        _ asset: Asset,
+        request: RenderRequest,
+        shown: Rendition?,
+        pixelSize: CGSize
+    ) async -> RenderedImage? {
+        for provider in providers {
+            if let rendered = await provider.render(asset, request: request, shown: shown, pixelSize: pixelSize) {
+                return rendered
             }
         }
         return nil

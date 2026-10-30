@@ -7,7 +7,10 @@
 //! chains onto the one before (invariant 17). Until then the record is **held**.
 //!
 //! What is sent is never read from anywhere but the asset's own provenance chain in the
-//! library. The delegation ledger keeps a copy of a delegated asset's stretch only to know which
+//! library ([`local_chain`]): a live or trashed asset's, or the chain a purge keeps as the
+//! tombstone, so a held delete and the shorter-retention re-issue an early purge appended
+//! outlive the purge and are sent once another device's upload of the create is indexed. The
+//! delegation ledger keeps a copy of a delegated asset's stretch only to know which
 //! assets wait on a hand-off's custody; its delivery, like `capsule trash` and `capsule push`,
 //! re-derives what to send by comparing the chain with the head a fresh feed drain names
 //! ([`ServerChains`]), so a lost upload queue or ledger, a reinstall that keeps the library, or a
@@ -25,9 +28,36 @@ use std::collections::HashMap;
 
 use capsule_core::crypto::hash::{Hash32, hash_bytes};
 use capsule_core::crypto::provenance::{Action, ProvenanceRecord};
+use capsule_library::lifecycle::Workspace;
 use capsule_sdk::sync::FeedEntry;
 use serde::Serialize;
 use uuid::Uuid;
+
+/// An asset's provenance chain as a delivery reads it from the library.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct LocalChain<'a> {
+    /// The chain, oldest first.
+    pub(crate) records: &'a [ProvenanceRecord],
+    /// The sealed metadata blob the library holds for the asset, which a record that binds it
+    /// carries; `None` for a purged asset, whose blob the purge removed. A `delete` binds none.
+    pub(crate) metadata_blob: Option<&'a [u8]>,
+}
+
+/// `asset_id`'s chain in `workspace`: the asset's own while the library holds it (live or in
+/// the trash), otherwise the chain its purge kept ([`Workspace::purged_chain`]). `None` for an
+/// asset the library never held.
+pub(crate) fn local_chain<'a>(workspace: &'a Workspace, asset_id: &Uuid) -> Option<LocalChain<'a>> {
+    if let Some(asset) = workspace.asset(asset_id) {
+        return Some(LocalChain {
+            records: asset.chain.records(),
+            metadata_blob: Some(&asset.metadata_blob),
+        });
+    }
+    workspace.purged_chain(asset_id).map(|records| LocalChain {
+        records,
+        metadata_blob: None,
+    })
+}
 
 /// The server's chain head for every asset its feed lists, read off one fresh drain.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -82,7 +112,9 @@ impl ServerChains {
     }
 
     /// The clock a held stretch is judged by: this device's, floored by the latest server
-    /// `changed_at` the drain saw, as every expiry decision is.
+    /// `changed_at` the drain saw, so a restore is withheld whenever either clock says the
+    /// server would refuse it. Only this rule uses it: the retention sweep judges expiry by
+    /// the server's `changed_at` alone, since a device clock running ahead would purge early.
     pub(crate) fn judging_clock(&self, now: jiff::Timestamp) -> jiff::Timestamp {
         self.latest_changed_at.map_or(now, |seen| now.max(seen))
     }

@@ -26,8 +26,10 @@
 //! | provision `403 error.quota.grace_locked` / `error.quota.suspended` | a link is metadata growth: the owner is past the quota grace window, or the operator suspended their quota (#725). A revocation is never refused |
 //! | create `201` | a drop session, with its suggested chunk size |
 //! | chunk `204` | staged, with the authoritative offset and `X-Capsule-Upload-Status`. The completing chunk is answered `waiting_for_processing` as soon as its deposit is started, never once the deposit ends (#1040) |
+//! | status `200` | the session's state, its offset and declared size, and for `failed_processing` the deposit's `error.*` code: the one place a guest learns whether a detached deposit filed or refused the drop |
 //! | adopt `200` | the asset exists and the inbox row is gone |
-//! | create/chunk `404` | **one answer** for a malformed id, an unknown link, an expired one, a revoked one, a spent single-use one, and an unknown session — the guest path carries no credential |
+//! | status `500 error.drop.unavailable` | a store could not answer the probe; the guest polls again |
+//! | create/chunk/status `404` | **one answer** for a malformed id, an unknown link, an expired one, a revoked one, a spent single-use one, and an unknown session — the guest path carries no credential |
 //! | create `409 error.drop.cap_exhausted` | invariant 26: a cumulative cap on an otherwise-live link, which is *not* the indistinguishable `404` because the guest was handed a real link and needs to ask for a new one |
 //! | create `413 error.drop.file_too_large` | invariant 28 |
 //! | create `400 error.drop.malformed` | invariants 27 and 30 |
@@ -1155,6 +1157,126 @@ pub async fn append_drop_chunk(
             upload_status: upload_status.as_str().to_owned(),
         },
     ))
+}
+
+/// What a guest's drop session is doing, as its status probe reports it.
+///
+/// The session's own state and nothing else: no drop id, no owner, no link totals. Every field
+/// is one the guest already holds or is owed — the bytes they sent, the size they declared, and
+/// the outcome of the deposit they started.
+#[derive(Schema, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct DropStatusResponse {
+    /// Where the session is in its state machine: `pending`, `uploading`,
+    /// `waiting_for_processing` while its deposit runs, then `completed` once the drop is in its
+    /// owner's inbox, or `failed_processing` once the deposit refused it.
+    pub status: String,
+    /// Bytes durably accepted so far — the offset a resumed upload continues from.
+    pub received_bytes: u64,
+    /// The declared total.
+    pub total_size: u64,
+    /// For a `failed_processing` session, the `error.*` code the deposit failed with. Absent for
+    /// every other state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
+}
+
+/// The one way the status probe answers.
+#[derive(Reply)]
+pub enum DropStatusReply {
+    /// The session's state.
+    #[reply(status = 200, description = "The drop session's state")]
+    Status(DropStatusResponse),
+}
+
+/// Why a status probe was refused.
+#[derive(Debug, thiserror::Error, ApiError)]
+pub enum DropStatusRejection {
+    /// The link or the session is not here. One answer, as on the chunk path: a malformed id, an
+    /// unknown, expired or revoked link, an unknown session, and another link owner's session
+    /// are indistinguishable.
+    #[error("not found")]
+    #[problem(status = 404, title = "Not found")]
+    NotFound,
+
+    /// A store could not answer. The guest asks again later.
+    #[error("the drop's status could not be read")]
+    #[problem(status = 500, title = "Internal server error")]
+    Unavailable {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+}
+
+impl DropStatusRejection {
+    /// A store could not answer.
+    fn unavailable() -> Self {
+        Self::Unavailable {
+            code: error_codes::DROP_UNAVAILABLE,
+        }
+    }
+}
+
+/// Report a drop session's state, and its deposit's outcome once it has one.
+///
+/// The completing chunk is answered `waiting_for_processing` before the deposit's re-hash runs,
+/// so this is where a guest learns whether the drop was filed or refused: `completed`, or
+/// `failed_processing` with the deposit's `error.*` code. A guest polls it with backoff.
+///
+/// Authorized exactly as a chunk is: the link's opaque id, live for chunks, plus a session that
+/// is a drop under that link's owner. Read-only — it starts nothing, so polling it cannot change
+/// what it reports — and it charges no limiter: it reveals nothing the holder of the two ids does
+/// not already own, and a poll spending the per-source budget would refuse the guest's next drop.
+#[kynos::get(
+    "/d/{opaque_id}/{upload_id}",
+    operation_id = "drop_status",
+    tag = DropsTag
+)]
+pub async fn drop_status(
+    Inject(drops): Inject<DropContext>,
+    Path(path): Path<DropChunkPath>,
+) -> Result<DropStatusReply, DropStatusRejection> {
+    if !is_opaque_id(&path.opaque_id) {
+        return Err(DropStatusRejection::NotFound);
+    }
+    let link = drops
+        .drops()
+        .resolve(&path.opaque_id)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "the drop store could not resolve a link for a status probe");
+            DropStatusRejection::unavailable()
+        })?;
+    // The chunk path's liveness, so the probe is never the one guest surface a revoked link
+    // still answers on.
+    let Some(link) = link.filter(|link| link.is_live_for_chunks_at(drops.clock().now())) else {
+        return Err(DropStatusRejection::NotFound);
+    };
+    let id = UploadId::new(&path.upload_id);
+    let record = drops.sessions().read(&id).await.map_err(|error| {
+        tracing::error!(%error, "the upload session store could not answer a drop status probe");
+        DropStatusRejection::unavailable()
+    })?;
+    // The chunk path's binding: a session under this link's owner, and a drop. Anything else —
+    // another owner's session, the owner's own album upload — is the one `404`.
+    let Some(record) =
+        record.filter(|record| record.upload_user_id == link.owner_id && record.is_guest_drop())
+    else {
+        return Err(DropStatusRejection::NotFound);
+    };
+    let error_code = crate::routes::upload::failure_code_of(&record);
+    tracing::debug!(
+        upload = %record.upload_id,
+        status = record.status.as_str(),
+        error_code = error_code.as_deref(),
+        "a guest read their drop's status"
+    );
+    Ok(DropStatusReply::Status(DropStatusResponse {
+        status: record.status.as_str().to_owned(),
+        received_bytes: record.received_bytes,
+        total_size: record.total_size,
+        error_code,
+    }))
 }
 
 /// The owner's signed `create` over a drop already in their inbox.

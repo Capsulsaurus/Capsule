@@ -134,7 +134,6 @@ extension MockTransferStore: StoragePort {
 
     private static func fraction(of size: UInt64, tier: RepresentationTier) -> UInt64 {
         switch tier {
-        case .dominantColour: 0
         case .lqip: 220
         case .thumbnail: size / 220
         case .preview: size / 18

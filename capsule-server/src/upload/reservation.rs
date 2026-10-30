@@ -27,19 +27,41 @@
 //! The ledger's own [`crate::quota::QuotaStore::release`] then refuses an attribution that is
 //! another account's, so a session never gives back somebody else's charge.
 //!
+//! # Another account's session for the same bytes
+//!
+//! A live session of a *different* account does not keep the attribution: it was admitted
+//! `AlreadyAttributed` against this uploader's charge, and keeping the uploader charged for it
+//! would bill them for bytes they abandoned. The attribution goes, and once it has, [`release`]
+//! asks for a live session of **any** uploader declaring the address and charges the first one
+//! it finds in its place
+//! ([`crate::store::UploadSessionStore::live_for_address`]). Without that step such a session,
+//! whose own post-open re-charge passed long ago, would store its bytes charged to nobody.
+//!
+//! That charge is an upload's charge ([`crate::quota::charge_upload`]), with its hard-limit and
+//! suspension checks, so a dedup never pushes an account over its limit. A session whose
+//! uploader is refused is discarded with its stage, the way a refused post-open re-charge
+//! undoes a session, and the next live session for the address is tried. Its client's next
+//! request finds no session, and re-creating it is refused with the same code. Discarding
+//! leaves the session state machine as it is: a session is claimed for finalization only once
+//! every byte has arrived. The one exception is a session whose finalization is already
+//! claimed: every byte is on the server and ending it would race its finalizer, so it is
+//! charged past the check, as [`crate::quota`] records.
+//!
 //! # Racing a create for the same bytes
 //!
 //! The live-session check is not atomic with the ledger's release, so a create that charged
 //! `AlreadyAttributed` could open its session after the check and before the release, and
 //! store its bytes against an attribution that is gone. Both sides write their own fact first
 //! and read the other's after: session creation opens the session and then charges the
-//! address again, and [`release`] releases and then asks for another live session again,
-//! putting the reservation back for one it finds. Whichever order the four steps run in, one
-//! of the two second reads sees the other's write, so a session that stores bytes is charged
-//! for them.
+//! address again, and [`release`] releases and then asks for a live session of any uploader
+//! again, putting the reservation back for one it finds. Whichever order the four steps run
+//! in, one of the two second reads sees the other's write, so a session that stores bytes is
+//! charged for them.
+
+use capsule_i18n::error_codes;
 
 use crate::blob::{BlobError, ContentAddress};
-use crate::store::{StoreError, UploadSessionRecord};
+use crate::store::{StoreError, UnclaimedDiscard, UploadSessionRecord, UploadSessionStatus};
 use crate::upload::UploadContext;
 
 /// What giving a session's reservation back did.
@@ -53,8 +75,8 @@ pub enum Released {
     BytesStored,
     /// Nothing was released: another live session of the uploader declares the address.
     StillReserved,
-    /// The attribution went back, and a session of the uploader that opened for the address
-    /// while it went was charged again — the release raced a create.
+    /// The attribution went back, and a live session for the address — of this uploader or of
+    /// another account, admitted against the attribution that went — was charged in its place.
     Restored,
     /// Nothing was released: the session's declared hash is not a content address.
     ///
@@ -116,37 +138,141 @@ pub async fn release(
         status = record.status.as_str(),
         "released an ended session's quota reservation"
     );
-    // The check above and the release are two operations, and a create for the same address
-    // can open its session between them — after charging `AlreadyAttributed` against the
-    // attribution just released. Asked again now the release is done: a session open by this
-    // point is one the create's own post-open re-charge may already have passed, so the
-    // reservation is put back on its behalf. A session opening after this point re-charges for
+    // A session of any account open by this point was admitted against the attribution just
+    // released — charged `AlreadyAttributed`, whether it opened long before this session ended
+    // or between the check above and the release — and its own post-open re-charge may already
+    // have passed, so nothing else will charge it for the bytes it stores. The reservation is
+    // put back on its uploader's behalf. A session opening after this point re-charges for
     // itself and finds nothing attributed.
-    let Some(other) = other_live_session(context, record).await? else {
-        return Ok(Released::Released);
+    let live = context
+        .sessions()
+        .live_for_address(&record.expected_hash)
+        .await?;
+    for other in live.into_iter().filter(|other| *other != record.upload_id) {
+        match context.sessions().read(&other).await? {
+            Some(holder) if holder.status.is_active() => {
+                if recharge(context, &address, &holder).await? {
+                    return Ok(Released::Restored);
+                }
+            }
+            _ => tracing::debug!(%other, "a live session for the address has since ended"),
+        }
+    }
+    Ok(Released::Released)
+}
+
+/// Charge `holder`, a live session left owing for the released address, in the released
+/// attribution's place. `true` when the address is charged again — to `holder`'s uploader, or
+/// already to somebody else — so no other session needs charging.
+///
+/// The charge is the upload's own ([`crate::quota::charge_upload`]), so the hard limit and a
+/// suspension refuse it exactly as they would have refused the session at creation. A session
+/// whose uploader is refused may not go on to store bytes it is not charged for, and is undone
+/// the way a refused post-open re-charge undoes it: the session discarded and its stage
+/// dropped. Its client's next request is the uniform `404`, and the re-create it answers with
+/// is refused with the code this charge was. The discard is a compare-and-set
+/// ([`crate::store::UploadSessionStore::discard_unclaimed`]), so a session whose finalization
+/// is already under way is never discarded out from under its finalizer; see
+/// [`charge_finalizing`]. The next live session for the address is then tried, and `false`
+/// says so.
+async fn recharge(
+    context: &UploadContext,
+    address: &ContentAddress,
+    holder: &UploadSessionRecord,
+) -> Result<bool, StoreError> {
+    let other = &holder.upload_id;
+    let code = match crate::quota::charge_upload(
+        context.quota(),
+        &holder.upload_user_id,
+        address,
+        holder.total_size,
+    )
+    .await?
+    {
+        crate::quota::UploadCharge::Admitted | crate::quota::UploadCharge::AlreadyAttributed => {
+            tracing::info!(
+                %other,
+                uploader = %holder.upload_user_id,
+                size = holder.total_size,
+                "a live session declares the released address; its reservation was put back"
+            );
+            return Ok(true);
+        }
+        crate::quota::UploadCharge::Refused => error_codes::QUOTA_EXCEEDED,
+        crate::quota::UploadCharge::Suspended => error_codes::QUOTA_SUSPENDED,
     };
-    let Some(holder) = context.sessions().read(&other).await? else {
-        tracing::debug!(%other, "the session that opened during the release is gone");
-        return Ok(Released::Released);
-    };
-    let restored = context
+    match context.sessions().discard_unclaimed(other).await? {
+        UnclaimedDiscard::Discarded(_) => {
+            // The record first, so a finalizer can no longer claim the session; a stage left by
+            // a failed drop is an orphan the startup scrub deletes.
+            if let Err(error) = context.blobs().abandon(other).await {
+                tracing::error!(%error, %other, "a refused session's stage could not be dropped");
+            }
+            tracing::info!(
+                %other,
+                uploader = %holder.upload_user_id,
+                size = holder.total_size,
+                refusal = code,
+                "a live session for the released address could not be charged; discarded it"
+            );
+            Ok(false)
+        }
+        UnclaimedDiscard::Claimed => match context.sessions().read(other).await? {
+            Some(current)
+                if matches!(
+                    current.status,
+                    UploadSessionStatus::WaitingForProcessing | UploadSessionStatus::Completed
+                ) =>
+            {
+                charge_finalizing(context, address, &current, code).await
+            }
+            _ => {
+                tracing::debug!(%other, "a refused session for the address has since failed");
+                Ok(false)
+            }
+        },
+        UnclaimedDiscard::NotFound => {
+            tracing::debug!(%other, "a refused session for the address has since gone");
+            Ok(false)
+        }
+    }
+}
+
+/// Charge `holder`, whose finalization is claimed or has completed, past the check that
+/// refused it.
+///
+/// Every byte is on the server and a finalizer is committing them (or has), so refusing now
+/// costs storage rather than saving it — the reason session creation is quota's one
+/// enforcement point ([`crate::quota`], "One hard enforcement point") — and ending the session
+/// would race the finalizer's own terminal write. The bytes are charged to their uploader
+/// through the ledger directly, which may carry the account over its hard limit: the
+/// documented exception in [`crate::quota`], "How an account reaches `HardExceeded`". Should
+/// the finalization then fail, its own [`release`] gives the charge back.
+async fn charge_finalizing(
+    context: &UploadContext,
+    address: &ContentAddress,
+    holder: &UploadSessionRecord,
+    refusal: &str,
+) -> Result<bool, StoreError> {
+    let outcome = context
         .quotas()
         .charge(
             &holder.upload_user_id,
-            &address,
+            address,
             holder.total_size,
             context.clock().now(),
             context.quota_limits(),
         )
         .await?;
-    tracing::info!(
-        %other,
+    tracing::warn!(
+        other = %holder.upload_id,
         uploader = %holder.upload_user_id,
         size = holder.total_size,
-        restored = matches!(restored, crate::quota::ChargeOutcome::Charged { .. }),
-        "a session opened during the release; its reservation was put back"
+        refusal,
+        charged = matches!(outcome, crate::quota::ChargeOutcome::Charged { .. }),
+        "a finalizing session for the released address was charged past its quota check"
     );
-    Ok(Released::Restored)
+    Ok(true)
 }
 
 /// Another live session of `record`'s uploader that declares the same bytes, if one exists.

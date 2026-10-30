@@ -150,6 +150,11 @@ struct Harness {
 }
 
 fn harness() -> Harness {
+    limited_harness(QuotaLimits::unlimited())
+}
+
+/// [`harness`], under `limits` rather than none.
+fn limited_harness(limits: QuotaLimits) -> Harness {
     let clock = Arc::new(ManualClock::new(
         Timestamp::from_second(1_800_000_000).expect("in range"),
     ));
@@ -160,7 +165,7 @@ fn harness() -> Harness {
         blobs.clone(),
         Arc::new(InMemoryAssetIndex::new()),
         Arc::new(Unasked),
-        QuotaContext::new(quotas.clone(), clock.clone(), QuotaLimits::unlimited()),
+        QuotaContext::new(quotas.clone(), clock.clone(), limits),
         clock,
         UploadPolicy::default(),
     );
@@ -341,5 +346,237 @@ async fn a_session_that_opens_during_the_release_gets_the_reservation_back() {
         h.used(&uploader()).await,
         BYTES.len() as u64,
         "the session that opened will store the bytes, so their reservation stands"
+    );
+}
+
+/// `session`, uploaded by `user` instead — another account sending the same bytes.
+fn session_of(user: &UserId, tag: &str, status: UploadSessionStatus) -> UploadSessionRecord {
+    let mut record = session(tag, status);
+    record.upload_user_id = user.clone();
+    record.owner_id = OwnerId::new(user.as_str());
+    record
+}
+
+#[tokio::test]
+async fn another_accounts_live_session_is_charged_when_the_holder_lets_go() {
+    let h = harness();
+    let other = UserId::new("reservation-other".to_owned());
+    h.charge(&uploader()).await;
+    // Opened long before the holder's session ends, so its own post-open re-charge found the
+    // holder's attribution and debited nothing; no race with the release is involved.
+    h.context
+        .sessions()
+        .open(session_of(&other, "theirs", UploadSessionStatus::Uploading))
+        .await
+        .expect("opened");
+    let ended = session("cancelled", UploadSessionStatus::Pending);
+
+    assert_eq!(
+        release(&h.context, &ended).await.expect("answers"),
+        Released::Restored
+    );
+    assert_eq!(
+        h.used(&uploader()).await,
+        0,
+        "the holder gave up the bytes, so they stop paying for them"
+    );
+    assert_eq!(
+        h.used(&other).await,
+        BYTES.len() as u64,
+        "the session still sending the bytes is charged for them"
+    );
+}
+
+#[tokio::test]
+async fn another_accounts_ended_session_is_not_charged() {
+    let h = harness();
+    let other = UserId::new("reservation-other".to_owned());
+    h.charge(&uploader()).await;
+    h.context
+        .sessions()
+        .open(session_of(
+            &other,
+            "theirs",
+            UploadSessionStatus::FailedProcessing,
+        ))
+        .await
+        .expect("opened");
+    let ended = session("cancelled", UploadSessionStatus::Pending);
+
+    assert_eq!(
+        release(&h.context, &ended).await.expect("answers"),
+        Released::Released
+    );
+    assert_eq!(h.used(&other).await, 0, "a terminal session stores nothing");
+}
+
+/// Limits under which an account that already uses `BYTES.len()` cannot take `BYTES` again.
+fn tight() -> QuotaLimits {
+    let size = BYTES.len() as u64;
+    QuotaLimits::new(size, size * 2 - 1, crate::quota::DEFAULT_GRACE_WINDOW)
+}
+
+impl Harness {
+    /// Charge `user` for `BYTES.len()` bytes at an address of their own, filling their quota.
+    async fn fill(&self, user: &UserId) {
+        let filler =
+            ContentAddress::parse(&hash_bytes(user.as_str().as_bytes()).to_hex()).expect("address");
+        self.quotas
+            .charge(
+                user,
+                &filler,
+                BYTES.len() as u64,
+                Timestamp::from_second(1_800_000_000).expect("in range"),
+                tight(),
+            )
+            .await
+            .expect("the ledger answers");
+    }
+
+    /// Open `record` with a stage, as session creation does.
+    async fn open(&self, record: UploadSessionRecord) {
+        self.blobs.begin(&record.upload_id).await.expect("staged");
+        self.context.sessions().open(record).await.expect("opened");
+    }
+
+    async fn status(&self, upload: &UploadId) -> (UploadSessionStatus, Option<String>) {
+        let record = self
+            .context
+            .sessions()
+            .read(upload)
+            .await
+            .expect("the store answers")
+            .expect("the session is still readable");
+        (record.status, record.failure_code)
+    }
+
+    /// Whether `upload` is gone from the session store.
+    async fn discarded(&self, upload: &UploadId) -> bool {
+        self.context
+            .sessions()
+            .read(upload)
+            .await
+            .expect("the store answers")
+            .is_none()
+    }
+
+    /// Whether `upload`'s stage is gone: dropping it again finds nothing.
+    async fn unstaged(&self, upload: &UploadId) -> bool {
+        !self
+            .blobs
+            .abandon(upload)
+            .await
+            .expect("the blob store answers")
+    }
+}
+
+#[tokio::test]
+async fn another_accounts_session_over_its_hard_limit_is_discarded_not_charged() {
+    let h = limited_harness(tight());
+    let other = UserId::new("reservation-other".to_owned());
+    h.charge(&uploader()).await;
+    h.fill(&other).await;
+    let theirs = session_of(&other, "theirs", UploadSessionStatus::Uploading);
+    h.open(theirs.clone()).await;
+    let ended = session("cancelled", UploadSessionStatus::Pending);
+
+    assert_eq!(
+        release(&h.context, &ended).await.expect("answers"),
+        Released::Released
+    );
+    assert_eq!(
+        h.used(&other).await,
+        BYTES.len() as u64,
+        "the dedup never carries the other account over its hard limit"
+    );
+    assert!(
+        h.discarded(&theirs.upload_id).await,
+        "a session that cannot be charged may not go on to store its bytes"
+    );
+    assert!(
+        h.unstaged(&theirs.upload_id).await,
+        "its stage was already dropped"
+    );
+}
+
+#[tokio::test]
+async fn another_accounts_suspended_session_is_discarded_not_charged() {
+    let h = harness();
+    let other = UserId::new("reservation-other".to_owned());
+    h.charge(&uploader()).await;
+    h.quotas
+        .suspend(
+            &other,
+            Timestamp::from_second(1_800_000_000).expect("in range"),
+        )
+        .await
+        .expect("suspended");
+    let theirs = session_of(&other, "theirs", UploadSessionStatus::Pending);
+    h.open(theirs.clone()).await;
+    let ended = session("cancelled", UploadSessionStatus::Pending);
+
+    assert_eq!(
+        release(&h.context, &ended).await.expect("answers"),
+        Released::Released
+    );
+    assert_eq!(
+        h.used(&other).await,
+        0,
+        "a suspended account is never charged"
+    );
+    assert!(h.discarded(&theirs.upload_id).await);
+    assert!(h.unstaged(&theirs.upload_id).await);
+}
+
+#[tokio::test]
+async fn a_refused_session_hands_the_charge_to_the_next_live_one() {
+    let h = limited_harness(tight());
+    let full = UserId::new("reservation-full".to_owned());
+    let roomy = UserId::new("reservation-roomy".to_owned());
+    h.charge(&uploader()).await;
+    h.fill(&full).await;
+    // Listed smallest id first, so the full account's session is asked first.
+    let refused = session_of(&full, "a-full", UploadSessionStatus::Uploading);
+    let charged = session_of(&roomy, "b-roomy", UploadSessionStatus::Uploading);
+    h.open(refused.clone()).await;
+    h.open(charged.clone()).await;
+    let ended = session("cancelled", UploadSessionStatus::Pending);
+
+    assert_eq!(
+        release(&h.context, &ended).await.expect("answers"),
+        Released::Restored
+    );
+    assert_eq!(h.used(&full).await, BYTES.len() as u64);
+    assert_eq!(h.used(&roomy).await, BYTES.len() as u64);
+    assert!(h.discarded(&refused.upload_id).await);
+    assert_eq!(
+        h.status(&charged.upload_id).await.0,
+        UploadSessionStatus::Uploading
+    );
+}
+
+#[tokio::test]
+async fn a_finalizing_session_is_charged_past_its_limit_and_left_to_its_finalizer() {
+    let h = limited_harness(tight());
+    let other = UserId::new("reservation-other".to_owned());
+    h.charge(&uploader()).await;
+    h.fill(&other).await;
+    let theirs = session_of(&other, "theirs", UploadSessionStatus::WaitingForProcessing);
+    h.open(theirs.clone()).await;
+    let ended = session("cancelled", UploadSessionStatus::Pending);
+
+    assert_eq!(
+        release(&h.context, &ended).await.expect("answers"),
+        Released::Restored
+    );
+    assert_eq!(
+        h.used(&other).await,
+        2 * BYTES.len() as u64,
+        "every byte is already on the server, so it is charged rather than stored free"
+    );
+    assert_eq!(
+        h.status(&theirs.upload_id).await,
+        (UploadSessionStatus::WaitingForProcessing, None),
+        "the finalizer owns the session's terminal write"
     );
 }

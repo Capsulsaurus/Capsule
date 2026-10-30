@@ -29,6 +29,8 @@ android {
         // across every package by `mise run set-version` (xtask).
         versionCode = providers.gradleProperty("capsule.versionCode").get().toInt()
         versionName = providers.gradleProperty("capsule.versionName").get()
+        // The Compose UI accessibility checks run on a device (API 34+): Robolectric skips them.
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     buildFeatures {
         compose = true
@@ -84,6 +86,15 @@ dependencies {
 
     // Plain JVM unit tests over the alert loop, which touches no Android API.
     testImplementation(kotlin("test"))
+
+    // Instrumented Compose UI tests with the accessibility checks (Accessibility Test
+    // Framework) on every interaction, as the culling surface's audit requires.
+    androidTestImplementation(platform(libs.androidx.compose.bom))
+    androidTestImplementation(libs.androidx.compose.ui.test.junit4)
+    androidTestImplementation(libs.androidx.compose.ui.test.junit4.accessibility)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    debugImplementation(libs.androidx.compose.ui.test.manifest)
 }
 
 // The adapters' JVM unit tests drive a real FfiWorkspace: JNA loads the host libcapsule_sdk
