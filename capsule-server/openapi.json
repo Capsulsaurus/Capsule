@@ -15223,6 +15223,31 @@
                   "type": "string"
                 }
               },
+              "X-Capsule-Advice": {
+                "description": "The server's advice, as on session create.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Capsule-Session-Expires-In": {
+                "description": "Seconds until the session's lifetime cap.",
+                "required": true,
+                "schema": {
+                  "type": "integer",
+                  "minimum": 0.0,
+                  "format": "uint64"
+                }
+              },
+              "X-Capsule-Session-Idle-Expires-In": {
+                "description": "Seconds until the session's survival floor. For a session past `uploading` it equals\nthe lifetime cap's, because such a session is never discarded under pressure.",
+                "required": true,
+                "schema": {
+                  "type": "integer",
+                  "minimum": 0.0,
+                  "format": "uint64"
+                }
+              },
               "Cache-Control": {
                 "description": "`no-store`: progress is not cacheable.",
                 "required": true,
@@ -19516,14 +19541,27 @@
                   ]
                 }
               },
-              "X-Capsule-Suggested-Chunk-Size": {
-                "description": "The starting chunk size.",
-                "required": false,
+              "X-Capsule-Advice": {
+                "description": "The server's advice, an RFC 9651 dictionary of integers: `chunk`, `sessions`, `ranges`\nand `ttl`. Advisory only; a client clamps every member into its own bounds.",
+                "required": true,
                 "schema": {
-                  "type": [
-                    "integer",
-                    "null"
-                  ],
+                  "type": "string"
+                }
+              },
+              "X-Capsule-Session-Expires-In": {
+                "description": "Seconds until the session's lifetime cap.",
+                "required": true,
+                "schema": {
+                  "type": "integer",
+                  "minimum": 0.0,
+                  "format": "uint64"
+                }
+              },
+              "X-Capsule-Session-Idle-Expires-In": {
+                "description": "Seconds until the session's survival floor, after which it may be discarded under\npressure. Never more than `X-Capsule-Session-Expires-In`.",
+                "required": true,
+                "schema": {
+                  "type": "integer",
                   "minimum": 0.0,
                   "format": "uint64"
                 }
@@ -19593,14 +19631,27 @@
                   ]
                 }
               },
-              "X-Capsule-Suggested-Chunk-Size": {
-                "description": "The starting chunk size.",
-                "required": false,
+              "X-Capsule-Advice": {
+                "description": "The server's advice, an RFC 9651 dictionary of integers: `chunk`, `sessions`, `ranges`\nand `ttl`. Advisory only; a client clamps every member into its own bounds.",
+                "required": true,
                 "schema": {
-                  "type": [
-                    "integer",
-                    "null"
-                  ],
+                  "type": "string"
+                }
+              },
+              "X-Capsule-Session-Expires-In": {
+                "description": "Seconds until the session's lifetime cap.",
+                "required": true,
+                "schema": {
+                  "type": "integer",
+                  "minimum": 0.0,
+                  "format": "uint64"
+                }
+              },
+              "X-Capsule-Session-Idle-Expires-In": {
+                "description": "Seconds until the session's survival floor, after which it may be discarded under\npressure. Never more than `X-Capsule-Session-Expires-In`.",
+                "required": true,
+                "schema": {
+                  "type": "integer",
                   "minimum": 0.0,
                   "format": "uint64"
                 }

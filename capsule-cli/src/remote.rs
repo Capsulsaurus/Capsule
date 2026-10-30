@@ -1252,6 +1252,12 @@ pub struct PushSummary {
     /// Assets skipped because they are in the trash: a deleted asset's upload is redacted, so
     /// nothing of it is planned or sent and it has no entry in `outcomes`.
     pub trashed_assets: usize,
+    /// What the run did with each trashed asset's lifecycle records the server does not hold
+    /// yet: its `delete`, held until the server indexed the asset's create, is sent once the
+    /// feed lists it, whichever device uploaded it (Organization — Deletion State Machine). One
+    /// entry per trashed asset with a record to send or still held; none for one the server is
+    /// level with, and none on a dry run or under `--force`, which read no server truth.
+    pub held_records: Vec<TrashOutcome>,
     /// Verified custody receipts persisted to the library this run.
     pub receipts: usize,
     /// Blobs transferred to completion.
@@ -1306,8 +1312,13 @@ pub async fn held_blobs(
     page_size: u32,
 ) -> Result<HashSet<String>, RemoteError> {
     let entries = drain_feed(remote, session, page_size).await?;
+    Ok(blobs_held(&entries))
+}
+
+/// The blob content addresses a drain's `entries` say the server durably holds.
+fn blobs_held(entries: &[FeedEntry]) -> HashSet<String> {
     let mut held = HashSet::new();
-    for entry in &entries {
+    for entry in entries {
         held.extend(held_from_feed(entry));
     }
     tracing::info!(
@@ -1315,7 +1326,45 @@ pub async fn held_blobs(
         blobs = held.len(),
         "push: server truth read off the sync feed"
     );
-    Ok(held)
+    held
+}
+
+/// Send the lifecycle records of each `trashed` asset the server does not hold yet, now that
+/// `chains` says which creates it has indexed ([`deliver_chain`]). An asset the server is level
+/// with has no entry; one whose create is still not indexed is reported held.
+async fn deliver_held_records(
+    remote: &RemoteConfig,
+    session: &Session,
+    workspace: &Workspace,
+    trashed: &[Uuid],
+    chains: &held::ServerChains,
+) -> Vec<TrashOutcome> {
+    let mut outcomes = Vec::new();
+    for asset_id in trashed {
+        let Some(asset) = workspace.asset(asset_id) else {
+            continue;
+        };
+        if chains.is_level(asset_id, asset.chain.records()) {
+            tracing::debug!(%asset_id, "push: the server holds this trashed asset's head; nothing to send");
+            continue;
+        }
+        let delivered = deliver_chain(
+            remote,
+            session,
+            workspace,
+            asset_id,
+            chains,
+            jiff::Timestamp::now(),
+        )
+        .await;
+        let outcome = TrashOutcome {
+            retention_until: trashed_until(asset),
+            ..trash_outcome(*asset_id, delivered, trashed_until(asset))
+        };
+        tracing::info!(%asset_id, status = ?outcome.status, "push: a trashed asset's held records");
+        outcomes.push(outcome);
+    }
+    outcomes
 }
 
 /// Every entry of a **fresh** feed drain, in feed order, through a scratch [`SyncState`]: start
@@ -1606,7 +1655,8 @@ async fn push_with(
     };
     // A trashed asset's upload is redacted (Organization — Deletion State Machine): this device
     // sends no further byte of it, so none of its tiers is planned, deferred or opened. Its
-    // `delete` reaches the server as a lifecycle op (`capsule trash`), never as an upload.
+    // `delete` reaches the server as a lifecycle op, never as an upload: `capsule trash` sends it
+    // when the server has indexed the create, and this run sends one held until it has.
     let (trashed, asset_ids): (Vec<Uuid>, Vec<Uuid>) = asset_ids
         .into_iter()
         .partition(|asset_id| workspace.is_trashed(asset_id));
@@ -1629,8 +1679,8 @@ async fn push_with(
         summary.album_keys_escrowed = escrows.stored;
         uncovered = escrows.uncovered;
     }
-    if asset_ids.is_empty() {
-        tracing::info!("push: the library holds no assets");
+    if asset_ids.is_empty() && (trashed.is_empty() || options.dry_run || options.force) {
+        tracing::info!("push: the library holds no assets to push");
         return Ok(summary);
     }
 
@@ -1639,8 +1689,19 @@ async fn push_with(
         tracing::info!("push: --force, re-driving every blob regardless of server truth");
         HashSet::new()
     } else {
-        held_blobs(remote, session.clone(), DEFAULT_SYNC_PAGE_SIZE).await?
+        let entries = drain_feed(remote, session.clone(), DEFAULT_SYNC_PAGE_SIZE).await?;
+        let held = blobs_held(&entries);
+        if !options.dry_run {
+            let chains = held::ServerChains::from_feed(&entries);
+            summary.held_records =
+                deliver_held_records(remote, &session, workspace, &trashed, &chains).await;
+        }
+        held
     };
+    if asset_ids.is_empty() {
+        summary.log();
+        return Ok(summary);
+    }
 
     let upload = UploadClient::new(UploadTransport::with_session(
         session.clone(),
@@ -2011,6 +2072,36 @@ pub fn custody_line(summary: &PushSummary) -> String {
             summary.trashed_assets
         );
     }
+    let count = |status| {
+        summary
+            .held_records
+            .iter()
+            .filter(|outcome| outcome.status == status)
+            .count()
+    };
+    let (sent, held, failed) = (
+        count(TrashStatus::Applied),
+        count(TrashStatus::Held),
+        count(TrashStatus::Failed),
+    );
+    if sent > 0 {
+        let _ = write!(
+            line,
+            " Sent the held delete of {sent} trashed assets the server now indexes."
+        );
+    }
+    if held > 0 {
+        let _ = write!(
+            line,
+            " {held} trashed assets keep their delete held in the library."
+        );
+    }
+    if failed > 0 {
+        let _ = write!(
+            line,
+            " {failed} trashed assets' held records were not applied; `--json` says why."
+        );
+    }
     line
 }
 
@@ -2092,15 +2183,7 @@ pub fn lifecycle_ops_after(
     let Some(asset) = workspace.asset(asset_id) else {
         return Ok(Vec::new());
     };
-    let records = asset.chain.records();
-    let sealed = after.and_then(|hash| records.iter().position(|r| r.record_hash() == hash));
-    let start = if let Some(index) = sealed {
-        index + 1
-    } else {
-        tracing::debug!(%asset_id, "lifecycle ops: the sealed head is not in the chain; the head alone");
-        records.len().saturating_sub(1)
-    };
-    let tail = records.get(start..).unwrap_or_default();
+    let tail = held::after_head(asset.chain.records(), after);
     if !tail
         .iter()
         .any(|r| r.manifest.core.action == Action::Delete)
@@ -2314,8 +2397,22 @@ pub struct TrashRequest {
 pub enum TrashStatus {
     /// The server applied the op (or had applied it already: see `replayed`).
     Applied,
+    /// The record is signed in the library and held there, not sent; `held` says why. Not a
+    /// failure: a later `capsule trash` or `capsule push` sends it once it may be sent.
+    Held,
     /// The op was not applied; `error` says why.
     Failed,
+}
+
+/// Why one asset's records were held rather than sent, in the shape `--json` reports it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TrashHold {
+    /// `not_indexed` (the server has not indexed the asset's create, so it may see no lifecycle
+    /// record of it yet) or `restore_too_late` (the restore undoes a delete the server has not
+    /// seen and whose window has closed; withheld for good, the server keeps the asset live).
+    pub reason: HoldReason,
+    /// For `restore_too_late`, the closed window (RFC 3339) of the delete the restore undoes.
+    pub retention_until: Option<String>,
 }
 
 /// Why one asset's op was not applied, in the shape `--json` reports it.
@@ -2363,6 +2460,8 @@ pub struct TrashOutcome {
     /// For a delete the library signed, what aborting the asset's open upload sessions did.
     /// `None` for a restore, and for an asset whose delete was not signed.
     pub redaction: Option<TrashRedaction>,
+    /// Why the records were held, for a [`TrashStatus::Held`] asset only.
+    pub held: Option<TrashHold>,
 }
 
 /// What a delete did to its asset's in-flight upload — the redaction the deletion state
@@ -2387,6 +2486,9 @@ pub struct TrashSummary {
     pub action: TrashAction,
     /// Assets whose op the server applied.
     pub applied: usize,
+    /// Assets whose record is signed and held in the library, not sent; each is in `outcomes`
+    /// with why.
+    pub held: usize,
     /// Assets whose op was not applied; each is in `outcomes` with its error.
     pub failed: usize,
     /// One entry per asset, in the order given.
@@ -2405,10 +2507,18 @@ impl TrashSummary {
 /// Move `request.assets` to the trash, or restore them from it, in the library and on the
 /// server: sign the lifecycle record locally, then send it to `POST /v1/albums/{album}/ops`.
 ///
-/// Each asset is one op, sent once. An asset whose chain head already is the record this run
-/// would sign (a run whose send did not land) has that head resent rather than a second record
-/// signed, and the server answers a replay as a success. No op is retried within the run, and
-/// a [`permanent`](TrashFailure::permanent) failure is one a re-run only repeats.
+/// An asset whose chain head already is the record this run would sign (a run whose send did
+/// not land) has nothing new signed. No op is retried within the run, and a
+/// [`permanent`](TrashFailure::permanent) failure is one a re-run only repeats.
+///
+/// **A record goes only to a server that has indexed the asset's create** (Organization —
+/// Deletion State Machine). The run drains the feed once, fresh: an asset it does not list is
+/// [`Held`](TrashStatus::Held) (`not_indexed`), its record kept in the library and sent by a
+/// later `capsule trash` or `capsule push` that finds the create indexed, whichever device
+/// uploaded it. A listed asset is sent every record after the head the server holds, in chain
+/// order, so a delete held earlier reaches the server before the restore that undoes it; where
+/// the server already holds the head, the head is resent and answered as a replay. A restore
+/// that undoes a held delete whose window has closed is withheld for good (`restore_too_late`).
 ///
 /// **A delete redacts the asset's in-flight upload first** ([`push::redact_asset`]): every open
 /// upload session the server lists for it is cancelled before the `delete` op is sent, and a
@@ -2450,17 +2560,25 @@ async fn trash_with(
     let mut summary = TrashSummary {
         action: request.action,
         applied: 0,
+        held: 0,
         failed: 0,
         outcomes: Vec::new(),
     };
+    let assets = distinct(request.assets.clone());
+    if assets.is_empty() {
+        return summary;
+    }
     let upload = UploadClient::new(UploadTransport::with_session(
         session.clone(),
         &remote.upload_endpoint,
         &remote.protocol_version,
     ));
-    for asset_id in distinct(request.assets.clone()) {
-        let outcome = match prepare_trash_op(workspace, &asset_id, request, jiff::Timestamp::now())
-        {
+    // Which assets the server has indexed, and the head it holds for each: read once, fresh, so
+    // a record goes only to a server that has the create it continues.
+    let chains = server_chains(remote, session.clone()).await;
+    for asset_id in assets {
+        let now = jiff::Timestamp::now();
+        let outcome = match prepare_trash_op(workspace, &asset_id, request, now) {
             Err(failure) => failed_trash(asset_id, failure),
             Ok(prepared) => {
                 // The window a delete actually carries: the sent record's, which a resend
@@ -2475,50 +2593,38 @@ async fn trash_with(
                 } else {
                     None
                 };
-                match send_op(remote, session.clone(), &prepared.op).await {
-                    Ok(applied) => {
-                        tracing::info!(%asset_id, sync_seq = applied.sync_seq, replayed = applied.replayed, retention_until = ?sent_until, "trash: op applied");
-                        TrashOutcome {
-                            asset_id: asset_id.to_string(),
-                            status: TrashStatus::Applied,
-                            sync_seq: Some(applied.sync_seq),
-                            replayed: applied.replayed,
-                            error: None,
-                            retention_until: sent_until,
-                            redaction,
-                        }
+                let delivered = match &chains {
+                    Ok(chains) => {
+                        deliver_chain(remote, &session, workspace, &asset_id, chains, now).await
                     }
-                    Err(failure) => {
-                        tracing::warn!(%asset_id, kind = failure.kind, code = ?failure.code, permanent = failure.permanent, error = %failure.message, "trash: op not applied");
-                        let retention_until = (failure.kind == "retention_elapsed")
-                            .then_some(prepared.retention_until)
-                            .flatten();
-                        TrashOutcome {
-                            retention_until: sent_until,
-                            redaction,
-                            ..failed_trash(
-                                asset_id,
-                                TrashFailure {
-                                    kind: failure.kind,
-                                    code: failure.code,
-                                    message: failure.message,
-                                    permanent: failure.permanent,
-                                    retention_until,
-                                },
-                            )
-                        }
-                    }
+                    Err(message) => Delivered::Failed(OpFailure {
+                        kind: "unavailable",
+                        code: None,
+                        message: format!(
+                            "the server's feed could not be read, so whether it has indexed the \
+                             asset is unknown; the record is held in the library and nothing was \
+                             sent: {message}"
+                        ),
+                        permanent: false,
+                    }),
+                };
+                TrashOutcome {
+                    retention_until: sent_until,
+                    redaction,
+                    ..trash_outcome(asset_id, delivered, prepared.retention_until)
                 }
             }
         };
         match outcome.status {
             TrashStatus::Applied => summary.applied += 1,
+            TrashStatus::Held => summary.held += 1,
             TrashStatus::Failed => summary.failed += 1,
         }
         summary.outcomes.push(outcome);
     }
     tracing::info!(
         applied = summary.applied,
+        held = summary.held,
         failed = summary.failed,
         "trash: run finished"
     );
@@ -2534,7 +2640,140 @@ fn failed_trash(asset_id: Uuid, failure: TrashFailure) -> TrashOutcome {
         error: Some(failure),
         retention_until: None,
         redaction: None,
+        held: None,
     }
+}
+
+/// One asset's outcome from what delivering its chain did. `trashed_until` is the signed
+/// window of the delete the asset is in the trash under, which a `retention_elapsed` refusal
+/// reports.
+fn trash_outcome(
+    asset_id: Uuid,
+    delivered: Delivered,
+    trashed_until: Option<String>,
+) -> TrashOutcome {
+    match delivered {
+        Delivered::Applied(applied) => TrashOutcome {
+            asset_id: asset_id.to_string(),
+            status: TrashStatus::Applied,
+            sync_seq: Some(applied.sync_seq),
+            replayed: applied.replayed,
+            error: None,
+            retention_until: None,
+            redaction: None,
+            held: None,
+        },
+        Delivered::Held(hold) => TrashOutcome {
+            asset_id: asset_id.to_string(),
+            status: TrashStatus::Held,
+            sync_seq: None,
+            replayed: false,
+            error: None,
+            retention_until: None,
+            redaction: None,
+            held: Some(hold),
+        },
+        Delivered::Failed(failure) => {
+            let retention_until = (failure.kind == "retention_elapsed")
+                .then_some(trashed_until)
+                .flatten();
+            failed_trash(
+                asset_id,
+                TrashFailure {
+                    kind: failure.kind,
+                    code: failure.code,
+                    message: failure.message,
+                    permanent: failure.permanent,
+                    retention_until,
+                },
+            )
+        }
+    }
+}
+
+/// The server's chain heads off a fresh feed drain, or why the feed could not be read.
+pub(crate) async fn server_chains(
+    remote: &RemoteConfig,
+    session: Session,
+) -> Result<held::ServerChains, String> {
+    match drain_feed(remote, session, DEFAULT_SYNC_PAGE_SIZE).await {
+        Ok(entries) => Ok(held::ServerChains::from_feed(&entries)),
+        Err(error) => {
+            tracing::warn!(%error, "held records: the feed could not be read; nothing is sent");
+            Err(error.to_string())
+        }
+    }
+}
+
+/// What delivering one asset's chain did.
+#[derive(Debug)]
+pub(crate) enum Delivered {
+    /// Every record sent was applied; the last one's answer.
+    Applied(OpApplied),
+    /// Nothing was sent.
+    Held(TrashHold),
+    /// A record was not applied; those after it were not sent.
+    Failed(OpFailure),
+}
+
+/// Send what of `asset_id`'s chain may go to the server now ([`held::plan`]): nothing while the
+/// server has not indexed the asset's create, otherwise every record after the head it holds,
+/// in chain order, each once the one before it was applied.
+#[instrument(skip(remote, session, workspace, chains, now))]
+pub(crate) async fn deliver_chain(
+    remote: &RemoteConfig,
+    session: &Session,
+    workspace: &Workspace,
+    asset_id: &Uuid,
+    chains: &held::ServerChains,
+    now: jiff::Timestamp,
+) -> Delivered {
+    let library_failure = |message: String| {
+        Delivered::Failed(OpFailure {
+            kind: "library",
+            code: None,
+            message,
+            permanent: true,
+        })
+    };
+    let Some(asset) = workspace.asset(asset_id) else {
+        return library_failure(format!("the library holds no asset {asset_id}"));
+    };
+    let records = asset.chain.records();
+    let stretch = match held::plan(records, chains.head(asset_id), chains.judging_clock(now)) {
+        held::Delivery::Held {
+            reason,
+            retention_until,
+        } => {
+            tracing::info!(%asset_id, ?reason, retention_until = ?retention_until, "held records: nothing sent");
+            return Delivered::Held(TrashHold {
+                reason,
+                retention_until,
+            });
+        }
+        held::Delivery::Send(stretch) => stretch,
+    };
+    let mut last = None;
+    for record in stretch {
+        let op = match encode_op(asset, record) {
+            Ok(op) => op,
+            Err(error) => return library_failure(error.to_string()),
+        };
+        match send_op(remote, session.clone(), &op).await {
+            Ok(applied) => {
+                tracing::info!(%asset_id, action = %applied.action, sync_seq = applied.sync_seq, replayed = applied.replayed, "held records: op applied");
+                last = Some(applied);
+            }
+            Err(failure) => {
+                tracing::warn!(%asset_id, kind = failure.kind, code = ?failure.code, permanent = failure.permanent, error = %failure.message, "held records: op not applied; the rest of the stretch is not sent");
+                return Delivered::Failed(failure);
+            }
+        }
+    }
+    last.map_or_else(
+        || library_failure(format!("asset {asset_id} has no provenance")),
+        Delivered::Applied,
+    )
 }
 
 /// Abort `asset_id`'s open upload sessions before its `delete` is sent, so this device sends no
@@ -2557,18 +2796,16 @@ async fn redact_upload(upload: &UploadClient, asset_id: Uuid) -> TrashRedaction 
     }
 }
 
-/// One asset's op, ready to send.
+/// One asset's record, signed in the library and ready to deliver.
 #[derive(Debug)]
 struct PreparedTrashOp {
-    /// The `POST /v1/albums/{album}/ops` body for the asset's new chain head.
-    op: Vec<u8>,
     /// The signed retention floor of the delete the asset is in the trash under, when it is.
     retention_until: Option<String>,
 }
 
 /// Sign `request.action` for `asset_id` in the library, unless its chain head already is such
-/// a record, and encode the head as the op to send. `now` is this device's clock, against which
-/// a restore's retention floor is checked before anything is signed.
+/// a record. `now` is this device's clock, against which a restore's retention floor is checked
+/// before anything is signed. What of the chain is then sent is [`deliver_chain`]'s to decide.
 fn prepare_trash_op(
     workspace: &mut Workspace,
     asset_id: &Uuid,
@@ -2640,14 +2877,7 @@ fn prepare_trash_op(
             format!("the library holds no asset {asset_id}"),
         )
     })?;
-    let head = asset
-        .chain
-        .records()
-        .last()
-        .ok_or_else(|| local("library", format!("asset {asset_id} has no provenance")))?;
-    let op = encode_op(asset, head).map_err(|error| local("library", error.to_string()))?;
     Ok(PreparedTrashOp {
-        op,
         retention_until: trashed_until(asset),
     })
 }
@@ -2679,6 +2909,13 @@ pub fn trash_line(summary: &TrashSummary) -> String {
         "assets"
     };
     let mut line = format!("{} {noun} {verb} on the server", summary.applied);
+    if summary.held > 0 {
+        let _ = write!(
+            line,
+            ", {} held in the library until the server may take it",
+            summary.held
+        );
+    }
     if summary.failed > 0 {
         let _ = write!(line, ", {} failed", summary.failed);
     }
@@ -2966,6 +3203,10 @@ pub async fn list<C: ConnectionTrait>(
 ) -> Result<Vec<SyncedAssetView>, RemoteError> {
     Ok(syncstore::list_assets(db, include_tombstoned).await?)
 }
+
+pub(crate) mod held;
+
+pub use held::HoldReason;
 
 #[cfg(test)]
 mod tests;

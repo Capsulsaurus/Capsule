@@ -1222,6 +1222,12 @@ fn chain_len(ws: &Workspace, asset: &Uuid) -> usize {
     ws.asset(asset).expect("held").chain.records().len()
 }
 
+/// The op body for `asset`'s chain head, as a delivery sends it.
+fn head_op(ws: &Workspace, asset: &Uuid) -> Vec<u8> {
+    let state = ws.asset(asset).expect("held");
+    encode_op(state, state.chain.records().last().expect("a head")).expect("encodes")
+}
+
 fn head_action(ws: &Workspace, asset: &Uuid) -> capsule_core::crypto::provenance::Action {
     ws.asset(asset)
         .expect("held")
@@ -1248,8 +1254,9 @@ fn a_trash_delete_signs_one_delete_and_resends_it_on_a_rerun() {
         .expect("prepared");
     assert_eq!(head_action(&ws, &asset), Action::Delete);
     assert_eq!(chain_len(&ws, &asset), before + 1);
+    let first_op = head_op(&ws, &asset);
     let sent: capsule_sdk::rest::types::OpRequest =
-        serde_json::from_slice(&first.op).expect("an op");
+        serde_json::from_slice(&first_op).expect("an op");
     assert_eq!(sent.manifest_envelope.action, "delete");
     assert!(sent.manifest_envelope.retention_until.is_some());
     assert_eq!(
@@ -1260,7 +1267,8 @@ fn a_trash_delete_signs_one_delete_and_resends_it_on_a_rerun() {
     let again = prepare_trash_op(&mut ws, &asset, &request(TrashAction::Delete, asset), now)
         .expect("prepared");
     assert_eq!(chain_len(&ws, &asset), before + 1, "no second delete");
-    assert_eq!(again.op, first.op, "the same op is resent");
+    assert_eq!(again.retention_until, first.retention_until);
+    assert_eq!(head_op(&ws, &asset), first_op, "the same head is resent");
 }
 
 /// A restore signs a `trash-restore` onto the delete it undoes.
@@ -1279,7 +1287,7 @@ fn a_trash_restore_signs_a_restore_onto_the_delete() {
     .expect("prepared");
     assert_eq!(head_action(&ws, &asset), Action::TrashRestore);
     let sent: capsule_sdk::rest::types::OpRequest =
-        serde_json::from_slice(&prepared.op).expect("an op");
+        serde_json::from_slice(&head_op(&ws, &asset)).expect("an op");
     assert_eq!(sent.manifest_envelope.action, "trash-restore");
     assert!(prepared.retention_until.is_some(), "the delete's floor");
 }
@@ -1322,15 +1330,58 @@ fn a_trash_run_refuses_locally_what_it_already_knows_without_signing() {
     assert_eq!(chain_len(&ws, &asset), before, "nothing signed");
 }
 
-/// Every `METHOD path` a mock answered, in order.
+/// Every `METHOD path` a mock answered, in order, but the feed pulls.
 type Seen = std::sync::Arc<std::sync::Mutex<Vec<String>>>;
 
-/// Serve a mock answering every request with `status` and `body`, and return the endpoints and
-/// a session against it, with the requests it answered.
-async fn ops_mock(status: u16, body: serde_json::Value) -> (RemoteConfig, Session, Seen) {
+/// The feed entry naming `asset` indexed on the server, its head the record at `at` of the
+/// library's chain.
+fn listed(ws: &Workspace, asset: &Uuid, at: usize) -> serde_json::Value {
+    use base64::Engine as _;
+    let state = ws.asset(asset).expect("held");
+    let record = &state.chain.records()[at];
+    let cbor = capsule_core::cbor::to_canonical_vec(record).expect("encodes");
+    serde_json::json!({
+        "asset_id": asset.to_string(),
+        "album_id": state.album_id.to_string(),
+        "protocol_version": capsule_core::crypto::primitives::PROTOCOL_VERSION,
+        "sync_seq": at + 1,
+        "change": if at == 0 { "created" } else { "updated" },
+        "manifest_cbor": base64::engine::general_purpose::STANDARD.encode(cbor),
+        "metadata_blob": "metadata",
+        "blobs": [],
+        "original_held": true,
+        "changed_at": "2026-10-01T00:00:00Z",
+    })
+}
+
+/// The feed's answer to `line` when it is a feed pull: `entries` on the first page, then an
+/// empty one. `None` for any other request.
+fn feed_answer(line: &str, entries: &[serde_json::Value]) -> Option<(u16, &'static str, String)> {
+    if !line.starts_with("GET /v1/sync") {
+        return None;
+    }
+    let first = !line.contains("cursor=");
+    let page = serde_json::json!({
+        "entries": if first { entries.to_vec() } else { Vec::new() },
+        "next_cursor": "after-the-listing",
+        "has_more": false,
+    });
+    Some((200, "application/json", page.to_string()))
+}
+
+/// Serve a mock whose feed lists `feed`, and which answers every other request with `status`
+/// and `body`; return the endpoints and a session against it, with the requests it answered.
+async fn ops_mock(
+    status: u16,
+    body: serde_json::Value,
+    feed: Vec<serde_json::Value>,
+) -> (RemoteConfig, Session, Seen) {
     let seen = Seen::default();
     let sink = seen.clone();
     let answer = move |line: &str| {
+        if let Some(page) = feed_answer(line, &feed) {
+            return page;
+        }
         sink.lock().unwrap().push(line.to_owned());
         let content_type = if status == 200 {
             "application/json"
@@ -1362,6 +1413,7 @@ async fn a_restore_the_server_refuses_as_too_late_is_a_permanent_retention_elaps
             "code": "error.upload.retention_elapsed",
             "retention_until": "2026-09-01T00:00:00Z",
         }),
+        vec![listed(&ws, &asset, 1)],
     )
     .await;
 
@@ -1417,6 +1469,7 @@ async fn an_applied_delete_reports_its_feed_position() {
             "action": "delete",
             "replayed": false,
         }),
+        vec![listed(&ws, &asset, 0)],
     )
     .await;
 
@@ -1469,6 +1522,7 @@ async fn a_resent_delete_reports_the_window_it_carries_not_the_flag() {
             "action": "delete",
             "replayed": false,
         }),
+        vec![listed(&ws, &asset, 0)],
     )
     .await;
 
@@ -1503,7 +1557,7 @@ async fn bytes_that_are_not_a_sendable_op_are_refused_for_good() {
         serde_json::from_slice(&op).expect("an op");
     request.manifest_envelope.album_id = None;
     let albumless = serde_json::to_vec(&request).expect("encodes");
-    let (remote, session, seen) = ops_mock(500, serde_json::json!({})).await;
+    let (remote, session, seen) = ops_mock(500, serde_json::json!({}), Vec::new()).await;
 
     for bytes in [b"not an op".to_vec(), albumless] {
         let failure = send_op(&remote, session.clone(), &bytes)
@@ -1529,6 +1583,7 @@ async fn a_server_fault_is_a_transient_failure() {
             "detail": "the lifecycle write could not be applied",
             "code": "error.internal",
         }),
+        vec![listed(&ws, &asset, 0)],
     )
     .await;
 
@@ -1550,11 +1605,17 @@ async fn a_server_fault_is_a_transient_failure() {
 
 /// A server holding three upload sessions — two of `asset`'s, one of another asset's — whose
 /// cancel answers `204` for `s-open` and `409 session_not_active` for `s-final`, and which
-/// applies every lifecycle op.
-async fn redaction_mock(asset: Uuid) -> (RemoteConfig, Session, Seen) {
+/// applies every lifecycle op; its feed lists `feed`.
+async fn redaction_mock(
+    asset: Uuid,
+    feed: Vec<serde_json::Value>,
+) -> (RemoteConfig, Session, Seen) {
     let seen = Seen::default();
     let sink = seen.clone();
     let answer = move |line: &str| {
+        if let Some(page) = feed_answer(line, &feed) {
+            return page;
+        }
         sink.lock().unwrap().push(line.to_owned());
         let session = |id: &str, asset_id: &str, status: &str| {
             serde_json::json!({
@@ -1602,7 +1663,7 @@ async fn redaction_mock(asset: Uuid) -> (RemoteConfig, Session, Seen) {
 async fn a_delete_aborts_the_assets_open_upload_sessions_before_sending_the_delete() {
     let scratch = Scratch::new();
     let (mut ws, asset) = trash_library(&scratch);
-    let (remote, session, seen) = redaction_mock(asset).await;
+    let (remote, session, seen) = redaction_mock(asset, vec![listed(&ws, &asset, 0)]).await;
 
     let summary = trash_with(
         &remote,
@@ -1652,6 +1713,7 @@ async fn a_failed_redaction_is_reported_and_the_delete_still_sent() {
             "action": "delete",
             "replayed": false,
         }),
+        vec![listed(&ws, &asset, 0)],
     )
     .await;
 
@@ -1733,6 +1795,29 @@ async fn a_trashed_asset_is_skipped_by_a_push() {
             "{}",
             custody_line(&summary)
         );
+        // The feed lists nothing, so the trashed asset's delete stays held; a dry run reads no
+        // server truth for it at all.
+        let held: Vec<_> = summary
+            .held_records
+            .iter()
+            .map(|o| {
+                (
+                    o.asset_id.clone(),
+                    o.status,
+                    o.held.as_ref().map(|h| h.reason),
+                )
+            })
+            .collect();
+        let expected = if dry_run {
+            Vec::new()
+        } else {
+            vec![(
+                other.to_string(),
+                TrashStatus::Held,
+                Some(HoldReason::NotIndexed),
+            )]
+        };
+        assert_eq!(held, expected, "dry run: {dry_run}");
         assert!(
             !mock.seen.lock().unwrap().iter().any(|line| {
                 (line.contains(&other_album.to_string()) || line.contains(&other.to_string()))
@@ -1741,4 +1826,264 @@ async fn a_trashed_asset_is_skipped_by_a_push() {
             "nothing of the trashed asset was sent (dry run: {dry_run})"
         );
     }
+}
+
+// ── Held lifecycle records (#1029) ──────────────────────────────────────
+
+fn applied_body(asset: Uuid, action: &str) -> serde_json::Value {
+    serde_json::json!({
+        "asset_id": asset.to_string(),
+        "sync_seq": 11,
+        "action": action,
+        "replayed": false,
+    })
+}
+
+fn posted_ops(seen: &Seen) -> usize {
+    seen.lock()
+        .unwrap()
+        .iter()
+        .filter(|line| line.starts_with("POST /v1/albums/"))
+        .count()
+}
+
+/// **The server never sees a delete for an asset it has not indexed.** The feed does not list
+/// the asset, so its delete is signed in the library and held there: the upload is still
+/// redacted, nothing is posted to the ops surface, and the run neither applies nor fails it.
+#[tokio::test]
+async fn a_delete_of_an_asset_the_server_has_not_indexed_is_held() {
+    let scratch = Scratch::new();
+    let (mut ws, asset) = trash_library(&scratch);
+    let (remote, session, seen) = ops_mock(200, applied_body(asset, "delete"), Vec::new()).await;
+
+    let summary = trash_with(
+        &remote,
+        &mut ws,
+        session,
+        &request(TrashAction::Delete, asset),
+    )
+    .await;
+
+    assert_eq!(
+        (summary.applied, summary.held, summary.failed),
+        (0, 1, 0),
+        "{summary:#?}"
+    );
+    let outcome = &summary.outcomes[0];
+    assert_eq!(outcome.status, TrashStatus::Held);
+    assert_eq!(
+        outcome.held,
+        Some(TrashHold {
+            reason: HoldReason::NotIndexed,
+            retention_until: None,
+        })
+    );
+    assert!(outcome.redaction.is_some(), "the upload is still redacted");
+    assert!(outcome.retention_until.is_some(), "the signed window");
+    assert_eq!(
+        head_action(&ws, &asset),
+        capsule_core::crypto::provenance::Action::Delete,
+        "the delete is signed and kept in the library"
+    );
+    assert_eq!(posted_ops(&seen), 0, "nothing reached the ops surface");
+    assert!(
+        seen.lock()
+            .unwrap()
+            .iter()
+            .any(|line| line == "GET /v1/upload/sessions"),
+        "the redaction ran"
+    );
+    assert_eq!(
+        trash_line(&summary),
+        "0 assets moved to the trash on the server, 1 held in the library until the server may \
+         take it"
+    );
+    let json = serde_json::to_value(&summary).expect("serializes");
+    assert_eq!(json["held"], 1);
+    assert_eq!(json["outcomes"][0]["status"], "held");
+    assert_eq!(json["outcomes"][0]["held"]["reason"], "not_indexed");
+}
+
+/// A feed that cannot be read says nothing about what the server indexed, so nothing is sent:
+/// the asset fails as `unavailable`, which a re-run can clear, and its record stays signed.
+#[tokio::test]
+async fn an_unreadable_feed_sends_nothing_and_fails_transiently() {
+    let scratch = Scratch::new();
+    let (mut ws, asset) = trash_library(&scratch);
+    let seen = Seen::default();
+    let sink = seen.clone();
+    let answer = move |line: &str| {
+        sink.lock().unwrap().push(line.to_owned());
+        let problem = serde_json::json!({
+            "type": "about:blank", "status": 500, "detail": "down", "code": "error.internal",
+        });
+        (500, "application/problem+json", problem.to_string())
+    };
+    let (remote, session) = remote_at(&serve_mock(answer).await);
+
+    let summary = trash_with(
+        &remote,
+        &mut ws,
+        session,
+        &request(TrashAction::Delete, asset),
+    )
+    .await;
+
+    assert_eq!((summary.applied, summary.held, summary.failed), (0, 0, 1));
+    let error = summary.outcomes[0].error.as_ref().expect("an error");
+    assert_eq!(error.kind, "unavailable");
+    assert!(!error.permanent, "a re-run can send it");
+    assert_eq!(posted_ops(&seen), 0, "nothing reached the ops surface");
+    assert_eq!(
+        head_action(&ws, &asset),
+        capsule_core::crypto::provenance::Action::Delete
+    );
+}
+
+/// Once the create is indexed, a restore made after a held delete sends both, the delete
+/// first, so each chains onto the server's head in turn.
+#[tokio::test]
+async fn a_restore_after_a_held_delete_sends_the_delete_then_the_restore() {
+    let scratch = Scratch::new();
+    let (mut ws, asset) = trash_library(&scratch);
+    let at_create = listed(&ws, &asset, 0);
+    ws.soft_delete(&asset, 30).expect("deleted");
+    let (remote, session, seen) =
+        ops_mock(200, applied_body(asset, "trash-restore"), vec![at_create]).await;
+
+    let summary = trash_with(
+        &remote,
+        &mut ws,
+        session,
+        &request(TrashAction::TrashRestore, asset),
+    )
+    .await;
+
+    assert_eq!(
+        (summary.applied, summary.held, summary.failed),
+        (1, 0, 0),
+        "{summary:#?}"
+    );
+    assert_eq!(posted_ops(&seen), 2, "the held delete, then the restore");
+}
+
+/// **A restore of a held delete is never sent too late.** The server's feed is past the
+/// delete's window, so sending the pair would have the server apply the delete, refuse the
+/// restore and purge an asset restored in time. Nothing is sent, the asset is reported held
+/// with the closed window, and the library keeps both records.
+#[tokio::test]
+async fn a_restore_of_a_held_delete_past_its_window_is_withheld() {
+    let scratch = Scratch::new();
+    let (mut ws, asset) = trash_library(&scratch);
+    let mut at_create = listed(&ws, &asset, 0);
+    at_create["changed_at"] = serde_json::json!("2999-01-01T00:00:00Z");
+    ws.soft_delete(&asset, 1).expect("deleted");
+    let until = trashed_until(ws.asset(&asset).expect("held"));
+    ws.restore(&asset).expect("restored in time");
+    let before = chain_len(&ws, &asset);
+    let (remote, session, seen) =
+        ops_mock(200, applied_body(asset, "trash-restore"), vec![at_create]).await;
+
+    let summary = trash_with(
+        &remote,
+        &mut ws,
+        session,
+        &request(TrashAction::TrashRestore, asset),
+    )
+    .await;
+
+    assert_eq!((summary.applied, summary.held, summary.failed), (0, 1, 0));
+    assert_eq!(
+        summary.outcomes[0].held,
+        Some(TrashHold {
+            reason: HoldReason::RestoreTooLate,
+            retention_until: until,
+        })
+    );
+    assert_eq!(posted_ops(&seen), 0);
+    assert_eq!(chain_len(&ws, &asset), before, "nothing signed or dropped");
+}
+
+/// **A push sends a held delete once another device's upload is indexed.** The trashed asset's
+/// create is on the feed, so its delete goes to the ops surface, once; the asset is still not
+/// uploaded. A second push finds the server level with the library and sends nothing.
+#[tokio::test]
+async fn a_push_sends_a_held_delete_once_the_create_is_indexed() {
+    let EscrowRun {
+        _scratch,
+        mut ws,
+        other,
+        ..
+    } = escrow_run().await;
+    let at_create = listed(&ws, &other, 0);
+    ws.soft_delete(&other, 30).expect("deleted");
+    let at_delete = listed(&ws, &other, 1);
+    let escrow = EscrowMock {
+        full_for: Uuid::now_v7(),
+        seen: std::sync::Arc::default(),
+    };
+    let feed = std::sync::Arc::new(std::sync::Mutex::new(vec![at_create]));
+    let (seen, listing) = (escrow.seen.clone(), feed.clone());
+    let answer = move |line: &str| {
+        let entries = listing.lock().unwrap().clone();
+        if let Some(page) = feed_answer(line, &entries) {
+            return page;
+        }
+        if line.starts_with("POST /v1/albums/") {
+            escrow.seen.lock().unwrap().push(line.to_owned());
+            return (
+                200,
+                "application/json",
+                applied_body(other, "delete").to_string(),
+            );
+        }
+        escrow.answer(line)
+    };
+    let (remote, session) = remote_at(&serve_mock(answer).await);
+    let only_other = || PushRun {
+        assets: Some(vec![other]),
+        ..PushRun::default()
+    };
+
+    let summary = push_with(
+        &remote,
+        &mut ws,
+        session.clone(),
+        PushOptions::default(),
+        only_other(),
+    )
+    .await
+    .expect("the run completes");
+
+    assert_eq!(summary.trashed_assets, 1);
+    assert!(summary.outcomes.is_empty(), "nothing of it is uploaded");
+    let statuses: Vec<_> = summary.held_records.iter().map(|o| o.status).collect();
+    assert_eq!(statuses, vec![TrashStatus::Applied], "{summary:#?}");
+    assert_eq!(posted_ops(&seen), 1, "the delete, once");
+    assert!(
+        !seen
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|line| line.contains("/v1/upload")),
+        "no upload session was opened"
+    );
+    assert!(
+        custody_line(&summary).contains("Sent the held delete of 1"),
+        "{}",
+        custody_line(&summary)
+    );
+
+    *feed.lock().unwrap() = vec![at_delete];
+    let again = push_with(
+        &remote,
+        &mut ws,
+        session,
+        PushOptions::default(),
+        only_other(),
+    )
+    .await
+    .expect("the run completes");
+    assert!(again.held_records.is_empty(), "{again:#?}");
+    assert_eq!(posted_ops(&seen), 1, "nothing sent again");
 }

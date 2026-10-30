@@ -858,6 +858,10 @@ fn compose(
     let uploads = stores.uploads.clone();
     let marks = stores.marks.clone();
     let quotas = stores.quotas.clone();
+    // Unlimited, which is what a self-hosted deployment runs. A configurable ceiling is a
+    // quota policy this change does not own; `QuotaLimits` already takes one. One context, so
+    // the upload module restores a reservation under the same limits the quota module charges.
+    let quota = QuotaContext::new(quotas.clone(), clock.clone(), QuotaLimits::unlimited());
     let shares = stores.shares.clone();
     let issued = stores.capabilities.clone();
     let peers = stores.peers.clone();
@@ -1026,6 +1030,7 @@ fn compose(
             blobs.clone(),
             index.clone(),
             authority.clone(),
+            quota.clone(),
             clock.clone(),
             // The window the operator configured, not the crate default: this policy is what
             // the handshake enforces and what every response advertises (`negotiation`), and the
@@ -1054,9 +1059,7 @@ fn compose(
         directories: DeviceDirectoryContext::new(directories.clone(), clock.clone()),
         albums: AlbumContext::new(albums.clone(), clock.clone()),
         membership: MembershipContext::new(members, clock.clone()),
-        // Unlimited, which is what a self-hosted deployment runs. A configurable ceiling is a
-        // quota policy this change does not own; `QuotaLimits` already takes one.
-        quota: QuotaContext::new(quotas.clone(), clock.clone(), QuotaLimits::unlimited()),
+        quota,
         attestation: attestation.clone(),
         discovery: DiscoveryContext::new(server_info, revocations),
         escrow: EscrowContext::new(escrow, clock.clone()),

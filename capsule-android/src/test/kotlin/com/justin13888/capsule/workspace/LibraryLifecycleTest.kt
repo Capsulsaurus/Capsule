@@ -1,7 +1,11 @@
 package com.justin13888.capsule.workspace
 
+import com.justin13888.capsule.hardware.SoftwareP256Signer
 import uniffi.capsule_sdk.FfiClientBuild
 import uniffi.capsule_sdk.FfiDeviceTier
+import uniffi.capsule_sdk.FfiException
+import uniffi.capsule_sdk.FfiHardwareSigner
+import uniffi.capsule_sdk.FfiHardwareSignerException
 import uniffi.capsule_sdk.FfiWorkspace
 import java.io.File
 import java.nio.file.Files
@@ -30,8 +34,14 @@ class LibraryLifecycleTest {
         dir.deleteRecursively()
     }
 
-    private fun lifecycle(secrets: UnlockSecretStore = unlockStore(dir, sealer)) =
-        LibraryLifecycle(root, secrets, FfiDeviceTier.LOW_RAM, FfiClientBuild("capsule-android", "0.0.0"), "Library")
+    // The device's StrongBox key, stood in for by a software P-256 element: the same seed is the same key at every launch.
+    private val element = SoftwareP256Signer(ByteArray(32) { 7 })
+    private val client = FfiClientBuild("capsule-android", "0.0.0")
+
+    private fun lifecycle(
+        secrets: UnlockSecretStore = unlockStore(dir, sealer),
+        signer: FfiHardwareSigner? = element,
+    ) = LibraryLifecycle(root, secrets, FfiDeviceTier.LOW_RAM, client, "Library", signer)
 
     private fun open(lifecycle: LibraryLifecycle = lifecycle()): OpenedLibrary = lifecycle.open().also { opened += it }
 
@@ -115,9 +125,59 @@ class LibraryLifecycleTest {
         // No new secret was drawn and no new library made over the old one.
         assertTrue(!File(dir, "unlock.sealed").exists())
         assertTrue(before.contentEquals(account.readBytes()))
-        FfiWorkspace.open(root.path, secret, FfiDeviceTier.LOW_RAM, FfiClientBuild("capsule-android", "0.0.0")).use {
-            assertEquals(user, it.userId())
-        }
+        FfiWorkspace
+            .openWithP256HardwareSigner(
+                root.path,
+                secret,
+                FfiDeviceTier.LOW_RAM,
+                element,
+                LibraryLifecycle.DEVICE_SIGNING_KEY_ALIAS,
+                client,
+            ).use { assertEquals(user, it.userId()) }
+    }
+
+    @Test
+    fun aRelaunchSignsWithTheKeyTheFirstLaunchPublished() {
+        val first = open()
+        val directory = first.workspace.signedDeviceDirectory()
+        (first.workspace as AutoCloseable).close()
+        opened.clear()
+
+        assertTrue(directory.contentEquals(open().workspace.signedDeviceDirectory()))
+    }
+
+    @Test
+    fun aLibraryMadeOnSoftwareKeysKeepsThemOnceTheElementIsOffered() {
+        val first = open(lifecycle(signer = null))
+        val directory = first.workspace.signedDeviceDirectory()
+        (first.workspace as AutoCloseable).close()
+        opened.clear()
+
+        assertTrue(directory.contentEquals(open().workspace.signedDeviceDirectory()))
+    }
+
+    @Test
+    fun aLibraryOnTheElementsKeyIsNotOpenedOnSoftwareKeys() {
+        open().also { (it.workspace as AutoCloseable).close() }
+        opened.clear()
+
+        assertFailsWith<FfiException> { lifecycle(signer = null).open() }
+    }
+
+    @Test
+    fun aRefusedEnrollmentFailsTheFirstLaunchAndTheRetryCreatesTheLibrary() {
+        val refusing =
+            object : FfiHardwareSigner by element {
+                override fun enroll(keyAlias: String): ByteArray = throw FfiHardwareSignerException.Unavailable("keystore refused")
+            }
+
+        // An element's own exception reaches the app as an internal error today, since the core cannot lift a flat
+        // error thrown by a foreign implementation; either way the launch fails.
+        assertFails { lifecycle(signer = refusing).open() }
+        // Nothing was laid out, so the next launch creates the library rather than judging a half-made one.
+        assertTrue(!File(root, LibraryLifecycle.LIBRARY_DIR).exists())
+        val library = open()
+        assertEquals(listOf(library.workspace.defaultAlbumId()), library.workspace.albums().map { it.albumId })
     }
 
     @Test

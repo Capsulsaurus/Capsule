@@ -155,6 +155,52 @@ public protocol UploadPort: Sendable {
     func changes() -> AsyncStream<[UploadSession]>
 }
 
+/// What redacting one asset's upload did: the redaction the deletion state
+/// machine requires when an asset whose upload has not finished is deleted.
+public struct UploadRedaction: Sendable, Equatable {
+    /// The asset's sessions that were cancelled.
+    public var cancelled: [UploadID]
+    /// The asset's sessions already finalizing, which cannot be cancelled. Their
+    /// blob lands, and the `delete` sent once the create is indexed supersedes it.
+    public var finalizing: [UploadID]
+
+    public init(cancelled: [UploadID] = [], finalizing: [UploadID] = []) {
+        self.cancelled = cancelled
+        self.finalizing = finalizing
+    }
+}
+
+public extension UploadPort {
+    /// Stop this device's upload of a deleted asset: cancel every active session
+    /// of it, so no further byte of it is sent. A session already finalizing is
+    /// reported rather than failing the redaction, and one the server no longer
+    /// knows is already gone. Any other refusal is thrown; the delete itself never
+    /// waits on it, since the library holds the signed record either way.
+    ///
+    /// Composed from ``activeSessions()`` and ``cancelSession(_:)`` so every
+    /// adapter redacts the same way. The SDK's counterpart is
+    /// `capsule_sdk::push::redact_asset`.
+    func redactUploads(for assetID: AssetID) async throws -> UploadRedaction {
+        guard case let .managed(uuid) = assetID else {
+            // A system Photos asset has no Capsule upload of its own.
+            return UploadRedaction()
+        }
+        var redaction = UploadRedaction()
+        for session in try await activeSessions() where session.assetID == uuid {
+            do {
+                try await cancelSession(session.id)
+                redaction.cancelled.append(session.id)
+            } catch let error as CapsuleError
+                where error.code == .uploadFinalizeInProgress || error.code == .uploadSessionNotActive {
+                redaction.finalizing.append(session.id)
+            } catch let error as CapsuleError where error.code == .uploadSessionNotFound {
+                continue
+            }
+        }
+        return redaction
+    }
+}
+
 // MARK: - TransferEventPort
 
 /// The live transfer event stream: every step an upload, a custody check, or

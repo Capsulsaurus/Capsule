@@ -2899,6 +2899,12 @@ async fn peer_status(workspace: &Workspace, acks: &[PathBuf], json: bool) -> Res
                     delete.message.as_deref().unwrap_or("no detail")
                 )
                 .red(),
+                "withheld" => format!(
+                    "{}: delete and restore withheld for good; the library keeps them: {}",
+                    delete.asset_id,
+                    delete.message.as_deref().unwrap_or("no detail")
+                )
+                .yellow(),
                 _ => format!(
                     "{}: {} not applied, kept for the next run: {}",
                     delete.asset_id,

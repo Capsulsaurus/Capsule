@@ -233,6 +233,74 @@ struct LibraryPortContractTests {
     }
 }
 
+/// A minimal in-test ``UploadPort`` holding sessions in memory. A cancel of a
+/// session in `.waitingForProcessing` is refused as finalizing, as the server
+/// refuses it.
+private actor StubUploads: UploadPort {
+    private(set) var sessions: [UploadSession]
+
+    init(sessions: [UploadSession]) {
+        self.sessions = sessions
+    }
+
+    func activeSessions() async throws -> [UploadSession] { sessions }
+    func uploadPolicy() async throws -> UploadPolicy { .full }
+    func setUploadPolicy(_: UploadPolicy) async throws {}
+    func forceUpload(assetIDs _: [AssetID]) async throws {}
+
+    func cancelSession(_ id: UploadID) async throws {
+        guard let session = sessions.first(where: { $0.id == id }) else {
+            throw CapsuleError(code: .uploadSessionNotFound)
+        }
+        guard session.state != .waitingForProcessing else {
+            throw CapsuleError(code: .uploadFinalizeInProgress)
+        }
+        sessions.removeAll { $0.id == id }
+    }
+
+    func custodyReceipts(for _: AssetID) async throws -> [CustodyReceipt] { [] }
+    nonisolated func changes() -> AsyncStream<[UploadSession]> { AsyncStream { $0.finish() } }
+}
+
+private func session(_ id: String, asset: String, state: UploadSessionState) -> UploadSession {
+    UploadSession(
+        id: UploadID(id),
+        assetID: asset,
+        blobRole: .original,
+        tier: .original,
+        state: state,
+        offset: 0,
+        declaredSize: 8,
+        ciphertextHash: BlobHash("hash-\(id)")
+    )
+}
+
+@Suite("Deleting an asset redacts its upload")
+struct UploadRedactionContractTests {
+    @Test("every session of the asset is cancelled, a finalizing one is reported, another asset's is untouched")
+    func redactsOneAsset() async throws {
+        let uploads = StubUploads(sessions: [
+            session("open", asset: "deleted", state: .uploading),
+            session("final", asset: "deleted", state: .waitingForProcessing),
+            session("other", asset: "kept", state: .uploading),
+        ])
+
+        let redaction = try await uploads.redactUploads(for: .managed(uuid: "deleted"))
+
+        #expect(redaction == UploadRedaction(cancelled: [UploadID("open")], finalizing: [UploadID("final")]))
+        let left = await uploads.sessions.map(\.id)
+        #expect(left == [UploadID("final"), UploadID("other")])
+    }
+
+    @Test("a system Photos asset has no Capsule upload to redact")
+    func photoKitHasNothing() async throws {
+        let uploads = StubUploads(sessions: [session("open", asset: "x", state: .uploading)])
+        let redaction = try await uploads.redactUploads(for: .photoKit(localIdentifier: "x"))
+        #expect(redaction == UploadRedaction())
+        #expect(await uploads.sessions.count == 1)
+    }
+}
+
 @Suite("Ports throw CapsuleError, so one error path serves every surface")
 struct PortErrorContractTests {
     @Test("a failing port surfaces a coded error with its recovery attached")
