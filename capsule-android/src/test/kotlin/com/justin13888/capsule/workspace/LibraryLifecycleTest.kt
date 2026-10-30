@@ -173,11 +173,45 @@ class LibraryLifecycleTest {
 
         // An element's own exception reaches the app as an internal error today, since the core cannot lift a flat
         // error thrown by a foreign implementation; either way the launch fails.
-        assertFails { lifecycle(signer = refusing).open() }
+        val failure = assertFailsWith<HardwareEnrollmentRefusedException> { lifecycle(signer = refusing).open() }
+        assertTrue(failure.cause is FfiHardwareSignerException.Unavailable)
         // Nothing was laid out, so the next launch creates the library rather than judging a half-made one.
         assertTrue(!File(root, LibraryLifecycle.LIBRARY_DIR).exists())
         val library = open()
         assertEquals(listOf(library.workspace.defaultAlbumId()), library.workspace.albums().map { it.albumId })
+    }
+
+    @Test
+    fun aCreateFailureBeforeEnrollmentIsPassedOnNotReportedAsARefusal() {
+        var enrolled = false
+        val watching =
+            object : FfiHardwareSigner by element {
+                override fun enroll(keyAlias: String): ByteArray {
+                    enrolled = true
+                    return element.enroll(keyAlias)
+                }
+            }
+        val badSeed = LibraryLifecycle(root, unlockStore(dir, sealer), FfiDeviceTier.LOW_RAM, client, "Library", watching, { ByteArray(1) })
+
+        val failure = assertFails { badSeed.open() }
+        assertTrue(failure !is HardwareEnrollmentRefusedException)
+        assertTrue(!enrolled)
+    }
+
+    @Test
+    fun aCreateFailureAfterASuccessfulEnrollmentIsPassedOnNotReportedAsARefusal() {
+        var enrolled = false
+        val unusable =
+            object : FfiHardwareSigner by element {
+                override fun enroll(keyAlias: String): ByteArray {
+                    enrolled = true
+                    return ByteArray(0)
+                }
+            }
+
+        val failure = assertFails { lifecycle(signer = unusable).open() }
+        assertTrue(enrolled)
+        assertTrue(failure !is HardwareEnrollmentRefusedException)
     }
 
     @Test
