@@ -201,7 +201,7 @@ async fn the_unbounded_writes_keep_the_backstop() {
 
 /// The cap covers operations that take no body at all.
 ///
-/// Every group carries one, the exempt twelve's included, rather than only the operations that
+/// Every group carries one, the exempt thirteen's included, rather than only the operations that
 /// happen to accept a body today, so a body sent where none is expected is refused rather than
 /// read into memory and discarded. `GET /v1/version` carries the bounded cap.
 #[tokio::test]

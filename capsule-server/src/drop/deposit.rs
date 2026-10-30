@@ -36,13 +36,16 @@
 //!
 //! # A failure is terminal, and gives the link back
 //!
-//! A deposit that cannot file the drop leaves the session `FailedProcessing`, drops the stage,
-//! and refunds the link the reservation the drop took — a drop that never landed must not spend
+//! A deposit that cannot file the drop leaves the session `FailedProcessing` with the failure's
+//! `error.*` code ([`DepositFailure::code`]), drops the stage, and refunds the link the
+//! reservation the drop took. The code is what the drop's status probe reports: no request waits
+//! on the deposit, so it is the only way the guest learns why their drop was refused — a drop that never landed must not spend
 //! a guest's caps. The one exception is the final status write: the drop is already filed, so
 //! failing it would tell the guest a lie. That session stays claimed for the next boot's
 //! recovery, which finds the drop filed and completes it.
 
 use capsule_core::crypto::hash::Sha256Hasher;
+use capsule_i18n::error_codes;
 
 use super::DropContext;
 use crate::blob::{BlobError, ContentAddress};
@@ -85,6 +88,22 @@ pub enum DepositFailure {
     /// A collaborator could not answer.
     #[error("the drop could not be deposited: {0}")]
     Unavailable(String),
+}
+
+impl DepositFailure {
+    /// The stable `error.*` code this failure is recorded and reported under.
+    ///
+    /// Recorded on the session when the deposit fails it, and read back by the drop's status
+    /// probe (`GET /d/{opaque_id}/{upload_id}`). The two refusals of the bytes reuse the upload
+    /// protocol's codes, because they are the upload protocol's finalization failures: a drop is
+    /// finalized under the same rule, and a client localizes one code once.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::ContentHashMismatch { .. } => error_codes::UPLOAD_CONTENT_HASH_MISMATCH,
+            Self::StorageInconsistent { .. } => error_codes::UPLOAD_STORAGE_INCONSISTENT,
+            Self::Unavailable(_) => error_codes::DROP_UNAVAILABLE,
+        }
+    }
 }
 
 /// Claim `upload`'s deposit and drive it to a terminal state.
@@ -185,7 +204,7 @@ async fn drive(drops: &DropContext, record: &UploadSessionRecord) -> Result<(), 
     let address = match commit(drops, record).await {
         Ok(address) => address,
         Err(failure) => {
-            fail(drops, upload).await;
+            fail(drops, upload, failure.code()).await;
             tracing::warn!(%upload, %failure, "the deposit refused the drop");
             return Err(failure);
         }
@@ -193,7 +212,7 @@ async fn drive(drops: &DropContext, record: &UploadSessionRecord) -> Result<(), 
     match file(drops, record, &address).await {
         Ok(()) => {}
         Err(Unfiled::NotFiled(failure)) => {
-            fail(drops, upload).await;
+            fail(drops, upload, failure.code()).await;
             tracing::warn!(%upload, %failure, "the deposit could not file the drop");
             return Err(failure);
         }
@@ -406,9 +425,9 @@ async fn recompute_hash(
 }
 
 /// Leave a claimed session whose drop was not filed terminal: the stage goes, the link gets its
-/// reservation back, and the session is `FailedProcessing`. Each step is logged rather than
-/// failed — the caller is already reporting the failure that brought it here.
-async fn fail(drops: &DropContext, upload: &UploadId) {
+/// reservation back, and the session is `FailedProcessing` carrying `failure_code`. Each step is
+/// logged rather than failed — the caller is already reporting the failure that brought it here.
+async fn fail(drops: &DropContext, upload: &UploadId, failure_code: &str) {
     match drops.blobs().abandon(upload).await {
         Ok(dropped) => tracing::debug!(%upload, dropped, "dropped the staged drop"),
         Err(error) => {
@@ -426,12 +445,12 @@ async fn fail(drops: &DropContext, upload: &UploadId) {
             tracing::error!(%upload, %error, "a failed drop's declaration could not be released");
         }
     }
-    if let Err(error) = drops
-        .sessions()
-        .set_status(upload, UploadSessionStatus::FailedProcessing)
-        .await
-    {
-        tracing::error!(%upload, %error, "a failed drop's session could not be marked");
+    match drops.sessions().fail_processing(upload, failure_code).await {
+        Ok(Some(_)) => tracing::info!(%upload, failure_code, "a drop's deposit was refused"),
+        Ok(None) => tracing::debug!(%upload, "a failed drop's session was already gone"),
+        Err(error) => {
+            tracing::error!(%upload, %error, "a failed drop's session could not be marked");
+        }
     }
 }
 

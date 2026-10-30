@@ -29513,38 +29513,37 @@
         ]
       }
     },
-    "/d/{opaque_id}": {
-      "post": {
+    "/d/{opaque_id}/{upload_id}": {
+      "get": {
         "tags": [
           "drops"
         ],
-        "summary": "Open a drop session through a link.",
-        "description": "Invariants 26–30 in order: the link admits the file and reserves its caps in one store\noperation, then the owner's quota is charged, then the declaration is checked. A drop the\nowner's quota will not admit is `403 error.quota.exceeded`, or `403 error.quota.suspended`\nwhile the operator has suspended the owner's quota.",
-        "operationId": "create_drop",
+        "summary": "Report a drop session's state, and its deposit's outcome once it has one.",
+        "description": "The completing chunk is answered `waiting_for_processing` before the deposit's re-hash runs,\nso this is where a guest learns whether the drop was filed or refused: `completed`, or\n`failed_processing` with the deposit's `error.*` code. A guest polls it with backoff.\n\nAuthorized exactly as a chunk is: the link's opaque id, live for chunks, plus a session that\nis a drop under that link's owner. Read-only — it starts nothing, so polling it cannot change\nwhat it reports — and it charges no limiter: it reveals nothing the holder of the two ids does\nnot already own, and a poll spending the per-source budget would refuse the guest's next drop.",
+        "operationId": "drop_status",
         "parameters": [
           {
             "name": "opaque_id",
             "in": "path",
-            "description": "The opaque id.",
+            "description": "The opaque id of the link the session belongs to.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "upload_id",
+            "in": "path",
+            "description": "The session id.",
             "required": true,
             "schema": {
               "type": "string"
             }
           }
         ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateDropRequest"
-              }
-            }
-          },
-          "required": true
-        },
         "responses": {
           "400": {
-            "description": "Bad Request; Malformed drop",
+            "description": "Bad Request",
             "headers": {
               "X-Capsule-Protocol-Min": {
                 "description": "The oldest protocol version this server accepts.",
@@ -29586,137 +29585,8 @@
               }
             }
           },
-          "413": {
-            "description": "Payload Too Large; File too large; the request body exceeds the configured limit",
-            "headers": {
-              "X-Capsule-Protocol-Min": {
-                "description": "The oldest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Protocol-Max": {
-                "description": "The newest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Min-Client-Build": {
-                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
-                }
-              },
-              "X-Request-Id": {
-                "description": "The UUIDv7 this server minted for the request. Quote it when reporting a failure: it names the request's log lines. Never taken from the client.",
-                "required": true,
-                "schema": {
-                  "type": "string"
-                }
-              }
-            },
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/FileTooLargeProblem"
-                }
-              }
-            }
-          },
-          "415": {
-            "description": "Unsupported Media Type",
-            "headers": {
-              "X-Capsule-Protocol-Min": {
-                "description": "The oldest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Protocol-Max": {
-                "description": "The newest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Min-Client-Build": {
-                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
-                }
-              },
-              "X-Request-Id": {
-                "description": "The UUIDv7 this server minted for the request. Quote it when reporting a failure: it names the request's log lines. Never taken from the client.",
-                "required": true,
-                "schema": {
-                  "type": "string"
-                }
-              }
-            },
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CodedProblem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Unprocessable Entity",
-            "headers": {
-              "X-Capsule-Protocol-Min": {
-                "description": "The oldest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Protocol-Max": {
-                "description": "The newest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Min-Client-Build": {
-                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
-                }
-              },
-              "X-Request-Id": {
-                "description": "The UUIDv7 this server minted for the request. Quote it when reporting a failure: it names the request's log lines. Never taken from the client.",
-                "required": true,
-                "schema": {
-                  "type": "string"
-                }
-              }
-            },
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CodedProblem"
-                }
-              }
-            }
-          },
-          "201": {
-            "description": "A drop session is open and accepting chunks",
+          "200": {
+            "description": "The drop session's state",
             "headers": {
               "X-Request-Id": {
                 "description": "The UUIDv7 this server minted for the request. Quote it when reporting a failure: it names the request's log lines. Never taken from the client.",
@@ -29753,7 +29623,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CreateDropResponse"
+                  "$ref": "#/components/schemas/DropStatusResponse"
                 }
               }
             }
@@ -29801,143 +29671,6 @@
               }
             }
           },
-          "403": {
-            "description": "Passphrase required; Quota exceeded; Quota suspended",
-            "headers": {
-              "X-Capsule-Protocol-Min": {
-                "description": "The oldest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Protocol-Max": {
-                "description": "The newest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Min-Client-Build": {
-                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
-                }
-              },
-              "X-Request-Id": {
-                "description": "The UUIDv7 this server minted for the request. Quote it when reporting a failure: it names the request's log lines. Never taken from the client.",
-                "required": true,
-                "schema": {
-                  "type": "string"
-                }
-              }
-            },
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CodedProblem"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Link capacity exhausted",
-            "headers": {
-              "X-Capsule-Protocol-Min": {
-                "description": "The oldest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Protocol-Max": {
-                "description": "The newest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Min-Client-Build": {
-                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
-                }
-              },
-              "X-Request-Id": {
-                "description": "The UUIDv7 this server minted for the request. Quote it when reporting a failure: it names the request's log lines. Never taken from the client.",
-                "required": true,
-                "schema": {
-                  "type": "string"
-                }
-              }
-            },
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CodedProblem"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "Too many requests",
-            "headers": {
-              "X-Capsule-Protocol-Min": {
-                "description": "The oldest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Protocol-Max": {
-                "description": "The newest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Min-Client-Build": {
-                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
-                }
-              },
-              "X-Request-Id": {
-                "description": "The UUIDv7 this server minted for the request. Quote it when reporting a failure: it names the request's log lines. Never taken from the client.",
-                "required": true,
-                "schema": {
-                  "type": "string"
-                }
-              },
-              "Retry-After": {
-                "description": "Seconds to wait before retrying (RFC 9110 delta-seconds): the problem's `retry_after` instant, measured from the server's clock.",
-                "schema": {
-                  "type": "integer",
-                  "minimum": 0.0,
-                  "format": "uint64"
-                }
-              }
-            },
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DropRateLimitedProblem"
-                }
-              }
-            }
-          },
           "500": {
             "description": "Internal server error",
             "headers": {
@@ -29980,11 +29713,52 @@
                 }
               }
             }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              },
+              "X-Request-Id": {
+                "description": "The UUIDv7 this server minted for the request. Quote it when reporting a failure: it names the request's log lines. Never taken from the client.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
           }
         }
-      }
-    },
-    "/d/{opaque_id}/{upload_id}": {
+      },
       "patch": {
         "tags": [
           "drops"
@@ -30462,6 +30236,477 @@
           },
           "413": {
             "description": "the request body exceeds the configured limit",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              },
+              "X-Request-Id": {
+                "description": "The UUIDv7 this server minted for the request. Quote it when reporting a failure: it names the request's log lines. Never taken from the client.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/d/{opaque_id}": {
+      "post": {
+        "tags": [
+          "drops"
+        ],
+        "summary": "Open a drop session through a link.",
+        "description": "Invariants 26–30 in order: the link admits the file and reserves its caps in one store\noperation, then the owner's quota is charged, then the declaration is checked. A drop the\nowner's quota will not admit is `403 error.quota.exceeded`, or `403 error.quota.suspended`\nwhile the operator has suspended the owner's quota.",
+        "operationId": "create_drop",
+        "parameters": [
+          {
+            "name": "opaque_id",
+            "in": "path",
+            "description": "The opaque id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateDropRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "400": {
+            "description": "Bad Request; Malformed drop",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              },
+              "X-Request-Id": {
+                "description": "The UUIDv7 this server minted for the request. Quote it when reporting a failure: it names the request's log lines. Never taken from the client.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Payload Too Large; File too large; the request body exceeds the configured limit",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              },
+              "X-Request-Id": {
+                "description": "The UUIDv7 this server minted for the request. Quote it when reporting a failure: it names the request's log lines. Never taken from the client.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileTooLargeProblem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported Media Type",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              },
+              "X-Request-Id": {
+                "description": "The UUIDv7 this server minted for the request. Quote it when reporting a failure: it names the request's log lines. Never taken from the client.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              },
+              "X-Request-Id": {
+                "description": "The UUIDv7 this server minted for the request. Quote it when reporting a failure: it names the request's log lines. Never taken from the client.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "A drop session is open and accepting chunks",
+            "headers": {
+              "X-Request-Id": {
+                "description": "The UUIDv7 this server minted for the request. Quote it when reporting a failure: it names the request's log lines. Never taken from the client.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateDropResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              },
+              "X-Request-Id": {
+                "description": "The UUIDv7 this server minted for the request. Quote it when reporting a failure: it names the request's log lines. Never taken from the client.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Passphrase required; Quota exceeded; Quota suspended",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              },
+              "X-Request-Id": {
+                "description": "The UUIDv7 this server minted for the request. Quote it when reporting a failure: it names the request's log lines. Never taken from the client.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Link capacity exhausted",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              },
+              "X-Request-Id": {
+                "description": "The UUIDv7 this server minted for the request. Quote it when reporting a failure: it names the request's log lines. Never taken from the client.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              },
+              "X-Request-Id": {
+                "description": "The UUIDv7 this server minted for the request. Quote it when reporting a failure: it names the request's log lines. Never taken from the client.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Seconds to wait before retrying (RFC 9110 delta-seconds): the problem's `retry_after` instant, measured from the server's clock.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 0.0,
+                  "format": "uint64"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DropRateLimitedProblem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
             "headers": {
               "X-Capsule-Protocol-Min": {
                 "description": "The oldest protocol version this server accepts.",
@@ -33221,6 +33466,40 @@
           "refresh_token"
         ],
         "description": "The refresh token being exchanged for a new pair.\n\n`Debug` is hand-written, for the same reason as [`LoginRequest`]: this field is a live\ncredential."
+      },
+      "DropStatusResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "description": "Where the session is in its state machine: `pending`, `uploading`,\n`waiting_for_processing` while its deposit runs, then `completed` once the drop is in its\nowner's inbox, or `failed_processing` once the deposit refused it."
+          },
+          "received_bytes": {
+            "type": "integer",
+            "minimum": 0.0,
+            "format": "uint64",
+            "description": "Bytes durably accepted so far — the offset a resumed upload continues from."
+          },
+          "total_size": {
+            "type": "integer",
+            "minimum": 0.0,
+            "format": "uint64",
+            "description": "The declared total."
+          },
+          "error_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For a `failed_processing` session, the `error.*` code the deposit failed with. Absent for\nevery other state."
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "received_bytes",
+          "total_size"
+        ],
+        "description": "What a guest's drop session is doing, as its status probe reports it.\n\nThe session's own state and nothing else: no drop id, no owner, no link totals. Every field\nis one the guest already holds or is owed — the bytes they sent, the size they declared, and\nthe outcome of the deposit they started."
       },
       "CreateDropRequest": {
         "properties": {
