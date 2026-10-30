@@ -24,6 +24,38 @@ class LibraryLockedException(
 ) : Exception("the library exists but its unlock secret is unavailable", cause)
 
 /**
+ * The first launch could not create the library because the keystore refused to enroll the
+ * device signing key. Nothing was laid out, so the launch can be retried, or the library
+ * created on software keys instead (`app.enrollment.failure.hardware.*`).
+ */
+class HardwareEnrollmentRefusedException(
+    cause: Throwable,
+) : Exception("the keystore refused to enroll the device signing key", cause)
+
+/**
+ * Passes every call to [element], keeping what [enroll] threw: the core reports an element's
+ * own failure as an internal error, so this is the only place a refused enrollment can still
+ * be told apart from any other reason creation failed.
+ */
+private class EnrollmentWatch(
+    private val element: FfiHardwareSigner,
+) : FfiHardwareSigner by element {
+    @Volatile
+    var refusal: Throwable? = null
+        private set
+
+    override fun enroll(keyAlias: String): ByteArray =
+        try {
+            element.enroll(keyAlias)
+        } catch (
+            @Suppress("TooGenericExceptionCaught") error: Exception,
+        ) {
+            refusal = error
+            throw error
+        }
+}
+
+/**
  * Creates the library on first launch and opens it on every launch after.
  *
  * The library lives at [root] and is wrapped under the secret [secrets] holds. Which of
@@ -47,8 +79,8 @@ class LibraryLockedException(
  * `openWithP256HardwareSigner`, so the key the device publishes is the same at every launch.
  * The library records which key it signs with, so a library created on the software key (any
  * library from before the key moved into the keystore) keeps opening on that key. When the
- * keystore refuses the key the launch fails and can be retried; nothing here falls back to
- * software keys on its own. A `null` [signer] is the documented deviation of software keys
+ * keystore refuses the key the launch fails with [HardwareEnrollmentRefusedException] and can be
+ * retried; nothing here falls back to software keys on its own. A `null` [signer] is the documented deviation of software keys
  * (`app.enrollment.failure.hardware.*`), and only a caller that offered that choice passes it.
  */
 class LibraryLifecycle(
@@ -84,16 +116,7 @@ class LibraryLifecycle(
                 root.parentFile?.mkdirs()
                 log.info("library: creating ${root.path} (signingElement=${signer != null})")
                 if (signer != null) {
-                    // A refused enrollment fails before the core writes anything under the root.
-                    FfiWorkspace.createWithP256HardwareSigner(
-                        root.path,
-                        passphrase,
-                        tier,
-                        signer,
-                        DEVICE_SIGNING_KEY_ALIAS,
-                        signingSeed(),
-                        client,
-                    )
+                    createOnElement(signer, passphrase)
                 } else {
                     FfiWorkspace.create(root.path, passphrase, tier, client)
                 }
@@ -113,6 +136,35 @@ class LibraryLifecycle(
             }
         log.info("library: open (assets=${if (sampleAsset == null) 0 else "1+"})")
         return OpenedLibrary(workspace, sampleAsset)
+    }
+
+    /**
+     * Creates the library on [element]'s key. A refused enrollment fails before the core writes
+     * anything under the root, and is reported as [HardwareEnrollmentRefusedException] so the
+     * person can be offered software keys; any other failure is passed on as it came.
+     */
+    private fun createOnElement(
+        element: FfiHardwareSigner,
+        passphrase: ByteArray,
+    ): FfiWorkspace {
+        val watch = EnrollmentWatch(element)
+        return try {
+            FfiWorkspace.createWithP256HardwareSigner(
+                root.path,
+                passphrase,
+                tier,
+                watch,
+                DEVICE_SIGNING_KEY_ALIAS,
+                signingSeed(),
+                client,
+            )
+        } catch (
+            @Suppress("TooGenericExceptionCaught") error: Exception,
+        ) {
+            val refusal = watch.refusal ?: throw error
+            log.warning("library: the keystore refused to enroll the device signing key (${refusal.javaClass.simpleName})")
+            throw HardwareEnrollmentRefusedException(refusal).apply { addSuppressed(error) }
+        }
     }
 
     /** The unlock secret of the library already on disk. Throws [LibraryLockedException] when it is missing or does not open. */
