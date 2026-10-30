@@ -60,6 +60,22 @@ class CullKeyboardTest {
     }
 
     @Test
+    fun aFirstKeyDownIsAVerb() {
+        assertEquals(CullVerb.REJECT, CullKeyboard.verbForEvent(true, 0, KeyEvent.KEYCODE_X, 0))
+    }
+
+    @Test
+    fun anAutoRepeatIsIgnored() {
+        assertNull(CullKeyboard.verbForEvent(true, 1, KeyEvent.KEYCODE_X, 0))
+        assertNull(CullKeyboard.verbForEvent(true, 5, KeyEvent.KEYCODE_P, 0))
+    }
+
+    @Test
+    fun aKeyUpIsIgnored() {
+        assertNull(CullKeyboard.verbForEvent(false, 0, KeyEvent.KEYCODE_X, 0))
+    }
+
+    @Test
     fun theHelperListsTheKeysOnlyWhileASurfaceIsShowing() {
         assertFalse(CullKeyboard.isShowing)
         CullKeyboard.shown()

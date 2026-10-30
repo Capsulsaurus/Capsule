@@ -50,6 +50,18 @@ object CullKeyboard {
         return bindings.firstOrNull { it.keyCode == keyCode && it.modifiers == held }?.verb
     }
 
+    /**
+     * The verb a key event asks for, or `null`. Only the first key-down counts: a held key's
+     * auto-repeat (`repeatCount > 0`) and the key-up are ignored, so holding X or P cannot
+     * write a verdict to every asset in the pass.
+     */
+    fun verbForEvent(
+        isKeyDown: Boolean,
+        repeatCount: Int,
+        keyCode: Int,
+        metaState: Int,
+    ): CullVerb? = if (isKeyDown && repeatCount == 0) verbFor(keyCode, metaState) else null
+
     /** [metaState] reduced to the `META_*_ON` bits a binding names, left and right alike. */
     fun normalized(metaState: Int): Int = metaState and MODIFIER_MASK
 

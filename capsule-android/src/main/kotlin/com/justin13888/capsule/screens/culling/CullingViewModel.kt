@@ -17,18 +17,26 @@ class CullingViewModel(
     /** What the surface draws. */
     val state: StateFlow<CullingState> = model.state
 
+    /** Every store write, in the order the user made it. */
+    private val writes = WriteQueue()
+
     init {
         viewModelScope.launch { model.load() }
+        viewModelScope.launch { writes.run() }
     }
 
     /** Run [verb]; a verdict shows at once and its write follows. */
     fun perform(verb: CullVerb) {
         val verdict = model.perform(verb) ?: return
-        viewModelScope.launch { model.write(verdict) }
+        writes.submit { model.write(verdict) }
     }
 
     fun confirmSweep() {
-        viewModelScope.launch { model.confirmSweep() }
+        writes.submit { model.confirmSweep() }
+    }
+
+    override fun onCleared() {
+        writes.close()
     }
 
     fun dismissSweep() = model.dismissSweep()

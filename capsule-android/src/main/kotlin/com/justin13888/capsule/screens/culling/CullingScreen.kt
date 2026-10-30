@@ -107,11 +107,14 @@ fun CullingScreen(
     Scaffold(
         modifier =
             Modifier.onPreviewKeyEvent { event ->
-                if (event.type != KeyEventType.KeyDown || state.asset == null) return@onPreviewKeyEvent false
+                if (state.asset == null) return@onPreviewKeyEvent false
                 val native = event.nativeKeyEvent
-                val verb = CullKeyboard.verbFor(native.keyCode, native.metaState) ?: return@onPreviewKeyEvent false
-                viewModel.perform(verb)
-                true
+                val isDown = event.type == KeyEventType.KeyDown
+                val verb =
+                    CullKeyboard.verbForEvent(isDown, native.repeatCount, native.keyCode, native.metaState)
+                if (verb != null) viewModel.perform(verb)
+                // A held key's repeats are consumed too, so they never reach a focused button.
+                isDown && CullKeyboard.verbFor(native.keyCode, native.metaState) != null
             },
         topBar = { CullingTopBar(state, viewModel::perform, navigateBack) },
         snackbarHost = { SnackbarHost(snackbar) },
