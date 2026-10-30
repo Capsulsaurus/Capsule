@@ -14,10 +14,14 @@
 //!   → HEAD re-align; `session_not_found` → re-create; `duplicate_blob` → merge
 //!   (success carrying the existing asset ref); `426` → abort-with-upgrade;
 //!   `checksum_mismatch` → re-send the chunk; `chunk_timeout` → re-send at the
-//!   same offset, smaller; `rate_limited`, `unavailable` and
+//!   same offset, shorter; `rate_limited`, `unavailable` and
 //!   `storage_full` → wait out `Retry-After`, then resume from HEAD. The client
 //!   switches on the stable `error.*` code (from `capsule_i18n::error_codes`),
-//!   never on the bare status.
+//!   never on the bare status;
+//! - per-request stall bounds ([`RequestBounds`]): a chunk body is cut when no bytes move for
+//!   the stall bound, the wait for a response once the body is sent runs under a separate,
+//!   longer bound, and nothing bounds a request's total duration — a slow but live link is
+//!   never cut. A client-cut chunk is re-sent at the same offset, shorter, like a `408`.
 //!
 //! Tokens stay SDK-owned: an upload composes with the SDK session — build the
 //! transport with [`UploadTransport::with_session`] and every request runs through
@@ -37,7 +41,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::events::{RetryReason, TransferEvent, TransferEvents, millis};
 use crate::net::{
-    ConnectionClass, RetryClass, RetryDecision, RetryEngine, Sleeper, TokioSleeper, negotiation,
+    ConnectionClass, ExchangeProgress, PacedBody, RequestBounds, RequestCut, RetryClass,
+    RetryDecision, RetryEngine, Sleeper, TokioSleeper, negotiation, within_bounds,
 };
 
 pub mod advice;
@@ -59,14 +64,6 @@ const ALIGNMENT: u64 = 4096;
 /// outside them (400 / 413).
 pub const PROTOCOL_MIN_CHUNK: u64 = 4096;
 pub const PROTOCOL_MAX_CHUNK: u64 = CHUNK_SIZE_16MB;
-/// Window size for throughput measurements
-const THROUGHPUT_WINDOW_SECS: f64 = 30.0;
-/// Minimum bytes before scaling chunk size
-const MIN_BYTES_BEFORE_SCALING: u64 = 8 * 1024 * 1024; // 8MB
-/// Minimum chunks before scaling chunk size
-const MIN_CHUNKS_BEFORE_SCALING: u32 = 5;
-/// Maximum number of recent chunks to keep in history
-const MAX_RECENT_CHUNKS: usize = 1000;
 
 /// Upper bound on recovery actions (re-align / re-create / re-send) for a single
 /// blob transfer. A live server drives progress well inside this; hitting it
@@ -84,154 +81,159 @@ const MAX_RECOVERIES: u32 = 64;
 /// each one a HEAD that re-learns the offset and charges the recovery budget.
 const MAX_SERVER_BACKOFF: Duration = Duration::from_mins(5);
 
-/// Successful chunks at a size below the tier floor before the strategy tries
-/// twice that size again (see [`AdaptiveChunkSizeStrategy::shrink_after_timeout`]).
+/// How long one chunk request should take at the measured goodput, on an ordinary link: eight
+/// seconds.
+///
+/// Long enough that a round trip and the server's write are a small share of each request; short
+/// enough that a request lost to a reset or a stall costs seconds, not minutes.
+pub const TARGET_REQUEST_DURATION: Duration = Duration::from_secs(8);
+
+/// How long one chunk request should take under an [`ConnectionClass::Adverse`] link: two
+/// seconds, so a request usually completes between the resets that made the link adverse.
+pub const ADVERSE_TARGET_REQUEST_DURATION: Duration = Duration::from_secs(2);
+
+/// The sliding window goodput is measured over.
+const GOODPUT_WINDOW: Duration = Duration::from_secs(30);
+/// Maximum number of recent chunks to keep in history.
+const MAX_RECENT_CHUNKS: usize = 1000;
+/// Chunks measured at one size before the strategy grows it. Shrinking needs one: a chunk that
+/// took far longer than the target is evidence enough.
+const WARMUP_CHUNKS: u32 = 5;
+/// Successful chunks after a stall before the size may grow again: the link has to show it
+/// recovered first.
 const GROW_BACK_AFTER_SUCCESSES: u32 = 4;
-/// Windowed throughput above which the link is fast, in bytes per second: the
-/// strategy doubles, and forgets any chunk size that timed out earlier.
-const FAST_THROUGHPUT: f64 = 5.0 * 1024.0 * 1024.0;
-/// Windowed throughput below which the link is slow, in bytes per second.
-const SLOW_THROUGHPUT: f64 = 1.0 * 1024.0 * 1024.0;
 
 /// Chunk size strategy for adaptive upload.
 ///
-/// Normative for `capsule-sdk` (transfer upload doc, §Adaptive Chunk Sizing):
-/// warm-up before adjusting, double above 5 MB/s, halve below 1 MB/s, clamp to
-/// the file-size tier's range — and every tier range sits inside the protocol
-/// bounds `[4 KiB, 16 MiB]` for non-final chunks.
+/// Normative for `capsule-sdk` (transfer upload doc, §Adaptive Chunk Sizing): the size is the
+/// one that completes in a [target request duration](TARGET_REQUEST_DURATION) at the goodput
+/// measured over a sliding window — shorter under an adverse link. Because the server cuts a
+/// chunk only when it stalls, never for its total duration, a chunk's size never has to fit a
+/// deadline: a slow link gets chunks that take the target time at its own rate, a fast one
+/// chunks up to the file-size tier's ceiling.
 ///
-/// A chunk the server timed out (`408 error.upload.chunk_timeout`) is the one
-/// way below the tier floor: [`shrink_after_timeout`](Self::shrink_after_timeout)
-/// halves the size, down to the protocol minimum, and the strategy grows back
-/// towards the floor after successes, never again to a size that timed out unless
-/// the link turns fast.
+/// It starts from the server's advised size, clamped to `[PROTOCOL_MIN_CHUNK, tier ceiling]`.
+/// After each chunk it moves towards the target size: down to it at once when the target is
+/// half the current size or less, up by doubling after a warm-up when it is twice or more.
+/// Every candidate is aligned down to 4 KiB and clamped, so the size is aligned and within the
+/// protocol bounds by construction.
+///
+/// A stall — the server's `408 error.upload.chunk_timeout`, or the client's own stall cut —
+/// re-sends the same offset at half the stalled length ([`shrink_after_stall`]), and the size
+/// does not grow again until a run of successes shows the link recovered.
+///
+/// [`shrink_after_stall`]: Self::shrink_after_stall
 #[derive(Debug, Clone)]
 pub struct AdaptiveChunkSizeStrategy {
-    /// Current chunk size
+    /// Current chunk size.
     pub current_size: u64,
-    /// Minimum allowed chunk size based on file size tier
-    pub min_size: u64,
-    /// Maximum allowed chunk size based on file size tier
+    /// The file-size tier's ceiling: no chunk is larger.
     pub max_size: u64,
-    /// Number of successful chunks at current size
+    /// Successful chunks measured since the size last changed.
     pub successful_chunks: u32,
-    /// Total bytes uploaded
+    /// Total bytes uploaded.
     pub bytes_uploaded: u64,
-    /// Total time spent uploading
+    /// Total time spent uploading.
     pub total_upload_time: Duration,
-    /// Recent chunk records for windowed throughput (bytes, duration, timestamp)
-    /// Using VecDeque for efficient sliding window
+    /// Recent chunk records for windowed goodput: (bytes, duration, when recorded).
     recent_chunks: VecDeque<(u64, Duration, std::time::Instant)>,
-    /// Pinned to the tier floor under `adverse` (the connection class's chunk-size floor):
-    /// while set, the size stays at `min_size` and adaptive scaling is suppressed,
-    /// so each request is small enough to usually complete between mid-transfer
-    /// resets (networking doc, "Bounded transfer windows under `adverse`").
-    pinned_floor: bool,
-    /// The smallest chunk length the server timed out in this transfer. The size
-    /// never grows back to it, because the link has already shown it cannot carry
-    /// that much within the server's read deadline; a fast window clears it.
-    timeout_ceiling: Option<u64>,
+    /// How long one chunk request should take at the measured goodput.
+    target: Duration,
+    /// Successes still owed after a stall before the size may grow.
+    hold_growth: u32,
 }
 
 impl AdaptiveChunkSizeStrategy {
-    /// Create a new chunk size strategy based on total file size
+    /// Create a new chunk size strategy based on total file size: the tier names the starting
+    /// size and the ceiling.
     pub fn for_file_size(total_size: u64) -> Self {
-        let (min_size, max_size, current_size) = if total_size < 10 * 1024 * KB {
-            // < 10MB: 256KB - 1MB chunks
-            (CHUNK_SIZE_256KB, CHUNK_SIZE_1MB, CHUNK_SIZE_256KB)
+        let (current_size, max_size) = if total_size < 10 * 1024 * KB {
+            // < 10 MiB: start at 256 KiB, at most 1 MiB.
+            (CHUNK_SIZE_256KB, CHUNK_SIZE_1MB)
         } else if total_size < 100 * 1024 * KB {
-            // < 100MB: 1MB - 4MB chunks
-            (CHUNK_SIZE_1MB, CHUNK_SIZE_4MB, CHUNK_SIZE_1MB)
+            // < 100 MiB: start at 1 MiB, at most 4 MiB.
+            (CHUNK_SIZE_1MB, CHUNK_SIZE_4MB)
         } else {
-            // >= 100MB: 4MB - 16MB chunks
-            (CHUNK_SIZE_4MB, CHUNK_SIZE_16MB, CHUNK_SIZE_4MB)
+            // >= 100 MiB: start at 4 MiB, at most 16 MiB.
+            (CHUNK_SIZE_4MB, CHUNK_SIZE_16MB)
         };
 
         Self {
             current_size,
-            min_size,
             max_size,
             successful_chunks: 0,
             bytes_uploaded: 0,
             total_upload_time: Duration::ZERO,
             recent_chunks: VecDeque::with_capacity(32),
-            pinned_floor: false,
-            timeout_ceiling: None,
+            target: TARGET_REQUEST_DURATION,
+            hold_growth: 0,
         }
     }
 
-    /// Shrink after the server timed out a chunk of `timed_out` bytes
-    /// (`408 error.upload.chunk_timeout`): the next chunk, sent at the same offset,
-    /// is half that, 4 KiB-aligned down, and at least [`PROTOCOL_MIN_CHUNK`].
+    /// `size` aligned down to 4 KiB and clamped into `[PROTOCOL_MIN_CHUNK, max_size]`.
+    fn bounded(&self, size: u64) -> u64 {
+        ((size / ALIGNMENT) * ALIGNMENT).clamp(PROTOCOL_MIN_CHUNK, self.max_size)
+    }
+
+    /// Shrink after a chunk of `stalled` bytes stalled — the server answered
+    /// `408 error.upload.chunk_timeout`, or the client cut it: the next chunk, sent at the same
+    /// offset, is half that, 4 KiB-aligned down, and at least [`PROTOCOL_MIN_CHUNK`]. The size
+    /// then holds until [`GROW_BACK_AFTER_SUCCESSES`] chunks succeed.
     ///
-    /// This is the only path below the tier floor. A slow link would otherwise time
-    /// out every floor-sized chunk and never progress: 4 MiB in the server's default
-    /// two minutes needs about 280 kbit/s. Returns `false` when `timed_out` is
-    /// already at or below the protocol minimum, so nothing smaller can be sent; the
-    /// size is then left as it is.
-    pub fn shrink_after_timeout(&mut self, timed_out: u64) -> bool {
-        self.timeout_ceiling = Some(self.timeout_ceiling.map_or(timed_out, |c| c.min(timed_out)));
-        if timed_out <= PROTOCOL_MIN_CHUNK {
+    /// Returns `false` when `stalled` is already at or below the protocol minimum, so nothing
+    /// smaller can be sent; the size is then left as it is.
+    pub fn shrink_after_stall(&mut self, stalled: u64) -> bool {
+        self.hold_growth = GROW_BACK_AFTER_SUCCESSES;
+        self.successful_chunks = 0;
+        if stalled <= PROTOCOL_MIN_CHUNK {
             return false;
         }
-        let half = (timed_out / 2 / ALIGNMENT) * ALIGNMENT;
-        self.current_size = half.max(PROTOCOL_MIN_CHUNK);
-        self.successful_chunks = 0;
+        self.current_size = self.bounded(stalled / 2);
         debug_assert!(self.current_size.is_multiple_of(ALIGNMENT));
         true
     }
 
-    /// Whether `size` stays below every chunk length the server has timed out.
-    fn under_timeout_ceiling(&self, size: u64) -> bool {
-        self.timeout_ceiling.is_none_or(|ceiling| size < ceiling)
-    }
-
-    /// Couple the chunk size to a detected [`ConnectionClass`]. On
-    /// [`ConnectionClass::Adverse`] the strategy pins to the tier floor
-    /// (`min_size`) and suppresses adaptive growth for the rest of the transfer;
-    /// any other class releases the pin and lets the normative adaptive algorithm
-    /// run. The floor is still 4 KiB-aligned and within the protocol bounds by
-    /// construction (it is the tier minimum).
+    /// Couple the chunk size to a detected [`ConnectionClass`]: under
+    /// [`ConnectionClass::Adverse`] each request targets
+    /// [`ADVERSE_TARGET_REQUEST_DURATION`], otherwise [`TARGET_REQUEST_DURATION`].
     #[must_use]
-    pub fn with_connection_class(mut self, class: crate::net::ConnectionClass) -> Self {
+    pub fn with_connection_class(mut self, class: ConnectionClass) -> Self {
         self.apply_connection_class(class);
         self
     }
 
-    /// Apply the connection-class chunk-floor coupling in place (see
+    /// Apply the connection-class coupling in place (see
     /// [`with_connection_class`](Self::with_connection_class)).
-    pub fn apply_connection_class(&mut self, class: crate::net::ConnectionClass) {
-        if class == crate::net::ConnectionClass::Adverse {
-            self.pinned_floor = true;
-            self.current_size = self.min_size;
+    pub fn apply_connection_class(&mut self, class: ConnectionClass) {
+        self.target = if class == ConnectionClass::Adverse {
+            ADVERSE_TARGET_REQUEST_DURATION
         } else {
-            self.pinned_floor = false;
-        }
+            TARGET_REQUEST_DURATION
+        };
+    }
+
+    /// How long one chunk request should take at the measured goodput.
+    pub fn target_duration(&self) -> Duration {
+        self.target
     }
 
     /// Seed the starting chunk size from the server's suggestion: the `chunk` member of
     /// `X-Capsule-Advice`, or the create body's `suggested_chunk_size` from a server that
     /// sends no advice.
     ///
-    /// The suggestion is a *starting point only* (transfer upload doc, §Adaptive
-    /// Chunk Sizing): 4 KiB-aligned down and clamped into this tier's range, so
-    /// the invariant "current size is aligned and within the tier" (hence within
-    /// the protocol bounds) still holds by construction.
+    /// The suggestion is a *starting point only* (transfer upload doc, §Adaptive Chunk Sizing):
+    /// 4 KiB-aligned down and clamped into `[PROTOCOL_MIN_CHUNK, tier ceiling]`, so the size
+    /// is aligned and within the protocol bounds by construction.
     pub fn seeded_from_suggested(mut self, suggested: u64) -> Self {
-        let aligned_down = (suggested / ALIGNMENT) * ALIGNMENT;
-        self.current_size = aligned_down.clamp(self.min_size, self.max_size);
-        // Clamp can only land on aligned tier bounds or an aligned-down value;
-        // never below the tier minimum.
+        self.current_size = self.bounded(suggested);
         debug_assert!(self.current_size.is_multiple_of(ALIGNMENT));
         self
     }
 
-    /// Calculate current throughput in bytes per second (windowed)
+    /// Goodput in bytes per second over the sliding window.
     pub fn throughput_bytes_per_second(&self) -> f64 {
         let now = std::time::Instant::now();
-        let window_start = now
-            .checked_sub(Duration::from_secs_f64(THROUGHPUT_WINDOW_SECS))
-            .unwrap_or(now);
+        let window_start = now.checked_sub(GOODPUT_WINDOW).unwrap_or(now);
 
         let (bytes, time) = self
             .recent_chunks
@@ -247,87 +249,71 @@ impl AdaptiveChunkSizeStrategy {
         bytes as f64 / time.as_secs_f64()
     }
 
-    /// Record a successful chunk upload and potentially adjust chunk size
+    /// The size that completes in the target duration at the measured goodput, aligned and
+    /// clamped; `None` before anything was measured.
+    pub fn target_size(&self) -> Option<u64> {
+        let goodput = self.throughput_bytes_per_second();
+        (goodput > 0.0).then(|| self.bounded((goodput * self.target.as_secs_f64()) as u64))
+    }
+
+    /// Record a successful chunk upload and move the size towards the target.
     pub fn record_chunk(&mut self, chunk_size: u64, upload_duration: Duration) {
         self.successful_chunks += 1;
         self.bytes_uploaded += chunk_size;
         self.total_upload_time += upload_duration;
+        self.hold_growth = self.hold_growth.saturating_sub(1);
 
-        // Record for windowed throughput
         let now = std::time::Instant::now();
         self.recent_chunks
             .push_back((chunk_size, upload_duration, now));
-
-        // Enforce max size (circular buffer behavior)
         if self.recent_chunks.len() > MAX_RECENT_CHUNKS {
             self.recent_chunks.pop_front();
         }
-
-        // Cleanup old chunks (older than window)
-        // Since it's sorted by time, we can just pop from front until we see a new enough one
-        if let Some(window_start) = now.checked_sub(Duration::from_secs_f64(THROUGHPUT_WINDOW_SECS))
-        {
-            while let Some((_, _, timestamp)) = self.recent_chunks.front() {
-                if *timestamp < window_start {
-                    self.recent_chunks.pop_front();
-                } else {
-                    break;
-                }
+        if let Some(window_start) = now.checked_sub(GOODPUT_WINDOW) {
+            // Sorted by time, so the stale records are all at the front.
+            while self
+                .recent_chunks
+                .front()
+                .is_some_and(|(_, _, timestamp)| *timestamp < window_start)
+            {
+                self.recent_chunks.pop_front();
             }
         }
 
-        let throughput = self.throughput_bytes_per_second();
-        // A fast window means the link that timed a chunk out has recovered: a size
-        // that timed out may be tried again.
-        if throughput > FAST_THROUGHPUT {
-            self.timeout_ceiling = None;
-        }
-
-        // Below the tier floor (only a timed-out chunk puts it there): grow back
-        // towards the floor after a run of successes, never to a size that timed out.
-        if self.current_size < self.min_size {
-            if self.successful_chunks >= GROW_BACK_AFTER_SUCCESSES {
-                let next = (self.current_size * 2).min(self.min_size);
-                if self.under_timeout_ceiling(next) {
-                    self.current_size = next;
-                }
-                self.successful_chunks = 0;
-            }
+        let Some(target) = self.target_size() else {
             return;
-        }
-
-        // Under the adverse floor pin, scaling is suppressed: the size stays at the
-        // tier minimum so each request stays small across a hostile path.
-        if self.pinned_floor {
-            self.current_size = self.min_size;
-            return;
-        }
-
-        // Adaptive scaling based on throughput
-        if self.bytes_uploaded >= MIN_BYTES_BEFORE_SCALING
-            || self.successful_chunks >= MIN_CHUNKS_BEFORE_SCALING
+        };
+        let current = self.current_size;
+        let next = if target.saturating_mul(2) <= current {
+            // Far above the target: down to it at once, since every chunk at this size costs
+            // more than the target to lose.
+            target
+        } else if target >= current.saturating_mul(2)
+            && self.successful_chunks >= WARMUP_CHUNKS
+            && self.hold_growth == 0
         {
-            // If throughput is high (> 5 MB/s) and we're not at max, double chunk size
-            if throughput > FAST_THROUGHPUT && self.current_size < self.max_size {
-                self.current_size = (self.current_size * 2).min(self.max_size);
-                self.successful_chunks = 0; // Reset counter after scaling
-            }
-            // If throughput is low (< 1 MB/s) and we're not at min, halve chunk size
-            else if throughput < SLOW_THROUGHPUT && self.current_size > self.min_size {
-                self.current_size = (self.current_size / 2).max(self.min_size);
-                self.successful_chunks = 0;
-            }
+            self.bounded(current.saturating_mul(2))
+        } else {
+            current
+        };
+        if next != current {
+            tracing::debug!(
+                from = current,
+                to = next,
+                target_bytes = target,
+                target_ms = self.target.as_millis(),
+                "chunk size moved towards the target request duration"
+            );
+            self.current_size = next;
+            self.successful_chunks = 0;
         }
     }
 
     /// Get the next chunk size to use.
     ///
-    /// Alignment is a hard guarantee by construction: every candidate size is a
-    /// doubling/halving of a 4 KiB-aligned tier bound, or a timed-out length
-    /// halved and aligned down, so this can never return an unaligned size — the
-    /// debug_assert is a tripwire for future edits, not a runtime dependency. The
-    /// size is likewise always within the protocol bounds: every tier range is,
-    /// and a timeout never shrinks below [`PROTOCOL_MIN_CHUNK`].
+    /// Alignment is a hard guarantee by construction: every candidate is aligned down and
+    /// clamped by one function, so this can never return an unaligned size — the
+    /// debug_assert is a tripwire for future edits, not a runtime dependency.
     pub fn next_chunk_size(&self) -> u64 {
         debug_assert!(
             self.current_size.is_multiple_of(ALIGNMENT),
@@ -365,12 +351,15 @@ enum UploadAuth {
 }
 
 /// The authorized HTTP transport for one upload endpoint: base URL, the pinned
-/// protocol date sent as `X-Capsule-Protocol`, and the authorization seam.
+/// protocol date sent as `X-Capsule-Protocol`, the authorization seam, and the stall bounds
+/// every request runs under.
 #[derive(Clone)]
 pub struct UploadTransport {
     base_url: String,
     protocol_version: String,
     auth: UploadAuth,
+    /// The per-request stall and response-wait bounds ([`crate::net::within_bounds`]).
+    bounds: RequestBounds,
 }
 
 impl UploadTransport {
@@ -391,6 +380,7 @@ impl UploadTransport {
             base_url: base_url.into().trim_end_matches('/').to_string(),
             protocol_version: protocol_version.into(),
             auth: UploadAuth::Session(session),
+            bounds: RequestBounds::default(),
         }
     }
 
@@ -412,14 +402,89 @@ impl UploadTransport {
                 http,
                 token: token.0,
             },
+            bounds: RequestBounds::default(),
         }
     }
 
-    /// Send an authorized request. `build` constructs the un-authenticated
-    /// request (method, URL, headers, body) from the transport's HTTP client;
-    /// the seam adds the bearer. `build` may be invoked twice on the session
-    /// path (the `401` refresh-and-replay), so it must be reconstructible.
+    /// Run every request under `bounds` instead of [`RequestBounds::default`].
+    #[must_use]
+    pub fn with_request_bounds(mut self, bounds: RequestBounds) -> Self {
+        self.bounds = bounds;
+        self
+    }
+
+    /// Send an authorized request whose body is small enough to be sent at once: the
+    /// response-wait bound runs from the start, then the stall bound over the response body.
     async fn send<F>(&self, build: F) -> Result<reqwest::Response, UploadError>
+    where
+        F: Fn(&reqwest::Client) -> reqwest::RequestBuilder,
+    {
+        self.send_tracked(&ExchangeProgress::waiting(), build)
+            .await?
+            .map_err(|cut| UploadError::Transport(cut.to_string()))
+    }
+
+    /// Send an authorized request under the transport's [`RequestBounds`], reading its whole
+    /// response body before handing it back, so no read after this one can hang.
+    ///
+    /// `progress` is the exchange's: a request that streams a large body hands it to its
+    /// [`PacedBody`] in `build`, so the stall bound runs while the body is sent and the
+    /// response-wait bound once it is all sent. The inner `Err` is the [`RequestCut`] that ended
+    /// it, kept apart so a chunk can tell a stalled link from any other transport failure.
+    async fn send_tracked<F>(
+        &self,
+        progress: &ExchangeProgress,
+        build: F,
+    ) -> Result<Result<reqwest::Response, RequestCut>, UploadError>
+    where
+        F: Fn(&reqwest::Client) -> reqwest::RequestBuilder,
+    {
+        // Boxed: the send is the largest future in the upload state machine, and every caller
+        // up to the CLI's dispatch would otherwise carry it inline.
+        let send = Box::pin(self.send_unbounded(build));
+        let response = match within_bounds(self.bounds, progress, send).await {
+            Ok(response) => response?,
+            Err(cut) => return Ok(Err(self.cut(cut, "request"))),
+        };
+        progress.on_received();
+        let status = response.status();
+        let version = response.version();
+        let headers = response.headers().clone();
+        let mut response = response;
+        let mut body = Vec::new();
+        loop {
+            let piece = match within_bounds(self.bounds, progress, response.chunk()).await {
+                Ok(piece) => piece?,
+                Err(cut) => return Ok(Err(self.cut(cut, "response body"))),
+            };
+            let Some(piece) = piece else { break };
+            progress.on_received();
+            body.extend_from_slice(&piece);
+        }
+        let mut rebuilt = http::Response::new(body);
+        *rebuilt.status_mut() = status;
+        *rebuilt.version_mut() = version;
+        *rebuilt.headers_mut() = headers;
+        Ok(Ok(reqwest::Response::from(rebuilt)))
+    }
+
+    /// Log a cut request, and hand the cut back.
+    fn cut(&self, cut: RequestCut, during: &str) -> RequestCut {
+        tracing::info!(
+            ?cut,
+            during,
+            stall_ms = millis(self.bounds.stall),
+            response_wait_ms = millis(self.bounds.response_wait),
+            "an upload request was cut"
+        );
+        cut
+    }
+
+    /// Send an authorized request with no bound of its own. `build` constructs the
+    /// un-authenticated request (method, URL, headers, body) from the transport's HTTP client;
+    /// the seam adds the bearer. `build` may be invoked twice on the session path (the `401`
+    /// refresh-and-replay), so it must be reconstructible.
+    async fn send_unbounded<F>(&self, build: F) -> Result<reqwest::Response, UploadError>
     where
         F: Fn(&reqwest::Client) -> reqwest::RequestBuilder,
     {
@@ -865,9 +930,12 @@ enum ChunkAck {
     Recreate,
     /// `checksum_mismatch` — nothing was persisted; re-send the same chunk.
     Resend,
-    /// `chunk_timeout` — the body did not arrive within the server's read deadline
-    /// and nothing of it was written; re-send at the same offset, smaller.
+    /// `chunk_timeout` — the server cut the body for stalling, and nothing of it was
+    /// written; re-send at the same offset, shorter.
     TimedOut,
+    /// The client cut the body for stalling: no bytes moved for the stall bound. Nothing of a
+    /// chunk that did not arrive whole is written, so the same answer as [`Self::TimedOut`].
+    Stalled,
     /// `rate_limited`, `unavailable` or `storage_full` — the server asked the
     /// client to wait (for the `Retry-After` it sent, when it sent one) and then
     /// resume from HEAD. Nothing of the refused chunk was kept.
@@ -1002,8 +1070,8 @@ fn retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
 pub struct UploadClient {
     transport: UploadTransport,
     /// The detected connection class, coupling the chunk strategy to the network: under
-    /// [`ConnectionClass::Adverse`] the transfer pins to the tier
-    /// chunk floor. Defaults to [`ConnectionClass::Unmetered`].
+    /// [`ConnectionClass::Adverse`] each chunk targets the shorter
+    /// [`ADVERSE_TARGET_REQUEST_DURATION`]. Defaults to [`ConnectionClass::Unmetered`].
     connection: ConnectionClass,
     /// The backoff sleeper for the shared retry engine's transient-reset retries.
     /// Real in production; kept as a seam for determinism.
@@ -1037,12 +1105,20 @@ impl UploadClient {
         &self.events
     }
 
-    /// Set the detected connection class (the chunk-size floor follows it). On an
-    /// [`ConnectionClass::Adverse`] link the adaptive strategy pins to the tier
-    /// chunk floor for every transfer this client drives.
+    /// Set the detected connection class (the target request duration follows it). On an
+    /// [`ConnectionClass::Adverse`] link every transfer this client drives sizes its chunks to
+    /// the shorter [`ADVERSE_TARGET_REQUEST_DURATION`].
     #[must_use]
     pub fn with_connection_class(mut self, class: ConnectionClass) -> Self {
         self.connection = class;
+        self
+    }
+
+    /// Run every request this client sends under `bounds` instead of
+    /// [`RequestBounds::default`].
+    #[must_use]
+    pub fn with_request_bounds(mut self, bounds: RequestBounds) -> Self {
+        self.transport = self.transport.with_request_bounds(bounds);
         self
     }
 
@@ -1292,19 +1368,34 @@ impl UploadClient {
         offset: u64,
     ) -> Result<ChunkAck, UploadError> {
         let checksum = chunk_checksum(chunk);
+        let bytes = bytes::Bytes::copy_from_slice(chunk);
+        // The stall bound runs while the body is sent, the response-wait bound once it is all
+        // sent: a slow link is never cut, a stalled one is.
+        let progress = ExchangeProgress::waiting();
         let resp = self
             .transport
-            .send(|http| {
+            .send_tracked(&progress, |http| {
                 http.patch(self.transport.session_url(session_id))
                     .header("X-Capsule-Protocol", &self.transport.protocol_version)
                     .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
                     .header("X-Capsule-Offset", offset.to_string())
                     .header("X-Capsule-Checksum", &checksum)
-                    // The body is cloned per invocation: the session path may
+                    // A fresh body per invocation, over the same bytes: the session path may
                     // rebuild the request for its one 401 refresh-and-replay.
-                    .body(chunk.to_vec())
+                    .body(PacedBody::new(bytes.clone(), progress.clone()))
             })
             .await?;
+        let resp = match resp {
+            Ok(resp) => resp,
+            // The link stopped moving: nothing of the chunk can have been kept, so it is the
+            // same answer as the server's own stall cut.
+            Err(RequestCut::Stalled) => return Ok(ChunkAck::Stalled),
+            // The body went out whole and the server never answered: whether it kept the chunk
+            // is unknown until the re-send at the same offset is answered, so this is a reset.
+            Err(cut @ RequestCut::NoResponse) => {
+                return Err(UploadError::Transport(cut.to_string()));
+            }
+        };
 
         let status = resp.status().as_u16();
         if (200..300).contains(&status) {
@@ -1620,19 +1711,20 @@ impl UploadClient {
                     });
                     // Offset unchanged; the loop re-sends the same chunk.
                 }
-                ChunkAck::TimedOut => {
-                    recovery.charge("timed-out chunk re-send")?;
+                ack @ (ChunkAck::TimedOut | ChunkAck::Stalled) => {
+                    recovery.charge("stalled chunk re-send")?;
                     // The offset stays: the server writes nothing of a chunk that did
-                    // not arrive whole. No wait either, since the link just spent the
-                    // whole read deadline on this chunk.
-                    let shrunk = strategy.shrink_after_timeout(want);
+                    // not arrive whole. No wait either, since the link just spent a
+                    // whole stall bound on this chunk.
+                    let shrunk = strategy.shrink_after_stall(want);
                     tracing::info!(
                         %session_id,
                         offset,
-                        timed_out_len = want,
+                        stalled_len = want,
                         next_len = strategy.next_chunk_size().min(remaining),
                         shrunk,
-                        "chunk_timeout — re-sending at the same offset, smaller"
+                        cut_by = if matches!(ack, ChunkAck::Stalled) { "client" } else { "server" },
+                        "a chunk stalled — re-sending at the same offset, shorter"
                     );
                 }
                 ChunkAck::Backoff(asked) => {

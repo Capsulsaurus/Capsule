@@ -373,3 +373,125 @@ fn the_handshake_headers_are_the_build_constants() {
     assert_eq!(headers.len(), 3);
     assert!(http_client().is_ok());
 }
+
+// ─── Per-request stall bounds ────────────────────────────────────────────────
+
+/// Pull the next piece of `body` after `gap`, as an HTTP stack does once the link has taken the
+/// piece before it.
+async fn pull(body: &mut PacedBody, gap: Duration) -> Option<bytes::Bytes> {
+    use http_body::Body as _;
+    tokio::time::sleep(gap).await;
+    std::future::poll_fn(|cx| std::pin::Pin::new(&mut *body).poll_frame(cx))
+        .await
+        .map(|frame| {
+            let Ok(frame) = frame;
+            frame.into_data().expect("a paced body yields only data")
+        })
+}
+
+/// A body of `pieces` full pieces.
+fn paced(pieces: usize, progress: &ExchangeProgress) -> PacedBody {
+    PacedBody::new(
+        bytes::Bytes::from(vec![9u8; pieces * PACED_PIECE]),
+        progress.clone(),
+    )
+}
+
+/// **Slow but steady.** Each piece leaves just inside the stall bound, and the server then takes
+/// longer than the stall bound to answer, inside the response wait: twenty-odd stall bounds end
+/// to end, and nothing is cut. Simulated clock; no wall-clock wait.
+#[tokio::test(start_paused = true)]
+async fn a_slow_but_steady_request_is_never_cut() {
+    let bounds = RequestBounds::default();
+    let progress = ExchangeProgress::waiting();
+    let mut body = paced(20, &progress);
+    let gap = Duration::from_secs(19);
+    assert!(gap < bounds.stall);
+    let started = tokio::time::Instant::now();
+    let exchange = async move {
+        let mut sent = 0;
+        while let Some(piece) = pull(&mut body, gap).await {
+            sent += piece.len();
+        }
+        // The server writes and fsyncs for longer than a stall bound before it answers.
+        tokio::time::sleep(bounds.stall + Duration::from_secs(10)).await;
+        sent
+    };
+    let sent = within_bounds(bounds, &progress, exchange)
+        .await
+        .expect("a live request is never cut");
+    assert_eq!(sent, 20 * PACED_PIECE);
+    assert!(
+        started.elapsed() > bounds.stall * 15,
+        "ran far past the stall bound"
+    );
+}
+
+/// **Stalled.** Two pieces leave, then the link takes no more: the request is cut one stall
+/// bound after the last piece, as a stall.
+#[tokio::test(start_paused = true)]
+async fn a_request_whose_body_stops_moving_is_cut_as_stalled() {
+    let bounds = RequestBounds::default();
+    let progress = ExchangeProgress::waiting();
+    let mut body = paced(20, &progress);
+    let started = tokio::time::Instant::now();
+    let exchange = async move {
+        pull(&mut body, Duration::from_secs(1)).await;
+        pull(&mut body, Duration::from_secs(1)).await;
+        std::future::pending::<()>().await;
+    };
+    assert_eq!(
+        within_bounds(bounds, &progress, exchange).await,
+        Err(RequestCut::Stalled)
+    );
+    let cut_at = Duration::from_secs(2) + bounds.stall;
+    assert!(started.elapsed() >= cut_at);
+    assert!(started.elapsed() < cut_at + Duration::from_secs(1));
+}
+
+/// **Never answered.** The whole body leaves and no response comes: the request is cut at the
+/// response wait after the last piece, not at the shorter stall bound.
+#[tokio::test(start_paused = true)]
+async fn a_sent_request_with_no_answer_is_cut_at_the_response_wait() {
+    let bounds = RequestBounds::default();
+    let progress = ExchangeProgress::waiting();
+    let mut body = paced(2, &progress);
+    let started = tokio::time::Instant::now();
+    let exchange = async move {
+        while pull(&mut body, Duration::ZERO).await.is_some() {}
+        std::future::pending::<()>().await;
+    };
+    assert_eq!(
+        within_bounds(bounds, &progress, exchange).await,
+        Err(RequestCut::NoResponse)
+    );
+    assert!(started.elapsed() >= bounds.response_wait);
+    assert!(started.elapsed() < bounds.response_wait + Duration::from_secs(1));
+}
+
+/// A response body that stops arriving is a stall too.
+#[tokio::test(start_paused = true)]
+async fn a_response_that_stops_arriving_is_cut_as_stalled() {
+    let bounds = RequestBounds::default();
+    let progress = ExchangeProgress::waiting();
+    progress.on_received();
+    let exchange = std::future::pending::<()>();
+    assert_eq!(
+        within_bounds(bounds, &progress, exchange).await,
+        Err(RequestCut::Stalled)
+    );
+}
+
+#[test]
+fn a_paced_body_advertises_its_exact_length() {
+    use http_body::Body as _;
+    let body = paced(3, &ExchangeProgress::waiting());
+    assert_eq!(body.size_hint().exact(), Some(3 * PACED_PIECE as u64));
+}
+
+#[test]
+fn the_response_wait_outlasts_the_stall_bound() {
+    let bounds = RequestBounds::default();
+    assert!(bounds.response_wait > bounds.stall);
+    assert!(bounds.stall <= Duration::from_secs(30));
+}
