@@ -19,6 +19,7 @@ class CullingViewModel(
 
     /** Every store write, in the order the user made it. */
     private val writes = WriteQueue()
+    private val handOff = CullingHandOff(model, writes::submit)
 
     init {
         viewModelScope.launch { model.load() }
@@ -27,12 +28,11 @@ class CullingViewModel(
 
     /** Run [verb]; a verdict shows at once and its write follows. */
     fun perform(verb: CullVerb) {
-        val verdict = model.perform(verb) ?: return
-        writes.submit { model.write(verdict) }
+        handOff.perform(verb)
     }
 
     fun confirmSweep() {
-        writes.submit { model.confirmSweep() }
+        handOff.confirmSweep()
     }
 
     override fun onCleared() {
@@ -42,4 +42,25 @@ class CullingViewModel(
     fun dismissSweep() = model.dismissSweep()
 
     fun consumeNotice() = model.consumeNotice()
+}
+
+/**
+ * What the surface hands the store: [perform] shows a verdict at once and queues its write,
+ * [confirmSweep] queues the sweep, both through [submit], which is [WriteQueue.submit] in the app. Split from the
+ * ViewModel so the hand-off runs on the JVM without Android's main dispatcher.
+ */
+class CullingHandOff(
+    private val model: CullingModel,
+    private val submit: (suspend () -> Unit) -> Unit,
+) {
+    /** Run [verb]; a verdict shows at once and its write follows. */
+    fun perform(verb: CullVerb) {
+        val verdict = model.perform(verb) ?: return
+        submit { model.write(verdict) }
+    }
+
+    /** Queue the sweep of the pass's rejects. */
+    fun confirmSweep() {
+        submit { model.confirmSweep() }
+    }
 }

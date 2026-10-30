@@ -62,6 +62,30 @@ object CullKeyboard {
         metaState: Int,
     ): CullVerb? = if (isKeyDown && repeatCount == 0) verbFor(keyCode, metaState) else null
 
+    /**
+     * What the surface does with a key event: [verb] to run, if any, and whether the event is
+     * [consumed] so it never reaches a focused control. With no asset in the pass nothing is
+     * run or consumed. A held key's repeats and its key-down are consumed without running,
+     * so they never reach a focused button; a key-up is never consumed.
+     */
+    data class KeyDispatch(
+        val verb: CullVerb?,
+        val consumed: Boolean,
+    )
+
+    /** The [KeyDispatch] for a key event over a pass that [hasAsset] or is empty. */
+    fun dispatch(
+        hasAsset: Boolean,
+        isKeyDown: Boolean,
+        repeatCount: Int,
+        keyCode: Int,
+        metaState: Int,
+    ): KeyDispatch {
+        if (!hasAsset) return KeyDispatch(null, false)
+        val verb = verbForEvent(isKeyDown, repeatCount, keyCode, metaState)
+        return KeyDispatch(verb, isKeyDown && verbFor(keyCode, metaState) != null)
+    }
+
     /** [metaState] reduced to the `META_*_ON` bits a binding names, left and right alike. */
     fun normalized(metaState: Int): Int = metaState and MODIFIER_MASK
 
