@@ -189,6 +189,9 @@ pub enum RemoteError {
     /// The account profile could not be read, so the account's server id is unknown.
     #[error("the account profile could not be read: {0}")]
     Profile(String),
+    /// The account activity log could not be read (`capsule auth activity`).
+    #[error("the account activity log could not be read: {0}")]
+    Activity(String),
     /// The recovery secret did not open this account's escrow.
     #[error("the recovery secret does not open this account's escrow")]
     WrongRecoverySecret,
@@ -336,6 +339,81 @@ pub async fn auth_logout(remote: &RemoteConfig, store: &SessionStore) -> Result<
     revoke?;
     tracing::info!("logout revoked server-side and cleared the session store");
     Ok(true)
+}
+
+/// One event of the signed-in account's activity log, as `capsule auth activity` prints it.
+///
+/// The server's own fields, unchanged: the kind is its stable token (`sign_in.password`,
+/// `session.revoked`, ...), so a script matches on what the server sent rather than on a
+/// rendering of it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ActivityEntry {
+    /// The server's id for the event.
+    pub event_id: String,
+    /// What happened.
+    pub kind: String,
+    /// When, RFC 3339.
+    pub at: String,
+    /// The `X-Request-Id` of the request that caused it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
+    /// The session that acted, when one did.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// What the event is about: a session, a share link or a drop link.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subject: Option<String>,
+}
+
+/// `capsule auth activity`: the signed-in account's activity log, newest first.
+///
+/// At most `limit` events, or the server's default page when `None`.
+///
+/// # Errors
+///
+/// [`RemoteError::NotAuthenticated`] with no stored session, and [`RemoteError::Activity`] when
+/// the server cannot be reached or refuses.
+#[instrument(skip(store))]
+pub async fn auth_activity(
+    remote: &RemoteConfig,
+    store: &SessionStore,
+    limit: Option<u32>,
+) -> Result<Vec<ActivityEntry>, RemoteError> {
+    let session = resume_session(remote, store).await?;
+    let read = read_activity(&remote.sync_endpoint, session.clone(), limit).await;
+    checkpoint(store, &session).await;
+    let events = read?;
+    tracing::info!(events = events.len(), "read the account activity log");
+    Ok(events)
+}
+
+/// The listing itself, over a session somebody else persists.
+async fn read_activity(
+    api_root: &str,
+    session: Session,
+    limit: Option<u32>,
+) -> Result<Vec<ActivityEntry>, RemoteError> {
+    let client = AuthenticatedClient::new(api_root, session)
+        .map_err(|error| RemoteError::Activity(error.to_string()))?;
+    let params =
+        limit.map(|limit| capsule_sdk::rest::ListActivityParams::default().limit(i64::from(limit)));
+    let response = client
+        .list_activity(capsule_core::crypto::primitives::PROTOCOL_VERSION, params)
+        .await
+        .map_err(|error| RemoteError::Activity(error.to_string()))?
+        .into_inner();
+    Ok(response
+        .events
+        .into_iter()
+        .map(|event| ActivityEntry {
+            event_id: event.event_id,
+            kind: event.kind,
+            at: event.at,
+            request_id: event.request_id,
+            session_id: event.session_id,
+            subject: event.subject,
+        })
+        .collect())
 }
 
 /// Resume the stored session, and hand back a guard that persists whatever it rotated to.

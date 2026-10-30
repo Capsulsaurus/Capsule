@@ -43,6 +43,7 @@ use kynos::prelude::*;
 use kynos::response::status::NoContent;
 use serde::{Deserialize, Serialize};
 
+use crate::activity::{ActivityContext, ActivityKind};
 use crate::auth::{AccessToken, AuthContext};
 use crate::store::{SessionId, SessionRecord, UserId};
 
@@ -247,6 +248,7 @@ pub async fn list_devices(
 pub async fn revoke_session(
     Auth(credential): Auth<AccessToken>,
     Inject(auth): Inject<AuthContext>,
+    Inject(activity): Inject<ActivityContext>,
     Path(path): Path<SessionPath>,
 ) -> Result<NoContent, RevokeSessionRejection> {
     let user = UserId::new(credential.user.as_str());
@@ -289,6 +291,14 @@ pub async fn revoke_session(
         current = held.session_id == credential.session,
         "a session was revoked from the devices surface"
     );
+    activity
+        .record(
+            &user,
+            ActivityKind::SessionRevoked,
+            Some(&credential.session),
+            Some(held.session_id.as_str()),
+        )
+        .await;
     Ok(NoContent)
 }
 

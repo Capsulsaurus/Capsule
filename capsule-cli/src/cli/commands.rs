@@ -1166,4 +1166,14 @@ pub(crate) enum AuthCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Show the signed-in account's recent security activity, newest first: sign-ins,
+    /// sign-outs, revoked sessions, credential changes, enrolled devices and links
+    Activity {
+        /// The most events to show; the server keeps 90 days and at most 1000
+        #[arg(long, value_name = "N")]
+        limit: Option<u32>,
+        /// Print the events as one JSON document on stdout
+        #[arg(long)]
+        json: bool,
+    },
 }

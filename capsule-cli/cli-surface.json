@@ -9,6 +9,33 @@
       "name": "auth",
       "subcommands": [
         {
+          "about": "Show the signed-in account's recent security activity, newest first: sign-ins, sign-outs, revoked sessions, credential changes, enrolled devices and links",
+          "args": [
+            {
+              "help": "The most events to show; the server keeps 90 days and at most 1000",
+              "id": "limit",
+              "long": "limit",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": true,
+              "value_names": [
+                "N"
+              ]
+            },
+            {
+              "help": "Print the events as one JSON document on stdout",
+              "id": "json",
+              "long": "json",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            }
+          ],
+          "name": "activity"
+        },
+        {
           "about": "Set up recovery for a library: bind it to the signed-in account and store its recovery backup under a new recovery secret",
           "args": [
             {

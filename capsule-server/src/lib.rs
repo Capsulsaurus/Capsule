@@ -28,7 +28,7 @@
 //! TTL abstraction is planned.
 //!
 //! Each module owns one port and, where it has one, the surface over it. [`routes`](mod@routes) is the only
-//! module that knows about HTTP: everything under it — [`album`], [`directory`], [`discovery`],
+//! module that knows about HTTP: everything under it — [`activity`], [`album`], [`directory`], [`discovery`],
 //! [`enrollment`], [`escrow`], [`federation`], [`gc`], [`index`], [`membership`],
 //! [`moderation`],
 //! [`negotiation`], [`quota`],
@@ -62,6 +62,7 @@
 //! `cargo nextest run` on a machine with no container runtime is green and says what it did not
 //! prove — which is the acceptance gap design/module-map.md sets for the framework.
 
+pub mod activity;
 pub mod album;
 pub mod app;
 pub mod attestation;
@@ -303,9 +304,12 @@ pub fn router() -> Router<App, Propagate, ServerInterceptors, impl Sized> {
                     routes::assets::get_asset_receipts,
                     routes::drop::list_inbox,
                 ])
-                // The recovery surface's third read, past the tuple ceiling of the mount above:
-                // the account's album key escrows (#741).
-                .mount(kynos::routes![routes::escrow::list_album_keys]),
+                // The reads past the tuple ceiling of the mount above: the recovery surface's
+                // third, the account's album key escrows (#741), and the account activity log.
+                .mount(kynos::routes![
+                    routes::escrow::list_album_keys,
+                    routes::activity::list_activity,
+                ]),
         )
         // **The thirteen operations the design exempts from the gate**, in a group of their
         // own so neither gated group above covers them (`api-surfaces.md`, "Negotiation Across
