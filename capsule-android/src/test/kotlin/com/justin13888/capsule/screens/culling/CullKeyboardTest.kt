@@ -87,4 +87,36 @@ class CullKeyboardTest {
         assertTrue(CullKeyboard.isShowing)
         CullKeyboard.hidden()
     }
+
+    @Test
+    fun aFirstVerbKeyDownRunsAndIsConsumed() {
+        val dispatch = CullKeyboard.dispatch(true, true, 0, KeyEvent.KEYCODE_X, 0)
+
+        assertEquals(CullKeyboard.KeyDispatch(CullVerb.REJECT, true), dispatch)
+    }
+
+    @Test
+    fun anAutoRepeatIsConsumedWithoutRunning() {
+        assertEquals(CullKeyboard.KeyDispatch(null, true), CullKeyboard.dispatch(true, true, 3, KeyEvent.KEYCODE_P, 0))
+    }
+
+    @Test
+    fun aKeyUpIsNeitherRunNorConsumed() {
+        assertEquals(CullKeyboard.KeyDispatch(null, false), CullKeyboard.dispatch(true, false, 0, KeyEvent.KEYCODE_X, 0))
+    }
+
+    @Test
+    fun anUnboundKeyPassesThrough() {
+        assertEquals(CullKeyboard.KeyDispatch(null, false), CullKeyboard.dispatch(true, true, 0, KeyEvent.KEYCODE_A, 0))
+        assertEquals(CullKeyboard.KeyDispatch(null, false), CullKeyboard.dispatch(true, true, 0, KeyEvent.KEYCODE_C, KeyEvent.META_CTRL_ON))
+    }
+
+    @Test
+    fun anEmptyPassRunsAndConsumesNothing() {
+        assertEquals(CullKeyboard.KeyDispatch(null, false), CullKeyboard.dispatch(false, true, 0, KeyEvent.KEYCODE_X, 0))
+        assertEquals(
+            CullKeyboard.KeyDispatch(null, false),
+            CullKeyboard.dispatch(false, true, 0, KeyEvent.KEYCODE_DEL, KeyEvent.META_CTRL_ON),
+        )
+    }
 }

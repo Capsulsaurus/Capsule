@@ -107,14 +107,17 @@ fun CullingScreen(
     Scaffold(
         modifier =
             Modifier.onPreviewKeyEvent { event ->
-                if (state.asset == null) return@onPreviewKeyEvent false
                 val native = event.nativeKeyEvent
-                val isDown = event.type == KeyEventType.KeyDown
-                val verb =
-                    CullKeyboard.verbForEvent(isDown, native.repeatCount, native.keyCode, native.metaState)
-                if (verb != null) viewModel.perform(verb)
-                // A held key's repeats are consumed too, so they never reach a focused button.
-                isDown && CullKeyboard.verbFor(native.keyCode, native.metaState) != null
+                val dispatch =
+                    CullKeyboard.dispatch(
+                        hasAsset = state.asset != null,
+                        isKeyDown = event.type == KeyEventType.KeyDown,
+                        repeatCount = native.repeatCount,
+                        keyCode = native.keyCode,
+                        metaState = native.metaState,
+                    )
+                dispatch.verb?.let(viewModel::perform)
+                dispatch.consumed
             },
         topBar = { CullingTopBar(state, viewModel::perform, navigateBack) },
         snackbarHost = { SnackbarHost(snackbar) },
@@ -174,20 +177,26 @@ private fun CullingContent(
     perform: (CullVerb) -> Unit,
 ) {
     when {
-        state.phase == CullingPhase.LOADING ->
+        state.phase == CullingPhase.LOADING -> {
             Placeholder { CircularProgressIndicator() }
-        state.phase == CullingPhase.FAILED ->
+        }
+
+        state.phase == CullingPhase.FAILED -> {
             Placeholder {
                 Text(stringResource(R.string.app_culling_title), style = MaterialTheme.typography.titleMedium)
                 Text(stringResource(R.string.app_culling_error_load), textAlign = TextAlign.Center)
             }
-        state.asset == null ->
+        }
+
+        state.asset == null -> {
             Placeholder {
                 Icon(Icons.Filled.CheckCircle, contentDescription = null, modifier = Modifier.size(48.dp))
                 Text(stringResource(R.string.app_culling_empty_title), style = MaterialTheme.typography.titleMedium)
                 Text(stringResource(R.string.app_culling_empty_body), textAlign = TextAlign.Center)
             }
-        else ->
+        }
+
+        else -> {
             Column(
                 Modifier.fillMaxSize().padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -203,6 +212,7 @@ private fun CullingContent(
                 )
                 Controls(state, perform)
             }
+        }
     }
 }
 
@@ -342,7 +352,8 @@ private fun flagText(flag: CullStepFlag?): String =
             val members = pluralStringResource(R.plurals.app_culling_stack_members, flag.memberCount, flag.memberCount)
             stringResource(R.string.app_culling_stack_summary, summary, members)
         }
-        is CullStepFlag.Asset ->
+
+        is CullStepFlag.Asset -> {
             stringResource(
                 when (flag.flag) {
                     CullFlag.PICK -> R.string.app_culling_flag_pick
@@ -350,7 +361,11 @@ private fun flagText(flag: CullStepFlag?): String =
                     CullFlag.NEUTRAL -> R.string.app_culling_flag_unflagged
                 },
             )
-        null -> stringResource(R.string.app_culling_flag_unflagged)
+        }
+
+        null -> {
+            stringResource(R.string.app_culling_flag_unflagged)
+        }
     }
 
 @Composable
@@ -370,19 +385,25 @@ private fun noticeText(notice: CullNotice): String =
 /** The flag's symbol. A stack shows its derived state's: a pick, all rejected, or undecided. */
 private fun flagIcon(flag: CullStepFlag?): ImageVector =
     when (flag) {
-        is CullStepFlag.Asset ->
+        is CullStepFlag.Asset -> {
             when (flag.flag) {
                 CullFlag.PICK -> Icons.Filled.CheckCircle
                 CullFlag.REJECT -> Icons.Filled.Close
                 CullFlag.NEUTRAL -> Icons.Outlined.CheckCircle
             }
-        is CullStepFlag.Stack ->
+        }
+
+        is CullStepFlag.Stack -> {
             when (flag.state) {
                 StackCullState.ANY_PICK -> Icons.Filled.CheckCircle
                 StackCullState.ALL_REJECTED -> Icons.Filled.Close
                 StackCullState.MIXED -> Icons.Outlined.CheckCircle
             }
-        null -> Icons.Outlined.CheckCircle
+        }
+
+        null -> {
+            Icons.Outlined.CheckCircle
+        }
     }
 
 private fun verbIcon(verb: CullVerb): ImageVector =
