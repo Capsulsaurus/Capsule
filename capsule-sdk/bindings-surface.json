@@ -313,6 +313,13 @@
             },
             {
               "kind": "func",
+              "name": "stackMemberships",
+              "signature": "func stackMemberships() throws -> [FfiStackMember]",
+              "doc": "Every managed, non-trashed asset that belongs to a stack, with its stack, whether it is\nthe cover and its member index, sorted by asset id. An asset in no stack is absent, so a\ncull pass reads it as a lone asset; a trashed member is absent too, matching the members\n[`flag_stack`](Self::flag_stack) writes.",
+              "members": []
+            },
+            {
+              "kind": "func",
               "name": "addLabel",
               "signature": "func addLabel(target: FfiLabelTarget, label: String) throws -> [String]",
               "doc": "Add `label` to `target` and return its labels afterwards.",
@@ -1508,6 +1515,42 @@
               "name": "source",
               "signature": "public var source: FfiRungSource",
               "doc": "What fills it.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "struct",
+          "name": "FfiStackMember",
+          "signature": "public struct FfiStackMember: Equatable, Hashable",
+          "doc": "Where one live asset sits in its stack, read from its signed `stack_membership` register.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "assetId",
+              "signature": "public var assetId: String",
+              "doc": "The asset (UUID string).",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "stackId",
+              "signature": "public var stackId: String",
+              "doc": "The stack it belongs to (UUID string).",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "isCover",
+              "signature": "public var isCover: Bool",
+              "doc": "Whether it is the stack's cover: its `primary` member, the \"best photo\".",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "memberIndex",
+              "signature": "public var memberIndex: UInt32?",
+              "doc": "Its position within the stack (burst sequence, chapter index), when one was recorded.",
               "members": []
             }
           ]
@@ -3240,6 +3283,13 @@
             },
             {
               "kind": "fun",
+              "name": "stackMemberships",
+              "signature": "fun stackMemberships(): List<FfiStackMember>",
+              "doc": "Every managed, non-trashed asset that belongs to a stack, with its stack, whether it is\nthe cover and its member index, sorted by asset id. An asset in no stack is absent, so a\ncull pass reads it as a lone asset; a trashed member is absent too, matching the members\n[`flag_stack`](Self::flag_stack) writes.",
+              "members": []
+            },
+            {
+              "kind": "fun",
               "name": "addLabel",
               "signature": "fun addLabel(target: FfiLabelTarget, label: kotlin.String): List<kotlin.String>",
               "doc": "Add `label` to `target` and return its labels afterwards.",
@@ -4435,6 +4485,42 @@
               "name": "source",
               "signature": "var source: FfiRungSource",
               "doc": "What fills it.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "data class",
+          "name": "FfiStackMember",
+          "signature": "data class FfiStackMember",
+          "doc": "Where one live asset sits in its stack, read from its signed `stack_membership` register.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "assetId",
+              "signature": "var assetId: kotlin.String",
+              "doc": "The asset (UUID string).",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "stackId",
+              "signature": "var stackId: kotlin.String",
+              "doc": "The stack it belongs to (UUID string).",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "isCover",
+              "signature": "var isCover: kotlin.Boolean",
+              "doc": "Whether it is the stack's cover: its `primary` member, the \"best photo\".",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "memberIndex",
+              "signature": "var memberIndex: kotlin.UInt?",
+              "doc": "Its position within the stack (burst sequence, chapter index), when one was recorded.",
               "members": []
             }
           ]

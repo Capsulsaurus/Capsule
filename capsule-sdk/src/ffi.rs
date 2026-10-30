@@ -81,11 +81,11 @@ pub use workspace::{
 };
 
 /// The cull verbs on [`FfiWorkspace`]: flag an asset or a stack, read a stack's derived state,
-/// list by flag, and the reject sweep. Its own module because culling is one workflow with one
+/// list by flag, list stack membership, and the reject sweep. Its own module because culling is one workflow with one
 /// destructive step, and reads better as a unit than as another section of `workspace`.
 mod culling;
 
-pub use culling::{FfiCullFlag, FfiStackCullState};
+pub use culling::{FfiCullFlag, FfiStackCullState, FfiStackMember};
 
 /// The transfer event stream: the flattened mirror of `crate::events` and the subscription a
 /// real-time transfer view polls. Separated because it is the one surface that is a stream
@@ -293,11 +293,10 @@ impl From<UploadError> for FfiError {
             return auth.into();
         }
         let code = match &err {
-            UploadError::Rejected { code, .. } => code.clone(),
             UploadError::UpgradeRequired { .. } => {
                 Some(capsule_i18n::error_codes::PROTOCOL_VERSION_UNSUPPORTED.to_owned())
             }
-            _ => None,
+            _ => err.error_code().map(str::to_owned),
         };
         Self::Upload {
             code,
