@@ -1090,7 +1090,7 @@ impl FfiSession {
         }
         let path = PathBuf::from(path);
         tracing::info!(%hash, size, path = %path.display(), "ffi: fetching a blob to disk");
-        let source = HttpBlobSource::new(self.session.clone(), blob_base_url);
+        let source = HttpBlobSource::new(self.path_session(), blob_base_url);
         // A fetch is a request the user is waiting on: the path sizes its range windows (bounded
         // under `adverse`) but never holds it back.
         let class = self.path.plan().class;
@@ -1235,20 +1235,24 @@ impl FfiSession {
 }
 
 impl FfiSession {
-    /// An upload client on the current path's pooled connections.
-    fn upload_client(&self) -> UploadClient {
+    /// The session, sending through the current path generation's pooled connections.
+    fn path_session(&self) -> Session {
         let generation = self.path.snapshot().generation;
-        let session = match self.pool.client(generation) {
+        match self.pool.client(generation) {
             Ok(http) => self.session.with_http_client(http),
             Err(error) => {
                 // Building a client fails only where the platform lacks something the builder
                 // needs; the session's own client still sends, on the pool it already has.
-                tracing::warn!(%error, generation = generation.0, "ffi: no client for the new path; uploading on the session's own");
+                tracing::warn!(%error, generation = generation.0, "ffi: no client for the new path; sending on the session's own");
                 self.session.clone()
             }
-        };
+        }
+    }
+
+    /// An upload client on the current path's pooled connections.
+    fn upload_client(&self) -> UploadClient {
         let transport = UploadTransport::with_session(
-            session,
+            self.path_session(),
             self.upload_base_url.clone(),
             self.protocol_version.clone(),
         );
