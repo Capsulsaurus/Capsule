@@ -911,10 +911,17 @@ pub struct FfiFeedDrain {
     /// no entry. Deadlines are judged at it alone, never by this device's clock, so with
     /// `None` nothing has expired.
     pub latest_changed_at: Option<String>,
-    /// Every asset the drained feed lists, keyed by its id as the feed names it, with the
+    /// Every asset the server's feed lists, keyed by its id as the feed names it, with the
     /// `manifest_cbor` of its latest entry (empty for an entry that carries no record). An
     /// asset whose latest `delete` is not that head or before it is a held delete, which
     /// never expires. Ids that are not UUIDs name no asset of this workspace and are ignored.
+    ///
+    /// The map must cover the whole feed: a drain from the feed's start (no cursor), or the
+    /// heads this app kept, entry by entry, across every cursored drain since one. A drain
+    /// resumed from a cursor lists only the assets that changed after it, so passing it alone
+    /// leaves out every asset whose `delete` an earlier sync indexed: each is judged held and
+    /// never expires, and the trash grows until the user empties it. That loses nothing, but
+    /// the sweep stops working.
     pub server_heads: HashMap<String, Vec<u8>>,
 }
 
@@ -1894,7 +1901,8 @@ impl FfiWorkspace {
     /// input, each one ready for [`purge_asset`](Self::purge_asset).
     ///
     /// A deadline is judged only after a sync drained the feed to its head, so a restore on a
-    /// later page lands first: pass that drain as `drain`. The deadline is judged by the
+    /// later page lands first: pass that drain as `drain`, its `server_heads` covering the whole
+    /// feed as [`FfiFeedDrain::server_heads`] requires. The deadline is judged by the
     /// drain's latest server `changed_at` alone, never by this device's clock, and an asset
     /// whose `delete` the server has not indexed (a held delete) never expires. With no drain
     /// (`None`: the sync failed, or this device has no server), or a drain that saw no entry,

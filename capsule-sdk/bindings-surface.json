@@ -399,7 +399,7 @@
               "kind": "func",
               "name": "expiredTrash",
               "signature": "func expiredTrash(drain: FfiFeedDrain?) throws -> [FfiTrashEntry]",
-              "doc": "The trash entries whose signed retention window has closed: the retention sweep's\ninput, each one ready for [`purge_asset`](Self::purge_asset).\n\nA deadline is judged only after a sync drained the feed to its head, so a restore on a\nlater page lands first: pass that drain as `drain`. The deadline is judged by the\ndrain's latest server `changed_at` alone, never by this device's clock, and an asset\nwhose `delete` the server has not indexed (a held delete) never expires. With no drain\n(`None`: the sync failed, or this device has no server), or a drain that saw no entry,\nnothing has expired, and the trash keeps every asset until the user empties it.\n\n# Errors\n\n[`FfiError::InvalidArgument`] for a `latest_changed_at` that is not RFC 3339.",
+              "doc": "The trash entries whose signed retention window has closed: the retention sweep's\ninput, each one ready for [`purge_asset`](Self::purge_asset).\n\nA deadline is judged only after a sync drained the feed to its head, so a restore on a\nlater page lands first: pass that drain as `drain`, its `server_heads` covering the whole\nfeed as [`FfiFeedDrain::server_heads`] requires. The deadline is judged by the\ndrain's latest server `changed_at` alone, never by this device's clock, and an asset\nwhose `delete` the server has not indexed (a held delete) never expires. With no drain\n(`None`: the sync failed, or this device has no server), or a drain that saw no entry,\nnothing has expired, and the trash keeps every asset until the user empties it.\n\n# Errors\n\n[`FfiError::InvalidArgument`] for a `latest_changed_at` that is not RFC 3339.",
               "members": []
             },
             {
@@ -921,7 +921,7 @@
               "kind": "field",
               "name": "serverHeads",
               "signature": "public var serverHeads: [String: Data]",
-              "doc": "Every asset the drained feed lists, keyed by its id as the feed names it, with the\n`manifest_cbor` of its latest entry (empty for an entry that carries no record). An\nasset whose latest `delete` is not that head or before it is a held delete, which\nnever expires. Ids that are not UUIDs name no asset of this workspace and are ignored.",
+              "doc": "Every asset the server's feed lists, keyed by its id as the feed names it, with the\n`manifest_cbor` of its latest entry (empty for an entry that carries no record). An\nasset whose latest `delete` is not that head or before it is a held delete, which\nnever expires. Ids that are not UUIDs name no asset of this workspace and are ignored.\n\nThe map must cover the whole feed: a drain from the feed's start (no cursor), or the\nheads this app kept, entry by entry, across every cursored drain since one. A drain\nresumed from a cursor lists only the assets that changed after it, so passing it alone\nleaves out every asset whose `delete` an earlier sync indexed: each is judged held and\nnever expires, and the trash grows until the user empties it. That loses nothing, but\nthe sweep stops working.",
               "members": []
             }
           ]
@@ -3132,7 +3132,7 @@
               "kind": "fun",
               "name": "expiredTrash",
               "signature": "fun expiredTrash(drain: FfiFeedDrain?): List<FfiTrashEntry>",
-              "doc": "The trash entries whose signed retention window has closed: the retention sweep's\ninput, each one ready for [`purge_asset`](Self::purge_asset).\n\nA deadline is judged only after a sync drained the feed to its head, so a restore on a\nlater page lands first: pass that drain as `drain`. The deadline is judged by the\ndrain's latest server `changed_at` alone, never by this device's clock, and an asset\nwhose `delete` the server has not indexed (a held delete) never expires. With no drain\n(`None`: the sync failed, or this device has no server), or a drain that saw no entry,\nnothing has expired, and the trash keeps every asset until the user empties it.\n\n# Errors\n\n[`FfiError::InvalidArgument`] for a `latest_changed_at` that is not RFC 3339.",
+              "doc": "The trash entries whose signed retention window has closed: the retention sweep's\ninput, each one ready for [`purge_asset`](Self::purge_asset).\n\nA deadline is judged only after a sync drained the feed to its head, so a restore on a\nlater page lands first: pass that drain as `drain`, its `server_heads` covering the whole\nfeed as [`FfiFeedDrain::server_heads`] requires. The deadline is judged by the\ndrain's latest server `changed_at` alone, never by this device's clock, and an asset\nwhose `delete` the server has not indexed (a held delete) never expires. With no drain\n(`None`: the sync failed, or this device has no server), or a drain that saw no entry,\nnothing has expired, and the trash keeps every asset until the user empties it.\n\n# Errors\n\n[`FfiError::InvalidArgument`] for a `latest_changed_at` that is not RFC 3339.",
               "members": []
             },
             {
@@ -3654,7 +3654,7 @@
               "kind": "field",
               "name": "serverHeads",
               "signature": "var serverHeads: Map<kotlin.String, kotlin.ByteArray>",
-              "doc": "Every asset the drained feed lists, keyed by its id as the feed names it, with the\n`manifest_cbor` of its latest entry (empty for an entry that carries no record). An\nasset whose latest `delete` is not that head or before it is a held delete, which\nnever expires. Ids that are not UUIDs name no asset of this workspace and are ignored.",
+              "doc": "Every asset the server's feed lists, keyed by its id as the feed names it, with the\n`manifest_cbor` of its latest entry (empty for an entry that carries no record). An\nasset whose latest `delete` is not that head or before it is a held delete, which\nnever expires. Ids that are not UUIDs name no asset of this workspace and are ignored.\n\nThe map must cover the whole feed: a drain from the feed's start (no cursor), or the\nheads this app kept, entry by entry, across every cursored drain since one. A drain\nresumed from a cursor lists only the assets that changed after it, so passing it alone\nleaves out every asset whose `delete` an earlier sync indexed: each is judged held and\nnever expires, and the trash grows until the user empties it. That loses nothing, but\nthe sweep stops working.",
               "members": []
             }
           ]

@@ -62,6 +62,11 @@ pub struct FeedDrain {
     /// the head record its latest entry carries, or `None` for an entry that carries none (a
     /// purged asset, or an older server). A record's hash is the SHA-256 of the entry's
     /// `manifest_cbor`, which is that record's canonical CBOR.
+    ///
+    /// It must cover the whole feed: a drain from the feed's start, or heads the caller kept
+    /// across every cursored drain since one. A drain resumed from a cursor lists only what
+    /// changed after it, so an asset whose `delete` an earlier sync indexed would be missing,
+    /// judged held, and never expire.
     pub server_heads: BTreeMap<Uuid, Option<Hash32>>,
 }
 
