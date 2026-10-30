@@ -715,11 +715,14 @@ impl Sleeper for TokioSleeper {
 /// observed by polling `HEAD`, never by holding a request open.
 pub const DEFAULT_RESPONSE_WAIT: Duration = Duration::from_mins(1);
 
-/// The size of one piece a [`PacedBody`] hands the HTTP stack: 64 KiB.
+/// The size of one piece a [`PacedBody`] hands the HTTP stack: 16 KiB.
 ///
-/// Small enough that a piece pulled is a fresh sign the link is moving, even at a few KiB/s;
-/// large enough that the per-piece bookkeeping is noise beside the bytes.
-pub const PACED_PIECE: usize = 64 * 1024;
+/// Once the stack's write buffer is full it pulls about one piece per piece written, so a live
+/// link must move one piece per stall bound to be seen moving. At 16 KiB over the default
+/// 20 s stall bound that is 0.8 KiB/s — below the server's 1 KiB/s minimum sustained rate, so
+/// the client never cuts as stalled a link the server would accept. Large enough that the
+/// per-piece bookkeeping is noise beside the bytes.
+pub const PACED_PIECE: usize = 16 * 1024;
 
 /// The two bounds every request runs under: the **stall** bound while bytes should be moving —
 /// sending the request body, or receiving the response body — and the longer **response-wait**
@@ -758,7 +761,12 @@ impl Default for RequestBounds {
 pub enum RequestCut {
     /// No bytes moved for the stall bound, sending or receiving.
     Stalled,
-    /// The body was sent, and no response head came within the response-wait bound.
+    /// The body was handed to the HTTP stack, and no response head came within the
+    /// response-wait bound.
+    ///
+    /// Handed off is not on the wire: the stack's write buffer and the kernel's send buffer may
+    /// still hold the tail of the body, so on a slow enough link this is the body still
+    /// draining as much as a server that never answered.
     NoResponse,
 }
 
@@ -884,8 +892,12 @@ pub async fn within_bounds<F: std::future::Future>(
 ///
 /// The stack pulls the next piece once it has written the one before, so a pull is the link
 /// moving and a long gap between pulls is the link stalled. Handing out the last piece starts
-/// the response wait. The exact length is advertised, so the request still carries a
-/// `Content-Length` and is never sent chunked.
+/// the response wait — while the stack's write buffer (hyper's holds up to about 400 KiB) and
+/// the kernel's send buffer may still hold the tail unsent. A link too slow to drain that tail
+/// inside the response wait is therefore cut as [`RequestCut::NoResponse`]; the upload client
+/// answers that by re-sending the chunk shorter, so the tail shrinks until it drains in time.
+/// The exact length is advertised, so the request still carries a `Content-Length` and is
+/// never sent chunked.
 #[derive(Debug)]
 pub struct PacedBody {
     remaining: bytes::Bytes,

@@ -120,7 +120,9 @@ const GROW_BACK_AFTER_SUCCESSES: u32 = 4;
 ///
 /// A stall — the server's `408 error.upload.chunk_timeout`, or the client's own stall cut —
 /// re-sends the same offset at half the stalled length ([`shrink_after_stall`]), and the size
-/// does not grow again until a run of successes shows the link recovered.
+/// does not grow again until a run of successes shows the link recovered. A chunk that got no
+/// answer within the response wait is shrunk the same way: its tail may have been too slow to
+/// drain out of the send buffers in time.
 ///
 /// [`shrink_after_stall`]: Self::shrink_after_stall
 #[derive(Debug, Clone)]
@@ -936,6 +938,13 @@ enum ChunkAck {
     /// The client cut the body for stalling: no bytes moved for the stall bound. Nothing of a
     /// chunk that did not arrive whole is written, so the same answer as [`Self::TimedOut`].
     Stalled,
+    /// The client handed the whole body off and no response head came within the response
+    /// wait. The tail may still have been in the HTTP stack's or the kernel's send buffer on a
+    /// link too slow to drain it, or the server may have kept the chunk and never answered:
+    /// back off as for a reset, then re-send at the same offset, shorter — so a slow link
+    /// converges on a chunk it drains in time, and a `409 offset_mismatch` re-aligns where the
+    /// server did keep it.
+    Unanswered,
     /// `rate_limited`, `unavailable` or `storage_full` — the server asked the
     /// client to wait (for the `Retry-After` it sent, when it sent one) and then
     /// resume from HEAD. Nothing of the refused chunk was kept.
@@ -1390,11 +1399,9 @@ impl UploadClient {
             // The link stopped moving: nothing of the chunk can have been kept, so it is the
             // same answer as the server's own stall cut.
             Err(RequestCut::Stalled) => return Ok(ChunkAck::Stalled),
-            // The body went out whole and the server never answered: whether it kept the chunk
-            // is unknown until the re-send at the same offset is answered, so this is a reset.
-            Err(cut @ RequestCut::NoResponse) => {
-                return Err(UploadError::Transport(cut.to_string()));
-            }
+            // The body was handed off whole and no answer came: either the server never
+            // answered, or the link is too slow to drain the tail the stack still buffers.
+            Err(RequestCut::NoResponse) => return Ok(ChunkAck::Unanswered),
         };
 
         let status = resp.status().as_u16();
@@ -1600,28 +1607,11 @@ impl UploadClient {
                 // through the shared engine and resume from the SAME offset (the
                 // server holds nothing new, so no bytes are re-sent beyond this
                 // chunk). Bounded give-up prevents a hot loop on a dead path.
-                Err(UploadError::Transport(reason)) => match recovery.engine.next_backoff(None) {
-                    RetryDecision::GiveUp => {
-                        return Err(UploadError::RetriesExhausted(format!(
-                            "transport reset unrecovered after {} retries: {reason}",
-                            recovery.engine.policy().max_retries
-                        )));
-                    }
-                    RetryDecision::Retry { after } => {
-                        tracing::debug!(offset, ?after, %reason, "mid-transfer reset — backing off and resuming");
-                        self.emit_retried(
-                            request,
-                            &session_id,
-                            offset,
-                            want,
-                            RetryReason::TransportReset {
-                                wait_ms: millis(after),
-                            },
-                        );
-                        self.sleeper.sleep(after).await;
-                        continue;
-                    }
-                },
+                Err(UploadError::Transport(reason)) => {
+                    self.back_off_reset(recovery, request, &session_id, (offset, want), &reason)
+                        .await?;
+                    continue;
+                }
                 Err(other) => return Err(other),
             };
             match ack {
@@ -1726,6 +1716,28 @@ impl UploadClient {
                         cut_by = if matches!(ack, ChunkAck::Stalled) { "client" } else { "server" },
                         "a chunk stalled — re-sending at the same offset, shorter"
                     );
+                }
+                ChunkAck::Unanswered => {
+                    // Shrink before backing off: a link too slow to drain the buffered tail
+                    // inside the response wait would otherwise be cut at the same size until
+                    // the retries ran out, though the server accepts every byte it receives.
+                    let shrunk = strategy.shrink_after_stall(want);
+                    tracing::info!(
+                        %session_id,
+                        offset,
+                        unanswered_len = want,
+                        next_len = strategy.next_chunk_size().min(remaining),
+                        shrunk,
+                        "a chunk got no answer — backing off, then re-sending at the same offset, shorter"
+                    );
+                    self.back_off_reset(
+                        recovery,
+                        request,
+                        &session_id,
+                        (offset, want),
+                        &RequestCut::NoResponse.to_string(),
+                    )
+                    .await?;
                 }
                 ChunkAck::Backoff(asked) => {
                     let wait = recovery.server_wait(asked, "server-requested wait")?;
@@ -1873,6 +1885,45 @@ impl UploadClient {
             blob: request.hash.clone(),
             asset_ref: asset_ref.to_string(),
         });
+    }
+
+    /// Back off after a mid-transfer transport reset — or a chunk that got no answer — through
+    /// the shared retry engine, so the caller resumes from the same offset; the server holds
+    /// nothing new, so no bytes are re-sent beyond this chunk. The `(offset, len)` pair names
+    /// the chunk that was cut.
+    ///
+    /// # Errors
+    ///
+    /// [`UploadError::RetriesExhausted`] once the engine gives up: a bounded give-up keeps a
+    /// dead path from becoming a hot loop.
+    async fn back_off_reset(
+        &self,
+        recovery: &mut Recovery,
+        request: &CreateUploadRequest,
+        session_id: &str,
+        (offset, len): (u64, u64),
+        reason: &str,
+    ) -> Result<(), UploadError> {
+        match recovery.engine.next_backoff(None) {
+            RetryDecision::GiveUp => Err(UploadError::RetriesExhausted(format!(
+                "transport reset unrecovered after {} retries: {reason}",
+                recovery.engine.policy().max_retries
+            ))),
+            RetryDecision::Retry { after } => {
+                tracing::debug!(offset, ?after, %reason, "mid-transfer reset — backing off and resuming");
+                self.emit_retried(
+                    request,
+                    session_id,
+                    offset,
+                    len,
+                    RetryReason::TransportReset {
+                        wait_ms: millis(after),
+                    },
+                );
+                self.sleeper.sleep(after).await;
+                Ok(())
+            }
+        }
     }
 
     fn emit_retried(

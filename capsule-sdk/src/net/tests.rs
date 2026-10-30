@@ -489,6 +489,20 @@ fn a_paced_body_advertises_its_exact_length() {
     assert_eq!(body.size_hint().exact(), Some(3 * PACED_PIECE as u64));
 }
 
+/// A piece pulled is the client's only sign the body is moving, so the slowest link it sees as
+/// moving is one piece per stall bound. That must sit below the server's default 1 KiB/s
+/// minimum sustained rate: the client never cuts as stalled a link the server would accept.
+#[test]
+fn one_piece_per_stall_bound_is_slower_than_the_server_rate_floor() {
+    const SERVER_MIN_RATE_BYTES_PER_SECOND: f64 = 1024.0;
+    let bounds = RequestBounds::default();
+    let slowest_seen_moving = PACED_PIECE as f64 / bounds.stall.as_secs_f64();
+    assert!(
+        slowest_seen_moving < SERVER_MIN_RATE_BYTES_PER_SECOND,
+        "{slowest_seen_moving} B/s"
+    );
+}
+
 #[test]
 fn the_response_wait_outlasts_the_stall_bound() {
     let bounds = RequestBounds::default();

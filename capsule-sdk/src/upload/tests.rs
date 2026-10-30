@@ -1181,16 +1181,18 @@ fn short_bounds() -> RequestBounds {
 
 /// **Black-holed request.** The server reads a whole chunk and then never answers, holding the
 /// connection open. Without a bound of its own the client would wait until the OS gave up;
-/// with one it cuts the request at the response wait and re-sends the same offset, which lands.
+/// with one it cuts the request at the response wait and re-sends the same offset, shorter,
+/// which lands.
 #[tokio::test]
 async fn a_request_that_is_never_answered_is_cut_and_resent() {
-    let patches = Arc::new(Mutex::new(Vec::<u64>::new()));
+    let patches = Arc::new(Mutex::new(Vec::<(u64, usize)>::new()));
     let p = patches.clone();
     let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
         ("POST", "/") => created("sess-hole", CHUNK_SIZE_256KB),
         ("PATCH", "/sess-hole") => {
             let mut seen = p.lock().unwrap();
-            seen.push(req.header("X-Capsule-Offset").unwrap().parse().unwrap());
+            let offset = req.header("X-Capsule-Offset").unwrap().parse().unwrap();
+            seen.push((offset, req.body.len()));
             if seen.len() == 1 {
                 return MockResponse::hold_open();
             }
@@ -1215,10 +1217,59 @@ async fn a_request_that_is_never_answered_is_cut_and_resent() {
     assert!(matches!(outcome, UploadOutcome::Completed { .. }));
     assert_eq!(
         *patches.lock().unwrap(),
-        vec![0, 0],
-        "cut, then re-sent at the same offset"
+        vec![(0, 64 * 1024), (0, 32 * 1024), (32 * 1024, 32 * 1024)],
+        "cut, then re-sent at the same offset, half the size"
     );
     assert!(started.elapsed() >= short_bounds().response_wait);
+}
+
+/// **A link too slow to drain the buffered tail.** The client hands a whole chunk to the HTTP
+/// stack long before it is on the wire, so on a slow enough link the response wait runs out
+/// while the tail is still in the send buffers, and the server — which accepts every byte it
+/// receives — never got the chance to answer. Here every body larger than the link can drain
+/// inside the response wait goes unanswered. The client shrinks on each cut rather than
+/// re-sending the same size until its retries run out, and the transfer completes.
+#[tokio::test]
+async fn a_chunk_too_slow_to_drain_inside_the_response_wait_is_resent_shorter() {
+    const DRAINS_IN_TIME: usize = 64 * 1024;
+    let patches = Arc::new(Mutex::new(Vec::<(u64, usize)>::new()));
+    let p = patches.clone();
+    let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+        ("POST", "/") => created("sess-drain", CHUNK_SIZE_256KB),
+        ("PATCH", "/sess-drain") => {
+            let offset = req.header("X-Capsule-Offset").unwrap().parse().unwrap();
+            p.lock().unwrap().push((offset, req.body.len()));
+            if req.body.len() > DRAINS_IN_TIME {
+                return MockResponse::hold_open();
+            }
+            MockResponse::new(204, "No Content")
+                .header("X-Capsule-Offset", ack_offset(req).to_string())
+        }
+        other => panic!("unexpected {other:?}"),
+    })
+    .await;
+
+    let client = server.client(PROTOCOL).with_request_bounds(short_bounds());
+    let data = vec![4u8; CHUNK_SIZE_256KB as usize];
+    let outcome = tokio::time::timeout(
+        Duration::from_secs(30),
+        client.upload(&request(data.len() as u64), &data),
+    )
+    .await
+    .expect("the shrinking re-sends converge")
+    .expect("a slow but live link is never given up on");
+
+    assert!(matches!(outcome, UploadOutcome::Completed { .. }));
+    let patches = patches.lock().unwrap();
+    assert_eq!(
+        patches[..3],
+        [(0, 256 * 1024), (0, 128 * 1024), (0, DRAINS_IN_TIME)],
+        "each unanswered chunk is re-sent at the same offset, half the size"
+    );
+    assert!(
+        patches[3..].iter().all(|&(_, len)| len <= DRAINS_IN_TIME),
+        "the size holds after the cut: {patches:?}"
+    );
 }
 
 /// **Slow server, live link.** A server that takes longer than the stall bound to write and
