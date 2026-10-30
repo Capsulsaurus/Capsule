@@ -164,11 +164,17 @@ A session token stops being honoured on sliding expiry, hard expiry, or explicit
 
 ### Sliding Inactivity Expiry
 
-180 days (configurable) without an access-token issuance. Each issuance resets the clock.
+180 days (configurable) without an access-token issuance. Each issuance resets the clock. Activity alone does not: a request records last-used time and never extends the session.
 
 ### Hard Expiry
 
-365 days (configurable) from issuance; **never reset**. Caps the window for a silently exfiltrated token on an active device ([malicious keyholder](/design/threat-model/#client-class-taxonomy)).
+365 days (configurable) from sign-in; **never reset**. Caps the window for a silently exfiltrated token on an active device ([malicious keyholder](/design/threat-model/#client-class-taxonomy)).
+
+Invariants:
+
+- **The cap survives rotation.** The session record carries its lineage's sign-in instant; a refresh carries it forward unchanged and a re-authentication does not move it.
+- **A session lives until the earlier of the two expiries**, and its refresh token is issued for exactly that remaining life, never a whole window past the cap.
+- **A deploy never shortens a live session.** A record that predates the sign-in instant measures its cap from its own creation.
 
 ### Explicit Revocation
 
@@ -226,7 +232,7 @@ cohort_hash = SHA-256( canonical-CBOR([ "capsule-device-cohort/v1", user_id, pla
 ## Validation
 
 - **Token round-trip (unit):** session token → access JWT → verify; after key rotation, old JWTs verify within their grace window.
-- **Expiry (unit, mock clock):** sliding refreshes on use, hard does not; rejection happens at access-token issuance.
+- **Expiry (unit, mock clock):** sliding refreshes on each issuance, hard does not and survives rotation; rejection happens at access-token issuance.
 - **Revoke-all (unit):** without master-key proof rejected; with it, every other session invalidated.
 - **Revocation immediacy (unit):** a revoked session's live access token is refused on next use.
 - **TOTP:** `202` on confirmed factor; code replay refused; per-challenge attempt cap; store outage fails closed.
