@@ -381,7 +381,8 @@ async fn a_fully_held_bundle_pushes_nothing() {
     let seen = requests.clone();
     let server = MockServer::start(move |_req: &MockRequest| {
         seen.fetch_add(1, Ordering::SeqCst);
-        MockResponse::new(500, "Internal Server Error")
+        // A refusal the client never retries: a `5xx` would be waited out.
+        MockResponse::new(403, "Forbidden")
     })
     .await;
 
@@ -404,7 +405,7 @@ async fn a_fully_held_bundle_pushes_nothing() {
 
     // `--force` ignores server truth and re-drives the ladder anyway.
     let forced = push_bundle(&client, &scheduler, &bundle, &held, true).await;
-    assert!(forced.is_err(), "force re-drives and surfaces the 500");
+    assert!(forced.is_err(), "force re-drives and surfaces the 403");
     assert!(requests.load(Ordering::SeqCst) > 0);
 }
 
@@ -499,8 +500,9 @@ struct Faults {
     /// answer the server gives, read naively as success.
     finalize_lost: bool,
     /// Finalization fails terminally after the bytes are committed (the stage and the session's
-    /// byte count disagree). An outage is no fixture for this: `unavailable` asks the client to
-    /// wait and resume, so it does not fail the push.
+    /// byte count disagree): the completing chunk is answered `500 storage_inconsistent`, which
+    /// the client waits out, and the `HEAD` it resumes from reports the session
+    /// `failed_processing` with that code.
     finalize_fails: bool,
     /// The verdict is honest per blob and says nothing is held.
     not_durable: bool,
@@ -562,6 +564,7 @@ impl CustodyServer {
             ("POST", "/storage/verify") => self.verdict(&body),
             ("POST", _) => self.create(&body),
             ("PATCH", path) => self.chunk(req, path),
+            ("HEAD", path) if self.faults.finalize_fails => self.failed_head(path),
             ("GET", path) if path.ends_with("/receipts") => self.receipts(),
             other => panic!("unexpected request {other:?}"),
         }
@@ -627,6 +630,21 @@ impl CustodyServer {
             }
         }
         MockResponse::new(204, "No Content").header("X-Capsule-Offset", next.to_string())
+    }
+
+    /// The `HEAD` a client resumes from after a failed finalize: every byte held, and the
+    /// session refused at finalization with the code the completing chunk was answered.
+    fn failed_head(&self, path: &str) -> MockResponse {
+        let id = path.rsplit('/').next().unwrap();
+        let (_, size) = self.sessions.lock().unwrap()[id].clone();
+        MockResponse::new(200, "OK")
+            .header("X-Capsule-Offset", size.to_string())
+            .header("X-Capsule-Content-Length", size.to_string())
+            .header("X-Capsule-Upload-Status", "failed_processing")
+            .header(
+                "X-Capsule-Upload-Error",
+                error_codes::UPLOAD_STORAGE_INCONSISTENT,
+            )
     }
 
     fn receipts(&self) -> MockResponse {
@@ -861,8 +879,9 @@ async fn a_lost_finalize_is_not_custody() {
 }
 
 /// **The failed finalize.** Finalization fails terminally after the commit; the chunk that
-/// triggered it is refused with the server's code, so the push fails before custody is ever
-/// asked about.
+/// triggered it is answered `500 storage_inconsistent`, which the client waits out and resumes
+/// from `HEAD`, and the `failed_processing` that `HEAD` reports fails the push with the
+/// server's code before custody is ever asked about.
 #[tokio::test]
 async fn a_failed_finalize_fails_the_push() {
     let (_dir, _bundle, run) = custody_run(Faults {

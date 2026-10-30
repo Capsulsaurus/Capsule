@@ -169,7 +169,10 @@ Client recovery matrix (`capsule-sdk::upload`):
 | `error.protocol.version_unsupported` (`426`) | Stop; prompt to update |
 | `error.quota.exceeded` | Pause; surface the remediable state |
 | `error.upload.rate_limited`, `unavailable`, `storage_full` | Back off per `Retry-After`, then resume from `HEAD` |
+| `error.upload.storage_inconsistent` (`500`), and any other `5xx`, `408` or `425`, coded or not | Back off per `Retry-After` (else the retry engine's backoff), then resume from `HEAD` |
 | other `4xx` | Fail the blob; never retry unchanged |
+
+Every non-success answer to a create, a chunk or a `HEAD` is classified before anything is retried ([Retry Policy Classes](/design/networking/#retry-policy-classes)): a code with a row above takes that row's action whatever its status, and an answer whose code names no action is classified by its status. Each wait charges the transfer's recovery cap and its server lane's shared retry budget, so a server that never stops failing ends the transfer; the transfer gives up with the last answer's status and stable code, so a client still localizes what the server said. A chunk answered with a `5xx` may have been kept, so its wait always resumes from `HEAD`, never from the client's own offset: a completing chunk answered `500 storage_inconsistent` settles on the state `HEAD` reports — `completed` with no byte re-sent, `failed_processing` with its code, or the offset to resume from.
 
 ## Adaptive Chunk Sizing
 

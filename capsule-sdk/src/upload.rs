@@ -14,10 +14,12 @@
 //!   → HEAD re-align; `session_not_found` → re-create; `duplicate_blob` → merge
 //!   (success carrying the existing asset ref); `426` → abort-with-upgrade;
 //!   `checksum_mismatch` → re-send the chunk; `chunk_timeout` → re-send at the
-//!   same offset, shorter; `rate_limited`, `unavailable` and
-//!   `storage_full` → wait out `Retry-After`, then resume from HEAD. The client
-//!   switches on the stable `error.*` code (from `capsule_i18n::error_codes`),
-//!   never on the bare status;
+//!   same offset, shorter; `rate_limited`, `unavailable`, `storage_full` and every
+//!   other answer the retry classification marks retryable (any `5xx`, `408`, `425`)
+//!   → wait out `Retry-After` (else the retry engine's backoff), then resume from
+//!   HEAD. The client switches on the stable `error.*` code (from
+//!   `capsule_i18n::error_codes`); the status decides only for an answer whose code
+//!   names no action;
 //! - per-request stall bounds ([`RequestBounds`]): a chunk body is cut when no bytes move for
 //!   the stall bound, the wait for a response once the body is sent runs under a separate,
 //!   longer bound, and nothing bounds a request's total duration — a slow but live link is
@@ -42,7 +44,8 @@ use serde::{Deserialize, Serialize};
 use crate::events::{RetryReason, TransferEvent, TransferEvents, millis};
 use crate::net::{
     ConnectionClass, ExchangeProgress, LaneRetries, PacedBody, RequestBounds, RequestCut,
-    RetryClass, RetryDecision, RetryEngine, Sleeper, TokioSleeper, negotiation, within_bounds,
+    RetryClass, RetryDecision, RetryEngine, RetryVerdict, Sleeper, TokioSleeper, negotiation,
+    within_bounds,
 };
 
 pub mod advice;
@@ -112,7 +115,8 @@ pub const PROTOCOL_MAX_CHUNK: u64 = CHUNK_SIZE_16MB;
 
 /// Upper bound on recovery actions (re-align / re-create / re-send) for a single
 /// blob transfer. A live server drives progress well inside this; hitting it
-/// means a stuck peer, so the transfer fails loudly ([`UploadError::RetriesExhausted`])
+/// means a stuck peer, so the transfer fails loudly ([`UploadError::RetriesExhausted`], or
+/// [`UploadError::WaitsExhausted`] carrying the answer when it was waiting out the server)
 /// rather than hot-looping (transfer upload doc, §Session Lifetime and Discard:
 /// "retrying with backoff and halting after a bounded number of attempts").
 const MAX_RECOVERIES: u32 = 64;
@@ -865,6 +869,25 @@ pub enum UploadError {
     /// budget — the peer is stuck; fail loudly rather than hot-loop.
     #[error("upload gave up after exhausting the recovery budget: {0}")]
     RetriesExhausted(String),
+    /// The server kept answering with a retryable status (any `5xx`, `408`, `425`, `429`, or
+    /// a wait code) and the transfer gave up waiting it out once its recovery budget, the
+    /// lane's shared retry budget or the retry engine's backoff was spent. Carries the last
+    /// answer's status and stable `error.*` code, so a caller still localizes what the server
+    /// said. Transient: a later run may find the server recovered.
+    #[error(
+        "upload gave up waiting out the server (last answer HTTP {status}, code {code:?}: \
+         {message}): {reason}"
+    )]
+    WaitsExhausted {
+        /// The last answer's HTTP status.
+        status: u16,
+        /// The last answer's stable `error.*` code, when the server supplied one.
+        code: Option<String>,
+        /// The last answer's English detail message.
+        message: String,
+        /// Which budget ran out, in English.
+        reason: String,
+    },
     /// A server response was missing a required header or otherwise unparsable.
     #[error("malformed server response: {0}")]
     MalformedResponse(String),
@@ -873,6 +896,18 @@ pub enum UploadError {
     /// interactive re-authentication.
     #[error("authentication error: {0}")]
     Auth(#[from] crate::auth::AuthError),
+}
+
+impl UploadError {
+    /// The stable `error.*` code the server supplied with the answer this error reports: a
+    /// refusal's, or the last answer of a wait the transfer gave up on.
+    #[must_use]
+    pub fn error_code(&self) -> Option<&str> {
+        match self {
+            Self::Rejected { code, .. } | Self::WaitsExhausted { code, .. } => code.as_deref(),
+            _ => None,
+        }
+    }
 }
 
 /// The bytes of one blob, read a chunk at a time.
@@ -999,10 +1034,10 @@ enum ChunkAck {
     /// shrinks is charged as a stall re-send; only one at the protocol minimum backs off as for
     /// a reset.
     Unanswered,
-    /// `rate_limited`, `unavailable` or `storage_full` — the server asked the
-    /// client to wait (for the `Retry-After` it sent, when it sent one) and then
-    /// resume from HEAD. Nothing of the refused chunk was kept.
-    Backoff(Option<Duration>),
+    /// A retryable answer: `rate_limited`, `unavailable` or `storage_full`, or any other `5xx`,
+    /// `408` or `425` — wait (for the `Retry-After` the server sent, when it sent one) and then
+    /// resume from HEAD, which says whether anything of the chunk was kept.
+    Backoff(WaitAsked),
 }
 
 /// Whether `code` is one of the three answers that mean "wait, then resume".
@@ -1012,16 +1047,39 @@ fn asks_to_wait(code: &str) -> bool {
         || code == error_codes::UPLOAD_STORAGE_FULL
 }
 
-/// Whether a non-success answer asks the client to wait.
+/// Whether the client recovery matrix names an action for `code` that the upload loop takes
+/// itself: re-align, re-create, re-send (a checksum refusal or a server stall cut), or merge.
+fn recovery_names_action(code: &str) -> bool {
+    code == error_codes::UPLOAD_OFFSET_MISMATCH
+        || code == error_codes::UPLOAD_SESSION_NOT_FOUND
+        || code == error_codes::UPLOAD_CHECKSUM_MISMATCH
+        || code == error_codes::UPLOAD_CHUNK_TIMEOUT
+        || code == error_codes::UPLOAD_DUPLICATE_BLOB
+}
+
+/// What a non-success upload answer (to a create, a chunk or a `HEAD`) permits, classified
+/// before anything is retried (networking doc, Retry Policy Classes).
 ///
-/// The code decides whenever the server sent one. A `HEAD` answer has no body by
-/// HTTP's rules, so it can carry no code: there the status names the three wait
-/// answers (`429`, `503`, `507`), which the server sends only with those codes.
-fn answer_asks_to_wait(status: u16, code: Option<&str>) -> bool {
+/// A code the recovery matrix names an action for keeps that action ([`RetryVerdict::Recover`]),
+/// whatever the status. A code that asks for a wait (`rate_limited`, `unavailable`,
+/// `storage_full`) is [`RetryVerdict::Retryable`] whatever the status. Every other answer is
+/// classified by its status: any `5xx`, `408`, `425` and `429` are retryable, coded or not —
+/// a proxy's bare `502`, or a `500 storage_inconsistent` alike — and every other `4xx` ends the
+/// transfer. A `HEAD` answer has no body by HTTP's rules, so there the status is all there is.
+fn upload_answer_verdict(status: u16, code: Option<&str>) -> RetryVerdict {
     match code {
-        Some(code) => asks_to_wait(code),
-        None => matches!(status, 429 | 503 | 507),
+        Some(code) if recovery_names_action(code) => RetryVerdict::Recover,
+        Some(code) if asks_to_wait(code) => RetryVerdict::Retryable,
+        _ => RetryVerdict::of_status(status, false),
     }
+}
+
+/// Whether a non-success answer asks the client to wait, then ask again: its verdict is
+/// [`RetryVerdict::Retryable`]. The transfer loop waits it out — the `Retry-After` the server
+/// named, else the retry engine's backoff — under the transfer's recovery cap and the lane's
+/// shared retry budget.
+fn answer_asks_to_wait(status: u16, code: Option<&str>) -> bool {
+    upload_answer_verdict(status, code) == RetryVerdict::Retryable
 }
 
 /// A single request the server answered with "wait, then ask again".
@@ -1035,6 +1093,19 @@ struct WaitAsked {
     message: String,
     /// The `Retry-After` the server sent, when it sent one.
     after: Option<Duration>,
+}
+
+impl WaitAsked {
+    /// The error a transfer ends with when it gives up waiting this answer out: it keeps the
+    /// answer's status and code, and `reason` says which budget ran out.
+    fn gave_up(self, reason: String) -> UploadError {
+        UploadError::WaitsExhausted {
+            status: self.status,
+            code: self.code,
+            message: self.message,
+            reason,
+        }
+    }
 }
 
 impl From<WaitAsked> for UploadError {
@@ -1131,18 +1202,21 @@ impl<'g> Recovery<'g> {
 
     /// Charge a server-asked wait and resolve how long to wait: the server's
     /// `Retry-After` up to [`MAX_SERVER_BACKOFF`], else the engine's schedule.
-    fn server_wait(
-        &mut self,
-        asked: Option<Duration>,
-        action: &str,
-    ) -> Result<Duration, UploadError> {
-        self.charge(action)?;
-        match asked {
-            Some(asked) => Ok(asked.min(MAX_SERVER_BACKOFF)),
+    ///
+    /// Giving up ends the transfer with [`UploadError::WaitsExhausted`], carrying the answer
+    /// waited on, so its stable code still reaches the caller.
+    fn server_wait(&mut self, asked: WaitAsked, action: &str) -> Result<Duration, UploadError> {
+        match self.charge(action) {
+            Ok(()) => {}
+            Err(UploadError::RetriesExhausted(reason)) => return Err(asked.gave_up(reason)),
+            Err(other) => return Err(other),
+        }
+        match asked.after {
+            Some(after) => Ok(after.min(MAX_SERVER_BACKOFF)),
             None => match self.engine.next_backoff(None) {
                 RetryDecision::Retry { after } => Ok(after),
-                RetryDecision::GiveUp => Err(UploadError::RetriesExhausted(format!(
-                    "{action}: the server kept asking for a wait without naming one"
+                RetryDecision::GiveUp => Err(asked.gave_up(format!(
+                    "{action}: the backoff for retryable answers that name no Retry-After is spent"
                 ))),
             },
         }
@@ -1268,8 +1342,9 @@ impl UploadClient {
     /// on `duplicate_blob` (the merge trigger). A `426` returns
     /// [`UploadError::UpgradeRequired`] — the session is never created.
     ///
-    /// This is one request: `rate_limited`, `unavailable` and `storage_full` come
-    /// back as [`UploadError::Rejected`]. [`UploadClient::upload`] waits those out.
+    /// This is one request: a retryable answer (`rate_limited`, `unavailable`,
+    /// `storage_full`, any `5xx`, `408`, `425`) comes back as [`UploadError::Rejected`].
+    /// [`UploadClient::upload`] waits those out.
     #[tracing::instrument(level = "debug", skip(self, request), fields(size = request.size, hash = %request.hash))]
     pub async fn create_session(
         &self,
@@ -1339,8 +1414,8 @@ impl UploadClient {
     /// Query progress (`HEAD /upload/{id}`). `Ok(None)` means the session is gone
     /// (`404`) — a discarded/expired/never-existent session is uniform.
     ///
-    /// This is one request: a `429`, `503` or `507` comes back as
-    /// [`UploadError::Rejected`]. The transfer loop waits those out.
+    /// This is one request: a retryable answer (any `5xx`, `408`, `425`, `429`) comes
+    /// back as [`UploadError::Rejected`]. The transfer loop waits those out.
     #[tracing::instrument(level = "debug", skip(self))]
     pub async fn head(&self, session_id: &str) -> Result<Option<HeadInfo>, UploadError> {
         Ok(self.try_head(session_id).await??)
@@ -1405,8 +1480,8 @@ impl UploadClient {
         })))
     }
 
-    /// `POST /upload`, waiting out every `rate_limited`, `unavailable` and
-    /// `storage_full` answer under the transfer's recovery budget.
+    /// `POST /upload`, waiting out every retryable answer under the transfer's recovery
+    /// budget and the lane's shared retry budget.
     async fn create_waiting(
         &self,
         request: &CreateUploadRequest,
@@ -1424,7 +1499,7 @@ impl UploadClient {
                     return Ok(outcome);
                 }
                 Err(asked) => {
-                    let wait = recovery.server_wait(asked.after, "session create")?;
+                    let wait = recovery.server_wait(asked, "session create")?;
                     tracing::debug!(?wait, "waiting as the server asked, then creating again");
                     self.sleeper.sleep(wait).await;
                 }
@@ -1432,8 +1507,8 @@ impl UploadClient {
         }
     }
 
-    /// `HEAD /upload/{id}`, waiting out every `429`, `503` and `507` answer under
-    /// the transfer's recovery budget.
+    /// `HEAD /upload/{id}`, waiting out every retryable answer under the transfer's
+    /// recovery budget and the lane's shared retry budget.
     async fn head_waiting(
         &self,
         session_id: &str,
@@ -1451,7 +1526,7 @@ impl UploadClient {
                     return Ok(info);
                 }
                 Err(asked) => {
-                    let wait = recovery.server_wait(asked.after, "progress query")?;
+                    let wait = recovery.server_wait(asked, "progress query")?;
                     tracing::debug!(?wait, "waiting as the server asked, then asking HEAD again");
                     self.sleeper.sleep(wait).await;
                 }
@@ -1586,12 +1661,25 @@ impl UploadClient {
                 tracing::debug!("chunk_timeout — re-sending smaller");
                 Ok(ChunkAck::TimedOut)
             }
-            Some(c) if asks_to_wait(c) => {
-                tracing::debug!(code = c, ?wait, "the server asked for a wait — backing off");
-                Ok(ChunkAck::Backoff(wait))
-            }
             _ if is_upgrade_required(status, code.as_deref()) => {
                 Err(self.transport.upgrade_required(&headers, message))
+            }
+            // Every retryable answer — a wait the server asked for, any `5xx`, `408`, `425` —
+            // waits and resumes from `HEAD`: a `5xx` may have kept the chunk (a completing
+            // chunk's `500 storage_inconsistent` included), so only the server knows the offset.
+            _ if answer_asks_to_wait(status, code.as_deref()) => {
+                tracing::debug!(
+                    status,
+                    ?code,
+                    ?wait,
+                    "a retryable answer to a chunk — backing off"
+                );
+                Ok(ChunkAck::Backoff(WaitAsked {
+                    status,
+                    code,
+                    message,
+                    after: wait,
+                }))
             }
             _ => Err(UploadError::Rejected {
                 status,
@@ -1612,9 +1700,12 @@ impl UploadClient {
     /// `completed` — the outcome — or `failed_processing`, which is an
     /// [`UploadError::Rejected`] carrying the `X-Capsule-Upload-Error` code.
     ///
-    /// A `rate_limited`, `unavailable` or `storage_full` answer to any request it
-    /// makes — the create, a chunk, or a `HEAD` — is waited out, each wait charging
-    /// the one recovery budget the transfer shares.
+    /// A retryable answer to any request it makes — the create, a chunk, or a `HEAD` —
+    /// is waited out, each wait charging the one recovery budget the transfer shares and
+    /// the lane's shared retry budget. That is `rate_limited`, `unavailable`,
+    /// `storage_full`, and every other `5xx`, `408` or `425`; a chunk's wait resumes from
+    /// `HEAD`, so a completing chunk answered `500 storage_inconsistent` settles on what
+    /// the server says it holds.
     #[tracing::instrument(level = "debug", skip(self, data), fields(size = request.size, blob_role = ?request.blob_role))]
     pub async fn upload<S: UploadSource + ?Sized>(
         &self,
