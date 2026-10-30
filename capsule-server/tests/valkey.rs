@@ -261,6 +261,123 @@ async fn a_reopened_session_never_outlives_its_hard_cap() {
     );
 }
 
+/// A near-cap rotation never shortens the per-user index under a younger lineage.
+///
+/// Two lineages of one user carry different caps: the first was signed in just now and lives a
+/// whole window, the second is seconds from its cap. Opening the second must leave the shared
+/// index's collector lifetime at least the first's, or the index expires under a live session
+/// and `sessions_for_user` / `close_all_for_user` (revoke-all, password change) miss it.
+#[tokio::test]
+async fn a_near_cap_rotation_never_shortens_the_user_index() {
+    let Some(server) = server().await else {
+        return;
+    };
+    let harness = ValkeyHarness::connect(&server.url).await;
+    let user_id = UserId::new("valkey-index-cap-user");
+    let index = format!("capsule:user_sessions:{user_id}");
+    let client = redis::Client::open(server.url.as_str()).expect("the URL opens");
+    let mut connection = client
+        .get_multiplexed_async_connection()
+        .await
+        .expect("a second connection");
+    let _: i64 = redis::cmd("DEL")
+        .arg(&index)
+        .query_async(&mut connection)
+        .await
+        .expect("DEL answers");
+
+    let now = Timestamp::UNIX_EPOCH;
+    let window = harness.auth.ttl();
+    let near_cap_left = SignedDuration::from_secs(5);
+    assert!(
+        near_cap_left < window,
+        "the second lineage's cap must bite before the first's window ends"
+    );
+    let record = |tag: &str, signed_in_at: Timestamp| SessionRecord {
+        session_id: SessionId::new(format!("valkey-index-cap-{tag}")),
+        user_id: user_id.clone(),
+        created_at: now,
+        authenticated_at: signed_in_at,
+        signed_in_at,
+        last_active_at: now,
+        user_agent: None,
+        ip_address: None,
+        cohort_hash: None,
+        device_id: None,
+    };
+    let fresh = record("fresh", now);
+    let near_cap = record(
+        "near-cap",
+        now.checked_sub(harness.auth.hard_cap() - near_cap_left)
+            .expect("in range"),
+    );
+    harness
+        .auth
+        .open_session(fresh.clone())
+        .await
+        .expect("the fresh lineage opens");
+    harness
+        .auth
+        .open_session(near_cap.clone())
+        .await
+        .expect("the near-cap lineage opens");
+
+    let pttl = |key: String| {
+        let mut connection = connection.clone();
+        async move {
+            let ttl: i64 = redis::cmd("PTTL")
+                .arg(key)
+                .query_async(&mut connection)
+                .await
+                .expect("PTTL answers");
+            ttl
+        }
+    };
+    let near_cap_ttl = pttl(format!("capsule:session:{}", near_cap.session_id)).await;
+    let index_ttl = pttl(index.clone()).await;
+    let near_cap_millis = i64::try_from(near_cap_left.as_millis()).expect("fits");
+    assert!(
+        near_cap_ttl <= near_cap_millis,
+        "the near-cap record is collected at its cap: {near_cap_ttl}"
+    );
+    assert!(
+        index_ttl > near_cap_millis,
+        "the index keeps the fresh lineage's lifetime, not the near-cap one's: {index_ttl}"
+    );
+
+    let mut listed = harness
+        .auth
+        .sessions_for_user(&user_id)
+        .await
+        .expect("answers")
+        .into_iter()
+        .map(|found| found.session_id)
+        .collect::<Vec<_>>();
+    listed.sort();
+    assert_eq!(
+        listed,
+        vec![fresh.session_id.clone(), near_cap.session_id.clone()],
+        "both lineages are listed"
+    );
+
+    harness
+        .advance(near_cap_left)
+        .await
+        .expect("advances past the near cap");
+    assert_eq!(
+        harness
+            .auth
+            .close_all_for_user(&user_id)
+            .await
+            .expect("answers")
+            .into_iter()
+            .map(|found| found.session_id)
+            .collect::<Vec<_>>(),
+        vec![fresh.session_id],
+        "revoke-all still finds the live lineage once the near-cap one is gone"
+    );
+}
+
 #[tokio::test]
 async fn a_logically_expired_record_is_dead_but_left_for_the_collector() {
     let Some(server) = server().await else {

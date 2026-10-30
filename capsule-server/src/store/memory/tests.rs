@@ -32,6 +32,7 @@ conformance_cases! {
     reopening_a_session_id_does_not_duplicate_the_listing,
     touching_a_session_records_activity_without_extending_its_life,
     an_expired_session_leaves_no_listing_entry_behind,
+    a_past_cap_lineage_does_not_hide_a_live_one,
     upload_session_round_trips_every_field,
     uploader_listing_is_ordered_and_scoped,
     a_pending_address_is_uploader_scoped_and_ends_with_the_session,
@@ -214,6 +215,44 @@ async fn reopening_slides_the_window_but_never_past_the_hard_cap() {
             .expect("answers"),
         None,
         "a lineage past its cap cannot be re-opened into life"
+    );
+}
+
+/// A restore puts a closed record back under the deadline it already had; it never slides.
+#[tokio::test]
+async fn restoring_a_session_keeps_its_deadline() {
+    let clock = ManualClock::default();
+    let window = SignedDuration::from_hours(24);
+    let store = InMemoryAuthState::new(Arc::new(clock.clone()), window);
+    let tick = SignedDuration::from_nanos(1);
+    let record = lineage_record("restored", clock.now());
+    store.open_session(record.clone()).await.expect("opens");
+
+    clock.advance(SignedDuration::from_hours(20));
+    let closed = store
+        .close_session(&record.session_id)
+        .await
+        .expect("answers")
+        .expect("was live");
+    store.restore_session(closed).await.expect("restores");
+
+    clock.advance(SignedDuration::from_hours(4) - tick);
+    assert!(
+        store
+            .read_session(&record.session_id)
+            .await
+            .expect("answers")
+            .is_some(),
+        "just inside the original window the restored record is live"
+    );
+    clock.advance(tick);
+    assert_eq!(
+        store
+            .read_session(&record.session_id)
+            .await
+            .expect("answers"),
+        None,
+        "it dies when the original window closes, not a window after the restore"
     );
 }
 

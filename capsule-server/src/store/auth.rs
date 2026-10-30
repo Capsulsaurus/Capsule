@@ -153,6 +153,16 @@ pub trait AuthStateStore: std::fmt::Debug + Send + Sync {
     /// user's listing — an id is one session, however many times it is written.
     fn open_session(&self, record: SessionRecord) -> StoreFuture<'_, ()>;
 
+    /// Put back a session the caller just closed, under the deadline it already had.
+    ///
+    /// Unlike [`Self::open_session`] this is not an issuance, so it does not slide the window:
+    /// the record lives until [`Self::expires_at`] measured from [`SessionRecord::created_at`],
+    /// the issuance that last opened it, which is also when its refresh token dies. A password
+    /// change closes every session of the account and restores the caller's this way. A record
+    /// whose deadline has passed is stored already expired. The listing behaves exactly as for
+    /// [`Self::open_session`].
+    fn restore_session(&self, record: SessionRecord) -> StoreFuture<'_, ()>;
+
     /// The live session `session`, or `None` if it never existed, was closed, or expired.
     fn read_session<'a>(&'a self, session: &'a SessionId)
     -> StoreFuture<'a, Option<SessionRecord>>;

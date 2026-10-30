@@ -9,9 +9,11 @@
 
 mod support;
 
+use capsule_server::store::{AuthStateStore, Clock};
+use jiff::SignedDuration;
 use kynos::http::StatusCode;
 use serde_json::{Value, json};
-use support::{EMAIL, Fixture, PASSWORD};
+use support::{EMAIL, Fixture, PASSWORD, SESSION_TTL, user};
 
 /// Read the caller's profile and assert the status.
 async fn get(fixture: &Fixture, bearer: &str, expect: StatusCode) -> kynos::test::TestResponse {
@@ -335,6 +337,48 @@ async fn a_password_change_ends_every_other_session_and_keeps_this_one() {
         .send()
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn a_password_change_does_not_slide_the_kept_session_window() {
+    // The change closes every session and puts the caller's back. No token is issued, so the
+    // record must still end when its window from the last issuance does, together with the
+    // refresh token minted then; a slid window would list a session nothing can refresh.
+    let fixture = Fixture::working();
+    let opened_at = fixture.clock.now();
+    let mine = fixture.bearer().await;
+    fixture.clock.advance(SignedDuration::from_mins(5));
+
+    change(
+        &fixture,
+        &mine,
+        PASSWORD,
+        NEW_PASSWORD,
+        StatusCode::NO_CONTENT,
+    )
+    .await;
+
+    let listed = |fixture: &Fixture| {
+        let sessions = fixture.sessions.clone();
+        async move {
+            sessions
+                .sessions_for_user(&user())
+                .await
+                .expect("store answers")
+                .len()
+        }
+    };
+    fixture.clock.advance(
+        (opened_at + SESSION_TTL).duration_since(fixture.clock.now())
+            - SignedDuration::from_secs(1),
+    );
+    assert_eq!(listed(&fixture).await, 1, "kept until its window closes");
+    fixture.clock.advance(SignedDuration::from_secs(1));
+    assert_eq!(
+        listed(&fixture).await,
+        0,
+        "and gone when it does, not a window after the password change"
+    );
 }
 
 #[tokio::test]

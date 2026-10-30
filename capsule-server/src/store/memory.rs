@@ -192,18 +192,15 @@ impl InMemoryAuthState {
     pub fn with_default_ttl(clock: Arc<dyn Clock>) -> Self {
         Self::new(clock, DEFAULT_SESSION_TTL)
     }
-}
 
-impl AuthStateStore for InMemoryAuthState {
-    fn ttl(&self) -> SignedDuration {
-        self.ttl
-    }
-
-    fn hard_cap(&self) -> SignedDuration {
-        self.hard_cap
-    }
-
-    fn open_session(&self, record: SessionRecord) -> StoreFuture<'_, ()> {
+    /// Store `record` until `expires_at`, indexed under its user: the one write both
+    /// [`AuthStateStore::open_session`] and [`AuthStateStore::restore_session`] make.
+    fn store_session(
+        &self,
+        record: SessionRecord,
+        expires_at: Timestamp,
+        verb: &'static str,
+    ) -> StoreFuture<'_, ()> {
         Box::pin(async move {
             let now = self.clock.now();
             let mut state = lock(&self.state);
@@ -211,7 +208,6 @@ impl AuthStateStore for InMemoryAuthState {
 
             let session_id = record.session_id.clone();
             let user_id = record.user_id.clone();
-            let expires_at = self.expires_at(&record, now);
             let entry = Entry { record, expires_at };
             // Re-opening an id that already named a *different* user must not leave the old
             // user's listing pointing at a session that is now someone else's.
@@ -226,9 +222,29 @@ impl AuthStateStore for InMemoryAuthState {
                 .or_default()
                 .insert(session_id.clone());
 
-            tracing::debug!(%session_id, %user_id, %expires_at, "opened session");
+            tracing::debug!(%session_id, %user_id, %expires_at, verb, "stored session");
             Ok(())
         })
+    }
+}
+
+impl AuthStateStore for InMemoryAuthState {
+    fn ttl(&self) -> SignedDuration {
+        self.ttl
+    }
+
+    fn hard_cap(&self) -> SignedDuration {
+        self.hard_cap
+    }
+
+    fn open_session(&self, record: SessionRecord) -> StoreFuture<'_, ()> {
+        let expires_at = self.expires_at(&record, self.clock.now());
+        self.store_session(record, expires_at, "opened")
+    }
+
+    fn restore_session(&self, record: SessionRecord) -> StoreFuture<'_, ()> {
+        let expires_at = self.expires_at(&record, record.created_at);
+        self.store_session(record, expires_at, "restored")
     }
 
     fn read_session<'a>(

@@ -2016,6 +2016,13 @@ impl AuthStateStore for SwitchableSessions {
         self.inner.open_session(record)
     }
 
+    fn restore_session(&self, record: SessionRecord) -> StoreFuture<'_, ()> {
+        if self.is_down_past_the_door() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.restore_session(record)
+    }
+
     fn read_session<'a>(
         &'a self,
         session: &'a SessionId,

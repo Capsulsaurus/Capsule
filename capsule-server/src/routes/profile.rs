@@ -485,7 +485,9 @@ pub async fn change_password(
                 // measures from.
                 record.authenticated_at = now;
                 record.last_active_at = now;
-                match auth.sessions().open_session(record).await {
+                // Restored, not re-opened: no token is issued here, so the window does not
+                // slide, and the record still dies with the refresh token it was minted with.
+                match auth.sessions().restore_session(record).await {
                     Ok(()) => restored = true,
                     Err(error) => tracing::error!(
                         %error,

@@ -481,6 +481,50 @@ pub async fn an_expired_session_leaves_no_listing_entry_behind(h: &dyn Harness) 
     );
 }
 
+/// A lineage past its hard cap, re-opened beside a live one of the same user, leaves the live
+/// one listed and revocable.
+///
+/// The two lineages carry different caps, so the past-cap record's remaining life is nil while
+/// the live one has a whole window. The per-user listing is shared by both: the one opened last
+/// must not shorten it, or `sessions_for_user` and `close_all_for_user` (revoke-all, a password
+/// change) would miss a session that is still honoured.
+pub async fn a_past_cap_lineage_does_not_hide_a_live_one(h: &dyn Harness) {
+    let store = h.auth();
+    let live = session("cap-index", "live", "user", 0);
+    let mut past_cap = session("cap-index", "past", "user", 1);
+    // Before any harness clock: the cap has passed whatever "now" the store reads.
+    past_cap.signed_in_at = Timestamp::MIN;
+    past_cap.authenticated_at = Timestamp::MIN;
+
+    ok(store.open_session(live.clone()).await, "open_session");
+    ok(store.open_session(past_cap.clone()).await, "open_session");
+
+    assert_eq!(
+        ok(
+            store.read_session(&past_cap.session_id).await,
+            "read_session"
+        ),
+        None,
+        "a lineage past its cap is stored already expired"
+    );
+    assert_eq!(
+        ok(
+            store.sessions_for_user(&live.user_id).await,
+            "sessions_for_user"
+        ),
+        vec![live.clone()],
+        "the live lineage is still listed"
+    );
+    assert_eq!(
+        ok(
+            store.close_all_for_user(&live.user_id).await,
+            "close_all_for_user"
+        ),
+        vec![live],
+        "and a revoke-all still reaches it"
+    );
+}
+
 // ===========================================================================================
 // UploadSessionStore
 // ===========================================================================================
@@ -1946,6 +1990,7 @@ pub async fn run_all(h: &dyn Harness) {
     reopening_a_session_id_does_not_duplicate_the_listing(h).await;
     touching_a_session_records_activity_without_extending_its_life(h).await;
     an_expired_session_leaves_no_listing_entry_behind(h).await;
+    a_past_cap_lineage_does_not_hide_a_live_one(h).await;
 
     upload_session_round_trips_every_field(h).await;
     uploader_listing_is_ordered_and_scoped(h).await;

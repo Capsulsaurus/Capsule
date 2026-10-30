@@ -765,6 +765,9 @@ macro_rules! script {
 // ---- sessions -----------------------------------------------------------------------------
 
 // KEYS: record, user index. ARGV: ttl_ms, session_id, user_id, fields…
+// `ttl_ms` is this record's remaining life, clipped to its lineage's hard cap, so it may be far
+// shorter than another member's: the shared index is only ever lengthened by it (`extend`),
+// or a near-cap rotation would expire the index under still-live sessions.
 script!(
     OPEN_SESSION,
     "local previous = redis.call('HGET', KEYS[1], 'user_id')
@@ -772,7 +775,7 @@ redis.call('DEL', KEYS[1])
 redis.call('HSET', KEYS[1], unpack(ARGV, 4))
 redis.call('PEXPIRE', KEYS[1], ARGV[1])
 redis.call('SADD', KEYS[2], ARGV[2])
-redis.call('PEXPIRE', KEYS[2], ARGV[1])
+extend(KEYS[2], tonumber(ARGV[1]))
 if previous and previous ~= ARGV[3] then
   redis.call('SREM', 'capsule:user_sessions:' .. previous, ARGV[2])
 end
@@ -1311,6 +1314,38 @@ impl ValkeyAuthState {
         micros(self.clock.now()).to_string()
     }
 
+    /// Store `record` until `expires_at`, indexed under its user: the one write both
+    /// [`AuthStateStore::open_session`] and [`AuthStateStore::restore_session`] make.
+    fn store_session(
+        &self,
+        record: SessionRecord,
+        expires_at: Timestamp,
+        verb: &'static str,
+    ) -> StoreFuture<'_, ()> {
+        Box::pin(async move {
+            let now = self.clock.now();
+            let session_id = record.session_id.clone();
+            let user_id = record.user_id.clone();
+            let mut args = vec![
+                ttl_millis(expires_at.duration_since(now)),
+                session_id.to_string(),
+                user_id.to_string(),
+            ];
+            args.extend(encode_session(&record, expires_at));
+            let _: i64 = self
+                .valkey
+                .eval(
+                    AUTH,
+                    &OPEN_SESSION,
+                    &[session_key(&session_id), user_sessions_key(&user_id)],
+                    &args,
+                )
+                .await?;
+            tracing::debug!(%session_id, %user_id, %expires_at, verb, "stored session");
+            Ok(())
+        })
+    }
+
     async fn set_field(
         &self,
         session: &SessionId,
@@ -1367,32 +1402,17 @@ impl AuthStateStore for ValkeyAuthState {
     }
 
     fn open_session(&self, record: SessionRecord) -> StoreFuture<'_, ()> {
-        Box::pin(async move {
-            let now = self.clock.now();
-            // The sliding window clipped to the lineage's hard cap. A record already past its
-            // cap gets a deadline at or before `now`: the read gate refuses it at once and the
-            // one-millisecond floor in `ttl_millis` lets the collector take it.
-            let expires_at = self.expires_at(&record, now);
-            let session_id = record.session_id.clone();
-            let user_id = record.user_id.clone();
-            let mut args = vec![
-                ttl_millis(expires_at.duration_since(now)),
-                session_id.to_string(),
-                user_id.to_string(),
-            ];
-            args.extend(encode_session(&record, expires_at));
-            let _: i64 = self
-                .valkey
-                .eval(
-                    AUTH,
-                    &OPEN_SESSION,
-                    &[session_key(&session_id), user_sessions_key(&user_id)],
-                    &args,
-                )
-                .await?;
-            tracing::debug!(%session_id, %user_id, %expires_at, "opened session");
-            Ok(())
-        })
+        // The sliding window clipped to the lineage's hard cap. A record already past its cap
+        // gets a deadline at or before `now`: the read gate refuses it at once and the
+        // one-millisecond floor in `ttl_millis` lets the collector take it.
+        let expires_at = self.expires_at(&record, self.clock.now());
+        self.store_session(record, expires_at, "opened")
+    }
+
+    fn restore_session(&self, record: SessionRecord) -> StoreFuture<'_, ()> {
+        // The window the record was last opened under, not a fresh one.
+        let expires_at = self.expires_at(&record, record.created_at);
+        self.store_session(record, expires_at, "restored")
     }
 
     fn read_session<'a>(
