@@ -1,10 +1,11 @@
 use std::cell::RefCell;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 
 use capsule_core::domain::model_identity::TaskKind;
 use rusqlite::{Connection, params};
 
+use crate::db::album_order::AlbumRecency;
 use crate::db::migrate::{self, MigrationError};
 use crate::db::rows::{AlbumRow, AssetRow, AssetStackRow, CachedRepresentationRow, StackMemberRow};
 
@@ -486,13 +487,37 @@ impl DatabaseDriver {
         }
     }
 
+    /// Every album row, in the album order ([`AlbumRecency`]): most recent visible asset first,
+    /// an empty album by its id's creation time, ties by ascending id. The row's local
+    /// `created_at` is not consulted: it differs per device and across a rebuild.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn list_albums(&self) -> Result<Vec<AlbumRow>, rusqlite::Error> {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, created_at, modified_at, cover_asset_id
-             FROM albums ORDER BY created_at DESC",
+             FROM albums",
         )?;
-        let rows = stmt.query_map([], map_album_row)?;
-        rows.collect()
+        let mut rows = stmt
+            .query_map([], map_album_row)?
+            .collect::<Result<Vec<_>, _>>()?;
+        self.album_recency()?.sort(&mut rows, |row| row.id.clone());
+        tracing::debug!(albums = rows.len(), "albums listed in recency order");
+        Ok(rows)
+    }
+
+    /// The album order's input, read from the index: the latest effective capture among each
+    /// album's assets that are neither hidden nor trashed. Served by
+    /// `idx_assets_album_recency`; nothing is stored, so every write to an asset's album,
+    /// capture time, hidden or trashed state moves it with no extra bookkeeping.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub fn album_recency(&self) -> Result<AlbumRecency, rusqlite::Error> {
+        let mut stmt = self.conn.prepare(ALBUM_RECENCY_SQL)?;
+        let latest = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })?
+            .collect::<Result<HashMap<_, _>, _>>()?;
+        tracing::trace!(albums = latest.len(), "album recency read from the index");
+        Ok(AlbumRecency::from_latest_captures(latest))
     }
 
     /// Set (or clear, with `None`) the album an asset belongs to.
@@ -644,6 +669,14 @@ impl DatabaseDriver {
         rows.collect()
     }
 }
+
+/// The album order's index read: the latest effective capture per album over its assets that
+/// are neither hidden nor trashed. `INDEXED BY` makes a missing or unusable
+/// `idx_assets_album_recency` an error rather than a silent table scan.
+const ALBUM_RECENCY_SQL: &str = "SELECT album_id, MAX(COALESCE(capture_utc, capture_timestamp))
+     FROM assets INDEXED BY idx_assets_album_recency
+     WHERE album_id IS NOT NULL AND is_deleted = 0 AND is_hidden = 0
+     GROUP BY album_id";
 
 fn now_secs() -> i64 {
     std::time::SystemTime::now()
