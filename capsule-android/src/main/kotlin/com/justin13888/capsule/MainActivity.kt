@@ -4,6 +4,8 @@ import android.Manifest
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import android.view.KeyboardShortcutGroup
+import android.view.Menu
 import android.view.MotionEvent
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -30,6 +32,8 @@ import com.justin13888.capsule.i18n.LanguagePickerButton
 import com.justin13888.capsule.i18n.LocalesConfig
 import com.justin13888.capsule.perf.FrameMonitor
 import com.justin13888.capsule.perf.InputToFrameTracer
+import com.justin13888.capsule.screens.culling.CullKeyboard
+import com.justin13888.capsule.screens.culling.shortcutGroup
 import com.justin13888.capsule.workspace.LibraryHost
 import java.util.logging.Logger
 
@@ -76,6 +80,19 @@ class MainActivity : AppCompatActivity() {
             }
         }
         frameMonitor = FrameMonitor(window)
+    }
+
+    /**
+     * The culling keys, in the system keyboard shortcuts helper (Meta+/), while the culling
+     * pass is on screen: the platform's way to discover them.
+     */
+    override fun onProvideKeyboardShortcuts(
+        data: MutableList<KeyboardShortcutGroup>?,
+        menu: Menu?,
+        deviceId: Int,
+    ) {
+        super.onProvideKeyboardShortcuts(data, menu, deviceId)
+        if (CullKeyboard.isShowing) data?.add(CullKeyboard.shortcutGroup(this))
     }
 
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
