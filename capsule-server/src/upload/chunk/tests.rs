@@ -174,6 +174,7 @@ async fn opened_session(
         received_bytes: 0,
         total_size,
         status: crate::store::upload::UploadSessionStatus::Pending,
+        failure_code: None,
         created_at: clock.now(),
         last_progress_at: clock.now(),
     };

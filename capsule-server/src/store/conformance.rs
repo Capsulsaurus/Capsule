@@ -165,6 +165,7 @@ fn upload(case: &str, tag: &str, uploader: &str, offset: i64) -> UploadSessionRe
         received_bytes: 0,
         total_size: 8192,
         status: UploadSessionStatus::Pending,
+        failure_code: None,
         created_at,
         last_progress_at: created_at,
     }
@@ -915,6 +916,78 @@ pub async fn a_terminal_session_is_not_an_eviction_candidate(h: &dyn Harness) {
     );
 
     ok(store.discard(&record.upload_id).await, "discard");
+}
+
+/// Failing a session records its `error.*` code with the status, and both read back: the code is
+/// what `HEAD` and the session list report once no request waits on finalization.
+pub async fn a_failed_session_carries_its_failure_code(h: &dyn Harness) {
+    let store = h.uploads();
+    let record = upload("failure-code", "a", "uploader", 0);
+    ok(store.open(record.clone()).await, "open");
+    assert_eq!(
+        present(
+            ok(store.read(&record.upload_id).await, "read"),
+            "a live session"
+        )
+        .failure_code,
+        None,
+        "a session that has not failed carries no failure code"
+    );
+    match ok(
+        store.claim_finalize(&record.upload_id).await,
+        "claim_finalize",
+    ) {
+        FinalizeClaim::Won(_) => {}
+        other => panic!("the first claim must win, got {other:?}"),
+    }
+
+    let failed = present(
+        ok(
+            store
+                .fail_processing(&record.upload_id, "error.upload.content_hash_mismatch")
+                .await,
+            "fail_processing",
+        ),
+        "a live session",
+    );
+    assert_eq!(failed.status, UploadSessionStatus::FailedProcessing);
+    assert_eq!(
+        failed.failure_code.as_deref(),
+        Some("error.upload.content_hash_mismatch")
+    );
+    let reread = present(
+        ok(store.read(&record.upload_id).await, "read"),
+        "a live session",
+    );
+    assert_eq!(
+        reread, failed,
+        "the code reads back with the status it explains"
+    );
+    assert!(
+        !mine_claimed(store, &record.upload_id).await,
+        "a failed session has left the claimed listing"
+    );
+    assert_eq!(
+        ok(
+            store
+                .fail_processing(
+                    &UploadId::new("failure-code-unknown"),
+                    "error.upload.unavailable"
+                )
+                .await,
+            "fail_processing",
+        ),
+        None,
+        "failing an unknown session touches nothing"
+    );
+
+    ok(store.discard(&record.upload_id).await, "discard");
+}
+
+async fn mine_claimed(store: &dyn UploadSessionStore, upload: &UploadId) -> bool {
+    ok(store.claimed().await, "claimed")
+        .iter()
+        .any(|claimed| claimed.upload_id == *upload)
 }
 
 /// Discarding removes the record, its replay entries and its listing entry together.
@@ -1883,6 +1956,7 @@ pub async fn run_all(h: &dyn Harness) {
     a_claimed_session_leaves_the_eviction_view(h).await;
     reconciling_received_bytes_does_not_move_the_progress_clock(h).await;
     a_terminal_session_is_not_an_eviction_candidate(h).await;
+    a_failed_session_carries_its_failure_code(h).await;
     discarding_removes_the_record_its_chunks_and_its_listing(h).await;
     eviction_candidates_are_ordered_by_progress_and_bounded(h).await;
     the_claimed_listing_is_exactly_the_sessions_awaiting_their_finalizer(h).await;

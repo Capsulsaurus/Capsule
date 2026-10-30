@@ -207,7 +207,8 @@ fn an_upload_session_round_trips_through_its_hash_encoding() {
         manifest_envelope: "{\"tag\":\"x\"}".to_owned(),
         received_bytes: 12,
         total_size: 34,
-        status: UploadSessionStatus::WaitingForProcessing,
+        status: UploadSessionStatus::FailedProcessing,
+        failure_code: Some("error.upload.content_hash_mismatch".to_owned()),
         created_at: Timestamp::UNIX_EPOCH,
         last_progress_at: deadline(Timestamp::UNIX_EPOCH, SignedDuration::from_secs(5)),
     };

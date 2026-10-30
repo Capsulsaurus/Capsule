@@ -20,6 +20,7 @@ fn session(created: i64, progressed: i64, status: UploadSessionStatus) -> Upload
         received_bytes: 0,
         total_size: 8192,
         status,
+        failure_code: None,
         created_at: at(created),
         last_progress_at: at(progressed),
     }

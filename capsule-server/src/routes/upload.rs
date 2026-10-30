@@ -1292,6 +1292,7 @@ pub async fn create_upload(
         received_bytes: 0,
         total_size: request.size,
         status: UploadSessionStatus::Pending,
+        failure_code: None,
         created_at: now,
         last_progress_at: now,
     };

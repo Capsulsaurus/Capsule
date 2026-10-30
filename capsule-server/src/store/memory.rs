@@ -532,6 +532,25 @@ impl UploadSessionStore for InMemoryUploadSessions {
         })
     }
 
+    fn fail_processing<'a>(
+        &'a self,
+        upload: &'a UploadId,
+        failure_code: &'a str,
+    ) -> StoreFuture<'a, Option<UploadSessionRecord>> {
+        Box::pin(async move {
+            let now = self.clock.now();
+            let mut state = lock(&self.state);
+            state.purge(now);
+            let Some(entry) = state.sessions.get_mut(upload) else {
+                return Ok(None);
+            };
+            entry.record.status = UploadSessionStatus::FailedProcessing;
+            entry.record.failure_code = Some(failure_code.to_owned());
+            tracing::debug!(%upload, failure_code, "failed an upload session");
+            Ok(Some(entry.record.clone()))
+        })
+    }
+
     fn claim_finalize<'a>(&'a self, upload: &'a UploadId) -> StoreFuture<'a, FinalizeClaim> {
         Box::pin(async move {
             let now = self.clock.now();

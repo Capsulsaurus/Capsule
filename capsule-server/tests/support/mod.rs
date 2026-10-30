@@ -2175,6 +2175,7 @@ impl SwitchableUploads {
                     received_bytes: 0,
                     total_size: 4096,
                     status: UploadSessionStatus::Pending,
+                    failure_code: None,
                     created_at: now,
                     last_progress_at: now,
                 })
@@ -2261,6 +2262,17 @@ impl UploadSessionStore for SwitchableUploads {
             return Box::pin(async { Self::refuse() });
         }
         self.inner.set_status(upload, status)
+    }
+
+    fn fail_processing<'a>(
+        &'a self,
+        upload: &'a UploadId,
+        failure_code: &'a str,
+    ) -> StoreFuture<'a, Option<UploadSessionRecord>> {
+        if self.is_down() || self.status_writes_refused.load(Ordering::SeqCst) {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.fail_processing(upload, failure_code)
     }
 
     fn claim_finalize<'a>(&'a self, upload: &'a UploadId) -> StoreFuture<'a, FinalizeClaim> {
