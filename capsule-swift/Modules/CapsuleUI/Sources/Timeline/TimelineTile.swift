@@ -1,6 +1,7 @@
 import CapsuleDomain
 import CapsuleFoundation
 import CoreGraphics
+import ImagePipeline
 import SwiftUI
 
 // MARK: - TimelineTile
@@ -79,28 +80,37 @@ struct TimelineTile: View {
 
 // MARK: - TimelineTileImage
 
-/// The progressive representation ladder for one asset, as a view.
+/// The render ladder for one asset, as a view.
 ///
-/// The rungs are stacked, cheapest at the back, and each one that arrives covers
-/// the one below it:
+/// The tile asks the ladder for the Thumbnail rung and draws what it names over
+/// the LQIP rung, which is always underneath:
 ///
-/// 1. ``Lqip/dominantColor`` — no decode, no `await`, no cache. Painted in the
-///    first layout pass, which is why a tile is never blank.
-/// 2. The LQIP itself — embedded in the metadata blob, so it costs no request.
-/// 3. The grid thumbnail — the real picture, when the pipeline has decoded it.
+/// 1. The LQIP rung: its ``Lqip/dominantColor`` — no decode, no `await`, no
+///    cache, painted in the first layout pass, which is why a tile is never
+///    blank — and the LQIP itself over it, embedded in the metadata blob so it
+///    costs no request.
+/// 2. Whatever the ladder names above it — an encoded thumbnail, a RAW's
+///    embedded preview, a rung generated from the original — when the source
+///    has decoded it. The tile keeps the rendition it shows and passes it back,
+///    so a better rung arriving upgrades it in place and it never downgrades.
 ///
-/// This is not a loading spinner dressed up. It is the product's own degrade
-/// ladder (``RepresentationTier``) used as a loading strategy, so a tile that is
-/// *permanently* on rung 1 — an asset whose thumbnail this device does not hold
-/// and cannot fetch — looks exactly like a tile that is momentarily on rung 1,
-/// and neither looks broken.
+/// This is not a loading spinner dressed up. A tile that is *permanently* on
+/// the LQIP rung — an asset whose thumbnail this device does not hold and
+/// cannot fetch — looks exactly like a tile that is momentarily on it, and
+/// neither looks broken.
 private struct TimelineTileImage: View {
+    /// How many frames one load draws at most: what is held now, then the rung
+    /// generated from the original.
+    static let maximumRenderSteps = 3
+
     let asset: LibraryAsset
     let context: TimelineGridContext
     let images: any TimelineImageSource
 
     @State private var placeholder: PlatformImage?
     @State private var thumbnail: PlatformImage?
+    /// The rendition ``thumbnail`` is, passed back on the next load.
+    @State private var shown: Rendition?
 
     var body: some View {
         ZStack {
@@ -108,9 +118,14 @@ private struct TimelineTileImage: View {
             layer(placeholder)
             layer(thumbnail)
         }
-        // Keyed on the decode size alone: the asset is this view's identity, so
-        // a resize is the only thing that can invalidate what has been loaded.
-        .task(id: context.decodeSize) { await load() }
+        // The asset is this view's identity, so a resize, or a change in what
+        // the device holds for it, is all that can invalidate what was loaded.
+        .task(id: LoadKey(decodeSize: context.decodeSize, held: asset.representations)) { await load() }
+    }
+
+    private struct LoadKey: Equatable {
+        let decodeSize: CGSize
+        let held: LocalRepresentations
     }
 
     /// Rung zero. Always drawn, always underneath.
@@ -156,8 +171,13 @@ private struct TimelineTileImage: View {
         // `.zero` means the grid has not been measured yet; decoding at that size
         // would be wasted work and would poison any size-keyed cache.
         guard size.width > 0, size.height > 0 else { return }
-        let decoded = await images.thumbnail(for: asset, pixelSize: size)
-        guard !Task.isCancelled else { return }
-        thumbnail = decoded
+        let request = RenderRequest(intent: .thumbnail, pixelSize: size)
+        for _ in 0 ..< Self.maximumRenderSteps {
+            let frame = await images.render(asset, request: request, shown: shown, pixelSize: size)
+            guard let frame, !Task.isCancelled else { return }
+            thumbnail = frame.image
+            shown = frame.rendition
+            guard frame.rendition != nil, case .generate = frame.next else { return }
+        }
     }
 }

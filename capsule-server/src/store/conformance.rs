@@ -50,8 +50,8 @@ use super::ids::{
     OidcState, OwnerId, PkceVerifier, SessionId, UploadId, UserId,
 };
 use super::upload::{
-    AcceptedChunk, BlobRole, FinalizeClaim, UploadSessionRecord, UploadSessionStatus,
-    UploadSessionStore,
+    AcceptedChunk, BlobRole, FinalizeClaim, UnclaimedDiscard, UploadSessionRecord,
+    UploadSessionStatus, UploadSessionStore,
 };
 use super::{StoreError, StoreFuture, deadline};
 
@@ -99,6 +99,14 @@ pub trait Harness: CohortHarness {
     fn oidc_authorizations(&self) -> &dyn OidcAuthorizationStore;
     /// The pending OIDC device authorization store under test (issue #635).
     fn oidc_devices(&self) -> &dyn OidcDeviceStore;
+
+    /// The instant the stores under test currently read as now.
+    ///
+    /// For the one case whose deadline is measured from a record's own timestamp rather than
+    /// from the store's clock: [`restoring_a_session_keeps_its_original_deadline`] must stamp
+    /// its record with the instant it is opened at, or the restore would compute a deadline
+    /// unrelated to the window the open granted.
+    fn now(&self) -> Timestamp;
 }
 
 /// Unwrap a store result, failing with the operation that was expected to work.
@@ -138,6 +146,7 @@ fn session(case: &str, tag: &str, user: &str, offset: i64) -> SessionRecord {
         user_id: UserId::new(format!("{case}-{user}")),
         created_at,
         authenticated_at: created_at,
+        signed_in_at: created_at,
         last_active_at: created_at,
         user_agent: Some(format!("agent-{tag}")),
         ip_address: Some("203.0.113.7".to_owned()),
@@ -165,6 +174,7 @@ fn upload(case: &str, tag: &str, uploader: &str, offset: i64) -> UploadSessionRe
         received_bytes: 0,
         total_size: 8192,
         status: UploadSessionStatus::Pending,
+        failure_code: None,
         created_at,
         last_progress_at: created_at,
     }
@@ -479,6 +489,114 @@ pub async fn an_expired_session_leaves_no_listing_entry_behind(h: &dyn Harness) 
     );
 }
 
+/// A lineage past its hard cap, re-opened beside a live one of the same user, leaves the live
+/// one listed and revocable.
+///
+/// The two lineages carry different caps, so the past-cap record's remaining life is nil while
+/// the live one has a whole window. The per-user listing is shared by both: the one opened last
+/// must not shorten it, or `sessions_for_user` and `close_all_for_user` (revoke-all, a password
+/// change) would miss a session that is still honoured.
+pub async fn a_past_cap_lineage_does_not_hide_a_live_one(h: &dyn Harness) {
+    let store = h.auth();
+    let live = session("cap-index", "live", "user", 0);
+    let mut past_cap = session("cap-index", "past", "user", 1);
+    // Before any harness clock: the cap has passed whatever "now" the store reads.
+    past_cap.signed_in_at = Timestamp::MIN;
+    past_cap.authenticated_at = Timestamp::MIN;
+
+    ok(store.open_session(live.clone()).await, "open_session");
+    ok(store.open_session(past_cap.clone()).await, "open_session");
+
+    assert_eq!(
+        ok(
+            store.read_session(&past_cap.session_id).await,
+            "read_session"
+        ),
+        None,
+        "a lineage past its cap is stored already expired"
+    );
+    assert_eq!(
+        ok(
+            store.sessions_for_user(&live.user_id).await,
+            "sessions_for_user"
+        ),
+        vec![live.clone()],
+        "the live lineage is still listed"
+    );
+    assert_eq!(
+        ok(
+            store.close_all_for_user(&live.user_id).await,
+            "close_all_for_user"
+        ),
+        vec![live],
+        "and a revoke-all still reaches it"
+    );
+}
+
+/// A session closed and restored dies when the window it was opened under closes, not a
+/// window after the restore.
+///
+/// A restore is not an issuance — a password change closes every session of the account and
+/// puts the caller's back — so it must not slide the window: the record lives exactly as long
+/// as the refresh token minted when it was opened. The step is a microsecond rather than a
+/// nanosecond tick because the Valkey read gate compares microseconds, and the harness clock may
+/// sit between two of them by the time this case runs.
+pub async fn restoring_a_session_keeps_its_original_deadline(h: &dyn Harness) {
+    let store = h.auth();
+    let ttl = store.ttl();
+    let step = SignedDuration::from_micros(1);
+    let opened_at = h.now();
+    let record = SessionRecord {
+        created_at: opened_at,
+        authenticated_at: opened_at,
+        signed_in_at: opened_at,
+        last_active_at: opened_at,
+        ..session("restore", "a", "user", 0)
+    };
+    ok(store.open_session(record.clone()).await, "open_session");
+
+    let elapsed = ttl / 2;
+    ok(h.advance(elapsed).await, "advance into the window");
+    let closed = present(
+        ok(
+            store.close_session(&record.session_id).await,
+            "close_session",
+        ),
+        "the live session it closes",
+    );
+    ok(store.restore_session(closed).await, "restore_session");
+    assert_eq!(
+        ok(store.read_session(&record.session_id).await, "read_session"),
+        Some(record.clone()),
+        "a restored session is the record that was closed"
+    );
+
+    ok(
+        h.advance(ttl - elapsed - step).await,
+        "advance to just inside the original window",
+    );
+    assert_eq!(
+        ok(store.read_session(&record.session_id).await, "read_session"),
+        Some(record.clone()),
+        "just inside the original window the restored session is live"
+    );
+
+    ok(h.advance(step).await, "advance to the original deadline");
+    assert_eq!(
+        ok(store.read_session(&record.session_id).await, "read_session"),
+        None,
+        "a restore must not slide the window it was opened under"
+    );
+    assert!(
+        ok(
+            store.sessions_for_user(&record.user_id).await,
+            "sessions_for_user"
+        )
+        .is_empty(),
+        "and the expired restore leaves no listing entry"
+    );
+}
+
 // ===========================================================================================
 // UploadSessionStore
 // ===========================================================================================
@@ -646,6 +764,83 @@ pub async fn discarding_a_session_withdraws_its_pending_address(h: &dyn Harness)
     );
 }
 
+/// Every active session declaring a hash is live for it, whoever uploads it, until the session
+/// ends, is discarded, or is re-opened declaring other bytes.
+///
+/// The question quota release asks after giving an attribution back (#1064), so unlike
+/// [`a_pending_address_is_uploader_scoped_and_ends_with_the_session`] it crosses accounts.
+pub async fn a_live_address_spans_every_uploader_and_ends_with_the_session(h: &dyn Harness) {
+    let store = h.uploads();
+    // A hash of its own, so sessions other cases leave behind on a shared backend never match.
+    let hash = "c".repeat(64);
+    let mut first = upload("live-addr", "a", "uploader-a", 0);
+    first.expected_hash.clone_from(&hash);
+    let mut second = upload("live-addr", "b", "uploader-b", 0);
+    second.expected_hash.clone_from(&hash);
+    assert_ne!(first.upload_user_id, second.upload_user_id);
+    ok(store.open(second.clone()).await, "open");
+    ok(store.open(first.clone()).await, "open");
+
+    assert_eq!(
+        ok(store.live_for_address(&hash).await, "live_for_address"),
+        vec![first.upload_id.clone(), second.upload_id.clone()],
+        "both accounts' sessions declare the bytes, smallest id first"
+    );
+    assert_eq!(
+        ok(
+            store.live_for_address(&"d".repeat(64)).await,
+            "live_for_address"
+        ),
+        Vec::<UploadId>::new(),
+        "an undeclared hash has no live session"
+    );
+
+    present(
+        ok(
+            store
+                .set_status(&first.upload_id, UploadSessionStatus::FailedProcessing)
+                .await,
+            "set_status",
+        ),
+        "set_status",
+    );
+    assert_eq!(
+        ok(store.live_for_address(&hash).await, "live_for_address"),
+        vec![second.upload_id.clone()],
+        "a terminal session is no longer live"
+    );
+
+    let mut moved = second.clone();
+    moved.expected_hash = "e".repeat(64);
+    ok(store.open(moved.clone()).await, "open");
+    assert_eq!(
+        ok(store.live_for_address(&hash).await, "live_for_address"),
+        Vec::<UploadId>::new(),
+        "a session re-opened declaring other bytes leaves the old address"
+    );
+    assert_eq!(
+        ok(
+            store.live_for_address(&moved.expected_hash).await,
+            "live_for_address"
+        ),
+        vec![moved.upload_id.clone()],
+        "and is live for the bytes it now declares"
+    );
+
+    present(
+        ok(store.discard(&moved.upload_id).await, "discard"),
+        "discard",
+    );
+    assert_eq!(
+        ok(
+            store.live_for_address(&moved.expected_hash).await,
+            "live_for_address"
+        ),
+        Vec::<UploadId>::new(),
+        "a discarded session takes its place in the index with it"
+    );
+}
+
 /// Accepting a chunk advances the byte counter, the progress clock and the replay store — as
 /// one operation, because they describe one event.
 pub async fn recording_progress_advances_bytes_clock_and_replay_together(h: &dyn Harness) {
@@ -786,6 +981,76 @@ pub async fn finalization_is_claimed_exactly_once(h: &dyn Harness) {
     );
 }
 
+/// An unclaimed discard takes a `Pending` or `Uploading` session, and leaves a claimed or
+/// terminal one exactly as it is.
+pub async fn an_unclaimed_discard_never_takes_a_claimed_session(h: &dyn Harness) {
+    let store = h.uploads();
+    let open = upload("unclaimed-open", "a", "uploader", 0);
+    let claimed = upload("unclaimed-claimed", "a", "uploader", 0);
+    let failed = upload("unclaimed-failed", "a", "uploader", 0);
+    for record in [&open, &claimed, &failed] {
+        ok(store.open(record.clone()).await, "open");
+    }
+    ok(
+        store.claim_finalize(&claimed.upload_id).await,
+        "claim_finalize",
+    );
+    ok(
+        store
+            .fail_processing(&failed.upload_id, "error.upload.hash_mismatch")
+            .await,
+        "fail_processing",
+    );
+
+    match ok(
+        store.discard_unclaimed(&open.upload_id).await,
+        "discard_unclaimed",
+    ) {
+        UnclaimedDiscard::Discarded(removed) => assert_eq!(
+            removed.upload_id, open.upload_id,
+            "the discard hands back the session it removed"
+        ),
+        other => panic!("an open session must be discarded, got {other:?}"),
+    }
+    assert_eq!(
+        ok(store.read(&open.upload_id).await, "read"),
+        None,
+        "the discarded session is gone"
+    );
+    assert_eq!(
+        ok(
+            store.discard_unclaimed(&open.upload_id).await,
+            "discard_unclaimed"
+        ),
+        UnclaimedDiscard::NotFound,
+        "discarding it again finds nothing"
+    );
+
+    for (record, status) in [
+        (&claimed, UploadSessionStatus::WaitingForProcessing),
+        (&failed, UploadSessionStatus::FailedProcessing),
+    ] {
+        assert_eq!(
+            ok(
+                store.discard_unclaimed(&record.upload_id).await,
+                "discard_unclaimed"
+            ),
+            UnclaimedDiscard::Claimed,
+            "a {status:?} session is not discarded"
+        );
+        assert_eq!(
+            present(
+                ok(store.read(&record.upload_id).await, "read"),
+                "the session"
+            )
+            .status,
+            status,
+            "the refused discard left the session as it was"
+        );
+        ok(store.discard(&record.upload_id).await, "discard");
+    }
+}
+
 /// A claimed session is no longer an eviction candidate — the promise the claim makes.
 ///
 /// The winner finalizes from the record it was handed and must not have the bytes discarded
@@ -915,6 +1180,78 @@ pub async fn a_terminal_session_is_not_an_eviction_candidate(h: &dyn Harness) {
     );
 
     ok(store.discard(&record.upload_id).await, "discard");
+}
+
+/// Failing a session records its `error.*` code with the status, and both read back: the code is
+/// what `HEAD` and the session list report once no request waits on finalization.
+pub async fn a_failed_session_carries_its_failure_code(h: &dyn Harness) {
+    let store = h.uploads();
+    let record = upload("failure-code", "a", "uploader", 0);
+    ok(store.open(record.clone()).await, "open");
+    assert_eq!(
+        present(
+            ok(store.read(&record.upload_id).await, "read"),
+            "a live session"
+        )
+        .failure_code,
+        None,
+        "a session that has not failed carries no failure code"
+    );
+    match ok(
+        store.claim_finalize(&record.upload_id).await,
+        "claim_finalize",
+    ) {
+        FinalizeClaim::Won(_) => {}
+        other => panic!("the first claim must win, got {other:?}"),
+    }
+
+    let failed = present(
+        ok(
+            store
+                .fail_processing(&record.upload_id, "error.upload.content_hash_mismatch")
+                .await,
+            "fail_processing",
+        ),
+        "a live session",
+    );
+    assert_eq!(failed.status, UploadSessionStatus::FailedProcessing);
+    assert_eq!(
+        failed.failure_code.as_deref(),
+        Some("error.upload.content_hash_mismatch")
+    );
+    let reread = present(
+        ok(store.read(&record.upload_id).await, "read"),
+        "a live session",
+    );
+    assert_eq!(
+        reread, failed,
+        "the code reads back with the status it explains"
+    );
+    assert!(
+        !mine_claimed(store, &record.upload_id).await,
+        "a failed session has left the claimed listing"
+    );
+    assert_eq!(
+        ok(
+            store
+                .fail_processing(
+                    &UploadId::new("failure-code-unknown"),
+                    "error.upload.unavailable"
+                )
+                .await,
+            "fail_processing",
+        ),
+        None,
+        "failing an unknown session touches nothing"
+    );
+
+    ok(store.discard(&record.upload_id).await, "discard");
+}
+
+async fn mine_claimed(store: &dyn UploadSessionStore, upload: &UploadId) -> bool {
+    ok(store.claimed().await, "claimed")
+        .iter()
+        .any(|claimed| claimed.upload_id == *upload)
 }
 
 /// Discarding removes the record, its replay entries and its listing entry together.
@@ -1872,17 +2209,22 @@ pub async fn run_all(h: &dyn Harness) {
     reopening_a_session_id_does_not_duplicate_the_listing(h).await;
     touching_a_session_records_activity_without_extending_its_life(h).await;
     an_expired_session_leaves_no_listing_entry_behind(h).await;
+    a_past_cap_lineage_does_not_hide_a_live_one(h).await;
+    restoring_a_session_keeps_its_original_deadline(h).await;
 
     upload_session_round_trips_every_field(h).await;
     uploader_listing_is_ordered_and_scoped(h).await;
     a_pending_address_is_uploader_scoped_and_ends_with_the_session(h).await;
     discarding_a_session_withdraws_its_pending_address(h).await;
+    a_live_address_spans_every_uploader_and_ends_with_the_session(h).await;
     recording_progress_advances_bytes_clock_and_replay_together(h).await;
     chunk_replay_is_offset_addressed(h).await;
     finalization_is_claimed_exactly_once(h).await;
+    an_unclaimed_discard_never_takes_a_claimed_session(h).await;
     a_claimed_session_leaves_the_eviction_view(h).await;
     reconciling_received_bytes_does_not_move_the_progress_clock(h).await;
     a_terminal_session_is_not_an_eviction_candidate(h).await;
+    a_failed_session_carries_its_failure_code(h).await;
     discarding_removes_the_record_its_chunks_and_its_listing(h).await;
     eviction_candidates_are_ordered_by_progress_and_bounded(h).await;
     the_claimed_listing_is_exactly_the_sessions_awaiting_their_finalizer(h).await;

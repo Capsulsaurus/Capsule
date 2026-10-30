@@ -32,13 +32,17 @@ conformance_cases! {
     reopening_a_session_id_does_not_duplicate_the_listing,
     touching_a_session_records_activity_without_extending_its_life,
     an_expired_session_leaves_no_listing_entry_behind,
+    a_past_cap_lineage_does_not_hide_a_live_one,
+    restoring_a_session_keeps_its_original_deadline,
     upload_session_round_trips_every_field,
     uploader_listing_is_ordered_and_scoped,
     a_pending_address_is_uploader_scoped_and_ends_with_the_session,
     discarding_a_session_withdraws_its_pending_address,
+    a_live_address_spans_every_uploader_and_ends_with_the_session,
     recording_progress_advances_bytes_clock_and_replay_together,
     chunk_replay_is_offset_addressed,
     finalization_is_claimed_exactly_once,
+    an_unclaimed_discard_never_takes_a_claimed_session,
     a_claimed_session_leaves_the_eviction_view,
     reconciling_received_bytes_does_not_move_the_progress_clock,
     a_terminal_session_is_not_an_eviction_candidate,
@@ -108,6 +112,10 @@ async fn the_whole_suite_passes_in_one_pass() {
 fn production_lifetimes_are_per_ceremony() {
     let stores = InMemoryStores::new();
     assert_eq!(AuthStateStore::ttl(&stores.auth), DEFAULT_SESSION_TTL);
+    assert_eq!(
+        AuthStateStore::hard_cap(&stores.auth),
+        DEFAULT_SESSION_HARD_CAP
+    );
     assert_eq!(UploadSessionStore::ttl(&stores.uploads), LIFETIME_CAP);
     assert_eq!(ChallengeStore::ttl(&stores.challenges), CHALLENGE_TTL);
     assert_eq!(
@@ -124,6 +132,130 @@ fn production_lifetimes_are_per_ceremony() {
         CHALLENGE_TTL, ENROLLMENT_CODE_TTL,
         "a ceremony's window belongs to what it is; if these ever coincide by accident \
              this assertion stops being evidence"
+    );
+}
+
+/// A record opened at `opened_at` in a lineage that signed in at the epoch.
+fn lineage_record(id: &str, opened_at: Timestamp) -> SessionRecord {
+    SessionRecord {
+        session_id: SessionId::new(id),
+        user_id: UserId::new("lineage-user"),
+        created_at: opened_at,
+        authenticated_at: Timestamp::UNIX_EPOCH,
+        signed_in_at: Timestamp::UNIX_EPOCH,
+        last_active_at: opened_at,
+        user_agent: None,
+        ip_address: None,
+        cohort_hash: None,
+        device_id: None,
+    }
+}
+
+/// Each open slides the window; none of them moves the hard cap.
+///
+/// The rotation a refresh performs is a close and an open of a record carrying the lineage's
+/// `signed_in_at`, so this is the cap surviving rotation at the store's level: re-opened
+/// sessions keep living a full window until the window would cross the cap, and then live
+/// only until the cap.
+#[tokio::test]
+async fn reopening_slides_the_window_but_never_past_the_hard_cap() {
+    let clock = ManualClock::default();
+    let store = InMemoryAuthState::new(Arc::new(clock.clone()), SignedDuration::from_hours(24))
+        .with_hard_cap(SignedDuration::from_hours(60));
+    let tick = SignedDuration::from_nanos(1);
+
+    // A sign-in and two rotations, each inside the previous window: hours 0, 23 and 46.
+    for (wait, id) in [(0, "first"), (23, "second"), (23, "third")] {
+        clock.advance(SignedDuration::from_hours(wait));
+        store
+            .open_session(lineage_record(id, clock.now()))
+            .await
+            .expect("opens");
+    }
+    assert!(
+        store
+            .read_session(&SessionId::new("second"))
+            .await
+            .expect("answers")
+            .is_some(),
+        "the second record, opened at hour 23, still has its full window"
+    );
+    // The third opened at hour 46: a full window would run to hour 70, the cap stops it at 60.
+    assert_eq!(
+        store.expires_at(&lineage_record("probe", clock.now()), clock.now()),
+        deadline(Timestamp::UNIX_EPOCH, SignedDuration::from_hours(60))
+    );
+
+    clock.advance(SignedDuration::from_hours(14) - tick);
+    assert!(
+        store
+            .read_session(&SessionId::new("third"))
+            .await
+            .expect("answers")
+            .is_some(),
+        "just inside the cap the latest rotation is live"
+    );
+
+    clock.advance(tick);
+    assert_eq!(
+        store
+            .read_session(&SessionId::new("third"))
+            .await
+            .expect("answers"),
+        None,
+        "at the cap it is gone, ten hours before its window would have closed"
+    );
+
+    // And a record opened past the cap is born expired.
+    store
+        .open_session(lineage_record("late", clock.now()))
+        .await
+        .expect("opens");
+    assert_eq!(
+        store
+            .read_session(&SessionId::new("late"))
+            .await
+            .expect("answers"),
+        None,
+        "a lineage past its cap cannot be re-opened into life"
+    );
+}
+
+/// A restore puts a closed record back under the deadline it already had; it never slides.
+#[tokio::test]
+async fn restoring_a_session_keeps_its_deadline() {
+    let clock = ManualClock::default();
+    let window = SignedDuration::from_hours(24);
+    let store = InMemoryAuthState::new(Arc::new(clock.clone()), window);
+    let tick = SignedDuration::from_nanos(1);
+    let record = lineage_record("restored", clock.now());
+    store.open_session(record.clone()).await.expect("opens");
+
+    clock.advance(SignedDuration::from_hours(20));
+    let closed = store
+        .close_session(&record.session_id)
+        .await
+        .expect("answers")
+        .expect("was live");
+    store.restore_session(closed).await.expect("restores");
+
+    clock.advance(SignedDuration::from_hours(4) - tick);
+    assert!(
+        store
+            .read_session(&record.session_id)
+            .await
+            .expect("answers")
+            .is_some(),
+        "just inside the original window the restored record is live"
+    );
+    clock.advance(tick);
+    assert_eq!(
+        store
+            .read_session(&record.session_id)
+            .await
+            .expect("answers"),
+        None,
+        "it dies when the original window closes, not a window after the restore"
     );
 }
 

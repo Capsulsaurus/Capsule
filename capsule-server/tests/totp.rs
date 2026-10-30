@@ -116,6 +116,13 @@ async fn a_confirming_code_switches_the_factor_on() {
     enroll_and_confirm(&fixture, &bearer).await;
 
     assert!(fixture.totp.is_active(&support::user()));
+    assert_eq!(
+        fixture.activity_kinds(&support::user()).await,
+        [
+            capsule_server::activity::ActivityKind::TotpEnabled,
+            capsule_server::activity::ActivityKind::SignInPassword
+        ]
+    );
 }
 
 #[tokio::test]
@@ -273,6 +280,15 @@ async fn the_challenge_and_a_code_complete_the_sign_in() {
         .send()
         .await
         .assert_status(StatusCode::OK);
+    // The `202` opened nothing and recorded nothing; the completing request did both.
+    assert_eq!(
+        fixture.activity_kinds(&support::user()).await,
+        [
+            capsule_server::activity::ActivityKind::SignInSecondFactor,
+            capsule_server::activity::ActivityKind::TotpEnabled,
+            capsule_server::activity::ActivityKind::SignInPassword
+        ]
+    );
 }
 
 #[tokio::test]
@@ -295,6 +311,16 @@ async fn the_confirming_code_cannot_also_complete_a_sign_in() {
         .assert_status(StatusCode::UNAUTHORIZED)
         .json();
     assert_eq!(body["code"], "error.auth.totp_invalid_code");
+    // The code verified and was refused as already spent: the replay arm, which records the
+    // refusal so the owner sees that somebody holding the password was stopped here.
+    assert_eq!(
+        fixture.activity_kinds(&support::user()).await,
+        [
+            capsule_server::activity::ActivityKind::SignInSecondFactorRefused,
+            capsule_server::activity::ActivityKind::TotpEnabled,
+            capsule_server::activity::ActivityKind::SignInPassword
+        ]
+    );
 }
 
 #[tokio::test]
@@ -330,6 +356,14 @@ async fn a_code_is_good_once_even_inside_its_own_window() {
         .send()
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        fixture.activity_kinds(&support::user()).await[..2],
+        [
+            capsule_server::activity::ActivityKind::SignInSecondFactorRefused,
+            capsule_server::activity::ActivityKind::SignInSecondFactor
+        ],
+        "the replayed code is refused and recorded after the sign-in it first completed"
+    );
 }
 
 #[tokio::test]
@@ -472,6 +506,14 @@ async fn five_wrong_codes_exhaust_one_challenge_and_not_the_account() {
         .send()
         .await
         .assert_status(StatusCode::OK);
+    // Each refused code is the owner's to see; the rate-limited attempt never reached a code.
+    let mut expected = vec![capsule_server::activity::ActivityKind::SignInSecondFactor];
+    expected.extend([capsule_server::activity::ActivityKind::SignInSecondFactorRefused; 5]);
+    expected.push(capsule_server::activity::ActivityKind::TotpEnabled);
+    assert_eq!(
+        fixture.activity_kinds(&support::user()).await[..7],
+        expected[..]
+    );
 }
 
 #[tokio::test]
@@ -536,6 +578,14 @@ async fn a_live_code_removes_the_factor_and_the_gate_with_it() {
 
     assert!(!fixture.totp.is_active(&support::user()));
     password_login(&fixture).await.assert_status(StatusCode::OK);
+    assert_eq!(
+        fixture.activity_kinds(&support::user()).await[..3],
+        [
+            capsule_server::activity::ActivityKind::SignInPassword,
+            capsule_server::activity::ActivityKind::TotpDisabled,
+            capsule_server::activity::ActivityKind::TotpEnabled
+        ]
+    );
 }
 
 #[tokio::test]

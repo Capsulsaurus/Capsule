@@ -66,7 +66,7 @@ Rules (carriage in `capsule-server/src/negotiation.rs`; pinned by `capsule-serve
 - `GET /v1/version` — the probe before a client knows the window.
 - `GET /.well-known/capsule/attestation-keys`, `GET /.well-known/capsule/server-info`, `GET /.well-known/capsule/deprecation`, `GET /.well-known/capsule/revoked-jti` — public discovery.
 - `GET /s/{opaque_id}`, `/s/{opaque_id}/wrapped-secret`, `/s/{opaque_id}/blob/{hash}` — a `426` would break [Share Links](/design/share-links/)' indistinguishable `404`.
-- `POST /d/{opaque_id}`, `PATCH /d/{opaque_id}/{upload_id}` — the link pins versions at issuance ([Web Upload](/design/web-upload/)).
+- `POST /d/{opaque_id}`, `PATCH /d/{opaque_id}/{upload_id}`, `GET /d/{opaque_id}/{upload_id}` — the link pins versions at issuance ([Web Upload](/design/web-upload/)).
 - `POST /v1/auth/refresh`, `POST /v1/auth/logout` — refusing them would cut off reads still allowed, or keep open a session its holder closed. Login and register stay gated.
 
 Credentials use `Authorization: Bearer`. Session tokens and federation capabilities are distinct token types verified by their modules, but the document has exactly **one `bearer` security component** for both, so the generated client uses one credential key.

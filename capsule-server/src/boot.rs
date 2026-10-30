@@ -53,6 +53,7 @@ use std::sync::Arc;
 use jiff::Timestamp;
 use sea_orm::DatabaseConnection;
 
+use crate::activity::{ActivityContext, ActivityStore, InMemoryActivity, PostgresActivity};
 use crate::album::authority::ProvisionedAuthority;
 use crate::album::postgres::PostgresAlbums;
 use crate::album::{AlbumContext, AlbumStore, InMemoryAlbums};
@@ -83,9 +84,11 @@ use crate::enrollment::EnrollmentContext;
 use crate::escrow::postgres::PostgresEscrow;
 use crate::escrow::{EscrowContext, EscrowStore, InMemoryEscrow};
 use crate::federation::postgres::{PostgresCapabilities, PostgresPeers};
+use crate::federation::subscriptions::postgres::PostgresSubscriptions;
 use crate::federation::{
     CapabilityCodec, CapabilityStore, FederationCollaborators, FederationContext,
-    InMemoryCapabilities, InMemoryPeers, PeerAdministration, PeerStore,
+    InMemoryCapabilities, InMemoryPeers, InMemorySubscriptions, PeerAdministration, PeerStore,
+    SubscriptionStore,
 };
 use crate::gc::memory::InMemoryCollection;
 use crate::gc::postgres::PostgresCollection;
@@ -405,11 +408,16 @@ async fn valkey(config: &Config) -> Result<ValkeyStores, BootError> {
         .valkey_url
         .as_deref()
         .ok_or(BootError::Missing { key: "VALKEY_URL" })?;
-    let stores = ValkeyStores::connect(url, Arc::new(SystemClock))
-        .await
-        .map_err(|error| BootError::Valkey {
-            detail: error.to_string(),
-        })?;
+    let stores = ValkeyStores::connect(
+        url,
+        Arc::new(SystemClock),
+        config.session_ttl,
+        config.session_hard_cap,
+    )
+    .await
+    .map_err(|error| BootError::Valkey {
+        detail: error.to_string(),
+    })?;
     tracing::info!("VALKEY_URL answers; the volatile state ports are on Valkey");
     Ok(stores)
 }
@@ -463,6 +471,9 @@ struct Stores {
     capabilities: Arc<dyn CapabilityStore>,
     /// The peers: read by federation at every boundary and written by `capsule-server peer …`.
     peers: Arc<dyn PeerStore>,
+    /// The local album subscriptions: written by subscription intake, and the egress pull
+    /// worker's job source (#1035).
+    subscriptions: Arc<dyn SubscriptionStore>,
     /// The moderation store: written by report intake, read by `capsule-server moderation …`.
     moderation: Arc<dyn ModerationStore>,
 }
@@ -607,6 +618,7 @@ impl Base {
             shares: Arc::new(InMemoryShares::new()),
             capabilities: Arc::new(InMemoryCapabilities::new(self.clock.clone())),
             peers: Arc::new(InMemoryPeers::new()),
+            subscriptions: Arc::new(InMemorySubscriptions::new()),
             moderation: Arc::new(InMemoryModeration::new()),
             root: self.root,
             clock: self.clock,
@@ -628,6 +640,7 @@ impl Base {
                 self.clock.clone(),
             )),
             peers: Arc::new(PostgresPeers::new(connection.clone())),
+            subscriptions: Arc::new(PostgresSubscriptions::new(connection.clone())),
             moderation: Arc::new(PostgresModeration::new(connection.clone())),
             root: self.root,
             clock: self.clock,
@@ -738,6 +751,8 @@ struct Ports {
     oidc_authorizations: Arc<dyn OidcAuthorizationStore>,
     /// The pending OIDC device authorizations (issue #635), on the same terms.
     oidc_devices: Arc<dyn OidcDeviceStore>,
+    /// The account activity log: durable, so Postgres on the durable arm (design/activity-log.md).
+    activity: Arc<dyn ActivityStore>,
 }
 
 /// The credential verifier, built once.
@@ -766,7 +781,10 @@ fn memory_ports(
             config.lockout_attempts,
             config.lockout_window,
         ))),
-        sessions: Arc::new(InMemoryAuthState::with_default_ttl(clock.clone())),
+        sessions: Arc::new(
+            InMemoryAuthState::new(clock.clone(), config.session_ttl)
+                .with_hard_cap(config.session_hard_cap),
+        ),
         challenges: Arc::new(InMemoryChallenges::with_default_ttl(clock.clone())),
         cohorts: Arc::new(InMemoryCohorts::new()),
         totp: Arc::new(InMemoryTotp::new()),
@@ -781,6 +799,7 @@ fn memory_ports(
         counters: Arc::new(InMemoryCounters::new()),
         oidc_authorizations: Arc::new(InMemoryOidcAuthorizations::with_default_ttl(clock.clone())),
         oidc_devices: Arc::new(InMemoryOidcDevices::with_default_ttl(clock.clone())),
+        activity: Arc::new(InMemoryActivity::new()),
     })
 }
 
@@ -821,6 +840,7 @@ fn durable_ports(
         counters: Arc::new(ValkeyCounters::new(valkey.valkey().clone())),
         oidc_authorizations: valkey.oidc_authorizations(),
         oidc_devices: valkey.oidc_devices(),
+        activity: Arc::new(PostgresActivity::new(db())),
     })
 }
 
@@ -865,6 +885,7 @@ fn compose(
     let shares = stores.shares.clone();
     let issued = stores.capabilities.clone();
     let peers = stores.peers.clone();
+    let subscriptions = stores.subscriptions.clone();
     let moderation = stores.moderation.clone();
 
     // The signer is built from the private key alone and derives its own public half, which is
@@ -895,6 +916,7 @@ fn compose(
         counters,
         oidc_authorizations,
         oidc_devices,
+        activity,
     } = ports;
     // The production write authority, not a permissive double: it reads the
     // album's own pin and the account's published device directory, so invariants 6 and 7 mean
@@ -941,6 +963,12 @@ fn compose(
     if config.oidc.is_some() {
         // Endpoints only; the issuer and client id stay the server's.
         server_info = server_info.with_oidc();
+    }
+    // Configuration refuses the switch without an issuer, so a record that says "no passwords"
+    // always also publishes where the identity provider is.
+    if config.password_auth_disabled {
+        tracing::info!("password sign-in is disabled; accounts sign in through the OIDC provider");
+        server_info = server_info.without_passwords();
     }
     // Published only when the deployment federates (#509): a `FEDERATION_URL` without
     // `FEDERATION_ENABLED` is an endpoint nothing behind it would answer.
@@ -1017,7 +1045,9 @@ fn compose(
             cohorts,
             tokens: tokens.clone(),
             clock: clock.clone(),
-        }),
+        })
+        // The same switch the discovery record above publishes, read from the same field.
+        .with_password_setting(Arc::new(config.password_auth_disabled)),
         totp: TotpContext::new(
             totp,
             // The issuer is what an authenticator app shows beside the code, so it is this
@@ -1038,8 +1068,8 @@ fn compose(
             UploadPolicy::default()
                 .with_protocol_window(config.protocol_min.clone(), config.protocol_max.clone())
                 .with_min_client_build(config.min_client_build.clone())
-                // The chunk-body read deadline (#717), fixed for the life of the process.
-                .with_chunk_read_deadline(Arc::new(config.chunk_read_timeout)),
+                // The chunk-body read pace (#717, #1041), fixed for the life of the process.
+                .with_chunk_pace(Arc::new(config.chunk_pace)),
         ),
         sync: SyncContext::new(
             index.clone(),
@@ -1067,6 +1097,7 @@ fn compose(
             codec: capabilities,
             capabilities: issued,
             peers,
+            subscriptions,
             clock: clock.clone(),
             enabled: Arc::new(config.federation_endpoint().is_some()),
         }),
@@ -1075,6 +1106,7 @@ fn compose(
         share: ShareContext::new(shares, blobs.clone(), clock.clone()),
         drops: DropContext::new(drops, uploads.clone(), blobs.clone(), clock.clone()),
         counters: CounterContext::new(counters, clock.clone()),
+        activity: ActivityContext::new(activity, clock.clone()),
     });
 
     tracing::info!(

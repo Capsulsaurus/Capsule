@@ -23,281 +23,199 @@ use crate::testmock::{MockRequest, MockResponse, MockServer};
 
 // ─── Adaptive strategy (unit) ───────────────────────────────────────────────
 
+/// The duration one chunk of `bytes` takes at `bytes_per_second`.
+fn at_rate(bytes: u64, bytes_per_second: f64) -> Duration {
+    Duration::from_secs_f64(bytes as f64 / bytes_per_second)
+}
+
 #[test]
 fn tier_selection_by_file_size() {
     let small = AdaptiveChunkSizeStrategy::for_file_size(5 * 1024 * 1024);
     assert_eq!(small.current_size, CHUNK_SIZE_256KB);
-    assert_eq!(small.min_size, CHUNK_SIZE_256KB);
     assert_eq!(small.max_size, CHUNK_SIZE_1MB);
 
     let medium = AdaptiveChunkSizeStrategy::for_file_size(50 * 1024 * 1024);
     assert_eq!(medium.current_size, CHUNK_SIZE_1MB);
-    assert_eq!(medium.min_size, CHUNK_SIZE_1MB);
     assert_eq!(medium.max_size, CHUNK_SIZE_4MB);
 
     let large = AdaptiveChunkSizeStrategy::for_file_size(200 * 1024 * 1024);
     assert_eq!(large.current_size, CHUNK_SIZE_4MB);
-    assert_eq!(large.min_size, CHUNK_SIZE_4MB);
     assert_eq!(large.max_size, CHUNK_SIZE_16MB);
+    assert_eq!(large.target_duration(), TARGET_REQUEST_DURATION);
 }
 
 #[test]
-fn every_tier_range_sits_inside_the_protocol_bounds_and_is_aligned() {
+fn every_tier_sits_inside_the_protocol_bounds_and_is_aligned() {
     for size in [1u64, 5 << 20, 50 << 20, 500 << 20] {
         let s = AdaptiveChunkSizeStrategy::for_file_size(size);
-        assert!(
-            s.min_size >= PROTOCOL_MIN_CHUNK,
-            "tier min below protocol min"
-        );
-        assert!(
-            s.max_size <= PROTOCOL_MAX_CHUNK,
-            "tier max above protocol max"
-        );
-        assert!(s.min_size.is_multiple_of(4096));
+        assert!(s.current_size >= PROTOCOL_MIN_CHUNK);
+        assert!(s.max_size <= PROTOCOL_MAX_CHUNK);
         assert!(s.max_size.is_multiple_of(4096));
         assert!(s.current_size.is_multiple_of(4096));
     }
 }
 
+/// **Slow but steady.** The size is the one that completes in the target duration at the
+/// measured goodput, far below the old 4 MiB tier floor: at 600 ms RTT-class 6.7 KiB/s, eight
+/// seconds is about 53 KiB. It is never halved towards 4 KiB, and never cut for taking long.
 #[test]
-fn warmup_defers_scaling_then_doubles_above_5mbps() {
-    let mut s = AdaptiveChunkSizeStrategy::for_file_size(50 * 1024 * 1024);
-    // < 5 chunks and < 8 MiB: no adjustment on a cold window.
-    for _ in 0..3 {
-        s.record_chunk(CHUNK_SIZE_1MB, Duration::from_millis(100));
-    }
-    assert_eq!(s.current_size, CHUNK_SIZE_1MB);
-    // Past the warm-up, sustained > 5 MB/s doubles.
-    for _ in 0..2 {
-        s.record_chunk(CHUNK_SIZE_1MB, Duration::from_millis(100));
-    }
-    assert!(s.current_size > CHUNK_SIZE_1MB);
-}
-
-/// **Chunk-size floor coupling.** Under `adverse` the strategy pins to the
-/// tier chunk floor and suppresses adaptive growth, so each request stays small
-/// enough to usually complete between mid-transfer resets; releasing the coupling
-/// lets the normative adaptive algorithm grow again.
-#[test]
-fn adverse_pins_chunk_size_to_the_tier_floor() {
-    use crate::net::ConnectionClass;
-
-    let mut adverse = AdaptiveChunkSizeStrategy::for_file_size(500 * 1024 * 1024) // 4–16 MiB
-        .with_connection_class(ConnectionClass::Adverse);
-    let floor = adverse.min_size;
-    assert_eq!(adverse.current_size, floor, "pinned to the tier floor");
-    assert_eq!(adverse.next_chunk_size(), floor);
-
-    // Even sustained high-throughput chunks that would normally double the size
-    // leave it pinned at the floor while adverse.
-    for _ in 0..10 {
-        adverse.record_chunk(floor, Duration::from_millis(1));
-    }
-    assert_eq!(adverse.current_size, floor, "no growth under adverse");
-
-    // Control: an unmetered client on the same tier is free to grow past the floor.
-    let mut unmetered = AdaptiveChunkSizeStrategy::for_file_size(500 * 1024 * 1024)
-        .with_connection_class(ConnectionClass::Unmetered);
-    for _ in 0..6 {
-        let cs = unmetered.current_size;
-        unmetered.record_chunk(cs, Duration::from_millis(1));
-    }
-    assert!(
-        unmetered.current_size > floor,
-        "unmetered grows above the floor"
-    );
-}
-
-#[test]
-fn doubling_never_exceeds_the_tier_max_and_stays_aligned() {
-    let mut s = AdaptiveChunkSizeStrategy::for_file_size(500 * 1024 * 1024); // 4–16 MiB
-    for _ in 0..40 {
-        let cs = s.current_size;
-        s.record_chunk(cs, Duration::from_millis(50)); // very fast → keep doubling
-        assert!(
-            s.current_size.is_multiple_of(4096),
-            "size drifted off 4 KiB"
-        );
-        assert!(s.current_size <= s.max_size, "exceeded tier max");
-        assert!(
-            (PROTOCOL_MIN_CHUNK..=PROTOCOL_MAX_CHUNK).contains(&s.next_chunk_size()),
-            "escaped protocol bounds"
-        );
-    }
+fn a_slow_link_is_sized_to_the_target_duration_not_halved_to_the_minimum() {
+    let rate = 6.7 * 1024.0;
+    let mut s = AdaptiveChunkSizeStrategy::for_file_size(200 * 1024 * 1024); // starts at 4 MiB
+    let first = s.next_chunk_size();
+    s.record_chunk(first, at_rate(first, rate));
+    let expected = ((rate * TARGET_REQUEST_DURATION.as_secs_f64()) as u64 / 4096) * 4096;
     assert_eq!(
-        s.current_size, s.max_size,
-        "should clamp up to the tier max"
+        s.next_chunk_size(),
+        expected,
+        "one slow chunk is enough to shrink"
     );
-    assert_eq!(s.max_size, PROTOCOL_MAX_CHUNK);
-}
 
-#[test]
-fn halving_never_drops_below_the_tier_min_and_stays_aligned() {
-    let mut s = AdaptiveChunkSizeStrategy::for_file_size(50 * 1024 * 1024); // 1–4 MiB
-    // Start high within the tier, then feed only slow chunks.
-    s.current_size = CHUNK_SIZE_4MB;
-    for _ in 0..40 {
-        let cs = s.current_size;
-        s.record_chunk(cs, Duration::from_secs(30)); // ~140 KB/s → keep halving
-        assert!(
-            s.current_size.is_multiple_of(4096),
-            "size drifted off 4 KiB"
-        );
-        assert!(s.current_size >= s.min_size, "dropped below tier min");
-    }
-    assert_eq!(
-        s.current_size, s.min_size,
-        "should clamp down to the tier min"
-    );
-}
-
-#[test]
-fn at_min_tier_slow_throughput_never_underflows() {
-    let mut s = AdaptiveChunkSizeStrategy::for_file_size(1024 * 1024); // 256 KiB–1 MiB
+    // Steady at that rate: the size holds at the target, and every chunk takes about it.
     for _ in 0..20 {
-        let cs = s.current_size;
-        s.record_chunk(cs, Duration::from_secs(30));
+        let cs = s.next_chunk_size();
+        s.record_chunk(cs, at_rate(cs, rate));
+        assert!(cs.is_multiple_of(4096));
+        assert!(cs > PROTOCOL_MIN_CHUNK, "never halved towards the minimum");
     }
-    assert_eq!(s.current_size, s.min_size);
-    assert_eq!(s.min_size, CHUNK_SIZE_256KB);
+    let settled = s.next_chunk_size();
+    assert!(at_rate(settled, rate) <= TARGET_REQUEST_DURATION);
+    assert!(at_rate(settled, rate) > TARGET_REQUEST_DURATION / 2);
 }
 
-/// A chunk the server timed out halves, aligned, through and below the 4 MiB
-/// large-file floor, and stops at the protocol minimum.
+/// A fast link grows by doubling after the warm-up, up to the tier ceiling and no further.
 #[test]
-fn a_timeout_shrinks_below_the_tier_floor_down_to_the_protocol_minimum() {
-    let mut s = AdaptiveChunkSizeStrategy::for_file_size(200 * 1024 * 1024); // 4–16 MiB
+fn a_fast_link_doubles_after_the_warmup_up_to_the_tier_ceiling() {
+    let mut s = AdaptiveChunkSizeStrategy::for_file_size(500 * 1024 * 1024); // 4–16 MiB
+    let fast = 100.0 * 1024.0 * 1024.0;
+    let start = s.next_chunk_size();
+    for _ in 0..WARMUP_CHUNKS - 1 {
+        s.record_chunk(start, at_rate(start, fast));
+        assert_eq!(s.next_chunk_size(), start, "no growth before the warm-up");
+    }
+    s.record_chunk(start, at_rate(start, fast));
+    assert_eq!(s.next_chunk_size(), 2 * start, "doubles after it");
+    for _ in 0..40 {
+        let cs = s.next_chunk_size();
+        s.record_chunk(cs, at_rate(cs, fast));
+        assert!(cs.is_multiple_of(4096));
+        assert!(cs <= s.max_size);
+    }
+    assert_eq!(s.next_chunk_size(), PROTOCOL_MAX_CHUNK);
+}
+
+/// Under `adverse` each request targets the shorter duration, so the same goodput yields a
+/// quarter the chunk.
+#[test]
+fn adverse_targets_a_shorter_request_duration() {
+    let rate = 512.0 * 1024.0;
+    let sized = |class| {
+        let mut s = AdaptiveChunkSizeStrategy::for_file_size(500 * 1024 * 1024)
+            .with_connection_class(class);
+        for _ in 0..30 {
+            let cs = s.next_chunk_size();
+            s.record_chunk(cs, at_rate(cs, rate));
+        }
+        s.next_chunk_size()
+    };
+    let unmetered = sized(ConnectionClass::Unmetered);
+    let adverse = sized(ConnectionClass::Adverse);
+    assert!(
+        at_rate(unmetered, rate) <= TARGET_REQUEST_DURATION
+            && at_rate(unmetered, rate) > TARGET_REQUEST_DURATION / 2,
+        "unmetered settles near {TARGET_REQUEST_DURATION:?}: {unmetered}"
+    );
+    assert!(
+        at_rate(adverse, rate) <= ADVERSE_TARGET_REQUEST_DURATION
+            && at_rate(adverse, rate) > ADVERSE_TARGET_REQUEST_DURATION / 2,
+        "adverse settles near {ADVERSE_TARGET_REQUEST_DURATION:?}: {adverse}"
+    );
+    assert!(adverse < unmetered);
+}
+
+#[test]
+fn an_extremely_slow_link_is_held_at_the_protocol_minimum() {
+    let mut s = AdaptiveChunkSizeStrategy::for_file_size(1024 * 1024);
+    for _ in 0..20 {
+        let cs = s.next_chunk_size();
+        s.record_chunk(cs, at_rate(cs, 10.0));
+    }
+    assert_eq!(s.next_chunk_size(), PROTOCOL_MIN_CHUNK);
+}
+
+/// A chunk that stalled is re-sent at half its length, aligned, down to the protocol minimum.
+#[test]
+fn a_stall_halves_the_chunk_down_to_the_protocol_minimum() {
+    let mut s = AdaptiveChunkSizeStrategy::for_file_size(200 * 1024 * 1024);
     assert_eq!(s.next_chunk_size(), CHUNK_SIZE_4MB);
 
     let mut sizes = Vec::new();
-    while s.shrink_after_timeout(s.next_chunk_size()) {
+    while s.shrink_after_stall(s.next_chunk_size()) {
         let next = s.next_chunk_size();
         assert!(next.is_multiple_of(4096), "size drifted off 4 KiB");
         sizes.push(next);
     }
     assert_eq!(sizes.first(), Some(&(2 * 1024 * 1024)));
     assert_eq!(sizes.last(), Some(&PROTOCOL_MIN_CHUNK));
-    assert_eq!(sizes.len(), 10, "4 MiB halves ten times to 4 KiB");
     assert!(
-        !s.shrink_after_timeout(PROTOCOL_MIN_CHUNK),
+        !s.shrink_after_stall(PROTOCOL_MIN_CHUNK),
         "nothing below the protocol minimum"
     );
     assert_eq!(s.next_chunk_size(), PROTOCOL_MIN_CHUNK);
 }
 
-/// A timed-out final remainder halves too, aligned down; one already at or
-/// under 4 KiB cannot shrink.
+/// A stalled final remainder halves too, aligned down; one already at or under 4 KiB cannot
+/// shrink.
 #[test]
-fn a_timed_out_remainder_halves_aligned_down() {
+fn a_stalled_remainder_halves_aligned_down() {
     let mut s = AdaptiveChunkSizeStrategy::for_file_size(5 * 1024 * 1024);
-    assert!(s.shrink_after_timeout(100 * 1024 + 123));
+    assert!(s.shrink_after_stall(100 * 1024 + 123));
     assert_eq!(s.next_chunk_size(), 48 * 1024);
 
     let mut s = AdaptiveChunkSizeStrategy::for_file_size(5 * 1024 * 1024);
-    assert!(!s.shrink_after_timeout(3000));
+    assert!(!s.shrink_after_stall(3000));
     assert_eq!(
         s.next_chunk_size(),
         CHUNK_SIZE_256KB,
-        "an unshrinkable timeout leaves the size alone"
+        "an unshrinkable stall leaves the size alone"
     );
 }
 
-/// After a timeout the size grows back towards the tier floor on a run of
-/// successes, but never to a length that timed out while the link stays slow.
+/// After a stall the size does not grow until a run of successes shows the link recovered,
+/// however fast those successes are.
 #[test]
-fn after_a_timeout_successes_grow_back_but_never_to_the_timed_out_size() {
-    let mut s = AdaptiveChunkSizeStrategy::for_file_size(200 * 1024 * 1024); // floor 4 MiB
-    assert!(s.shrink_after_timeout(CHUNK_SIZE_4MB)); // 2 MiB
-    assert!(s.shrink_after_timeout(2 * 1024 * 1024)); // 1 MiB; ceiling 2 MiB
-    assert!(s.shrink_after_timeout(CHUNK_SIZE_1MB)); // 512 KiB; ceiling 1 MiB
-    assert_eq!(s.next_chunk_size(), 512 * 1024);
-
-    // A slow link: 512 KiB in 20 s, about 26 KB/s.
-    let slow = Duration::from_secs(20);
-    for _ in 0..GROW_BACK_AFTER_SUCCESSES - 1 {
-        s.record_chunk(512 * 1024, slow);
-        assert_eq!(s.next_chunk_size(), 512 * 1024, "no growth before the run");
-    }
-    s.record_chunk(512 * 1024, slow);
-    assert_eq!(
-        s.next_chunk_size(),
-        512 * 1024,
-        "doubling would reach the 1 MiB that timed out"
-    );
-    for _ in 0..3 * GROW_BACK_AFTER_SUCCESSES {
-        s.record_chunk(512 * 1024, slow);
-    }
-    assert_eq!(s.next_chunk_size(), 512 * 1024, "held under the ceiling");
-
-    // Without a lower ceiling a chunk grows back by doubling up to the floor.
+fn after_a_stall_growth_waits_for_a_run_of_successes() {
     let mut s = AdaptiveChunkSizeStrategy::for_file_size(200 * 1024 * 1024);
-    assert!(s.shrink_after_timeout(16 * 1024 * 1024)); // 8 MiB, clamped later
-    s.current_size = 256 * 1024; // below the floor, ceiling 16 MiB
-    let mut seen = vec![s.next_chunk_size()];
-    for _ in 0..8 * GROW_BACK_AFTER_SUCCESSES {
-        let cs = s.next_chunk_size();
-        s.record_chunk(cs, Duration::from_secs(60));
-        if seen.last() != Some(&s.next_chunk_size()) {
-            seen.push(s.next_chunk_size());
-        }
+    assert!(s.shrink_after_stall(CHUNK_SIZE_4MB)); // 2 MiB
+    let fast = 100.0 * 1024.0 * 1024.0;
+    for _ in 0..GROW_BACK_AFTER_SUCCESSES.max(WARMUP_CHUNKS) - 1 {
+        s.record_chunk(2 * 1024 * 1024, at_rate(2 * 1024 * 1024, fast));
+        assert_eq!(s.next_chunk_size(), 2 * 1024 * 1024, "held after the stall");
     }
-    assert_eq!(
-        seen,
-        vec![
-            256 * 1024,
-            512 * 1024,
-            CHUNK_SIZE_1MB,
-            2 * 1024 * 1024,
-            CHUNK_SIZE_4MB
-        ],
-        "doubles back to the tier floor and stops there on a slow link"
-    );
-}
-
-/// A fast window forgets the timed-out size: the link recovered.
-#[test]
-fn a_fast_window_lifts_the_timeout_ceiling() {
-    let mut s = AdaptiveChunkSizeStrategy::for_file_size(200 * 1024 * 1024);
-    assert!(s.shrink_after_timeout(CHUNK_SIZE_4MB)); // 2 MiB; ceiling 4 MiB
-    for _ in 0..GROW_BACK_AFTER_SUCCESSES {
-        s.record_chunk(2 * 1024 * 1024, Duration::from_millis(10));
-    }
+    s.record_chunk(2 * 1024 * 1024, at_rate(2 * 1024 * 1024, fast));
     assert_eq!(
         s.next_chunk_size(),
         CHUNK_SIZE_4MB,
-        "grew back to the floor"
+        "grows once the run shows the link recovered"
     );
 }
 
-/// The adverse pin still holds the floor once a timeout's shrink has grown back.
 #[test]
-fn under_adverse_a_timeout_shrinks_and_grows_back_only_to_the_floor() {
-    let mut s = AdaptiveChunkSizeStrategy::for_file_size(50 * 1024 * 1024) // 1–4 MiB
-        .with_connection_class(crate::net::ConnectionClass::Adverse);
-    assert!(s.shrink_after_timeout(CHUNK_SIZE_1MB));
-    assert_eq!(s.next_chunk_size(), 512 * 1024);
-    for _ in 0..4 * GROW_BACK_AFTER_SUCCESSES {
-        let cs = s.next_chunk_size();
-        s.record_chunk(cs, Duration::from_millis(1));
-    }
-    assert_eq!(s.next_chunk_size(), CHUNK_SIZE_1MB, "pinned at the floor");
-}
-
-#[test]
-fn seeded_from_suggested_aligns_down_and_clamps_into_the_tier() {
-    // 50 MiB → tier [1 MiB, 4 MiB].
+fn seeded_from_suggested_aligns_down_and_clamps_into_the_bounds() {
+    // 50 MiB → ceiling 4 MiB.
     let tier = || AdaptiveChunkSizeStrategy::for_file_size(50 * 1024 * 1024);
 
-    // An unaligned mid-tier suggestion aligns down and stays put.
+    // An unaligned suggestion aligns down and stays put.
     let s = tier().seeded_from_suggested(2 * 1024 * 1024 + 123);
     assert_eq!(s.current_size, 2 * 1024 * 1024);
-    assert!(s.current_size.is_multiple_of(4096));
 
-    // Below the tier floor → clamped up to the min.
+    // Below the tier's starting size is fine — there is no floor but the protocol's.
+    let s = tier().seeded_from_suggested(64 * 1024);
+    assert_eq!(s.current_size, 64 * 1024);
     let s = tier().seeded_from_suggested(100);
-    assert_eq!(s.current_size, CHUNK_SIZE_1MB);
+    assert_eq!(s.current_size, PROTOCOL_MIN_CHUNK);
 
-    // Above the tier ceiling → clamped down to the max.
+    // Above the tier ceiling → clamped down to it.
     let s = tier().seeded_from_suggested(999 * 1024 * 1024);
     assert_eq!(s.current_size, CHUNK_SIZE_4MB);
 }
@@ -849,17 +767,282 @@ fn a_server_named_wait_is_read_and_bounded() {
         Duration::from_mins(5),
         "an hour-long ask is waited in five-minute steps"
     );
+}
 
-    // A HEAD answer has no body, so its status names the wait; a code, when
-    // there is one, decides.
-    for status in [429, 503, 507] {
-        assert!(answer_asks_to_wait(status, None), "{status}");
+/// **Every upload answer is classified before it is retried** (networking doc, Retry Policy
+/// Classes; upload recovery matrix). A code the recovery matrix names an action for keeps it;
+/// a code that asks for a wait waits; otherwise any `5xx`, `408`, `425` and `429` wait — a
+/// proxy's bare `502` and a `500 storage_inconsistent` alike — and every other answer ends
+/// the transfer.
+#[test]
+fn every_upload_answer_waits_recovers_or_ends_the_transfer() {
+    use RetryVerdict::{Recover, Retryable, Terminal};
+
+    let table: &[(u16, Option<&str>, RetryVerdict)] = &[
+        // Waits: the three wait codes, and the transient statuses coded or not.
+        (429, Some(error_codes::UPLOAD_RATE_LIMITED), Retryable),
+        (503, Some(error_codes::UPLOAD_UNAVAILABLE), Retryable),
+        (507, Some(error_codes::UPLOAD_STORAGE_FULL), Retryable),
+        (
+            500,
+            Some(error_codes::UPLOAD_STORAGE_INCONSISTENT),
+            Retryable,
+        ),
+        (
+            503,
+            Some(error_codes::UPLOAD_STORAGE_INCONSISTENT),
+            Retryable,
+        ),
+        (500, None, Retryable),
+        (502, None, Retryable),
+        (503, None, Retryable),
+        (504, None, Retryable),
+        (507, None, Retryable),
+        (429, None, Retryable),
+        (408, None, Retryable),
+        (425, None, Retryable),
+        // Recovers: the matrix's own actions, whatever the status.
+        (409, Some(error_codes::UPLOAD_OFFSET_MISMATCH), Recover),
+        (404, Some(error_codes::UPLOAD_SESSION_NOT_FOUND), Recover),
+        (400, Some(error_codes::UPLOAD_CHECKSUM_MISMATCH), Recover),
+        (408, Some(error_codes::UPLOAD_CHUNK_TIMEOUT), Recover),
+        (409, Some(error_codes::UPLOAD_DUPLICATE_BLOB), Recover),
+        // Ends the transfer: every other `4xx`, coded or not.
+        (400, None, Terminal),
+        (403, Some(error_codes::QUOTA_EXCEEDED), Terminal),
+        (409, Some(error_codes::UPLOAD_SESSION_NOT_ACTIVE), Terminal),
+        (413, Some(error_codes::UPLOAD_CHUNK_TOO_LARGE), Terminal),
+        (
+            426,
+            Some(error_codes::PROTOCOL_VERSION_UNSUPPORTED),
+            Terminal,
+        ),
+        (426, None, Terminal),
+        (404, None, Terminal),
+    ];
+    for &(status, code, expected) in table {
+        assert_eq!(
+            upload_answer_verdict(status, code),
+            expected,
+            "{status} {code:?}"
+        );
+        assert_eq!(
+            answer_asks_to_wait(status, code),
+            expected == Retryable,
+            "{status} {code:?}"
+        );
     }
-    assert!(!answer_asks_to_wait(500, None));
-    assert!(!answer_asks_to_wait(
-        503,
+}
+
+/// **A server error is a wait, not a failure.** A proxy's bare `502` on the create, a bare
+/// `504` on the `HEAD` after it, and a bare `500` on a chunk are each waited out on the retry
+/// engine's backoff (none names a `Retry-After`), and the chunk resumes from `HEAD`.
+#[tokio::test(start_paused = true)]
+async fn a_server_error_on_any_upload_request_is_waited_out() {
+    let creates = Arc::new(AtomicUsize::new(0));
+    let heads = Arc::new(AtomicUsize::new(0));
+    let patch_offsets = Arc::new(Mutex::new(Vec::<u64>::new()));
+    let (cr, hc, po) = (creates.clone(), heads.clone(), patch_offsets.clone());
+    let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+        ("POST", "/") => {
+            if cr.fetch_add(1, Ordering::SeqCst) == 0 {
+                MockResponse::new(502, "Bad Gateway")
+            } else {
+                created("sess-5xx", CHUNK_SIZE_256KB)
+            }
+        }
+        ("HEAD", "/sess-5xx") => {
+            if hc.fetch_add(1, Ordering::SeqCst) == 0 {
+                MockResponse::new(504, "Gateway Timeout")
+            } else {
+                MockResponse::new(200, "OK")
+                    .header("X-Capsule-Offset", "0")
+                    .header("X-Capsule-Content-Length", "4096")
+                    .header("X-Capsule-Upload-Status", "uploading")
+            }
+        }
+        ("PATCH", "/sess-5xx") => {
+            let mut seen = po.lock().unwrap();
+            seen.push(req.header("X-Capsule-Offset").unwrap().parse().unwrap());
+            if seen.len() == 1 {
+                MockResponse::new(500, "Internal Server Error")
+            } else {
+                MockResponse::new(204, "No Content").header("X-Capsule-Offset", "4096")
+            }
+        }
+        other => panic!("unexpected {other:?}"),
+    })
+    .await;
+
+    let client = server.client(PROTOCOL);
+    let outcome = client.upload(&request(4096), &[9u8; 4096]).await.unwrap();
+
+    assert!(
+        matches!(outcome, UploadOutcome::Completed { .. }),
+        "{outcome:?}"
+    );
+    assert_eq!(creates.load(Ordering::SeqCst), 2, "one wait, one create");
+    assert_eq!(
+        heads.load(Ordering::SeqCst),
+        2,
+        "one waited HEAD, then the answer"
+    );
+    assert_eq!(
+        *patch_offsets.lock().unwrap(),
+        vec![0, 0],
+        "resumed where HEAD said"
+    );
+}
+
+/// **A completing chunk answered `500 storage_inconsistent` resumes from `HEAD`.** The server
+/// may have kept the chunk and finalized: the client waits, asks `HEAD`, and settles on what
+/// it says — the finalized outcome, without re-sending a byte, or the refusal it reports.
+#[tokio::test(start_paused = true)]
+async fn a_completing_chunk_answered_storage_inconsistent_settles_from_head() {
+    for (status, error, expected_ok) in [
+        ("completed", None, true),
+        (
+            "failed_processing",
+            Some(error_codes::UPLOAD_STORAGE_INCONSISTENT),
+            false,
+        ),
+    ] {
+        let patches = Arc::new(AtomicUsize::new(0));
+        let pc = patches.clone();
+        let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+            ("POST", "/") => created("sess-500", CHUNK_SIZE_256KB),
+            ("PATCH", "/sess-500") => {
+                pc.fetch_add(1, Ordering::SeqCst);
+                MockResponse::api_error(
+                    500,
+                    "Internal Server Error",
+                    error_codes::UPLOAD_STORAGE_INCONSISTENT,
+                    "the staged upload and the session's byte count disagree",
+                )
+            }
+            ("HEAD", "/sess-500") => {
+                let head = MockResponse::new(200, "OK")
+                    .header("X-Capsule-Offset", "4096")
+                    .header("X-Capsule-Content-Length", "4096")
+                    .header("X-Capsule-Upload-Status", status);
+                match error {
+                    Some(code) => head.header("X-Capsule-Upload-Error", code),
+                    None => head,
+                }
+            }
+            other => panic!("unexpected {other:?}"),
+        })
+        .await;
+
+        let client = server.client(PROTOCOL);
+        let outcome = client.upload(&request(4096), &[9u8; 4096]).await;
+
+        assert_eq!(patches.load(Ordering::SeqCst), 1, "{status}: never re-sent");
+        if expected_ok {
+            assert!(
+                matches!(outcome, Ok(UploadOutcome::Completed { .. })),
+                "{outcome:?}"
+            );
+        } else {
+            match outcome {
+                Err(UploadError::Rejected { code, .. }) => {
+                    assert_eq!(code.as_deref(), error, "{status}");
+                }
+                other => panic!("expected the finalization refusal, got {other:?}"),
+            }
+        }
+    }
+}
+
+/// **Giving up on a coded `5xx` keeps its code.** A chunk answered `500 storage_inconsistent`
+/// every time, with no `Retry-After`, is waited out on the engine's backoff until it is spent;
+/// the transfer then ends with the last answer's status and stable code, so a client still
+/// localizes it, and the reason names the spent backoff rather than a wait nobody asked for.
+#[tokio::test(start_paused = true)]
+async fn giving_up_on_a_coded_server_error_keeps_its_code() {
+    let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+        ("POST", "/") => created("sess-stuck", CHUNK_SIZE_256KB),
+        ("PATCH", "/sess-stuck") => MockResponse::api_error(
+            500,
+            "Internal Server Error",
+            error_codes::UPLOAD_STORAGE_INCONSISTENT,
+            "the staged upload and the session's byte count disagree",
+        ),
+        ("HEAD", "/sess-stuck") => MockResponse::new(200, "OK")
+            .header("X-Capsule-Offset", "0")
+            .header("X-Capsule-Content-Length", "4096")
+            .header("X-Capsule-Upload-Status", "pending"),
+        other => panic!("unexpected {other:?}"),
+    })
+    .await;
+
+    let client = server.client(PROTOCOL);
+    let err = client
+        .upload(&request(4096), &[9u8; 4096])
+        .await
+        .unwrap_err();
+
+    match &err {
+        UploadError::WaitsExhausted {
+            status,
+            code,
+            reason,
+            ..
+        } => {
+            assert_eq!(*status, 500);
+            assert_eq!(
+                code.as_deref(),
+                Some(error_codes::UPLOAD_STORAGE_INCONSISTENT)
+            );
+            assert!(reason.contains("name no Retry-After"), "{reason}");
+        }
+        other => panic!("expected the give-up to carry the answer, got {other:?}"),
+    }
+    assert_eq!(
+        err.error_code(),
         Some(error_codes::UPLOAD_STORAGE_INCONSISTENT)
-    ));
+    );
+}
+
+/// **A server error that never ends still ends the transfer.** Every wait charges the
+/// transfer's recovery budget and the lane's shared one, so a server answering every chunk
+/// `500` costs a bounded number of requests and fails loudly.
+#[tokio::test(start_paused = true)]
+async fn a_server_that_always_errs_exhausts_the_budget() {
+    let requests = Arc::new(AtomicUsize::new(0));
+    let rq = requests.clone();
+    let server = MockServer::start(move |req| {
+        rq.fetch_add(1, Ordering::SeqCst);
+        match (req.method.as_str(), req.path.as_str()) {
+            ("POST", "/") => created("sess-down", CHUNK_SIZE_256KB),
+            _ => MockResponse::new(500, "Internal Server Error").header("Retry-After", "0"),
+        }
+    })
+    .await;
+
+    let lane = LaneRetries::new(10);
+    let client = server.client(PROTOCOL).with_lane_retries(lane.clone());
+    let err = client
+        .upload(&request(4096), &[9u8; 4096])
+        .await
+        .unwrap_err();
+
+    assert!(
+        matches!(
+            err,
+            UploadError::WaitsExhausted {
+                status: 500,
+                code: None,
+                ..
+            }
+        ),
+        "the give-up carries the last answer: {err:?}"
+    );
+    assert_eq!(lane.remaining(), 0, "the lane's budget bounded the waits");
+    assert!(
+        requests.load(Ordering::SeqCst) <= 2 + 10,
+        "a bounded number of requests"
+    );
 }
 
 /// An outage that outlasts one wait: the `HEAD` after the wait is itself a
@@ -1025,7 +1208,11 @@ async fn a_create_that_never_stops_waiting_exhausts_the_budget() {
         .upload(&request(4096), &[9u8; 4096])
         .await
         .unwrap_err();
-    assert!(matches!(err, UploadError::RetriesExhausted(_)), "{err:?}");
+    assert!(
+        matches!(err, UploadError::WaitsExhausted { status: 503, .. }),
+        "{err:?}"
+    );
+    assert_eq!(err.error_code(), Some(error_codes::UPLOAD_UNAVAILABLE));
     assert_eq!(
         creates.load(Ordering::SeqCst),
         MAX_RECOVERIES as usize + 1,
@@ -1162,7 +1349,7 @@ impl UploadSource for Zeroes {
     }
 }
 
-/// The `408` the server's chunk-read deadline answers a body that did not arrive.
+/// The `408` the server answers a chunk body it cut for stalling.
 fn chunk_timeout() -> MockResponse {
     MockResponse::api_error(
         408,
@@ -1172,12 +1359,12 @@ fn chunk_timeout() -> MockResponse {
     )
 }
 
-/// **Slow link.** A large file on a link that carries at most 256 KiB inside
-/// the server's read deadline: every larger body is timed out. The client
-/// re-sends at the same offset, halving through and below the 4 MiB large-file
-/// floor, until a chunk arrives; once one does, the transfer progresses.
+/// **Stalling link.** A large file on a link that stalls on every body larger
+/// than 256 KiB: the server cuts each one. The client re-sends at the same
+/// offset, halving each time, until a chunk arrives; once one does, the
+/// transfer progresses.
 #[tokio::test]
-async fn recovery_chunk_timeout_resends_smaller_below_the_large_file_floor() {
+async fn recovery_chunk_timeout_resends_shorter_at_the_same_offset() {
     const LINK_LIMIT: usize = 256 * 1024;
     let size = 200 * 1024 * 1024;
     let patches = Arc::new(Mutex::new(Vec::<(u64, usize)>::new()));
@@ -1217,11 +1404,11 @@ async fn recovery_chunk_timeout_resends_smaller_below_the_large_file_floor() {
             (0, 512 * 1024),
             (0, LINK_LIMIT),
         ],
-        "each timed-out chunk is re-sent at the same offset, half the size"
+        "each stalled chunk is re-sent at the same offset, half the size"
     );
 }
 
-/// A link that cannot carry even the 4 KiB protocol minimum inside the deadline
+/// A link that stalls on even the 4 KiB protocol minimum
 /// fails loudly on the recovery budget rather than re-sending forever.
 #[tokio::test]
 async fn a_chunk_that_always_times_out_exhausts_the_budget() {
@@ -1248,11 +1435,293 @@ async fn a_chunk_that_always_times_out_exhausts_the_budget() {
         matches!(err, UploadError::RetriesExhausted(_)),
         "got {err:?}"
     );
+    // Six halvings take 256 KiB to the 4 KiB minimum; those cuts are charged to the budget
+    // progress refills, and every re-send at the minimum to the per-transfer one.
     assert_eq!(
         patch_count.load(Ordering::SeqCst),
-        MAX_RECOVERIES as usize + 1,
-        "every re-send is charged to the one budget"
+        6 + MAX_RECOVERIES as usize + 1,
+        "every re-send at the minimum is charged to the per-transfer budget"
     );
+}
+
+/// **A long upload over a link that slows down again and again.** Every chunk above the
+/// protocol minimum times out, so each time the size grows back after a run of landed chunks
+/// it is cut down again. Shrinking cuts are charged to a budget each accepted chunk refills, so
+/// a transfer that keeps making progress completes however many cuts it takes in total, well
+/// past the per-transfer [`MAX_RECOVERIES`] ceiling.
+#[tokio::test]
+async fn shrinking_cuts_between_accepted_chunks_do_not_spend_the_per_transfer_budget() {
+    let cuts = Arc::new(AtomicUsize::new(0));
+    let c = cuts.clone();
+    let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+        ("POST", "/") => created("sess-flaky", CHUNK_SIZE_256KB),
+        ("PATCH", "/sess-flaky") => {
+            if req.body.len() as u64 > PROTOCOL_MIN_CHUNK {
+                c.fetch_add(1, Ordering::SeqCst);
+                return chunk_timeout();
+            }
+            MockResponse::new(204, "No Content")
+                .header("X-Capsule-Offset", ack_offset(req).to_string())
+        }
+        other => panic!("unexpected {other:?}"),
+    })
+    .await;
+
+    let client = server.client(PROTOCOL);
+    let data = vec![2u8; 2 * 1024 * 1024];
+    let outcome = client
+        .upload(&request(data.len() as u64), &data)
+        .await
+        .expect("progress refills the shrinking-cut budget");
+
+    assert!(matches!(outcome, UploadOutcome::Completed { .. }));
+    assert!(
+        cuts.load(Ordering::SeqCst) > MAX_RECOVERIES as usize,
+        "the transfer took {} cuts, more than the per-transfer ceiling",
+        cuts.load(Ordering::SeqCst)
+    );
+}
+
+/// A run of shrinking cuts that lands nothing fails loudly once it passes
+/// [`MAX_CUTS_SINCE_PROGRESS`], and an accepted chunk refills that budget without refilling
+/// the per-transfer one.
+#[test]
+fn the_shrinking_cut_budget_refills_on_progress_and_bounds_a_run_without_it() {
+    let mut recovery = Recovery::new(LaneRetries::new(u32::MAX), None);
+    for _ in 0..MAX_CUTS_SINCE_PROGRESS {
+        recovery.charge_cut("cut").unwrap();
+    }
+    recovery.on_progress();
+    for _ in 0..MAX_CUTS_SINCE_PROGRESS {
+        recovery.charge_cut("cut").unwrap();
+    }
+    assert!(matches!(
+        recovery.charge_cut("cut"),
+        Err(UploadError::RetriesExhausted(_))
+    ));
+
+    let mut recovery = Recovery::new(LaneRetries::new(u32::MAX), None);
+    for _ in 0..MAX_RECOVERIES {
+        recovery.charge("re-align").unwrap();
+    }
+    recovery.on_progress();
+    assert!(
+        matches!(
+            recovery.charge("re-align"),
+            Err(UploadError::RetriesExhausted(_))
+        ),
+        "progress does not refill the per-transfer budget"
+    );
+}
+
+/// A shrinking cut is a retry to the server lane: it spends from the lane's shared budget, and
+/// fails loudly once that is spent even with the cut budget unspent; the accepted chunks that
+/// refill the cut budget earn toward the lane's.
+#[test]
+fn a_shrinking_cut_spends_the_lane_retry_budget() {
+    let lane = LaneRetries::new(2);
+    let mut recovery = Recovery::new(lane.clone(), None);
+    recovery.charge_cut("cut").unwrap();
+    recovery.charge_cut("cut").unwrap();
+    assert_eq!(lane.remaining(), 0);
+    assert!(matches!(
+        recovery.charge_cut("cut"),
+        Err(UploadError::RetriesExhausted(_))
+    ));
+
+    for _ in 0..crate::net::LANE_SUCCESSES_PER_RETRY {
+        recovery.on_progress();
+    }
+    assert_eq!(lane.remaining(), 1, "accepted chunks earn toward the lane");
+    recovery.charge_cut("cut").unwrap();
+}
+
+/// Bounds short enough to cut a black-holed request inside a test: a 200 ms stall bound and a
+/// 400 ms response wait.
+fn short_bounds() -> RequestBounds {
+    RequestBounds::new(Duration::from_millis(200), Duration::from_millis(400))
+}
+
+/// **Black-holed request.** The server reads a whole chunk and then never answers, holding the
+/// connection open. Without a bound of its own the client would wait until the OS gave up;
+/// with one it cuts the request at the response wait and re-sends the same offset, shorter,
+/// which lands.
+#[tokio::test]
+async fn a_request_that_is_never_answered_is_cut_and_resent() {
+    let patches = Arc::new(Mutex::new(Vec::<(u64, usize)>::new()));
+    let p = patches.clone();
+    let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+        ("POST", "/") => created("sess-hole", CHUNK_SIZE_256KB),
+        ("PATCH", "/sess-hole") => {
+            let mut seen = p.lock().unwrap();
+            let offset = req.header("X-Capsule-Offset").unwrap().parse().unwrap();
+            seen.push((offset, req.body.len()));
+            if seen.len() == 1 {
+                return MockResponse::hold_open();
+            }
+            MockResponse::new(204, "No Content")
+                .header("X-Capsule-Offset", ack_offset(req).to_string())
+        }
+        other => panic!("unexpected {other:?}"),
+    })
+    .await;
+
+    let client = server.client(PROTOCOL).with_request_bounds(short_bounds());
+    let data = vec![3u8; 64 * 1024];
+    let started = std::time::Instant::now();
+    let outcome = tokio::time::timeout(
+        Duration::from_secs(20),
+        client.upload(&request(data.len() as u64), &data),
+    )
+    .await
+    .expect("the cut ends the black-holed request")
+    .unwrap();
+
+    assert!(matches!(outcome, UploadOutcome::Completed { .. }));
+    assert_eq!(
+        *patches.lock().unwrap(),
+        vec![(0, 64 * 1024), (0, 32 * 1024), (32 * 1024, 32 * 1024)],
+        "cut, then re-sent at the same offset, half the size"
+    );
+    assert!(started.elapsed() >= short_bounds().response_wait);
+}
+
+/// **A link too slow to drain the buffered tail.** The client hands a whole chunk to the HTTP
+/// stack long before it is on the wire, so on a slow enough link the response wait runs out
+/// while the tail is still in the send buffers, and the server — which accepts every byte it
+/// receives — never got the chance to answer. Here every body larger than the link can drain
+/// inside the response wait goes unanswered. The client shrinks on each cut rather than
+/// re-sending the same size until its retries run out, and the transfer completes.
+#[tokio::test]
+async fn a_chunk_too_slow_to_drain_inside_the_response_wait_is_resent_shorter() {
+    const DRAINS_IN_TIME: usize = 64 * 1024;
+    let patches = Arc::new(Mutex::new(Vec::<(u64, usize)>::new()));
+    let p = patches.clone();
+    let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+        ("POST", "/") => created("sess-drain", CHUNK_SIZE_256KB),
+        ("PATCH", "/sess-drain") => {
+            let offset = req.header("X-Capsule-Offset").unwrap().parse().unwrap();
+            p.lock().unwrap().push((offset, req.body.len()));
+            if req.body.len() > DRAINS_IN_TIME {
+                return MockResponse::hold_open();
+            }
+            MockResponse::new(204, "No Content")
+                .header("X-Capsule-Offset", ack_offset(req).to_string())
+        }
+        other => panic!("unexpected {other:?}"),
+    })
+    .await;
+
+    let client = server.client(PROTOCOL).with_request_bounds(short_bounds());
+    let data = vec![4u8; CHUNK_SIZE_256KB as usize];
+    let outcome = tokio::time::timeout(
+        Duration::from_secs(30),
+        client.upload(&request(data.len() as u64), &data),
+    )
+    .await
+    .expect("the shrinking re-sends converge")
+    .expect("a slow but live link is never given up on");
+
+    assert!(matches!(outcome, UploadOutcome::Completed { .. }));
+    let patches = patches.lock().unwrap();
+    assert_eq!(
+        patches[..3],
+        [(0, 256 * 1024), (0, 128 * 1024), (0, DRAINS_IN_TIME)],
+        "each unanswered chunk is re-sent at the same offset, half the size"
+    );
+    assert!(
+        patches[3..].iter().all(|&(_, len)| len <= DRAINS_IN_TIME),
+        "the size holds after the cut: {patches:?}"
+    );
+}
+
+/// **A ceiling-sized chunk on a link that falls to about 1 KiB/s.** A chunk grown to the
+/// 16 MiB ceiling needs twelve halvings to reach what such a link drains inside the response
+/// wait. Here the link drains only the protocol minimum until a chunk lands, then recovers.
+/// Every cut that shrinks is a stall re-send, not a transport reset, so the eight reset retries
+/// are never spent on them and the transfer completes rather than giving up at 64 KiB.
+#[tokio::test]
+async fn a_ceiling_chunk_on_a_link_that_falls_to_a_crawl_shrinks_past_the_reset_budget() {
+    let patches = Arc::new(Mutex::new(Vec::<(u64, usize)>::new()));
+    let p = patches.clone();
+    let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+        ("POST", "/") => created("sess-crawl", CHUNK_SIZE_16MB),
+        ("PATCH", "/sess-crawl") => {
+            let mut seen = p.lock().unwrap();
+            let offset = req.header("X-Capsule-Offset").unwrap().parse().unwrap();
+            seen.push((offset, req.body.len()));
+            // Slow until the first chunk lands: everything above the minimum goes unanswered.
+            if offset == 0 && req.body.len() as u64 > PROTOCOL_MIN_CHUNK {
+                return MockResponse::hold_open();
+            }
+            MockResponse::new(204, "No Content")
+                .header("X-Capsule-Offset", ack_offset(req).to_string())
+        }
+        other => panic!("unexpected {other:?}"),
+    })
+    .await;
+
+    let client = server.client(PROTOCOL).with_request_bounds(short_bounds());
+    // The 16 MiB ceiling is the >= 100 MiB tier's.
+    let data = vec![6u8; 100 * 1024 * 1024];
+    let outcome = tokio::time::timeout(
+        Duration::from_secs(60),
+        client.upload(&request(data.len() as u64), &data),
+    )
+    .await
+    .expect("shrinking cuts take no reset backoff")
+    .expect("a cut that shrinks does not spend the reset retries");
+
+    assert!(matches!(outcome, UploadOutcome::Completed { .. }));
+    let patches = patches.lock().unwrap();
+    let halvings: Vec<(u64, usize)> = (0..=12)
+        .map(|n| (0, (CHUNK_SIZE_16MB >> n) as usize))
+        .collect();
+    assert_eq!(
+        patches[..13],
+        halvings[..],
+        "each unanswered cut is re-sent at the same offset, half the size, down to the minimum"
+    );
+    assert_eq!(
+        patches[13].0, PROTOCOL_MIN_CHUNK,
+        "the minimum chunk landed"
+    );
+}
+
+/// **Slow server, live link.** A server that takes longer than the stall bound to write and
+/// answer a chunk it has received whole is inside the longer response-wait bound: the chunk is
+/// not cut, and nothing is re-sent.
+#[tokio::test]
+async fn a_slow_answer_inside_the_response_wait_is_not_cut() {
+    let patch_count = Arc::new(AtomicUsize::new(0));
+    let pc = patch_count.clone();
+    let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+        ("POST", "/") => created("sess-slow-fsync", CHUNK_SIZE_256KB),
+        ("PATCH", "/sess-slow-fsync") => {
+            pc.fetch_add(1, Ordering::SeqCst);
+            MockResponse::new(204, "No Content")
+                .header("X-Capsule-Offset", ack_offset(req).to_string())
+                .after(Duration::from_millis(300))
+        }
+        other => panic!("unexpected {other:?}"),
+    })
+    .await;
+
+    // The answer takes 300 ms: past the 100 ms stall bound, inside the 2 s response wait.
+    let client = server
+        .client(PROTOCOL)
+        .with_request_bounds(RequestBounds::new(
+            Duration::from_millis(100),
+            Duration::from_secs(2),
+        ));
+    let data = vec![5u8; 64 * 1024];
+    let outcome = client
+        .upload(&request(data.len() as u64), &data)
+        .await
+        .unwrap();
+
+    assert!(matches!(outcome, UploadOutcome::Completed { .. }));
+    assert_eq!(patch_count.load(Ordering::SeqCst), 1, "nothing was cut");
 }
 
 #[tokio::test]
@@ -1453,6 +1922,243 @@ async fn a_mid_drive_recreate_seeds_the_first_chunk_from_the_new_advice() {
     assert_eq!(*patch_offsets.lock().unwrap(), vec![0, advised]);
 }
 
+// ─── Finalization is read from HEAD ─────────────────────────────────────────
+
+/// A `HEAD` answer for an 8 KiB session in `status`, with the failure code when one is given.
+fn head_at_size(status: &str, error: Option<&str>) -> MockResponse {
+    let response = MockResponse::new(200, "OK")
+        .header("X-Capsule-Offset", "8192")
+        .header("X-Capsule-Content-Length", "8192")
+        .header("X-Capsule-Upload-Status", status);
+    match error {
+        Some(code) => response.header("X-Capsule-Upload-Error", code),
+        None => response,
+    }
+}
+
+/// A server that answers the completing chunk `waiting_for_processing` and then reports
+/// `states` to successive `HEAD`s, the last of them for every `HEAD` after it. Counts the
+/// `HEAD`s it answered.
+fn finalizing_server(
+    states: Vec<(&'static str, Option<&'static str>)>,
+) -> (
+    impl Fn(&MockRequest) -> MockResponse + Send + Sync + 'static,
+    Arc<AtomicUsize>,
+) {
+    let heads = Arc::new(AtomicUsize::new(0));
+    let seen = heads.clone();
+    let handler = move |req: &MockRequest| match (req.method.as_str(), req.path.as_str()) {
+        ("POST", "/") => created("sess-fin", CHUNK_SIZE_256KB),
+        ("PATCH", "/sess-fin") => {
+            let new_offset = ack_offset(req);
+            let status = if new_offset == 8192 {
+                "waiting_for_processing"
+            } else {
+                "uploading"
+            };
+            MockResponse::new(204, "No Content")
+                .header("X-Capsule-Offset", new_offset.to_string())
+                .header("X-Capsule-Upload-Status", status)
+        }
+        ("HEAD", "/sess-fin") => {
+            let n = seen.fetch_add(1, Ordering::SeqCst);
+            let (status, error) = states[n.min(states.len() - 1)];
+            head_at_size(status, error)
+        }
+        other => panic!("unexpected {other:?}"),
+    };
+    (handler, heads)
+}
+
+/// The completing chunk is answered `waiting_for_processing`, so the client polls `HEAD` with
+/// backoff until the server reports the session `completed` — and that is the outcome.
+#[tokio::test]
+async fn a_waiting_completion_polls_head_until_the_session_completes() {
+    let (handler, heads) = finalizing_server(vec![
+        ("waiting_for_processing", None),
+        ("waiting_for_processing", None),
+        ("completed", None),
+    ]);
+    let server = MockServer::start(handler).await;
+
+    let data = vec![1u8; 8192];
+    let outcome = server
+        .client(PROTOCOL)
+        .upload(&request(8192), &data)
+        .await
+        .unwrap();
+
+    match outcome {
+        UploadOutcome::Completed { session_id } => assert_eq!(session_id, "sess-fin"),
+        other @ UploadOutcome::AlreadyStored { .. } => panic!("expected Completed, got {other:?}"),
+    }
+    assert_eq!(
+        heads.load(Ordering::SeqCst),
+        3,
+        "polled until the terminal state"
+    );
+}
+
+/// A session finalization refused is the refusal, carrying the code `HEAD` reported in
+/// `X-Capsule-Upload-Error` — the code a caller switches on, as it did when the completing chunk
+/// itself was refused.
+#[tokio::test]
+async fn a_failed_finalization_is_the_rejection_head_names() {
+    let (handler, heads) = finalizing_server(vec![
+        ("waiting_for_processing", None),
+        (
+            "failed_processing",
+            Some(error_codes::UPLOAD_CONTENT_HASH_MISMATCH),
+        ),
+    ]);
+    let server = MockServer::start(handler).await;
+
+    let data = vec![2u8; 8192];
+    let error = server
+        .client(PROTOCOL)
+        .upload(&request(8192), &data)
+        .await
+        .expect_err("a refused finalization fails the upload");
+
+    match error {
+        UploadError::Rejected { code, .. } => {
+            assert_eq!(
+                code.as_deref(),
+                Some(error_codes::UPLOAD_CONTENT_HASH_MISMATCH)
+            );
+        }
+        other => panic!("expected the finalization's rejection, got {other:?}"),
+    }
+    assert_eq!(heads.load(Ordering::SeqCst), 2);
+}
+
+/// A duplicate create that hands back a full session `waiting_for_processing` sends nothing more
+/// and reads the outcome from `HEAD`.
+#[tokio::test]
+async fn a_resumed_full_session_waiting_for_processing_is_polled_not_resent() {
+    let heads = Arc::new(AtomicUsize::new(0));
+    let seen = heads.clone();
+    let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+        ("POST", "/") => MockResponse::new(200, "OK")
+            .header("Location", "/upload/sess-full")
+            .header("X-Capsule-Offset", "8192")
+            .header("X-Capsule-Upload-Status", "waiting_for_processing")
+            .json_body(format!(
+                r#"{{"id":"sess-full","upload_url":"/upload/sess-full","suggested_chunk_size":{CHUNK_SIZE_256KB}}}"#
+            )),
+        ("HEAD", "/sess-full") => {
+            seen.fetch_add(1, Ordering::SeqCst);
+            head_at_size("completed", None)
+        }
+        other => panic!("unexpected {other:?}"),
+    })
+    .await;
+
+    let data = vec![3u8; 8192];
+    let outcome = server
+        .client(PROTOCOL)
+        .upload(&request(8192), &data)
+        .await
+        .unwrap();
+
+    assert!(matches!(outcome, UploadOutcome::Completed { .. }));
+    assert_eq!(heads.load(Ordering::SeqCst), 1);
+}
+
+/// A server that finalizes before it answers sends no state on the completing chunk; its
+/// accepted chunk is the outcome and nothing is polled. Every mock above that answers no `HEAD`
+/// is such a server; this one says so.
+#[tokio::test]
+async fn a_server_that_sends_no_state_is_not_polled() {
+    let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+        ("POST", "/") => created("sess-old", CHUNK_SIZE_256KB),
+        ("PATCH", "/sess-old") => MockResponse::new(204, "No Content")
+            .header("X-Capsule-Offset", ack_offset(req).to_string()),
+        other => panic!("an older server is never asked {other:?}"),
+    })
+    .await;
+
+    let data = vec![4u8; 4096];
+    let outcome = server
+        .client(PROTOCOL)
+        .upload(&request(4096), &data)
+        .await
+        .unwrap();
+    assert!(matches!(outcome, UploadOutcome::Completed { .. }));
+}
+
+/// Against a server that stays `waiting_for_processing`, the poll's waits start at 100 ms and
+/// double up to their 5 s ceiling, and the poll gives up with `WaitsExhausted` — a slow server,
+/// not a stuck link — once their sum reaches the 30-minute deadline rather than polling a
+/// server that never finishes. Time is
+/// paused, so the waits are read off the clock the `HEAD`s arrive at, not slept.
+#[tokio::test(start_paused = true)]
+async fn the_finalization_poll_backs_off_and_is_bounded() {
+    let arrivals = Arc::new(Mutex::new(Vec::new()));
+    let seen = arrivals.clone();
+    let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+        ("POST", "/") => created("sess-stuck", CHUNK_SIZE_256KB),
+        ("PATCH", "/sess-stuck") => MockResponse::new(204, "No Content")
+            .header("X-Capsule-Offset", ack_offset(req).to_string())
+            .header("X-Capsule-Upload-Status", "waiting_for_processing"),
+        ("HEAD", "/sess-stuck") => {
+            seen.lock()
+                .expect("arrivals")
+                .push(tokio::time::Instant::now());
+            head_at_size("waiting_for_processing", None)
+        }
+        other => panic!("unexpected {other:?}"),
+    })
+    .await;
+
+    let data = vec![5u8; 8192];
+    let error = server
+        .client(PROTOCOL)
+        .upload(&request(8192), &data)
+        .await
+        .expect_err("a finalization that never ends fails the upload");
+    assert!(
+        matches!(error, UploadError::WaitsExhausted { status: 200, .. }),
+        "expected the poll to give up waiting, got {error:?}"
+    );
+
+    let arrivals = arrivals.lock().expect("arrivals");
+    let waits: Vec<Duration> = arrivals
+        .windows(2)
+        .map(|pair| pair[1].duration_since(pair[0]))
+        .collect();
+    let ms = Duration::from_millis;
+    assert_eq!(
+        waits[..7],
+        [
+            ms(100),
+            ms(200),
+            ms(400),
+            ms(800),
+            ms(1600),
+            ms(3200),
+            ms(5000)
+        ],
+        "the waits double from 100 ms to the 5 s ceiling"
+    );
+    assert!(
+        waits[7..]
+            .iter()
+            .all(|wait| *wait == Duration::from_secs(5)),
+        "the waits hold at the ceiling"
+    );
+    let total: Duration = waits.iter().sum();
+    let deadline = Duration::from_mins(30);
+    assert!(
+        total >= deadline,
+        "gave up after {total:?}, before the deadline"
+    );
+    assert!(
+        total.saturating_sub(waits[waits.len() - 1]) < deadline,
+        "polled again after the deadline had passed ({total:?})"
+    );
+}
+
 // ─── HEAD / DELETE / list ───────────────────────────────────────────────────
 
 #[tokio::test]
@@ -1470,6 +2176,26 @@ async fn head_reports_offset_and_status() {
     assert_eq!(info.offset, 100);
     assert_eq!(info.total_size, Some(200));
     assert_eq!(info.status, "uploading");
+    assert_eq!(info.error_code, None);
+}
+
+#[tokio::test]
+async fn head_reports_a_failed_sessions_error_code() {
+    let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+        ("HEAD", "/s1") => head_at_size(
+            "failed_processing",
+            Some(error_codes::UPLOAD_ENVELOPE_REJECTED),
+        ),
+        other => panic!("unexpected {other:?}"),
+    })
+    .await;
+
+    let info = server.client(PROTOCOL).head("s1").await.unwrap().unwrap();
+    assert_eq!(info.status, "failed_processing");
+    assert_eq!(
+        info.error_code.as_deref(),
+        Some(error_codes::UPLOAD_ENVELOPE_REJECTED)
+    );
 }
 
 #[tokio::test]
@@ -1483,17 +2209,23 @@ async fn head_returns_none_on_404() {
 async fn list_sessions_parses_rows() {
     let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
         ("GET", "/sessions") => MockResponse::new(200, "OK").json_body(
-            r#"{"sessions":[{"id":"s1","asset_id":"a1","received_bytes":100,"total_size":200,"status":"Uploading","extra_unknown":true}]}"#,
+            r#"{"sessions":[{"id":"s1","asset_id":"a1","received_bytes":100,"total_size":200,"status":"Uploading","extra_unknown":true},{"id":"s2","received_bytes":200,"total_size":200,"status":"failed_processing","error_code":"error.upload.stale_revival"}]}"#,
         ),
         other => panic!("unexpected {other:?}"),
     })
     .await;
 
     let rows = server.client(PROTOCOL).list_sessions().await.unwrap();
-    assert_eq!(rows.len(), 1);
+    assert_eq!(rows.len(), 2);
     assert_eq!(rows[0].id, "s1");
     assert_eq!(rows[0].received_bytes, 100);
     assert_eq!(rows[0].status, "Uploading");
+    assert_eq!(rows[0].error_code, None);
+    assert_eq!(rows[1].status, "failed_processing");
+    assert_eq!(
+        rows[1].error_code.as_deref(),
+        Some("error.upload.stale_revival")
+    );
 }
 
 #[tokio::test]
@@ -1743,4 +2475,251 @@ async fn an_upload_426_names_the_bound_it_broke() {
         }
         other => panic!("expected UpgradeRequired, got {other:?}"),
     }
+}
+
+// ─── The lane's shared retry budget and the transfer gate ───────────────────
+
+/// **A failing server costs at most the lane's retry budget.** Every transfer to one server
+/// spends from one shared budget, so once a server that only ever asks for a wait has taken the
+/// lane's three retries, the next transfer gives up at its first refusal instead of taking a
+/// full recovery ladder of its own.
+#[tokio::test]
+async fn transfers_to_one_server_share_its_lane_retry_budget() {
+    let creates = Arc::new(AtomicUsize::new(0));
+    let cr = creates.clone();
+    let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+        ("POST", "/") => {
+            cr.fetch_add(1, Ordering::SeqCst);
+            MockResponse::api_error(
+                503,
+                "Service Unavailable",
+                error_codes::UPLOAD_UNAVAILABLE,
+                "down",
+            )
+            .header("Retry-After", "0")
+        }
+        other => panic!("unexpected {other:?}"),
+    })
+    .await;
+
+    let lane = LaneRetries::new(3);
+    let client = server.client(PROTOCOL).with_lane_retries(lane.clone());
+    assert!(client.lane_retries().same_as(&lane));
+    let first = client.upload(&request(4096), &[9u8; 4096]).await;
+    let first = first.unwrap_err();
+    assert!(
+        matches!(first, UploadError::WaitsExhausted { status: 503, .. }),
+        "{first:?}"
+    );
+    assert_eq!(first.error_code(), Some(error_codes::UPLOAD_UNAVAILABLE));
+    assert_eq!(
+        creates.load(Ordering::SeqCst),
+        4,
+        "one try and three retries"
+    );
+
+    let second = client.clone().upload(&request(4096), &[9u8; 4096]).await;
+    let second = second.unwrap_err();
+    assert!(
+        matches!(second, UploadError::WaitsExhausted { status: 503, .. }),
+        "{second:?}"
+    );
+    assert_eq!(second.error_code(), Some(error_codes::UPLOAD_UNAVAILABLE));
+    assert_eq!(
+        creates.load(Ordering::SeqCst),
+        5,
+        "the second transfer to the same server got no retry at all"
+    );
+    assert_eq!(lane.remaining(), 0);
+}
+
+/// Accepted chunks earn the lane's retries back, so a server that recovers is retried again.
+#[tokio::test]
+async fn accepted_chunks_earn_the_lane_budget_back() {
+    let (handler, _) = recording_server(created("sess-earn", CHUNK_SIZE_256KB), "sess-earn");
+    let server = MockServer::start(handler).await;
+    let lane = LaneRetries::new(2);
+    assert!(lane.try_spend());
+    assert!(lane.try_spend());
+    let client = server.client(PROTOCOL).with_lane_retries(lane.clone());
+    // An answered create and four chunks of 256 KiB: two earned retries at one per two
+    // successes.
+    let size = 4 * CHUNK_SIZE_256KB;
+    let data = vec![1u8; size as usize];
+    client.upload(&request(size), &data).await.unwrap();
+    assert_eq!(lane.remaining(), 2);
+}
+
+/// **A server that paces creates does not drain the lane.** Every create is answered `429`
+/// with a `Retry-After` once before it is accepted; the answered create earns toward the lane
+/// as its accepted chunk does, so a one-retry lane honours the wait on every one of many
+/// single-chunk transfers instead of failing them once its first token is spent.
+#[tokio::test]
+async fn answered_creates_earn_the_lane_budget_back() {
+    let creates = Arc::new(AtomicUsize::new(0));
+    let cr = creates.clone();
+    let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+        ("POST", "/") => {
+            if cr.fetch_add(1, Ordering::SeqCst).is_multiple_of(2) {
+                MockResponse::api_error(
+                    429,
+                    "Too Many Requests",
+                    error_codes::UPLOAD_RATE_LIMITED,
+                    "wait",
+                )
+                .header("Retry-After", "0")
+            } else {
+                created("sess-paced", CHUNK_SIZE_256KB)
+            }
+        }
+        ("PATCH", "/sess-paced") => {
+            let new_offset = ack_offset(req);
+            MockResponse::new(204, "No Content").header("X-Capsule-Offset", new_offset.to_string())
+        }
+        other => panic!("unexpected {other:?}"),
+    })
+    .await;
+
+    let lane = LaneRetries::new(1);
+    let client = server.client(PROTOCOL).with_lane_retries(lane.clone());
+    for item in 0..10 {
+        let outcome = client.upload(&request(4096), &[9u8; 4096]).await;
+        assert!(
+            matches!(outcome, Ok(UploadOutcome::Completed { .. })),
+            "item {item}: {outcome:?}"
+        );
+    }
+    assert_eq!(
+        creates.load(Ordering::SeqCst),
+        20,
+        "one wait and one create each"
+    );
+    assert_eq!(lane.remaining(), 1);
+}
+
+/// What a recording gate saw, in order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum GateEvent {
+    Reserved(u64),
+    Released,
+    Advised(Option<u32>),
+}
+
+/// A gate that reserves every range at once and records what the transfer asked of it.
+struct RecordingGate {
+    queue: Mutex<Option<(queue::UploadQueue<()>, queue::GrantId)>>,
+    events: Mutex<Vec<GateEvent>>,
+}
+
+impl RecordingGate {
+    fn new() -> Self {
+        let mut queue = queue::UploadQueue::new(1 << 30, Duration::from_secs(30));
+        let server = queue::ServerKey::new("https://gate.test");
+        queue.enqueue(
+            &server,
+            queue::QueuedJob::new(capsule_library::import::UploadTier::Original, ()),
+        );
+        let grant = queue.next(std::time::Instant::now()).unwrap();
+        Self {
+            queue: Mutex::new(Some((queue, grant.id))),
+            events: Mutex::default(),
+        }
+    }
+
+    fn in_use(&self) -> u64 {
+        self.queue.lock().unwrap().as_ref().unwrap().0.in_use()
+    }
+}
+
+impl TransferGate for RecordingGate {
+    fn reserve(
+        &self,
+        len: u64,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<RangeId>> + Send + '_>> {
+        let mut held = self.queue.lock().unwrap();
+        let (queue, grant) = held.as_mut().unwrap();
+        let range = queue
+            .reserve_range(*grant, len, std::time::Instant::now())
+            .expect("one range at a time fits");
+        self.events.lock().unwrap().push(GateEvent::Reserved(len));
+        Box::pin(std::future::ready(Some(range)))
+    }
+
+    fn release(&self, range: RangeId) {
+        let mut held = self.queue.lock().unwrap();
+        let (queue, _) = held.as_mut().unwrap();
+        assert!(queue.release_range(range, std::time::Instant::now()));
+        self.events.lock().unwrap().push(GateEvent::Released);
+    }
+
+    fn advised(&self, advice: &ServerAdvice) {
+        self.events.lock().unwrap().push(GateEvent::Advised(Some(
+            advice.sessions_window(16, Duration::ZERO),
+        )));
+    }
+}
+
+/// **Every range reserves its length while in flight, and only then.** A gated transfer
+/// reserves each chunk before reading it, gives it back once its request is answered, holds
+/// one range at a time, and reports the advice its create carried.
+#[tokio::test]
+async fn a_gated_transfer_reserves_each_range_while_it_is_in_flight() {
+    let (handler, offsets) = recording_server(created("sess-gate", CHUNK_SIZE_256KB), "sess-gate");
+    let server = MockServer::start(handler).await;
+    let gate = RecordingGate::new();
+    let size = 300 * 1024;
+    let data = vec![4u8; size as usize];
+    let outcome = server
+        .client(PROTOCOL)
+        .upload_gated(&request(size), &data, &gate)
+        .await
+        .unwrap();
+    assert!(matches!(outcome, UploadOutcome::Completed { .. }));
+    assert_eq!(*offsets.lock().unwrap(), vec![0, CHUNK_SIZE_256KB]);
+    assert_eq!(
+        *gate.events.lock().unwrap(),
+        vec![
+            GateEvent::Advised(Some(4)),
+            GateEvent::Reserved(CHUNK_SIZE_256KB),
+            GateEvent::Released,
+            GateEvent::Reserved(size - CHUNK_SIZE_256KB),
+            GateEvent::Released,
+        ]
+    );
+    assert_eq!(
+        gate.in_use(),
+        0,
+        "nothing is held once the transfer is done"
+    );
+}
+
+/// A range whose request fails still gives its bytes back.
+#[tokio::test]
+async fn a_refused_range_gives_its_reservation_back() {
+    let server = MockServer::start(|req| match (req.method.as_str(), req.path.as_str()) {
+        ("POST", "/") => created("sess-refused", CHUNK_SIZE_256KB),
+        ("PATCH", "/sess-refused") => MockResponse::api_error(
+            403,
+            "Forbidden",
+            error_codes::UPLOAD_ALBUM_ACCESS_DENIED,
+            "no",
+        ),
+        other => panic!("unexpected {other:?}"),
+    })
+    .await;
+    let gate = RecordingGate::new();
+    let err = server
+        .client(PROTOCOL)
+        .upload_gated(&request(4096), &[0u8; 4096], &gate)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, UploadError::Rejected { status: 403, .. }),
+        "{err:?}"
+    );
+    assert_eq!(gate.in_use(), 0);
+    assert_eq!(
+        gate.events.lock().unwrap().last(),
+        Some(&GateEvent::Released)
+    );
 }

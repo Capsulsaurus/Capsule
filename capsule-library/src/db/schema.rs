@@ -21,10 +21,13 @@
 /// v5: added `assets.caption`, `assets.latitude` and `assets.longitude` — the index
 ///     projections of the sidecar `caption` LWW register and its effective location
 ///     (`gps_user` over the as-imported `gps`). All three are nullable: `NULL` is "none".
+/// v6: added `idx_assets_album_recency` — the covering index the album order reads: the latest
+///     effective capture among each album's visible, untrashed assets (SSoT:
+///     design/organization § Album Order and Recency). No column is added; recency is derived.
 ///
 /// **Bumping this constant requires appending a step to `db::migrate::STEPS`** —
 /// `steps_form_a_contiguous_chain` fails otherwise. Never edit a step that has shipped.
-pub(crate) const SCHEMA_VERSION: u32 = 5;
+pub(crate) const SCHEMA_VERSION: u32 = 6;
 
 pub(crate) const DDL: &str = r"
 PRAGMA journal_mode = WAL;
@@ -103,6 +106,8 @@ CREATE INDEX IF NOT EXISTS idx_assets_stack      ON assets(stack_id);
 CREATE INDEX IF NOT EXISTS idx_assets_type       ON assets(asset_type);
 CREATE INDEX IF NOT EXISTS idx_assets_hidden     ON assets(is_hidden);
 CREATE INDEX IF NOT EXISTS idx_assets_timeline   ON assets(is_deleted, is_stack_hidden, is_hidden, capture_utc, capture_timestamp);
+CREATE INDEX IF NOT EXISTS idx_assets_album_recency
+    ON assets(album_id, is_deleted, is_hidden, capture_utc, capture_timestamp);
 CREATE INDEX IF NOT EXISTS idx_stacks_type       ON asset_stacks(stack_type);
 CREATE INDEX IF NOT EXISTS idx_stacks_primary    ON asset_stacks(primary_asset_id);
 CREATE INDEX IF NOT EXISTS idx_stack_members_stack  ON stack_members(stack_id);

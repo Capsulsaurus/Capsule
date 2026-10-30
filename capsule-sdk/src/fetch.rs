@@ -14,6 +14,9 @@
 //!   representation already in hand ([`best_available`]) — down to the always-present
 //!   LQIP — never removing the asset's metadata or index entry
 //!   ([`open_representation`]).
+//! - **The render ladder.** [`render_step`] extends that ladder with what the device holds,
+//!   a RAW original's embedded preview included, and answers what a surface shows now and what
+//!   to fetch or generate next; it is the one ladder the apps reach over the FFI.
 //! - **Resumable ranged fetch.** [`fetch_blob`] fetches a blob with HTTP `Range`
 //!   windows; an interrupted transfer resumes from the last persisted byte instead
 //!   of restarting, and re-fetches zero bytes it already holds. [`fetch_blob_into`]
@@ -66,8 +69,13 @@ use crate::net::{
     StallDetector, SystemClock, TokioSleeper, TransferSignal,
 };
 
+mod ladder;
 mod resumable;
 
+pub use ladder::{
+    LocalHoldings, NextStep, PixelSize, RenderRequest, RenderStep, Rendition, RungSource,
+    render_step, thumbnail_long_edge,
+};
 pub use resumable::{PARTIAL_SUFFIX, fetch_blob_to_file, partial_path};
 
 // ─── Representation ladder ───────────────────────────────────────────────────

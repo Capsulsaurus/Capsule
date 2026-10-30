@@ -34,6 +34,11 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
 import com.justin13888.capsule.screens.DetailScreen
 import com.justin13888.capsule.screens.ListScreen
+import com.justin13888.capsule.screens.culling.CullPort
+import com.justin13888.capsule.screens.culling.CullingScreen
+import com.justin13888.capsule.screens.culling.CullingViewModel
+import com.justin13888.capsule.screens.culling.FfiCullPort
+import com.justin13888.capsule.screens.culling.InMemoryCullPort
 import com.justin13888.capsule.screens.domain.AlbumId
 import com.justin13888.capsule.screens.domain.AssetId
 import com.justin13888.capsule.screens.domain.LabelPort
@@ -74,6 +79,10 @@ data class AssetViewerDestination(
     val assetId: String,
 )
 
+/** The keyboard-driven, accessible cull pass over the library. */
+@Serializable
+object CullingDestination
+
 /** Sign in to a server for the session the transfer view follows. */
 @Serializable
 object SignInDestination
@@ -86,8 +95,9 @@ data class CollectionLabelsDestination(
 )
 
 /**
- * What the transfer view and the label editor run on: their two ports, and the subjects
- * the home menu opens the editors on. A subject the world has none of hides its entry.
+ * What the transfer view, the label editor and the culling pass run on: their ports, and
+ * the subjects the home menu opens the editors on. A subject the world has none of hides
+ * its entry.
  */
 class ScreenPorts(
     val transferEvents: TransferEventPort,
@@ -95,9 +105,13 @@ class ScreenPorts(
     val sampleAsset: AssetId?,
     val sampleStack: StackId?,
     val sampleAlbum: AlbumId?,
+    val culling: CullPort,
 ) {
     companion object {
-        /** The mock world: its recorded transfer feed, its label store, and its sample subjects. */
+        /**
+         * The mock world: its recorded transfer feed, its label store, its sample subjects,
+         * and a sample pass to cull.
+         */
         fun mock(environment: MockEnvironment = MockEnvironment()): ScreenPorts =
             ScreenPorts(
                 environment.transferEvents,
@@ -105,11 +119,12 @@ class ScreenPorts(
                 environment.sampleAsset,
                 environment.sampleStack,
                 environment.sampleAlbum,
+                InMemoryCullPort.sample(environment.seed),
             )
 
         /**
-         * The Rust-backed world: labels and regions over [workspace], and the transfer
-         * events of [session], or none while nothing is signed in. The album editor opens
+         * The Rust-backed world: labels, regions and the cull verbs over [workspace], and
+         * the transfer events of [session], or none while nothing is signed in. The album editor opens
          * on the workspace's default album; [sampleAsset] and [sampleStack] are whatever
          * the caller's library shows.
          */
@@ -125,6 +140,7 @@ class ScreenPorts(
                 sampleAsset = sampleAsset,
                 sampleStack = sampleStack,
                 sampleAlbum = AlbumId(workspace.defaultAlbumId()),
+                culling = FfiCullPort(workspace),
             )
     }
 }
@@ -152,6 +168,7 @@ fun App(
                 composable<ListDestination> {
                     HomeShell(
                         openTransfers = { navController.navigate(TransferBoardDestination) },
+                        openCulling = { navController.navigate(CullingDestination) },
                         openSignIn = sessions?.takeIf { !signedIn }?.let { { navController.navigate(SignInDestination) } },
                         openSampleAsset = ports.sampleAsset?.let { { navController.navigate(AssetViewerDestination(it.value)) } },
                         openStackLabels =
@@ -177,6 +194,10 @@ fun App(
                         viewModel { TransferBoardViewModel(ports.transferEvents, SystemClock::elapsedRealtime) }
                     TransferBoardScreen(boardViewModel, navigateBack = { navController.popBackStack() })
                 }
+                composable<CullingDestination> {
+                    val culling = viewModel { CullingViewModel(ports.culling) }
+                    CullingScreen(culling, navigateBack = { navController.popBackStack() })
+                }
                 if (sessions != null) {
                     composable<SignInDestination> {
                         val signIn = viewModel { SignInViewModel(sessions) }
@@ -201,11 +222,15 @@ fun App(
     }
 }
 
-/** The home screen's app bar: an overflow menu into sign-in, the transfer view and the label editors. */
+/**
+ * The home screen's app bar: an overflow menu into sign-in, the transfer view, the culling
+ * pass and the label editors.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun HomeShell(
     openTransfers: () -> Unit,
+    openCulling: () -> Unit,
     openSignIn: (() -> Unit)?,
     openSampleAsset: (() -> Unit)?,
     openStackLabels: (() -> Unit)?,
@@ -235,6 +260,10 @@ private fun HomeShell(
                         DropdownMenuItem(
                             text = { Text(stringResource(R.string.app_transfer_board_title)) },
                             onClick = { choose(openTransfers) },
+                        )
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.app_culling_open)) },
+                            onClick = { choose(openCulling) },
                         )
                         openSampleAsset?.let { open ->
                             DropdownMenuItem(

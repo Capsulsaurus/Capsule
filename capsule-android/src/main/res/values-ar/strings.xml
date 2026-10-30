@@ -1793,6 +1793,7 @@
     <string name="error_auth_oidc_state_invalid">انتهت صلاحية تسجيل الدخول هذا. ابدأ من جديد.</string>
     <string name="error_auth_oidc_token_invalid">تعذّر التحقق من استجابة موفّر الهوية.</string>
     <string name="error_auth_oidc_unavailable">تعذّر على Capsule الوصول إلى موفّر الهوية حاليًا. يُرجى المحاولة مرة أخرى.</string>
+    <string name="error_auth_password_disabled">لا يقبل هذا الخادم تسجيل الدخول إلا عبر تسجيل الدخول الموحّد.</string>
     <string name="error_auth_password_invalid">لا يمكن استخدام كلمة المرور هذه.</string>
     <string name="error_auth_profile_invalid">لا يمكن استخدام هذا الاسم المعروض.</string>
     <string name="error_auth_profile_not_found">لم يعد هذا الحساب موجودًا.</string>

@@ -15,12 +15,14 @@
 //! never a live NIC probe, so every rule is a deterministic unit test.
 
 use std::collections::VecDeque;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use capsule_library::import::UploadTier;
 use tracing::instrument;
 
 pub mod negotiation;
+pub mod path;
 
 /// The closed connection-class enum, evaluated continuously on-device.
 /// Consumers: sync criteria (small/large reconciliation), staged-upload tier
@@ -325,6 +327,14 @@ impl AdverseDetector {
         }
     }
 
+    /// Forget every outcome observed so far and return to non-adverse: the link they were
+    /// observed on is gone ([`path::PathMonitor::observe`] calls this on a new path).
+    pub fn reset(&mut self) {
+        self.recent.clear();
+        self.consecutive_clean = 0;
+        self.adverse = false;
+    }
+
     /// Whether the link is currently promoted to `adverse`.
     #[must_use]
     pub fn is_adverse(&self) -> bool {
@@ -573,6 +583,186 @@ impl RetryEngine {
     }
 }
 
+// ─── Retry classification ────────────────────────────────────────────────────
+
+/// What one failed request permits, decided before any retry is taken (networking doc, Retry
+/// Policy Classes: "errors are classified before any retry").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RetryVerdict {
+    /// A transient failure: a transport failure, any `5xx`, `408`, `425` or `429`. It may be
+    /// retried under the surface's class, its item's attempt cap and the lane's retry budget.
+    Retryable,
+    /// A contract `4xx` the recovery matrix names an action for (re-align, re-create, re-send,
+    /// merge): the client takes that action, and it charges the same budgets a retry does.
+    Recover,
+    /// A contract refusal the recovery matrix names no action for, or an answer that is not a
+    /// failure at all: surfaced, never retried.
+    Terminal,
+}
+
+impl RetryVerdict {
+    /// A request that got no answer: the connection failed, reset, or timed out.
+    #[must_use]
+    pub const fn of_transport() -> Self {
+        Self::Retryable
+    }
+
+    /// An answer with HTTP `status`. `recovery_names_action` says whether the recovery matrix
+    /// names an action for the `error.*` code the answer carried; it only matters for a `4xx`
+    /// outside the transient set, because a transient status is retryable whatever its code.
+    #[must_use]
+    pub const fn of_status(status: u16, recovery_names_action: bool) -> Self {
+        match status {
+            408 | 425 | 429 | 500..=599 => Self::Retryable,
+            400..=499 if recovery_names_action => Self::Recover,
+            _ => Self::Terminal,
+        }
+    }
+
+    /// Whether this verdict permits another request at all.
+    #[must_use]
+    pub const fn permits_retry(self) -> bool {
+        !matches!(self, Self::Terminal)
+    }
+}
+
+// ─── Lane retry budget ───────────────────────────────────────────────────────
+
+/// The retries one server lane may take while nothing succeeds. Twice an upload's own
+/// recovery cap, so a single item's attempt cap binds before the lane's budget does and the
+/// budget only bites when several items fail against the same server.
+pub const DEFAULT_LANE_RETRY_BUDGET: u32 = 128;
+
+/// Successes that earn one retry back, up to the budget's capacity. Two bounds the retries a
+/// steadily working lane adds to half its successful requests.
+pub const LANE_SUCCESSES_PER_RETRY: u32 = 2;
+
+/// One server lane's shared retry budget (networking doc, Retry Policy Classes: "each server
+/// lane holds one shared retry budget").
+///
+/// Every retry any item on the lane takes spends one token; successes earn tokens back, one per
+/// [`LANE_SUCCESSES_PER_RETRY`], never above the capacity. A server that fails every request
+/// therefore costs at most `capacity` retries in total, however many items are queued for it,
+/// rather than one full retry ladder per item. A pure value; [`LaneRetries`] shares one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LaneRetryBudget {
+    capacity: u32,
+    tokens: u32,
+    /// Successes counted toward the next earned token.
+    successes: u32,
+}
+
+impl Default for LaneRetryBudget {
+    fn default() -> Self {
+        Self::new(DEFAULT_LANE_RETRY_BUDGET)
+    }
+}
+
+impl LaneRetryBudget {
+    /// A full budget of `capacity` retries. Zero is a lane that never retries.
+    #[must_use]
+    pub const fn new(capacity: u32) -> Self {
+        Self {
+            capacity,
+            tokens: capacity,
+            successes: 0,
+        }
+    }
+
+    /// The most retries the budget ever holds.
+    #[must_use]
+    pub const fn capacity(&self) -> u32 {
+        self.capacity
+    }
+
+    /// The retries left before the lane stops retrying.
+    #[must_use]
+    pub const fn remaining(&self) -> u32 {
+        self.tokens
+    }
+
+    /// Spend one retry. `false` means the budget is spent: the caller must not retry, and gives
+    /// the item up as the failure it is.
+    pub fn try_spend(&mut self) -> bool {
+        if self.tokens == 0 {
+            tracing::debug!(
+                capacity = self.capacity,
+                "lane retry budget spent; refusing a retry"
+            );
+            return false;
+        }
+        self.tokens -= 1;
+        tracing::trace!(
+            remaining = self.tokens,
+            "lane retry budget: one retry spent"
+        );
+        true
+    }
+
+    /// Record one request that succeeded, earning a retry back every
+    /// [`LANE_SUCCESSES_PER_RETRY`] successes.
+    pub fn record_success(&mut self) {
+        if self.tokens >= self.capacity {
+            self.successes = 0;
+            return;
+        }
+        self.successes += 1;
+        if self.successes >= LANE_SUCCESSES_PER_RETRY {
+            self.successes = 0;
+            self.tokens += 1;
+            tracing::trace!(
+                remaining = self.tokens,
+                "lane retry budget: one retry earned back"
+            );
+        }
+    }
+}
+
+/// A [`LaneRetryBudget`] shared by everything that retries against one server: every clone is
+/// the same budget. The upload queue holds one per lane and hands it to the upload client that
+/// drives the lane's sessions, so the queue's requeues and the client's request retries spend
+/// from one pool.
+#[derive(Debug, Clone, Default)]
+pub struct LaneRetries(Arc<Mutex<LaneRetryBudget>>);
+
+impl LaneRetries {
+    /// A fresh shared budget of `capacity` retries.
+    #[must_use]
+    pub fn new(capacity: u32) -> Self {
+        Self(Arc::new(Mutex::new(LaneRetryBudget::new(capacity))))
+    }
+
+    /// Spend one retry; `false` when the lane's budget is spent. See
+    /// [`LaneRetryBudget::try_spend`].
+    pub fn try_spend(&self) -> bool {
+        self.with(LaneRetryBudget::try_spend)
+    }
+
+    /// Record one success. See [`LaneRetryBudget::record_success`].
+    pub fn record_success(&self) {
+        self.with(LaneRetryBudget::record_success);
+    }
+
+    /// The retries left.
+    #[must_use]
+    pub fn remaining(&self) -> u32 {
+        self.with(|budget| budget.remaining())
+    }
+
+    /// Whether `other` is this same shared budget.
+    #[must_use]
+    pub fn same_as(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+
+    fn with<T>(&self, f: impl FnOnce(&mut LaneRetryBudget) -> T) -> T {
+        // A panic while holding the lock left a plain counter behind, never a broken invariant,
+        // so a poisoned lock is still a usable budget.
+        let mut budget = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        f(&mut budget)
+    }
+}
+
 /// A non-cryptographic seed for the jitter PRNG from the wall clock, X's a fixed
 /// odd constant and forced nonzero. Only spread matters here.
 fn seed() -> u64 {
@@ -705,6 +895,250 @@ impl Sleeper for TokioSleeper {
     }
 }
 
+// ─── Per-request stall bounds ────────────────────────────────────────────────
+
+/// How long a request waits for its response once its body is fully sent: one minute.
+///
+/// Longer than the stall bound, because it covers the server's own work on a write — a chunk's
+/// staging write and `fsync` — rather than bytes on the wire (networking doc, Adverse-Network
+/// Posture). Waiting on a session whose finalization is still running is not this wait: that is
+/// observed by polling `HEAD`, never by holding a request open.
+pub const DEFAULT_RESPONSE_WAIT: Duration = Duration::from_mins(1);
+
+/// The size of one piece a [`PacedBody`] hands the HTTP stack: 16 KiB.
+///
+/// Once the stack's write buffer is full it pulls about one piece per piece written, so a live
+/// link must move one piece per stall bound to be seen moving. At 16 KiB over the default
+/// 20 s stall bound that is 0.8 KiB/s — below the server's 1 KiB/s minimum sustained rate, so
+/// the client never cuts as stalled a link the server would accept. Large enough that the
+/// per-piece bookkeeping is noise beside the bytes.
+pub const PACED_PIECE: usize = 16 * 1024;
+
+/// The two bounds every request runs under: the **stall** bound while bytes should be moving —
+/// sending the request body, or receiving the response body — and the longer **response-wait**
+/// bound between the last request byte and the response head.
+///
+/// Neither is a total-duration timeout: a slow but live request is never cut.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RequestBounds {
+    /// No bytes moved for this long while sending or receiving cuts the request.
+    pub stall: Duration,
+    /// No response head this long after the body was sent cuts the request.
+    pub response_wait: Duration,
+}
+
+impl RequestBounds {
+    /// Bounds of `stall` and `response_wait`.
+    #[must_use]
+    pub const fn new(stall: Duration, response_wait: Duration) -> Self {
+        Self {
+            stall,
+            response_wait,
+        }
+    }
+}
+
+impl Default for RequestBounds {
+    /// The [`StallConfig`] default stall bound — below the server's own, so the client usually
+    /// notices first — and [`DEFAULT_RESPONSE_WAIT`].
+    fn default() -> Self {
+        Self::new(StallConfig::default().stall_after, DEFAULT_RESPONSE_WAIT)
+    }
+}
+
+/// Why a request was cut.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RequestCut {
+    /// No bytes moved for the stall bound, sending or receiving.
+    Stalled,
+    /// The body was handed to the HTTP stack, and no response head came within the
+    /// response-wait bound.
+    ///
+    /// Handed off is not on the wire: the stack's write buffer and the kernel's send buffer may
+    /// still hold the tail of the body, so on a slow enough link this is the body still
+    /// draining as much as a server that never answered.
+    NoResponse,
+}
+
+impl std::fmt::Display for RequestCut {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Stalled => "the request stalled: no bytes moved for the stall bound",
+            Self::NoResponse => "no response arrived within the response-wait bound",
+        })
+    }
+}
+
+/// Where one request's exchange is, and when it last moved.
+#[derive(Debug, Clone, Copy)]
+enum Phase {
+    /// Sending the body; a piece last left at `last`.
+    Sending { last: tokio::time::Instant },
+    /// The body is sent; waiting for the head since `since`.
+    Waiting { since: tokio::time::Instant },
+    /// Receiving the response body; bytes last arrived at `last`.
+    Receiving { last: tokio::time::Instant },
+}
+
+/// The progress of one request, shared between the body that sends it, the code that reads its
+/// response, and [`within_bounds`] that watches both. Cheap to clone: every clone is the same
+/// progress.
+///
+/// Read on tokio's clock, so a paused test clock drives it like every other timer.
+#[derive(Debug, Clone)]
+pub struct ExchangeProgress {
+    phase: std::sync::Arc<std::sync::Mutex<Phase>>,
+}
+
+impl ExchangeProgress {
+    /// A request with nothing (more) to send, waiting for its response from now.
+    #[must_use]
+    pub fn waiting() -> Self {
+        Self {
+            phase: std::sync::Arc::new(std::sync::Mutex::new(Phase::Waiting {
+                since: tokio::time::Instant::now(),
+            })),
+        }
+    }
+
+    fn set(&self, phase: Phase) {
+        // A poisoned lock holds a phase still worth reading: the watcher only reads instants.
+        *self
+            .phase
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = phase;
+    }
+
+    fn phase(&self) -> Phase {
+        *self
+            .phase
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// The body started sending, or a piece of it left, now.
+    pub fn on_sent(&self) {
+        self.set(Phase::Sending {
+            last: tokio::time::Instant::now(),
+        });
+    }
+
+    /// The whole body has been handed off, now: the response wait starts.
+    pub fn on_sent_all(&self) {
+        self.set(Phase::Waiting {
+            since: tokio::time::Instant::now(),
+        });
+    }
+
+    /// Response bytes arrived — or the head did — now.
+    pub fn on_received(&self) {
+        self.set(Phase::Receiving {
+            last: tokio::time::Instant::now(),
+        });
+    }
+
+    /// When the exchange is cut unless it moves first, and as what.
+    fn deadline(&self, bounds: RequestBounds) -> (tokio::time::Instant, RequestCut) {
+        match self.phase() {
+            Phase::Sending { last } | Phase::Receiving { last } => {
+                (last + bounds.stall, RequestCut::Stalled)
+            }
+            Phase::Waiting { since } => (since + bounds.response_wait, RequestCut::NoResponse),
+        }
+    }
+}
+
+/// Drive `exchange` while `progress` keeps moving inside `bounds`; cut it when it does not.
+///
+/// The deadline moves with the progress, so the watcher sleeps to the current deadline, and on
+/// waking re-reads it: progress since pushes it out, and none means the cut. Nothing here bounds
+/// the exchange's total duration.
+///
+/// On a cut `exchange` is dropped, and with it the connection: on HTTP/1.1 it closes, on HTTP/2
+/// the stream resets (networking doc, HTTP Transport).
+///
+/// # Errors
+///
+/// The [`RequestCut`] that ended it.
+pub async fn within_bounds<F: std::future::Future>(
+    bounds: RequestBounds,
+    progress: &ExchangeProgress,
+    exchange: F,
+) -> Result<F::Output, RequestCut> {
+    let mut exchange = std::pin::pin!(exchange);
+    loop {
+        let (deadline, cut) = progress.deadline(bounds);
+        if tokio::time::Instant::now() >= deadline {
+            return Err(cut);
+        }
+        if let Ok(output) = tokio::time::timeout_at(deadline, exchange.as_mut()).await {
+            return Ok(output);
+        }
+    }
+}
+
+/// A request body sent in [`PACED_PIECE`] pieces, recording each piece the HTTP stack pulls in
+/// an [`ExchangeProgress`].
+///
+/// The stack pulls the next piece once it has written the one before, so a pull is the link
+/// moving and a long gap between pulls is the link stalled. Handing out the last piece starts
+/// the response wait — while the stack's write buffer (hyper's holds up to about 400 KiB) and
+/// the kernel's send buffer may still hold the tail unsent. A link too slow to drain that tail
+/// inside the response wait is therefore cut as [`RequestCut::NoResponse`]; the upload client
+/// answers that by re-sending the chunk shorter, so the tail shrinks until it drains in time.
+/// The exact length is advertised, so the request still carries a `Content-Length` and is
+/// never sent chunked.
+#[derive(Debug)]
+pub struct PacedBody {
+    remaining: bytes::Bytes,
+    progress: ExchangeProgress,
+}
+
+impl PacedBody {
+    /// A body of `bytes` that reports to `progress`. Starts the send clock now.
+    #[must_use]
+    pub fn new(bytes: bytes::Bytes, progress: ExchangeProgress) -> Self {
+        progress.on_sent();
+        Self {
+            remaining: bytes,
+            progress,
+        }
+    }
+}
+
+impl http_body::Body for PacedBody {
+    type Data = bytes::Bytes;
+    type Error = std::convert::Infallible;
+
+    fn poll_frame(
+        mut self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>> {
+        if self.remaining.is_empty() {
+            self.progress.on_sent_all();
+            return std::task::Poll::Ready(None);
+        }
+        let take = self.remaining.len().min(PACED_PIECE);
+        let piece = self.remaining.split_to(take);
+        if self.remaining.is_empty() {
+            self.progress.on_sent_all();
+        } else {
+            self.progress.on_sent();
+        }
+        std::task::Poll::Ready(Some(Ok(http_body::Frame::data(piece))))
+    }
+
+    fn size_hint(&self) -> http_body::SizeHint {
+        http_body::SizeHint::with_exact(self.remaining.len() as u64)
+    }
+}
+
+impl From<PacedBody> for reqwest::Body {
+    fn from(body: PacedBody) -> Self {
+        reqwest::Body::wrap(body)
+    }
+}
+
 // ─── Happy Eyeballs at dial ──────────────────────────────────────────────────
 
 /// A bounded per-address TCP connect timeout applied at dial. Keeps a dead path
@@ -774,8 +1208,18 @@ pub fn protocol_headers() -> reqwest::header::HeaderMap {
 /// the one place it is installed. A transport built any other way sends no handshake and is
 /// refused by every gated route, which is why nothing in this crate calls
 /// `reqwest::Client::builder()` directly outside tests.
+///
+/// **Parallelism is connections, not streams** (networking doc, HTTP Transport). Every
+/// transport is pinned to HTTP/1.1, so each request in flight at once rides its own pooled
+/// connection: a lane's sessions in flight spread across several TCP windows instead of sharing
+/// the one an HTTP/2 connection would multiplex them onto, which is what keeps a lossy or
+/// high-latency link busy. The pin is explicit rather than left to the SDK's `reqwest` features
+/// leaving `http2` out, so a feature another crate enables can never fold the windows back
+/// onto one connection.
 pub fn http_builder() -> reqwest::ClientBuilder {
-    reqwest::Client::builder().default_headers(protocol_headers())
+    reqwest::Client::builder()
+        .default_headers(protocol_headers())
+        .http1_only()
 }
 
 /// The plain SDK client: [`http_builder`], built.
@@ -786,6 +1230,136 @@ pub fn http_builder() -> reqwest::ClientBuilder {
 /// no configuration a platform can lack.
 pub fn http_client() -> reqwest::Result<reqwest::Client> {
     http_builder().build()
+}
+
+// ─── Packet marking ──────────────────────────────────────────────────────────
+
+/// The Lower Effort per-hop behaviour's DSCP (RFC 8622), `000001`: traffic that yields to every
+/// other class wherever a network honours the field (networking doc, Packet Marking).
+pub const LOWER_EFFORT_DSCP: u8 = 1;
+
+/// [`LOWER_EFFORT_DSCP`] as the whole IPv4 TOS / IPv6 traffic-class octet: the six DSCP bits
+/// above the two ECN bits, which stay clear for the kernel's TCP to manage.
+pub const LOWER_EFFORT_TRAFFIC_CLASS: u32 = (LOWER_EFFORT_DSCP as u32) << 2;
+
+/// What [`mark_lower_effort`] did to a socket. Every outcome leaves the socket usable: marking is
+/// a courtesy to other traffic, never a condition of the transfer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Marking {
+    /// The socket's outgoing packets now carry the Lower Effort DSCP.
+    Marked,
+    /// The platform refused the option (or the socket's address could not be read); the socket
+    /// is unmarked and otherwise unchanged.
+    Refused,
+    /// This build has no setter for the socket's address family on this platform; the socket is
+    /// unmarked.
+    Unsupported,
+}
+
+/// Mark a bulk-transfer socket the SDK holds with the Lower Effort DSCP, best effort.
+///
+/// Sets `IP_TOS` on a socket carrying IPv4 (an IPv4-mapped IPv6 socket included, since its
+/// packets are IPv4) and `IPV6_TCLASS` on one carrying IPv6, to
+/// [`LOWER_EFFORT_TRAFFIC_CLASS`]. A platform that refuses either, or a target `socket2` exposes
+/// no setter on, leaves the socket unmarked; the outcome is logged and returned, never an error,
+/// so a caller proceeds the same whichever it is.
+///
+/// Only bulk transfers are marked: interactive requests and the server's sockets stay at the
+/// default class, so marking can only make Capsule's bulk bytes yield, never make anything of
+/// Capsule's slower to answer a person.
+#[instrument(level = "debug", skip(socket))]
+pub fn mark_lower_effort(socket: &tokio::net::TcpStream) -> Marking {
+    let local = match socket.local_addr() {
+        Ok(local) => local,
+        Err(error) => {
+            tracing::debug!(%error, "packet marking: socket address unreadable; left unmarked");
+            return Marking::Refused;
+        }
+    };
+    let carries_ipv4 = match local {
+        std::net::SocketAddr::V4(_) => true,
+        std::net::SocketAddr::V6(v6) => v6.ip().to_ipv4_mapped().is_some(),
+    };
+    let sock = socket2::SockRef::from(socket);
+    let set = if carries_ipv4 {
+        set_tos_v4(&sock)
+    } else {
+        set_tclass_v6(&sock)
+    };
+    match set {
+        Some(Ok(())) => {
+            tracing::debug!(%local, carries_ipv4, "packet marking: lower effort set");
+            Marking::Marked
+        }
+        Some(Err(error)) => {
+            tracing::debug!(%local, carries_ipv4, %error, "packet marking: refused; left unmarked");
+            Marking::Refused
+        }
+        None => {
+            tracing::debug!(%local, carries_ipv4, "packet marking: unsupported here; left unmarked");
+            Marking::Unsupported
+        }
+    }
+}
+
+/// `IP_TOS`, on every target `socket2` exposes it for.
+#[cfg(not(any(
+    target_os = "fuchsia",
+    target_os = "redox",
+    target_os = "solaris",
+    target_os = "haiku",
+    target_os = "wasi",
+)))]
+#[allow(clippy::unnecessary_wraps)]
+fn set_tos_v4(sock: &socket2::SockRef<'_>) -> Option<std::io::Result<()>> {
+    Some(sock.set_tos_v4(LOWER_EFFORT_TRAFFIC_CLASS))
+}
+
+/// `IP_TOS` where `socket2` has no setter: unsupported.
+#[cfg(any(
+    target_os = "fuchsia",
+    target_os = "redox",
+    target_os = "solaris",
+    target_os = "haiku",
+    target_os = "wasi",
+))]
+fn set_tos_v4(_sock: &socket2::SockRef<'_>) -> Option<std::io::Result<()>> {
+    None
+}
+
+/// `IPV6_TCLASS`, on every target `socket2` exposes it for (not iOS or Windows).
+#[cfg(any(
+    target_os = "android",
+    target_os = "dragonfly",
+    target_os = "freebsd",
+    target_os = "fuchsia",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "netbsd",
+    target_os = "openbsd",
+    target_os = "cygwin",
+    target_os = "illumos",
+))]
+#[allow(clippy::unnecessary_wraps)]
+fn set_tclass_v6(sock: &socket2::SockRef<'_>) -> Option<std::io::Result<()>> {
+    Some(sock.set_tclass_v6(LOWER_EFFORT_TRAFFIC_CLASS))
+}
+
+/// `IPV6_TCLASS` where `socket2` has no setter: unsupported.
+#[cfg(not(any(
+    target_os = "android",
+    target_os = "dragonfly",
+    target_os = "freebsd",
+    target_os = "fuchsia",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "netbsd",
+    target_os = "openbsd",
+    target_os = "cygwin",
+    target_os = "illumos",
+)))]
+fn set_tclass_v6(_sock: &socket2::SockRef<'_>) -> Option<std::io::Result<()>> {
+    None
 }
 
 #[cfg(test)]

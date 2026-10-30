@@ -21,6 +21,7 @@
 //!     — the two colliding v2 stamps.
 //!   - `v3_rows_default_to_not_hidden`
 //!   - `v4_rows_gain_no_caption_and_no_location`
+//!   - `v5_catalog_gains_the_album_recency_index_and_keeps_its_rows`
 //!   - `an_unstamped_catalog_is_adopted_at_the_baseline_version`
 //!
 //! Acceptance (the "done when")
@@ -211,6 +212,13 @@ DROP INDEX IF EXISTS idx_assets_timeline;
 CREATE INDEX IF NOT EXISTS idx_assets_timeline   ON assets(is_deleted, is_stack_hidden, is_hidden, capture_utc, capture_timestamp);
 ";
 
+/// The v5 additions over v4: the caption and effective-location projections.
+const CAPTION_BLOCK_V5: &str = "
+ALTER TABLE assets ADD COLUMN caption TEXT;
+ALTER TABLE assets ADD COLUMN latitude REAL;
+ALTER TABLE assets ADD COLUMN longitude REAL;
+";
+
 /// A historical catalog shape: the DDL a build of that era created, and the stamp it wrote.
 #[derive(Clone, Copy)]
 struct Fixture {
@@ -252,6 +260,11 @@ const FIXTURES: &[Fixture] = &[
         stamp: 4,
         hash_column: "hash_sha256",
     },
+    Fixture {
+        label: "v5",
+        stamp: 5,
+        hash_column: "hash_sha256",
+    },
 ];
 
 fn fixture_ddl(f: &Fixture) -> String {
@@ -270,6 +283,9 @@ fn fixture_ddl(f: &Fixture) -> String {
         }
         ("v4", _) => format!(
             "{ASSETS_V1_SHA256}{CORE_TABLES_V1}{INDEXES_V1_SHA256}{CACHE_BLOCK}{ALBUMS_BLOCK}{EMBEDDINGS_BLOCK}{HIDDEN_BLOCK_V4}"
+        ),
+        ("v5", _) => format!(
+            "{ASSETS_V1_SHA256}{CORE_TABLES_V1}{INDEXES_V1_SHA256}{CACHE_BLOCK}{ALBUMS_BLOCK}{EMBEDDINGS_BLOCK}{HIDDEN_BLOCK_V4}{CAPTION_BLOCK_V5}"
         ),
         _ => format!(
             "{ASSETS_V1_SHA256}{CORE_TABLES_V1}{INDEXES_V1_SHA256}{CACHE_BLOCK}{ALBUMS_BLOCK}{EMBEDDINGS_BLOCK}"
@@ -621,12 +637,12 @@ fn v4_rows_gain_no_caption_and_no_location() {
         .unwrap();
     let outcome = migrate(&conn).unwrap();
     assert_eq!(
-        outcome.applied,
-        vec![Applied {
+        outcome.applied.first(),
+        Some(&Applied {
             from: 4,
             to: 5,
             name: "v4_to_v5_caption_and_location"
-        }]
+        })
     );
     let (caption, lat, lon, hidden): (Option<String>, Option<f64>, Option<f64>, i64) = conn
         .query_row(
@@ -637,6 +653,63 @@ fn v4_rows_gain_no_caption_and_no_location() {
         .unwrap();
     assert_eq!((caption, lat, lon), (None, None, None));
     assert_eq!(hidden, 1, "the step must not touch an existing projection");
+}
+
+/// The v6 step adds the album-recency index and touches no row: a v5 catalog's assets keep
+/// every projection, and the album order reads them through the new index.
+#[test]
+fn v5_catalog_gains_the_album_recency_index_and_keeps_its_rows() {
+    let f = FIXTURES[6];
+    let conn = historical_conn(&f);
+    insert_historical_asset(&conn, &f, "uuid-1", &"f".repeat(64), Some("album-1"));
+    conn.execute_batch(
+        "UPDATE assets SET is_hidden = 1, caption = 'kept', latitude = 1.5, longitude = 2.5
+         WHERE uuid = 'uuid-1';",
+    )
+    .unwrap();
+    let outcome = migrate(&conn).unwrap();
+    assert_eq!(
+        outcome.applied,
+        vec![Applied {
+            from: 5,
+            to: 6,
+            name: "v5_to_v6_album_recency_index"
+        }]
+    );
+    let index: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master
+             WHERE type = 'index' AND name = 'idx_assets_album_recency'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(index, 1);
+    let row: (
+        Option<String>,
+        i64,
+        Option<String>,
+        Option<f64>,
+        Option<f64>,
+    ) = conn
+        .query_row(
+            "SELECT album_id, is_hidden, caption, latitude, longitude FROM assets
+             WHERE uuid = 'uuid-1'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        row,
+        (
+            Some("album-1".to_string()),
+            1,
+            Some("kept".to_string()),
+            Some(1.5),
+            Some(2.5)
+        ),
+        "the step must not touch an existing row"
+    );
 }
 
 #[test]

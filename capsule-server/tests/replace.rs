@@ -29,7 +29,9 @@ fn asset() -> AssetId {
     AssetId::new("018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5e61")
 }
 
-/// Upload `bytes` under `role` through the real protocol, in one chunk.
+/// Upload `bytes` under `role` through the real protocol, in one chunk, and wait for its
+/// finalization to complete — as a client does, polling `HEAD`, before it sends the member that
+/// must land after it.
 async fn upload(fixture: &Fixture, body: &serde_json::Value, bytes: &[u8], bearer: &str) {
     let id = fixture.open_session_with(body, bearer).await;
     fixture
@@ -37,6 +39,10 @@ async fn upload(fixture: &Fixture, body: &serde_json::Value, bytes: &[u8], beare
         .send()
         .await
         .assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(
+        fixture.uploads.terminal_for_test(&id).await.status.as_str(),
+        "completed"
+    );
 }
 
 /// The manifest member of a bundle: `body`, a provenance body, declared at the manifest its
@@ -217,6 +223,38 @@ async fn caught_up(fixture: &Fixture, bearer: &str) -> Option<String> {
     feed["next_cursor"].as_str().map(ToOwned::to_owned)
 }
 
+/// Send a replace manifest as `id`'s only chunk, and return the `error.*` code its refused
+/// finalization reports.
+///
+/// The chunk is accepted — no chunk waits for finalization — and the refusal is read the way a
+/// client reads it: from `HEAD`'s `X-Capsule-Upload-Error` once the session is terminal.
+async fn refused_at_finalization(
+    fixture: &Fixture,
+    bearer: &str,
+    id: &str,
+    manifest: &[u8],
+) -> String {
+    let accepted = fixture.chunk(id, 0, manifest, bearer).send().await;
+    accepted.assert_status(StatusCode::NO_CONTENT);
+    accepted.assert_header("x-capsule-upload-status", "waiting_for_processing");
+    assert_eq!(
+        fixture.uploads.terminal_for_test(id).await.status.as_str(),
+        "failed_processing"
+    );
+    let reported = fixture
+        .client
+        .head(&format!("/v1/upload/{id}"))
+        .header("authorization", bearer)
+        .send()
+        .await;
+    reported.assert_status(StatusCode::OK);
+    reported.assert_header("x-capsule-upload-status", "failed_processing");
+    reported
+        .header("x-capsule-upload-error")
+        .expect("a failed session names why")
+        .to_owned()
+}
+
 #[tokio::test]
 async fn a_manifest_that_arrives_before_its_bundle_is_refused_and_retryable() {
     // The one ordering rule this protocol has, and the reason it is a `409` rather than a `400`:
@@ -233,10 +271,10 @@ async fn a_manifest_that_arrives_before_its_bundle_is_refused_and_retryable() {
 
     let (body, manifest) = replace_manifest(&fixture, &head, &original, &metadata);
     let early = fixture.open_session_with(&body, &bearer).await;
-    let refused = fixture.chunk(&early, 0, &manifest, &bearer).send().await;
-    refused.assert_status(StatusCode::CONFLICT);
-    let problem: serde_json::Value = refused.json();
-    assert_eq!(problem["code"], "error.upload.replace_incomplete");
+    assert_eq!(
+        refused_at_finalization(&fixture, &bearer, &early, &manifest).await,
+        "error.upload.replace_incomplete"
+    );
     assert_eq!(
         held(&fixture, BlobRole::Provenance).await,
         head,
@@ -291,10 +329,10 @@ async fn a_replace_that_does_not_chain_onto_the_head_is_refused() {
     let stale = checksum(b"a manifest this asset never had");
     let (body, manifest) = replace_manifest(&fixture, &stale, &original, &metadata);
     let id = fixture.open_session_with(&body, &bearer).await;
-    let refused = fixture.chunk(&id, 0, &manifest, &bearer).send().await;
-    refused.assert_status(StatusCode::CONFLICT);
-    let problem: serde_json::Value = refused.json();
-    assert_eq!(problem["code"], "error.upload.stale_revival");
+    assert_eq!(
+        refused_at_finalization(&fixture, &bearer, &id, &manifest).await,
+        "error.upload.stale_revival"
+    );
     assert_eq!(
         held(&fixture, BlobRole::Original).await,
         checksum(&payload(b'o', 8192)),

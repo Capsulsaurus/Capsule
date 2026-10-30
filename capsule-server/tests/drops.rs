@@ -640,6 +640,13 @@ async fn a_revoked_link_stops_a_drop_that_is_already_uploading() {
             .expect("drops")
             .is_empty()
     );
+    assert_eq!(
+        fixture.activity_kinds(&user()).await[..2],
+        [
+            capsule_server::activity::ActivityKind::DropLinkRevoked,
+            capsule_server::activity::ActivityKind::DropLinkCreated
+        ]
+    );
 }
 
 #[tokio::test]
@@ -1947,20 +1954,17 @@ async fn a_guest_who_disconnects_after_the_commit_still_has_their_drop_filed() {
     let bytes = payload(b'd', 4096);
     let (id, upload_id) = open_drop(&fixture, &bearer, 60, &bytes).await;
 
-    // The only chunk completes the drop and claims its deposit; park the deposit after its
-    // commit has landed, then drop the request there — the guest's browser went away between
-    // the commit and the inbox row.
+    // The only chunk completes the drop and starts its deposit, and is answered at once; the
+    // deposit is parked after its commit has landed, with nobody waiting on it — the guest's
+    // browser went away between the commit and the inbox row.
     let hold = fixture.blobs.hold_commits();
-    {
-        let completing = chunk_at(&fixture, &id, &upload_id, 0, &bytes);
-        tokio::pin!(completing);
-        tokio::select! {
-            response = &mut completing => {
-                panic!("the chunk answered before its commit was parked: {}", response.status());
-            }
-            () = hold.entered.notified() => {}
-        }
-    }
+    let answered = chunk_at(&fixture, &id, &upload_id, 0, &bytes).await;
+    answered.assert_status(StatusCode::NO_CONTENT);
+    answered.assert_header("x-capsule-upload-status", "waiting_for_processing");
+    drop(answered);
+    tokio::time::timeout(std::time::Duration::from_secs(10), hold.entered.notified())
+        .await
+        .expect("the detached deposit reaches its commit");
     assert_eq!(
         fixture.blobs.staged_len_for_test(&upload_id).await,
         None,
@@ -2167,9 +2171,19 @@ async fn a_filed_drop_whose_status_write_was_lost_is_completed_at_boot_not_faile
     let (id, upload_id) = open_drop(&fixture, &bearer, 65, &bytes).await;
 
     fixture.uploads.refuse_status_writes(true);
+    let refused_before = fixture.uploads.refused_status_writes();
+    // The chunk is answered once the deposit is started; the deposit loses its status write
+    // later, detached, and that refused write is the last thing it does.
     chunk_at(&fixture, &id, &upload_id, 0, &bytes)
         .await
-        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+        .assert_status(StatusCode::NO_CONTENT);
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while fixture.uploads.refused_status_writes() == refused_before {
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("the detached deposit reaches its status write");
     fixture.uploads.refuse_status_writes(false);
     assert_eq!(
         fixture
@@ -2245,9 +2259,10 @@ async fn a_filing_that_did_not_happen_fails_the_drop_and_gives_the_link_back() {
     fixture
         .dropstore
         .fault_next_file(support::FileFault::Refused);
-    chunk_at(&fixture, &id, &upload_id, 0, &bytes)
-        .await
-        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    // The chunk landed; the deposit it started fails later, and no request waits to hear it.
+    let answered = chunk_at(&fixture, &id, &upload_id, 0, &bytes).await;
+    answered.assert_status(StatusCode::NO_CONTENT);
+    answered.assert_header("x-capsule-upload-status", "waiting_for_processing");
     assert_eq!(
         terminal_status(&fixture, &upload_id).await,
         "failed_processing"
@@ -2307,10 +2322,11 @@ async fn a_drop_whose_bytes_are_not_its_declared_hash_is_refused_and_gives_the_l
         .expect("the link is provisioned");
     assert_eq!(charged.used_files, 1, "opening the drop reserved a file");
 
-    // Each chunk is its own checksum, so the chunk lands; the whole is not the declared blob.
+    // Each chunk is its own checksum, so the chunk lands; the whole is not the declared blob,
+    // which the detached deposit finds after the chunk is answered.
     chunk_at(&fixture, &id, &upload_id, 0, &sent)
         .await
-        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+        .assert_status(StatusCode::NO_CONTENT);
     assert_eq!(
         terminal_status(&fixture, &upload_id).await,
         "failed_processing"
@@ -2354,5 +2370,194 @@ async fn a_drop_whose_bytes_are_not_its_declared_hash_is_refused_and_gives_the_l
         (refunded.used_files, refunded.used_bytes),
         (0, 0),
         "a drop that never landed does not spend the link"
+    );
+}
+
+// ===========================================================================================
+// The status probe
+// ===========================================================================================
+
+/// Probe `upload_id`'s status through link `id`, returning the response unasserted.
+async fn probe(fixture: &Fixture, id: &str, upload_id: &str) -> kynos::test::TestResponse {
+    fixture
+        .client
+        .get(&format!("/d/{id}/{upload_id}"))
+        .header("accept", "application/json")
+        .send()
+        .await
+}
+
+/// Probe, asserting a `200`, and return the body.
+async fn probed(fixture: &Fixture, id: &str, upload_id: &str) -> Value {
+    let response = probe(fixture, id, upload_id).await;
+    response.assert_status(StatusCode::OK);
+    response.json()
+}
+
+/// The guest reads the deposit the completing chunk started while its re-hash is parked, and
+/// reads it filed once the disk answers — no request ever waited on the re-hash.
+#[tokio::test]
+async fn a_guest_reads_a_held_deposit_as_waiting_and_then_as_filed() {
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let first = payload(b'p', 4096);
+    let last = payload(b'q', 4096);
+    let both: Vec<u8> = first.iter().chain(last.iter()).copied().collect();
+    let (id, upload_id) = open_drop(&fixture, &bearer, 70, &both).await;
+
+    let opened = probed(&fixture, &id, &upload_id).await;
+    assert_eq!(opened["status"], "pending");
+    assert_eq!(opened["received_bytes"], 0);
+    assert_eq!(opened["total_size"], both.len());
+    assert!(opened.get("error_code").is_none(), "{opened}");
+
+    chunk_at(&fixture, &id, &upload_id, 0, &first)
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let halfway = probed(&fixture, &id, &upload_id).await;
+    assert_eq!(halfway["status"], "uploading");
+    assert_eq!(halfway["received_bytes"], 4096);
+
+    // Every read of the stage parks: the deposit's re-hash is as slow as the test needs.
+    let hold = fixture.blobs.hold_staged_reads();
+    let bound = std::time::Duration::from_secs(5);
+    let answered = tokio::time::timeout(bound, chunk_at(&fixture, &id, &upload_id, 4096, &last))
+        .await
+        .expect("the completing chunk is answered while the re-hash is parked");
+    answered.assert_status(StatusCode::NO_CONTENT);
+    answered.assert_header("x-capsule-upload-status", "waiting_for_processing");
+    tokio::time::timeout(bound, hold.entered.notified())
+        .await
+        .expect("the detached deposit reached its re-hash");
+
+    let waiting = tokio::time::timeout(bound, probed(&fixture, &id, &upload_id))
+        .await
+        .expect("the probe is answered while the re-hash is parked");
+    assert_eq!(waiting["status"], "waiting_for_processing");
+    assert_eq!(waiting["received_bytes"], both.len());
+    assert!(waiting.get("error_code").is_none(), "{waiting}");
+
+    // One permit is enough: each parked read gives it back as it goes on.
+    hold.release.add_permits(1);
+    assert_eq!(terminal_status(&fixture, &upload_id).await, "completed");
+    let filed = probed(&fixture, &id, &upload_id).await;
+    assert_eq!(filed["status"], "completed");
+    assert!(filed.get("error_code").is_none(), "{filed}");
+    assert_one_drop(&fixture, &bearer, &both).await;
+}
+
+/// A deposit that refuses the bytes is read as refused, with the code that says why, and the
+/// link has its reservation back — the guest can drop again without spending a file.
+#[tokio::test]
+async fn a_guest_reads_a_refused_deposit_with_its_code() {
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let declared = payload(b'h', 4096);
+    let sent = payload(b'x', 4096);
+    let (id, upload_id) = open_drop(&fixture, &bearer, 71, &declared).await;
+
+    let hold = fixture.blobs.hold_staged_reads();
+    let bound = std::time::Duration::from_secs(5);
+    chunk_at(&fixture, &id, &upload_id, 0, &sent)
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    tokio::time::timeout(bound, hold.entered.notified())
+        .await
+        .expect("the detached deposit reached its re-hash");
+    let waiting = probed(&fixture, &id, &upload_id).await;
+    assert_eq!(waiting["status"], "waiting_for_processing");
+    assert!(waiting.get("error_code").is_none(), "{waiting}");
+
+    hold.release.add_permits(1);
+    assert_eq!(
+        terminal_status(&fixture, &upload_id).await,
+        "failed_processing"
+    );
+    let refused = probed(&fixture, &id, &upload_id).await;
+    assert_eq!(refused["status"], "failed_processing");
+    assert_eq!(refused["error_code"], "error.upload.content_hash_mismatch");
+    assert_eq!(link_totals(&fixture, &id).await, (0, 0));
+}
+
+/// A deposit that could not file the drop is read as refused under the drop surface's own code.
+#[tokio::test]
+async fn a_filing_that_did_not_happen_is_read_as_unavailable() {
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let bytes = payload(b'u', 4096);
+    let (id, upload_id) = open_drop(&fixture, &bearer, 72, &bytes).await;
+
+    fixture
+        .dropstore
+        .fault_next_file(support::FileFault::Refused);
+    chunk_at(&fixture, &id, &upload_id, 0, &bytes)
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(
+        terminal_status(&fixture, &upload_id).await,
+        "failed_processing"
+    );
+    let refused = probed(&fixture, &id, &upload_id).await;
+    assert_eq!(refused["status"], "failed_processing");
+    assert_eq!(refused["error_code"], "error.drop.unavailable");
+}
+
+/// The probe is the chunk path's capability and no wider: anything but this link's own drop
+/// session is the one `404`, so it says nothing about any other session.
+#[tokio::test]
+async fn the_probe_answers_one_404_for_everything_but_the_links_own_drop() {
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let bytes = payload(b'v', 4096);
+    let (mine, upload_id) = open_drop(&fixture, &bearer, 73, &bytes).await;
+
+    let stranger = fixture
+        .other_bearer("01937b7c-0000-7000-8000-0000000000fe")
+        .await;
+    let (theirs, their_upload) = open_drop(&fixture, &stranger, 74, &bytes).await;
+    // The owner's own album upload shares the session store and is not a drop.
+    let album_upload = fixture
+        .open_session(&payload(b'w', 4096), "original", &bearer)
+        .await;
+
+    let not_found = [
+        // Another account's link, naming my session.
+        (theirs.clone(), upload_id.clone()),
+        // My link, naming another account's session.
+        (mine.clone(), their_upload.clone()),
+        // My link, naming my own album upload.
+        (mine.clone(), album_upload),
+        // My link, naming no session.
+        (
+            mine.clone(),
+            "01937b7c-0000-4000-8000-000000000000".to_owned(),
+        ),
+        // A link that was never provisioned.
+        (opaque(75), upload_id.clone()),
+        // Not an opaque id at all.
+        ("not-an-opaque-id".to_owned(), upload_id.clone()),
+    ];
+    for (link, session) in &not_found {
+        probe(&fixture, link, session)
+            .await
+            .assert_status(StatusCode::NOT_FOUND);
+    }
+
+    // A revoked link stops answering for its sessions, as it stops taking their chunks.
+    probed(&fixture, &theirs, &their_upload).await;
+    fixture
+        .client
+        .delete(&format!("/v1/drops/links/{theirs}"))
+        .header("authorization", &stranger)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    probe(&fixture, &theirs, &their_upload)
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    // And mine still answers.
+    assert_eq!(
+        probed(&fixture, &mine, &upload_id).await["status"],
+        "pending"
     );
 }

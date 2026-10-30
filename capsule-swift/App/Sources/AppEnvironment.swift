@@ -142,6 +142,9 @@ struct AppEnvironment {
     /// ``LanePorts`` a lane supplies, so the FFI lane's Rust-backed adapter
     /// replaces the mock one here and nowhere else.
     let labels: any LabelPort
+    /// What the cull pass reads and writes. Stored rather than forwarded, like
+    /// ``labels``: the FFI lane's workspace adapter replaces the mock one here.
+    let cull: any CullPort
 
     var importing: any ImportPort { mock.importing }
     var uploads: any UploadPort { mock.uploads }
@@ -232,13 +235,17 @@ struct AppEnvironment {
 
         let lane = lane ?? .mock(mock)
         labels = lane.labels
+        cull = lane.cull
         transferEvents = lane.transferEvents
 
         // Held concretely for a moment: the info panel's metadata source wants
         // this provider's `AssetLocationSource` conformance, which the erased
         // `any AssetProvider` the rest of the app sees does not carry.
         let library = PortBackedAssetProvider(library: mock.library, organize: mock.organize)
-        let managed = Self.makeManagedLane(root: Self.libraryRoot(), openLibrary: lane.openManagedLibrary)
+        let managed = Self.makeManagedLane(
+            root: Self.libraryRoot(), openLibrary: lane.openManagedLibrary, uploads: mock.uploads,
+            renderLadder: lane.renderLadder, embeddedPreviews: lane.embeddedPreviews
+        )
         assetProvider = Self.composeTimeline(library: library, managed: managed.provider)
         captionStore = Self.composeCaptions(
             library: PortBackedCaptionStore(library: mock.library, organize: mock.organize),
@@ -304,6 +311,10 @@ struct AppEnvironment {
         /// and the managed one never opens on its own — nor through the system
         /// `LAContext` sheet this lane keeps out.
         let trashGate: SecondaryTrashGate
+        /// The render ladder the store's pixels are drawn through.
+        let renderLadder: RenderLadder
+        /// Where a RAW original's embedded preview is read, when the lane can.
+        let embeddedPreviews: (any EmbeddedPreviewPort)?
     }
 
     /// The picker-driven import flow and the provider that reads what it writes.
@@ -320,9 +331,19 @@ struct AppEnvironment {
     ///   supplies one whose writes are the Rust workspace's verbs; with none,
     ///   there is no Rust core, so the store is an in-memory catalog written
     ///   through a `LocalManagedWorkspace`.
+    /// - Parameter uploads: the upload sessions a managed delete redacts the
+    ///   deleted asset's in-flight upload from. With none, a delete redacts
+    ///   nothing.
+    /// - Parameter renderLadder: the lane's render ladder. The default is the
+    ///   mock lane's stand-in; the FFI lane passes `RenderLadder.ffi`.
+    /// - Parameter embeddedPreviews: where a RAW's embedded preview is read.
+    ///   With none, every rung is drawn from the original.
     static func makeManagedLane(
         root: URL,
-        openLibrary: (@Sendable (ManagedLibraryLayout) -> ManagedLibrary)? = nil
+        openLibrary: (@Sendable (ManagedLibraryLayout) -> ManagedLibrary)? = nil,
+        uploads: (any UploadPort)? = nil,
+        renderLadder: RenderLadder = MockRenderLadder.ladder,
+        embeddedPreviews: (any EmbeddedPreviewPort)? = nil
     ) -> ManagedLane {
         let layout = ManagedLibraryLayout(root: root)
         let fileStore = SystemFileStore()
@@ -330,13 +351,15 @@ struct AppEnvironment {
             ?? ManagedLibrary(layout: layout, fileStore: fileStore, catalog: InMemoryAssetCatalog())
         let importService = ImportService(library: library, fileStore: fileStore, hasher: CryptoKitHasher())
         let trashGate = SecondaryTrashGate()
-        let provider = ManagedProvider(library: library, authGate: trashGate)
+        let provider = ManagedProvider(library: library, authGate: trashGate, uploads: uploads)
         CapsuleLog.app.debug("managed lane composed at \(root.path, privacy: .private)")
         return ManagedLane(
             provider: provider,
             importer: LibraryImporter(importService: importService, managedProvider: provider),
             reader: ManagedMediaReader(library: library),
-            trashGate: trashGate
+            trashGate: trashGate,
+            renderLadder: renderLadder,
+            embeddedPreviews: embeddedPreviews
         )
     }
 
@@ -357,7 +380,12 @@ struct AppEnvironment {
     /// lookup), while the mock renderer paints any identifier whose shape it
     /// decodes, which a freshly minted import id can happen to match.
     static func composeThumbnails(library: any ThumbnailProvider, managed: ManagedLane) -> any ThumbnailProvider {
-        CompositeThumbnailProvider(providers: [ManagedThumbnailProvider(reader: managed.reader), library])
+        let managedThumbnails = ManagedThumbnailProvider(
+            reader: managed.reader,
+            ladder: managed.renderLadder,
+            embeddedPreviews: managed.embeddedPreviews
+        )
+        return CompositeThumbnailProvider(providers: [managedThumbnails, library])
     }
 
     /// The info panel's metadata over both stores, the managed file's real EXIF

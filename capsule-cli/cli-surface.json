@@ -9,6 +9,33 @@
       "name": "auth",
       "subcommands": [
         {
+          "about": "Show the signed-in account's recent security activity, newest first: sign-ins, sign-outs, revoked sessions, credential changes, enrolled devices and links",
+          "args": [
+            {
+              "help": "The most events to show; the server keeps 90 days and at most 1000",
+              "id": "limit",
+              "long": "limit",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": true,
+              "value_names": [
+                "N"
+              ]
+            },
+            {
+              "help": "Print the events as one JSON document on stdout",
+              "id": "json",
+              "long": "json",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            }
+          ],
+          "name": "activity"
+        },
+        {
           "about": "Set up recovery for a library: bind it to the signed-in account and store its recovery backup under a new recovery secret",
           "args": [
             {
@@ -1387,6 +1414,53 @@
           "name": "discard"
         },
         {
+          "about": "Stop retrying a delete made after a hand-off that `capsule peer status` keeps reporting as not applied because the library holds neither the asset nor its tombstone. Local only: the server keeps the asset as it holds it. Refused while the library still holds the asset's chain, since `capsule peer status` can then send the delete",
+          "args": [
+            {
+              "help": "Path to the Capsule library holding the assets",
+              "id": "library",
+              "long": "library",
+              "positional": false,
+              "repeatable": false,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "PATH"
+              ]
+            },
+            {
+              "help": "The asset, as `capsule peer status` lists it",
+              "id": "asset",
+              "positional": true,
+              "repeatable": false,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "ASSET_ID"
+              ]
+            },
+            {
+              "help": "Read the library passphrase from stdin instead of prompting, so the command works in scripts and CI where there is no terminal",
+              "id": "passphrase_stdin",
+              "long": "passphrase-stdin",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            },
+            {
+              "help": "Print the run as one JSON document on stdout: the asset and how many outbox entries were dropped",
+              "id": "json",
+              "long": "json",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            }
+          ],
+          "name": "forget-delete"
+        },
+        {
           "about": "Send this library's assets to another device of this account over the LAN peering channel: dial its `capsule peer pull --listen`, verify it over mutual TLS as a device of this account, and serve it one backup artifact sealed for that session. The other device skips what it already holds and refuses what it has purged",
           "args": [
             {
@@ -1642,6 +1716,130 @@
           "repeatable": false,
           "required": false,
           "takes_value": false
+        },
+        {
+          "help": "What the path costs; on `metered` or `constrained` the push is staged and the preview and original tiers wait",
+          "id": "path_cost",
+          "long": "path-cost",
+          "positional": false,
+          "possible_values": [
+            {
+              "help": "Bulk transfer is acceptable",
+              "name": "unmetered"
+            },
+            {
+              "help": "A byte-counted link: the preview and original tiers wait",
+              "name": "metered"
+            },
+            {
+              "help": "The OS data saver is on: the preview and original tiers wait",
+              "name": "constrained"
+            }
+          ],
+          "repeatable": false,
+          "required": false,
+          "takes_value": true,
+          "value_names": [
+            "COST"
+          ]
+        },
+        {
+          "help": "The interface the path runs over",
+          "id": "path_interface",
+          "long": "path-interface",
+          "positional": false,
+          "possible_values": [
+            {
+              "help": "Ethernet or another wired link",
+              "name": "wired"
+            },
+            {
+              "help": "Wi-Fi",
+              "name": "wifi"
+            },
+            {
+              "help": "A cellular radio",
+              "name": "cellular"
+            },
+            {
+              "help": "Anything else, or unknown",
+              "name": "other"
+            }
+          ],
+          "repeatable": false,
+          "required": false,
+          "takes_value": true,
+          "value_names": [
+            "INTERFACE"
+          ]
+        },
+        {
+          "help": "The power source; `low-power` holds the preview and original tiers back",
+          "id": "power",
+          "long": "power",
+          "positional": false,
+          "possible_values": [
+            {
+              "help": "On external power",
+              "name": "external"
+            },
+            {
+              "help": "On battery",
+              "name": "battery"
+            },
+            {
+              "help": "On battery in low-power mode: the bulk tiers wait, on one session",
+              "name": "low-power"
+            }
+          ],
+          "repeatable": false,
+          "required": false,
+          "takes_value": true,
+          "value_names": [
+            "POWER"
+          ]
+        },
+        {
+          "help": "The thermal state; `serious` holds the preview and original tiers back, `critical` sends nothing",
+          "id": "thermal",
+          "long": "thermal",
+          "positional": false,
+          "possible_values": [
+            {
+              "help": "No thermal pressure",
+              "name": "nominal"
+            },
+            {
+              "help": "Slightly elevated",
+              "name": "fair"
+            },
+            {
+              "help": "High: the bulk tiers wait, on one session",
+              "name": "serious"
+            },
+            {
+              "help": "Critical: nothing is sent",
+              "name": "critical"
+            }
+          ],
+          "repeatable": false,
+          "required": false,
+          "takes_value": true,
+          "value_names": [
+            "STATE"
+          ]
+        },
+        {
+          "help": "Run as a background task the OS ends this many seconds from now; under a minute holds the preview and original tiers back",
+          "id": "background_deadline",
+          "long": "background-deadline",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "takes_value": true,
+          "value_names": [
+            "SECONDS"
+          ]
         }
       ],
       "name": "push"

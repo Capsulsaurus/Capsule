@@ -1204,6 +1204,20 @@ pub struct Session {
 }
 
 impl Session {
+    /// This session — the same token store and refresh gate — sending through `http` instead.
+    ///
+    /// How a transfer leaves a path behind: a new path generation builds a new client
+    /// ([`GenerationPool`](crate::net::path::GenerationPool)), and requests sent through it never
+    /// ride a connection pooled on the old path. `http` **must** come from
+    /// [`crate::net::http_builder`] or [`crate::net::http_client`], so it carries the handshake.
+    #[must_use]
+    pub fn with_http_client(&self, http: reqwest::Client) -> Self {
+        Self {
+            http,
+            ..self.clone()
+        }
+    }
+
     /// Whether the session currently holds tokens.
     pub async fn is_authenticated(&self) -> bool {
         self.inner.tokens.read().await.is_some()

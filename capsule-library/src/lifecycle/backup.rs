@@ -99,7 +99,7 @@ impl Workspace {
         let purged = self
             .purged
             .iter()
-            .map(|(id, head)| (*id, head.record_hash()));
+            .filter_map(|(id, chain)| chain.head().map(|head| (*id, head)));
         self.assets
             .iter()
             .filter_map(|(id, a)| a.chain.head().map(|h| (*id, h)))
@@ -229,15 +229,22 @@ impl Workspace {
 
         for asset in self.assets.values() {
             // The per-asset re-encrypt (plaintext → the ciphertext the manifest's recorded
-            // nonce prefix pins) is the `upload_bundle` accessor's job — one copy of that
-            // crypto, shared with `capsule push`. It also self-checks the re-derived
-            // ciphertext against the manifest's content address, which this loop never did.
-            let bundle = self.upload_bundle(&asset.asset_id)?;
+            // nonce prefix pins) is `verified_original`'s job — one copy of that crypto, shared
+            // with `capsule push`'s upload bundle. It also self-checks the re-derived
+            // ciphertext against the manifest's content address. The artifact carries the
+            // whole chain and the latest metadata blob, which the head binds, so it is read
+            // against the head rather than through the upload bundle, which carries the create.
             let album = self.album(&asset.album_id)?;
-            amks.insert(
-                (asset.album_id, bundle.amk_version),
-                album.amks[&bundle.amk_version],
-            );
+            let head = &asset
+                .chain
+                .records()
+                .last()
+                .expect("provenance chain is never empty")
+                .manifest
+                .core;
+            let original = self.verified_original(asset, album, head)?;
+            let epoch = head.amk_version.0;
+            amks.insert((asset.album_id, epoch), album.amks[&epoch]);
             // The asset's evidence logs — custody receipts and signed storage attestations — if
             // the client has persisted them beside the chain. A log that exists and cannot be
             // read fails the export: an artifact silently missing its evidence is the loss the
@@ -258,12 +265,12 @@ impl Workspace {
                 asset_id: asset.asset_id,
                 // Export the exact sealed blob the manifest committed to (re-sealing would draw
                 // a fresh nonce and break the `metadata_blob_hash` content address).
-                metadata_blob: bundle.metadata_blob,
+                metadata_blob: asset.metadata_blob.clone(),
                 // The original as a source, not its bytes: the export streams it into the
                 // artifact one STREAM chunk at a time, as a push does, so exporting never holds
-                // the library's ciphertext. `upload_bundle` has just verified it re-derives to
-                // the manifest's address; the export checks the bytes it writes again.
-                ciphertext: Arc::new(bundle.original),
+                // the library's ciphertext. `verified_original` has just verified it re-derives
+                // to the manifest's address; the export checks the bytes it writes again.
+                ciphertext: Arc::new(original),
                 provenance: asset.chain.records().to_vec(),
                 receipts,
                 attestations,

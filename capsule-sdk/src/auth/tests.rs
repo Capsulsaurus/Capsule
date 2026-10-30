@@ -733,6 +733,28 @@ async fn export_and_resume_roundtrip_session() {
     assert_eq!(stored_access(&resumed).await, "access-1");
 }
 
+/// A session moved onto another HTTP client keeps the one token store: clearing it through
+/// either handle clears it for both.
+#[tokio::test]
+async fn a_session_on_another_client_shares_its_tokens() {
+    let handler: Handler =
+        Arc::new(move |_req| Box::pin(async move { MockResponse::json(404, r#"{"error":"x"}"#) }));
+    let server = start_mock(handler).await;
+    let client = AuthClient::new(&server.base_url).unwrap();
+    let session = client
+        .resume(PersistedSession {
+            access_token: "a".into(),
+            refresh_token: "r".into(),
+            access_expires_at_unix: far_future(),
+        })
+        .unwrap();
+    let moved = session.with_http_client(crate::net::http_client().unwrap());
+    assert_eq!(stored_access(&moved).await, "a");
+
+    *session.inner.tokens.write().await = None;
+    assert!(!moved.is_authenticated().await);
+}
+
 /// An operation on an empty session reports `NotAuthenticated`.
 #[tokio::test]
 async fn refresh_without_session_is_not_authenticated() {

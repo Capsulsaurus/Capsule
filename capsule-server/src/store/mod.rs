@@ -100,8 +100,8 @@ pub use self::ids::{
     OidcDeviceHandle, OidcNonce, OidcState, OwnerId, PkceVerifier, SessionId, UploadId, UserId,
 };
 pub use self::upload::{
-    AcceptedChunk, BlobRole, FinalizeClaim, UploadSessionRecord, UploadSessionStatus,
-    UploadSessionStore,
+    AcceptedChunk, BlobRole, FinalizeClaim, UnclaimedDiscard, UploadSessionRecord,
+    UploadSessionStatus, UploadSessionStore,
 };
 
 /// The future every port operation returns.

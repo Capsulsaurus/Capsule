@@ -54,12 +54,14 @@ use crate::directory::{DirectoryClient, DirectoryError};
 use crate::events::TransferEvents;
 use crate::fetch::{FetchError, HttpBlobSource, RangedFetcher};
 use crate::net::ConnectionClass;
+use crate::net::path::{GenerationPool, PathMonitor, PathSample};
 use crate::push::{AssetPushReport, PushError, PushedBlob};
 use crate::recovery::{EscrowStored, RecoveryClient, RecoveryError};
-use crate::staged::{StagedScheduler, TierSessionOutcome};
+use crate::staged::{TierSessionOutcome, run_under_path};
 use crate::sync::{
     BlobManifest, BlobRef, ChangeKind, FeedEntry, SyncConsumer, SyncCursor, SyncError, SyncPage,
 };
+use crate::upload::queue::LaneWindows;
 use crate::upload::{
     BlobRole, CreateUploadRequest, HeadInfo, ManifestEnvelope, UploadClient, UploadError,
     UploadOutcome, UploadTransport,
@@ -77,6 +79,13 @@ pub use workspace::{
     FfiSyncApplyOutcome, FfiSyncEntry, FfiSyncHead, FfiTrashEntry, FfiTrashRefusal, FfiUploadBlob,
     FfiVerifyOutcome, FfiWorkspace, p256_hardware_dek_round_trip,
 };
+
+/// The cull verbs on [`FfiWorkspace`]: flag an asset or a stack, read a stack's derived state,
+/// list by flag, list stack membership, and the reject sweep. Its own module because culling is one workflow with one
+/// destructive step, and reads better as a unit than as another section of `workspace`.
+mod culling;
+
+pub use culling::{FfiCullFlag, FfiStackCullState, FfiStackMember};
 
 /// The transfer event stream: the flattened mirror of `crate::events` and the subscription a
 /// real-time transfer view polls. Separated because it is the one surface that is a stream
@@ -96,6 +105,22 @@ mod notify;
 pub use notify::{
     FfiAlert, FfiAlertClass, FfiAlertSeverity, FfiClassDeadline, FfiNotifyInput, FfiQuotaAdvisory,
     evaluate_alerts, next_alert_deadline, pre_arm_deadlines,
+};
+
+/// The path snapshot an app's OS listeners report, flattened, and what a finished push tells
+/// the adverse detector. Separated because it is the session's one input that is device state
+/// rather than a request.
+mod path;
+
+pub use path::{FfiPathCost, FfiPathInterface, FfiPathSnapshot, FfiPowerState, FfiThermalState};
+
+/// The render ladder: the one order every app renders by, and the embedded-preview read that
+/// feeds it. Separated for the reason `notify` is: pure functions of caller-supplied state.
+mod ladder;
+
+pub use ladder::{
+    FfiEmbeddedPreview, FfiLocalHoldings, FfiNextStep, FfiRenderRequest, FfiRenderStep,
+    FfiRendition, FfiRepresentation, FfiRungSource, embedded_preview, render_step,
 };
 
 // ─── Errors ──────────────────────────────────────────────────────────────────
@@ -268,11 +293,10 @@ impl From<UploadError> for FfiError {
             return auth.into();
         }
         let code = match &err {
-            UploadError::Rejected { code, .. } => code.clone(),
             UploadError::UpgradeRequired { .. } => {
                 Some(capsule_i18n::error_codes::PROTOCOL_VERSION_UNSUPPORTED.to_owned())
             }
-            _ => None,
+            _ => err.error_code().map(str::to_owned),
         };
         Self::Upload {
             code,
@@ -619,6 +643,9 @@ pub struct FfiPushReport {
     pub pushed: Vec<FfiPushedBlob>,
     /// Total bytes handed to the upload client, the original included.
     pub bytes: u64,
+    /// Blobs the reported path held back ([`FfiSession::set_path`]): push the asset again once
+    /// the path allows them. Zero when the whole ladder ran.
+    pub deferred: u32,
 }
 
 impl From<AssetPushReport> for FfiPushReport {
@@ -627,6 +654,7 @@ impl From<AssetPushReport> for FfiPushReport {
             asset_id: report.asset_id,
             pushed: report.pushed.into_iter().map(FfiPushedBlob::from).collect(),
             bytes: report.bytes,
+            deferred: u32::try_from(report.deferred).unwrap_or(u32::MAX),
         }
     }
 }
@@ -906,6 +934,8 @@ impl FfiCapsuleClient {
             upload_base_url: self.upload_base_url.clone(),
             protocol_version: self.protocol_version.clone(),
             events: TransferEvents::default_channel(),
+            path: PathMonitor::new(PathSample::desktop(), LaneWindows::default()),
+            pool: GenerationPool::sdk(),
         })
     }
 }
@@ -923,10 +953,29 @@ pub struct FfiSession {
     /// Where every upload, push and fetch this session drives publishes its steps. Nothing is
     /// built while nobody is subscribed.
     events: TransferEvents,
+    /// The path the app last reported and the link behaviour seen on it: every push and fetch
+    /// plans from it. Until the app reports one, the desktop default — reachable, unmetered,
+    /// foreground.
+    path: PathMonitor,
+    /// The HTTP client uploads ride, rebuilt on each new path generation so no pooled
+    /// connection outlives its path.
+    pool: GenerationPool,
 }
 
 #[uniffi::export]
 impl FfiSession {
+    /// Report the path as the app's OS listeners see it now, and return its path generation.
+    ///
+    /// Call it whenever a listener fires. The generation advances only when reachability, the
+    /// interface or the cost changes; it then drops this session's pooled connections, forgets
+    /// the resets and stalls seen on the old path, and cancels — within one scheduling tick —
+    /// any push work the new path forbids, which re-plans and resumes. Power, thermal and
+    /// background-deadline changes re-plan without a new generation.
+    pub fn set_path(&self, snapshot: FfiPathSnapshot) -> u64 {
+        let update = self.path.observe(snapshot.into());
+        update.plan().generation.0
+    }
+
     /// Subscribe to the step-by-step progress of every upload, push and fetch this session
     /// drives from now on, each event stamped with the milliseconds since this call on a
     /// monotonic clock.
@@ -981,9 +1030,11 @@ impl FfiSession {
     /// transfer window whatever the original's size. The workspace lock is held only while the
     /// bundle is built, never across the network.
     ///
-    /// Every blob is driven; one the server already holds answers `duplicate_blob` and comes
-    /// back [`FfiUploadOutcome::AlreadyStored`], so pushing twice is safe. The album must
-    /// already be provisioned on the server.
+    /// Every blob the reported path admits is driven ([`set_path`](Self::set_path)); the tiers
+    /// it holds back are counted in [`FfiPushReport::deferred`] and wait for the next push. A
+    /// blob the server already holds answers `duplicate_blob` and comes back
+    /// [`FfiUploadOutcome::AlreadyStored`], so pushing twice is safe. The album must already be
+    /// provisioned on the server.
     ///
     /// **A create the server refused is re-sealed and retried once** (issue #822). When the
     /// album's epoch moved past the one the asset was sealed under, the server refuses its
@@ -1040,8 +1091,11 @@ impl FfiSession {
         }
         let path = PathBuf::from(path);
         tracing::info!(%hash, size, path = %path.display(), "ffi: fetching a blob to disk");
-        let source = HttpBlobSource::new(self.session.clone(), blob_base_url);
-        let result = fetch_to_file(&source, &hash, size, &path, &self.events).await;
+        let source = HttpBlobSource::new(self.path_session(), blob_base_url);
+        // A fetch is a request the user is waiting on: the path sizes its range windows (bounded
+        // under `adverse`) but never holds it back.
+        let class = self.path.plan().class;
+        let result = fetch_to_file(&source, &hash, size, &path, class, &self.events).await;
         if let Err(error) = &result {
             tracing::warn!(%hash, %error, "ffi: blob fetch failed; removing the partial file");
             // Best effort: the file may never have been created.
@@ -1182,13 +1236,31 @@ impl FfiSession {
 }
 
 impl FfiSession {
+    /// The session, sending through the current path generation's pooled connections.
+    fn path_session(&self) -> Session {
+        let generation = self.path.snapshot().generation;
+        match self.pool.client(generation) {
+            Ok(http) => self.session.with_http_client(http),
+            Err(error) => {
+                // Building a client fails only where the platform lacks something the builder
+                // needs; the session's own client still sends, on the pool it already has.
+                tracing::warn!(%error, generation = generation.0, "ffi: no client for the new path; sending on the session's own");
+                self.session.clone()
+            }
+        }
+    }
+
+    /// An upload client on the current path's pooled connections, sizing its chunks to the
+    /// current plan's class: under `adverse` each chunk request targets the shorter duration.
     fn upload_client(&self) -> UploadClient {
         let transport = UploadTransport::with_session(
-            self.session.clone(),
+            self.path_session(),
             self.upload_base_url.clone(),
             self.protocol_version.clone(),
         );
-        UploadClient::new(transport).with_events(self.events.clone())
+        UploadClient::new(transport)
+            .with_events(self.events.clone())
+            .with_connection_class(self.path.plan().class)
     }
 
     /// Drive one bundle's ladder. The workspace lock is not held: the bundle is owned.
@@ -1199,17 +1271,24 @@ impl FfiSession {
             original_bytes = bundle.original.size(),
             "ffi: pushing a sealed asset"
         );
-        // Eager, unmetered ordering: the policy `upload` callers have always had. A
-        // connection class from the app would plug in here.
-        let scheduler = StagedScheduler::new(UploadPolicy::Full, ConnectionClass::Unmetered);
-        crate::push::push_bundle(
-            &self.upload_client(),
-            &scheduler,
-            bundle,
-            &HashSet::<String>::new(),
-            false,
-        )
-        .await
+        // Full ordering where the path allows it; the plan stages the push where it holds bulk
+        // back, and a path change that closes a running tier cancels and re-plans the push.
+        let held = HashSet::<String>::new();
+        let started_on = self.path.snapshot().generation;
+        let pushed = run_under_path(&self.path, UploadPolicy::Full, false, |scheduler| {
+            let client = self.upload_client();
+            let held = &held;
+            async move { crate::push::push_bundle(&client, &scheduler, bundle, held, false).await }
+        })
+        .await;
+        // Only an outcome on the path the push started on: if the path changed under it, the
+        // detector was reset for a link this outcome never measured.
+        if let Some(signal) = path::link_signal(&pushed)
+            && let Some(plan) = self.path.record_on(started_on, signal)
+        {
+            tracing::debug!(?signal, class = ?plan.class, "ffi: the push's outcome fed the adverse detector");
+        }
+        pushed
     }
 }
 
@@ -1220,6 +1299,7 @@ async fn fetch_to_file<B: crate::fetch::BlobSource>(
     hash: &str,
     size: u64,
     path: &Path,
+    class: ConnectionClass,
     events: &TransferEvents,
 ) -> Result<(), FfiError> {
     let local = |action: &str, e: std::io::Error| FfiError::Fetch {
@@ -1228,7 +1308,7 @@ async fn fetch_to_file<B: crate::fetch::BlobSource>(
     };
     let file = std::fs::File::create(path).map_err(|e| local("creating", e))?;
     let mut sink = std::io::BufWriter::new(file);
-    RangedFetcher::new(ConnectionClass::Unmetered)
+    RangedFetcher::new(class)
         .with_events(events.clone())
         .fetch_into(source, hash, size, &mut sink)
         .await?;

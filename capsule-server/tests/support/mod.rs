@@ -32,6 +32,9 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use base64::Engine as _;
 use capsule_core::crypto::keys::HybridSigningKey;
 use capsule_server::App;
+use capsule_server::activity::{
+    ActivityContext, ActivityEvent, ActivityKind, ActivityStore, InMemoryActivity,
+};
 use capsule_server::album::{
     AlbumContext, AlbumRecord, AlbumStore, InMemoryAlbums, ProvisionOutcome,
 };
@@ -45,8 +48,8 @@ use capsule_server::auth::oidc::{
 use capsule_server::auth::{
     AccountDirectory, AccountProfiles, ActivateOutcome, AuthCollaborators, AuthContext,
     Authentication, BeginOutcome, ConsumeOutcome, DirectoryError, DirectoryFuture, EnrollmentState,
-    PasswordChange, PasswordChanged, ProfileRecord, ProfileUpdate, SessionTokens, TotpCodes,
-    TotpContext, TotpEnrollment, TotpSecret, TotpStore,
+    PasswordChange, PasswordChanged, PasswordSetting, ProfileRecord, ProfileUpdate, SessionTokens,
+    TotpCodes, TotpContext, TotpEnrollment, TotpSecret, TotpStore,
 };
 use capsule_server::blob::{
     BlobError, BlobFuture, BlobPage, BlobStat, BlobStore, ContentAddress, InMemoryBlobStore,
@@ -70,10 +73,12 @@ use capsule_server::escrow::{
     AlbumKeyRecord, AlbumKeysStored, EscrowContext, EscrowRecord, EscrowStore, InMemoryEscrow,
     Replaced,
 };
+use capsule_server::federation::pull::JobKey;
 use capsule_server::federation::{
     CapabilityCodec, CapabilityFilter, CapabilityRecord, CapabilityStore, FederationCollaborators,
-    FederationContext, FederationSetting, InMemoryCapabilities, InMemoryPeers, RefreshOutcome,
-    ReportClaim, RevokeOutcome,
+    FederationContext, FederationSetting, InMemoryCapabilities, InMemoryPeers,
+    InMemorySubscriptions, PeerId, PutOutcome, RefreshOutcome, ReportClaim, RevokeOutcome,
+    Subscription, SubscriptionStore,
 };
 use capsule_server::gc::memory::InMemoryCollection;
 use capsule_server::index::memory::InMemoryAssetIndex;
@@ -107,8 +112,9 @@ use capsule_server::store::{
     ChannelStore, Clock, CohortRecord, CohortStore, Direction, DrainOutcome, ENROLLMENT_CODE_TTL,
     EnrollmentCode, EnrollmentStore, FinalizeClaim, OidcAuthorizationStore, OidcState, OwnerId,
     PendingAuthorization, PendingEnrollment, RELAY_CHANNEL_TTL, RelayChannel, RelayOutcome,
-    RelayPayload, RevokeAllChallenge, SessionId, SessionRecord, StoreError, StoreFuture, UploadId,
-    UploadSessionRecord, UploadSessionStatus, UploadSessionStore, UserId,
+    RelayPayload, RevokeAllChallenge, SessionId, SessionRecord, StoreError, StoreFuture,
+    UnclaimedDiscard, UploadId, UploadSessionRecord, UploadSessionStatus, UploadSessionStore,
+    UserId,
 };
 
 pub(crate) mod idp;
@@ -116,7 +122,7 @@ use capsule_server::sync::{CURSOR_KEY_LEN, CursorCodec, SyncContext};
 use capsule_server::upload::authority::{
     AlbumWriteAccess, AuthorityError, AuthorityFuture, WriteAuthority,
 };
-use capsule_server::upload::{ChunkReadDeadline, UploadContext, UploadPolicy, WriteRole};
+use capsule_server::upload::{ChunkPace, ChunkReadPace, UploadContext, UploadPolicy, WriteRole};
 use capsule_server::verify::VerifyContext;
 use jiff::{SignedDuration, Timestamp};
 use kynos::test::{TestClient, TestRequest};
@@ -128,6 +134,13 @@ use uuid::Uuid;
 /// exercises a realistic "the refresh token dies with its record" window rather than a shorter
 /// one that would hide the arrangement.
 pub(crate) const SESSION_TTL: SignedDuration = SignedDuration::from_hours(24 * 7);
+
+/// The hard cap the fixture's store is built with: a session lineage dies thirty days after its
+/// sign-in however often it refreshes.
+///
+/// Several sliding windows long, so a test can refresh a few times inside it and then watch the
+/// cap, rather than the window, end the session.
+pub(crate) const SESSION_HARD_CAP: SignedDuration = SignedDuration::from_hours(24 * 30);
 
 /// The asset the conformance suite's lifecycle ops act on.
 pub(crate) const OPS_ASSET: &str = "018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5e61";
@@ -893,15 +906,15 @@ impl AccountDirectory for InMemoryAccounts {
 
             let accounts = self.accounts();
             let Some(account) = accounts.get(email) else {
-                return Ok(Authentication::Refused);
+                return Ok(Authentication::Refused(None));
             };
             if account.locked {
-                return Ok(Authentication::Locked);
+                return Ok(Authentication::Locked(account.user_id.clone()));
             }
             if account.password == password {
                 Ok(Authentication::Granted(account.user_id.clone()))
             } else {
-                Ok(Authentication::Refused)
+                Ok(Authentication::Refused(Some(account.user_id.clone())))
             }
         })
     }
@@ -924,13 +937,13 @@ impl AccountDirectory for InMemoryAccounts {
                 .find(|held| &held.user_id == user)
                 .cloned()
             else {
-                return Ok(Authentication::Refused);
+                return Ok(Authentication::Refused(None));
             };
             if account.locked {
-                return Ok(Authentication::Locked);
+                return Ok(Authentication::Locked(account.user_id));
             }
             if account.password != password {
-                return Ok(Authentication::Refused);
+                return Ok(Authentication::Refused(Some(account.user_id)));
             }
             if self
                 .forget_after_authentication
@@ -1207,16 +1220,35 @@ pub(crate) struct SwitchableSessions {
     inner: InMemoryAuthState,
     unavailable: AtomicBool,
     unavailable_after_authentication: AtomicBool,
+    lowered: Mutex<Option<(SignedDuration, SignedDuration)>>,
 }
 
 impl SwitchableSessions {
-    /// A working store on `clock`, with [`SESSION_TTL`].
+    /// A working store on `clock`, with [`SESSION_TTL`] and [`SESSION_HARD_CAP`].
     pub(crate) fn new(clock: Arc<ManualClock>) -> Self {
         Self {
-            inner: InMemoryAuthState::new(clock, SESSION_TTL),
+            inner: InMemoryAuthState::new(clock, SESSION_TTL).with_hard_cap(SESSION_HARD_CAP),
             unavailable: AtomicBool::new(false),
             unavailable_after_authentication: AtomicBool::new(false),
+            lowered: Mutex::new(None),
         }
+    }
+
+    /// Report `ttl` and `hard_cap` from now on, while every record already stored keeps the
+    /// deadline it was opened under.
+    ///
+    /// The restart of a durable store under a lowered `SESSION_TTL_DAYS` or
+    /// `SESSION_HARD_CAP_DAYS`: the new process reads the new values, and the records the old
+    /// one wrote still expire on the old schedule.
+    pub(crate) fn lower_lifetimes(&self, ttl: SignedDuration, hard_cap: SignedDuration) {
+        *self.lowered.lock().unwrap_or_else(PoisonError::into_inner) = Some((ttl, hard_cap));
+    }
+
+    fn lifetimes(&self) -> (SignedDuration, SignedDuration) {
+        self.lowered
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .unwrap_or((self.inner.ttl(), self.inner.hard_cap()))
     }
 
     /// Make every subsequent operation fail, or stop.
@@ -1547,38 +1579,146 @@ impl FederationSetting for SwitchableFederation {
     }
 }
 
-/// The fixture server's chunk-body read deadline (#717), switchable per request.
+/// Whether the fixture server refuses password sign-in (`PASSWORD_AUTH_DISABLED`, #1004),
+/// switchable per request.
+///
+/// A switch for the reason [`SwitchableFederation`] is one: the `403` the password operations
+/// declare has to come from the same server that answers their `200`s. Production hands in a
+/// fixed `bool`.
+#[derive(Debug)]
+pub(crate) struct SwitchablePasswords {
+    disabled: AtomicBool,
+}
+
+impl SwitchablePasswords {
+    /// A switch starting in `disabled`.
+    pub(crate) fn new(disabled: bool) -> Self {
+        Self {
+            disabled: AtomicBool::new(disabled),
+        }
+    }
+
+    /// Refuse or accept password sign-in for every subsequent request.
+    pub(crate) fn set_disabled(&self, disabled: bool) {
+        self.disabled.store(disabled, Ordering::SeqCst);
+    }
+}
+
+impl PasswordSetting for SwitchablePasswords {
+    fn passwords_disabled(&self) -> bool {
+        self.disabled.load(Ordering::SeqCst)
+    }
+}
+
+/// The fixture server's chunk-body read pace (#717, #1041), switchable per request.
 ///
 /// A switch for the reason [`SwitchableFederation`] is one: the `408` both chunk routes declare
 /// has to come from the same server that answers their `204`s, and an in-process body is always
-/// whole, so the walk produces it by switching to a deadline that has already passed. Production
-/// hands in a fixed `Duration`.
+/// whole, so the walk produces it by switching to a zero stall bound, which cuts before the
+/// first byte. Production hands in a fixed `ChunkPace`.
 #[derive(Debug)]
-pub(crate) struct SwitchableChunkDeadline {
-    millis: AtomicU64,
+pub(crate) struct SwitchableChunkPace {
+    stall_millis: AtomicU64,
+    min_bytes_per_second: AtomicU64,
 }
 
-impl SwitchableChunkDeadline {
-    /// A switch starting at `timeout`.
-    pub(crate) fn new(timeout: std::time::Duration) -> Self {
+impl SwitchableChunkPace {
+    /// A switch starting at `pace`.
+    pub(crate) fn new(pace: ChunkPace) -> Self {
         let switch = Self {
-            millis: AtomicU64::new(0),
+            stall_millis: AtomicU64::new(0),
+            min_bytes_per_second: AtomicU64::new(0),
         };
-        switch.set(timeout);
+        switch.set(pace);
         switch
     }
 
-    /// Move the deadline for every subsequent chunk; [`Duration::ZERO`](std::time::Duration::ZERO)
-    /// refuses every one.
-    pub(crate) fn set(&self, timeout: std::time::Duration) {
-        let millis = u64::try_from(timeout.as_millis()).expect("a test deadline fits in u64 ms");
-        self.millis.store(millis, Ordering::SeqCst);
+    /// Move the pace for every subsequent chunk; a zero stall bound refuses every one.
+    pub(crate) fn set(&self, pace: ChunkPace) {
+        let millis = u64::try_from(pace.stall.as_millis()).expect("a test stall fits in u64 ms");
+        self.stall_millis.store(millis, Ordering::SeqCst);
+        self.min_bytes_per_second
+            .store(pace.min_bytes_per_second, Ordering::SeqCst);
+    }
+
+    /// The default pace with a zero stall bound: every subsequent chunk is cut before its first
+    /// byte.
+    pub(crate) fn cut_every_chunk(&self) {
+        self.set(ChunkPace::new(std::time::Duration::ZERO, 0));
+    }
+
+    /// Back to the default pace.
+    pub(crate) fn reset(&self) {
+        self.set(ChunkPace::default());
     }
 }
 
-impl ChunkReadDeadline for SwitchableChunkDeadline {
-    fn chunk_read_timeout(&self) -> std::time::Duration {
-        std::time::Duration::from_millis(self.millis.load(Ordering::SeqCst))
+impl ChunkReadPace for SwitchableChunkPace {
+    fn chunk_pace(&self) -> ChunkPace {
+        ChunkPace::new(
+            std::time::Duration::from_millis(self.stall_millis.load(Ordering::SeqCst)),
+            self.min_bytes_per_second.load(Ordering::SeqCst),
+        )
+    }
+}
+
+/// An activity log that can be made to fail, or to hang, on demand.
+#[derive(Debug, Default)]
+pub(crate) struct SwitchableActivity {
+    inner: InMemoryActivity,
+    unavailable: AtomicBool,
+    stalled: AtomicBool,
+}
+
+impl SwitchableActivity {
+    /// A working, empty log.
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    /// Make every subsequent operation fail, or stop.
+    pub(crate) fn set_unavailable(&self, unavailable: bool) {
+        self.unavailable.store(unavailable, Ordering::SeqCst);
+    }
+
+    /// Make every subsequent write never finish, so a caller that awaits one never returns.
+    pub(crate) fn stall_writes(&self) {
+        self.stalled.store(true, Ordering::SeqCst);
+    }
+
+    fn refuse<T>() -> Result<T, StoreError> {
+        Err(StoreError::Unavailable {
+            store: "activity",
+            detail: REFUSAL.to_owned(),
+        })
+    }
+
+    fn is_down(&self) -> bool {
+        self.unavailable.load(Ordering::SeqCst)
+    }
+}
+
+impl ActivityStore for SwitchableActivity {
+    fn record(&self, event: ActivityEvent, retain_from: Timestamp) -> StoreFuture<'_, ()> {
+        if self.stalled.load(Ordering::SeqCst) {
+            return Box::pin(std::future::pending());
+        }
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.record(event, retain_from)
+    }
+
+    fn recent<'a>(
+        &'a self,
+        user: &'a UserId,
+        since: Timestamp,
+        limit: usize,
+    ) -> StoreFuture<'a, Vec<ActivityEvent>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.recent(user, since, limit)
     }
 }
 
@@ -1646,6 +1786,78 @@ impl ModerationStore for SwitchableModeration {
             return Box::pin(async { Self::refuse() });
         }
         self.inner.pending_reports()
+    }
+}
+
+/// A subscription store that can be made to fail on demand.
+#[derive(Debug, Default)]
+pub(crate) struct SwitchableSubscriptions {
+    inner: InMemorySubscriptions,
+    unavailable: AtomicBool,
+}
+
+impl SwitchableSubscriptions {
+    /// A working store holding no subscription.
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    /// Make every subsequent operation fail, or stop.
+    pub(crate) fn set_unavailable(&self, unavailable: bool) {
+        self.unavailable.store(unavailable, Ordering::SeqCst);
+    }
+
+    fn refuse<T>() -> Result<T, StoreError> {
+        Err(StoreError::Unavailable {
+            store: "subscriptions",
+            detail: REFUSAL.to_owned(),
+        })
+    }
+
+    fn is_down(&self) -> bool {
+        self.unavailable.load(Ordering::SeqCst)
+    }
+}
+
+impl SubscriptionStore for SwitchableSubscriptions {
+    fn put(&self, subscription: Subscription) -> StoreFuture<'_, PutOutcome> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.put(subscription)
+    }
+
+    fn of_subscriber<'a>(&'a self, subscriber: &'a UserId) -> StoreFuture<'a, Vec<Subscription>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.of_subscriber(subscriber)
+    }
+
+    fn remove<'a>(
+        &'a self,
+        subscriber: &'a UserId,
+        peer: &'a PeerId,
+        album: &'a AlbumId,
+    ) -> StoreFuture<'a, bool> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.remove(subscriber, peer, album)
+    }
+
+    fn of_job<'a>(&'a self, job: &'a JobKey) -> StoreFuture<'a, Vec<Subscription>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.of_job(job)
+    }
+
+    fn live_jobs(&self, now: Timestamp) -> StoreFuture<'_, Vec<JobKey>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.live_jobs(now)
     }
 }
 
@@ -1995,7 +2207,11 @@ impl ChallengeStore for SwitchableChallenges {
 
 impl AuthStateStore for SwitchableSessions {
     fn ttl(&self) -> SignedDuration {
-        self.inner.ttl()
+        self.lifetimes().0
+    }
+
+    fn hard_cap(&self) -> SignedDuration {
+        self.lifetimes().1
     }
 
     fn open_session(&self, record: SessionRecord) -> StoreFuture<'_, ()> {
@@ -2003,6 +2219,13 @@ impl AuthStateStore for SwitchableSessions {
             return Box::pin(async { Self::refuse() });
         }
         self.inner.open_session(record)
+    }
+
+    fn restore_session(&self, record: SessionRecord) -> StoreFuture<'_, ()> {
+        if self.is_down_past_the_door() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.restore_session(record)
     }
 
     fn read_session<'a>(
@@ -2077,6 +2300,8 @@ pub(crate) struct SwitchableUploads {
     unavailable: AtomicBool,
     claim_after_progress: AtomicBool,
     status_writes_refused: AtomicBool,
+    /// How many status writes [`Self::refuse_status_writes`] has refused so far.
+    status_writes_refused_count: std::sync::atomic::AtomicUsize,
 }
 
 impl SwitchableUploads {
@@ -2087,7 +2312,29 @@ impl SwitchableUploads {
             unavailable: AtomicBool::new(false),
             claim_after_progress: AtomicBool::new(false),
             status_writes_refused: AtomicBool::new(false),
+            status_writes_refused_count: std::sync::atomic::AtomicUsize::new(0),
         }
+    }
+
+    /// How many status writes have been refused since the store was built.
+    ///
+    /// A finalization runs detached from the request that claimed it, so a case that refuses its
+    /// terminal write has nothing to await but this: the refused write is the last thing the
+    /// finalizer does.
+    pub(crate) fn refused_status_writes(&self) -> usize {
+        self.status_writes_refused_count.load(Ordering::SeqCst)
+    }
+
+    fn refuses_status_write(&self) -> bool {
+        if self.is_down() {
+            return true;
+        }
+        let refused = self.status_writes_refused.load(Ordering::SeqCst);
+        if refused {
+            self.status_writes_refused_count
+                .fetch_add(1, Ordering::SeqCst);
+        }
+        refused
     }
 
     /// Refuse every subsequent [`UploadSessionStore::set_status`], or stop.
@@ -2124,6 +2371,27 @@ impl SwitchableUploads {
             .read(&UploadId::new(id))
             .await
             .expect("the in-memory store answers")
+    }
+
+    /// Wait, boundedly, for `id`'s session to reach a terminal status, and return its record.
+    ///
+    /// No request waits on finalization, so a case that sent the completing chunk has nothing to
+    /// await but the store: the detached finalization writes the terminal status as it ends.
+    pub(crate) async fn terminal_for_test(&self, id: &str) -> UploadSessionRecord {
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                let record = self
+                    .read_for_test(id)
+                    .await
+                    .expect("the session survives as a receipt");
+                if record.status.is_terminal() {
+                    return record;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .expect("a claimed session reaches a terminal status")
     }
 
     /// Let a concurrent finalizer win the claim in the window the racing request cannot see:
@@ -2175,6 +2443,7 @@ impl SwitchableUploads {
                     received_bytes: 0,
                     total_size: 4096,
                     status: UploadSessionStatus::Pending,
+                    failure_code: None,
                     created_at: now,
                     last_progress_at: now,
                 })
@@ -2257,10 +2526,22 @@ impl UploadSessionStore for SwitchableUploads {
         upload: &'a UploadId,
         status: UploadSessionStatus,
     ) -> StoreFuture<'a, Option<UploadSessionRecord>> {
-        if self.is_down() || self.status_writes_refused.load(Ordering::SeqCst) {
+        if self.refuses_status_write() {
             return Box::pin(async { Self::refuse() });
         }
         self.inner.set_status(upload, status)
+    }
+
+    fn fail_processing<'a>(
+        &'a self,
+        upload: &'a UploadId,
+        failure_code: &'a str,
+    ) -> StoreFuture<'a, Option<UploadSessionRecord>> {
+        if self.refuses_status_write() {
+            return Box::pin(async { Self::refuse() });
+        }
+
+        self.inner.fail_processing(upload, failure_code)
     }
 
     fn claim_finalize<'a>(&'a self, upload: &'a UploadId) -> StoreFuture<'a, FinalizeClaim> {
@@ -2284,6 +2565,13 @@ impl UploadSessionStore for SwitchableUploads {
         self.inner.discard(upload)
     }
 
+    fn discard_unclaimed<'a>(&'a self, upload: &'a UploadId) -> StoreFuture<'a, UnclaimedDiscard> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.discard_unclaimed(upload)
+    }
+
     fn pending_for_address<'a>(
         &'a self,
         uploader: &'a UserId,
@@ -2293,6 +2581,13 @@ impl UploadSessionStore for SwitchableUploads {
             return Box::pin(async { Self::refuse() });
         }
         self.inner.pending_for_address(uploader, expected_hash)
+    }
+
+    fn live_for_address<'a>(&'a self, expected_hash: &'a str) -> StoreFuture<'a, Vec<UploadId>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.live_for_address(expected_hash)
     }
 
     fn in_flight_for_album<'a>(&'a self, album: &'a AlbumId) -> StoreFuture<'a, u64> {
@@ -2341,6 +2636,8 @@ pub(crate) struct SwallowingBlobs {
     held_appends: Mutex<Option<PutHold>>,
     /// Park every commit, *after* it has landed, until the test lets it go.
     held_commits: Mutex<Option<PutHold>>,
+    /// Park every read of a stage — the finalize re-hash's — until the test lets it go.
+    held_staged_reads: Mutex<Option<PutHold>>,
     /// Refuse every [`BlobStore::put`], as a full or read-only disk would.
     puts_unavailable: AtomicBool,
     /// Park every [`BlobStore::put`] until the test lets it go.
@@ -2369,6 +2666,7 @@ impl SwallowingBlobs {
             full_next_begin: AtomicBool::new(false),
             held_appends: Mutex::new(None),
             held_commits: Mutex::new(None),
+            held_staged_reads: Mutex::new(None),
             puts_unavailable: AtomicBool::new(false),
             held_puts: Mutex::new(None),
         }
@@ -2428,6 +2726,23 @@ impl SwallowingBlobs {
         };
         *self
             .held_commits
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(hold.clone());
+        hold
+    }
+
+    /// Park every subsequent read of a stage until the returned hold releases it.
+    ///
+    /// The finalize re-hash, and a drop deposit's, read the stage window by window, so a parked
+    /// read is a re-hash that never ends: the disk a 4 GiB blob sits on, as slow as a test needs
+    /// it to be. A request whose answer waited on the re-hash would never be answered.
+    pub(crate) fn hold_staged_reads(&self) -> PutHold {
+        let hold = PutHold {
+            entered: Arc::new(tokio::sync::Notify::new()),
+            release: Arc::new(tokio::sync::Semaphore::new(0)),
+        };
+        *self
+            .held_staged_reads
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = Some(hold.clone());
         hold
@@ -2555,7 +2870,22 @@ impl BlobStore for SwallowingBlobs {
         offset: u64,
         len: usize,
     ) -> BlobFuture<'a, Option<Vec<u8>>> {
-        self.inner.read_staged_at(upload, offset, len)
+        let hold = self
+            .held_staged_reads
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        Box::pin(async move {
+            if let Some(hold) = hold {
+                hold.entered.notify_one();
+                let _permit = hold
+                    .release
+                    .acquire()
+                    .await
+                    .expect("the hold is never closed");
+            }
+            self.inner.read_staged_at(upload, offset, len).await
+        })
     }
 
     fn abandon<'a>(&'a self, upload: &'a UploadId) -> BlobFuture<'a, bool> {
@@ -3931,9 +4261,13 @@ pub(crate) struct Fixture {
     pub(crate) revocations: Arc<SwitchableRevocations>,
     /// The peers this server has pinned or blocked.
     pub(crate) peers: Arc<InMemoryPeers>,
+    /// The albums this server pulls from peers for its own members.
+    pub(crate) subscriptions: Arc<SwitchableSubscriptions>,
     /// Whether the server federates — the *same* switch it reads, so a case can turn the whole
     /// federation surface off for the requests it is about.
     pub(crate) federation: Arc<SwitchableFederation>,
+    /// Whether the server refuses password sign-in — the *same* switch it reads.
+    pub(crate) passwords: Arc<SwitchablePasswords>,
     /// The capability codec the server mints with — the *same* one, over the *same* key as
     /// `tokens`, so a test can mint a capability the server will accept, or one it must not.
     pub(crate) codec: Arc<CapabilityCodec>,
@@ -3966,8 +4300,12 @@ pub(crate) struct Fixture {
     pub(crate) oidc_authorizations: Arc<SwitchableOidcAuthorizations>,
     /// The pending OIDC device authorizations (issue #635).
     pub(crate) oidc_devices: Arc<SwitchableOidcDevices>,
-    /// The chunk-body read deadline both chunk routes read (#717).
-    pub(crate) chunk_deadline: Arc<SwitchableChunkDeadline>,
+    /// The chunk-body read pace both chunk routes read (#717, #1041).
+    pub(crate) chunk_pace: Arc<SwitchableChunkPace>,
+    /// The account activity log the server records to.
+    pub(crate) activity: Arc<SwitchableActivity>,
+    /// The activity module the server records through, for [`Self::activity_settled`].
+    activity_context: ActivityContext,
 }
 
 impl Fixture {
@@ -3981,13 +4319,13 @@ impl Fixture {
 
     /// The same server, with a deployment's quota thresholds.
     pub(crate) fn with_quota(quota_limits: QuotaLimits) -> Self {
-        Self::build(quota_limits, None, None, true)
+        Self::build(quota_limits, None, None, true, false)
     }
 
     /// The working server over a **real** identity provider adapter, for the cases that drive
     /// the wire against the mock provider in [`idp`]. `fixture.idp` is present but unused.
     pub(crate) fn with_identity_provider(provider: Arc<dyn IdentityProvider>) -> Self {
-        Self::build(QuotaLimits::unlimited(), Some(provider), None, true)
+        Self::build(QuotaLimits::unlimited(), Some(provider), None, true, false)
     }
 
     /// The working server whose rate-limit counters hold at most `ceiling` keys **per
@@ -3999,7 +4337,7 @@ impl Fixture {
     /// at-capacity code rather than a `500` that impersonates an outage — does not depend on how
     /// wide it is, so the tests that assert it shrink the partitions and spend two requests.
     pub(crate) fn with_counter_ceiling(ceiling: usize) -> Self {
-        Self::build(QuotaLimits::unlimited(), None, Some(ceiling), true)
+        Self::build(QuotaLimits::unlimited(), None, Some(ceiling), true, false)
     }
 
     /// The same server on a deployment that does **not** federate: `FEDERATION_ENABLED` off,
@@ -4009,7 +4347,16 @@ impl Fixture {
     /// observes the server federating. [`Fixture::federation`] still turns it on, which is how
     /// a case mints a grant "while federation was on" and then asks what off does to it.
     pub(crate) fn without_federation() -> Self {
-        Self::build(QuotaLimits::unlimited(), None, None, false)
+        Self::build(QuotaLimits::unlimited(), None, None, false, false)
+    }
+
+    /// The same server on an OIDC-only deployment: `PASSWORD_AUTH_DISABLED` on (#1004).
+    ///
+    /// Built off rather than switched off, so `server-info` publishes the refusal too.
+    /// [`Fixture::passwords`] still switches it, which is how a case opens a session while
+    /// passwords were accepted and then asks what the switch does to it.
+    pub(crate) fn without_passwords() -> Self {
+        Self::build(QuotaLimits::unlimited(), None, None, true, true)
     }
 
     fn build(
@@ -4017,6 +4364,7 @@ impl Fixture {
         provider: Option<Arc<dyn IdentityProvider>>,
         counter_ceiling: Option<usize>,
         federating: bool,
+        passwords_disabled: bool,
     ) -> Self {
         let clock = Arc::new(ManualClock::default());
         let sessions = Arc::new(SwitchableSessions::new(clock.clone()));
@@ -4062,10 +4410,10 @@ impl Fixture {
         let ledger = Arc::new(SwitchableLedger::default());
         let revocations = Arc::new(SwitchableRevocations::new(clock.clone()));
         let peers = Arc::new(InMemoryPeers::new());
+        let subscriptions = Arc::new(SwitchableSubscriptions::new());
         let federation = Arc::new(SwitchableFederation::new(federating));
-        let chunk_deadline = Arc::new(SwitchableChunkDeadline::new(
-            capsule_server::upload::policy::DEFAULT_CHUNK_READ_TIMEOUT,
-        ));
+        let passwords = Arc::new(SwitchablePasswords::new(passwords_disabled));
+        let chunk_pace = Arc::new(SwitchableChunkPace::new(ChunkPace::default()));
         let challenges = Arc::new(SwitchableChallenges::new(clock.clone()));
         let escrows = Arc::new(SwitchableEscrow::new());
         let cohorts = Arc::new(SwitchableCohorts::new());
@@ -4084,6 +4432,8 @@ impl Fixture {
         let oidc_authorizations = Arc::new(SwitchableOidcAuthorizations::new(clock.clone()));
         let oidc_devices = Arc::new(SwitchableOidcDevices::new(clock.clone()));
         let provider: Arc<dyn IdentityProvider> = provider.unwrap_or_else(|| idp.clone());
+        let activity = Arc::new(SwitchableActivity::new());
+        let activity_context = ActivityContext::new(activity.clone(), clock.clone());
 
         // One index behind both modules, which is what makes "upload it, then read it back off
         // the feed" a test of the server rather than of two disconnected doubles.
@@ -4098,7 +4448,8 @@ impl Fixture {
                 cohorts: cohorts.clone(),
                 tokens: tokens.clone(),
                 clock: clock.clone(),
-            }),
+            })
+            .with_password_setting(passwords.clone()),
             // Every module reads the index **through** the crash seam, so an armed fault is a
             // property of the server rather than of one module's wiring — and a disarmed one is
             // a delegating pass-through, which is what every other case sees.
@@ -4109,7 +4460,7 @@ impl Fixture {
                 authority.clone(),
                 QuotaContext::new(quotas.clone(), clock.clone(), quota_limits),
                 clock.clone(),
-                UploadPolicy::default().with_chunk_read_deadline(chunk_deadline.clone()),
+                UploadPolicy::default().with_chunk_pace(chunk_pace.clone()),
             ),
             sync: SyncContext::new(
                 index_fault.clone(),
@@ -4145,13 +4496,21 @@ impl Fixture {
                 ledger.clone(),
                 index.clone(),
             ))),
-            discovery: DiscoveryContext::new(Arc::new(server_info(&tokens)), revocations.clone()),
+            discovery: DiscoveryContext::new(
+                Arc::new(if passwords_disabled {
+                    server_info(&tokens).without_passwords()
+                } else {
+                    server_info(&tokens)
+                }),
+                revocations.clone(),
+            ),
             escrow: EscrowContext::new(escrows.clone(), clock.clone()),
             // On unless the case asked otherwise ([`Fixture::without_federation`]).
             federation: FederationContext::new(FederationCollaborators {
                 codec: codec.clone(),
                 capabilities: revocations.clone(),
                 peers: peers.clone(),
+                subscriptions: subscriptions.clone(),
                 clock: clock.clone(),
                 enabled: federation.clone(),
             }),
@@ -4169,6 +4528,7 @@ impl Fixture {
                 clock.clone(),
             ),
             counters: CounterContext::new(counters.clone(), clock.clone()),
+            activity: activity_context.clone(),
             totp: TotpContext::new(totp.clone(), codes.clone()),
             oidc: OidcContext::new(OidcCollaborators {
                 provider,
@@ -4204,7 +4564,9 @@ impl Fixture {
             ledger,
             revocations,
             peers,
+            subscriptions,
             federation,
+            passwords,
             codec,
             challenges,
             escrows,
@@ -4220,8 +4582,16 @@ impl Fixture {
             idp,
             oidc_authorizations,
             oidc_devices,
-            chunk_deadline,
+            chunk_pace,
+            activity,
+            activity_context,
         }
+    }
+
+    /// Wait for every activity write the server took off a response path to land, so a case
+    /// can read the log after a refused sign-in.
+    pub(crate) async fn activity_settled(&self) {
+        self.activity_context.settled().await;
     }
 
     /// Just the application context, for a test that needs no handles on what is behind it.
@@ -4323,6 +4693,7 @@ impl Fixture {
                 ),
                 capabilities: issued,
                 peers: Arc::new(InMemoryPeers::new()),
+                subscriptions: Arc::new(InMemorySubscriptions::new()),
                 clock: clock.clone(),
                 enabled: Arc::new(true),
             }),
@@ -4344,6 +4715,7 @@ impl Fixture {
                 clock.clone(),
             ),
             counters: CounterContext::new(Arc::new(InMemoryCounters::new()), clock.clone()),
+            activity: ActivityContext::new(Arc::new(InMemoryActivity::new()), clock.clone()),
             totp: TotpContext::new(
                 Arc::new(InMemoryTotp::new()),
                 Arc::new(TotpCodes::new("Capsule")),
@@ -4351,6 +4723,17 @@ impl Fixture {
             oidc: OidcContext::disabled(clock.clone()),
         });
         (app, clock)
+    }
+
+    /// The kinds of `account`'s activity events, newest first, read past the HTTP surface.
+    pub(crate) async fn activity_kinds(&self, account: &UserId) -> Vec<ActivityKind> {
+        self.activity
+            .recent(account, Timestamp::MIN, 1_000)
+            .await
+            .expect("the in-memory activity log reads")
+            .into_iter()
+            .map(|event| event.kind)
+            .collect()
     }
 
     /// Sign in with the seeded account and return the pair.
@@ -4414,6 +4797,7 @@ impl Fixture {
                 user_id: UserId::new(user_id),
                 created_at: now,
                 authenticated_at: now,
+                signed_in_at: now,
                 last_active_at: now,
                 user_agent: None,
                 ip_address: None,

@@ -181,6 +181,10 @@ impl Harness for ValkeyHarness {
     fn oidc_devices(&self) -> &dyn OidcDeviceStore {
         &*self.oidc_devices
     }
+
+    fn now(&self) -> Timestamp {
+        self.clock.now()
+    }
 }
 
 /// The whole store suite, in one pass on one server.
@@ -191,6 +195,187 @@ async fn the_store_suite_passes_against_valkey() {
     };
     let harness = ValkeyHarness::connect(&server.url).await;
     conformance::run_all(&harness).await;
+}
+
+/// A session re-opened near the end of its lineage lives only until the hard cap, not for a
+/// whole sliding window — the cap survives the rotation that re-opens it.
+#[tokio::test]
+async fn a_reopened_session_never_outlives_its_hard_cap() {
+    let Some(server) = server().await else {
+        return;
+    };
+    let harness = ValkeyHarness::connect(&server.url).await;
+    let session_id = SessionId::new("valkey-hard-cap");
+    let now = Timestamp::UNIX_EPOCH;
+    let left = SignedDuration::from_secs(30);
+    assert!(
+        left < harness.auth.ttl(),
+        "the cap must bite first for this case to mean anything"
+    );
+    let signed_in_at = now
+        .checked_sub(harness.auth.hard_cap() - left)
+        .expect("in range");
+    harness
+        .auth
+        .open_session(SessionRecord {
+            session_id: session_id.clone(),
+            user_id: UserId::new("valkey-hard-cap-user"),
+            created_at: now,
+            authenticated_at: signed_in_at,
+            signed_in_at,
+            last_active_at: now,
+            user_agent: None,
+            ip_address: None,
+            cohort_hash: None,
+            device_id: None,
+        })
+        .await
+        .expect("the session opens");
+
+    harness
+        .advance(left - SignedDuration::from_micros(1))
+        .await
+        .expect("advances");
+    assert!(
+        harness
+            .auth
+            .read_session(&session_id)
+            .await
+            .expect("answers")
+            .is_some(),
+        "just inside the cap the session is live"
+    );
+
+    harness
+        .advance(SignedDuration::from_micros(1))
+        .await
+        .expect("advances");
+    assert_eq!(
+        harness
+            .auth
+            .read_session(&session_id)
+            .await
+            .expect("answers"),
+        None,
+        "at the cap it is gone, though its sliding window has time left"
+    );
+}
+
+/// A near-cap rotation never shortens the per-user index under a younger lineage.
+///
+/// Two lineages of one user carry different caps: the first was signed in just now and lives a
+/// whole window, the second is seconds from its cap. Opening the second must leave the shared
+/// index's collector lifetime at least the first's, or the index expires under a live session
+/// and `sessions_for_user` / `close_all_for_user` (revoke-all, password change) miss it.
+#[tokio::test]
+async fn a_near_cap_rotation_never_shortens_the_user_index() {
+    let Some(server) = server().await else {
+        return;
+    };
+    let harness = ValkeyHarness::connect(&server.url).await;
+    let user_id = UserId::new("valkey-index-cap-user");
+    let index = format!("capsule:user_sessions:{user_id}");
+    let client = redis::Client::open(server.url.as_str()).expect("the URL opens");
+    let mut connection = client
+        .get_multiplexed_async_connection()
+        .await
+        .expect("a second connection");
+    let _: i64 = redis::cmd("DEL")
+        .arg(&index)
+        .query_async(&mut connection)
+        .await
+        .expect("DEL answers");
+
+    let now = Timestamp::UNIX_EPOCH;
+    let window = harness.auth.ttl();
+    let near_cap_left = SignedDuration::from_secs(5);
+    assert!(
+        near_cap_left < window,
+        "the second lineage's cap must bite before the first's window ends"
+    );
+    let record = |tag: &str, signed_in_at: Timestamp| SessionRecord {
+        session_id: SessionId::new(format!("valkey-index-cap-{tag}")),
+        user_id: user_id.clone(),
+        created_at: now,
+        authenticated_at: signed_in_at,
+        signed_in_at,
+        last_active_at: now,
+        user_agent: None,
+        ip_address: None,
+        cohort_hash: None,
+        device_id: None,
+    };
+    let fresh = record("fresh", now);
+    let near_cap = record(
+        "near-cap",
+        now.checked_sub(harness.auth.hard_cap() - near_cap_left)
+            .expect("in range"),
+    );
+    harness
+        .auth
+        .open_session(fresh.clone())
+        .await
+        .expect("the fresh lineage opens");
+    harness
+        .auth
+        .open_session(near_cap.clone())
+        .await
+        .expect("the near-cap lineage opens");
+
+    let pttl = |key: String| {
+        let mut connection = connection.clone();
+        async move {
+            let ttl: i64 = redis::cmd("PTTL")
+                .arg(key)
+                .query_async(&mut connection)
+                .await
+                .expect("PTTL answers");
+            ttl
+        }
+    };
+    let near_cap_ttl = pttl(format!("capsule:session:{}", near_cap.session_id)).await;
+    let index_ttl = pttl(index.clone()).await;
+    let near_cap_millis = i64::try_from(near_cap_left.as_millis()).expect("fits");
+    assert!(
+        near_cap_ttl <= near_cap_millis,
+        "the near-cap record is collected at its cap: {near_cap_ttl}"
+    );
+    assert!(
+        index_ttl > near_cap_millis,
+        "the index keeps the fresh lineage's lifetime, not the near-cap one's: {index_ttl}"
+    );
+
+    let mut listed = harness
+        .auth
+        .sessions_for_user(&user_id)
+        .await
+        .expect("answers")
+        .into_iter()
+        .map(|found| found.session_id)
+        .collect::<Vec<_>>();
+    listed.sort();
+    assert_eq!(
+        listed,
+        vec![fresh.session_id.clone(), near_cap.session_id.clone()],
+        "both lineages are listed"
+    );
+
+    harness
+        .advance(near_cap_left)
+        .await
+        .expect("advances past the near cap");
+    assert_eq!(
+        harness
+            .auth
+            .close_all_for_user(&user_id)
+            .await
+            .expect("answers")
+            .into_iter()
+            .map(|found| found.session_id)
+            .collect::<Vec<_>>(),
+        vec![fresh.session_id],
+        "revoke-all still finds the live lineage once the near-cap one is gone"
+    );
 }
 
 /// A record past its logical lifetime is reported dead and is **not** deleted by the reader.
@@ -212,6 +397,7 @@ async fn a_logically_expired_record_is_dead_but_left_for_the_collector() {
             user_id: UserId::new("valkey-logical-expiry-user"),
             created_at,
             authenticated_at: created_at,
+            signed_in_at: created_at,
             last_active_at: created_at,
             user_agent: None,
             ip_address: None,
@@ -290,6 +476,7 @@ async fn the_progress_sweep_drops_an_expired_session_from_the_view() {
             received_bytes: 0,
             total_size: 1,
             status: UploadSessionStatus::Pending,
+            failure_code: None,
             created_at: harness.clock.now(),
             last_progress_at: harness.clock.now(),
         })
@@ -368,6 +555,7 @@ async fn the_claimed_view_heals_a_member_its_record_no_longer_backs() {
                 received_bytes: 0,
                 total_size: 1,
                 status: UploadSessionStatus::Pending,
+                failure_code: None,
                 created_at: harness.clock.now(),
                 last_progress_at: harness.clock.now(),
             })
@@ -474,6 +662,7 @@ async fn the_progress_sweep_pages_by_score_cursor_across_ties_and_drops() {
                 received_bytes: 0,
                 total_size: 1,
                 status: UploadSessionStatus::Pending,
+                failure_code: None,
                 created_at: harness.clock.now(),
                 last_progress_at: harness.clock.now(),
             })
@@ -742,6 +931,7 @@ async fn finalization_claims_race_to_one_winner() {
             received_bytes: 0,
             total_size: 1,
             status: UploadSessionStatus::Pending,
+            failure_code: None,
             created_at,
             last_progress_at: created_at,
         })

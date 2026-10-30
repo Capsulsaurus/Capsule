@@ -362,3 +362,205 @@ fn feed_entry(id: &str, original_held: bool, with_original_ref: bool) -> FeedEnt
         changed_at: "1970-01-01T00:00:00Z".to_string(),
     }
 }
+
+// ── Running under a changing path ──
+
+mod under_path {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use super::*;
+    use crate::net::path::{
+        PathCost, PathInterface, PathMonitor, PathSample, PathUpdate, ThermalState, TierAdmission,
+    };
+    use crate::upload::queue::LaneWindows;
+
+    fn monitor() -> PathMonitor {
+        PathMonitor::new(PathSample::desktop(), LaneWindows::default())
+    }
+
+    fn metered() -> PathSample {
+        PathSample {
+            cost: PathCost::Metered,
+            interface: PathInterface::Cellular,
+            ..PathSample::desktop()
+        }
+    }
+
+    /// Set when the future holding it is dropped: the in-flight work was cancelled.
+    struct Cancelled(Arc<AtomicBool>);
+
+    impl Drop for Cancelled {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn a_plan_scheduler_gates_on_the_whole_plan() {
+        let monitor = monitor();
+        monitor.observe(PathSample {
+            thermal: ThermalState::Serious,
+            ..PathSample::desktop()
+        });
+        let scheduler = StagedScheduler::from_plan(&monitor.plan(), UploadPolicy::Full);
+        // An unmetered class alone would open the original; the heat holds it back, and
+        // force-sync does not overrule the device's own limits.
+        assert!(scheduler.tier_opens_now(UploadTier::Index));
+        assert!(!scheduler.tier_opens_now(UploadTier::Original));
+        assert!(
+            !scheduler
+                .with_force_sync(true)
+                .tier_opens_now(UploadTier::Original)
+        );
+    }
+
+    #[test]
+    fn a_class_scheduler_keeps_its_old_gate() {
+        for class in [
+            ConnectionClass::Unmetered,
+            ConnectionClass::Metered,
+            ConnectionClass::Constrained,
+            ConnectionClass::Adverse,
+            ConnectionClass::Offline,
+        ] {
+            for force_sync in [false, true] {
+                let scheduler =
+                    StagedScheduler::new(UploadPolicy::Staged, class).with_force_sync(force_sync);
+                for tier in [UploadTier::Index, UploadTier::Preview, UploadTier::Original] {
+                    assert_eq!(
+                        scheduler.tier_opens_now(tier),
+                        class.permits_tier(tier, force_sync),
+                        "{class:?} {tier:?} force_sync={force_sync}"
+                    );
+                }
+            }
+            // Full still opens everything eagerly on a class-only scheduler.
+            assert!(
+                StagedScheduler::new(UploadPolicy::Full, class)
+                    .tier_opens_now(UploadTier::Original)
+            );
+        }
+    }
+
+    #[test]
+    fn narrowing_is_closing_a_tier_that_was_open() {
+        let open = StagedScheduler::new(UploadPolicy::Staged, ConnectionClass::Unmetered);
+        let index = StagedScheduler::new(UploadPolicy::Staged, ConnectionClass::Metered);
+        let none = StagedScheduler::new(UploadPolicy::Staged, ConnectionClass::Offline);
+        assert!(open.narrows_to(&index));
+        assert!(index.narrows_to(&none));
+        assert!(!index.narrows_to(&open));
+        assert!(!open.narrows_to(&open));
+    }
+
+    /// **Acceptance: a changed path generation cancels forbidden work within one scheduling
+    /// tick.** The attempt running under the unmetered plan never finishes on its own; the
+    /// metered path closes the original tier, and the same wake that delivers the change drops
+    /// it and re-runs under an index-only scheduler. The clock is paused and never advanced, so
+    /// no timer or later tick is involved.
+    #[tokio::test(start_paused = true)]
+    async fn a_new_generation_cancels_forbidden_work_within_one_tick() {
+        let monitor = monitor();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let schedulers = Mutex::new(Vec::new());
+        let start = tokio::time::Instant::now();
+
+        let run = run_under_path(&monitor, UploadPolicy::Full, false, |scheduler| {
+            schedulers.lock().unwrap().push(scheduler);
+            let guard = Cancelled(cancelled.clone());
+            async move {
+                if scheduler.tier_opens_now(UploadTier::Original) {
+                    let _guard = guard;
+                    std::future::pending::<&str>().await
+                } else {
+                    "index only"
+                }
+            }
+        });
+        let flip = async {
+            tokio::task::yield_now().await;
+            assert!(
+                !cancelled.load(Ordering::SeqCst),
+                "nothing cancels before the change"
+            );
+            let update = monitor.observe(metered());
+            assert!(matches!(update, PathUpdate::NewPath(_)));
+        };
+        let (out, ()) = tokio::join!(run, flip);
+
+        assert_eq!(out, "index only");
+        assert!(
+            cancelled.load(Ordering::SeqCst),
+            "the in-flight attempt was dropped"
+        );
+        assert_eq!(tokio::time::Instant::now(), start, "no time passed");
+        let schedulers = schedulers.lock().unwrap();
+        assert_eq!(schedulers.len(), 2, "one cancel, one re-plan");
+        assert!(schedulers[0].tier_opens_now(UploadTier::Original));
+        assert!(schedulers[1].tier_opens_now(UploadTier::Index));
+        assert!(!schedulers[1].tier_opens_now(UploadTier::Original));
+    }
+
+    /// A same-path change that closes a tier cancels just the same.
+    #[tokio::test(start_paused = true)]
+    async fn a_critical_thermal_state_cancels_everything() {
+        let monitor = monitor();
+        let admissions = Mutex::new(Vec::new());
+        let run = run_under_path(&monitor, UploadPolicy::Staged, false, |scheduler| {
+            let opens = scheduler.tier_opens_now(UploadTier::Index);
+            admissions.lock().unwrap().push(opens);
+            async move {
+                if opens {
+                    std::future::pending::<()>().await;
+                }
+            }
+        });
+        let flip = async {
+            tokio::task::yield_now().await;
+            monitor.observe(PathSample {
+                thermal: ThermalState::Critical,
+                ..PathSample::desktop()
+            });
+        };
+        tokio::join!(run, flip);
+        assert_eq!(*admissions.lock().unwrap(), vec![true, false]);
+        assert_eq!(monitor.plan().admission, TierAdmission::Nothing);
+    }
+
+    /// A new path that closes nothing lets the running work finish where it is.
+    #[tokio::test(start_paused = true)]
+    async fn a_new_generation_that_closes_nothing_runs_on() {
+        let monitor = monitor();
+        let (finish, finished) = tokio::sync::oneshot::channel::<()>();
+        let mut finished = Some(finished);
+        let attempts = Mutex::new(0_u32);
+        let run = run_under_path(&monitor, UploadPolicy::Full, false, |_| {
+            *attempts.lock().unwrap() += 1;
+            let finished = finished.take();
+            async move {
+                if let Some(finished) = finished {
+                    let _ = finished.await;
+                }
+                "finished"
+            }
+        });
+        let flip = async {
+            tokio::task::yield_now().await;
+            let update = monitor.observe(PathSample {
+                interface: PathInterface::Wifi,
+                ..PathSample::desktop()
+            });
+            assert!(matches!(update, PathUpdate::NewPath(_)));
+            tokio::task::yield_now().await;
+            finish.send(()).unwrap();
+        };
+        let (out, ()) = tokio::join!(run, flip);
+        assert_eq!(out, "finished");
+        assert_eq!(
+            *attempts.lock().unwrap(),
+            1,
+            "the attempt was never cancelled"
+        );
+    }
+}

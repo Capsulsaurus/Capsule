@@ -7211,6 +7211,10 @@
     "message": "Capsule сейчас не удалось связаться с вашим поставщиком удостоверений. Повторите попытку.",
     "origin": "machine"
   },
+  "error.auth.password_disabled": {
+    "message": "Этот сервер принимает вход только через единый вход (SSO).",
+    "origin": "machine"
+  },
   "error.auth.password_invalid": {
     "message": "Этот пароль нельзя использовать.",
     "origin": "machine"

@@ -154,7 +154,7 @@ async fn every_declared_response_is_exercised() {
         .assert_status(StatusCode::OK);
 
     // 413 is declared on *every* operation, because every group carries a body-size cap — the
-    // exempt twelve in a group holding nothing else — and a Kynos interceptor's declaration is its
+    // exempt thirteen in a group holding nothing else — and a Kynos interceptor's declaration is its
     // type (#478). So every operation produces one here, sent the cheapest way the
     // limit can be reached: a `Content-Length` over every group's cap, refused before a byte of
     // the body is read.
@@ -184,6 +184,9 @@ async fn every_declared_response_is_exercised() {
         ("DELETE", "/v1/albums/anything/capabilities/anything"),
         ("POST", "/v1/federation/capabilities/refresh"),
         ("POST", "/v1/federation/reports"),
+        ("POST", "/v1/federation/subscriptions"),
+        ("GET", "/v1/federation/subscriptions"),
+        ("DELETE", "/v1/federation/subscriptions/anything/anything"),
         ("GET", "/v1/quota"),
         ("GET", "/v1/upload/sessions"),
         ("GET", "/v1/assets/anything/receipts"),
@@ -216,6 +219,7 @@ async fn every_declared_response_is_exercised() {
         ("GET", "/v1/auth/devices/enroll/channel/anything"),
         ("DELETE", "/v1/auth/devices/enroll/channel/anything"),
         ("GET", "/v1/moderation/record"),
+        ("GET", "/v1/auth/activity"),
         ("POST", "/v1/shares"),
         ("DELETE", "/v1/shares/anything"),
         ("GET", "/s/anything"),
@@ -225,6 +229,7 @@ async fn every_declared_response_is_exercised() {
         ("DELETE", "/v1/drops/links/anything"),
         ("POST", "/d/anything"),
         ("PATCH", "/d/anything/anything"),
+        ("GET", "/d/anything/anything"),
         ("GET", "/v1/drops"),
         ("POST", "/v1/drops/anything/adopt"),
         ("DELETE", "/v1/drops/anything"),
@@ -365,6 +370,21 @@ async fn every_declared_response_is_exercised() {
         .send()
         .await
         .assert_status(StatusCode::TOO_MANY_REQUESTS);
+    // 403: the deployment refuses passwords (#1004), and so does login below.
+    fixture.passwords.set_disabled(true);
+    client
+        .post("/v1/auth/register")
+        .json(&json!({ "email": "oidc-only@example.test", "password": PASSWORD }))
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    client
+        .post("/v1/auth/login")
+        .json(&json!({ "email": EMAIL, "password": PASSWORD }))
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    fixture.passwords.set_disabled(false);
 
     // ── POST /v1/auth/login ────────────────────────────────────────────────────────────────
     // 400, 415, 422 are the `Json` extractor's, declared on every operation that takes a body.
@@ -746,9 +766,9 @@ async fn every_declared_response_is_exercised() {
         .send()
         .await
         .assert_status(StatusCode::UNSUPPORTED_MEDIA_TYPE);
-    // 408: the chunk read deadline passed before the body arrived (#717). An in-process body is
-    // always whole, so the deadline is switched to one that has already passed.
-    fixture.chunk_deadline.set(std::time::Duration::ZERO);
+    // 408: the chunk body was cut (#717, #1041). An in-process body is always whole, so the
+    // stall bound is switched to zero, which cuts before the first byte.
+    fixture.chunk_pace.cut_every_chunk();
     client
         .patch(&session)
         .header("authorization", &bearer)
@@ -759,9 +779,7 @@ async fn every_declared_response_is_exercised() {
         .send()
         .await
         .assert_status(StatusCode::REQUEST_TIMEOUT);
-    fixture
-        .chunk_deadline
-        .set(capsule_server::upload::policy::DEFAULT_CHUNK_READ_TIMEOUT);
+    fixture.chunk_pace.reset();
     client
         .patch(&session)
         .header("authorization", &bearer)
@@ -1387,7 +1405,7 @@ async fn every_declared_response_is_exercised() {
 
     // ── A deployment that does not federate (#509) ─────────────────────────────────────────
     // Off is the default, and every federation operation declares the `404` it answers then.
-    // Switched off for these four requests and back on, so the one server this walk drives
+    // Switched off for these requests and back on, so the one server this walk drives
     // produces that `404` beside every federated `200`. No credential and no body: the gate
     // answers before either is read, which is the property `tests/federation.rs` asserts.
     fixture.federation.set_enabled(false);
@@ -1407,6 +1425,18 @@ async fn every_declared_response_is_exercised() {
         (
             kynos::http::Method::POST,
             "/v1/federation/reports".to_owned(),
+        ),
+        (
+            kynos::http::Method::POST,
+            "/v1/federation/subscriptions".to_owned(),
+        ),
+        (
+            kynos::http::Method::GET,
+            "/v1/federation/subscriptions".to_owned(),
+        ),
+        (
+            kynos::http::Method::DELETE,
+            "/v1/federation/subscriptions/anything/anything".to_owned(),
         ),
     ] {
         let refused = client
@@ -3228,6 +3258,195 @@ async fn every_declared_response_is_exercised() {
         .await
         .assert_status(StatusCode::OK);
 
+    // ── The account activity log ─────────────────────────────────────────────────
+    client
+        .get("/v1/auth/activity")
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    client
+        .get("/v1/auth/activity")
+        .header(
+            "authorization",
+            &format!("Bearer {}", rotated.refresh_token),
+        )
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    fixture.activity.set_unavailable(true);
+    let problem: serde_json::Value = client
+        .get("/v1/auth/activity")
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR)
+        .json();
+    assert_eq!(problem["code"], "error.auth.unavailable");
+    fixture.activity.set_unavailable(false);
+    client
+        .get("/v1/auth/activity?limit=5")
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+
+    // ── Federation subscriptions ─────────────────────────────────────────────────
+    // A member posts the capability an album's home server minted for this server. The home
+    // server is staged as a codec of its own, whose key is pinned partway through so the
+    // walk produces the unknown peer's `403` first.
+    {
+        use capsule_server::federation::{CapabilityCodec, MintRequest, PeerId, PeerStore as _};
+        const HOME: &str = "home.subscribed.test";
+        const SUBSCRIBED_ALBUM: &str = "01937b7c-0000-7000-8000-00000000c0de";
+        let der = ring::signature::Ed25519KeyPair::generate_pkcs8(&ring::rand::SystemRandom::new())
+            .expect("the platform generates a key");
+        let home = CapabilityCodec::from_pkcs8(der.as_ref(), HOME, fixture.clock.clone())
+            .expect("a fresh key parses");
+        let invite = home
+            .mint(&MintRequest {
+                peer: PeerId::new(support::SERVER_ORIGIN),
+                album: capsule_server::store::AlbumId::new(SUBSCRIBED_ALBUM),
+                scope: capsule_server::federation::Scope::Read,
+                min_protocol_version: PROTOCOL_VERSION.to_owned(),
+                ttl: jiff::SignedDuration::from_hours(6),
+            })
+            .expect("it mints")
+            .token;
+        let subscription = json!({ "issuer": HOME, "token": invite });
+        let refresh_bearer = format!("Bearer {}", rotated.refresh_token);
+
+        client
+            .post("/v1/federation/subscriptions")
+            .json(&subscription)
+            .send()
+            .await
+            .assert_status(StatusCode::UNAUTHORIZED);
+        client
+            .post("/v1/federation/subscriptions")
+            .header("authorization", &refresh_bearer)
+            .json(&subscription)
+            .send()
+            .await
+            .assert_status(StatusCode::FORBIDDEN);
+        client
+            .post("/v1/federation/subscriptions")
+            .header("authorization", &bearer)
+            .body("text/plain", "{}")
+            .send()
+            .await
+            .assert_status(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        client
+            .post("/v1/federation/subscriptions")
+            .header("authorization", &bearer)
+            .json(&json!({ "issuer": 42 }))
+            .send()
+            .await
+            .assert_status(StatusCode::UNPROCESSABLE_ENTITY);
+        client
+            .post("/v1/federation/subscriptions")
+            .header("authorization", &bearer)
+            .json(&json!({ "issuer": "https://home.subscribed.test/", "token": "t" }))
+            .send()
+            .await
+            .assert_status(StatusCode::BAD_REQUEST);
+        // 403: nobody pinned the home server's key, so nothing it signed can be verified.
+        client
+            .post("/v1/federation/subscriptions")
+            .header("authorization", &bearer)
+            .json(&subscription)
+            .send()
+            .await
+            .assert_status(StatusCode::FORBIDDEN);
+        let key: [u8; 32] = home.public_key().try_into().expect("thirty-two bytes");
+        fixture
+            .peers
+            .pin(&PeerId::new(HOME), key, fixture.clock.now())
+            .await
+            .expect("the operator pins");
+        fixture.subscriptions.set_unavailable(true);
+        client
+            .post("/v1/federation/subscriptions")
+            .header("authorization", &bearer)
+            .json(&subscription)
+            .send()
+            .await
+            .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+        fixture.subscriptions.set_unavailable(false);
+        client
+            .post("/v1/federation/subscriptions")
+            .header("authorization", &bearer)
+            .header("accept", "application/json")
+            .json(&subscription)
+            .send()
+            .await
+            .assert_status(StatusCode::CREATED);
+        client
+            .post("/v1/federation/subscriptions")
+            .header("authorization", &bearer)
+            .header("accept", "application/json")
+            .json(&subscription)
+            .send()
+            .await
+            .assert_status(StatusCode::OK);
+
+        client
+            .get("/v1/federation/subscriptions")
+            .send()
+            .await
+            .assert_status(StatusCode::UNAUTHORIZED);
+        client
+            .get("/v1/federation/subscriptions")
+            .header("authorization", &refresh_bearer)
+            .send()
+            .await
+            .assert_status(StatusCode::FORBIDDEN);
+        fixture.subscriptions.set_unavailable(true);
+        client
+            .get("/v1/federation/subscriptions")
+            .header("authorization", &bearer)
+            .send()
+            .await
+            .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+        fixture.subscriptions.set_unavailable(false);
+        let listed: serde_json::Value = client
+            .get("/v1/federation/subscriptions")
+            .header("authorization", &bearer)
+            .header("accept", "application/json")
+            .send()
+            .await
+            .assert_status(StatusCode::OK)
+            .json();
+        assert_eq!(listed["subscriptions"][0]["album_id"], SUBSCRIBED_ALBUM);
+
+        let unsubscribe = format!("/v1/federation/subscriptions/{HOME}/{SUBSCRIBED_ALBUM}");
+        client
+            .delete(&unsubscribe)
+            .send()
+            .await
+            .assert_status(StatusCode::UNAUTHORIZED);
+        client
+            .delete(&unsubscribe)
+            .header("authorization", &refresh_bearer)
+            .send()
+            .await
+            .assert_status(StatusCode::FORBIDDEN);
+        fixture.subscriptions.set_unavailable(true);
+        client
+            .delete(&unsubscribe)
+            .header("authorization", &bearer)
+            .send()
+            .await
+            .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+        fixture.subscriptions.set_unavailable(false);
+        client
+            .delete(&unsubscribe)
+            .header("authorization", &bearer)
+            .send()
+            .await
+            .assert_status(StatusCode::NO_CONTENT);
+    }
+
     // ── The master-key escrow ────────────────────────────────────────────────────
     client
         .put("/v1/auth/escrow")
@@ -3570,7 +3789,7 @@ const HANDSHAKE_HEADERS: [&str; 3] = [
 /// client hits before it knows the window; the `/.well-known/capsule/*` records are public
 /// discovery; the `/s/{opaque_id}*` reads must answer an indistinguishable `404`
 /// (share-links.md), which a `426` would turn into a probing oracle; the `/d/{opaque_id}*`
-/// guest deposits have their protocol pinned at link issuance (web-upload.md); refreshing and
+/// guest deposits and status probe have their protocol pinned at link issuance (web-upload.md); refreshing and
 /// closing a session are upkeep an out-of-window client must still reach, since its reads are
 /// admitted at any protocol date (#527).
 const EXEMPT: &[(&str, &str)] = &[
@@ -3584,6 +3803,7 @@ const EXEMPT: &[(&str, &str)] = &[
     ("GET", "/s/{opaque_id}/blob/{hash}"),
     ("POST", "/d/{opaque_id}"),
     ("PATCH", "/d/{opaque_id}/{upload_id}"),
+    ("GET", "/d/{opaque_id}/{upload_id}"),
     ("POST", "/v1/auth/refresh"),
     ("POST", "/v1/auth/logout"),
 ];
@@ -3685,7 +3905,7 @@ fn is_exempt(method: &str, template: &str) -> bool {
 
 /// The operations declaring the handshake are exactly the ones outside [`EXEMPT`].
 #[test]
-fn the_handshake_is_declared_on_every_operation_but_the_exempt_twelve() {
+fn the_handshake_is_declared_on_every_operation_but_the_exempt_thirteen() {
     let document = capsule_server::openapi().expect("router describes itself");
     let json = serde_json::to_value(&document).expect("a document serializes");
 
@@ -3742,7 +3962,7 @@ fn the_handshake_is_declared_on_every_operation_but_the_exempt_twelve() {
         "the gated set is not \"everything but EXEMPT\"; `lib.rs::router` and this pin change \
          together"
     );
-    assert_eq!(EXEMPT.len(), 12, "the design names twelve exemptions");
+    assert_eq!(EXEMPT.len(), 13, "the design names thirteen exemptions");
 
     for (method, path) in EXEMPT {
         assert!(
@@ -5009,9 +5229,9 @@ async fn drops_block(
         .send()
         .await
         .assert_status(StatusCode::BAD_REQUEST);
-    // 408: the chunk read deadline passed before the body arrived (#717). An in-process body is
-    // always whole, so the deadline is switched to one that has already passed.
-    fixture.chunk_deadline.set(std::time::Duration::ZERO);
+    // 408: the chunk body was cut (#717, #1041). An in-process body is always whole, so the
+    // stall bound is switched to zero, which cuts before the first byte.
+    fixture.chunk_pace.cut_every_chunk();
     client
         .patch(&chunk_path)
         .header("x-capsule-offset", "0")
@@ -5020,9 +5240,7 @@ async fn drops_block(
         .send()
         .await
         .assert_status(StatusCode::REQUEST_TIMEOUT);
-    fixture
-        .chunk_deadline
-        .set(capsule_server::upload::policy::DEFAULT_CHUNK_READ_TIMEOUT);
+    fixture.chunk_pace.reset();
     client
         .patch(&chunk_path)
         .header("x-capsule-offset", "512")
@@ -5047,6 +5265,32 @@ async fn drops_block(
         .send()
         .await
         .assert_status(StatusCode::NO_CONTENT);
+
+    // The status probe: the session's state, one 404 for a session that is not the link's, the
+    // `Path` extractor's 400, and a session store that cannot answer.
+    client
+        .get(&chunk_path)
+        .header("accept", "application/json")
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+    client
+        .get(&format!("/d/{drop_link}/no-such-session"))
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    client
+        .get("/d/%FF/anything")
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    fixture.uploads.set_unavailable(true);
+    client
+        .get(&chunk_path)
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    fixture.uploads.set_unavailable(false);
 
     // The inbox, an adoption refused on its merits, and a discard.
     let inbox: serde_json::Value = client

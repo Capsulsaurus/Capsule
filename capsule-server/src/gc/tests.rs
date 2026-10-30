@@ -1312,6 +1312,7 @@ async fn the_upload_session_store_sweeps_through_its_pressure_listing() {
                 received_bytes: 0,
                 total_size: 1,
                 status: crate::store::upload::UploadSessionStatus::Pending,
+                failure_code: None,
                 created_at: clock.now(),
                 last_progress_at: clock.now(),
             })

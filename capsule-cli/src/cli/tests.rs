@@ -275,6 +275,81 @@ fn bare_capsule_off_a_terminal_is_the_help_usage_error() {
     assert_eq!(error.exit_code(), 2);
 }
 
+/// `capsule push` takes the path snapshot from its flags, and each maps onto the SDK's sample.
+#[test]
+fn push_takes_the_path_snapshot_from_flags() {
+    use capsule_sdk::net::path::{PathCost, PathInterface, PowerState, ThermalState};
+
+    let cli = try_parse_from(
+        false,
+        [
+            "capsule",
+            "push",
+            "--library",
+            "lib",
+            "--path-cost",
+            "metered",
+            "--path-interface",
+            "cellular",
+            "--power",
+            "low-power",
+            "--thermal",
+            "serious",
+            "--background-deadline",
+            "30",
+        ],
+    )
+    .expect("parses");
+    let Some(Commands::Push { path, .. }) = cli.command else {
+        panic!("a push");
+    };
+    assert_eq!(
+        path.flags(),
+        crate::cache::PathFlags {
+            cost: Some(PathCost::Metered),
+            interface: Some(PathInterface::Cellular),
+            power: Some(PowerState::LowPower),
+            thermal: Some(ThermalState::Serious),
+            background_deadline: Some(std::time::Duration::from_secs(30)),
+        }
+    );
+
+    let bare = try_parse_from(false, ["capsule", "push", "--library", "lib"]).expect("parses");
+    let Some(Commands::Push { path, .. }) = bare.command else {
+        panic!("a push");
+    };
+    assert_eq!(path.flags(), crate::cache::PathFlags::default());
+}
+
+/// `capsule auth activity` takes an optional limit and the `--json` switch.
+#[test]
+fn auth_activity_parses_its_limit_and_json() {
+    let cli = try_parse_from(
+        false,
+        ["capsule", "auth", "activity", "--limit", "5", "--json"],
+    )
+    .expect("parses");
+    assert!(matches!(
+        cli.command,
+        Some(Commands::Auth {
+            command: AuthCommands::Activity {
+                limit: Some(5),
+                json: true
+            }
+        })
+    ));
+    let bare = try_parse_from(false, ["capsule", "auth", "activity"]).expect("parses");
+    assert!(matches!(
+        bare.command,
+        Some(Commands::Auth {
+            command: AuthCommands::Activity {
+                limit: None,
+                json: false
+            }
+        })
+    ));
+}
+
 /// A subcommand parses the same whether or not a terminal is attached.
 #[test]
 fn a_subcommand_parses_the_same_on_and_off_a_terminal() {

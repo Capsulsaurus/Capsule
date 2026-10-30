@@ -2,43 +2,35 @@ import Foundation
 
 // MARK: - RepresentationTier
 
-/// The degrade ladder, as a type (*Download and Synchronization — Tiered,
-/// On-Demand Fetch*).
+/// A rung of the representation ladder, by name (*Download and
+/// Synchronization — Tiered, On-Demand Fetch*).
 ///
-/// Every asset has a ladder of representations, cheapest first. The client
-/// fetches the smallest one that satisfies the user's current intent and
-/// nothing more, and when a higher rung becomes permanently unavailable it
-/// **degrades gracefully** down the ladder rather than showing a failure — down
-/// to ``dominantColour``, which is always present because it rides inside the
-/// metadata blob.
+/// This type **names** a tier and nothing more: what a port fetches, what
+/// storage is spent on, what a sync state reports as the best in hand. It
+/// carries no order. Which rung a surface shows, and what it obtains next, is
+/// the render ladder's answer (``RenderLadder``), computed once in Rust and
+/// reached over the FFI; an app keeps no ladder of its own.
 ///
-/// This enum deliberately carries **no `unknown` case**, unlike the wire enums.
-/// The ladder is client-local: it never crosses the FFI as a string, and a
-/// total order with an unplaceable member would make ``LocalRepresentations/best``
-/// undefined.
-public enum RepresentationTier: Int, Sendable, Equatable, Hashable, Comparable, CaseIterable, Codable {
-    /// The LQIP's dominant colour. Renderable with no decode at all, and
-    /// present for every asset whose metadata has synced.
-    case dominantColour = 0
-    /// The full LQIP placeholder, embedded in the metadata blob at zero extra
-    /// request.
+/// The cases are declared cheapest first, which is the order a list of them is
+/// presented in. The raw values are those the type has always encoded with, so
+/// a persisted tier still decodes; they are not an ordering either.
+///
+/// There is no dominant-colour case. The LQIP rung paints its dominant colour
+/// where the LQIP does not decode (*Thumbnails — LQIP*), so the colour is how
+/// that rung renders, not a rung of its own. Like the wire enums' closed
+/// counterparts it carries no `unknown` case: it never crosses the FFI as a
+/// string.
+public enum RepresentationTier: Int, Sendable, Equatable, Hashable, CaseIterable, Codable {
+    /// The LQIP placeholder, embedded in the metadata blob at zero extra
+    /// request, or its dominant colour where it does not decode.
     case lqip = 1
-    /// A grid thumbnail, fetched as the asset scrolls into or near view.
+    /// A grid thumbnail.
     case thumbnail = 2
-    /// A screen-resolution derivative, fetched when the asset is opened.
+    /// A screen-resolution derivative, for the single-asset view.
     case preview = 3
     /// The full-fidelity original, fetched only on explicit demand: viewing at
     /// full fidelity, exporting, or sharing the original.
     case original = 4
-
-    public static func < (lhs: RepresentationTier, rhs: RepresentationTier) -> Bool {
-        lhs.rawValue < rhs.rawValue
-    }
-
-    /// The next rung down, or `nil` at the bottom. The degrade step.
-    public var degraded: RepresentationTier? {
-        RepresentationTier(rawValue: rawValue - 1)
-    }
 }
 
 // MARK: - SyncScope
@@ -90,24 +82,18 @@ public enum SyncScope: ClosedWireEnum {
 
 // MARK: - LocalRepresentations
 
-/// Which rungs of the ladder this device actually holds for one asset.
+/// Which representations this device actually holds for one asset.
 ///
-/// The grid reads ``best`` to decide what to draw, and the viewer reads
+/// A set, not a ladder: what to draw is the render ladder's answer over
+/// ``renderHoldings(embeddedPreview:)``, and the viewer reads
 /// ``isFullResolutionAvailable`` to decide whether to offer a full-fidelity
 /// view or a "fetching original" affordance. Neither ever asks the network.
 public struct LocalRepresentations: Sendable, Equatable, Hashable {
-    /// The tiers held locally. ``RepresentationTier/dominantColour`` is implied
-    /// for any asset whose metadata has synced and is inserted on init.
+    /// The tiers held locally.
     public private(set) var heldTiers: Set<RepresentationTier>
 
     public init(heldTiers: Set<RepresentationTier> = []) {
-        self.heldTiers = heldTiers.union([.dominantColour])
-    }
-
-    /// The best representation available right now — what the UI should draw.
-    /// Never `nil`: the ladder bottoms out at a colour.
-    public var best: RepresentationTier {
-        heldTiers.max() ?? .dominantColour
+        self.heldTiers = heldTiers
     }
 
     /// Whether the original is held, so a full-fidelity view can be shown
@@ -132,6 +118,13 @@ public struct LocalRepresentations: Sendable, Equatable, Hashable {
     /// verify-before-destroy, which is a port concern, not a value-type one.
     public func removing(_ tier: RepresentationTier) -> LocalRepresentations {
         LocalRepresentations(heldTiers: heldTiers.subtracting([tier]))
+    }
+
+    /// What the render ladder is told this device holds: the encoded tiers and
+    /// the original, and the size of the original's embedded preview where one
+    /// was read. The LQIP is implied there, so it is not listed.
+    public func renderHoldings(embeddedPreview: Dimensions? = nil) -> RenderHoldings {
+        RenderHoldings(held: heldTiers.subtracting([.lqip]), embeddedPreview: embeddedPreview)
     }
 }
 

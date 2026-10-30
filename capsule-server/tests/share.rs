@@ -498,6 +498,23 @@ async fn revocation_takes_effect_immediately_and_is_only_the_owners() {
         fixture.blobs.stat(&original).await.expect("stat").is_some(),
         "revoking a link is a serving constraint; the owner's bytes stay"
     );
+    // The owner's log holds the issue and the one revocation that changed something; the
+    // stranger's indistinguishable `204` recorded nothing anywhere.
+    assert_eq!(
+        fixture.activity_kinds(&support::user()).await[..2],
+        [
+            capsule_server::activity::ActivityKind::ShareLinkRevoked,
+            capsule_server::activity::ActivityKind::ShareLinkCreated
+        ]
+    );
+    assert!(
+        fixture
+            .activity_kinds(&capsule_server::store::UserId::new(
+                "01937b7c-0000-7000-8000-0000000000ff"
+            ))
+            .await
+            .is_empty()
+    );
 }
 
 #[tokio::test]

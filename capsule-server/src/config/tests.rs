@@ -66,21 +66,65 @@ fn the_connection_bounds_are_explicit_and_configurable() {
     let config = Config::load(&serveable(), &memory(), Demands::Serve).expect("it loads");
     assert_eq!(config.header_read_timeout, Duration::from_secs(30));
     assert_eq!(
-        config.chunk_read_timeout,
-        crate::upload::policy::DEFAULT_CHUNK_READ_TIMEOUT
+        config.chunk_pace,
+        crate::upload::policy::ChunkPace::new(
+            crate::upload::policy::DEFAULT_CHUNK_STALL_TIMEOUT,
+            crate::upload::policy::DEFAULT_CHUNK_MIN_RATE,
+        )
     );
 
     let mut environment = serveable();
     environment.insert("HEADER_READ_TIMEOUT_SECONDS".to_owned(), "7".to_owned());
-    environment.insert("CHUNK_READ_TIMEOUT_SECONDS".to_owned(), "45".to_owned());
+    environment.insert("CHUNK_STALL_TIMEOUT_SECONDS".to_owned(), "45".to_owned());
+    environment.insert(
+        "CHUNK_MIN_RATE_BYTES_PER_SECOND".to_owned(),
+        "512".to_owned(),
+    );
     let config = Config::load(&environment, &memory(), Demands::Serve).expect("it loads");
     assert_eq!(config.header_read_timeout, Duration::from_secs(7));
-    assert_eq!(config.chunk_read_timeout, Duration::from_secs(45));
+    assert_eq!(
+        config.chunk_pace,
+        crate::upload::policy::ChunkPace::new(Duration::from_secs(45), 512)
+    );
+}
+
+/// The stall bound must sit below the idle timeout a typical reverse proxy applies (sixty
+/// seconds for nginx and AWS ALB), or a stalled chunk is cut by the proxy with a bare `504`
+/// before this server can answer its `408`.
+#[test]
+fn the_default_stall_bound_sits_below_a_typical_proxy_idle_timeout() {
+    assert!(crate::upload::policy::DEFAULT_CHUNK_STALL_TIMEOUT <= Duration::from_secs(30));
+}
+
+/// A zero rate floor is a setting, not an outage: it leaves the stall bound alone.
+#[test]
+fn a_zero_minimum_rate_turns_the_floor_off() {
+    let mut environment = serveable();
+    environment.insert("CHUNK_MIN_RATE_BYTES_PER_SECOND".to_owned(), "0".to_owned());
+    let config = Config::load(&environment, &memory(), Demands::Serve).expect("it loads");
+    assert_eq!(config.chunk_pace.min_bytes_per_second, 0);
+    assert_eq!(
+        config.chunk_pace.stall,
+        crate::upload::policy::DEFAULT_CHUNK_STALL_TIMEOUT
+    );
+}
+
+/// The total-duration setting the stall bound replaced is no longer read, and does not stop a
+/// server that still carries it from booting.
+#[test]
+fn the_retired_chunk_read_timeout_is_ignored() {
+    let mut environment = serveable();
+    environment.insert("CHUNK_READ_TIMEOUT_SECONDS".to_owned(), "0".to_owned());
+    let config = Config::load(&environment, &memory(), Demands::Serve).expect("it loads");
+    assert_eq!(
+        config.chunk_pace.stall,
+        crate::upload::policy::DEFAULT_CHUNK_STALL_TIMEOUT
+    );
 }
 
 #[test]
 fn a_connection_bound_of_zero_or_not_a_number_is_refused() {
-    for key in ["HEADER_READ_TIMEOUT_SECONDS", "CHUNK_READ_TIMEOUT_SECONDS"] {
+    for key in ["HEADER_READ_TIMEOUT_SECONDS", "CHUNK_STALL_TIMEOUT_SECONDS"] {
         for value in ["0", "-1", "thirty"] {
             let mut environment = serveable();
             environment.insert(key.to_owned(), value.to_owned());
@@ -88,6 +132,18 @@ fn a_connection_bound_of_zero_or_not_a_number_is_refused() {
                 Config::load(&environment, &memory(), Demands::Serve).expect_err("it refuses");
             assert!(error.names(key), "{key}={value}: {error}");
         }
+    }
+    for value in ["-1", "fast"] {
+        let mut environment = serveable();
+        environment.insert(
+            "CHUNK_MIN_RATE_BYTES_PER_SECOND".to_owned(),
+            value.to_owned(),
+        );
+        let error = Config::load(&environment, &memory(), Demands::Serve).expect_err("it refuses");
+        assert!(
+            error.names("CHUNK_MIN_RATE_BYTES_PER_SECOND"),
+            "{value}: {error}"
+        );
     }
 }
 
@@ -434,6 +490,58 @@ fn the_lockout_window_defaults_to_fifteen_minutes_and_is_configurable() {
 }
 
 #[test]
+fn the_session_lifetime_defaults_to_the_design_and_is_configurable() {
+    let config = Config::load(&serveable(), &memory(), Demands::Serve).expect("it loads");
+    assert_eq!(config.session_ttl, SignedDuration::from_hours(180 * 24));
+    assert_eq!(
+        config.session_hard_cap,
+        SignedDuration::from_hours(365 * 24)
+    );
+
+    let mut environment = serveable();
+    environment.insert("SESSION_TTL_DAYS".to_owned(), "30".to_owned());
+    environment.insert("SESSION_HARD_CAP_DAYS".to_owned(), " 90 ".to_owned());
+    let config = Config::load(&environment, &memory(), Demands::Serve).expect("it loads");
+    assert_eq!(config.session_ttl, SignedDuration::from_hours(30 * 24));
+    assert_eq!(config.session_hard_cap, SignedDuration::from_hours(90 * 24));
+
+    // A cap equal to the window is coherent: the window simply never outlives it.
+    environment.insert("SESSION_HARD_CAP_DAYS".to_owned(), "30".to_owned());
+    let config = Config::load(&environment, &memory(), Demands::Serve).expect("it loads");
+    assert_eq!(config.session_hard_cap, config.session_ttl);
+}
+
+#[test]
+fn a_session_lifetime_of_zero_negative_or_not_a_number_is_refused() {
+    for key in ["SESSION_TTL_DAYS", "SESSION_HARD_CAP_DAYS"] {
+        for value in ["0", "-1", "a year", "1.5", "106751991167301"] {
+            let mut environment = serveable();
+            environment.insert(key.to_owned(), value.to_owned());
+            let error =
+                Config::load(&environment, &memory(), Demands::Serve).expect_err("it refuses");
+            assert!(error.names(key), "{key}={value}: {error}");
+        }
+    }
+}
+
+#[test]
+fn a_hard_cap_shorter_than_the_sliding_window_is_refused() {
+    let mut environment = serveable();
+    environment.insert("SESSION_HARD_CAP_DAYS".to_owned(), "179".to_owned());
+    let error = Config::load(&environment, &memory(), Demands::Serve).expect_err("it refuses");
+    assert!(error.names("SESSION_HARD_CAP_DAYS"), "{error}");
+    assert!(!error.names("SESSION_TTL_DAYS"), "{error}");
+
+    // A malformed window is reported once, not again as a cap shorter than its default.
+    let mut environment = serveable();
+    environment.insert("SESSION_TTL_DAYS".to_owned(), "0".to_owned());
+    environment.insert("SESSION_HARD_CAP_DAYS".to_owned(), "30".to_owned());
+    let error = Config::load(&environment, &memory(), Demands::Serve).expect_err("it refuses");
+    assert!(error.names("SESSION_TTL_DAYS"), "{error}");
+    assert!(!error.names("SESSION_HARD_CAP_DAYS"), "{error}");
+}
+
+#[test]
 fn an_explicit_cursor_key_wins_over_the_derived_one() {
     let mut environment = serveable();
     let explicit = base64::Engine::encode(
@@ -621,6 +729,58 @@ fn switching_federation_on_without_a_url_or_with_a_typo_is_refused_by_name() {
     environment.insert("FEDERATION_ENABLED".to_owned(), "enabled".to_owned());
     let error = Config::load(&environment, &memory(), Demands::Serve).expect_err("it refuses");
     assert!(error.names("FEDERATION_ENABLED"), "{error}");
+}
+
+/// The environment a `serve --memory` with a whole OIDC relying party needs.
+fn serveable_with_oidc() -> BTreeMap<String, String> {
+    let mut environment = serveable();
+    environment.insert(
+        "OIDC_ISSUER".to_owned(),
+        "https://idp.example.test/realm".to_owned(),
+    );
+    environment.insert("OIDC_CLIENT_ID".to_owned(), "capsule".to_owned());
+    environment
+}
+
+#[test]
+fn password_auth_is_on_unless_switched_off() {
+    let config = Config::load(&serveable(), &memory(), Demands::Serve).expect("it loads");
+    assert!(!config.password_auth_disabled);
+
+    let mut environment = serveable_with_oidc();
+    for on in ["true", "1", "YES", " on "] {
+        environment.insert("PASSWORD_AUTH_DISABLED".to_owned(), on.to_owned());
+        let config = Config::load(&environment, &memory(), Demands::Serve).expect("it loads");
+        assert!(config.password_auth_disabled, "PASSWORD_AUTH_DISABLED={on}");
+    }
+    environment.insert("PASSWORD_AUTH_DISABLED".to_owned(), "off".to_owned());
+    let config = Config::load(&environment, &memory(), Demands::Serve).expect("it loads");
+    assert!(!config.password_auth_disabled);
+}
+
+#[test]
+fn disabling_passwords_without_an_identity_provider_is_refused_by_name() {
+    let mut environment = serveable();
+    environment.insert("PASSWORD_AUTH_DISABLED".to_owned(), "true".to_owned());
+    let error = Config::load(&environment, &memory(), Demands::Serve).expect_err("it refuses");
+    assert!(error.names("OIDC_ISSUER"), "{error}");
+    // Only `serve` admits anybody, so maintenance is not sent looking for a provider.
+    Config::load(&environment, &memory(), Demands::Maintenance)
+        .expect("maintenance loads without one");
+
+    // A half-configured relying party is told what it lacks, not that its issuer is missing.
+    environment.insert(
+        "OIDC_ISSUER".to_owned(),
+        "https://idp.example.test/realm".to_owned(),
+    );
+    let error = Config::load(&environment, &memory(), Demands::Serve).expect_err("it refuses");
+    assert!(error.names("OIDC_CLIENT_ID"), "{error}");
+    assert!(!error.names("OIDC_ISSUER"), "{error}");
+
+    let mut environment = serveable_with_oidc();
+    environment.insert("PASSWORD_AUTH_DISABLED".to_owned(), "sometimes".to_owned());
+    let error = Config::load(&environment, &memory(), Demands::Serve).expect_err("it refuses");
+    assert!(error.names("PASSWORD_AUTH_DISABLED"), "{error}");
 }
 
 #[test]

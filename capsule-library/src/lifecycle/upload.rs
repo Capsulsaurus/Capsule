@@ -20,11 +20,13 @@ use std::path::PathBuf;
 
 use capsule_core::cbor;
 use capsule_core::crypto::encryption::{
-    AssetEncryption, CiphertextReader, NONCE_PREFIX_LEN, StreamError, ciphertext_len,
-    encrypt_asset_vec_with_prefix, encrypt_asset_with_prefix,
+    AssetEncryption, CiphertextReader, NONCE_PREFIX_LEN, StreamError, blob_ciphertext_hash,
+    ciphertext_len, encrypt_asset_vec_with_prefix, encrypt_asset_with_prefix,
 };
 use capsule_core::crypto::hash::{self, Hash32};
-use capsule_core::crypto::provenance::{Action, DerivativeManifest, DerivativeRole, KeyMode};
+use capsule_core::crypto::provenance::{
+    Action, DerivativeManifest, DerivativeRole, KeyMode, ManifestCore,
+};
 use capsule_core::derivative_format::{DerivativeFormat, verify_still_format};
 use uuid::Uuid;
 
@@ -127,8 +129,10 @@ pub struct UploadBundle {
     pub key_mode: KeyMode,
     /// The **exact** sealed metadata-blob wire bytes the manifest commits to.
     pub metadata_blob: Vec<u8>,
-    /// The **exact** provenance-blob wire bytes: the canonical CBOR of the chain's head
-    /// [`ProvenanceRecord`](capsule_core::crypto::provenance::ProvenanceRecord).
+    /// The **exact** provenance-blob wire bytes: the canonical CBOR of the chain's `create`
+    /// [`ProvenanceRecord`](capsule_core::crypto::provenance::ProvenanceRecord), its genesis.
+    /// The records after it are not uploaded: they reach the server as lifecycle ops once it
+    /// has indexed this one.
     ///
     /// This is the asset's *envelope object* — the `provenance` blob of
     /// [provenance.md § Physical Storage](https://docs/design/cryptography/provenance/#physical-storage),
@@ -141,9 +145,9 @@ pub struct UploadBundle {
     /// bytes" holds through the wrapper.
     ///
     /// Always present, unlike [`metadata_blob_hash`](Self::metadata_blob_hash): a managed asset
-    /// always has a chain head, even when its head action binds no metadata blob.
+    /// always has a create record, even when it binds no metadata blob.
     pub provenance_blob: Vec<u8>,
-    /// The content address of the sealed metadata blob, when the head action binds one.
+    /// The content address of the sealed metadata blob, when the create binds one.
     pub metadata_blob_hash: Option<Hash32>,
     /// The asset's derivative blobs, if any were generated and persisted.
     pub derivatives: Vec<DerivativeBlob>,
@@ -164,15 +168,15 @@ pub struct UploadBundle {
     pub created_by_user: Uuid,
     /// The authoring device.
     pub created_by_device: Uuid,
-    /// The exact client build that authored the head manifest.
+    /// The exact client build that authored the create manifest.
     pub client_version: String,
-    /// RFC3339 authoring timestamp of the head manifest.
+    /// RFC3339 authoring timestamp of the create manifest.
     pub timestamp: String,
-    /// The head manifest's lifecycle action.
+    /// The create manifest's lifecycle action: `create`.
     pub action: Action,
-    /// The head manifest's prior-provenance link (null iff `action = create`).
+    /// The create manifest's prior-provenance link: null, as for every `create`.
     pub prior_provenance_hash: Option<Hash32>,
-    /// The head manifest's retention floor (set only for `delete`).
+    /// The create manifest's retention floor: unset, as it is set only for `delete`.
     pub retention_until: Option<String>,
 }
 
@@ -280,13 +284,28 @@ impl capsule_core::backup::CiphertextSource for OriginalCiphertext {
 }
 
 impl Workspace {
-    /// Build the [`UploadBundle`] for one managed asset.
+    /// Build the [`UploadBundle`] for one managed asset: its **`create` record** and the bytes
+    /// that record commits to.
     ///
-    /// Re-derives the original ciphertext from the head manifest's recorded `nonce_prefix`
-    /// (clients hold plaintext; ciphertext is regenerated deterministically) and gates it on
-    /// the manifest's own content address, so a bundle that reaches the network is one the
-    /// signed manifest vouches for. The sealed metadata blob is carried verbatim — it cannot
-    /// be regenerated, because `seal_metadata_blob` draws a fresh nonce per call.
+    /// An upload establishes an asset on the server, and the server takes nothing but a
+    /// `create` through it. So the bundle carries the chain's genesis whatever the chain holds
+    /// now: an asset deleted and restored, or edited, before its first upload is uploaded as the
+    /// create it began as, and every record after it reaches the server as a lifecycle op once
+    /// the create is indexed (Organization — Deletion State Machine, "Held records").
+    ///
+    /// Re-derives the original ciphertext from the create's recorded `nonce_prefix` (clients
+    /// hold plaintext; ciphertext is regenerated deterministically) and gates it on the
+    /// manifest's own content address, so a bundle that reaches the network is one the signed
+    /// manifest vouches for. The sealed metadata blob the create binds is carried verbatim — it
+    /// cannot be regenerated, because `seal_metadata_blob` draws a fresh nonce per call — so an
+    /// asset edited since its import carries the copy its first edit kept, not its current blob.
+    ///
+    /// # Errors
+    ///
+    /// [`LifecycleError::CreateMetadataSuperseded`] when the create binds a metadata blob the
+    /// library no longer holds: an edit made before the library kept that blob replaced it.
+    /// [`LifecycleError::CiphertextMismatch`] when the plaintext on disk no longer re-derives to
+    /// the signed ciphertext.
     #[tracing::instrument(skip(self), fields(asset_id = %asset_id))]
     pub fn upload_bundle(&self, asset_id: &Uuid) -> Result<UploadBundle> {
         let asset = self
@@ -294,48 +313,24 @@ impl Workspace {
             .get(asset_id)
             .ok_or_else(|| LifecycleError::NotFound(format!("asset {asset_id}")))?;
         let album = self.album(&asset.album_id)?;
-        let head_record = asset
+        let create_record = asset
             .chain
             .records()
-            .last()
+            .first()
             .expect("provenance chain is never empty");
-        let head = &head_record.manifest.core;
+        let create = &create_record.manifest.core;
         // The envelope object, encoded once here so the SDK ladder and the FFI hand the wire
         // the same bytes. Canonical by construction: `record_hash()` is defined as the digest
         // of exactly this encoding, which is what makes the server's chain head and a client's
         // next `prior_provenance_hash` the same value.
-        let provenance_blob = cbor::to_canonical_vec(head_record)
+        let provenance_blob = cbor::to_canonical_vec(create_record)
             .map_err(|e| LifecycleError::Cbor(format!("encoding the provenance record: {e}")))?;
 
-        let epoch = head.amk_version.0;
-        let file_key = self.original_file_key(album, head)?;
-        let original = OriginalCiphertext {
-            path: self.media_path(asset),
-            file_key,
-            nonce_prefix: head.nonce_prefix,
-            plaintext_size: head.plaintext_size,
-        };
+        let metadata_blob = self.create_metadata_blob(asset, create.metadata_blob_hash)?;
 
-        // The re-derivation is deterministic, so a mismatch means the library's bytes and its
-        // own signed manifest disagree — never ship that. Hashed in one streaming pass, so
-        // building the bundle holds one STREAM chunk of the original, whatever its size.
-        let rederived = original
-            .rederive()
-            .map_err(|e| LifecycleError::Io(e.to_string()))?;
-        let ciphertext_hash = rederived.ciphertext_hash;
-        if ciphertext_hash != head.ciphertext_hash
-            || rederived.plaintext_size != head.plaintext_size
-        {
-            tracing::error!(
-                asset_id = %asset.asset_id,
-                expected = %head.ciphertext_hash.to_hex(),
-                actual = %ciphertext_hash.to_hex(),
-                expected_plaintext_size = head.plaintext_size,
-                actual_plaintext_size = rederived.plaintext_size,
-                "upload bundle: re-derived ciphertext does not match the manifest"
-            );
-            return Err(LifecycleError::CiphertextMismatch(asset.asset_id));
-        }
+        let epoch = create.amk_version.0;
+        let original = self.verified_original(asset, album, create)?;
+        let ciphertext_hash = create.ciphertext_hash;
 
         let DerivativeSet {
             blobs: derivatives,
@@ -345,39 +340,131 @@ impl Workspace {
             album_id = %asset.album_id,
             amk_version = epoch,
             ciphertext_bytes = original.size(),
-            metadata_blob_bytes = asset.metadata_blob.len(),
+            metadata_blob_bytes = metadata_blob.len(),
             provenance_blob_bytes = provenance_blob.len(),
             derivatives = derivatives.len(),
             derivative_manifests = derivative_manifests.len(),
-            action = ?head.action,
+            action = ?create.action,
+            later_records = asset.chain.records().len() - 1,
             "upload bundle built"
         );
 
         Ok(UploadBundle {
             asset_id: asset.asset_id,
             album_id: asset.album_id,
-            crypto_suite_id: head.crypto_suite_id,
-            protocol_version: head.protocol_version.clone(),
+            crypto_suite_id: create.crypto_suite_id,
+            protocol_version: create.protocol_version.clone(),
             amk_version: epoch,
             original,
             ciphertext_hash,
-            plaintext_size: head.plaintext_size,
-            chunk_size: head.chunk_size,
+            plaintext_size: create.plaintext_size,
+            chunk_size: create.chunk_size,
             content_type: wire_content_type(&asset.sidecar.content_type).to_owned(),
-            key_mode: head.key_mode,
-            metadata_blob: asset.metadata_blob.clone(),
-            metadata_blob_hash: head.metadata_blob_hash,
+            key_mode: create.key_mode,
+            metadata_blob,
+            metadata_blob_hash: create.metadata_blob_hash,
             provenance_blob,
             derivatives,
             derivative_manifests,
-            created_by_user: head.created_by_user,
-            created_by_device: head.created_by_device,
-            client_version: head.client_version.clone(),
-            timestamp: head.timestamp.clone(),
-            action: head.action,
-            prior_provenance_hash: head.prior_provenance_hash,
-            retention_until: head.retention_until.clone(),
+            created_by_user: create.created_by_user,
+            created_by_device: create.created_by_device,
+            client_version: create.client_version.clone(),
+            timestamp: create.timestamp.clone(),
+            action: create.action,
+            prior_provenance_hash: create.prior_provenance_hash,
+            retention_until: create.retention_until.clone(),
         })
+    }
+
+    /// The exact sealed metadata blob a create binding `bound` uploads with: the asset's current
+    /// blob while no edit has replaced it, otherwise the copy the first edit kept
+    /// ([`create_metadata_blob_path`](Self::create_metadata_blob_path)). A create that binds no
+    /// blob carries the current one, as it always has.
+    ///
+    /// Either candidate is checked against `bound` before it is used, so the bytes returned are
+    /// the ones the server accepts under that address.
+    ///
+    /// # Errors
+    ///
+    /// [`LifecycleError::CreateMetadataSuperseded`] when neither answers `bound`: an edit made
+    /// before the library kept the create's blob replaced it, and it is gone.
+    /// [`LifecycleError::Io`] when the kept copy exists and cannot be read.
+    fn create_metadata_blob(&self, asset: &AssetState, bound: Option<Hash32>) -> Result<Vec<u8>> {
+        let Some(bound) = bound else {
+            return Ok(asset.metadata_blob.clone());
+        };
+        if blob_ciphertext_hash(&asset.metadata_blob) == bound {
+            return Ok(asset.metadata_blob.clone());
+        }
+        let path = self.create_metadata_blob_path_of(asset);
+        let kept = match fs::read(&path) {
+            Ok(kept) => Some(kept),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => None,
+            Err(e) => {
+                return Err(LifecycleError::Io(format!(
+                    "the create's metadata blob {}: {e}",
+                    path.display()
+                )));
+            }
+        };
+        match kept {
+            Some(kept) if blob_ciphertext_hash(&kept) == bound => {
+                tracing::debug!(
+                    asset_id = %asset.asset_id,
+                    records = asset.chain.records().len(),
+                    "upload bundle: an edit superseded the create's metadata blob; carrying the \
+                     kept copy"
+                );
+                Ok(kept)
+            }
+            kept => {
+                tracing::warn!(
+                    asset_id = %asset.asset_id,
+                    records = asset.chain.records().len(),
+                    kept_copy = kept.is_some(),
+                    "upload bundle: the metadata blob the create binds was superseded by an edit \
+                     and no kept copy answers it"
+                );
+                Err(LifecycleError::CreateMetadataSuperseded(asset.asset_id))
+            }
+        }
+    }
+
+    /// The original's ciphertext as `core` pins it, checked against `core`'s content address.
+    ///
+    /// The re-derivation is deterministic, so a mismatch means the library's bytes and its own
+    /// signed manifest disagree — never ship or export that. Hashed in one streaming pass, so
+    /// this holds one STREAM chunk of the original, whatever its size. Every record of a chain
+    /// pins the same original, so any of them may be `core`.
+    pub(super) fn verified_original(
+        &self,
+        asset: &AssetState,
+        album: &AlbumKeys,
+        core: &ManifestCore,
+    ) -> Result<OriginalCiphertext> {
+        let original = OriginalCiphertext {
+            path: self.media_path(asset),
+            file_key: self.original_file_key(album, core)?,
+            nonce_prefix: core.nonce_prefix,
+            plaintext_size: core.plaintext_size,
+        };
+        let rederived = original
+            .rederive()
+            .map_err(|e| LifecycleError::Io(e.to_string()))?;
+        if rederived.ciphertext_hash != core.ciphertext_hash
+            || rederived.plaintext_size != core.plaintext_size
+        {
+            tracing::error!(
+                asset_id = %asset.asset_id,
+                expected = %core.ciphertext_hash.to_hex(),
+                actual = %rederived.ciphertext_hash.to_hex(),
+                expected_plaintext_size = core.plaintext_size,
+                actual_plaintext_size = rederived.plaintext_size,
+                "upload bundle: re-derived ciphertext does not match the manifest"
+            );
+            return Err(LifecycleError::CiphertextMismatch(asset.asset_id));
+        }
+        Ok(original)
     }
 
     /// The asset's persisted derivative blobs, read back from

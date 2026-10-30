@@ -38,6 +38,24 @@ public enum NavigationAction: Sendable, Hashable {
     case previousAsset
     /// Close the focused window.
     case closeWindow
+
+    // The cull pass's own verbs. The router declines every one of them: they
+    // act on the asset the focused culling surface is showing, so that surface
+    // answers them, the same way the viewer answers paging.
+
+    /// Flag the asset (or every member of the collapsed stack) as a pick.
+    case cullPick
+    /// Clear the flag.
+    case cullNeutral
+    /// Flag as a reject.
+    case cullReject
+    /// Open the collapsed stack under review, so its members are culled one by one.
+    case expandStack
+    /// Fold the expanded stack back to its cover.
+    case collapseStack
+    /// Move the pass's rejects to the trash — the one destructive cull step,
+    /// confirmed before it runs and restorable for the retention window.
+    case rejectSweep
 }
 
 // MARK: - Shortcuts
@@ -66,6 +84,8 @@ public enum CommandKey: Sendable, Hashable {
     case character(Character)
     case leftArrow
     case rightArrow
+    /// The backspace key, ⌫.
+    case delete
 }
 
 /// A key equivalent, as data. The app maps this to SwiftUI's
@@ -89,14 +109,18 @@ public struct CommandShortcut: Sendable, Hashable {
 
 /// Which menu a command belongs to.
 ///
-/// Only the four menus Capsule actually populates. The Mac menu bar maps these
-/// to `CommandGroup` positions; the iPad overlay uses them purely as grouping,
-/// which is why this is a neutral name rather than a `CommandGroupPlacement`.
+/// Only the menus Capsule actually populates. The Mac menu bar maps the first
+/// four to `CommandGroup` positions in the system menus and ``culling`` to a
+/// menu of its own; the iPad overlay uses them purely as grouping, which is why
+/// this is a neutral name rather than a `CommandGroupPlacement`.
 public enum CommandPlacement: String, Sendable, Hashable, CaseIterable {
     case file
     case edit
     case view
     case window
+    /// The cull pass's verbs, in a menu of their own so the whole keyboard
+    /// pass is discoverable in one place.
+    case culling
 }
 
 // MARK: - NavigationCommand

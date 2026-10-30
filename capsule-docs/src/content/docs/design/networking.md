@@ -33,19 +33,12 @@ Consumers: [sync criteria](/design/sync/#synchronization-criteria), [staged-uplo
 
 ## Path Snapshot
 
-Each platform shell observes its operating system and pushes one normalized **path snapshot** into the Rust core; no transfer logic runs in the shell. The snapshot carries:
+A platform shell (or the CLI's flags) reports one normalized sample of the path: **cost** (unmetered, metered, constrained), **reachability**, **interface** (wired, Wi-Fi, cellular, other), **power** (external, battery, low-power), **thermal** state (nominal, fair, serious, critical) and **execution** (foreground, or background with a deadline). The SDK stamps it with a **path generation**.
 
-| Field | Values | Sources |
-| --- | --- | --- |
-| cost | unmetered, metered, constrained | `NWPath` `isExpensive` / `isConstrained`; Android `NET_CAPABILITY_NOT_METERED` and Data Saver; desktop OS metered flag; CLI flag |
-| reachability | satisfied, unsatisfied | OS path status |
-| interface | Wi-Fi, cellular, wired, other | OS path |
-| path generation | a counter | incremented by the core when reachability, interface or cost changes |
-| power | normal, saver | Low Power Mode; Android battery saver |
-| thermal | nominal, elevated, critical | `ProcessInfo.thermalState`; Android thermal status |
-| execution | foreground, or background with a deadline | the OS's execution grant |
-
-The core derives the connection class and the transfer plan as a pure function of **(snapshot, observed link behaviour, [server advice](#server-advice), compiled bounds)**, which is table-tested without a device. Observed link behaviour is the resets and stalls the behavioural `adverse` detection counts. Reaction is local and immediate: the server is never in the decision loop, because the network that degrades is the one a round trip to it would need. The path generation advances only when reachability, interface or cost changes, never on a minor path update. A new path generation drops pooled connections, resets the behavioural `adverse` detection, cancels in-flight work the new cost class forbids, and re-plans. Power saver and elevated thermal state lower the in-flight windows; a background deadline stops new requests that cannot finish within it.
+- **The generation advances only when reachability, interface or cost changes.** Power, thermal state and execution change the plan, never the path.
+- **The transfer plan is a pure function** of the snapshot, the link behaviour the `adverse` detector observed, the [server's advice](#server-advice), and the client's compiled window bounds. The server is never in the loop; its advice can only lower a window.
+- **Plan rules, in precedence order.** No path, or a critical thermal state, runs nothing. Anything but an unmetered, well-behaved link holds the bulk tiers back, as do low-power mode, a serious thermal state, and a background deadline under one minute; the index tier still runs. Low-power mode and a serious thermal state narrow a lane to one session. A user's force-sync consent lifts a hold on cost or link behaviour, never one on the path, power or heat.
+- **A new generation drops what belonged to the old path**: pooled connections are dropped, the `adverse` detector is reset, in-flight work the new plan forbids is cancelled within one scheduling tick, and the work re-plans. A plan that narrows on the same path (a critical thermal state, low-power mode) cancels the same way. Cancelled work resumes from server truth, so a cancel costs at most the bytes in flight.
 
 ## Server Advice
 
@@ -78,4 +71,9 @@ Hostile paths (captive portals, congested carriers, the Great Firewall) MUST deg
 
 ## Packet Marking
 
-Capsule sets no DSCP value or IP traffic class on its own sockets. No correctness or throughput property depends on marking: most access networks strip or rewrite the field, so it carries no meaning end to end. Where a LAN or Wi-Fi network does honour it, marking can make bulk transfers yield to other traffic, but it gains Capsule no throughput.
+No correctness or throughput property depends on marking: most access networks strip or rewrite the field, so it carries no meaning end to end. Where a LAN or Wi-Fi network does honour it, marking makes bulk transfers yield to other traffic (home routers often map it to the Wi-Fi WMM background queue), but it gains Capsule no throughput.
+
+- **Bulk transfers are marked Lower Effort** (RFC 8622, DSCP 1): `IP_TOS` on a socket carrying IPv4, `IPV6_TCLASS` on one carrying IPv6, set on a socket the SDK holds before its first byte. The peering channel, which carries hand-offs and sync artifacts, is marked on both ends.
+- **Marking is best effort.** A platform that refuses the option, or exposes no setter for the socket's family, leaves the socket unmarked and the transfer proceeds unchanged.
+- **Interactive traffic and the server stay unmarked.** Marking may only make Capsule's bulk bytes yield; it never slows a request a person is waiting on. A server-side mark would apply to every accepted connection, interactive ones included, so the server marks nothing.
+- **A socket the HTTP stack keeps out of reach stays unmarked.** The SDK's HTTP client dials its own sockets and exposes no hook to them, so HTTP uploads carry the default class until that stack exposes one; the SDK does not reimplement the HTTP connector to reach it.

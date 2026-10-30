@@ -25,6 +25,8 @@
 
 use std::sync::Arc;
 
+use capsule_core::crypto::keys::HardwareSignerError;
+
 use super::*;
 // One mock server for the whole crate, not one per module: `testmock` replays the real
 // wire — statuses, headers, and the `ApiError` JSON with its stable `error.*` codes — and is
@@ -641,6 +643,47 @@ async fn ffi_enroll_album_seal_upload_sync_apply_round_trip() {
     }
 }
 
+/// #998: `albums()` hands every app the one album order, so no app sorts its own: the album
+/// with the most recent visible asset first, an empty album by its UUIDv7 creation time, and
+/// the derived default album (whose id carries no time) last while it is empty.
+#[test]
+fn ffi_albums_are_listed_by_their_most_recent_asset() {
+    let lib = tempfile::TempDir::new().unwrap();
+    let workspace = enroll(lib.path());
+    let minted_at =
+        |secs| uuid::Uuid::new_v7(uuid::Timestamp::from_unix(uuid::NoContext, secs, 0)).to_string();
+    let older = workspace
+        .ensure_album(minted_at(1_000_000_000), "Older".into())
+        .unwrap();
+    let newer = workspace
+        .ensure_album(minted_at(1_100_000_000), "Newer".into())
+        .unwrap();
+    let default = workspace
+        .ensure_album(workspace.default_album_id().unwrap(), "Camera Roll".into())
+        .unwrap();
+    let order = |ws: &FfiWorkspace| -> Vec<String> {
+        ws.albums()
+            .unwrap()
+            .into_iter()
+            .map(|a| a.album_id)
+            .collect()
+    };
+    assert_eq!(
+        order(&workspace),
+        vec![newer.clone(), older.clone(), default.clone()]
+    );
+
+    // An asset without EXIF is dated by the import clock, later than either album's creation.
+    workspace
+        .seal_asset(
+            older.clone(),
+            "shot.jpg".into(),
+            b"\xFF\xD8\xFF order".to_vec(),
+        )
+        .unwrap();
+    assert_eq!(order(&workspace), vec![older, newer, default]);
+}
+
 /// A tampered original quarantines with the chokepoint's own reason code rather than
 /// erroring — one hostile feed row must not abort a sync page.
 #[tokio::test]
@@ -886,6 +929,100 @@ async fn ffi_push_asset_streams_the_original_in_bounded_windows() {
         );
         assert!(report.bytes >= reassembled.len() as u64);
     }
+}
+
+/// **The path the app reports plans the push.** On a metered cellular path the push is staged:
+/// the index tier publishes the asset and the original waits, where the hard-coded unmetered
+/// class used to send it. Back on an unmetered path the next push sends the original.
+#[tokio::test]
+async fn ffi_push_asset_plans_from_the_reported_path() {
+    let lib = tempfile::TempDir::new().unwrap();
+    let workspace = enroll(lib.path());
+    let album = workspace
+        .ensure_album(workspace.default_album_id().unwrap(), "Camera Roll".into())
+        .unwrap();
+    let chunks = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let server = recording_upload_server(chunks.clone()).await;
+    let session = login(&server).await;
+
+    let desktop = FfiPathSnapshot {
+        cost: FfiPathCost::Unmetered,
+        reachable: true,
+        interface: FfiPathInterface::Other,
+        power: FfiPowerState::External,
+        thermal: FfiThermalState::Nominal,
+        background_deadline_ms: None,
+    };
+    assert_eq!(
+        session.set_path(desktop),
+        1,
+        "the default path is unchanged"
+    );
+    let cellular = FfiPathSnapshot {
+        cost: FfiPathCost::Metered,
+        interface: FfiPathInterface::Cellular,
+        ..desktop
+    };
+    assert_eq!(
+        session.set_path(cellular),
+        2,
+        "a new path is a new generation"
+    );
+    assert_eq!(
+        session.set_path(FfiPathSnapshot {
+            power: FfiPowerState::Battery,
+            ..cellular
+        }),
+        2,
+        "a power change is the same path"
+    );
+
+    let asset = workspace
+        .seal_asset(album, "IMG_0043.JPG".into(), original_plaintext(64 * 1024))
+        .unwrap();
+    let report = session
+        .push_asset(workspace.clone(), asset.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        report
+            .pushed
+            .iter()
+            .map(|b| b.tier.as_str())
+            .collect::<Vec<_>>(),
+        vec!["index", "index"],
+        "the original waits for an unmetered path"
+    );
+    assert_eq!(report.deferred, 1);
+
+    assert_eq!(session.set_path(desktop), 3);
+    let report = session.push_asset(workspace, asset).await.unwrap();
+    assert!(
+        report.pushed.iter().any(|b| b.tier == "original"),
+        "the original goes once the path allows it"
+    );
+}
+
+/// **The upload client sizes chunks for the plan's class.** Once the detector promotes the
+/// link to `adverse`, every upload client the session builds targets the shorter chunk
+/// request duration.
+#[tokio::test]
+async fn ffi_upload_client_follows_the_plans_class() {
+    let chunks = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let server = recording_upload_server(chunks).await;
+    let session = login(&server).await;
+    assert_eq!(
+        session.upload_client().connection_class(),
+        ConnectionClass::Unmetered
+    );
+    for _ in 0..3 {
+        session.path.record(crate::net::TransferSignal::Reset);
+    }
+    assert_eq!(
+        session.upload_client().connection_class(),
+        ConnectionClass::Adverse,
+        "a promoted link shortens the chunk requests"
+    );
 }
 
 /// An unknown asset is refused before any request, and a malformed id is the caller's.
@@ -1598,7 +1735,9 @@ impl MockElement {
 
     fn guard(&self) -> Result<(), FfiHardwareSignerError> {
         match self.fails_with {
-            Some(_) => Err(FfiHardwareSignerError::Unavailable),
+            Some(detail) => Err(FfiHardwareSignerError::Unavailable {
+                detail: detail.into(),
+            }),
             None => Ok(()),
         }
     }
@@ -1633,7 +1772,9 @@ impl FfiHardwareSigner for MockElement {
     fn assert_non_exportable(&self, _key_alias: String) -> Result<(), FfiHardwareSignerError> {
         self.guard()?;
         if self.exportable {
-            Err(FfiHardwareSignerError::Exportable)
+            Err(FfiHardwareSignerError::Exportable {
+                detail: "mock key is exportable".into(),
+            })
         } else {
             Ok(())
         }
@@ -1966,7 +2107,9 @@ impl FfiHardwareKeyAgreement for MockKeyAgreement {
     fn public_key(&self, _key_alias: String) -> Result<Vec<u8>, FfiHardwareSignerError> {
         use p256::elliptic_curve::sec1::ToEncodedPoint as _;
         if self.unavailable {
-            return Err(FfiHardwareSignerError::Unavailable);
+            return Err(FfiHardwareSignerError::Unavailable {
+                detail: "no secure element".into(),
+            });
         }
         Ok(self
             .sk
@@ -1981,8 +2124,11 @@ impl FfiHardwareKeyAgreement for MockKeyAgreement {
         _key_alias: String,
         peer_public: Vec<u8>,
     ) -> Result<Vec<u8>, FfiHardwareSignerError> {
-        let peer = p256::PublicKey::from_sec1_bytes(&peer_public)
-            .map_err(|e| FfiHardwareSignerError::Backend(e.to_string()))?;
+        let peer = p256::PublicKey::from_sec1_bytes(&peer_public).map_err(|e| {
+            FfiHardwareSignerError::Backend {
+                detail: e.to_string(),
+            }
+        })?;
         let shared = p256::ecdh::diffie_hellman(self.sk.to_nonzero_scalar(), peer.as_affine());
         let mut secret = shared.raw_secret_bytes().to_vec();
         if self.corrupt {
@@ -2035,6 +2181,199 @@ fn ffi_p256_hardware_dek_round_trip_tracks_the_element() {
             "unexpected enrollment error detail: {detail}"
         ),
         other => panic!("expected Workspace for a failing element enrollment, got {other:?}"),
+    }
+}
+
+// ─── foreign-thrown element errors (issue #1061) ─────────────────────────────
+
+/// What a [`ForeignStyleElement`] throws from every call.
+#[derive(Clone)]
+enum Thrown {
+    /// A declared `FfiHardwareSignerException` / `FfiHardwareSignerError`.
+    Declared(FfiHardwareSignerError),
+    /// Anything else the foreign side throws (an unchecked `KeyStoreException`, a Swift
+    /// error of another type): uniffi reports it as an unexpected error carrying its text.
+    Undeclared(&'static str),
+}
+
+/// An element whose every call fails **the way a foreign one does**: its error does not
+/// travel as a Rust value but as the call status a Kotlin or Swift implementation writes —
+/// the lowered error buffer for a declared error, an unexpected-error string otherwise —
+/// and is lifted back through the very uniffi path a generated foreign-trait call takes.
+/// A flat error panics in that lift ("Can't lift flat errors"); this element pins that it
+/// cannot again.
+struct ForeignStyleElement(Thrown);
+
+impl ForeignStyleElement {
+    fn call<R>(&self) -> Result<R, FfiHardwareSignerError>
+    where
+        R: uniffi::LiftReturn<crate::UniFfiTag>,
+        R::ReturnType: Default,
+    {
+        let status = match self.0.clone() {
+            Thrown::Declared(err) => uniffi::RustCallStatus {
+                code: uniffi::RustCallStatusCode::Error,
+                error_buf: std::mem::ManuallyDrop::new(
+                    <FfiHardwareSignerError as uniffi::LowerError<crate::UniFfiTag>>::lower_error(
+                        err,
+                    ),
+                ),
+            },
+            Thrown::Undeclared(text) => uniffi::RustCallStatus::error(text),
+        };
+        <Result<R, FfiHardwareSignerError> as uniffi::LiftReturn<crate::UniFfiTag>>::lift_foreign_return(
+            Default::default(),
+            status,
+        )
+    }
+}
+
+impl FfiHardwareSigner for ForeignStyleElement {
+    fn enroll(&self, _key_alias: String) -> Result<Vec<u8>, FfiHardwareSignerError> {
+        self.call()
+    }
+    fn classical_public_key(&self, _key_alias: String) -> Result<Vec<u8>, FfiHardwareSignerError> {
+        self.call()
+    }
+    fn sign_classical(
+        &self,
+        _key_alias: String,
+        _msg: Vec<u8>,
+    ) -> Result<Vec<u8>, FfiHardwareSignerError> {
+        self.call()
+    }
+    fn assert_non_exportable(&self, _key_alias: String) -> Result<(), FfiHardwareSignerError> {
+        self.call()
+    }
+}
+
+impl FfiHardwareKeyAgreement for ForeignStyleElement {
+    fn enroll(&self, _key_alias: String) -> Result<Vec<u8>, FfiHardwareSignerError> {
+        self.call()
+    }
+    fn public_key(&self, _key_alias: String) -> Result<Vec<u8>, FfiHardwareSignerError> {
+        self.call()
+    }
+    fn key_agreement(
+        &self,
+        _key_alias: String,
+        _peer_public: Vec<u8>,
+    ) -> Result<Vec<u8>, FfiHardwareSignerError> {
+        self.call()
+    }
+    fn assert_non_exportable(&self, _key_alias: String) -> Result<(), FfiHardwareSignerError> {
+        self.call()
+    }
+}
+
+/// Every variant an element can throw, each with a distinct detail.
+fn every_hardware_error() -> Vec<FfiHardwareSignerError> {
+    vec![
+        FfiHardwareSignerError::AuthCancelled {
+            detail: "biometric cancelled".into(),
+        },
+        FfiHardwareSignerError::Unavailable {
+            detail: "keystore refused".into(),
+        },
+        FfiHardwareSignerError::NotFound {
+            detail: "no StrongBox key for alias".into(),
+        },
+        FfiHardwareSignerError::Exportable {
+            detail: "software key is exportable".into(),
+        },
+        FfiHardwareSignerError::Backend {
+            detail: "keymint returned 7".into(),
+        },
+    ]
+}
+
+/// Each variant a foreign element throws is lifted back **as itself**, detail included, on
+/// both return shapes the seams use (bytes and unit), and core receives the matching variant.
+#[test]
+fn ffi_foreign_thrown_hardware_errors_lift_as_themselves() {
+    for thrown in every_hardware_error() {
+        let element = ForeignStyleElement(Thrown::Declared(thrown.clone()));
+        assert_eq!(
+            FfiHardwareSigner::enroll(&element, "a".into()).unwrap_err(),
+            thrown
+        );
+        assert_eq!(
+            FfiHardwareSigner::assert_non_exportable(&element, "a".into()).unwrap_err(),
+            thrown
+        );
+        let core = HardwareSignerError::from(thrown.clone());
+        let same = match (&thrown, &core) {
+            (FfiHardwareSignerError::AuthCancelled { .. }, HardwareSignerError::AuthCancelled)
+            | (FfiHardwareSignerError::Unavailable { .. }, HardwareSignerError::Unavailable)
+            | (FfiHardwareSignerError::NotFound { .. }, HardwareSignerError::NotFound)
+            | (FfiHardwareSignerError::Exportable { .. }, HardwareSignerError::Exportable) => true,
+            (
+                FfiHardwareSignerError::Backend { detail },
+                HardwareSignerError::Backend(core_detail),
+            ) => detail == core_detail,
+            _ => false,
+        };
+        assert!(same, "{thrown:?} reached core as {core:?}");
+    }
+}
+
+/// An element that throws something it never declared is lifted as a typed `Backend`
+/// failure carrying the foreign text, rather than panicking with the workspace lock held.
+#[test]
+fn ffi_undeclared_foreign_throw_lifts_as_backend() {
+    let element = ForeignStyleElement(Thrown::Undeclared("java.security.KeyStoreException"));
+    match FfiHardwareSigner::sign_classical(&element, "a".into(), b"m".to_vec()) {
+        Err(FfiHardwareSignerError::Backend { detail }) => assert!(
+            detail.contains("java.security.KeyStoreException"),
+            "the foreign text is lost: {detail}"
+        ),
+        other => panic!("expected Backend, got {other:?}"),
+    }
+}
+
+/// **Through the verbs.** Whatever a foreign element throws — each declared variant, and an
+/// undeclared exception — creating a workspace on it, on either signer constructor, and the
+/// key-agreement round trip all fail with a typed [`FfiError::Workspace`], never a panic.
+#[test]
+fn ffi_foreign_thrown_element_errors_fail_the_verbs_typed() {
+    let throws = every_hardware_error()
+        .into_iter()
+        .map(Thrown::Declared)
+        .chain([Thrown::Undeclared("java.lang.IllegalStateException")]);
+    for thrown in throws {
+        let lib = tempfile::TempDir::new().unwrap();
+        let root = lib.path().to_string_lossy().into_owned();
+        let element = Arc::new(ForeignStyleElement(thrown));
+        for created in [
+            FfiWorkspace::create_with_p256_hardware_signer(
+                root.clone(),
+                b"pw".to_vec(),
+                FfiDeviceTier::LowRam,
+                element.clone(),
+                "capsule-device-dsk".into(),
+                vec![9u8; 32],
+                client_build(),
+            ),
+            FfiWorkspace::create_with_hardware_signer(
+                root.clone(),
+                b"pw".to_vec(),
+                FfiDeviceTier::LowRam,
+                element.clone(),
+                "capsule-device-dsk".into(),
+                vec![9u8; 32],
+                client_build(),
+            ),
+        ] {
+            match created {
+                Err(FfiError::Workspace { .. }) => {}
+                Err(other) => panic!("expected a typed workspace error, got {other:?}"),
+                Ok(_) => panic!("a throwing element must not yield a workspace"),
+            }
+        }
+        match p256_hardware_dek_round_trip(element, "device-dek".into(), vec![9u8; 32]) {
+            Err(FfiError::Workspace { .. }) => {}
+            other => panic!("expected Workspace from a throwing key agreement, got {other:?}"),
+        }
     }
 }
 
@@ -2100,6 +2439,25 @@ fn a_refused_create_with_no_newer_epoch_does_not_claim_a_missing_key() {
             );
         }
         other => panic!("expected an Upload refusal, got {other:?}"),
+    }
+}
+
+/// A transfer that gave up waiting out a coded answer reaches the bindings with that code, so
+/// an app still localizes what the server said.
+#[test]
+fn a_given_up_wait_reaches_the_bindings_with_the_servers_code() {
+    let gave_up = UploadError::WaitsExhausted {
+        status: 500,
+        code: Some("error.upload.storage_inconsistent".into()),
+        message: "the staged upload and the session's byte count disagree".into(),
+        reason: "server-requested wait: exceeded 64 recovery attempts".into(),
+    };
+    match FfiError::from(gave_up) {
+        FfiError::Upload { code, detail } => {
+            assert_eq!(code.as_deref(), Some("error.upload.storage_inconsistent"));
+            assert!(detail.contains("HTTP 500"), "{detail}");
+        }
+        other => panic!("expected an Upload error, got {other:?}"),
     }
 }
 
@@ -2325,40 +2683,73 @@ fn trash_refusal<T: std::fmt::Debug>(
     }
 }
 
-/// A drain that saw no feed entry: the device clock alone judges.
-fn drained() -> FfiFeedDrain {
+/// A drain whose feed lists `asset` at its current chain head (its `delete`, once trashed),
+/// with `changed_at` as the latest server clock reading it saw.
+fn drained(workspace: &FfiWorkspace, asset: &str, changed_at: Option<String>) -> FfiFeedDrain {
+    let head = workspace.provenance_head(asset.to_owned()).unwrap();
     FfiFeedDrain {
-        latest_changed_at: None,
+        latest_changed_at: changed_at,
+        server_heads: std::collections::HashMap::from([(asset.to_owned(), head)]),
     }
 }
 
-/// The retention sweep judges a deadline only after a drain, floored by the server's latest
-/// `changed_at`, and refuses a stamp that is not RFC 3339.
+/// The retention sweep judges a deadline only after a drain, by the server's latest
+/// `changed_at` alone, never expires a delete the server has not indexed, and refuses a stamp
+/// that is not RFC 3339.
 #[test]
-fn ffi_expired_trash_is_gated_on_a_drain_and_floored_by_the_server_clock() {
+fn ffi_expired_trash_is_gated_on_a_drain_and_judged_by_the_server_clock() {
     let lib = tempfile::TempDir::new().unwrap();
     let (workspace, _, asset) = labelled_fixture(lib.path());
-    let entry = workspace.delete_asset(asset.clone(), 30).unwrap();
+    let entry = workspace.delete_asset(asset.clone(), 0).unwrap();
     let until = entry.retention_until.clone().unwrap();
+    let before: jiff::Timestamp = until.parse().unwrap();
+    let before = (before - jiff::SignedDuration::from_secs(1)).to_string();
 
     assert!(workspace.expired_trash(None).unwrap().is_empty());
-    assert!(workspace.expired_trash(Some(drained())).unwrap().is_empty());
-    let floored = workspace
-        .expired_trash(Some(FfiFeedDrain {
-            latest_changed_at: Some(until),
-        }))
+    assert!(
+        workspace
+            .expired_trash(Some(drained(&workspace, &asset, None)))
+            .unwrap()
+            .is_empty(),
+        "no server clock reading, though this device's clock is past the window"
+    );
+    assert!(
+        workspace
+            .expired_trash(Some(drained(&workspace, &asset, Some(before))))
+            .unwrap()
+            .is_empty(),
+        "the server's clock has not reached the window"
+    );
+    let expired = workspace
+        .expired_trash(Some(drained(&workspace, &asset, Some(until.clone()))))
         .unwrap();
     assert_eq!(
-        floored
+        expired
             .iter()
             .map(|e| e.asset_id.clone())
             .collect::<Vec<_>>(),
-        vec![asset]
+        vec![asset.clone()]
     );
-    assert!(!floored[0].restorable, "judged at the same floored instant");
+    assert!(!expired[0].restorable, "judged at the server's instant");
+
+    let mut held = drained(&workspace, &asset, Some(until.clone()));
+    held.server_heads.clear();
+    held.server_heads
+        .insert("not-a-uuid".into(), b"ignored".to_vec());
+    assert!(
+        workspace.expired_trash(Some(held)).unwrap().is_empty(),
+        "a held delete never expires"
+    );
+    let mut no_record = drained(&workspace, &asset, Some(until));
+    no_record.server_heads.insert(asset, Vec::new());
+    assert!(
+        workspace.expired_trash(Some(no_record)).unwrap().is_empty(),
+        "an entry with no record is no evidence the delete was indexed"
+    );
     assert!(matches!(
         workspace.expired_trash(Some(FfiFeedDrain {
             latest_changed_at: Some("yesterday".into()),
+            server_heads: std::collections::HashMap::new(),
         })),
         Err(FfiError::InvalidArgument { .. })
     ));
@@ -2376,11 +2767,25 @@ fn ffi_trash_verbs_delete_restore_and_purge_through_signed_records() {
     assert!(workspace.trash().unwrap().is_empty());
 
     let entry = workspace.delete_asset(asset.clone(), 30).unwrap();
+    let head: ProvenanceRecord =
+        capsule_core::cbor::from_slice(&workspace.provenance_head(asset.clone()).unwrap()).unwrap();
+    assert_eq!(
+        head.manifest.core.action,
+        Action::Delete,
+        "the provenance head is the chain's head, not the create an upload carries"
+    );
     assert_eq!(entry.asset_id, asset);
     assert!(entry.restorable);
     assert!(entry.retention_until.is_some());
     assert_eq!(workspace.trash().unwrap(), vec![entry.clone()]);
-    assert!(workspace.expired_trash(Some(drained())).unwrap().is_empty());
+    let signed_at = Some(entry.deleted_at.clone());
+    assert!(
+        workspace
+            .expired_trash(Some(drained(&workspace, &asset, signed_at)))
+            .unwrap()
+            .is_empty(),
+        "the window is open at the instant the delete was signed"
+    );
     assert_eq!(
         workspace.delete_asset(asset.clone(), 1).unwrap(),
         entry,
@@ -2459,8 +2864,11 @@ fn ffi_trash_refuses_a_restore_after_retention_until() {
 
     let entry = workspace.delete_asset(asset.clone(), 0).unwrap();
     assert!(!entry.restorable);
+    let server_now = Some(jiff::Timestamp::now().to_string());
     assert_eq!(
-        workspace.expired_trash(Some(drained())).unwrap(),
+        workspace
+            .expired_trash(Some(drained(&workspace, &asset, server_now)))
+            .unwrap(),
         vec![entry.clone()]
     );
     assert!(

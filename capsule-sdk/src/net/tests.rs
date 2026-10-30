@@ -123,6 +123,24 @@ fn offline_is_never_promoted_to_adverse() {
     );
 }
 
+/// A reset forgets the old link entirely: it is no longer adverse, and the window it promoted
+/// on no longer counts toward the next promotion.
+#[test]
+fn reset_forgets_every_observed_outcome() {
+    let mut detector = AdverseDetector::with_defaults();
+    for _ in 0..3 {
+        detector.record(TransferSignal::Reset);
+    }
+    assert!(detector.is_adverse());
+
+    detector.reset();
+    assert!(!detector.is_adverse());
+    // Two more resets would promote had the old three still counted.
+    detector.record(TransferSignal::Reset);
+    detector.record(TransferSignal::Reset);
+    assert!(!detector.is_adverse());
+}
+
 /// **Connection-class matrix.** The staged-upload tier gates and the
 /// reconciliation gates take exactly the expected value on every class — the
 /// single table that downstream sync/cache consumers read.
@@ -372,4 +390,385 @@ fn the_handshake_headers_are_the_build_constants() {
     );
     assert_eq!(headers.len(), 3);
     assert!(http_client().is_ok());
+}
+
+/// **The retry classification table** (networking doc, Retry Policy Classes). Transport
+/// failures, every `5xx`, `408`, `425` and `429` are retryable; a contract `4xx` is terminal
+/// unless the recovery matrix names an action for its code; nothing else is a retryable failure.
+#[test]
+fn errors_are_classified_before_any_retry() {
+    use RetryVerdict::{Recover, Retryable, Terminal};
+
+    assert_eq!(RetryVerdict::of_transport(), Retryable);
+    let table: &[(u16, bool, RetryVerdict)] = &[
+        // The transient set, whatever the code says.
+        (408, false, Retryable),
+        (408, true, Retryable),
+        (425, false, Retryable),
+        (429, false, Retryable),
+        (429, true, Retryable),
+        (500, false, Retryable),
+        (502, false, Retryable),
+        (503, false, Retryable),
+        (504, false, Retryable),
+        (507, false, Retryable),
+        (599, false, Retryable),
+        // Contract `4xx`: an action from the recovery matrix, or nothing.
+        (400, true, Recover),
+        (400, false, Terminal),
+        (403, false, Terminal),
+        (404, true, Recover),
+        (404, false, Terminal),
+        (409, true, Recover),
+        (409, false, Terminal),
+        (413, false, Terminal),
+        (415, false, Terminal),
+        (426, false, Terminal),
+        (499, false, Terminal),
+        // Not failures this table retries.
+        (200, false, Terminal),
+        (204, true, Terminal),
+        (301, false, Terminal),
+        (600, false, Terminal),
+    ];
+    for &(status, names_action, expected) in table {
+        let verdict = RetryVerdict::of_status(status, names_action);
+        assert_eq!(verdict, expected, "{status} (action named: {names_action})");
+        assert_eq!(verdict.permits_retry(), expected != Terminal, "{status}");
+    }
+}
+
+/// **A failing server costs at most the lane's retry budget.** Every retry spends one token
+/// whichever item takes it; once the budget is spent nothing more is retried until successes
+/// earn tokens back, one per [`LANE_SUCCESSES_PER_RETRY`], never above the capacity.
+#[test]
+fn a_lane_retry_budget_bounds_the_retries_of_every_item() {
+    let mut budget = LaneRetryBudget::new(3);
+    assert_eq!(budget.capacity(), 3);
+    let spent = (0..10).filter(|_| budget.try_spend()).count();
+    assert_eq!(spent, 3, "ten failing items share three retries");
+    assert_eq!(budget.remaining(), 0);
+
+    for _ in 0..LANE_SUCCESSES_PER_RETRY - 1 {
+        budget.record_success();
+    }
+    assert!(!budget.try_spend(), "not yet earned back");
+    budget.record_success();
+    assert_eq!(budget.remaining(), 1, "earned back by successes");
+
+    for _ in 0..100 {
+        budget.record_success();
+    }
+    assert_eq!(budget.remaining(), 3, "never above the capacity");
+
+    let mut never = LaneRetryBudget::new(0);
+    assert!(!never.try_spend(), "a zero budget never retries");
+    assert_eq!(
+        LaneRetryBudget::default().capacity(),
+        DEFAULT_LANE_RETRY_BUDGET
+    );
+}
+
+/// Every clone of a [`LaneRetries`] is the one budget: what one holder spends, another cannot.
+#[test]
+fn a_shared_lane_budget_is_one_pool() {
+    let lane = LaneRetries::new(2);
+    let other_item = lane.clone();
+    assert!(lane.same_as(&other_item));
+    assert!(!lane.same_as(&LaneRetries::new(2)));
+    assert!(lane.try_spend());
+    assert!(other_item.try_spend());
+    assert!(!lane.try_spend(), "the clone spent the last retry");
+    assert_eq!(other_item.remaining(), 0);
+    for _ in 0..LANE_SUCCESSES_PER_RETRY {
+        other_item.record_success();
+    }
+    assert_eq!(lane.remaining(), 1);
+}
+
+/// **Parallelism is connections, not streams.** `W` requests in flight at once through one SDK
+/// client ride `W` separate HTTP/1.1 connections: the server below answers none of them until
+/// all `W` have arrived, each on a connection of its own, so a client that multiplexed them onto
+/// one connection or sent them one at a time never gets an answer and the test times out.
+#[tokio::test]
+async fn concurrent_requests_ride_separate_connections() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    const W: usize = 4;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let all_arrived = Arc::new(tokio::sync::Barrier::new(W));
+    let server = tokio::spawn(async move {
+        let mut connections = Vec::new();
+        for _ in 0..W {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let all_arrived = all_arrived.clone();
+            connections.push(tokio::spawn(async move {
+                let mut head = Vec::new();
+                let mut buf = [0_u8; 1024];
+                while !head.windows(4).any(|w| w == b"\r\n\r\n") {
+                    let read = socket.read(&mut buf).await.unwrap();
+                    assert_ne!(read, 0, "the client closed before sending a request");
+                    head.extend_from_slice(&buf[..read]);
+                }
+                assert!(
+                    head.starts_with(b"GET / HTTP/1.1\r\n"),
+                    "an HTTP/1.1 request"
+                );
+                all_arrived.wait().await;
+                socket
+                    .write_all(b"HTTP/1.1 204 No Content\r\ncontent-length: 0\r\n\r\n")
+                    .await
+                    .unwrap();
+            }));
+        }
+        for connection in connections {
+            connection.await.unwrap();
+        }
+    });
+
+    let client = http_client().unwrap();
+    let url = format!("http://{addr}/");
+    let requests: Vec<_> = (0..W)
+        .map(|_| {
+            let (client, url) = (client.clone(), url.clone());
+            tokio::spawn(async move { client.get(url).send().await })
+        })
+        .collect();
+    let answered = tokio::time::timeout(Duration::from_secs(20), async {
+        for request in requests {
+            let response = request.await.unwrap().unwrap();
+            assert_eq!(response.status().as_u16(), 204);
+        }
+        server.await.unwrap();
+    })
+    .await;
+    assert!(
+        answered.is_ok(),
+        "{W} concurrent requests did not ride {W} connections"
+    );
+}
+
+// ─── Per-request stall bounds ────────────────────────────────────────────────
+
+/// Pull the next piece of `body` after `gap`, as an HTTP stack does once the link has taken the
+/// piece before it.
+async fn pull(body: &mut PacedBody, gap: Duration) -> Option<bytes::Bytes> {
+    use http_body::Body as _;
+    tokio::time::sleep(gap).await;
+    std::future::poll_fn(|cx| std::pin::Pin::new(&mut *body).poll_frame(cx))
+        .await
+        .map(|frame| {
+            let Ok(frame) = frame;
+            frame.into_data().expect("a paced body yields only data")
+        })
+}
+
+/// A body of `pieces` full pieces.
+fn paced(pieces: usize, progress: &ExchangeProgress) -> PacedBody {
+    PacedBody::new(
+        bytes::Bytes::from(vec![9u8; pieces * PACED_PIECE]),
+        progress.clone(),
+    )
+}
+
+/// **Slow but steady.** Each piece leaves just inside the stall bound, and the server then takes
+/// longer than the stall bound to answer, inside the response wait: twenty-odd stall bounds end
+/// to end, and nothing is cut. Simulated clock; no wall-clock wait.
+#[tokio::test(start_paused = true)]
+async fn a_slow_but_steady_request_is_never_cut() {
+    let bounds = RequestBounds::default();
+    let progress = ExchangeProgress::waiting();
+    let mut body = paced(20, &progress);
+    let gap = Duration::from_secs(19);
+    assert!(gap < bounds.stall);
+    let started = tokio::time::Instant::now();
+    let exchange = async move {
+        let mut sent = 0;
+        while let Some(piece) = pull(&mut body, gap).await {
+            sent += piece.len();
+        }
+        // The server writes and fsyncs for longer than a stall bound before it answers.
+        tokio::time::sleep(bounds.stall + Duration::from_secs(10)).await;
+        sent
+    };
+    let sent = within_bounds(bounds, &progress, exchange)
+        .await
+        .expect("a live request is never cut");
+    assert_eq!(sent, 20 * PACED_PIECE);
+    assert!(
+        started.elapsed() > bounds.stall * 15,
+        "ran far past the stall bound"
+    );
+}
+
+/// **Stalled.** Two pieces leave, then the link takes no more: the request is cut one stall
+/// bound after the last piece, as a stall.
+#[tokio::test(start_paused = true)]
+async fn a_request_whose_body_stops_moving_is_cut_as_stalled() {
+    let bounds = RequestBounds::default();
+    let progress = ExchangeProgress::waiting();
+    let mut body = paced(20, &progress);
+    let started = tokio::time::Instant::now();
+    let exchange = async move {
+        pull(&mut body, Duration::from_secs(1)).await;
+        pull(&mut body, Duration::from_secs(1)).await;
+        std::future::pending::<()>().await;
+    };
+    assert_eq!(
+        within_bounds(bounds, &progress, exchange).await,
+        Err(RequestCut::Stalled)
+    );
+    let cut_at = Duration::from_secs(2) + bounds.stall;
+    assert!(started.elapsed() >= cut_at);
+    assert!(started.elapsed() < cut_at + Duration::from_secs(1));
+}
+
+/// **Never answered.** The whole body leaves and no response comes: the request is cut at the
+/// response wait after the last piece, not at the shorter stall bound.
+#[tokio::test(start_paused = true)]
+async fn a_sent_request_with_no_answer_is_cut_at_the_response_wait() {
+    let bounds = RequestBounds::default();
+    let progress = ExchangeProgress::waiting();
+    let mut body = paced(2, &progress);
+    let started = tokio::time::Instant::now();
+    let exchange = async move {
+        while pull(&mut body, Duration::ZERO).await.is_some() {}
+        std::future::pending::<()>().await;
+    };
+    assert_eq!(
+        within_bounds(bounds, &progress, exchange).await,
+        Err(RequestCut::NoResponse)
+    );
+    assert!(started.elapsed() >= bounds.response_wait);
+    assert!(started.elapsed() < bounds.response_wait + Duration::from_secs(1));
+}
+
+/// A response body that stops arriving is a stall too.
+#[tokio::test(start_paused = true)]
+async fn a_response_that_stops_arriving_is_cut_as_stalled() {
+    let bounds = RequestBounds::default();
+    let progress = ExchangeProgress::waiting();
+    progress.on_received();
+    let exchange = std::future::pending::<()>();
+    assert_eq!(
+        within_bounds(bounds, &progress, exchange).await,
+        Err(RequestCut::Stalled)
+    );
+}
+
+#[test]
+fn a_paced_body_advertises_its_exact_length() {
+    use http_body::Body as _;
+    let body = paced(3, &ExchangeProgress::waiting());
+    assert_eq!(body.size_hint().exact(), Some(3 * PACED_PIECE as u64));
+}
+
+/// A piece pulled is the client's only sign the body is moving, so the slowest link it sees as
+/// moving is one piece per stall bound. That must sit below the server's default 1 KiB/s
+/// minimum sustained rate: the client never cuts as stalled a link the server would accept.
+#[test]
+fn one_piece_per_stall_bound_is_slower_than_the_server_rate_floor() {
+    const SERVER_MIN_RATE_BYTES_PER_SECOND: f64 = 1024.0;
+    let bounds = RequestBounds::default();
+    let slowest_seen_moving = PACED_PIECE as f64 / bounds.stall.as_secs_f64();
+    assert!(
+        slowest_seen_moving < SERVER_MIN_RATE_BYTES_PER_SECOND,
+        "{slowest_seen_moving} B/s"
+    );
+}
+
+#[test]
+fn the_response_wait_outlasts_the_stall_bound() {
+    let bounds = RequestBounds::default();
+    assert!(bounds.response_wait > bounds.stall);
+    assert!(bounds.stall <= Duration::from_secs(30));
+}
+
+// ─── Packet marking ──────────────────────────────────────────────────────────
+
+/// **Lower Effort is DSCP 1 in the top six bits** (RFC 8622): the octet is `0x04`, the ECN bits
+/// clear.
+#[test]
+fn lower_effort_is_dscp_one_with_ecn_clear() {
+    assert_eq!(LOWER_EFFORT_DSCP, 1);
+    assert_eq!(LOWER_EFFORT_TRAFFIC_CLASS, 0x04);
+    assert_eq!(
+        LOWER_EFFORT_TRAFFIC_CLASS & 0b11,
+        0,
+        "ECN bits are the kernel's"
+    );
+}
+
+/// A connected loopback pair on `bind` (`None` where this host has no such loopback).
+#[cfg(unix)]
+async fn loopback_pair(bind: &str) -> Option<(tokio::net::TcpStream, tokio::net::TcpStream)> {
+    let listener = tokio::net::TcpListener::bind(bind).await.ok()?;
+    let addr = listener.local_addr().ok()?;
+    let (dialed, accepted) = tokio::join!(tokio::net::TcpStream::connect(addr), listener.accept());
+    Some((dialed.ok()?, accepted.ok()?.0))
+}
+
+/// **An IPv4 socket is marked through `IP_TOS`**, on both ends of a connection, and reads back
+/// the Lower Effort octet. Unix only: Windows accepts `IP_TOS` without applying it.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_ipv4_socket_is_marked_lower_effort() {
+    let (dialed, accepted) = loopback_pair("127.0.0.1:0").await.expect("IPv4 loopback");
+    for socket in [&dialed, &accepted] {
+        assert_eq!(
+            socket2::SockRef::from(socket).tos_v4().unwrap(),
+            0,
+            "unmarked by default"
+        );
+        assert_eq!(mark_lower_effort(socket), Marking::Marked);
+        assert_eq!(
+            socket2::SockRef::from(socket).tos_v4().unwrap(),
+            LOWER_EFFORT_TRAFFIC_CLASS
+        );
+    }
+}
+
+/// **An IPv6 socket is marked through `IPV6_TCLASS`** where the platform exposes it. Skipped on
+/// a host with no IPv6 loopback.
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
+#[tokio::test]
+async fn an_ipv6_socket_is_marked_lower_effort() {
+    let Some((dialed, accepted)) = loopback_pair("[::1]:0").await else {
+        return;
+    };
+    for socket in [&dialed, &accepted] {
+        assert_eq!(mark_lower_effort(socket), Marking::Marked);
+        assert_eq!(
+            socket2::SockRef::from(socket).tclass_v6().unwrap(),
+            LOWER_EFFORT_TRAFFIC_CLASS
+        );
+    }
+}
+
+/// **An IPv4-mapped IPv6 socket is marked as IPv4**, since its packets are IPv4. Skipped on a
+/// host with no dual-stack IPv6 listener.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn an_ipv4_mapped_socket_is_marked_through_ip_tos() {
+    let Ok(listener) = tokio::net::TcpListener::bind("[::]:0").await else {
+        return;
+    };
+    let port = listener.local_addr().unwrap().port();
+    let (dialed, accepted) = tokio::join!(
+        tokio::net::TcpStream::connect(("127.0.0.1", port)),
+        listener.accept()
+    );
+    let (Ok(_dialed), Ok((accepted, _))) = (dialed, accepted) else {
+        return;
+    };
+    assert!(
+        accepted.local_addr().unwrap().is_ipv6(),
+        "a dual-stack socket"
+    );
+    assert_eq!(mark_lower_effort(&accepted), Marking::Marked);
+    assert_eq!(
+        socket2::SockRef::from(&accepted).tos_v4().unwrap(),
+        LOWER_EFFORT_TRAFFIC_CLASS
+    );
 }

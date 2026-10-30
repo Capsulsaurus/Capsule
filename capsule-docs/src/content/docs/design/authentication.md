@@ -80,6 +80,16 @@ Rules:
 
 **Configuration** (`capsule-server/src/config.rs`): `OIDC_ISSUER` (absent = off), `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` (optional; absent = public PKCE-only client, RFC 8252 §8.5), `OIDC_REDIRECT_URL`, `OIDC_ALLOW_LOOPBACK_REDIRECT`, `OIDC_CA_BUNDLE`. Issuer without client id, or vice versa, is a startup fault. Ceremonies live on Valkey (in-memory in development); `capsule-server/compose.yaml` ships a dex service (`--profile oidc`).
 
+#### OIDC-Only Deployments
+
+`PASSWORD_AUTH_DISABLED` (default off) narrows the audited surface to the identity provider:
+
+- **`serve` refuses it without `OIDC_ISSUER`**: a server with neither door admits nobody.
+- **Register, login and reauthenticate answer `403 error.auth.password_disabled`** before anything else: no rate-limit charge, no body validation, no directory lookup, no Argon2. A malformed body, an unknown address and a locked account get the same answer.
+- **Every local account is refused**, including one created before the switch. There is no break-glass account: a named exception keeps a password door open on the account an attacker most wants, and the operator's recovery is turning the switch off.
+- **Existing sessions are not revoked.** A session opened with a password lives out its sliding and hard expiry; it cannot re-authenticate with a password, so freshness-gated operations are closed to it.
+- **`server-info` publishes `auth.password_disabled: true`** beside `auth.oidc`, so a client hides its password form. Absent means `false`, which is what a server predating the switch does.
+
 #### Signing In From the CLI
 
 `capsule auth login --oidc` is the RFC 8252 native-app flow; no extra server surface.
@@ -164,11 +174,19 @@ A session token stops being honoured on sliding expiry, hard expiry, or explicit
 
 ### Sliding Inactivity Expiry
 
-180 days (configurable) without an access-token issuance. Each issuance resets the clock.
+180 days (`SESSION_TTL_DAYS`) without an access-token issuance. Each issuance resets the clock. Activity alone does not: a request records last-used time and never extends the session.
 
 ### Hard Expiry
 
-365 days (configurable) from issuance; **never reset**. Caps the window for a silently exfiltrated token on an active device ([malicious keyholder](/design/threat-model/#client-class-taxonomy)).
+365 days (`SESSION_HARD_CAP_DAYS`) from sign-in; **never reset**. Caps the window for a silently exfiltrated token on an active device ([malicious keyholder](/design/threat-model/#client-class-taxonomy)).
+
+Both are whole days, set per deployment and never per session. Zero, a negative count, or a cap shorter than the sliding window refuses the boot as a configuration fault. A lowered value bounds a live session from its next refresh onward: a session idle longer than the new window, or a lineage older than the new cap, is refused there as expired, while one inside both rotates and is issued only what the new values leave it. A raised value lengthens nothing until that refresh, because a stored session keeps the deadline it was opened under.
+
+Invariants:
+
+- **The cap survives rotation.** The session record carries its lineage's sign-in instant; a refresh carries it forward unchanged and a re-authentication does not move it.
+- **A session lives until the earlier of the two expiries**, and its refresh token is issued for exactly that remaining life, never a whole window past the cap.
+- **A deploy never shortens a live session.** A record that predates the sign-in instant measures its cap from its own creation.
 
 ### Explicit Revocation
 
@@ -226,7 +244,7 @@ cohort_hash = SHA-256( canonical-CBOR([ "capsule-device-cohort/v1", user_id, pla
 ## Validation
 
 - **Token round-trip (unit):** session token → access JWT → verify; after key rotation, old JWTs verify within their grace window.
-- **Expiry (unit, mock clock):** sliding refreshes on use, hard does not; rejection happens at access-token issuance.
+- **Expiry (unit, mock clock):** sliding refreshes on each issuance, hard does not and survives rotation; rejection happens at access-token issuance.
 - **Revoke-all (unit):** without master-key proof rejected; with it, every other session invalidated.
 - **Revocation immediacy (unit):** a revoked session's live access token is refused on next use.
 - **TOTP:** `202` on confirmed factor; code replay refused; per-challenge attempt cap; store outage fails closed.

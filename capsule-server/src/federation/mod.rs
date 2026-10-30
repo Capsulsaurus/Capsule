@@ -25,14 +25,18 @@
 //!   `capsule-server peer …` acts on it, a block's cascade over the issued grants included.
 //! - [`pull`] — the egress pull worker's engine: each job's schedule, the lease that keeps two
 //!   replicas off one job, the per-peer circuit, and the failure policy that drives them.
+//! - [`subscriptions`] — [`SubscriptionStore`], the receiving half's record of which album this
+//!   server pulls from which peer for which local member, under the capability that member's
+//!   client posted; and [`SubscriptionJobs`], the pull worker's production job source.
 //! - [`memory`] — the deterministic doubles; [`conformance`] — the suite every adapter passes.
 //!
 //! # A peer is not an account
 //!
 //! A [`PeerId`] is a server's canonical origin (`other.tld`), never a user id, and the types
 //! keep them apart everywhere the two could be confused: the sync cursor's scope byte, the
-//! blob authority's principal, the counter key. Nothing here holds a user list, and nothing
-//! published here names a user — the registry's no-enumeration rule holds at this layer too.
+//! blob authority's principal, the counter key. The only accounts held here are this server's
+//! own subscribers, and nothing published here names a user — the registry's no-enumeration
+//! rule holds at this layer too.
 
 use std::fmt;
 use std::sync::Arc;
@@ -46,10 +50,11 @@ pub mod pull;
 pub mod report;
 pub mod scheme;
 pub mod store;
+pub mod subscriptions;
 
 pub use self::capability::{
     ALBUM_URN_PREFIX, CapabilityCodec, CapabilityError, CapabilityGrant, MintError, MintRequest,
-    Minted, Scope, album_from_urn, album_urn,
+    Minted, Scope, album_from_urn, album_urn, verify_received,
 };
 pub use self::memory::{InMemoryCapabilities, InMemoryPeers};
 pub use self::peers::{
@@ -63,6 +68,10 @@ pub use self::scheme::{Principal, ReadBearer, VerifiedCapability};
 pub use self::store::{
     CapabilityFilter, CapabilityRecord, CapabilityStore, MAX_GRANT_LIFETIME, RefreshOutcome,
     RevokeOutcome,
+};
+pub use self::subscriptions::{
+    CapabilityToken, InMemorySubscriptions, PutOutcome, Subscription, SubscriptionJobs,
+    SubscriptionStore,
 };
 use crate::counter::{CounterContext, CounterKey, budgets};
 use crate::store::Clock;
@@ -154,12 +163,14 @@ pub struct FederationCollaborators {
     pub capabilities: Arc<dyn CapabilityStore>,
     /// The peers this server has pinned or blocked.
     pub peers: Arc<dyn PeerStore>,
+    /// The albums this server pulls from peers for its own members.
+    pub subscriptions: Arc<dyn SubscriptionStore>,
     /// The clock every record and every deadline is stamped from.
     pub clock: Arc<dyn Clock>,
     /// Whether this deployment federates at all (`FEDERATION_ENABLED`, #509).
     ///
-    /// Off is the default, and off means the federation surface is not there: the four
-    /// federation operations answer `404` before any credential, budget or store is touched,
+    /// Off is the default, and off means the federation surface is not there: the federation
+    /// operations answer `404` before any credential, budget or store is touched,
     /// and [`ReadBearer`] refuses every capability on the two read primitives. See
     /// [`FederationSetting`] for why this is a port rather than a `bool`.
     pub enabled: Arc<dyn FederationSetting>,
@@ -198,6 +209,7 @@ pub struct FederationContext {
     codec: Arc<CapabilityCodec>,
     capabilities: Arc<dyn CapabilityStore>,
     peers: Arc<dyn PeerStore>,
+    subscriptions: Arc<dyn SubscriptionStore>,
     clock: Arc<dyn Clock>,
     enabled: Arc<dyn FederationSetting>,
 }
@@ -209,6 +221,7 @@ impl FederationContext {
             codec,
             capabilities,
             peers,
+            subscriptions,
             clock,
             enabled,
         } = collaborators;
@@ -216,9 +229,15 @@ impl FederationContext {
             codec,
             capabilities,
             peers,
+            subscriptions,
             clock,
             enabled,
         }
+    }
+
+    /// The albums this server pulls from peers for its own members.
+    pub fn subscriptions(&self) -> &dyn SubscriptionStore {
+        self.subscriptions.as_ref()
     }
 
     /// The codec capabilities are minted with and read by.

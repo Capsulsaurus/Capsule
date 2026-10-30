@@ -28,7 +28,7 @@
 //! TTL abstraction is planned.
 //!
 //! Each module owns one port and, where it has one, the surface over it. [`routes`](mod@routes) is the only
-//! module that knows about HTTP: everything under it — [`album`], [`directory`], [`discovery`],
+//! module that knows about HTTP: everything under it — [`activity`], [`album`], [`directory`], [`discovery`],
 //! [`enrollment`], [`escrow`], [`federation`], [`gc`], [`index`], [`membership`],
 //! [`moderation`],
 //! [`negotiation`], [`quota`],
@@ -62,6 +62,7 @@
 //! `cargo nextest run` on a machine with no container runtime is green and says what it did not
 //! prove — which is the acceptance gap design/module-map.md sets for the framework.
 
+pub mod activity;
 pub mod album;
 pub mod app;
 pub mod attestation;
@@ -142,12 +143,12 @@ pub fn router() -> Router<App, Propagate, ServerInterceptors, impl Sized> {
         // The body-size cap is **not** mounted here. It sits on every group below instead — each
         // group carrying the cap its own operations need — because Kynos refuses two `413`
         // producers on one route, so a router-wide cap would leave no group room for a tighter
-        // one (#478). Every operation is still covered by exactly one, including the twelve the
+        // one (#478). Every operation is still covered by exactly one, including the thirteen the
         // protocol gate exempts, which get groups holding nothing but the cap. The group's cap
         // is its **first** interceptor, so it stays outermost beneath `Negotiation` and an
         // oversized body is refused before the gate reads anything. See [`limits`].
         // The protocol gate is two `Group`s, not a router interceptor, for two reasons the type
-        // system makes concrete. First, the design exempts twelve operations, and a group is how
+        // system makes concrete. First, the design exempts thirteen operations, and a group is how
         // Kynos spells "these and not those": an operation mounted inside declares the handshake
         // parameters and the gate's statuses, one in the cap-only group below does not and still
         // carries the response headers. Second, the design holds a **write** to the window (a
@@ -156,7 +157,7 @@ pub fn router() -> Router<App, Propagate, ServerInterceptors, impl Sized> {
         // declaration is its type, a read operation must sit behind a gate whose `Short` has no
         // `426` in it, or the document would promise a status the read never renders. So the
         // non-safe operations sit behind `ProtocolGate` and the `GET`/`HEAD` ones behind
-        // `ProtocolReadGate`. `tests/conformance.rs` pins both sets and the exempt twelve against
+        // `ProtocolReadGate`. `tests/conformance.rs` pins both sets and the exempt thirteen against
         // the emitted document and walks every operation on the wire, so a route cannot change
         // gate by accident.
         //
@@ -255,10 +256,11 @@ pub fn router() -> Router<App, Propagate, ServerInterceptors, impl Sized> {
                 .mount(kynos::routes![routes::upload::append_chunk]),
         )
         // Federation's lifecycle: minting, revoking and refreshing the capability a peer pulls
-        // with, and the signed report intake. The pull itself is `sync_feed` and `get_blob` in
+        // with, the signed report intake, and the receiving half — a member's subscriptions to
+        // albums other servers host (#1035). The pull itself is `sync_feed` and `get_blob` in
         // the read group below — federation adds no new data protocol (design/federation.md).
         //
-        // Its own group rather than a fifth `mount` on the one above, for two reasons: these four
+        // Its own group rather than a fifth `mount` on the one above, for two reasons: these
         // are one surface and the sixteen-operation tuple ceiling is close, and they carry a
         // **tighter body cap** than the rest of the writes — no body here is anywhere near an
         // upload chunk, and `submit_federated_report` is the server's only unauthenticated write.
@@ -277,7 +279,19 @@ pub fn router() -> Router<App, Propagate, ServerInterceptors, impl Sized> {
                     routes::federation::revoke_capability,
                     routes::federation::refresh_capability,
                     routes::federation::submit_federated_report,
+                    routes::subscriptions::subscribe_album,
+                    routes::subscriptions::unsubscribe_album,
                 ]),
+        )
+        // The one federation read: a member's own subscriptions (#1035). Behind the same gate,
+        // first, so a deployment that does not federate answers it `404` like every other
+        // federation operation; held to the read handshake, as every `GET` is.
+        .group(
+            Group::<App>::new("/")
+                .intercept(routes::federation::FederationGate::new())
+                .intercept(limits::bounded_body_size())
+                .intercept(negotiation::ProtocolReadGate::new())
+                .mount(kynos::routes![routes::subscriptions::list_subscriptions]),
         )
         // The reads: every gated `GET` and `HEAD`. Held to the handshake's grammar, admitted at
         // any protocol date, and declaring the `400` alone. None takes a body, so the bounded cap.
@@ -303,31 +317,36 @@ pub fn router() -> Router<App, Propagate, ServerInterceptors, impl Sized> {
                     routes::assets::get_asset_receipts,
                     routes::drop::list_inbox,
                 ])
-                // The recovery surface's third read, past the tuple ceiling of the mount above:
-                // the account's album key escrows (#741).
-                .mount(kynos::routes![routes::escrow::list_album_keys]),
+                // The reads past the tuple ceiling of the mount above: the recovery surface's
+                // third, the account's album key escrows (#741), and the account activity log.
+                .mount(kynos::routes![
+                    routes::escrow::list_album_keys,
+                    routes::activity::list_activity,
+                ]),
         )
-        // **The twelve operations the design exempts from the gate**, in a group of their
+        // **The thirteen operations the design exempts from the gate**, in a group of their
         // own so neither gated group above covers them (`api-surfaces.md`, "Negotiation Across
         // Transports"). `GET /v1/version` is the reachability probe a client hits before it
         // knows the window. The four `/.well-known/capsule/*` records are public discovery,
         // read before any handshake. The three `/s/{opaque_id}*` share reads must answer an
         // indistinguishable `404` (share-links.md), which a `426` would turn into a probing
-        // oracle. The two `/d/{opaque_id}*` guest deposits have their protocol pinned at link
-        // issuance (web-upload.md), so a browser guest has nothing to assert. Refreshing and
+        // oracle. The three `/d/{opaque_id}*` guest operations — the two deposits and the drop's
+        // status probe — have their protocol pinned at link issuance (web-upload.md), so a
+        // browser guest has nothing to assert. Refreshing and
         // closing a session (`POST /v1/auth/refresh`, `POST /v1/auth/logout`) are session
         // upkeep, not library writes: reads are admitted at any protocol date, so a `426` on the
         // refresh that keeps the read's access token alive would sign an out-of-window client
         // out of the reads it is still allowed, and a `426` on logout would leave open a session
         // its holder asked to close (#527). Opening one (`login`, `register`) stays gated. All
-        // twelve still carry the response headers, because `Negotiation` is the router's.
+        // thirteen still carry the response headers, because `Negotiation` is the router's.
         //
-        // Body-size cap only, with no negotiation gate: the cap is per-group, and these twelve
-        // are still covered by one each. The ten that are not drop routes take the bounded cap
-        // — reads, and two session-upkeep writes carrying a token. The two drop routes keep the
-        // backstop, because a guest's drop chunk is as large as an upload chunk, and sit in two
-        // groups: `create_drop` alone, and `append_drop_chunk` alone with the length-less chunk
-        // deadline (#717), as the album chunk route is above.
+        // Body-size cap only, with no negotiation gate: the cap is per-group, and these thirteen
+        // are still covered by one each. The eleven that are not drop deposits take the bounded
+        // cap — reads, the drop's status probe among them, and two session-upkeep writes
+        // carrying a token. The two drop deposits keep the backstop, because a guest's drop chunk
+        // is as large as an upload chunk, and sit in two groups: `create_drop` alone, and
+        // `append_drop_chunk` alone with the length-less chunk deadline (#717), as the album
+        // chunk route is above.
         .group(
             Group::<App>::new("/")
                 .intercept(limits::bounded_body_size())
@@ -342,6 +361,7 @@ pub fn router() -> Router<App, Propagate, ServerInterceptors, impl Sized> {
                     routes::share::share_blob,
                     routes::auth::refresh_token,
                     routes::auth::logout,
+                    routes::drop::drop_status,
                 ]),
         )
         .group(

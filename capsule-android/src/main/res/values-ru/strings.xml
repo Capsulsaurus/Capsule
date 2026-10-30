@@ -1793,6 +1793,7 @@
     <string name="error_auth_oidc_state_invalid">Срок этого входа истёк. Начните заново.</string>
     <string name="error_auth_oidc_token_invalid">Не удалось проверить ответ вашего поставщика удостоверений.</string>
     <string name="error_auth_oidc_unavailable">Capsule сейчас не удалось связаться с вашим поставщиком удостоверений. Повторите попытку.</string>
+    <string name="error_auth_password_disabled">Этот сервер принимает вход только через единый вход (SSO).</string>
     <string name="error_auth_password_invalid">Этот пароль нельзя использовать.</string>
     <string name="error_auth_profile_invalid">Это отображаемое имя нельзя использовать.</string>
     <string name="error_auth_profile_not_found">Эта учётная запись больше не существует.</string>

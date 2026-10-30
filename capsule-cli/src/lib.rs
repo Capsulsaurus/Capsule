@@ -23,8 +23,8 @@ use capsule_library::lifecycle::{DerivativeStatus, Workspace, unanchored_sidecar
 use capsule_sdk::cache_budget::DesktopConnectionClass;
 use cli::{
     AuthCommands, CacheCommands, CameraCommands, Cli, Commands, EditCommands, EditLibraryArgs,
-    ImportProviderArg, LabelArgs, LabelCommands, LibraryCommands, PeerCommands, RegionCommands,
-    RepairCommands, ShareCommands, SyncCommands, TrashCommands,
+    ImportProviderArg, LabelArgs, LabelCommands, LibraryCommands, PathArgs, PeerCommands,
+    RegionCommands, RepairCommands, ShareCommands, SyncCommands, TrashCommands,
 };
 use colored::*;
 use dialoguer::{Confirm, Input, Password};
@@ -273,6 +273,7 @@ async fn dispatch(command: Commands) -> Result<()> {
                 passphrase_stdin,
             } => auth_recover(&library, recovery_secret_stdin, passphrase_stdin).await?,
             AuthCommands::Logout { json } => auth_logout(json).await?,
+            AuthCommands::Activity { limit, json } => auth_activity(limit, json).await?,
             AuthCommands::Status { json: true } => {
                 // A machine reader gets a failure as a non-zero exit, not a line on stdout.
                 let auth_status = status::AuthStatus::check(&session_store()?)
@@ -460,7 +461,7 @@ async fn dispatch(command: Commands) -> Result<()> {
                 if push {
                     return push_workspace(
                         &mut ws,
-                        push_options(false, false, staged),
+                        push_options(false, false, staged, PathArgs::default()),
                         Vec::new(),
                         false,
                     )
@@ -521,7 +522,7 @@ async fn dispatch(command: Commands) -> Result<()> {
             if push {
                 let pushed = push_workspace(
                     &mut ws,
-                    push_options(false, false, staged),
+                    push_options(false, false, staged, PathArgs::default()),
                     Vec::new(),
                     false,
                 )
@@ -554,9 +555,16 @@ async fn dispatch(command: Commands) -> Result<()> {
             staged,
             asset,
             json,
+            path,
         } => {
             let mut ws = open_workspace(&library, passphrase_stdin)?;
-            push_workspace(&mut ws, push_options(dry_run, force, staged), asset, json).await?;
+            push_workspace(
+                &mut ws,
+                push_options(dry_run, force, staged, path),
+                asset,
+                json,
+            )
+            .await?;
         }
 
         // ── Restore ───────────────────────────────────────────────────────
@@ -886,7 +894,7 @@ async fn dispatch(command: Commands) -> Result<()> {
                 json,
             } => {
                 let ws = open_workspace(&library, passphrase_stdin)?;
-                let push = push_options(false, false, staged);
+                let push = push_options(false, false, staged, PathArgs::default());
                 let listen = match listen {
                     Some(address) => Some(
                         peer_listen(address, std::time::Duration::from_secs(listen_timeout))
@@ -919,6 +927,15 @@ async fn dispatch(command: Commands) -> Result<()> {
             } => {
                 let ws = open_workspace(&library, passphrase_stdin)?;
                 peer_discard(&ws, &hand_off, json)?;
+            }
+            PeerCommands::ForgetDelete {
+                library,
+                asset,
+                passphrase_stdin,
+                json,
+            } => {
+                let ws = open_workspace(&library, passphrase_stdin)?;
+                peer_forget_delete(&ws, asset, json)?;
             }
             PeerCommands::Offer {
                 library,
@@ -1248,6 +1265,13 @@ struct LoginReport {
 struct LogoutReport {
     /// Whether a session was stored and is now gone; false when there was nothing to sign out.
     signed_out: bool,
+}
+
+/// What `capsule auth activity --json` prints.
+#[derive(Debug, serde::Serialize)]
+struct ActivityReport {
+    /// The account's events, newest first.
+    events: Vec<remote::ActivityEntry>,
 }
 
 /// What `capsule share revoke --json` prints.
@@ -1724,6 +1748,35 @@ async fn auth_logout(json: bool) -> Result<()> {
     }
 }
 
+/// `capsule auth activity`: the signed-in account's recent security events, newest first.
+///
+/// With `json`, stdout carries exactly one document, [`ActivityReport`].
+async fn auth_activity(limit: Option<u32>, json: bool) -> Result<()> {
+    let remote = remote::RemoteConfig::from_env();
+    let store = session_store()?;
+    let events = remote::auth_activity(&remote, &store, limit)
+        .await
+        .map_err(|error| eyre!("{}", describe_remote_error(&error)))?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&ActivityReport { events })?
+        );
+        return Ok(());
+    }
+    if events.is_empty() {
+        println!("{}", "No recent activity.".yellow());
+        return Ok(());
+    }
+    for event in &events {
+        match &event.subject {
+            Some(subject) => println!("{}  {}  {subject}", event.at, event.kind.bold()),
+            None => println!("{}  {}", event.at, event.kind.bold()),
+        }
+    }
+    Ok(())
+}
+
 /// The flags of one `capsule sync` run.
 #[derive(Debug, Clone, Copy)]
 struct SyncRun<'a> {
@@ -2055,14 +2108,15 @@ fn restore_options(scope: restore::RestoreScope, out: PathBuf) -> restore::Resto
     }
 }
 
-/// The push configuration behind the CLI's three push flags, on the connection class the
-/// desktop source reports now. A `--staged` run opens the tier sessions in ladder order gated by
-/// the class; the default `Full` policy opens them all eagerly unless the class defers bulk
-/// transfers, which stages the push ([`cache::push_options`]). The desktop source has no OS
-/// probe, so it reports `unmetered`.
-fn push_options(dry_run: bool, force: bool, staged: bool) -> remote::PushOptions {
+/// The push configuration behind the CLI's push flags, planned from the path snapshot: the
+/// connection class the desktop source reports now, with the `path` flags laid over it
+/// ([`cache::path_plan`]). A `--staged` run opens the tier sessions in ladder order gated by
+/// the plan; the default `Full` policy opens them all eagerly unless the plan holds bulk
+/// transfers back, which stages the push ([`cache::push_options`]). The desktop source has no
+/// OS probe, so without flags the path is unmetered.
+fn push_options(dry_run: bool, force: bool, staged: bool, path: PathArgs) -> remote::PushOptions {
     cache::push_options(
-        &cache::transfer_plan(&DesktopConnectionClass::new()),
+        &cache::path_plan(&DesktopConnectionClass::new(), path.flags()),
         dry_run,
         force,
         staged,
@@ -2939,6 +2993,27 @@ fn peer_discard(workspace: &Workspace, hand_off: &str, json: bool) -> Result<()>
                 discarded.hand_off, discarded.asset_id
             )
             .green()
+        );
+    }
+    Ok(())
+}
+
+/// `capsule peer forget-delete`: stop retrying one asset's undeliverable released delete.
+fn peer_forget_delete(workspace: &Workspace, asset: uuid::Uuid, json: bool) -> Result<()> {
+    let state = peer::PeerState::for_device(workspace.device_id())
+        .map_err(|error| peer_run_error("Forget", &error))?;
+    let forgotten = peer::forget_delete(&state, workspace, asset)
+        .map_err(|error| peer_run_error("Forget", &error))?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&forgotten)?);
+    } else {
+        println!(
+            "{}",
+            format!(
+                "{}: released delete dropped ({} outbox entries); no longer retried",
+                forgotten.asset_id, forgotten.entries
+            )
+            .yellow()
         );
     }
     Ok(())

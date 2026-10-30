@@ -7211,6 +7211,10 @@
     "message": "Capsule konnte deinen Identitätsanbieter gerade nicht erreichen. Bitte versuche es erneut.",
     "origin": "machine"
   },
+  "error.auth.password_disabled": {
+    "message": "Dieser Server akzeptiert die Anmeldung nur über Single Sign-On.",
+    "origin": "machine"
+  },
   "error.auth.password_invalid": {
     "message": "Dieses Passwort kann nicht verwendet werden.",
     "origin": "machine"

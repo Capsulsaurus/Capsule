@@ -1,6 +1,7 @@
 import CapsuleCatalog
 import CapsuleDomain
 import CapsuleFoundation
+import CapsulePorts
 import Foundation
 import ManagedStore
 
@@ -20,6 +21,7 @@ public actor ManagedProvider: AssetProvider, TrashProvider, AssetOwning {
     private let library: ManagedLibrary
     private let authGate: any LocalAuthGate
     private let sidecarCoder: any SidecarCoding
+    private let uploads: (any UploadPort)?
     private var observers: [UUID: AsyncStream<AssetChange>.Continuation] = [:]
     /// The last queued mutation of each asset; see ``serializingMutation(of:_:)``.
     private var mutationTails: [String: Task<Void, Never>] = [:]
@@ -32,14 +34,19 @@ public actor ManagedProvider: AssetProvider, TrashProvider, AssetOwning {
     ///   in — the one the importer wrote it in. Defaults to the mock lane's
     ///   `JSONSidecarCoder`; a catalog with no caption register refuses the edit
     ///   before the sidecar is touched, so no other lane reaches it.
+    /// - Parameter uploads: this device's upload sessions, whose in-flight
+    ///   upload of an asset ``delete(_:)`` redacts. With none, a delete redacts
+    ///   nothing.
     public init(
         library: ManagedLibrary,
         authGate: any LocalAuthGate = LocalAuthenticationGate(),
-        sidecarCoder: any SidecarCoding = JSONSidecarCoder()
+        sidecarCoder: any SidecarCoding = JSONSidecarCoder(),
+        uploads: (any UploadPort)? = nil
     ) {
         self.library = library
         self.authGate = authGate
         self.sidecarCoder = sidecarCoder
+        self.uploads = uploads
     }
 
     public func authorizationStatus() -> AssetAuthorizationStatus {
@@ -92,14 +99,38 @@ public actor ManagedProvider: AssetProvider, TrashProvider, AssetOwning {
 
     /// Move each managed asset to the trash with the default retention window.
     /// A retried delete keeps the window the first one opened.
+    ///
+    /// Once the workspace holds an asset's delete, its in-flight upload is
+    /// redacted (``redactUpload(of:uuid:)``), as the deletion state machine
+    /// requires.
     public func delete(_ ids: [AssetID]) async throws {
         let retainDays = UInt32(TrashEntry.defaultRetentionDays)
         for id in ids {
             guard case let .managed(uuid) = id else { continue }
             try await library.workspace.deleteAsset(id: uuid, retainDays: retainDays)
             CapsuleLog.assetKit.debug("managed delete of \(uuid, privacy: .private)")
+            await redactUpload(of: id, uuid: uuid)
         }
         await emitReload()
+    }
+
+    /// Stop this device's upload of an asset the workspace has just deleted.
+    ///
+    /// A failure is logged and swallowed: the signed delete is already held, so
+    /// the delete stands either way, and a session left running finalizes into
+    /// a create that the delete supersedes once it syncs.
+    private func redactUpload(of id: AssetID, uuid: String) async {
+        guard let uploads else { return }
+        do {
+            let redaction = try await uploads.redactUploads(for: id)
+            CapsuleLog.assetKit.debug(
+                "upload redaction of \(uuid, privacy: .private): \(redaction.cancelled.count) cancelled, \(redaction.finalizing.count) finalizing"
+            )
+        } catch {
+            CapsuleLog.assetKit.error(
+                "upload redaction of \(uuid, privacy: .private) failed, the delete stands: \(String(describing: error), privacy: .public)"
+            )
+        }
     }
 
     /// Re-publish the timeline — called once an import has added assets.

@@ -1190,6 +1190,43 @@ fn an_edit_held_before_a_later_edit_is_not_held_twice() {
     assert_eq!(hashes.len(), held.len(), "no record is held twice");
 }
 
+/// **A delegated asset purged before custody keeps its held stretch.** The origin deletes and
+/// then purges the asset while the delegate still holds the upload, so the library no longer
+/// holds the asset; the delete and the early purge's re-issue are routed from the kept chain,
+/// in chain order, each chaining onto the one before it from the sealed head.
+#[test]
+fn a_delete_purged_before_custody_is_held_from_the_tombstone() {
+    let scratch = Scratch::new();
+    let (mut ws, asset, _) = two_assets(&scratch);
+    let sealed = ws.asset(&asset).expect("held").chain.records()[0].record_hash();
+    let mut ledger = ledger_of(vec![sealed_delegation(asset, sealed)]);
+
+    ws.soft_delete(&asset, 30).expect("deletes");
+    ws.purge(&asset).expect("purges early");
+    assert!(ws.asset(&asset).is_none(), "the asset left the library");
+
+    assert_eq!(hold_deletes(&mut ledger, &ws).expect("routes"), vec![asset]);
+    let held = &ledger.get(&asset).expect("held").held_deletes;
+    let actions: Vec<Option<String>> = held.iter().map(|op| op_action(op)).collect();
+    assert_eq!(
+        actions,
+        vec![Some("delete".to_owned()), Some("delete".to_owned())],
+        "the held delete, then the shorter-retention re-issue"
+    );
+    let kept = ws.purged_chain(&asset).expect("the tombstone");
+    for (op, prior) in held.iter().zip(kept) {
+        assert_eq!(
+            envelope_of(op).prior_provenance_hash,
+            Some(prior.record_hash().to_hex()),
+            "each op chains onto the record before it, the first onto the sealed head"
+        );
+    }
+    assert!(
+        hold_deletes(&mut ledger, &ws).expect("routes").is_empty(),
+        "nothing already held is held twice"
+    );
+}
+
 /// The feed entry naming `asset` indexed on the server, its head the record at `at` of the
 /// library's chain, changed at `changed_at` on the server's clock.
 fn listed(
@@ -1199,14 +1236,30 @@ fn listed(
     changed_at: &str,
 ) -> capsule_sdk::sync::FeedEntry {
     let state = ws.asset(asset).expect("held");
+    listed_at(
+        state.album_id,
+        asset,
+        &state.chain.records()[at],
+        changed_at,
+    )
+}
+
+/// The feed entry naming `asset` of `album_id` indexed on the server with `head` as its head
+/// record, changed at `changed_at` on the server's clock. Reaches an asset the library no
+/// longer holds, such as a purged one.
+fn listed_at(
+    album_id: Uuid,
+    asset: &Uuid,
+    head: &capsule_core::crypto::provenance::ProvenanceRecord,
+    changed_at: &str,
+) -> capsule_sdk::sync::FeedEntry {
     capsule_sdk::sync::FeedEntry {
-        album_id: state.album_id.to_string().into_bytes(),
+        album_id: album_id.to_string().into_bytes(),
         sync_seq: 1,
         protocol_version: capsule_core::crypto::primitives::PROTOCOL_VERSION.to_owned(),
         kind: capsule_sdk::sync::ChangeKind::Created,
         asset_id: asset.to_string().into_bytes(),
-        manifest_cbor: capsule_core::cbor::to_canonical_vec(&state.chain.records()[at])
-            .expect("encodes"),
+        manifest_cbor: capsule_core::cbor::to_canonical_vec(head).expect("encodes"),
         metadata_blob: Vec::new(),
         blobs: capsule_sdk::sync::BlobManifest::default(),
         derivative_manifests: Vec::new(),
@@ -1343,11 +1396,66 @@ async fn a_released_stretch_the_server_already_holds_is_not_sent_again() {
     assert_eq!(outcomes, vec!["sent"], "{views:?}");
 }
 
-/// A stretch refused for good is dropped, not retried, with every entry of its asset; another
-/// asset's entries are judged on their own. Here the refusal is the library's: the asset is
-/// listed on the server but gone from this library, so there is no chain to send from.
+/// **A purged asset is judged level against the chain its purge kept.** The origin deleted and
+/// purged the asset before custody, so the library no longer holds it. Where the feed names the
+/// tombstone's head, another command already delivered the stretch: nothing is sent (the
+/// server here answers nothing), the line is `sent` and the outbox drops it. Where the feed
+/// names only the create, the stretch is sent from the tombstone: the send fails against the
+/// unreachable server and is kept, rather than refused as an asset the library does not hold.
 #[tokio::test]
-async fn a_released_stretch_refused_for_good_is_dropped_with_the_rest_of_its_asset() {
+async fn a_purged_assets_released_stretch_is_judged_level_against_its_tombstone() {
+    let scratch = Scratch::new();
+    let (mut ws, asset, _) = two_assets(&scratch);
+    let album_id = ws.asset(&asset).expect("held").album_id;
+    let sealed = ws.asset(&asset).expect("held").chain.records()[0].record_hash();
+    ws.soft_delete(&asset, 30).expect("deletes");
+    ws.purge(&asset).expect("purges early");
+    assert!(ws.asset(&asset).is_none(), "the asset left the library");
+    let tombstone = ws.purged_chain(&asset).expect("the tombstone").to_vec();
+    let pending = released(&ws, asset, sealed);
+    assert_eq!(pending.len(), 2, "the delete and the re-issue");
+    let (remote, session) = unreachable_server();
+    let now = jiff::Timestamp::now();
+
+    let at_tombstone_head = remote::held::ServerChains::from_feed(&[listed_at(
+        album_id,
+        &asset,
+        tombstone.last().expect("a head"),
+        "2026-10-01T00:00:00Z",
+    )]);
+    let (kept, views) = send_deletes(
+        &remote,
+        &session,
+        &ws,
+        Ok(&at_tombstone_head),
+        now,
+        pending.clone(),
+    )
+    .await;
+    assert!(kept.is_empty(), "level: dropped");
+    let outcomes: Vec<&str> = views.iter().map(|v| v.outcome).collect();
+    assert_eq!(outcomes, vec!["sent"], "{views:?}");
+
+    let at_create = remote::held::ServerChains::from_feed(&[listed_at(
+        album_id,
+        &asset,
+        &tombstone[0],
+        "2026-10-01T00:00:00Z",
+    )]);
+    let (kept, views) =
+        send_deletes(&remote, &session, &ws, Ok(&at_create), now, pending.clone()).await;
+    assert_eq!(kept, pending, "not level: sent, unreachable, kept whole");
+    let outcomes: Vec<&str> = views.iter().map(|v| v.outcome).collect();
+    assert_eq!(outcomes, vec!["failed"], "{views:?}");
+}
+
+/// A stretch the server refuses for good is dropped, not retried, with every entry of its asset;
+/// another asset's entries are judged on their own. An asset the server lists but this library
+/// holds neither live nor as a tombstone has no chain to send from this run, which shows
+/// nothing about a later one: its entries are kept, so the delete it owes the server is not
+/// lost. The server here refuses every op with `409 error.upload.retention_elapsed`.
+#[tokio::test]
+async fn a_stretch_refused_for_good_is_dropped_and_one_with_no_chain_is_kept() {
     let scratch = Scratch::new();
     let (mut ws, kept_back, other) = two_assets(&scratch);
     let sealed = ws.asset(&other).expect("held").chain.records()[0].record_hash();
@@ -1360,7 +1468,7 @@ async fn a_released_stretch_refused_for_good_is_dropped_with_the_rest_of_its_ass
         listed(&ws, &other, 0, "2026-10-01T00:00:00Z"),
     ]);
     let others = released(&ws, other, sealed);
-    let mut pending = vec![
+    let chainless = vec![
         PendingDelete {
             asset_id: gone,
             op: b"not an op".to_vec(),
@@ -1370,8 +1478,20 @@ async fn a_released_stretch_refused_for_good_is_dropped_with_the_rest_of_its_ass
             op: b"nor this".to_vec(),
         },
     ];
-    pending.extend(others.clone());
-    let (remote, session) = unreachable_server();
+    let mut pending = chainless.clone();
+    pending.extend(others);
+    let refusal = serde_json::json!({
+        "type": "about:blank",
+        "title": "Retention elapsed",
+        "status": 409,
+        "detail": "this asset's retention window has closed",
+        "code": "error.upload.retention_elapsed",
+    })
+    .to_string();
+    let origin =
+        remote::tests::serve_mock(move |_| (409, "application/problem+json", refusal.clone()))
+            .await;
+    let (remote, session) = remote::tests::remote_at(&origin);
 
     let (kept, views) = send_deletes(
         &remote,
@@ -1383,9 +1503,128 @@ async fn a_released_stretch_refused_for_good_is_dropped_with_the_rest_of_its_ass
     )
     .await;
 
-    assert_eq!(kept, others, "only the other asset's entries are kept");
-    let outcomes: Vec<(Uuid, &str)> = views.iter().map(|v| (v.asset_id, v.outcome)).collect();
-    assert_eq!(outcomes, vec![(gone, "refused"), (other, "failed")]);
+    assert_eq!(
+        kept, chainless,
+        "only the chainless asset's entries are kept, in order"
+    );
+    let outcomes: Vec<(Uuid, &str, Option<&str>)> = views
+        .iter()
+        .map(|v| (v.asset_id, v.outcome, v.code.as_deref()))
+        .collect();
+    assert_eq!(
+        outcomes,
+        vec![
+            (gone, "failed", None),
+            (other, "refused", Some("error.upload.retention_elapsed")),
+        ]
+    );
+    assert!(
+        views[0]
+            .message
+            .as_deref()
+            .is_some_and(|m| m.contains("capsule peer forget-delete")),
+        "the kept line names the command that drops it: {:?}",
+        views[0].message
+    );
+}
+
+/// The feed is drained only for an outbox holding an asset the library has a chain for, so an
+/// entry it holds no chain for does not re-read the whole feed on every run.
+#[test]
+fn the_feed_is_needed_only_for_an_entry_with_a_chain() {
+    let scratch = Scratch::new();
+    let (ws, held, _) = two_assets(&scratch);
+    let entry = |asset_id| PendingDelete {
+        asset_id,
+        op: b"op".to_vec(),
+    };
+    assert!(!needs_feed(&ws, &[]), "an empty outbox sends nothing");
+    let gone = Uuid::now_v7();
+    assert!(
+        !needs_feed(&ws, &[entry(gone), entry(gone)]),
+        "a chainless asset is kept without the feed"
+    );
+    assert!(needs_feed(&ws, &[entry(gone), entry(held)]));
+}
+
+/// A chainless asset still kept when the feed could not be read says why, not that the feed
+/// failed: its line does not depend on the server.
+#[tokio::test]
+async fn a_chainless_entry_is_kept_even_when_the_feed_is_unreadable() {
+    let scratch = Scratch::new();
+    let (ws, _, _) = two_assets(&scratch);
+    let gone = Uuid::now_v7();
+    let pending = vec![PendingDelete {
+        asset_id: gone,
+        op: b"op".to_vec(),
+    }];
+    let (remote, session) = remote::tests::remote_at("http://127.0.0.1:9");
+    let (kept, views) = send_deletes(
+        &remote,
+        &session,
+        &ws,
+        Err("unreachable"),
+        jiff::Timestamp::now(),
+        pending.clone(),
+    )
+    .await;
+    assert_eq!(kept, pending);
+    assert_eq!(views.len(), 1);
+    assert_eq!(views[0].outcome, "failed");
+    assert!(
+        views[0]
+            .message
+            .as_deref()
+            .is_some_and(|m| m.contains("nor its tombstone")),
+        "{:?}",
+        views[0].message
+    );
+}
+
+/// `peer forget-delete` drops only the named chainless asset's entries, refuses an asset whose
+/// chain the library holds (its delete can still be sent), and refuses one nothing is owed for.
+#[test]
+fn forget_delete_drops_only_an_undeliverable_assets_entries() {
+    let scratch = Scratch::new();
+    let (ws, held, _) = two_assets(&scratch);
+    let (_dir, state) = state();
+    let gone = Uuid::now_v7();
+    let entry = |asset_id, op: &[u8]| PendingDelete {
+        asset_id,
+        op: op.to_vec(),
+    };
+    state
+        .save_outbox(&[entry(gone, b"a"), entry(held, b"b"), entry(gone, b"c")])
+        .expect("writes");
+
+    assert!(matches!(
+        forget_delete(&state, &ws, held),
+        Err(PeerError::StillDeliverable(id)) if id == held
+    ));
+    let other = Uuid::now_v7();
+    assert!(matches!(
+        forget_delete(&state, &ws, other),
+        Err(PeerError::NothingOwed(id)) if id == other
+    ));
+    assert_eq!(
+        state.load_outbox().expect("reads").len(),
+        3,
+        "a refused run drops nothing"
+    );
+
+    let forgotten = forget_delete(&state, &ws, gone).expect("forgets");
+    assert_eq!(
+        forgotten,
+        ForgottenDelete {
+            asset_id: gone,
+            entries: 2
+        }
+    );
+    assert_eq!(state.load_outbox().expect("reads"), vec![entry(held, b"b")]);
+    assert!(matches!(
+        forget_delete(&state, &ws, gone),
+        Err(PeerError::NothingOwed(_))
+    ));
 }
 
 /// A ledger that cannot be read leaves the push skipping nothing and the browser showing no

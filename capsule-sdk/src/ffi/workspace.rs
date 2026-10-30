@@ -33,10 +33,11 @@
 //! [`verify_asset`]: capsule_core::crypto::verify_asset::verify_asset
 //! [`Workspace`]: capsule_library::lifecycle::Workspace
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use capsule_core::crypto::hash::Hash32;
+use capsule_core::crypto::hash::{Hash32, hash_bytes};
 use capsule_core::crypto::keys::{
     HardwareBackedSigner, HardwareKeyAgreement, HardwareSigner, HardwareSignerError, P256HybridDek,
     Signer, encapsulate_to_p256_public,
@@ -63,34 +64,68 @@ use crate::upload::UploadError;
 /// Failure surfaced by a foreign [`FfiHardwareSigner`]. Mirrors `capsule-core`'s
 /// `HardwareSignerError` variant for variant — it is the same contract, declared in the
 /// `capsule_sdk` namespace because core's own type carries no uniffi derive.
-#[derive(Debug, thiserror::Error, uniffi::Error)]
-#[uniffi(flat_error)]
+///
+/// The error is **thrown by foreign code** — it is the declared error of the
+/// [`FfiHardwareSigner`] and [`FfiHardwareKeyAgreement`] foreign traits — so Rust must *lift*
+/// it, and uniffi lifts only a non-flat error. Every variant therefore carries a named
+/// `detail` field (the element's own English diagnostic), which also gives the Kotlin
+/// exceptions and Swift cases the same `(detail)` shape. Core's error keeps `detail` only on
+/// [`Backend`](Self::Backend); for the other variants it is logged at the seam and dropped.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, uniffi::Error)]
 pub enum FfiHardwareSignerError {
     /// The user cancelled the biometric / the element refused authentication.
-    #[error("hardware authentication cancelled")]
-    AuthCancelled,
+    #[error("hardware authentication cancelled: {detail}")]
+    AuthCancelled {
+        /// The element's English diagnostic.
+        detail: String,
+    },
     /// No secure element is available on this device.
-    #[error("hardware secure element unavailable")]
-    Unavailable,
+    #[error("hardware secure element unavailable: {detail}")]
+    Unavailable {
+        /// The element's English diagnostic.
+        detail: String,
+    },
     /// No key exists for the requested alias.
-    #[error("hardware key not found")]
-    NotFound,
+    #[error("hardware key not found: {detail}")]
+    NotFound {
+        /// The element's English diagnostic.
+        detail: String,
+    },
     /// The private key was readable — non-exportability is violated (a failure).
-    #[error("hardware private key is exportable")]
-    Exportable,
+    #[error("hardware private key is exportable: {detail}")]
+    Exportable {
+        /// The element's English diagnostic.
+        detail: String,
+    },
     /// Any other backend error.
-    #[error("hardware backend error: {0}")]
-    Backend(String),
+    #[error("hardware backend error: {detail}")]
+    Backend {
+        /// The element's English diagnostic.
+        detail: String,
+    },
+}
+
+/// A foreign element that throws something other than [`FfiHardwareSignerError`] (an
+/// unchecked `KeyStoreException`, a Swift error of another type) or breaks the FFI contract
+/// reaches Rust as an *unexpected* callback error. Without this conversion uniffi panics on
+/// it — inside a workspace call, with the workspace lock held — so it is lifted as a typed
+/// [`Backend`](FfiHardwareSignerError::Backend) failure instead.
+impl From<uniffi::UnexpectedUniFFICallbackError> for FfiHardwareSignerError {
+    fn from(err: uniffi::UnexpectedUniFFICallbackError) -> Self {
+        tracing::warn!(reason = %err.reason, "ffi: hardware element threw an undeclared error");
+        Self::Backend { detail: err.reason }
+    }
 }
 
 impl From<FfiHardwareSignerError> for HardwareSignerError {
     fn from(err: FfiHardwareSignerError) -> Self {
+        tracing::debug!(error = %err, "ffi: hardware element refused");
         match err {
-            FfiHardwareSignerError::AuthCancelled => Self::AuthCancelled,
-            FfiHardwareSignerError::Unavailable => Self::Unavailable,
-            FfiHardwareSignerError::NotFound => Self::NotFound,
-            FfiHardwareSignerError::Exportable => Self::Exportable,
-            FfiHardwareSignerError::Backend(detail) => Self::Backend(detail),
+            FfiHardwareSignerError::AuthCancelled { .. } => Self::AuthCancelled,
+            FfiHardwareSignerError::Unavailable { .. } => Self::Unavailable,
+            FfiHardwareSignerError::NotFound { .. } => Self::NotFound,
+            FfiHardwareSignerError::Exportable { .. } => Self::Exportable,
+            FfiHardwareSignerError::Backend { detail } => Self::Backend(detail),
         }
     }
 }
@@ -907,9 +942,21 @@ pub struct FfiPurgeOutcome {
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct FfiFeedDrain {
     /// The latest server `changed_at` the drain saw (RFC 3339), or `None` for a drain that saw
-    /// no entry. It floors this device's clock, so a slow clock cannot hold open a window the
-    /// server has closed.
+    /// no entry. Deadlines are judged at it alone, never by this device's clock, so with
+    /// `None` nothing has expired.
     pub latest_changed_at: Option<String>,
+    /// Every asset the server's feed lists, keyed by its id as the feed names it, with the
+    /// `manifest_cbor` of its latest entry (empty for an entry that carries no record). An
+    /// asset whose latest `delete` is not that head or before it is a held delete, which
+    /// never expires. Ids that are not UUIDs name no asset of this workspace and are ignored.
+    ///
+    /// The map must cover the whole feed: a drain from the feed's start (no cursor), or the
+    /// heads this app kept, entry by entry, across every cursored drain since one. A drain
+    /// resumed from a cursor lists only the assets that changed after it, so passing it alone
+    /// leaves out every asset whose `delete` an earlier sync indexed: each is judged held and
+    /// never expires, and the trash grows until the user empties it. That loses nothing, but
+    /// the sweep stops working.
+    pub server_heads: HashMap<String, Vec<u8>>,
 }
 
 impl FfiFeedDrain {
@@ -922,7 +969,19 @@ impl FfiFeedDrain {
             .map_err(|e| FfiError::InvalidArgument {
                 detail: format!("latest_changed_at: not an RFC 3339 timestamp ({e})"),
             })?;
-        Ok(FeedDrain { latest_changed_at })
+        let server_heads = self
+            .server_heads
+            .iter()
+            .filter_map(|(asset_id, head)| {
+                let asset_id = Uuid::parse_str(asset_id).ok()?;
+                let head = (!head.is_empty()).then(|| hash_bytes(head));
+                Some((asset_id, head))
+            })
+            .collect();
+        Ok(FeedDrain {
+            latest_changed_at,
+            server_heads,
+        })
     }
 }
 
@@ -941,7 +1000,7 @@ pub enum FfiTrashRefusal {
 
 /// A trash verb's failure: the refusals a trash view names as [`FfiError::Trash`], everything
 /// else as the workspace failure it is.
-fn trash_error(error: LifecycleError) -> FfiError {
+pub(super) fn trash_error(error: LifecycleError) -> FfiError {
     let (refusal, code, retention_until) = match &error {
         LifecycleError::NotFound(_) => (FfiTrashRefusal::NotFound, None, None),
         LifecycleError::NotInTrash(_) => (FfiTrashRefusal::NotInTrash, None, None),
@@ -978,7 +1037,7 @@ pub struct FfiWorkspace {
 impl FfiWorkspace {
     /// Run `f` under the workspace lock, surfacing a poisoned lock as a typed error rather
     /// than a panic across the boundary.
-    fn with<T>(
+    pub(super) fn with<T>(
         &self,
         f: impl FnOnce(&mut Workspace) -> Result<T, FfiError>,
     ) -> Result<T, FfiError> {
@@ -1038,7 +1097,7 @@ impl FfiWorkspace {
 }
 
 /// Parse a UUID from foreign code into a typed error rather than panicking at the boundary.
-fn parse_uuid(field: &str, value: &str) -> Result<Uuid, FfiError> {
+pub(super) fn parse_uuid(field: &str, value: &str) -> Result<Uuid, FfiError> {
     Uuid::parse_str(value).map_err(|e| FfiError::InvalidArgument {
         detail: format!("{field}: {value:?} is not a UUID ({e})"),
     })
@@ -1340,7 +1399,9 @@ impl FfiWorkspace {
         self.with(|ws| Ok(ws.ensure_album(album_id, &name)?.to_string()))
     }
 
-    /// Every album this workspace holds key material for.
+    /// Every album this workspace holds key material for, in the one album order every app
+    /// shows as is: the album with the most recent visible, untrashed asset first, an empty
+    /// album by its creation time, ties by ascending id (`Workspace::albums`).
     pub fn albums(&self) -> Result<Vec<FfiAlbum>, FfiError> {
         self.with(|ws| {
             Ok(ws
@@ -1445,13 +1506,22 @@ impl FfiWorkspace {
     /// Use [`signed_manifest`](Self::signed_manifest) when the *manifest* is what is wanted.
     pub fn provenance_head(&self, asset_id: String) -> Result<Vec<u8>, FfiError> {
         let asset_id = parse_uuid("asset_id", &asset_id)?;
+        // Read off the chain head directly: the upload bundle carries the create record, which
+        // is the head only until the first delete, restore or edit.
         self.with(|ws| {
-            Ok(ws
-                .upload_bundle(&asset_id)
-                .map_err(|e| FfiError::Workspace {
-                    detail: format!("reading the provenance head of {asset_id}: {e}"),
-                })?
-                .provenance_blob)
+            let asset = ws.asset(&asset_id).ok_or_else(|| FfiError::Workspace {
+                detail: format!("asset {asset_id} is not managed by this workspace"),
+            })?;
+            let head = asset
+                .chain
+                .records()
+                .last()
+                .ok_or_else(|| FfiError::Workspace {
+                    detail: format!("asset {asset_id} has an empty provenance chain"),
+                })?;
+            capsule_core::cbor::to_canonical_vec(head).map_err(|e| FfiError::Workspace {
+                detail: format!("reading the provenance head of {asset_id}: {e}"),
+            })
         })
     }
 
@@ -1876,10 +1946,12 @@ impl FfiWorkspace {
     /// input, each one ready for [`purge_asset`](Self::purge_asset).
     ///
     /// A deadline is judged only after a sync drained the feed to its head, so a restore on a
-    /// later page lands first: pass that drain as `drain`. The deadline is judged by this
-    /// device's clock floored by the drain's latest server `changed_at`. With no drain (`None`:
-    /// the sync failed, or this device has no server) nothing has expired, and the trash keeps
-    /// every asset until the user empties it.
+    /// later page lands first: pass that drain as `drain`, its `server_heads` covering the whole
+    /// feed as [`FfiFeedDrain::server_heads`] requires. The deadline is judged by the
+    /// drain's latest server `changed_at` alone, never by this device's clock, and an asset
+    /// whose `delete` the server has not indexed (a held delete) never expires. With no drain
+    /// (`None`: the sync failed, or this device has no server), or a drain that saw no entry,
+    /// nothing has expired, and the trash keeps every asset until the user empties it.
     ///
     /// # Errors
     ///
@@ -1889,13 +1961,13 @@ impl FfiWorkspace {
         drain: Option<FfiFeedDrain>,
     ) -> Result<Vec<FfiTrashEntry>, FfiError> {
         let drain = drain.as_ref().map(FfiFeedDrain::parse).transpose()?;
-        let clock = Timestamp::now();
-        let judged_at = drain.map_or(clock, |drain| drain.judged_at(clock));
+        // Every entry the sweep returns was judged at this reading; with none it returns none.
+        let judged_at = drain.as_ref().and_then(FeedDrain::judged_at);
         self.with(|ws| {
             Ok(ws
-                .expired_trash_after_drain(clock, drain)
+                .expired_trash_after_drain(drain.as_ref())
                 .iter()
-                .map(|entry| FfiTrashEntry::new(entry, judged_at))
+                .filter_map(|entry| judged_at.map(|at| FfiTrashEntry::new(entry, at)))
                 .collect())
         })
     }

@@ -183,8 +183,9 @@ pub trait Ports: Send + Sync + 'static {
         async { Err(NOT_OFFERED.to_owned()) }
     }
 
-    /// Decode an asset's original into a preview no larger than [`PREVIEW_EDGE`] on its long
-    /// edge, through `capsule-core::media`. `Err` says why there is none, including a terminal
+    /// Decode a preview of an asset's original no larger than [`PREVIEW_EDGE`] on its long
+    /// edge, through `capsule-core::media`, from the source the render ladder picks
+    /// ([`super::library::decode_preview`]). `Err` says why there is none, including a terminal
     /// that draws no images.
     fn preview(
         &self,
@@ -223,7 +224,9 @@ pub trait Ports: Send + Sync + 'static {
 
     /// Decode an asset's original into a preview no larger than [`REGION_PREVIEW_EDGE`] for
     /// the label editor to draw regions on as half blocks: unlike
-    /// [`preview`](Self::preview), whatever image protocol the terminal speaks.
+    /// [`preview`](Self::preview), whatever image protocol the terminal speaks, and always from
+    /// the original itself, because a region's coordinates are relative to the original's
+    /// upright frame and a camera's embedded preview need not share its crop.
     fn region_preview(
         &self,
         request: PreviewRequest,
@@ -939,7 +942,7 @@ impl Ports for LocalPorts {
                 &remote,
                 &store,
                 &mut workspace,
-                crate::push_options(false, false, false),
+                crate::push_options(false, false, false, crate::cli::PathArgs::default()),
                 run,
             )
             .await;
@@ -1032,8 +1035,9 @@ impl Ports for LocalPorts {
         tokio::task::spawn_blocking(move || {
             let bytes = std::fs::read(&request.original)
                 .map_err(|e| format!("could not read the original: {e}"))?;
-            super::library::decode_preview(
+            super::library::decode_preview_from(
                 &capsule_core::media::RawshiftDecoder,
+                None,
                 &bytes,
                 &request.ext,
                 REGION_PREVIEW_EDGE,

@@ -172,6 +172,12 @@ pub struct UploadSessionRecord {
     pub total_size: u64,
     /// Where the session is in its state machine.
     pub status: UploadSessionStatus,
+    /// The `error.*` code finalization failed with, set only with `FailedProcessing` by
+    /// [`UploadSessionStore::fail_processing`].
+    ///
+    /// The one channel through which a client learns why its upload was refused: no request
+    /// waits on finalization, so `HEAD` and the session list carry this code instead.
+    pub failure_code: Option<String>,
     /// When the session was created.
     pub created_at: Timestamp,
     /// When the last chunk was accepted, or creation time if none. Anchors the survival floor
@@ -227,6 +233,18 @@ pub enum FinalizeClaim {
     Won(Box<UploadSessionRecord>),
     /// Another caller already claimed it, or the session is no longer active.
     AlreadyClaimed,
+    /// No such session.
+    NotFound,
+}
+
+/// The outcome of discarding a session only while nobody has claimed its finalization.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UnclaimedDiscard {
+    /// The session was `Pending` or `Uploading` and is gone. The record is the session as it
+    /// was discarded.
+    Discarded(Box<UploadSessionRecord>),
+    /// The session's finalization is claimed, or it is terminal: it was left as it is.
+    Claimed,
     /// No such session.
     NotFound,
 }
@@ -303,6 +321,18 @@ pub trait UploadSessionStore: std::fmt::Debug + Send + Sync {
         status: UploadSessionStatus,
     ) -> StoreFuture<'a, Option<UploadSessionRecord>>;
 
+    /// Move a live session to `FailedProcessing`, recording the `error.*` code it failed with,
+    /// and return the updated record.
+    ///
+    /// [`Self::set_status`] with `FailedProcessing`, plus [`UploadSessionRecord::failure_code`]:
+    /// the code is what `HEAD` and the session list report, because the request that completed
+    /// the session never waits to hear it.
+    fn fail_processing<'a>(
+        &'a self,
+        upload: &'a UploadId,
+        failure_code: &'a str,
+    ) -> StoreFuture<'a, Option<UploadSessionRecord>>;
+
     /// Claim the exclusive right to finalize `upload`.
     ///
     /// Compare-and-set into `WaitingForProcessing`: only a `Pending` or `Uploading` session
@@ -325,6 +355,14 @@ pub trait UploadSessionStore: std::fmt::Debug + Send + Sync {
     /// Discard a session: its record, its accepted-chunk replay entries, and its place in
     /// both views, together. Returns the record that was removed, or `None`.
     fn discard<'a>(&'a self, upload: &'a UploadId) -> StoreFuture<'a, Option<UploadSessionRecord>>;
+
+    /// [`Self::discard`] `upload` only if it is `Pending` or `Uploading`.
+    ///
+    /// The compare and the discard are one step, as in [`Self::claim_finalize`], so a session
+    /// whose finalization a racing request claims is never discarded out from under its
+    /// finalizer: one of the two wins, and the other sees [`UnclaimedDiscard::Claimed`] or
+    /// [`FinalizeClaim::NotFound`].
+    fn discard_unclaimed<'a>(&'a self, upload: &'a UploadId) -> StoreFuture<'a, UnclaimedDiscard>;
 
     /// The active session `uploader` currently has open for `expected_hash`, if any.
     ///
@@ -354,6 +392,21 @@ pub trait UploadSessionStore: std::fmt::Debug + Send + Sync {
         uploader: &'a UserId,
         expected_hash: &'a str,
     ) -> StoreFuture<'a, Option<UploadId>>;
+
+    /// Every active session declaring `expected_hash`, whoever uploads it, smallest id first.
+    ///
+    /// The question quota release asks after giving an attribution back
+    /// ([`crate::upload::reservation`]): attribution is keyed by content address globally, so a
+    /// session of **another** account may have been admitted against the attribution just
+    /// released, and is now the one that has to be charged for the bytes it will store.
+    ///
+    /// Unscoped on purpose, and therefore server-internal only. It must never back an answer to
+    /// a caller: that would tell any account that can name a hash whether somebody else is
+    /// uploading it — the signal [`Self::pending_for_address`] is uploader-scoped to withhold.
+    ///
+    /// Terminal sessions never match, as for [`Self::pending_for_address`]. Adapters need a
+    /// secondary index on `expected_hash`; scanning is acceptable only in the in-memory double.
+    fn live_for_address<'a>(&'a self, expected_hash: &'a str) -> StoreFuture<'a, Vec<UploadId>>;
 
     /// How many sessions are still in flight against `album`.
     ///

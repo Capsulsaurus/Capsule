@@ -19,7 +19,7 @@ use capsule_server::store::{AuthStateStore, Clock, SessionId};
 use jiff::SignedDuration;
 use kynos::http::StatusCode;
 use serde_json::json;
-use support::{EMAIL, Fixture, PASSWORD, SESSION_TTL, user};
+use support::{EMAIL, Fixture, PASSWORD, SESSION_HARD_CAP, SESSION_TTL, user};
 
 /// Post a JSON body to `path`, as a well-formed client would.
 macro_rules! post_json {
@@ -86,8 +86,8 @@ async fn login_issues_a_pair_and_opens_the_session_it_names() {
 
 #[tokio::test]
 async fn the_refresh_token_never_outlives_the_session_it_names() {
-    // The two lifetimes are one fact: the route issues against `AuthStateStore::ttl()`, so a
-    // deployment cannot configure a refresh token that verifies past its own session record.
+    // The two lifetimes are one fact: the route issues against `AuthStateStore::expires_at`, so
+    // a deployment cannot configure a refresh token that verifies past its own session record.
     let fixture = Fixture::working();
 
     let body: TokenResponse = post_json!(
@@ -185,8 +185,9 @@ async fn an_unusable_advisory_field_is_dropped_rather_than_refusing_the_sign_in(
 #[tokio::test]
 async fn a_wrong_password_and_an_unknown_account_are_the_same_answer() {
     // The Salvo service went to the trouble of verifying a dummy hash so the two paths took the
-    // same time. Here they are the same *value* — `Authentication::Refused` — so no caller can
-    // tell them apart even in principle.
+    // same time. Here they are the same *variant* — `Authentication::Refused` — and the account
+    // a wrong password names goes only to that account's activity log, written off the response
+    // path (design/activity-log.md), so the answer below cannot tell them apart.
     let fixture = Fixture::working();
 
     let mut wrong: serde_json::Value = post_json!(
@@ -351,6 +352,196 @@ async fn refresh_rotates_the_session_and_closes_the_one_it_was_given() {
         .expect("store answers");
     assert_eq!(open.len(), 1);
     assert_eq!(open[0].session_id, rotated);
+
+    fixture.client.assert_conformance();
+}
+
+/// Log in and return the pair.
+async fn login(fixture: &Fixture) -> TokenResponse {
+    post_json!(
+        fixture.client,
+        "/v1/auth/login",
+        json!({ "email": EMAIL, "password": PASSWORD })
+    )
+    .assert_status(StatusCode::OK)
+    .json()
+}
+
+/// Refresh `pair` and return its successor.
+async fn refresh(fixture: &Fixture, pair: &TokenResponse) -> TokenResponse {
+    post_json!(
+        fixture.client,
+        "/v1/auth/refresh",
+        json!({ "refresh_token": pair.refresh_token })
+    )
+    .assert_status(StatusCode::OK)
+    .json()
+}
+
+#[tokio::test]
+async fn each_refresh_slides_the_inactivity_window() {
+    // The phone that is used now and then: every refresh buys a whole new window, so a session
+    // refreshed inside each window outlives any single one of them.
+    let fixture = Fixture::working();
+    let just_inside = SESSION_TTL - SignedDuration::from_secs(1);
+    let signed_in_at = fixture.clock.now();
+
+    let mut pair = login(&fixture).await;
+    for _ in 0..3 {
+        fixture.clock.advance(just_inside);
+        pair = refresh(&fixture, &pair).await;
+    }
+    assert!(
+        fixture.clock.now().duration_since(signed_in_at) > SESSION_TTL * 2,
+        "the lineage has outlived two windows"
+    );
+
+    // And idleness still ends it: one whole window without an issuance.
+    fixture.clock.advance(SESSION_TTL);
+    post_json!(
+        fixture.client,
+        "/v1/auth/refresh",
+        json!({ "refresh_token": pair.refresh_token })
+    )
+    .assert_status(StatusCode::UNAUTHORIZED);
+
+    fixture.client.assert_conformance();
+}
+
+#[tokio::test]
+async fn the_hard_cap_survives_rotation() {
+    // The session refreshed every day: rotation carries the sign-in instant forward, so the
+    // lineage still ends at the cap however recently it refreshed.
+    let fixture = Fixture::working();
+    let signed_in_at = fixture.clock.now();
+    let cap_at = signed_in_at + SESSION_HARD_CAP;
+    let day = SignedDuration::from_hours(24);
+
+    let mut pair = login(&fixture).await;
+    while fixture.clock.now() + day < cap_at {
+        fixture.clock.advance(day);
+        pair = refresh(&fixture, &pair).await;
+    }
+
+    let open = fixture
+        .sessions
+        .sessions_for_user(&user())
+        .await
+        .expect("store answers");
+    assert_eq!(open.len(), 1, "one lineage, however many rotations");
+    assert_eq!(
+        open[0].signed_in_at, signed_in_at,
+        "a refresh carries the sign-in instant forward, it never resets it"
+    );
+    assert!(
+        fixture.clock.now() + SESSION_TTL > cap_at,
+        "the last rotation's sliding window would run past the cap"
+    );
+
+    // The last pair was minted with only what is left of the cap, not a whole window.
+    fixture
+        .clock
+        .advance(cap_at.duration_since(fixture.clock.now()) - SignedDuration::from_secs(1));
+    assert!(
+        fixture
+            .tokens
+            .verify(&pair.refresh_token, TokenKind::Refresh)
+            .is_ok(),
+        "a second before the cap the refresh token is live"
+    );
+    fixture.clock.advance(SignedDuration::from_secs(2));
+    assert!(
+        fixture
+            .tokens
+            .verify(&pair.refresh_token, TokenKind::Refresh)
+            .is_err(),
+        "past the cap the refresh token dies with its lineage"
+    );
+    assert!(
+        fixture
+            .sessions
+            .sessions_for_user(&user())
+            .await
+            .expect("store answers")
+            .is_empty(),
+        "and so does the session record, inside its sliding window"
+    );
+    let body: serde_json::Value = post_json!(
+        fixture.client,
+        "/v1/auth/refresh",
+        json!({ "refresh_token": pair.refresh_token })
+    )
+    .assert_status(StatusCode::UNAUTHORIZED)
+    .json();
+    assert_eq!(code_of(&body), "error.auth.session_expired");
+
+    // A fresh sign-in starts a fresh lineage.
+    let again = login(&fixture).await;
+    refresh(&fixture, &again).await;
+
+    fixture.client.assert_conformance();
+}
+
+#[tokio::test]
+async fn a_lowered_sliding_window_ends_an_idle_session_at_its_next_refresh() {
+    // A restart under a smaller `SESSION_TTL_DAYS`: the record was stored under the old window
+    // and is still held, but the session has been idle longer than the new one allows.
+    let fixture = Fixture::working();
+    let day = SignedDuration::from_hours(24);
+
+    let idle = login(&fixture).await;
+    fixture.clock.advance(day * 3);
+    let recent = login(&fixture).await;
+    fixture.clock.advance(day);
+    fixture.sessions.lower_lifetimes(day * 2, SESSION_HARD_CAP);
+
+    let body: serde_json::Value = post_json!(
+        fixture.client,
+        "/v1/auth/refresh",
+        json!({ "refresh_token": idle.refresh_token })
+    )
+    .assert_status(StatusCode::UNAUTHORIZED)
+    .json();
+    assert_eq!(
+        code_of(&body),
+        "error.auth.session_expired",
+        "four idle days are past the lowered two-day window, though inside the old seven"
+    );
+
+    // One idle day is inside the new window, so that session rotates as before.
+    refresh(&fixture, &recent).await;
+
+    fixture.client.assert_conformance();
+}
+
+#[tokio::test]
+async fn a_lowered_hard_cap_ends_a_lineage_past_it_rather_than_rotating_it() {
+    // A restart under a smaller `SESSION_HARD_CAP_DAYS`: the lineage is refreshed daily and so
+    // still live under the old cap, but already older than the new one. Rotating it would
+    // answer 200 with a successor that expired before it was opened.
+    let fixture = Fixture::working();
+    let day = SignedDuration::from_hours(24);
+
+    let mut pair = login(&fixture).await;
+    for _ in 0..10 {
+        fixture.clock.advance(day);
+        pair = refresh(&fixture, &pair).await;
+    }
+    fixture.sessions.lower_lifetimes(day * 2, day * 5);
+    fixture.clock.advance(SignedDuration::from_hours(1));
+
+    let body: serde_json::Value = post_json!(
+        fixture.client,
+        "/v1/auth/refresh",
+        json!({ "refresh_token": pair.refresh_token })
+    )
+    .assert_status(StatusCode::UNAUTHORIZED)
+    .json();
+    assert_eq!(
+        code_of(&body),
+        "error.auth.session_expired",
+        "a lineage ten days old is past the lowered five-day cap however recently it refreshed"
+    );
 
     fixture.client.assert_conformance();
 }
@@ -1120,10 +1311,10 @@ async fn activity_moves_the_listing_and_is_coalesced_to_one_write_a_minute() {
         "the listing shows when the session was last used"
     );
 
-    // And activity is not a lifetime extension. The store's TTL is absolute, so a session that
-    // has been touched every minute for a day is still closed on schedule — a sliding lifetime
-    // would be a caller-supplied TTL, which the store port does not take, wearing activity as a
-    // disguise.
+    // And activity is not a lifetime extension. Only a token issuance slides the window, so a
+    // session that has been touched every minute without refreshing is still closed on
+    // schedule — sliding on traffic would be a caller-supplied TTL, which the store port does
+    // not take, wearing activity as a disguise.
     fixture.clock.advance(SESSION_TTL);
     fixture
         .client
@@ -1167,6 +1358,10 @@ async fn registering_creates_an_account_and_signs_it_in() {
         .await
         .expect("the store answers");
     assert_eq!(open.len(), 1, "registration opened exactly one session");
+    assert_eq!(
+        fixture.activity_kinds(&verified.user).await,
+        [capsule_server::activity::ActivityKind::AccountRegistered]
+    );
     assert_eq!(
         open[0].authenticated_at,
         fixture.clock.now(),
@@ -1386,4 +1581,130 @@ async fn a_full_registration_limiter_is_a_429_and_not_an_outage() {
     assert_told_to_wait(&refused, &fixture, "error.auth.registration_at_capacity");
 
     fixture.client.assert_conformance();
+}
+
+// ===========================================================================================
+// PASSWORD_AUTH_DISABLED (#1004)
+// ===========================================================================================
+
+#[tokio::test]
+async fn an_oidc_only_server_refuses_registration_and_creates_nothing() {
+    let fixture = Fixture::without_passwords();
+    let body = json!({ "email": "new@example.test", "password": "correct horse battery staple" });
+
+    let problem: serde_json::Value = post_json!(fixture.client, "/v1/auth/register", body)
+        .assert_status(StatusCode::FORBIDDEN)
+        .json();
+    assert_eq!(code_of(&problem), "error.auth.password_disabled");
+
+    // Nothing was written: with passwords accepted again, the same address is still free.
+    fixture.passwords.set_disabled(false);
+    post_json!(fixture.client, "/v1/auth/register", body).assert_status(StatusCode::OK);
+
+    fixture.client.assert_conformance();
+}
+
+#[tokio::test]
+async fn an_oidc_only_server_refuses_an_existing_account_its_correct_password() {
+    // Every local account is refused, including one created before the switch: there is no
+    // break-glass account.
+    let fixture = Fixture::without_passwords();
+
+    let problem: serde_json::Value = post_json!(
+        fixture.client,
+        "/v1/auth/login",
+        json!({ "email": EMAIL, "password": PASSWORD })
+    )
+    .assert_status(StatusCode::FORBIDDEN)
+    .json();
+    assert_eq!(code_of(&problem), "error.auth.password_disabled");
+
+    let open = fixture
+        .sessions
+        .sessions_for_user(&user())
+        .await
+        .expect("store answers");
+    assert!(open.is_empty(), "a refused sign-in opens no session");
+
+    fixture.client.assert_conformance();
+}
+
+#[tokio::test]
+async fn an_oidc_only_server_refuses_before_the_account_directory_is_asked() {
+    // The directory is down and the account locked, and the answer is still the switch's rather
+    // than an outage or a lockout: the refusal comes before any password reaches a directory, so
+    // no Argon2 runs and no account's existence or lockout state is disclosed.
+    let fixture = Fixture::without_passwords();
+    fixture.accounts.set_unavailable(true);
+    fixture.accounts.lock(EMAIL);
+
+    for body in [
+        json!({ "email": EMAIL, "password": PASSWORD }),
+        json!({ "email": "nobody@example.test", "password": "wrong" }),
+    ] {
+        let problem: serde_json::Value = post_json!(fixture.client, "/v1/auth/login", body)
+            .assert_status(StatusCode::FORBIDDEN)
+            .json();
+        assert_eq!(code_of(&problem), "error.auth.password_disabled");
+    }
+    let problem: serde_json::Value = post_json!(
+        fixture.client,
+        "/v1/auth/register",
+        json!({ "email": "x", "password": "short" })
+    )
+    .assert_status(StatusCode::FORBIDDEN)
+    .json();
+    assert_eq!(
+        code_of(&problem),
+        "error.auth.password_disabled",
+        "refused before the body is validated, so a malformed one learns nothing either"
+    );
+
+    fixture.client.assert_conformance();
+}
+
+#[tokio::test]
+async fn an_oidc_only_server_refuses_a_password_reauthentication() {
+    // A session opened while passwords were accepted cannot present one afterwards.
+    let fixture = Fixture::working();
+    let pair = login(&fixture).await;
+    fixture.passwords.set_disabled(true);
+
+    let problem: serde_json::Value = fixture
+        .client
+        .post("/v1/auth/reauthenticate")
+        .header("accept", "application/json")
+        .header("authorization", &format!("Bearer {}", pair.access_token))
+        .json(&json!({ "password": PASSWORD }))
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN)
+        .json();
+    assert_eq!(code_of(&problem), "error.auth.password_disabled");
+
+    fixture.client.assert_conformance();
+}
+
+#[tokio::test]
+async fn server_info_says_whether_passwords_are_accepted() {
+    for (fixture, disabled) in [
+        (Fixture::working(), false),
+        (Fixture::without_passwords(), true),
+    ] {
+        let record: serde_json::Value = fixture
+            .client
+            .get("/.well-known/capsule/server-info")
+            .header("accept", "application/json")
+            .send()
+            .await
+            .assert_status(StatusCode::OK)
+            .json();
+        assert_eq!(record["auth"]["password_disabled"], json!(disabled));
+        // The login endpoint is still published: the route exists, and says why it refuses.
+        assert!(record["auth"]["login"].is_string());
+        // An OIDC-only record always names where to sign in instead.
+        assert!(record["auth"]["oidc"]["authorize"].is_string());
+
+        fixture.client.assert_conformance();
+    }
 }

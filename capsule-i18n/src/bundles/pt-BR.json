@@ -1802,6 +1802,7 @@
   "error.auth.oidc_state_invalid": "Esse login expirou. Comece novamente.",
   "error.auth.oidc_token_invalid": "Não foi possível verificar a resposta do seu provedor de identidade.",
   "error.auth.oidc_unavailable": "O Capsule não conseguiu acessar seu provedor de identidade agora. Tente novamente.",
+  "error.auth.password_disabled": "Este servidor só aceita login por logon único.",
   "error.auth.password_invalid": "Essa senha não pode ser usada.",
   "error.auth.profile_invalid": "Esse nome de exibição não pode ser usado.",
   "error.auth.profile_not_found": "Essa conta não existe mais.",

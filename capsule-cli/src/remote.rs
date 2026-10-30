@@ -12,6 +12,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
+use capsule_core::crypto::encryption::blob_ciphertext_hash;
 use capsule_core::crypto::keys::{HybridVerifyingKey, MasterKey};
 use capsule_core::crypto::primitives::{Argon2Params, DeviceTier};
 use capsule_library::import::UploadPolicy;
@@ -27,6 +28,7 @@ use capsule_sdk::directory::{DirectoryClient, DirectoryError};
 use capsule_sdk::events::TransferEvents;
 use capsule_sdk::fetch::HttpBlobSource;
 use capsule_sdk::net::ConnectionClass;
+use capsule_sdk::net::path::TransferPlan;
 use capsule_sdk::push::{self, PushError};
 use capsule_sdk::recovery::{MintedSecret, RecoveryClient, RecoveryError};
 use capsule_sdk::staged::{StagedScheduler, TierSessionOutcome, held_from_feed};
@@ -188,6 +190,9 @@ pub enum RemoteError {
     /// The account profile could not be read, so the account's server id is unknown.
     #[error("the account profile could not be read: {0}")]
     Profile(String),
+    /// The account activity log could not be read (`capsule auth activity`).
+    #[error("the account activity log could not be read: {0}")]
+    Activity(String),
     /// The recovery secret did not open this account's escrow.
     #[error("the recovery secret does not open this account's escrow")]
     WrongRecoverySecret,
@@ -335,6 +340,81 @@ pub async fn auth_logout(remote: &RemoteConfig, store: &SessionStore) -> Result<
     revoke?;
     tracing::info!("logout revoked server-side and cleared the session store");
     Ok(true)
+}
+
+/// One event of the signed-in account's activity log, as `capsule auth activity` prints it.
+///
+/// The server's own fields, unchanged: the kind is its stable token (`sign_in.password`,
+/// `session.revoked`, ...), so a script matches on what the server sent rather than on a
+/// rendering of it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ActivityEntry {
+    /// The server's id for the event.
+    pub event_id: String,
+    /// What happened.
+    pub kind: String,
+    /// When, RFC 3339.
+    pub at: String,
+    /// The `X-Request-Id` of the request that caused it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
+    /// The session that acted, when one did.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// What the event is about: a session, a share link or a drop link.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subject: Option<String>,
+}
+
+/// `capsule auth activity`: the signed-in account's activity log, newest first.
+///
+/// At most `limit` events, or the server's default page when `None`.
+///
+/// # Errors
+///
+/// [`RemoteError::NotAuthenticated`] with no stored session, and [`RemoteError::Activity`] when
+/// the server cannot be reached or refuses.
+#[instrument(skip(store))]
+pub async fn auth_activity(
+    remote: &RemoteConfig,
+    store: &SessionStore,
+    limit: Option<u32>,
+) -> Result<Vec<ActivityEntry>, RemoteError> {
+    let session = resume_session(remote, store).await?;
+    let read = read_activity(&remote.sync_endpoint, session.clone(), limit).await;
+    checkpoint(store, &session).await;
+    let events = read?;
+    tracing::info!(events = events.len(), "read the account activity log");
+    Ok(events)
+}
+
+/// The listing itself, over a session somebody else persists.
+async fn read_activity(
+    api_root: &str,
+    session: Session,
+    limit: Option<u32>,
+) -> Result<Vec<ActivityEntry>, RemoteError> {
+    let client = AuthenticatedClient::new(api_root, session)
+        .map_err(|error| RemoteError::Activity(error.to_string()))?;
+    let params =
+        limit.map(|limit| capsule_sdk::rest::ListActivityParams::default().limit(i64::from(limit)));
+    let response = client
+        .list_activity(capsule_core::crypto::primitives::PROTOCOL_VERSION, params)
+        .await
+        .map_err(|error| RemoteError::Activity(error.to_string()))?
+        .into_inner();
+    Ok(response
+        .events
+        .into_iter()
+        .map(|event| ActivityEntry {
+            event_id: event.event_id,
+            kind: event.kind,
+            at: event.at,
+            request_id: event.request_id,
+            session_id: event.session_id,
+            subject: event.subject,
+        })
+        .collect())
 }
 
 /// Resume the stored session, and hand back a guard that persists whatever it rotated to.
@@ -1008,8 +1088,8 @@ async fn sync_with<C: ConnectionTrait + TransactionTrait>(
     };
     let mut albums = std::collections::HashSet::new();
     let mut resynced = false;
-    // The latest server clock reading among the landed entries, which floors the device clock
-    // the retention sweep judges deadlines at.
+    // The latest server clock reading among the landed entries: the only instant the retention
+    // sweep judges deadlines at.
     let mut server_clock = None;
 
     loop {
@@ -1051,10 +1131,14 @@ async fn sync_with<C: ConnectionTrait + TransactionTrait>(
     }
     if !dry_run {
         // Only here, at the feed's head: a delete landed on one page may be restored on a later
-        // one, and sweeping before that page lands would tombstone a restored asset for good. A
-        // run that landed no page still owes the sweep, since a window closes on the clock.
-        let at = syncstore::judged_at(jiff::Timestamp::now(), server_clock);
-        syncstore::record_elapsed_purges(db, at).await?;
+        // one, and sweeping before that page lands would tombstone a restored asset for good.
+        // Judged by the server's clock as the drain saw it, never this device's: a run that
+        // landed no entry has no reading, so it leaves the sweep to the next one that does.
+        if let Some(at) = server_clock {
+            syncstore::record_elapsed_purges(db, at).await?;
+        } else {
+            tracing::debug!("sync: the drain saw no server clock reading; no window is judged");
+        }
     }
 
     summary.albums = albums.len();
@@ -1083,8 +1167,13 @@ pub struct PushOptions {
     /// `Full` opens every tier eagerly; `Staged` gates the above-index tiers on the
     /// connection class.
     pub policy: UploadPolicy,
-    /// The detected connection class the staged tier gate consults.
+    /// The detected connection class: it sizes the upload chunks, and gates the staged tiers
+    /// when there is no `path` plan.
     pub connection: ConnectionClass,
+    /// The plan the path snapshot made ([`crate::cache::path_plan`]); when present it gates
+    /// the staged tiers on the whole path — power, heat and the background deadline too — not
+    /// the class alone.
+    pub path: Option<TransferPlan>,
 }
 
 impl Default for PushOptions {
@@ -1094,6 +1183,7 @@ impl Default for PushOptions {
             force: false,
             policy: UploadPolicy::Full,
             connection: ConnectionClass::Unmetered,
+            path: None,
         }
     }
 }
@@ -1113,6 +1203,11 @@ pub enum AssetPushStatus {
     /// still inside its deadline ([`PushRun::delegated`]), so that device uploads it. Not a
     /// failure; a re-queued delegation is pushed like any other asset.
     Delegated,
+    /// Skipped: the server already holds the asset's create (its feed lists the asset and holds
+    /// the original the create pins), and an edit since replaced the metadata blob that create
+    /// binds, so the library cannot rebuild the create and nothing of it is left to upload. Not
+    /// a failure; the records after the create reach the server in `live_records`.
+    Indexed,
 }
 
 /// Why an asset failed, in the shape `--json` reports it.
@@ -1122,7 +1217,11 @@ pub struct AssetPushFailure {
     /// `reseal`, `unknown_blob`, `verify_unavailable`, `not_durable`, `receipt_missing`,
     /// `receipt_rejected`, `receipt_store` or `album_keys_not_escrowed`.
     pub kind: &'static str,
-    /// The server's stable `error.*` code, when it supplied one.
+    /// The server's stable `error.*` code, when it supplied one. For a blob the server refused
+    /// at finalization — `error.upload.content_hash_mismatch`, `envelope_rejected`,
+    /// `replace_incomplete`, `stale_revival` — it is the code the session's terminal
+    /// `failed_processing` state carried (`X-Capsule-Upload-Error`), which the transfer reads
+    /// from `HEAD` once the server has finished finalizing.
     pub code: Option<String>,
     /// The English detail.
     pub message: String,
@@ -1135,7 +1234,9 @@ pub struct AssetPushOutcome {
     pub asset_id: String,
     /// Where the asset ended up.
     pub status: AssetPushStatus,
-    /// Blobs transferred to completion this run (planned, on a dry run).
+    /// Blobs transferred to their terminal outcome this run: every byte sent and the session
+    /// reported `completed` once the server finished finalizing it (planned, on a dry run). A
+    /// blob finalization refused is the asset's `error` instead.
     pub uploaded: usize,
     /// Blobs the server already held and merged onto (`duplicate_blob`).
     pub merged: usize,
@@ -1249,6 +1350,9 @@ pub struct PushSummary {
     /// Assets skipped because another device of the account holds an open hand-off for them
     /// ([`AssetPushStatus::Delegated`]).
     pub delegated_assets: usize,
+    /// Assets skipped because the server already holds their create and an edit since replaced
+    /// the metadata blob it binds ([`AssetPushStatus::Indexed`]).
+    pub indexed_assets: usize,
     /// Assets skipped because they are in the trash: a deleted asset's upload is redacted, so
     /// nothing of it is planned or sent and it has no entry in `outcomes`.
     pub trashed_assets: usize,
@@ -1256,11 +1360,20 @@ pub struct PushSummary {
     /// yet: its `delete`, held until the server indexed the asset's create, is sent once the
     /// feed lists it, whichever device uploaded it (Organization — Deletion State Machine). One
     /// entry per trashed asset with a record to send or still held; none for one the server is
-    /// level with, and none on a dry run or under `--force`, which read no server truth.
+    /// level with, and none on a dry run or under `--force`, which read no server truth. A
+    /// purged asset's kept chain is delivered the same way, from the tombstone, once the feed
+    /// lists it with a head before the chain's.
     pub held_records: Vec<TrashOutcome>,
+    /// What the run did with the records after the create of each live asset it considered:
+    /// an upload carries only the create, so a delete, a restore or an edit signed since is sent
+    /// as a lifecycle op once the server has indexed the create, read off a feed drained after
+    /// this run's uploads (Organization — Deletion State Machine). One entry per live asset
+    /// whose chain the server is not level with; none for a lone create, none for an asset
+    /// handed to another device, and none on a dry run.
+    pub live_records: Vec<TrashOutcome>,
     /// Verified custody receipts persisted to the library this run.
     pub receipts: usize,
-    /// Blobs transferred to completion.
+    /// Blobs transferred and finalized: the server reported each session `completed`.
     pub uploaded_blobs: usize,
     /// Blobs the server already held and merged onto (`duplicate_blob`).
     pub merged_blobs: usize,
@@ -1329,25 +1442,27 @@ fn blobs_held(entries: &[FeedEntry]) -> HashSet<String> {
     held
 }
 
-/// Send the lifecycle records of each `trashed` asset the server does not hold yet, now that
+/// Send the lifecycle records of each of `assets` the server does not hold yet, now that
 /// `chains` says which creates it has indexed ([`deliver_chain`]). An asset the server is level
-/// with has no entry; one whose create is still not indexed is reported held.
+/// with has no entry; one whose create is still not indexed is reported held. An outcome
+/// carries a `retention_until` only for an asset in the trash.
 async fn deliver_held_records(
     remote: &RemoteConfig,
     session: &Session,
     workspace: &Workspace,
-    trashed: &[Uuid],
+    assets: &[Uuid],
     chains: &held::ServerChains,
 ) -> Vec<TrashOutcome> {
     let mut outcomes = Vec::new();
-    for asset_id in trashed {
+    for asset_id in assets {
         let Some(asset) = workspace.asset(asset_id) else {
             continue;
         };
         if chains.is_level(asset_id, asset.chain.records()) {
-            tracing::debug!(%asset_id, "push: the server holds this trashed asset's head; nothing to send");
+            tracing::debug!(%asset_id, "push: the server holds this asset's head; nothing to send");
             continue;
         }
+        let trashed = workspace.is_trashed(asset_id);
         let delivered = deliver_chain(
             remote,
             session,
@@ -1358,10 +1473,101 @@ async fn deliver_held_records(
         )
         .await;
         let outcome = TrashOutcome {
-            retention_until: trashed_until(asset),
+            retention_until: trashed.then(|| trashed_until(asset)).flatten(),
             ..trash_outcome(*asset_id, delivered, trashed_until(asset))
         };
-        tracing::info!(%asset_id, status = ?outcome.status, "push: a trashed asset's held records");
+        tracing::info!(%asset_id, trashed, status = ?outcome.status, "push: an asset's held records");
+        outcomes.push(outcome);
+    }
+    outcomes
+}
+
+/// Send the records after the create of each `live` asset, once this run's uploads are done:
+/// the feed is drained afresh, so a create this run uploaded is indexed by the time its later
+/// records are judged ([`deliver_held_records`]). A feed that cannot be read sends nothing, and
+/// each asset fails as `unavailable`, which a re-run clears.
+async fn deliver_live_records(
+    remote: &RemoteConfig,
+    session: &Session,
+    workspace: &Workspace,
+    live: &[Uuid],
+) -> Vec<TrashOutcome> {
+    if live.is_empty() {
+        return Vec::new();
+    }
+    tracing::info!(
+        assets = live.len(),
+        "push: delivering the records after each live asset's create"
+    );
+    match server_chains(remote, session.clone()).await {
+        Ok(chains) => deliver_held_records(remote, session, workspace, live, &chains).await,
+        Err(message) => live
+            .iter()
+            .map(|asset_id| {
+                failed_trash(
+                    *asset_id,
+                    TrashFailure {
+                        kind: "unavailable",
+                        code: None,
+                        message: format!(
+                            "the server's feed could not be read after the uploads, so whether \
+                             it has indexed the asset is unknown; its later records are held in \
+                             the library and nothing was sent: {message}"
+                        ),
+                        permanent: false,
+                        retention_until: None,
+                    },
+                )
+            })
+            .collect(),
+    }
+}
+
+/// Send the stretch of each `purged` asset's kept chain the server lacks, from the tombstone
+/// ([`deliver_chain`]): the held `delete`, and the shorter-retention re-issue an early purge
+/// appended, once another device's upload of the create is indexed. The server then purges by
+/// that re-issued window.
+///
+/// Only an asset the feed lists with a head record, and not the chain's own head, has anything
+/// to send. One the feed does not list has no entry: its create may never reach the server, and
+/// a purged asset has no upload of its own to wait for, so it is not reported held on every
+/// run. One listed by an entry that carries no record (the server purged it too, or an older
+/// server) has no entry either: there is no head to chain onto.
+async fn deliver_purged_records(
+    remote: &RemoteConfig,
+    session: &Session,
+    workspace: &Workspace,
+    purged: &[Uuid],
+    chains: &held::ServerChains,
+) -> Vec<TrashOutcome> {
+    let mut outcomes = Vec::new();
+    for asset_id in purged {
+        let Some(records) = workspace.purged_chain(asset_id) else {
+            continue;
+        };
+        if !matches!(chains.head(asset_id), Some(Some(_))) {
+            tracing::debug!(%asset_id, "push: the feed lists no head for this purged asset; nothing to send");
+            continue;
+        }
+        if chains.is_level(asset_id, records) {
+            tracing::debug!(%asset_id, "push: the server holds this purged asset's head; nothing to send");
+            continue;
+        }
+        let until = latest_delete_until(records);
+        let delivered = deliver_chain(
+            remote,
+            session,
+            workspace,
+            asset_id,
+            chains,
+            jiff::Timestamp::now(),
+        )
+        .await;
+        let outcome = TrashOutcome {
+            retention_until: until.clone(),
+            ..trash_outcome(*asset_id, delivered, until)
+        };
+        tracing::info!(%asset_id, status = ?outcome.status, "push: a purged asset's held records, sent from its tombstone");
         outcomes.push(outcome);
     }
     outcomes
@@ -1644,9 +1850,18 @@ async fn push_with(
     options: PushOptions,
     mut run: PushRun<'_>,
 ) -> Result<PushSummary, RemoteError> {
-    let asset_ids = match run.assets.take() {
-        Some(assets) => distinct(assets),
-        None => workspace.asset_ids(),
+    // A purged asset has nothing to upload, but its kept chain may still hold a `delete` (and an
+    // early purge's re-issue) the server never saw: another device may upload its create later,
+    // and the stretch is then sent from the tombstone. Every tombstone on a whole-library run;
+    // only the named ones on a scoped run.
+    let (asset_ids, purged): (Vec<Uuid>, Vec<Uuid>) = match run.assets.take() {
+        Some(assets) => distinct(assets)
+            .into_iter()
+            .partition(|asset_id| workspace.purge_record(asset_id).is_none()),
+        None => (
+            workspace.asset_ids(),
+            workspace.tombstones().into_iter().collect(),
+        ),
     };
     let mut summary = PushSummary {
         assets: asset_ids.len(),
@@ -1679,24 +1894,29 @@ async fn push_with(
         summary.album_keys_escrowed = escrows.stored;
         uncovered = escrows.uncovered;
     }
-    if asset_ids.is_empty() && (trashed.is_empty() || options.dry_run || options.force) {
+    let nothing_held = trashed.is_empty() && purged.is_empty();
+    if asset_ids.is_empty() && (nothing_held || options.dry_run || options.force) {
         tracing::info!("push: the library holds no assets to push");
         return Ok(summary);
     }
 
     // Server truth first — the whole resume story. `--force` deliberately reads nothing.
-    let held = if options.force {
+    let (held, indexed) = if options.force {
         tracing::info!("push: --force, re-driving every blob regardless of server truth");
-        HashSet::new()
+        (HashSet::new(), HashSet::new())
     } else {
         let entries = drain_feed(remote, session.clone(), DEFAULT_SYNC_PAGE_SIZE).await?;
         let held = blobs_held(&entries);
+        let chains = held::ServerChains::from_feed(&entries);
         if !options.dry_run {
-            let chains = held::ServerChains::from_feed(&entries);
             summary.held_records =
                 deliver_held_records(remote, &session, workspace, &trashed, &chains).await;
+            summary.held_records.extend(
+                deliver_purged_records(remote, &session, workspace, &purged, &chains).await,
+            );
         }
-        held
+        let indexed = creates_on_server(workspace, &asset_ids, &chains, &held);
+        (held, indexed)
     };
     if asset_ids.is_empty() {
         summary.log();
@@ -1716,17 +1936,27 @@ async fn push_with(
     ));
     // `sync_endpoint` is the bare server origin; the storage and receipt routes hang off `/v1`.
     let verify = StorageVerifyClient::new(VerifyTransport::with_session(
-        session,
+        session.clone(),
         format!("{}/v1", remote.sync_endpoint.trim_end_matches('/')),
     ));
-    let scheduler = StagedScheduler::new(options.policy, options.connection);
+    let scheduler = match &options.path {
+        Some(plan) => StagedScheduler::from_plan(plan, options.policy),
+        None => StagedScheduler::new(options.policy, options.connection),
+    };
 
     if options.dry_run {
         for asset_id in asset_ids {
             let outcome = if run.delegated.contains(&asset_id) {
                 delegated(asset_id)
             } else {
-                plan_asset(workspace, &scheduler, &held, options.force, asset_id)
+                plan_asset(
+                    workspace,
+                    &scheduler,
+                    &held,
+                    &indexed,
+                    options.force,
+                    asset_id,
+                )
             };
             run.tell(|| AssetProgress::Finished(outcome.clone()));
             summary.record(outcome);
@@ -1739,6 +1969,21 @@ async fn push_with(
     // could be confirmed: that is a failure of the run, not of an asset.
     let attestation_keys = pinned_attestation_keys(remote, workspace, &verify).await?;
 
+    // An upload carries only an asset's create, so every live asset whose chain moved past it
+    // (a delete and a restore, or an edit) has records to deliver as lifecycle ops once the
+    // server indexes the create, whether this run uploads it or another device did. An asset
+    // handed to another device is left to its hand-off.
+    let later_records: Vec<Uuid> = asset_ids
+        .iter()
+        .filter(|asset_id| !run.delegated.contains(asset_id))
+        .filter(|asset_id| {
+            workspace
+                .asset(asset_id)
+                .is_some_and(|asset| asset.chain.records().len() > 1)
+        })
+        .copied()
+        .collect();
+
     let mut pusher = AssetPusher {
         workspace,
         upload,
@@ -1748,6 +1993,7 @@ async fn push_with(
         attestation_keys,
         scheduler,
         held,
+        indexed,
         force: options.force,
         provisioned: HashSet::new(),
         uncovered,
@@ -1771,6 +2017,8 @@ async fn push_with(
         run.tell(|| AssetProgress::Finished(outcome.clone()));
         summary.record(outcome);
     }
+    summary.live_records =
+        deliver_live_records(remote, &session, pusher.workspace, &later_records).await;
     summary.log();
     Ok(summary)
 }
@@ -1822,12 +2070,14 @@ fn plan_asset<H: std::hash::BuildHasher>(
     workspace: &Workspace,
     scheduler: &StagedScheduler,
     held: &HashSet<String, H>,
+    indexed: &HashSet<Uuid>,
     force: bool,
     asset_id: Uuid,
 ) -> AssetPushOutcome {
     let mut outcome = AssetPushOutcome::new(asset_id, AssetPushStatus::Planned);
-    match workspace.upload_bundle(&asset_id) {
-        Ok(bundle) => {
+    match create_bundle(workspace, indexed, asset_id) {
+        Ok(None) => outcome.status = AssetPushStatus::Indexed,
+        Ok(Some(bundle)) => {
             let planned = push::plan(scheduler, &bundle, held, force);
             outcome.uploaded = planned.blobs.len();
             outcome.already_held = planned.already_held;
@@ -1846,6 +2096,73 @@ fn plan_asset<H: std::hash::BuildHasher>(
         }
     }
     outcome
+}
+
+/// The assets of `asset_ids` whose create the server already holds: its feed lists the asset
+/// and holds the original that create pins. Nothing of such a create is left to upload.
+fn creates_on_server<H: std::hash::BuildHasher>(
+    workspace: &Workspace,
+    asset_ids: &[Uuid],
+    chains: &held::ServerChains,
+    held: &HashSet<String, H>,
+) -> HashSet<Uuid> {
+    let indexed: HashSet<Uuid> = asset_ids
+        .iter()
+        .filter(|asset_id| chains.head(asset_id).is_some())
+        .filter(|asset_id| {
+            workspace.asset(asset_id).is_some_and(|asset| {
+                asset.chain.records().first().is_some_and(|create| {
+                    held.contains(&create.manifest.core.ciphertext_hash.to_hex())
+                })
+            })
+        })
+        .copied()
+        .collect();
+    tracing::debug!(
+        assets = asset_ids.len(),
+        indexed = indexed.len(),
+        "push: assets whose create the server already holds"
+    );
+    indexed
+}
+
+/// `asset_id`'s upload bundle, or `None` when there is nothing of its create to upload: the
+/// server already holds it (`indexed`), and an edit since replaced the metadata blob it binds.
+/// Such an asset is skipped before its bundle is built, whether or not the library kept the
+/// create's blob ([`Workspace::create_metadata_blob_path`]): the create's index rung is on the
+/// server already, and a library edited before the blob was kept could not rebuild it
+/// ([`LifecycleError::CreateMetadataSuperseded`]). The records after the create are delivered
+/// as lifecycle ops ([`deliver_live_records`]), so such an asset is never a failure.
+///
+/// One the server does not hold yet uploads its create with the kept blob; only a library that
+/// kept none still fails, because its create has to be uploaded and cannot be.
+fn create_bundle(
+    workspace: &Workspace,
+    indexed: &HashSet<Uuid>,
+    asset_id: Uuid,
+) -> Result<Option<capsule_library::lifecycle::UploadBundle>, LifecycleError> {
+    if indexed.contains(&asset_id) && create_metadata_superseded(workspace, &asset_id) {
+        tracing::info!(
+            %asset_id,
+            "push: skipped; the server holds this asset's create, which an edit here has \
+             superseded, so nothing of it is uploaded"
+        );
+        return Ok(None);
+    }
+    workspace.upload_bundle(&asset_id).map(Some)
+}
+
+/// Whether an edit replaced the metadata blob `asset_id`'s create binds, so the asset's current
+/// blob is no longer the create's. `false` for an unknown asset and for a create that binds none.
+fn create_metadata_superseded(workspace: &Workspace, asset_id: &Uuid) -> bool {
+    workspace.asset(asset_id).is_some_and(|asset| {
+        asset
+            .chain
+            .records()
+            .first()
+            .and_then(|create| create.manifest.core.metadata_blob_hash)
+            .is_some_and(|bound| blob_ciphertext_hash(&asset.metadata_blob) != bound)
+    })
 }
 
 /// The outcome of an asset skipped because another device holds its open hand-off: nothing of
@@ -1869,6 +2186,8 @@ struct AssetPusher<'a> {
     attestation_keys: Vec<HybridVerifyingKey>,
     scheduler: StagedScheduler,
     held: HashSet<String>,
+    /// Assets whose create the server already holds ([`creates_on_server`]).
+    indexed: HashSet<Uuid>,
     force: bool,
     /// Albums registered this run. Provisioning is idempotent server-side, so this only saves
     /// making the same request once per asset; an album whose registration failed is not in
@@ -1891,7 +2210,10 @@ impl AssetPusher<'_> {
         summary: &mut PushSummary,
         run: &mut PushRun<'_>,
     ) -> Result<(), AssetError> {
-        let bundle = self.workspace.upload_bundle(&asset_id)?;
+        let Some(bundle) = create_bundle(self.workspace, &self.indexed, asset_id)? else {
+            outcome.status = AssetPushStatus::Indexed;
+            return Ok(());
+        };
         run.tell(|| started(&bundle));
         if self.uncovered.contains(&bundle.album_id) {
             return Err(AssetError::KeysNotEscrowed(bundle.album_id));
@@ -2021,6 +2343,7 @@ impl PushSummary {
             AssetPushStatus::Verified => self.verified_assets += 1,
             AssetPushStatus::Failed => self.failed_assets += 1,
             AssetPushStatus::Delegated => self.delegated_assets += 1,
+            AssetPushStatus::Indexed => self.indexed_assets += 1,
             AssetPushStatus::Planned => {}
         }
         self.outcomes.push(outcome);
@@ -2037,7 +2360,10 @@ impl PushSummary {
             verified_assets = self.verified_assets,
             failed_assets = self.failed_assets,
             delegated_assets = self.delegated_assets,
+            indexed_assets = self.indexed_assets,
             trashed_assets = self.trashed_assets,
+            held_records = self.held_records.len(),
+            live_records = self.live_records.len(),
             receipts = self.receipts,
             uploaded = self.uploaded_blobs,
             merged = self.merged_blobs,
@@ -2065,6 +2391,14 @@ pub fn custody_line(summary: &PushSummary) -> String {
             summary.delegated_assets
         );
     }
+    if summary.indexed_assets > 0 {
+        let _ = write!(
+            line,
+            " Skipped {} the server already holds; an edit here replaced what their upload \
+             carried, so only the records after it are sent.",
+            summary.indexed_assets
+        );
+    }
     if summary.trashed_assets > 0 {
         let _ = write!(
             line,
@@ -2072,34 +2406,56 @@ pub fn custody_line(summary: &PushSummary) -> String {
             summary.trashed_assets
         );
     }
-    let count = |status| {
-        summary
-            .held_records
+    let count = |outcomes: &[TrashOutcome], status| {
+        outcomes
             .iter()
             .filter(|outcome| outcome.status == status)
             .count()
     };
     let (sent, held, failed) = (
-        count(TrashStatus::Applied),
-        count(TrashStatus::Held),
-        count(TrashStatus::Failed),
+        count(&summary.held_records, TrashStatus::Applied),
+        count(&summary.held_records, TrashStatus::Held),
+        count(&summary.held_records, TrashStatus::Failed),
     );
     if sent > 0 {
         let _ = write!(
             line,
-            " Sent the held delete of {sent} trashed assets the server now indexes."
+            " Sent the held delete of {sent} deleted assets the server now indexes."
         );
     }
     if held > 0 {
         let _ = write!(
             line,
-            " {held} trashed assets keep their delete held in the library."
+            " {held} deleted assets keep their delete held in the library."
         );
     }
     if failed > 0 {
         let _ = write!(
             line,
-            " {failed} trashed assets' held records were not applied; `--json` says why."
+            " {failed} deleted assets' held records were not applied; `--json` says why."
+        );
+    }
+    let (sent, held, failed) = (
+        count(&summary.live_records, TrashStatus::Applied),
+        count(&summary.live_records, TrashStatus::Held),
+        count(&summary.live_records, TrashStatus::Failed),
+    );
+    if sent > 0 {
+        let _ = write!(
+            line,
+            " Sent the records after the create of {sent} assets the server now indexes."
+        );
+    }
+    if held > 0 {
+        let _ = write!(
+            line,
+            " {held} assets keep the records after their create held in the library."
+        );
+    }
+    if failed > 0 {
+        let _ = write!(
+            line,
+            " {failed} assets' records after their create were not applied; `--json` says why."
         );
     }
     line
@@ -2154,7 +2510,7 @@ pub fn delete_op(
     if head.manifest.core.action != capsule_core::crypto::provenance::Action::Delete {
         return Ok(None);
     }
-    encode_op(asset, head).map(Some)
+    encode_op(asset_id, Some(&asset.metadata_blob), head).map(Some)
 }
 
 /// The `POST /v1/albums/{album}/ops` bodies that carry `asset_id`'s chain from the record whose
@@ -2180,10 +2536,11 @@ pub fn lifecycle_ops_after(
     after: Option<capsule_core::crypto::hash::Hash32>,
 ) -> Result<Vec<Vec<u8>>, LifecycleError> {
     use capsule_core::crypto::provenance::Action;
-    let Some(asset) = workspace.asset(asset_id) else {
+    // A purged asset's stretch is read from the chain its purge kept, the tombstone.
+    let Some(chain) = held::local_chain(workspace, asset_id) else {
         return Ok(Vec::new());
     };
-    let tail = held::after_head(asset.chain.records(), after);
+    let tail = held::after_head(chain.records, after);
     if !tail
         .iter()
         .any(|r| r.manifest.core.action == Action::Delete)
@@ -2191,12 +2548,17 @@ pub fn lifecycle_ops_after(
         return Ok(Vec::new());
     }
     tracing::debug!(%asset_id, records = tail.len(), "lifecycle ops: the stretch after the sealed head");
-    tail.iter().map(|record| encode_op(asset, record)).collect()
+    tail.iter()
+        .map(|record| encode_op(asset_id, chain.metadata_blob, record))
+        .collect()
 }
 
-/// One provenance record of `asset` as the JSON body of a lifecycle op.
+/// One provenance record of `asset_id` as the JSON body of a lifecycle op. `metadata_blob` is
+/// the sealed blob the library holds for the asset (`None` once a purge removed it); a record
+/// that binds a blob carries it only when it is the one the record commits to.
 fn encode_op(
-    asset: &capsule_library::lifecycle::AssetState,
+    asset_id: &Uuid,
+    metadata_blob: Option<&[u8]>,
     record: &capsule_core::crypto::provenance::ProvenanceRecord,
 ) -> Result<Vec<u8>, LifecycleError> {
     use base64::Engine as _;
@@ -2205,15 +2567,17 @@ fn encode_op(
         .map_err(|e| LifecycleError::Cbor(format!("encoding the provenance record: {e}")))?;
     let base64 = base64::engine::general_purpose::STANDARD;
     let blob = core.metadata_blob_hash.and_then(|hash| {
-        let held = capsule_core::crypto::encryption::blob_ciphertext_hash(&asset.metadata_blob);
-        if held != hash {
+        let held = metadata_blob
+            .filter(|blob| capsule_core::crypto::encryption::blob_ciphertext_hash(blob) == hash);
+        if held.is_none() {
             tracing::warn!(
-                asset_id = %asset.asset_id,
+                %asset_id,
                 action = ?core.action,
-                "lifecycle op: the metadata blob this record binds was superseded; sent without it"
+                purged = metadata_blob.is_none(),
+                "lifecycle op: the library no longer holds the metadata blob this record binds; sent without it"
             );
         }
-        (held == hash).then(|| base64.encode(&asset.metadata_blob))
+        held.map(|blob| base64.encode(blob))
     });
     let request = capsule_sdk::rest::types::OpRequest {
         manifest_envelope: op_envelope(core),
@@ -2718,7 +3082,11 @@ pub(crate) enum Delivered {
 
 /// Send what of `asset_id`'s chain may go to the server now ([`held::plan`]): nothing while the
 /// server has not indexed the asset's create, otherwise every record after the head it holds,
-/// in chain order, each once the one before it was applied.
+/// in chain order, each once the one before it was applied. The chain is the library's
+/// ([`held::local_chain`]): a purged asset's is the one its purge kept, so the held `delete` and
+/// the re-issue an early purge appended are sent from the tombstone. A library holding neither
+/// is a failure that is not [`permanent`](OpFailure::permanent): nothing shows the records
+/// cannot be delivered by a later run.
 #[instrument(skip(remote, session, workspace, chains, now))]
 pub(crate) async fn deliver_chain(
     remote: &RemoteConfig,
@@ -2736,10 +3104,21 @@ pub(crate) async fn deliver_chain(
             permanent: true,
         })
     };
-    let Some(asset) = workspace.asset(asset_id) else {
-        return library_failure(format!("the library holds no asset {asset_id}"));
+    // A purged asset's chain is the one its purge kept, so its held records outlive the purge.
+    // A library that holds neither the asset nor its tombstone (one this build could not read,
+    // say) has nothing to send now, but the records it owes the server are not shown to be
+    // undeliverable: the failure is not permanent, so a caller that keeps work for a later run
+    // keeps it rather than dropping a delete the server never received.
+    let Some(chain) = held::local_chain(workspace, asset_id) else {
+        tracing::warn!(%asset_id, "held records: the library holds neither the asset nor its tombstone; nothing sent");
+        return Delivered::Failed(OpFailure {
+            kind: "library",
+            code: None,
+            message: format!("the library holds no asset {asset_id}"),
+            permanent: false,
+        });
     };
-    let records = asset.chain.records();
+    let records = chain.records;
     let stretch = match held::plan(records, chains.head(asset_id), chains.judging_clock(now)) {
         held::Delivery::Held {
             reason,
@@ -2755,7 +3134,7 @@ pub(crate) async fn deliver_chain(
     };
     let mut last = None;
     for record in stretch {
-        let op = match encode_op(asset, record) {
+        let op = match encode_op(asset_id, chain.metadata_blob, record) {
             Ok(op) => op,
             Err(error) => return library_failure(error.to_string()),
         };
@@ -2885,9 +3264,14 @@ fn prepare_trash_op(
 /// The signed retention floor of the latest `delete` in `asset`'s chain: the one a restore
 /// undoes, and so the one the server judges it against.
 fn trashed_until(asset: &capsule_library::lifecycle::AssetState) -> Option<String> {
-    asset
-        .chain
-        .records()
+    latest_delete_until(asset.chain.records())
+}
+
+/// The signed `retention_until` of the latest `delete` in `records` (a chain, oldest first).
+fn latest_delete_until(
+    records: &[capsule_core::crypto::provenance::ProvenanceRecord],
+) -> Option<String> {
+    records
         .iter()
         .rev()
         .find(|record| {
@@ -3030,19 +3414,21 @@ async fn release_moved_with(
     Ok(release_sources(workspace, &verifier, moved))
 }
 
-/// The custody question for each distinct asset behind `moved`. An asset whose bundle cannot be
-/// built is left out, so the verifier cannot answer for it and its source is kept.
+/// The custody question for each distinct asset behind `moved`, read off its chain head as the
+/// release gate declares it ([`HeldRelease::for_head`]), so an asset edited since its create is
+/// asked about like any other. An asset the library does not hold is left out, so the verifier
+/// cannot answer for it and its source is kept.
 fn held_releases(workspace: &Workspace, moved: &[MovedSource]) -> Vec<HeldRelease> {
     let mut seen = HashSet::new();
     moved
         .iter()
         .filter(|m| seen.insert(m.asset_id))
-        .filter_map(|m| match workspace.upload_bundle(&m.asset_id) {
-            Ok(bundle) => Some(HeldRelease::for_original(&bundle)),
-            Err(error) => {
-                tracing::warn!(asset_id = %m.asset_id, %error, "move release: no bundle; the source is kept");
-                None
+        .filter_map(|m| {
+            let release = workspace.asset(&m.asset_id).map(HeldRelease::for_head);
+            if release.is_none() {
+                tracing::warn!(asset_id = %m.asset_id, "move release: the library does not hold the asset; the source is kept");
             }
+            release
         })
         .collect()
 }
@@ -3209,4 +3595,4 @@ pub(crate) mod held;
 pub use held::HoldReason;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

@@ -552,6 +552,27 @@ impl Workspace {
         Ok(())
     }
 
+    /// Durably keep `blob`, the sealed metadata blob `asset`'s `create` binds, at
+    /// [`create_metadata_blob_path`](Self::create_metadata_blob_path): staged, renamed and
+    /// fsynced before the edit that supersedes it renames anything of its own, so a crash
+    /// between the two leaves the create's bytes on disk twice rather than nowhere.
+    pub(super) fn write_create_metadata_blob(&self, asset: &AssetState, blob: &[u8]) -> Result<()> {
+        let path = self.create_metadata_blob_path_of(asset);
+        let dir = path
+            .parent()
+            .expect("the create-metadata path has a shard directory")
+            .to_path_buf();
+        create_dir_durable(&dir)?;
+        stage(&path, blob)?.commit()?;
+        sync_dir_entries(&dir)?;
+        tracing::debug!(
+            asset_id = %asset.asset_id,
+            bytes = blob.len(),
+            "the metadata blob the create binds is kept before an edit replaces it"
+        );
+        Ok(())
+    }
+
     /// Write the queryable index row + user tags for `asset` into `library.sqlite`. Re-syncs on
     /// every change (import, metadata edit, soft-delete/restore), so the index reflects the
     /// asset's current rating, tags, and deletion state. Upsert keeps it conflict-safe even

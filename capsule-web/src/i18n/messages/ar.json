@@ -1802,6 +1802,7 @@
   "error.auth.oidc_state_invalid": "انتهت صلاحية تسجيل الدخول هذا. ابدأ من جديد.",
   "error.auth.oidc_token_invalid": "تعذّر التحقق من استجابة موفّر الهوية.",
   "error.auth.oidc_unavailable": "تعذّر على Capsule الوصول إلى موفّر الهوية حاليًا. يُرجى المحاولة مرة أخرى.",
+  "error.auth.password_disabled": "لا يقبل هذا الخادم تسجيل الدخول إلا عبر تسجيل الدخول الموحّد.",
   "error.auth.password_invalid": "لا يمكن استخدام كلمة المرور هذه.",
   "error.auth.profile_invalid": "لا يمكن استخدام هذا الاسم المعروض.",
   "error.auth.profile_not_found": "لم يعد هذا الحساب موجودًا.",

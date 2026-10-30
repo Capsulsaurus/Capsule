@@ -10,17 +10,19 @@
 //! session with its offset. Each request first draws the next fault from a proptest-generated
 //! schedule: a server-asked wait, a dropped connection, a response lost after the server applied
 //! the request (the duplicate a retry then sends), a short write, a rolled-back offset, a lost
-//! session, a server error, a version refusal, a `duplicate_blob`, or the client process dying
-//! mid-request.
+//! session, a server error (before or after the server applied the request), a version refusal,
+//! a `duplicate_blob`, or the client process dying mid-request.
 //!
 //! The driver plays the app around the SDK: an attempt that ends in a transport failure, an
-//! exhausted retry budget or a kill is resumed — from the session it was told about when it has
+//! exhausted retry budget (a run of server errors and dropped connections the retry engine's
+//! backoff gives up on) or a kill is resumed — from the session it was told about when it has
 //! one, from scratch otherwise — and every other end state is final. The properties:
 //!
 //! - **The right end state.** No refusal reached: the transfer completes, the session it names is
 //!   the one the server finalized, and the server holds exactly the client's bytes. A version
 //!   refusal reached: the run ends in [`UploadError::UpgradeRequired`], whichever request drew
-//!   it. A server error: [`UploadError::Rejected`] carrying it. A `duplicate_blob`: a merge.
+//!   it. A server error is a wait the transfer recovers from, resuming from `HEAD`, so it ends
+//!   as if it never happened. A `duplicate_blob`: a merge.
 //! - **Server truth.** The client never sends a chunk at an offset the server did not give it,
 //!   except straight after a fault that hid the server's answer from it (a lost response, a
 //!   kill); every chunk's checksum matches its body.
@@ -83,8 +85,12 @@ enum Fault {
     SessionLost,
     /// The client process dies while this request is in flight; the server applies it.
     Kill,
-    /// `500` with no code: not recoverable at this layer.
+    /// `500` with no code and no `Retry-After`; nothing applied. A wait on the retry engine's
+    /// backoff.
     ServerError,
+    /// Apply the request, then answer `500 storage_inconsistent`: the client must learn from
+    /// `HEAD` what the server kept (a completing chunk: that the blob finalized).
+    InconsistentAfterApply,
     /// `426 version_unsupported`.
     VersionRefused,
     /// A create: `409 duplicate_blob` — the server already holds this ciphertext.
@@ -106,6 +112,7 @@ fn fault() -> impl Strategy<Value = Fault> {
         1 => Just(Fault::SessionLost),
         1 => Just(Fault::Kill),
         1 => Just(Fault::ServerError),
+        1 => Just(Fault::InconsistentAfterApply),
         1 => Just(Fault::VersionRefused),
         1 => Just(Fault::DuplicateBlob),
     ]
@@ -115,7 +122,6 @@ fn fault() -> impl Strategy<Value = Fault> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Refusal {
     Version,
-    ServerError,
     Duplicate,
 }
 
@@ -233,10 +239,7 @@ impl Model {
                 return Answer::Reply(Reply::wait(507, error_codes::UPLOAD_STORAGE_FULL));
             }
             Fault::Drop => return Answer::Close,
-            Fault::ServerError => {
-                self.refusal = Some(Refusal::ServerError);
-                return Answer::Reply(Reply::new(500));
-            }
+            Fault::ServerError => return Answer::Reply(Reply::new(500)),
             Fault::VersionRefused => {
                 self.refusal = Some(Refusal::Version);
                 return Answer::Reply(
@@ -279,6 +282,9 @@ impl Model {
                 self.stale = true;
                 kill.notify_one();
                 Answer::Reply(reply)
+            }
+            Fault::InconsistentAfterApply => {
+                Answer::Reply(Reply::error(500, error_codes::UPLOAD_STORAGE_INCONSISTENT))
             }
             _ => {
                 if is_create && reply.status < 300 {
@@ -560,7 +566,18 @@ async fn run_schedule(
     let req = request(&data);
     let interruptions = faults
         .iter()
-        .filter(|f| matches!(f, Fault::Drop | Fault::LostResponse | Fault::Kill))
+        .filter(|f| {
+            matches!(
+                f,
+                Fault::Drop
+                    | Fault::LostResponse
+                    | Fault::Kill
+                    // Waits on the retry engine's backoff, which a long enough run of them
+                    // exhausts.
+                    | Fault::ServerError
+                    | Fault::InconsistentAfterApply
+            )
+        })
         .count();
 
     let mut attempts = 0;
@@ -593,7 +610,9 @@ async fn run_schedule(
         match attempt {
             Attempt::Killed
             | Attempt::Finished(Err(
-                UploadError::Transport(_) | UploadError::RetriesExhausted(_),
+                UploadError::Transport(_)
+                | UploadError::RetriesExhausted(_)
+                | UploadError::WaitsExhausted { .. },
             )) => {}
             Attempt::Finished(result) => break result,
         }
@@ -628,7 +647,6 @@ fn check(
             prop_assert_eq!(min.as_deref(), Some("2099-01-01"));
             prop_assert_eq!(max.as_deref(), Some("2099-12-31"));
         }
-        (Some(Refusal::ServerError), Err(UploadError::Rejected { status: 500, .. })) => {}
         (Some(Refusal::Duplicate), Ok(UploadOutcome::AlreadyStored { asset_ref })) => {
             prop_assert_eq!(asset_ref, "existing-asset");
         }

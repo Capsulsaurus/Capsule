@@ -185,6 +185,9 @@ pub enum CapabilityError {
     /// The token verified and was issued by some other server.
     #[error("the capability was issued by another server")]
     WrongIssuer,
+    /// The token verified and was issued to another server than the one reading it.
+    #[error("the capability was issued to another server")]
+    WrongRecipient,
     /// A claim is present and is not the shape the contract fixes.
     #[error("the capability's {claim} claim is malformed")]
     Malformed {
@@ -411,53 +414,108 @@ impl CapabilityCodec {
         if claims.sub.is_empty() {
             return Err(CapabilityError::Malformed { claim: "sub" });
         }
-        // A UUIDv7, as the table says and as this server mints: any other `jti` is a token
-        // this server did not issue, whatever key it verifies under.
-        if !uuid::Uuid::parse_str(&claims.jti).is_ok_and(|id| id.get_version_num() == 7) {
-            return Err(CapabilityError::Malformed { claim: "jti" });
-        }
-        if claims
-            .min_protocol_version
-            .parse::<jiff::civil::Date>()
-            .is_err()
-        {
-            return Err(CapabilityError::Malformed {
-                claim: "min_protocol_version",
-            });
-        }
-        let album =
-            album_from_urn(&claims.aud).ok_or(CapabilityError::Malformed { claim: "aud" })?;
-        let issued_at = instant(&claims.iat, "iat")?;
-        let expires_at = instant(&claims.exp, "exp")?;
-        let not_before = instant(&claims.nbf, "nbf")?;
-        if expires_at <= issued_at {
-            return Err(CapabilityError::Malformed { claim: "exp" });
-        }
-        if expires_at.duration_since(issued_at) > MAX_TOKEN_TTL {
-            tracing::debug!(jti = %claims.jti, "a presented capability outlives the ceiling");
-            return Err(CapabilityError::BeyondTtlCeiling);
-        }
-
-        let now = self.clock.now();
-        if now < not_before {
-            tracing::debug!(jti = %claims.jti, "a presented capability is not valid yet");
-            return Err(CapabilityError::NotYetValid);
-        }
-        if expires_at <= now {
-            tracing::debug!(jti = %claims.jti, "a presented capability has expired");
-            return Err(CapabilityError::Expired);
-        }
-
-        Ok(CapabilityGrant {
-            peer: PeerId::new(claims.sub),
-            album,
-            scope: claims.scope,
-            jti: claims.jti,
-            issued_at,
-            expires_at,
-            min_protocol_version: claims.min_protocol_version,
-        })
+        admit(claims, self.clock.now())
     }
+}
+
+/// Read a capability **another** server issued **to this one**: the half a receiving server
+/// runs when a member's client hands it a grant to pull with (design/federation.md, Token
+/// Lifecycle step 1).
+///
+/// The same claim rules as [`CapabilityCodec::verify`], in the same order, against the
+/// issuer's pinned operational key rather than this server's own. Two identity checks replace
+/// the one: `iss` must name `issuer` (folded, as every peer id is) and `sub` must name
+/// `recipient`, this server. A grant minted for some other server is no use here, because its
+/// issuer would refuse every request this server signed while presenting it.
+///
+/// # Errors
+///
+/// Returns [`CapabilityError`] for every way a token can fail; none carries any of it.
+pub fn verify_received(
+    presented: &str,
+    issuer: &PeerId,
+    issuer_key: &[u8; 32],
+    recipient: &PeerId,
+    now: Timestamp,
+) -> Result<CapabilityGrant, CapabilityError> {
+    let mut validation = Validation::new(Algorithm::EdDSA);
+    validation.set_required_spec_claims(&["iss", "sub", "aud"]);
+    validation.validate_exp = false;
+    validation.validate_nbf = false;
+    validation.validate_aud = false;
+    let claims = jsonwebtoken::decode::<Claims>(
+        presented,
+        &DecodingKey::from_ed_der(issuer_key),
+        &validation,
+    )
+    .map_err(|error| {
+        tracing::debug!(reason = ?error.kind(), %issuer, "a received capability did not verify");
+        CapabilityError::Unreadable
+    })?
+    .claims;
+
+    if PeerId::new(claims.iss.as_str()) != *issuer {
+        tracing::debug!(%issuer, "a received capability names another issuer");
+        return Err(CapabilityError::WrongIssuer);
+    }
+    if claims.sub.is_empty() {
+        return Err(CapabilityError::Malformed { claim: "sub" });
+    }
+    if PeerId::new(claims.sub.as_str()) != *recipient {
+        tracing::debug!(%issuer, "a received capability was issued to another server");
+        return Err(CapabilityError::WrongRecipient);
+    }
+    admit(claims, now)
+}
+
+/// The claim checks both readers share, once the signature and the identity claims hold: the
+/// shape of every claim, then the window against the ceiling, then `now`. The order reports
+/// the most specific true reason without ever computing with a claim not yet checked.
+fn admit(claims: Claims, now: Timestamp) -> Result<CapabilityGrant, CapabilityError> {
+    // A UUIDv7, as the table says and as this server mints: any other `jti` is a token
+    // no conforming server issued, whatever key it verifies under.
+    if !uuid::Uuid::parse_str(&claims.jti).is_ok_and(|id| id.get_version_num() == 7) {
+        return Err(CapabilityError::Malformed { claim: "jti" });
+    }
+    if claims
+        .min_protocol_version
+        .parse::<jiff::civil::Date>()
+        .is_err()
+    {
+        return Err(CapabilityError::Malformed {
+            claim: "min_protocol_version",
+        });
+    }
+    let album = album_from_urn(&claims.aud).ok_or(CapabilityError::Malformed { claim: "aud" })?;
+    let issued_at = instant(&claims.iat, "iat")?;
+    let expires_at = instant(&claims.exp, "exp")?;
+    let not_before = instant(&claims.nbf, "nbf")?;
+    if expires_at <= issued_at {
+        return Err(CapabilityError::Malformed { claim: "exp" });
+    }
+    if expires_at.duration_since(issued_at) > MAX_TOKEN_TTL {
+        tracing::debug!(jti = %claims.jti, "a presented capability outlives the ceiling");
+        return Err(CapabilityError::BeyondTtlCeiling);
+    }
+
+    if now < not_before {
+        tracing::debug!(jti = %claims.jti, "a presented capability is not valid yet");
+        return Err(CapabilityError::NotYetValid);
+    }
+    if expires_at <= now {
+        tracing::debug!(jti = %claims.jti, "a presented capability has expired");
+        return Err(CapabilityError::Expired);
+    }
+
+    Ok(CapabilityGrant {
+        peer: PeerId::new(claims.sub),
+        album,
+        scope: claims.scope,
+        jti: claims.jti,
+        issued_at,
+        expires_at,
+        min_protocol_version: claims.min_protocol_version,
+    })
 }
 
 /// `at` with its sub-second part dropped.

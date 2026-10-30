@@ -69,7 +69,7 @@ pub use self::authority::{
     AlbumWriteAccess, AuthorityError, AuthorityFuture, WriteAuthority, WriteRole,
 };
 pub use self::envelope::{DeclaredBlob, GateContext, GateReject, ManifestEnvelope};
-pub use self::policy::{ChunkReadDeadline, UploadPolicy};
+pub use self::policy::{ChunkPace, ChunkReadPace, UploadPolicy};
 use crate::blob::BlobStore;
 use crate::index::AssetIndex;
 use crate::quota::{QuotaContext, QuotaLimits, QuotaStore};
@@ -142,6 +142,12 @@ impl UploadContext {
     /// The quota ledger a session's reservation is charged to and released from.
     pub fn quotas(&self) -> &dyn QuotaStore {
         self.quota.quotas()
+    }
+
+    /// The quota module's collaborators, for a charge that must pass the same limit and
+    /// suspension checks session creation applies ([`crate::quota::charge_upload`]).
+    pub fn quota(&self) -> &QuotaContext {
+        &self.quota
     }
 
     /// The deployment's quota thresholds, which a reservation restored on a session's behalf

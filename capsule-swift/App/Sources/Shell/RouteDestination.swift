@@ -37,7 +37,7 @@ struct RouteDestination: View {
         case .trash: trashDestination
         case .hidden: hiddenDestination
         case let .viewer(id, context): viewerDestination(id, context: context)
-        case .culling: unbuilt
+        case let .culling(context): cullingDestination(context)
 
         // MARK: Collections
         case .browse: BrowseIndexView()
@@ -105,6 +105,17 @@ extension RouteDestination {
             importer: environment.importer,
             hiddenStore: environment.hiddenStore
         )
+        .toolbar {
+            // The on-screen door into the cull pass, beside ⇧⌘R: a phone with no
+            // keyboard, and VoiceOver, need one, and it is the one the
+            // accessibility audit walks through.
+            ToolbarItem(placement: .primaryAction) {
+                NavigationLink(value: Route.culling(.library)) {
+                    Label("app.culling.open", systemImage: "flag.2.crossed")
+                }
+                .accessibilityIdentifier("timeline.cull")
+            }
+        }
     }
 
     var albumsDestination: some View {

@@ -1802,6 +1802,7 @@
   "error.auth.oidc_state_invalid": "そのサインインは有効期限が切れました。もう一度やり直してください。",
   "error.auth.oidc_token_invalid": "ID プロバイダからの応答を検証できませんでした。",
   "error.auth.oidc_unavailable": "Capsule は現在 ID プロバイダにアクセスできませんでした。もう一度お試しください。",
+  "error.auth.password_disabled": "このサーバーではシングルサインオンによるサインインのみ利用できます。",
   "error.auth.password_invalid": "そのパスワードは使用できません。",
   "error.auth.profile_invalid": "その表示名は使用できません。",
   "error.auth.profile_not_found": "そのアカウントはもう存在しません。",

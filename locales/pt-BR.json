@@ -7211,6 +7211,10 @@
     "message": "O Capsule não conseguiu acessar seu provedor de identidade agora. Tente novamente.",
     "origin": "machine"
   },
+  "error.auth.password_disabled": {
+    "message": "Este servidor só aceita login por logon único.",
+    "origin": "machine"
+  },
   "error.auth.password_invalid": {
     "message": "Essa senha não pode ser usada.",
     "origin": "machine"

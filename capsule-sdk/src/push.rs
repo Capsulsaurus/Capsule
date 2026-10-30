@@ -57,6 +57,8 @@
 
 use std::borrow::Cow;
 use std::collections::HashSet;
+use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::time::{Duration, Instant};
 
 use capsule_core::crypto::hash::{Hash32, hash_bytes};
 use capsule_core::crypto::keys::HybridVerifyingKey;
@@ -72,9 +74,13 @@ use tracing::instrument;
 use crate::albums::{AlbumClient, AlbumError, ProvisionedAlbum};
 use crate::events::{TransferEvent, TransferEvents};
 use crate::staged::{StagedAsset, StagedScheduler, TierBlob, TierSessionOutcome, remaining_tiers};
+use crate::upload::advice::ServerAdvice;
+use crate::upload::queue::{
+    GrantId, LaneWindows, QueuedJob, RangeId, RangeRefused, ServerKey, UploadQueue,
+};
 use crate::upload::{
-    BlobRole, CreateUploadRequest, ManifestEnvelope, UploadClient, UploadError, UploadOutcome,
-    UploadSource,
+    BlobRole, CreateUploadRequest, ManifestEnvelope, TransferGate, UploadClient, UploadError,
+    UploadOutcome, UploadSource,
 };
 use crate::verify::{AssetQuery, StorageVerifyClient, VerifyError};
 
@@ -506,14 +512,11 @@ impl PushError {
     #[must_use]
     pub fn error_code(&self) -> Option<&str> {
         match self {
-            Self::Upload(UploadError::Rejected { code, .. }) => code.as_deref(),
-            Self::CreateRefused { source, .. } => match source.as_ref() {
-                UploadError::Rejected { code, .. } => code.as_deref(),
-                _ => None,
-            },
+            Self::CreateRefused { source, .. } => source.error_code(),
             Self::Upload(UploadError::UpgradeRequired { .. }) => {
                 Some(capsule_i18n::error_codes::PROTOCOL_VERSION_UNSUPPORTED)
             }
+            Self::Upload(error) => error.error_code(),
             Self::Verify(error) => error.error_code(),
             Self::Album(error) => error.error_code(),
             _ => None,
@@ -583,6 +586,18 @@ pub async fn push_bundle<H: std::hash::BuildHasher + Sync>(
     held: &HashSet<String, H>,
     force: bool,
 ) -> Result<AssetPushReport, PushError> {
+    push_bundle_with(client, scheduler, bundle, held, force, None).await
+}
+
+/// [`push_bundle`], with every range reserved through `gate` when there is one.
+async fn push_bundle_with<H: std::hash::BuildHasher + Sync>(
+    client: &UploadClient,
+    scheduler: &StagedScheduler,
+    bundle: &UploadBundle,
+    held: &HashSet<String, H>,
+    force: bool,
+    gate: Option<&dyn TransferGate>,
+) -> Result<AssetPushReport, PushError> {
     let asset_id = bundle.asset_id.to_string();
     let planned = plan(scheduler, bundle, held, force);
     let blobs = bundle_blobs(bundle);
@@ -618,10 +633,11 @@ pub async fn push_bundle<H: std::hash::BuildHasher + Sync>(
             content_type = %blob.content_type,
             "push: opening upload session"
         );
-        let uploaded = client
-            .upload(&request, &blob.bytes)
-            .await
-            .map_err(|error| classify_refusal(bundle, blob, error))?;
+        let uploaded = match gate {
+            Some(gate) => client.upload_gated(&request, &blob.bytes, gate).await,
+            None => client.upload(&request, &blob.bytes).await,
+        }
+        .map_err(|error| classify_refusal(bundle, blob, error))?;
         let outcome = match uploaded {
             UploadOutcome::Completed { session_id } => {
                 tracing::info!(tier = ?tier_blob.tier, hash = %hash, %session_id, "push: blob transferred");
@@ -646,6 +662,234 @@ pub async fn push_bundle<H: std::hash::BuildHasher + Sync>(
         "push: bundle complete"
     );
     Ok(report)
+}
+
+// ─── Pushing many bundles across lanes ───────────────────────────────────────
+
+/// One bundle queued on a lane, with the server truth its plan prunes against (see
+/// [`push_bundle`]'s `held`).
+pub struct LaneBundle<'a, H> {
+    /// The bundle to push.
+    pub bundle: &'a UploadBundle,
+    /// The blob content addresses the lane's server already holds.
+    pub held: &'a HashSet<String, H>,
+}
+
+// By hand: a derive would demand `H: Clone`, but only references are copied.
+impl<H> Clone for LaneBundle<'_, H> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<H> Copy for LaneBundle<'_, H> {}
+
+/// One server's share of a [`push_lanes`] run: the client that reaches it, and the bundles
+/// queued for it.
+pub struct LanePush<'a, H> {
+    /// The lane's key: the server's canonical origin.
+    pub server: ServerKey,
+    /// The client every session on the lane is driven through.
+    pub client: &'a UploadClient,
+    /// The bundles queued on the lane, in the order they were planned.
+    pub bundles: Vec<LaneBundle<'a, H>>,
+}
+
+/// What every lane of a run shares: the device's one upload queue, and the signal a released
+/// reservation or a finished session sends to the ranges waiting on the budget.
+struct LaneShared {
+    queue: Mutex<UploadQueue<(usize, usize)>>,
+    freed: tokio::sync::Notify,
+}
+
+impl LaneShared {
+    fn queue(&self) -> MutexGuard<'_, UploadQueue<(usize, usize)>> {
+        // A panic while holding the lock left a scheduler of plain values; it stays usable.
+        self.queue.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// The gate one admitted bundle's transfers run under: every range reserves its length in the
+/// shared queue under the bundle's grant, and the server's advice lowers its lane's windows.
+struct QueueGate<'s> {
+    shared: &'s LaneShared,
+    server: &'s ServerKey,
+    grant: GrantId,
+}
+
+impl TransferGate for QueueGate<'_> {
+    fn reserve(
+        &self,
+        len: u64,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<RangeId>> + Send + '_>> {
+        Box::pin(async move {
+            loop {
+                // Register for the next release before asking, so one that lands between the
+                // refusal and the wait is not missed.
+                let mut freed = std::pin::pin!(self.shared.freed.notified());
+                freed.as_mut().enable();
+                let (asked, still_waiting) = {
+                    let mut queue = self.shared.queue();
+                    let asked = queue.reserve_range(self.grant, len, Instant::now());
+                    (asked, queue.waiting_for_budget())
+                };
+                match asked {
+                    Ok(range) => {
+                        // The budget serves its line first-come: a waiter woken by the release
+                        // this range was served from, and refused for being behind it, asks
+                        // again now that it is next.
+                        if still_waiting > 0 {
+                            self.shared.freed.notify_waiters();
+                        }
+                        return Some(range);
+                    }
+                    Err(RangeRefused::NotInFlight) => {
+                        tracing::warn!(server = %self.server, "push: a range asked for a grant no longer in flight");
+                        return None;
+                    }
+                    Err(refused @ (RangeRefused::WindowFull | RangeRefused::BudgetFull)) => {
+                        tracing::trace!(server = %self.server, len, ?refused, "push: waiting for a range reservation");
+                    }
+                }
+                freed.await;
+            }
+        })
+    }
+
+    fn release(&self, range: RangeId) {
+        self.shared.queue().release_range(range, Instant::now());
+        self.shared.freed.notify_waiters();
+    }
+
+    fn advised(&self, advice: &ServerAdvice) {
+        let mut queue = self.shared.queue();
+        queue.set_advice(self.server, *advice, Instant::now());
+        queue.set_session_ranges(self.grant, advice);
+    }
+}
+
+/// Push every lane's bundles through one device-wide [`UploadQueue`], up to W at once per lane.
+///
+/// Each bundle is one job on its server's lane, queued at its lowest planned tier. The queue
+/// admits up to `windows.sessions` bundles per lane at once, lowered by the advice each server
+/// sends, serving lanes round-robin; a bundle drives its own blobs one session at a time in
+/// ladder order, exactly as [`push_bundle`] does, so W bundles in flight are W sessions, each on
+/// its own HTTP/1.1 connection. Every range any of them sends reserves its length against the
+/// one `budget` before its bytes are read, and waits while the budget is full. Each lane's
+/// client spends from its lane's shared retry budget, so a failing server costs a bounded number
+/// of retries across all of its bundles.
+///
+/// Returns each lane's results in the order of its bundles. One bundle's failure is its own:
+/// the others still run.
+#[instrument(skip_all, fields(lanes = lanes.len(), budget, sessions = windows.sessions, ranges = windows.ranges, force))]
+pub async fn push_lanes<H: std::hash::BuildHasher + Sync>(
+    scheduler: &StagedScheduler,
+    lanes: &[LanePush<'_, H>],
+    force: bool,
+    budget: u64,
+    windows: LaneWindows,
+) -> Vec<Vec<Result<AssetPushReport, PushError>>> {
+    // No stall reclaim here: each request's own stall bound already cuts a link that stops
+    // moving (`RequestBounds`), and the transfer resumes or fails inside its bundle.
+    let mut queue = UploadQueue::new(budget, Duration::from_secs(3600)).with_windows(windows);
+    let mut clients = Vec::with_capacity(lanes.len());
+    for (lane_at, lane) in lanes.iter().enumerate() {
+        clients.push(
+            lane.client
+                .clone()
+                .with_lane_retries(queue.lane_retries(&lane.server)),
+        );
+        for (bundle_at, queued) in lane.bundles.iter().enumerate() {
+            let tier = plan(scheduler, queued.bundle, queued.held, force)
+                .blobs
+                .first()
+                .map_or(UploadTier::Index, |blob| blob.tier);
+            queue.enqueue(&lane.server, QueuedJob::new(tier, (lane_at, bundle_at)));
+        }
+    }
+    let shared = LaneShared {
+        queue: Mutex::new(queue),
+        freed: tokio::sync::Notify::new(),
+    };
+    let mut results: Vec<Vec<Option<Result<AssetPushReport, PushError>>>> = lanes
+        .iter()
+        .map(|lane| lane.bundles.iter().map(|_| None).collect())
+        .collect();
+
+    type Running<'f> = std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = (usize, usize, GrantId, Result<AssetPushReport, PushError>),
+                > + Send
+                + 'f,
+        >,
+    >;
+    let mut running: Vec<Running<'_>> = Vec::new();
+    loop {
+        let admitted: Vec<_> = {
+            let mut queue = shared.queue();
+            let now = Instant::now();
+            std::iter::from_fn(|| queue.next(now)).collect()
+        };
+        for grant in admitted {
+            let (lane_at, bundle_at) = grant.job;
+            let lane = &lanes[lane_at];
+            let queued = lane.bundles[bundle_at];
+            let client = &clients[lane_at];
+            let shared = &shared;
+            tracing::info!(
+                server = %lane.server,
+                asset_id = %queued.bundle.asset_id,
+                ranges = grant.ranges,
+                "push: bundle admitted to its lane"
+            );
+            running.push(Box::pin(async move {
+                let gate = QueueGate {
+                    shared,
+                    server: &lane.server,
+                    grant: grant.id,
+                };
+                let pushed = push_bundle_with(
+                    client,
+                    scheduler,
+                    queued.bundle,
+                    queued.held,
+                    force,
+                    Some(&gate),
+                )
+                .await;
+                (lane_at, bundle_at, grant.id, pushed)
+            }));
+        }
+        if running.is_empty() {
+            break;
+        }
+        let (at, (lane_at, bundle_at, grant, pushed)) = std::future::poll_fn(|cx| {
+            for (at, bundle) in running.iter_mut().enumerate() {
+                if let std::task::Poll::Ready(done) = bundle.as_mut().poll(cx) {
+                    return std::task::Poll::Ready((at, done));
+                }
+            }
+            std::task::Poll::Pending
+        })
+        .await;
+        drop(running.swap_remove(at));
+        shared.queue().complete(grant, Instant::now());
+        shared.freed.notify_waiters();
+        if let Err(error) = &pushed {
+            tracing::warn!(server = %lanes[lane_at].server, kind = error.kind(), %error, "push: a bundle on the lane failed");
+        }
+        results[lane_at][bundle_at] = Some(pushed);
+    }
+    debug_assert!(shared.queue().is_empty(), "no lane is ever paused here");
+    results
+        .into_iter()
+        .map(|lane| {
+            lane.into_iter()
+                .map(|pushed| pushed.expect("every queued bundle runs before the queue drains"))
+                .collect()
+        })
+        .collect()
 }
 
 /// Name a transfer failure [`PushError::CreateRefused`] when it is the one a stale-epoch create

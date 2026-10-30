@@ -188,23 +188,33 @@ async fn a_session_that_fails_finalization_releases_its_reservation() {
     )
     .await;
     // Honest per-chunk checksums over bytes that do not hash to the declaration: only the
-    // finalize re-hash catches it.
+    // finalize re-hash catches it, after the chunk is answered.
     send_chunk(
         &fixture,
         &bearer,
         id,
         4096,
         &payload(b'z', 4096),
-        StatusCode::BAD_REQUEST,
-        Some("error.upload.content_hash_mismatch"),
+        StatusCode::NO_CONTENT,
+        None,
     )
     .await;
-
+    let failed = fixture.uploads.terminal_for_test(id).await;
+    assert_eq!(failed.status.as_str(), "failed_processing");
     assert_eq!(
-        snapshot(&fixture, &bearer).await["used"],
-        0,
-        "bytes that never reached the store must not stay charged"
+        failed.failure_code.as_deref(),
+        Some("error.upload.content_hash_mismatch")
     );
+
+    // The reservation goes back as the detached finalization's last step, just after the
+    // terminal status it follows.
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while snapshot(&fixture, &bearer).await["used"] != 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("bytes that never reached the store must not stay charged");
     open(&fixture, &bearer, &payload(b'g', 8192), StatusCode::CREATED).await;
 }
 

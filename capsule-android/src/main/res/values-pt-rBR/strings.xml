@@ -1793,6 +1793,7 @@
     <string name="error_auth_oidc_state_invalid">Esse login expirou. Comece novamente.</string>
     <string name="error_auth_oidc_token_invalid">Não foi possível verificar a resposta do seu provedor de identidade.</string>
     <string name="error_auth_oidc_unavailable">O Capsule não conseguiu acessar seu provedor de identidade agora. Tente novamente.</string>
+    <string name="error_auth_password_disabled">Este servidor só aceita login por logon único.</string>
     <string name="error_auth_password_invalid">Essa senha não pode ser usada.</string>
     <string name="error_auth_profile_invalid">Esse nome de exibição não pode ser usado.</string>
     <string name="error_auth_profile_not_found">Essa conta não existe mais.</string>

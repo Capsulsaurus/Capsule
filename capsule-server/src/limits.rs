@@ -130,7 +130,7 @@ pub fn bounded_body_size() -> BodySize {
 /// Both answer `413`, and an operation cannot declare two producers of one status. So the cap is
 /// not mounted on the router at all (#478): every group carries exactly one — the federation
 /// group this one, the chunk-carrying and unbounded groups [`body_size`]'s backstop, and every
-/// other group [`bounded_body_size`] (#576) — the twelve operations the protocol gate exempts
+/// other group [`bounded_body_size`] (#576) — the thirteen operations the protocol gate exempts
 /// included, in groups that hold nothing but the cap. `413` therefore
 /// stays declared on every operation, which `tests/conformance.rs` pins, and no route can be
 /// mounted outside a group without losing it, which `tests/limits.rs` pins.

@@ -7211,6 +7211,10 @@
     "message": "Capsule 暂时无法连接您的身份提供方，请重试。",
     "origin": "machine"
   },
+  "error.auth.password_disabled": {
+    "message": "此服务器仅接受通过单点登录进行登录。",
+    "origin": "machine"
+  },
   "error.auth.password_invalid": {
     "message": "无法使用该密码。",
     "origin": "machine"

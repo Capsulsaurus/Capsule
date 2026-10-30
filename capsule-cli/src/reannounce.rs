@@ -18,9 +18,10 @@ use serde::Serialize;
 
 /// Every live asset's chain-head provenance record, and how many deleted assets were left out.
 ///
-/// The record is encoded exactly as an upload's `provenance` blob is
-/// ([`Workspace::upload_bundle`]), without building the rest of the bundle: re-announce sends
-/// manifests only, so it never reads an original.
+/// The record is the chain head in the canonical CBOR the feed serves back as `manifest_cbor`
+/// (the encoding an upload's `provenance` blob uses for the create, [`Workspace::upload_bundle`]),
+/// so the server's chain head is its hash. Re-announce sends manifests only, so it never reads
+/// an original.
 ///
 /// # Errors
 ///
