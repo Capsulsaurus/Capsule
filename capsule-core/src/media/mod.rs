@@ -48,6 +48,11 @@
 //! Without it, only the thumbnail is encoded, as JXL alone and losslessly: the pure-Rust backend
 //! is `zune-jpegxl`'s `JxlSimpleEncoder`, so the tier's declared `q=50` is advisory there.
 //!
+//! **Embedded previews** ([`extract_embedded_preview`](crate::media::extract_embedded_preview))
+//! are read from every RAW family the build decodes through `RawFile::thumbnail`, under the same
+//! IFD walk and pixel budget, and never developed, uploaded or signed. They are a stand-in on
+//! the render ladder until an encoded tier exists, not a derivative.
+//!
 //! HEIC, WebP and the other five RAW families (CR2, CR3, CRW, NEF, RAF) — and AVIF without
 //! `media-avif-decode` — sniff correctly and refuse to decode. HEIC is refused by decision: libheif and libde265 are LGPL-3.0 and excluded
 //! by policy, and no permissive backend exists in `rawshift-image`. **WebP is a compile failure
@@ -70,7 +75,10 @@ mod tiff_bounds;
 // codecs from SQLite's C build) would otherwise carry an unused re-export.
 #[cfg(feature = "native")]
 pub use self::decode::guarded;
-pub use self::decode::{DecodedImage, Decoder, MediaMetadata, RawshiftDecoder, decode_guarded};
+pub use self::decode::{
+    DecodedImage, Decoder, EmbeddedPreview, MediaMetadata, RawshiftDecoder,
+    decode_embedded_preview, decode_guarded, extract_embedded_preview,
+};
 pub use self::derivative::{
     DerivativeContext, DerivativeSealer, DerivativeTier, GeneratedDerivative, SealedDerivative,
     StillDerivatives, generate_still_derivatives,
