@@ -23,18 +23,18 @@
 //! | create `426` | kept — the manifest envelope's `protocol_version` pin, refused by the envelope gate. The *header* handshake is no longer this surface's: [`crate::negotiation::ProtocolGate`] answers it before the handler runs, and the accepted window rides `X-Capsule-Protocol-Min`/`-Max` on every response |
 //! | create `500` | **now `503`** — a collaborator that could not answer, with `error.upload.unavailable` and a retry instant (transfer/upload.md, Hostile Clients) |
 //! | create `429` / `507` | **added** — the account's or its source address's session budget, or the live-session cap (`error.upload.rate_limited`), and a full disk (`error.upload.storage_full`); both carry a retry instant |
-//! | chunk `204` | kept — with the authoritative `X-Capsule-Offset` |
-//! | chunk `400` | kept, and now *coded*: missing offset, missing checksum, checksum mismatch, empty chunk, misalignment, size exceeded, and the two finalization failures each carry their own `error.upload.*` |
+//! | chunk `204` | kept — with the authoritative `X-Capsule-Offset` and `X-Capsule-Upload-Status`. The completing chunk is answered `waiting_for_processing` the moment it holds the finalize claim, never once finalization ends (#1040) |
+//! | chunk `400` | kept, and now *coded*: missing offset, missing checksum, checksum mismatch, empty chunk, misalignment and size exceeded each carry their own `error.upload.*`. The two finalization failures are no longer a chunk's answer: no chunk waits for finalization, so they are `HEAD`'s `X-Capsule-Upload-Error` and the session list's `error_code` |
 //! | chunk `403` | **folded into the `404`.** Only the uploader may append, and anyone else is told what a caller naming an unknown session is told — "foreign is unknown" (transfer/upload.md, Hostile Clients). The `403` that remains declared is the bearer scheme's |
 //! | chunk `404` | kept — unknown, expired, discarded and foreign sessions are one answer |
-//! | chunk `409` | kept — offset mismatch (carrying the authoritative offset), chunk conflict, session not active |
+//! | chunk `409` | kept — offset mismatch (carrying the authoritative offset), chunk conflict, session not active. `replace_incomplete` and `stale_revival` moved to `X-Capsule-Upload-Error` with the other finalization failures |
 //! | chunk `413` | kept — the 16 MiB protocol ceiling, reachable because the transport backstop sits above it |
 //! | chunk `415` | kept, and it keeps its code. Kynos's own `Binary` rejection declares `400`, `415` *and* a `422` a raw-bytes body cannot produce, and carries no `error.*` code; [`ChunkBody`] delegates the enforcement to `Binary` and replaces only the rejection, so the `415` is `error.upload.unsupported_media_type` and the phantom `422` is gone |
 //! | chunk `408` | **added** (#717) — a body that did not finish arriving within the chunk read deadline, `error.upload.chunk_timeout`. [`ChunkBody`] bounds the read and nothing after it, so finalization is never cut short by it |
 //! | chunk `409 finalize_in_progress` | **deleted.** Losing the finalize claim is a normal race and the chunk that triggered it was still accepted, so it answers `204`. Telling a client its accepted chunk failed was the Salvo behaviour and it was wrong |
 //! | chunk `500` | kept, narrowed — only a stage **shorter** than its counter, the one inconsistency the server cannot repair. A stage that ran ahead is cut back ([`chunk::append`]) and a collaborator failure is a `503` |
 //! | chunk `429` / `503` / `507` | **added** — the account's or its source address's chunk budget, a collaborator that could not answer, and a full disk. Each carries a retry instant, on the body and on `Retry-After` ([`crate::problem::RetryAfter`]) |
-//! | head `200` | kept — [`HeadReply::Progress`], carrying offset, declared length, state, advice and relative expiry on headers, with `Cache-Control: no-store`. A `Reply` rather than a `NoContent`, because `200 with headers` and `204` are different answers |
+//! | head `200` | kept — [`HeadReply::Progress`], carrying offset, declared length, state, advice and relative expiry on headers, with `Cache-Control: no-store`, and a `failed_processing` session's `error.*` code in `X-Capsule-Upload-Error`. A `Reply` rather than a `NoContent`, because `200 with headers` and `204` are different answers. It starts the finalization of a full, unclaimed session and never waits for it |
 //! | head `400` / `401` / `403` / `404` / `500` | kept, except that a session neither the caller's upload nor filed under the caller is the `404`, not a `403` of this surface's own, and the `500` is a `503` with a retry instant. The `403` left is the bearer scheme's. The `400` is the handshake's, declared by the read gate rather than by this surface; the `426` is gone from `HEAD`, because a read is admitted at any protocol date (issue #404) |
 //! | head `409` | **deleted as unreachable.** `HEAD` reports a state, it does not require one. It would have been declared for free by sharing a rejection type with `DELETE`, which is why they are two types |
 //! | delete `204` | kept |
@@ -107,7 +107,7 @@ use crate::upload::chunk::{
     self, MAX_CHUNK_BYTES, parse_checksum, parse_offset, suggested_chunk_size,
 };
 use crate::upload::envelope::{DeclaredBlob, GateContext, GateReject, ManifestEnvelope};
-use crate::upload::finalize::{self, FinalizeFailure, Outcome};
+use crate::upload::finalize::{self, FinalizeFailure};
 use crate::upload::{AlbumWriteAccess, UploadContext};
 
 /// The operations that move an asset's bytes to the server.
@@ -274,6 +274,10 @@ pub struct CreateHeaders {
     /// The authoritative offset, on a resumed session.
     #[header(rename = "X-Capsule-Offset")]
     offset: Option<u64>,
+    /// Where a resumed session is in its state machine — `waiting_for_processing` once a
+    /// duplicate create has started the finalization of a full session nobody had claimed.
+    #[header(rename = "X-Capsule-Upload-Status")]
+    upload_status: Option<String>,
 }
 
 impl CreateHeaders {
@@ -285,6 +289,7 @@ impl CreateHeaders {
             advice: Advice::for_size(record.total_size).to_string(),
             expires_in: expiry.expires_in,
             idle_expires_in: expiry.idle_expires_in,
+            upload_status: offset.map(|_| record.status.as_str().to_owned()),
             offset,
         }
     }
@@ -306,12 +311,17 @@ pub struct ChunkHeaders {
     checksum: Option<String>,
 }
 
-/// The offset a chunk's acknowledgement carries.
+/// What a chunk's acknowledgement carries.
 #[derive(HeaderParams)]
 pub struct OffsetHeader {
     /// The next byte the server expects.
     #[header(rename = "X-Capsule-Offset")]
     offset: u64,
+    /// Where the session stands: `uploading`, or `waiting_for_processing` once it holds every
+    /// declared byte. The completing chunk is answered as soon as finalization is claimed, never
+    /// once it finishes; the client reads the outcome from `HEAD`.
+    #[header(rename = "X-Capsule-Upload-Status")]
+    upload_status: String,
 }
 
 /// The one way `HEAD /v1/upload/{id}` succeeds.
@@ -331,8 +341,9 @@ pub enum HeadReply {
 
 /// What a `HEAD` answer carries.
 ///
-/// Every field is required and always sent: a resumption primitive that sometimes omits the
-/// offset would be one a client cannot rely on.
+/// Every field but the failure code is required and always sent: a resumption primitive that
+/// sometimes omits the offset would be one a client cannot rely on. The failure code exists only
+/// for a `failed_processing` session.
 #[derive(HeaderParams)]
 pub struct HeadHeaders {
     /// The next byte the server expects.
@@ -354,6 +365,13 @@ pub struct HeadHeaders {
     /// the lifetime cap's, because such a session is never discarded under pressure.
     #[header(rename = "X-Capsule-Session-Idle-Expires-In")]
     idle_expires_in: u64,
+    /// For a `failed_processing` session, the `error.*` code finalization failed with.
+    ///
+    /// The one channel through which a client learns `content_hash_mismatch`,
+    /// `envelope_rejected`, `replace_incomplete` or `stale_revival`: no request waits on
+    /// finalization, so the request that completed the session never hears it.
+    #[header(rename = "X-Capsule-Upload-Error")]
+    upload_error: Option<String>,
     /// `no-store`: progress is not cacheable.
     #[header(rename = "Cache-Control")]
     cache_control: String,
@@ -541,7 +559,10 @@ pub enum CreateRejection {
     },
 }
 
-/// Why a chunk was not accepted, or the finalization it triggered did not commit.
+/// Why a chunk was not accepted.
+///
+/// Never why a finalization failed: no chunk waits for one. A finalization's failure is read
+/// from `HEAD`'s `X-Capsule-Upload-Error` and the session list.
 #[derive(Debug, thiserror::Error, ApiError)]
 pub enum ChunkRejection {
     /// The request is not a well-formed chunk: a missing or unreadable offset or checksum, an
@@ -591,35 +612,6 @@ pub enum ChunkRejection {
     #[error("a different chunk was already accepted at this offset")]
     #[problem(status = 409, title = "Chunk conflict")]
     ChunkConflict {
-        /// The stable catalog code.
-        #[problem(extension)]
-        code: &'static str,
-    },
-
-    /// A `replace`'s manifest arrived before the bundle it commits to.
-    ///
-    /// Transient, and the only ordering rule this protocol has: a replace mutates an asset that
-    /// is already visible, so it is applied as one act at the moment its manifest lands — which
-    /// makes the manifest the member that lands **last**. Retrying it once the rest of the
-    /// bundle has committed succeeds, so this is a `409` a client acts on rather than a `400`
-    /// that says the request was wrong.
-    #[error("the replace names bytes the server does not hold yet")]
-    #[problem(status = 409, title = "Replace incomplete")]
-    ReplaceIncomplete {
-        /// The stable catalog code.
-        #[problem(extension)]
-        code: &'static str,
-    },
-
-    /// A `replace` did not chain onto the asset's current state.
-    ///
-    /// Invariant 17's stale revival, invariant 18's epoch regression, or an asset that has been
-    /// deleted since the session opened. One answer for all three: the client's move is the same
-    /// — re-read the asset and rebase — and distinguishing them would report on state the caller
-    /// may not be entitled to.
-    #[error("this manifest does not follow the asset's current state")]
-    #[problem(status = 409, title = "Stale revival")]
-    ReplaceRefused {
         /// The stable catalog code.
         #[problem(extension)]
         code: &'static str,
@@ -1064,12 +1056,14 @@ pub async fn create_upload(
     // against the cap: the client is given a fresh one to send its bytes again.
     let mut refused = None;
     if let Some(existing) = active_session_for(live.iter(), &owner, &request.hash, &album) {
-        // A full session nobody claimed is finished here, before the offset is handed back: a
-        // client told it is at its size sends nothing more, so this answer is the last request
-        // it makes about these bytes (#830).
+        // A full session nobody claimed has its finalization started here, before the offset is
+        // handed back: a client told it is at its size sends nothing more, so this answer may be
+        // the last request it makes about these bytes (#830). Started, never awaited: the answer
+        // is the session as it stands, `waiting_for_processing`, and the client reads the
+        // outcome from `HEAD`.
         let finished = finish_if_full(&upload, &attestation, existing).await;
         match finished {
-            None | Some(Ok(Outcome::Committed { .. } | Outcome::AlreadyClaimed)) => {
+            None | Some(Ok(finalize::Started::Claimed(_) | finalize::Started::AlreadyClaimed)) => {
                 // A finish moved the session past `Uploading`, and its expiry headers are the
                 // post-finish record's: a session no longer evictable lives to the cap, so the
                 // snapshot taken before the finish would report the survival floor instead.
@@ -1088,14 +1082,14 @@ pub async fn create_upload(
                 let headers = CreateHeaders::of(&upload, &current, Some(current.received_bytes));
                 return Ok(WithHeaders::new(CreateReply::Existing(body), headers));
             }
-            // Whether the session finished is unknown: it is claimed and recovery drives it, or
-            // it failed and the client's next create opens a fresh one. Either is a retry away.
-            Some(Err(FinalizeFailure::Unavailable(_))) => {
+            // The claim could not be taken: the session is still full and unclaimed, and the
+            // client's retry starts it.
+            Some(Err(_)) => {
                 return Err(CreateRejection::unavailable(upload.clock()));
             }
-            // Refused and left `FailedProcessing` with its stage dropped, or gone: the bytes are
-            // not held, so the create carries on and opens a session to receive them again.
-            Some(Ok(Outcome::NotFound) | Err(_)) => {
+            // Gone between the listing and the claim: the bytes are not held, so the create
+            // carries on and opens a session to receive them again.
+            Some(Ok(finalize::Started::NotFound)) => {
                 tracing::info!(
                     upload_id = %existing.upload_id,
                     "a duplicate create's full session did not finalize; opening a fresh one"
@@ -1435,11 +1429,13 @@ pub async fn append_chunk(
     // drift on exactly the case a client hits after losing a connection. What stays here is
     // what genuinely differs — who is allowed to append, and how a refusal is spelled on the
     // wire.
-    // The append and the finalization it triggers are one task, awaited here for the answer: a
-    // client that disconnects drops this future, and neither may stop with it. An append whose
-    // record landed but whose finalization never started leaves a full session nobody finishes;
-    // a finalization stopped between the commit and the index write strands the claim and
-    // orphans the bytes (#801, #818).
+    // The append and the finalize claim it leads to are one task, awaited here for the answer:
+    // a client that disconnects drops this future, and neither may stop with it, because an
+    // append whose record landed but whose claim was never taken leaves a full session nobody
+    // finishes (#801, #818). The finalization itself runs detached and is never awaited: the
+    // completing chunk is answered `waiting_for_processing` as soon as the claim is held, so the
+    // answer does not depend on how long a re-hash of the blob takes.
+    let declared_size = record.total_size;
     let landed = tokio::spawn(
         append_and_finish(
             upload.clone(),
@@ -1465,11 +1461,16 @@ pub async fn append_chunk(
         ChunkRejection::unavailable(upload.clock())
     })?;
 
-    if let Some(finalized) = landed.finalized {
-        match finalized {
-            Ok(Outcome::Committed { .. } | Outcome::AlreadyClaimed) => {}
-            Ok(Outcome::NotFound) => return Err(ChunkRejection::session_not_found()),
-            Err(failure) => return Err(ChunkRejection::from_failure(failure, upload.clock())),
+    if let Some(started) = landed.finalized {
+        match started {
+            Ok(finalize::Started::Claimed(_) | finalize::Started::AlreadyClaimed) => {}
+            Ok(finalize::Started::NotFound) => return Err(ChunkRejection::session_not_found()),
+            // The claim could not be taken. The chunk is recorded and the session is full and
+            // unclaimed, so the client's resend of it — or its `HEAD` — starts the finish.
+            Err(failure) => {
+                tracing::warn!(upload_id = %id, %failure, "a full session's finalization could not be claimed");
+                return Err(ChunkRejection::unavailable(upload.clock()));
+            }
         }
     }
 
@@ -1503,10 +1504,24 @@ pub async fn append_chunk(
         chunk::Accepted::SessionGone => return Err(ChunkRejection::session_not_found()),
     };
 
+    // A session holding every byte is claimed — by this chunk, or by the request that raced it
+    // — and finalizing; anything short of that is still uploading.
+    let upload_status = if next_offset == declared_size {
+        UploadSessionStatus::WaitingForProcessing
+    } else {
+        UploadSessionStatus::Uploading
+    };
+    tracing::debug!(
+        upload_id = %id,
+        next_offset,
+        status = upload_status.as_str(),
+        "acknowledged a chunk"
+    );
     Ok(WithHeaders::new(
         NoContent,
         OffsetHeader {
             offset: next_offset,
+            upload_status: upload_status.as_str().to_owned(),
         },
     ))
 }
@@ -1515,19 +1530,19 @@ pub async fn append_chunk(
 struct Landed {
     /// What the append did.
     accepted: chunk::Accepted,
-    /// The finalization the chunk ran — present when it completed the session, or replayed a
-    /// chunk of a full session nobody had finished.
-    finalized: Option<Result<Outcome, FinalizeFailure>>,
+    /// The finalization the chunk started — present when it completed the session, or replayed
+    /// a chunk of a full session nobody had finished. Started, never awaited.
+    finalized: Option<Result<finalize::Started, FinalizeFailure>>,
 }
 
 /// Append one chunk and, when the session then holds every byte and nobody has claimed its
-/// finish, finalize it.
+/// finish, take the claim and start finalization detached.
 ///
 /// Run as its own task by [`append_chunk`], so it reaches its end whether or not the request
-/// does. Finalizing on a replay is what finishes a session the completing request left full
-/// and unclaimed — a request dropped while its progress write was in flight, or a process that
-/// died before claiming: the client's resend of its last chunk is the one request left to
-/// finish it, and [`finalize::finalize`]'s claim makes a replay that races the original request
+/// does. Starting finalization on a replay is what finishes a session the completing request
+/// left full and unclaimed — a request dropped while its progress write was in flight, or a
+/// process that died before claiming: the client's resend of its last chunk is one request left
+/// to finish it, and [`finalize::start`]'s claim makes a replay that races the original request
 /// stand down rather than finalize twice.
 async fn append_and_finish(
     upload: UploadContext,
@@ -1556,7 +1571,7 @@ async fn append_and_finish(
             }
     );
     let finalized = if finishes {
-        Some(finalize::finalize(&upload, &attestation, &record.upload_id).await)
+        Some(finalize::start(&upload, &attestation, &record.upload_id).await)
     } else {
         None
     };
@@ -1566,37 +1581,24 @@ async fn append_and_finish(
     })
 }
 
-/// Finalize `record` when it holds every declared byte and nobody has claimed its finalization.
+/// Start the finalization of `record` when it holds every declared byte and nobody has claimed
+/// it.
 ///
 /// `None` when there is nothing to finish: the session is short of its size, already claimed or
 /// terminal, or a guest drop — whose finish is the drop surface's deposit, never a finalization,
-/// and which boot recovery deposits. Otherwise the same finish a replayed chunk runs, as its own
-/// task for the reason [`append_chunk`] spawns one: a client that goes away mid-finalization
-/// must not stop it between the commit and the index write.
+/// and which boot recovery deposits. Otherwise the claim is taken and finalization runs detached,
+/// exactly as for a completing chunk: the caller answers the session as it stands,
+/// `waiting_for_processing`, and never waits for the outcome.
 async fn finish_if_full(
     upload: &UploadContext,
     attestation: &crate::attestation::AttestationContext,
     record: &UploadSessionRecord,
-) -> Option<Result<Outcome, FinalizeFailure>> {
+) -> Option<Result<finalize::Started, FinalizeFailure>> {
     if !record.is_full_and_unclaimed() || record.is_guest_drop() {
         return None;
     }
-    let id = record.upload_id.clone();
-    tracing::info!(upload_id = %id, "finalizing a full session nobody claimed");
-    let task = {
-        let (upload, attestation, id) = (upload.clone(), attestation.clone(), id.clone());
-        tokio::spawn(
-            async move { finalize::finalize(&upload, &attestation, &id).await }
-                .instrument(tracing::Span::current()),
-        )
-    };
-    Some(task.await.unwrap_or_else(|join| {
-        // A panic inside the finalization. A claim it held is left for the next boot's recovery.
-        tracing::error!(upload_id = %id, error = %join, "the finalization task did not finish");
-        Err(FinalizeFailure::Unavailable(
-            "the finalization task did not finish".to_owned(),
-        ))
-    }))
+    tracing::info!(upload_id = %record.upload_id, "starting the finalization of a full session nobody claimed");
+    Some(finalize::start(upload, attestation, &record.upload_id).await)
 }
 
 /// Charge a just-opened session's address again, after a create charged it `AlreadyAttributed`.
@@ -1670,10 +1672,12 @@ async fn reread_finished(
 /// The answer carries **no body** — HTTP forbids one on `HEAD`, which is why the protocol puts
 /// all three on headers.
 ///
-/// A session that holds every byte and whose finalization nobody claimed is finalized before it
-/// is reported: a client resuming at an offset equal to the size sends nothing more, so
-/// this is the last request it makes about the session, and the state it reads is the one the
-/// finalization left.
+/// A session that holds every byte and whose finalization nobody claimed has its finalization
+/// started before it is reported: a client resuming at an offset equal to the size sends nothing
+/// more, so this may be the last request it makes about the session. The finalization is never
+/// awaited — the answer is the state as it stands, `waiting_for_processing` — and the client
+/// polls this operation, with backoff, until the state is terminal. A `failed_processing` state
+/// carries the failure's `error.*` code in `X-Capsule-Upload-Error`.
 #[kynos::head("/v1/upload/{id}", operation_id = "head_upload", tag = UploadTag)]
 pub async fn head_upload(
     Auth(credential): Auth<AccessToken>,
@@ -1682,11 +1686,11 @@ pub async fn head_upload(
     Path(path): Path<UploadPath>,
 ) -> Result<WithHeaders<HeadReply, HeadHeaders>, SessionRejection> {
     let mut record = session_for(&upload, &path, &credential.user).await?;
-    if let Some(finished) = finish_if_full(&upload, &attestation, &record).await {
-        // Whatever the finalization did, the record now says so — `Completed`, `FailedProcessing`,
-        // or still claimed for recovery — and that is the answer, not the outcome's shape.
-        if let Err(failure) = finished {
-            tracing::info!(upload_id = %record.upload_id, %failure, "a full session reported by HEAD did not finalize");
+    if let Some(started) = finish_if_full(&upload, &attestation, &record).await {
+        // Whatever the start did, the record now says so — claimed, or still full and unclaimed
+        // when the claim could not be taken — and that is the answer, not the start's shape.
+        if let Err(failure) = started {
+            tracing::info!(upload_id = %record.upload_id, %failure, "a full session reported by HEAD could not be claimed");
         }
         record = upload
             .sessions()
@@ -1709,6 +1713,7 @@ pub async fn head_upload(
             advice: Advice::for_size(record.total_size).to_string(),
             expires_in: expiry.expires_in,
             idle_expires_in: expiry.idle_expires_in,
+            upload_error: failure_code_of(&record),
             // A cached offset is a client that re-sends bytes the server already has, or skips
             // bytes it does not.
             cache_control: "no-store".to_owned(),
@@ -1757,6 +1762,16 @@ pub async fn cancel_upload(
 // ===========================================================================================
 // Helpers
 // ===========================================================================================
+
+/// The `error.*` code a `failed_processing` session reports, and nothing for any other state.
+///
+/// A code is only meaningful beside the status it explains, so a record in any other state
+/// reports none whatever it holds.
+pub(crate) fn failure_code_of(record: &UploadSessionRecord) -> Option<String> {
+    (record.status == UploadSessionStatus::FailedProcessing)
+        .then(|| record.failure_code.clone())
+        .flatten()
+}
 
 /// The session `path` names, if this caller may see it.
 ///
@@ -2106,20 +2121,6 @@ impl ChunkRejection {
         )
     }
 
-    fn content_hash_mismatch() -> Self {
-        Self::invalid(
-            error_codes::UPLOAD_CONTENT_HASH_MISMATCH,
-            "the stored bytes do not hash to the declared content hash",
-        )
-    }
-
-    fn envelope_rejected() -> Self {
-        Self::invalid(
-            error_codes::UPLOAD_ENVELOPE_REJECTED,
-            "the manifest envelope did not survive re-validation at finalization",
-        )
-    }
-
     fn offset_mismatch(offset: u64) -> Self {
         Self::OffsetMismatch {
             offset,
@@ -2161,22 +2162,6 @@ impl ChunkRejection {
         Self::Unavailable {
             code: error_codes::UPLOAD_UNAVAILABLE,
             retry_after: retry_at(clock, UNAVAILABLE_RETRY),
-        }
-    }
-
-    /// The answer for a finalization the completing chunk triggered and that did not commit.
-    fn from_failure(failure: FinalizeFailure, clock: &dyn Clock) -> Self {
-        match failure {
-            FinalizeFailure::ContentHashMismatch { .. } => Self::content_hash_mismatch(),
-            FinalizeFailure::EnvelopeRejected(_) => Self::envelope_rejected(),
-            FinalizeFailure::StorageInconsistent { .. } => Self::storage_inconsistent(),
-            FinalizeFailure::ReplaceIncomplete { .. } => Self::ReplaceIncomplete {
-                code: error_codes::UPLOAD_REPLACE_INCOMPLETE,
-            },
-            FinalizeFailure::ReplaceRefused { .. } => Self::ReplaceRefused {
-                code: error_codes::UPLOAD_STALE_REVIVAL,
-            },
-            FinalizeFailure::Unavailable(_) => Self::unavailable(clock),
         }
     }
 }

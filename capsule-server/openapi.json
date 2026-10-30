@@ -15013,7 +15013,7 @@
           "upload"
         ],
         "summary": "Report a session's progress and state.",
-        "description": "The resumption primitive: a client that lost a connection, an acknowledgement, or a process\nasks here and learns the authoritative offset, the declared length and the session's state.\nThe answer carries **no body** — HTTP forbids one on `HEAD`, which is why the protocol puts\nall three on headers.\n\nA session that holds every byte and whose finalization nobody claimed is finalized before it\nis reported: a client resuming at an offset equal to the size sends nothing more, so\nthis is the last request it makes about the session, and the state it reads is the one the\nfinalization left.",
+        "description": "The resumption primitive: a client that lost a connection, an acknowledgement, or a process\nasks here and learns the authoritative offset, the declared length and the session's state.\nThe answer carries **no body** — HTTP forbids one on `HEAD`, which is why the protocol puts\nall three on headers.\n\nA session that holds every byte and whose finalization nobody claimed has its finalization\nstarted before it is reported: a client resuming at an offset equal to the size sends nothing\nmore, so this may be the last request it makes about the session. The finalization is never\nawaited — the answer is the state as it stands, `waiting_for_processing` — and the client\npolls this operation, with backoff, until the state is terminal. A `failed_processing` state\ncarries the failure's `error.*` code in `X-Capsule-Upload-Error`.",
         "operationId": "head_upload",
         "parameters": [
           {
@@ -15246,6 +15246,16 @@
                   "type": "integer",
                   "minimum": 0.0,
                   "format": "uint64"
+                }
+              },
+              "X-Capsule-Upload-Error": {
+                "description": "For a `failed_processing` session, the `error.*` code finalization failed with.\n\nThe one channel through which a client learns `content_hash_mismatch`,\n`envelope_rejected`, `replace_incomplete` or `stale_revival`: no request waits on\nfinalization, so the request that completed the session never hears it.",
+                "required": false,
+                "schema": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
                 }
               },
               "Cache-Control": {
@@ -15752,6 +15762,13 @@
                   "format": "uint64"
                 }
               },
+              "X-Capsule-Upload-Status": {
+                "description": "Where the session stands: `uploading`, or `waiting_for_processing` once it holds every\ndeclared byte. The completing chunk is answered as soon as finalization is claimed, never\nonce it finishes; the client reads the outcome from `HEAD`.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Request-Id": {
                 "description": "The UUIDv7 this server minted for the request. Quote it when reporting a failure: it names the request's log lines. Never taken from the client.",
                 "required": true,
@@ -15829,7 +15846,7 @@
             }
           },
           "409": {
-            "description": "Offset mismatch; Chunk conflict; Replace incomplete; Stale revival; Session not active",
+            "description": "Offset mismatch; Chunk conflict; Session not active",
             "headers": {
               "X-Capsule-Protocol-Min": {
                 "description": "The oldest protocol version this server accepts.",
@@ -19578,6 +19595,16 @@
                   "format": "uint64"
                 }
               },
+              "X-Capsule-Upload-Status": {
+                "description": "Where a resumed session is in its state machine — `waiting_for_processing` once a\nduplicate create has started the finalization of a full session nobody had claimed.",
+                "required": false,
+                "schema": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
               "X-Request-Id": {
                 "description": "The UUIDv7 this server minted for the request. Quote it when reporting a failure: it names the request's log lines. Never taken from the client.",
                 "required": true,
@@ -19666,6 +19693,16 @@
                   ],
                   "minimum": 0.0,
                   "format": "uint64"
+                }
+              },
+              "X-Capsule-Upload-Status": {
+                "description": "Where a resumed session is in its state machine — `waiting_for_processing` once a\nduplicate create has started the finalization of a full session nobody had claimed.",
+                "required": false,
+                "schema": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
                 }
               },
               "X-Request-Id": {
@@ -30152,6 +30189,13 @@
                   "format": "uint64"
                 }
               },
+              "X-Capsule-Upload-Status": {
+                "description": "`uploading`, or `waiting_for_processing` once the drop holds every declared byte and its\ndeposit is running. The deposit is never awaited by the chunk that completes it.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              },
               "X-Request-Id": {
                 "description": "The UUIDv7 this server minted for the request. Quote it when reporting a failure: it names the request's log lines. Never taken from the client.",
                 "required": true,
@@ -32477,6 +32521,13 @@
           "last_progress_at": {
             "type": "string",
             "description": "When the last chunk was accepted, RFC 3339, or the creation time if none.\n\nWhat the survival floor is measured from, so a client can tell which of its stalled\nsessions is closest to being evicted."
+          },
+          "error_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For a `failed_processing` session, the `error.*` code finalization failed with — the\nsame code `HEAD` carries in `X-Capsule-Upload-Error`. Absent for every other state."
           }
         },
         "type": "object",
