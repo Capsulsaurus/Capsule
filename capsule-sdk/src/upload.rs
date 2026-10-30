@@ -871,7 +871,8 @@ pub enum UploadError {
     RetriesExhausted(String),
     /// The server kept answering with a retryable status (any `5xx`, `408`, `425`, `429`, or
     /// a wait code) and the transfer gave up waiting it out once its recovery budget, the
-    /// lane's shared retry budget or the retry engine's backoff was spent. Carries the last
+    /// lane's shared retry budget or the retry engine's backoff was spent; or it was still
+    /// finalizing the session when the finalization poll's deadline passed. Carries the last
     /// answer's status and stable `error.*` code, so a caller still localizes what the server
     /// said. Transient: a later run may find the server recovered.
     #[error(
@@ -2088,7 +2089,8 @@ impl UploadClient {
     /// before it answered the completing chunk and sends no state, so its accepted final chunk
     /// is the outcome. A `HEAD` the server asks to wait is waited out under the transfer's
     /// recovery budget; the poll itself charges nothing and is bounded by
-    /// [`FINALIZE_POLL_DEADLINE`].
+    /// [`FINALIZE_POLL_DEADLINE`], past which it gives up with [`UploadError::WaitsExhausted`]:
+    /// a server that answered every poll is slow, not a stuck link.
     async fn settle(
         &self,
         session_id: &str,
@@ -2141,10 +2143,18 @@ impl UploadClient {
                 _ => {}
             }
             if waited >= FINALIZE_POLL_DEADLINE {
-                return Err(UploadError::RetriesExhausted(format!(
-                    "session {session_id} was still finalizing after {polls} polls over {}s",
-                    waited.as_secs()
-                )));
+                // The server answered every poll; it is slow to finalize, not unreachable. That
+                // is a wait the server asked for, never a stuck link.
+                tracing::warn!(%session_id, polls, waited_ms = millis(waited), status = %info.status, "the server was still finalizing at the poll deadline; giving up waiting");
+                return Err(UploadError::WaitsExhausted {
+                    status: 200,
+                    code: None,
+                    message: format!("session {session_id} is still {}", info.status),
+                    reason: format!(
+                        "the finalization poll gave up after {polls} polls over {}s",
+                        waited.as_secs()
+                    ),
+                });
             }
             tracing::debug!(%session_id, polls, ?wait, status = %info.status, "finalizing; polling HEAD again");
             self.sleeper.sleep(wait).await;

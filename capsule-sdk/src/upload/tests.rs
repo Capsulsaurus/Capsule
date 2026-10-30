@@ -2088,8 +2088,9 @@ async fn a_server_that_sends_no_state_is_not_polled() {
 }
 
 /// Against a server that stays `waiting_for_processing`, the poll's waits start at 100 ms and
-/// double up to their 5 s ceiling, and the poll gives up with `RetriesExhausted` once their sum
-/// reaches the 30-minute deadline rather than polling a server that never answers. Time is
+/// double up to their 5 s ceiling, and the poll gives up with `WaitsExhausted` — a slow server,
+/// not a stuck link — once their sum reaches the 30-minute deadline rather than polling a
+/// server that never finishes. Time is
 /// paused, so the waits are read off the clock the `HEAD`s arrive at, not slept.
 #[tokio::test(start_paused = true)]
 async fn the_finalization_poll_backs_off_and_is_bounded() {
@@ -2117,8 +2118,8 @@ async fn the_finalization_poll_backs_off_and_is_bounded() {
         .await
         .expect_err("a finalization that never ends fails the upload");
     assert!(
-        matches!(error, UploadError::RetriesExhausted(_)),
-        "expected the poll to give up, got {error:?}"
+        matches!(error, UploadError::WaitsExhausted { status: 200, .. }),
+        "expected the poll to give up waiting, got {error:?}"
     );
 
     let arrivals = arrivals.lock().expect("arrivals");

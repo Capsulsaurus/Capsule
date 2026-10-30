@@ -126,12 +126,14 @@ impl From<FfiPathSnapshot> for PathSample {
     }
 }
 
-/// What a finished push says about the link, for the adverse detector: a push that completed
+/// What a finished push says about the link, for the adverse detector: a push that moved bytes
 /// is a clean transfer, one that gave up on the transport a reset, and one that exhausted its
-/// recovery budget a stall. A refusal, a server that kept answering "wait", an auth failure or
-/// a local error says nothing about the link, so it records nothing.
+/// recovery budget a stall. A push that moved nothing (every blob held or deferred), a
+/// refusal, a server that kept answering "wait" or was still finalizing at the poll deadline,
+/// an auth failure or a local error says nothing about the link, so it records nothing.
 pub(crate) fn link_signal(pushed: &Result<AssetPushReport, PushError>) -> Option<TransferSignal> {
     match pushed {
+        Ok(report) if report.is_no_op() => None,
         Ok(_) => Some(TransferSignal::Clean),
         Err(PushError::Upload(UploadError::Transport(_))) => Some(TransferSignal::Reset),
         Err(PushError::Upload(UploadError::RetriesExhausted(_))) => Some(TransferSignal::Stall),

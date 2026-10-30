@@ -92,9 +92,25 @@ fn every_field_maps_onto_the_sample() {
 
 #[test]
 fn only_link_failures_are_link_signals() {
+    let moved = AssetPushReport {
+        pushed: vec![crate::push::PushedBlob {
+            tier: capsule_library::import::UploadTier::Index,
+            hash: "ab".repeat(32),
+            outcome: crate::staged::TierSessionOutcome::Uploaded {
+                session_id: "sess".into(),
+            },
+        }],
+        ..AssetPushReport::default()
+    };
+    assert_eq!(link_signal(&Ok(moved)), Some(TransferSignal::Clean));
+    // A push that moved nothing — every tier held back by the plan, or already on the
+    // server — never touched the link, so it cannot vouch for it.
     assert_eq!(
-        link_signal(&Ok(AssetPushReport::default())),
-        Some(TransferSignal::Clean)
+        link_signal(&Ok(AssetPushReport {
+            deferred: 3,
+            ..AssetPushReport::default()
+        })),
+        None
     );
     assert_eq!(
         link_signal(&Err(PushError::Upload(UploadError::Transport(
@@ -123,6 +139,16 @@ fn only_link_failures_are_link_signals() {
             code: None,
             message: "busy".into(),
             reason: "the recovery budget ran out".into(),
+        }))),
+        None
+    );
+    // Nor is one still finalizing at the poll deadline: it answered every poll.
+    assert_eq!(
+        link_signal(&Err(PushError::Upload(UploadError::WaitsExhausted {
+            status: 200,
+            code: None,
+            message: "session sess is still waiting_for_processing".into(),
+            reason: "the finalization poll gave up after 370 polls over 1800s".into(),
         }))),
         None
     );
