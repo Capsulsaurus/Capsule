@@ -22,6 +22,7 @@ use capsule_library::import::UploadTier;
 use tracing::instrument;
 
 pub mod negotiation;
+pub mod path;
 
 /// The closed connection-class enum, evaluated continuously on-device.
 /// Consumers: sync criteria (small/large reconciliation), staged-upload tier
@@ -324,6 +325,14 @@ impl AdverseDetector {
                 self.consecutive_clean = 0;
             }
         }
+    }
+
+    /// Forget every outcome observed so far and return to non-adverse: the link they were
+    /// observed on is gone ([`path::PathMonitor::observe`] calls this on a new path).
+    pub fn reset(&mut self) {
+        self.recent.clear();
+        self.consecutive_clean = 0;
+        self.adverse = false;
     }
 
     /// Whether the link is currently promoted to `adverse`.
