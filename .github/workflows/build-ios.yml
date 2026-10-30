@@ -44,7 +44,7 @@ jobs:
     runs-on: macos-26
     steps:
       - name: Check out code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Select Xcode
         uses: maxim-lobanov/setup-xcode@v1
@@ -114,7 +114,7 @@ jobs:
     runs-on: [self-hosted, macos, secure-enclave]
     steps:
       - name: Check out code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up mise
         uses: jdx/mise-action@v2
