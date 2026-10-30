@@ -933,11 +933,23 @@ pub async fn refresh_token(
         return Err(RefreshRejection::session_expired());
     }
 
-    // No hard-cap check of its own: the store never holds a record past its lineage's cap (see
-    // `AuthStateStore::open_session`), so a session past it was refused above as "no live
-    // session", and the successor below is opened — and its refresh token minted — only for
-    // what is left of the cap.
+    // The lifetimes this process was configured with, measured from the issuance that last
+    // opened the record. The store already drops a record at the deadline it was opened under,
+    // but a restart may have lowered `SESSION_TTL_DAYS` or `SESSION_HARD_CAP_DAYS` since: a
+    // record idle past the new window, or a lineage past the new cap, is still held under the
+    // old deadline and must end here rather than rotate into an already-expired successor.
+    // Past this check the successor below has life left under both, so its refresh token is
+    // minted for what remains of the window clipped to the cap.
     let now = auth.clock().now();
+    let deadline = auth.sessions().expires_at(&record, record.created_at);
+    if deadline <= now {
+        tracing::info!(
+            session_id = %session,
+            %deadline,
+            "a refresh was refused: the session is past its configured lifetime"
+        );
+        return Err(RefreshRejection::session_expired());
+    }
     let rotated = new_session_id();
     let successor = SessionRecord {
         session_id: rotated.clone(),

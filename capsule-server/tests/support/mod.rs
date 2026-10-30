@@ -1215,6 +1215,7 @@ pub(crate) struct SwitchableSessions {
     inner: InMemoryAuthState,
     unavailable: AtomicBool,
     unavailable_after_authentication: AtomicBool,
+    lowered: Mutex<Option<(SignedDuration, SignedDuration)>>,
 }
 
 impl SwitchableSessions {
@@ -1224,7 +1225,25 @@ impl SwitchableSessions {
             inner: InMemoryAuthState::new(clock, SESSION_TTL).with_hard_cap(SESSION_HARD_CAP),
             unavailable: AtomicBool::new(false),
             unavailable_after_authentication: AtomicBool::new(false),
+            lowered: Mutex::new(None),
         }
+    }
+
+    /// Report `ttl` and `hard_cap` from now on, while every record already stored keeps the
+    /// deadline it was opened under.
+    ///
+    /// The restart of a durable store under a lowered `SESSION_TTL_DAYS` or
+    /// `SESSION_HARD_CAP_DAYS`: the new process reads the new values, and the records the old
+    /// one wrote still expire on the old schedule.
+    pub(crate) fn lower_lifetimes(&self, ttl: SignedDuration, hard_cap: SignedDuration) {
+        *self.lowered.lock().unwrap_or_else(PoisonError::into_inner) = Some((ttl, hard_cap));
+    }
+
+    fn lifetimes(&self) -> (SignedDuration, SignedDuration) {
+        self.lowered
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .unwrap_or((self.inner.ttl(), self.inner.hard_cap()))
     }
 
     /// Make every subsequent operation fail, or stop.
@@ -2051,11 +2070,11 @@ impl ChallengeStore for SwitchableChallenges {
 
 impl AuthStateStore for SwitchableSessions {
     fn ttl(&self) -> SignedDuration {
-        self.inner.ttl()
+        self.lifetimes().0
     }
 
     fn hard_cap(&self) -> SignedDuration {
-        self.inner.hard_cap()
+        self.lifetimes().1
     }
 
     fn open_session(&self, record: SessionRecord) -> StoreFuture<'_, ()> {
