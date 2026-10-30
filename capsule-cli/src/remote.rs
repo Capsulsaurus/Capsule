@@ -1122,7 +1122,11 @@ pub struct AssetPushFailure {
     /// `reseal`, `unknown_blob`, `verify_unavailable`, `not_durable`, `receipt_missing`,
     /// `receipt_rejected`, `receipt_store` or `album_keys_not_escrowed`.
     pub kind: &'static str,
-    /// The server's stable `error.*` code, when it supplied one.
+    /// The server's stable `error.*` code, when it supplied one. For a blob the server refused
+    /// at finalization — `error.upload.content_hash_mismatch`, `envelope_rejected`,
+    /// `replace_incomplete`, `stale_revival` — it is the code the session's terminal
+    /// `failed_processing` state carried (`X-Capsule-Upload-Error`), which the transfer reads
+    /// from `HEAD` once the server has finished finalizing.
     pub code: Option<String>,
     /// The English detail.
     pub message: String,
@@ -1135,7 +1139,9 @@ pub struct AssetPushOutcome {
     pub asset_id: String,
     /// Where the asset ended up.
     pub status: AssetPushStatus,
-    /// Blobs transferred to completion this run (planned, on a dry run).
+    /// Blobs transferred to their terminal outcome this run: every byte sent and the session
+    /// reported `completed` once the server finished finalizing it (planned, on a dry run). A
+    /// blob finalization refused is the asset's `error` instead.
     pub uploaded: usize,
     /// Blobs the server already held and merged onto (`duplicate_blob`).
     pub merged: usize,
@@ -1260,7 +1266,7 @@ pub struct PushSummary {
     pub held_records: Vec<TrashOutcome>,
     /// Verified custody receipts persisted to the library this run.
     pub receipts: usize,
-    /// Blobs transferred to completion.
+    /// Blobs transferred and finalized: the server reported each session `completed`.
     pub uploaded_blobs: usize,
     /// Blobs the server already held and merged onto (`duplicate_blob`).
     pub merged_blobs: usize,
