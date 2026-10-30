@@ -64,6 +64,7 @@ An account's log keeps events for **90 days** and at most **1,000 events**, whic
 
 - A read never returns an event older than 90 days, whether or not it has been deleted yet.
 - Recording an event deletes the same account's events beyond either bound, in the same operation, so the log of an active account never exceeds its bound.
+- An account that records nothing more keeps its expired rows, unread, until it next records. Deleting them sooner is an operator sweep over the table, not a request's work.
 - The count bound is what keeps a burst of events (a scripted sign-in loop against the second factor) from growing the table without limit; the rate limits below already slow it.
 
 ## The Port
