@@ -348,6 +348,22 @@ fn a_rejected_upload_carries_the_servers_code() {
     .failure();
     assert_eq!(failure.kind, "upload");
     assert_eq!(failure.code.as_deref(), Some("error.upload.unavailable"));
+
+    // A coded answer the transfer waited out and gave up on keeps its code too.
+    let failure = AssetError::from(PushError::Upload(
+        capsule_sdk::upload::UploadError::WaitsExhausted {
+            status: 500,
+            code: Some("error.upload.storage_inconsistent".into()),
+            message: "the staged upload and the session's byte count disagree".into(),
+            reason: "server-requested wait: exceeded 64 recovery attempts".into(),
+        },
+    ))
+    .failure();
+    assert_eq!(failure.kind, "upload");
+    assert_eq!(
+        failure.code.as_deref(),
+        Some("error.upload.storage_inconsistent")
+    );
 }
 
 /// **The terminal outcome reaches `--json`.** No request waits on finalization, so the SDK reads

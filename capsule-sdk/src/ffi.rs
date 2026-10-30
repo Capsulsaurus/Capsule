@@ -284,11 +284,10 @@ impl From<UploadError> for FfiError {
             return auth.into();
         }
         let code = match &err {
-            UploadError::Rejected { code, .. } => code.clone(),
             UploadError::UpgradeRequired { .. } => {
                 Some(capsule_i18n::error_codes::PROTOCOL_VERSION_UNSUPPORTED.to_owned())
             }
-            _ => None,
+            _ => err.error_code().map(str::to_owned),
         };
         Self::Upload {
             code,

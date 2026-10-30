@@ -2144,6 +2144,25 @@ fn a_refused_create_with_no_newer_epoch_does_not_claim_a_missing_key() {
     }
 }
 
+/// A transfer that gave up waiting out a coded answer reaches the bindings with that code, so
+/// an app still localizes what the server said.
+#[test]
+fn a_given_up_wait_reaches_the_bindings_with_the_servers_code() {
+    let gave_up = UploadError::WaitsExhausted {
+        status: 500,
+        code: Some("error.upload.storage_inconsistent".into()),
+        message: "the staged upload and the session's byte count disagree".into(),
+        reason: "server-requested wait: exceeded 64 recovery attempts".into(),
+    };
+    match FfiError::from(gave_up) {
+        FfiError::Upload { code, detail } => {
+            assert_eq!(code.as_deref(), Some("error.upload.storage_inconsistent"));
+            assert!(detail.contains("HTTP 500"), "{detail}");
+        }
+        other => panic!("expected an Upload error, got {other:?}"),
+    }
+}
+
 // ─── Labels and regions ──────────────────────────────────────────────────────
 
 /// A workspace holding one sealed asset, and that asset's album and id.

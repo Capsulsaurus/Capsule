@@ -115,7 +115,8 @@ pub const PROTOCOL_MAX_CHUNK: u64 = CHUNK_SIZE_16MB;
 
 /// Upper bound on recovery actions (re-align / re-create / re-send) for a single
 /// blob transfer. A live server drives progress well inside this; hitting it
-/// means a stuck peer, so the transfer fails loudly ([`UploadError::RetriesExhausted`])
+/// means a stuck peer, so the transfer fails loudly ([`UploadError::RetriesExhausted`], or
+/// [`UploadError::WaitsExhausted`] carrying the answer when it was waiting out the server)
 /// rather than hot-looping (transfer upload doc, §Session Lifetime and Discard:
 /// "retrying with backoff and halting after a bounded number of attempts").
 const MAX_RECOVERIES: u32 = 64;
@@ -868,6 +869,25 @@ pub enum UploadError {
     /// budget — the peer is stuck; fail loudly rather than hot-loop.
     #[error("upload gave up after exhausting the recovery budget: {0}")]
     RetriesExhausted(String),
+    /// The server kept answering with a retryable status (any `5xx`, `408`, `425`, `429`, or
+    /// a wait code) and the transfer gave up waiting it out once its recovery budget, the
+    /// lane's shared retry budget or the retry engine's backoff was spent. Carries the last
+    /// answer's status and stable `error.*` code, so a caller still localizes what the server
+    /// said. Transient: a later run may find the server recovered.
+    #[error(
+        "upload gave up waiting out the server (last answer HTTP {status}, code {code:?}: \
+         {message}): {reason}"
+    )]
+    WaitsExhausted {
+        /// The last answer's HTTP status.
+        status: u16,
+        /// The last answer's stable `error.*` code, when the server supplied one.
+        code: Option<String>,
+        /// The last answer's English detail message.
+        message: String,
+        /// Which budget ran out, in English.
+        reason: String,
+    },
     /// A server response was missing a required header or otherwise unparsable.
     #[error("malformed server response: {0}")]
     MalformedResponse(String),
@@ -876,6 +896,18 @@ pub enum UploadError {
     /// interactive re-authentication.
     #[error("authentication error: {0}")]
     Auth(#[from] crate::auth::AuthError),
+}
+
+impl UploadError {
+    /// The stable `error.*` code the server supplied with the answer this error reports: a
+    /// refusal's, or the last answer of a wait the transfer gave up on.
+    #[must_use]
+    pub fn error_code(&self) -> Option<&str> {
+        match self {
+            Self::Rejected { code, .. } | Self::WaitsExhausted { code, .. } => code.as_deref(),
+            _ => None,
+        }
+    }
 }
 
 /// The bytes of one blob, read a chunk at a time.
@@ -1005,7 +1037,7 @@ enum ChunkAck {
     /// A retryable answer: `rate_limited`, `unavailable` or `storage_full`, or any other `5xx`,
     /// `408` or `425` — wait (for the `Retry-After` the server sent, when it sent one) and then
     /// resume from HEAD, which says whether anything of the chunk was kept.
-    Backoff(Option<Duration>),
+    Backoff(WaitAsked),
 }
 
 /// Whether `code` is one of the three answers that mean "wait, then resume".
@@ -1061,6 +1093,19 @@ struct WaitAsked {
     message: String,
     /// The `Retry-After` the server sent, when it sent one.
     after: Option<Duration>,
+}
+
+impl WaitAsked {
+    /// The error a transfer ends with when it gives up waiting this answer out: it keeps the
+    /// answer's status and code, and `reason` says which budget ran out.
+    fn gave_up(self, reason: String) -> UploadError {
+        UploadError::WaitsExhausted {
+            status: self.status,
+            code: self.code,
+            message: self.message,
+            reason,
+        }
+    }
 }
 
 impl From<WaitAsked> for UploadError {
@@ -1157,18 +1202,21 @@ impl<'g> Recovery<'g> {
 
     /// Charge a server-asked wait and resolve how long to wait: the server's
     /// `Retry-After` up to [`MAX_SERVER_BACKOFF`], else the engine's schedule.
-    fn server_wait(
-        &mut self,
-        asked: Option<Duration>,
-        action: &str,
-    ) -> Result<Duration, UploadError> {
-        self.charge(action)?;
-        match asked {
-            Some(asked) => Ok(asked.min(MAX_SERVER_BACKOFF)),
+    ///
+    /// Giving up ends the transfer with [`UploadError::WaitsExhausted`], carrying the answer
+    /// waited on, so its stable code still reaches the caller.
+    fn server_wait(&mut self, asked: WaitAsked, action: &str) -> Result<Duration, UploadError> {
+        match self.charge(action) {
+            Ok(()) => {}
+            Err(UploadError::RetriesExhausted(reason)) => return Err(asked.gave_up(reason)),
+            Err(other) => return Err(other),
+        }
+        match asked.after {
+            Some(after) => Ok(after.min(MAX_SERVER_BACKOFF)),
             None => match self.engine.next_backoff(None) {
                 RetryDecision::Retry { after } => Ok(after),
-                RetryDecision::GiveUp => Err(UploadError::RetriesExhausted(format!(
-                    "{action}: the server kept asking for a wait without naming one"
+                RetryDecision::GiveUp => Err(asked.gave_up(format!(
+                    "{action}: the backoff for retryable answers that name no Retry-After is spent"
                 ))),
             },
         }
@@ -1451,7 +1499,7 @@ impl UploadClient {
                     return Ok(outcome);
                 }
                 Err(asked) => {
-                    let wait = recovery.server_wait(asked.after, "session create")?;
+                    let wait = recovery.server_wait(asked, "session create")?;
                     tracing::debug!(?wait, "waiting as the server asked, then creating again");
                     self.sleeper.sleep(wait).await;
                 }
@@ -1478,7 +1526,7 @@ impl UploadClient {
                     return Ok(info);
                 }
                 Err(asked) => {
-                    let wait = recovery.server_wait(asked.after, "progress query")?;
+                    let wait = recovery.server_wait(asked, "progress query")?;
                     tracing::debug!(?wait, "waiting as the server asked, then asking HEAD again");
                     self.sleeper.sleep(wait).await;
                 }
@@ -1626,7 +1674,12 @@ impl UploadClient {
                     ?wait,
                     "a retryable answer to a chunk — backing off"
                 );
-                Ok(ChunkAck::Backoff(wait))
+                Ok(ChunkAck::Backoff(WaitAsked {
+                    status,
+                    code,
+                    message,
+                    after: wait,
+                }))
             }
             _ => Err(UploadError::Rejected {
                 status,

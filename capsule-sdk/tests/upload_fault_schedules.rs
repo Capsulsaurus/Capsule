@@ -610,7 +610,9 @@ async fn run_schedule(
         match attempt {
             Attempt::Killed
             | Attempt::Finished(Err(
-                UploadError::Transport(_) | UploadError::RetriesExhausted(_),
+                UploadError::Transport(_)
+                | UploadError::RetriesExhausted(_)
+                | UploadError::WaitsExhausted { .. },
             )) => {}
             Attempt::Finished(result) => break result,
         }

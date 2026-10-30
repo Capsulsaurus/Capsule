@@ -954,6 +954,56 @@ async fn a_completing_chunk_answered_storage_inconsistent_settles_from_head() {
     }
 }
 
+/// **Giving up on a coded `5xx` keeps its code.** A chunk answered `500 storage_inconsistent`
+/// every time, with no `Retry-After`, is waited out on the engine's backoff until it is spent;
+/// the transfer then ends with the last answer's status and stable code, so a client still
+/// localizes it, and the reason names the spent backoff rather than a wait nobody asked for.
+#[tokio::test(start_paused = true)]
+async fn giving_up_on_a_coded_server_error_keeps_its_code() {
+    let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+        ("POST", "/") => created("sess-stuck", CHUNK_SIZE_256KB),
+        ("PATCH", "/sess-stuck") => MockResponse::api_error(
+            500,
+            "Internal Server Error",
+            error_codes::UPLOAD_STORAGE_INCONSISTENT,
+            "the staged upload and the session's byte count disagree",
+        ),
+        ("HEAD", "/sess-stuck") => MockResponse::new(200, "OK")
+            .header("X-Capsule-Offset", "0")
+            .header("X-Capsule-Content-Length", "4096")
+            .header("X-Capsule-Upload-Status", "pending"),
+        other => panic!("unexpected {other:?}"),
+    })
+    .await;
+
+    let client = server.client(PROTOCOL);
+    let err = client
+        .upload(&request(4096), &[9u8; 4096])
+        .await
+        .unwrap_err();
+
+    match &err {
+        UploadError::WaitsExhausted {
+            status,
+            code,
+            reason,
+            ..
+        } => {
+            assert_eq!(*status, 500);
+            assert_eq!(
+                code.as_deref(),
+                Some(error_codes::UPLOAD_STORAGE_INCONSISTENT)
+            );
+            assert!(reason.contains("name no Retry-After"), "{reason}");
+        }
+        other => panic!("expected the give-up to carry the answer, got {other:?}"),
+    }
+    assert_eq!(
+        err.error_code(),
+        Some(error_codes::UPLOAD_STORAGE_INCONSISTENT)
+    );
+}
+
 /// **A server error that never ends still ends the transfer.** Every wait charges the
 /// transfer's recovery budget and the lane's shared one, so a server answering every chunk
 /// `500` costs a bounded number of requests and fails loudly.
@@ -977,7 +1027,17 @@ async fn a_server_that_always_errs_exhausts_the_budget() {
         .await
         .unwrap_err();
 
-    assert!(matches!(err, UploadError::RetriesExhausted(_)), "{err:?}");
+    assert!(
+        matches!(
+            err,
+            UploadError::WaitsExhausted {
+                status: 500,
+                code: None,
+                ..
+            }
+        ),
+        "the give-up carries the last answer: {err:?}"
+    );
     assert_eq!(lane.remaining(), 0, "the lane's budget bounded the waits");
     assert!(
         requests.load(Ordering::SeqCst) <= 2 + 10,
@@ -1148,7 +1208,11 @@ async fn a_create_that_never_stops_waiting_exhausts_the_budget() {
         .upload(&request(4096), &[9u8; 4096])
         .await
         .unwrap_err();
-    assert!(matches!(err, UploadError::RetriesExhausted(_)), "{err:?}");
+    assert!(
+        matches!(err, UploadError::WaitsExhausted { status: 503, .. }),
+        "{err:?}"
+    );
+    assert_eq!(err.error_code(), Some(error_codes::UPLOAD_UNAVAILABLE));
     assert_eq!(
         creates.load(Ordering::SeqCst),
         MAX_RECOVERIES as usize + 1,
@@ -2441,10 +2505,12 @@ async fn transfers_to_one_server_share_its_lane_retry_budget() {
     let client = server.client(PROTOCOL).with_lane_retries(lane.clone());
     assert!(client.lane_retries().same_as(&lane));
     let first = client.upload(&request(4096), &[9u8; 4096]).await;
+    let first = first.unwrap_err();
     assert!(
-        matches!(first, Err(UploadError::RetriesExhausted(_))),
+        matches!(first, UploadError::WaitsExhausted { status: 503, .. }),
         "{first:?}"
     );
+    assert_eq!(first.error_code(), Some(error_codes::UPLOAD_UNAVAILABLE));
     assert_eq!(
         creates.load(Ordering::SeqCst),
         4,
@@ -2452,10 +2518,12 @@ async fn transfers_to_one_server_share_its_lane_retry_budget() {
     );
 
     let second = client.clone().upload(&request(4096), &[9u8; 4096]).await;
+    let second = second.unwrap_err();
     assert!(
-        matches!(second, Err(UploadError::RetriesExhausted(_))),
+        matches!(second, UploadError::WaitsExhausted { status: 503, .. }),
         "{second:?}"
     );
+    assert_eq!(second.error_code(), Some(error_codes::UPLOAD_UNAVAILABLE));
     assert_eq!(
         creates.load(Ordering::SeqCst),
         5,
