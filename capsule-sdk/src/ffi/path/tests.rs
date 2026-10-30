@@ -116,4 +116,14 @@ fn only_link_failures_are_link_signals() {
         }))),
         None
     );
+    // A server that kept answering "wait" is a busy server on a working link.
+    assert_eq!(
+        link_signal(&Err(PushError::Upload(UploadError::WaitsExhausted {
+            status: 503,
+            code: None,
+            message: "busy".into(),
+            reason: "the recovery budget ran out".into(),
+        }))),
+        None
+    );
 }
