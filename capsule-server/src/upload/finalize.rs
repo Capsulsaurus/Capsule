@@ -1267,11 +1267,14 @@ async fn complete(context: &UploadContext, upload: &UploadId) -> Result<(), Fina
     Ok(())
 }
 
-/// Step 8, the losing half: the bytes go and the session is terminal.
+/// Step 8, the losing half: the bytes go, the session is terminal, and its quota reservation
+/// goes back.
 ///
 /// Best-effort by construction — it runs *because* something already failed, and a second
-/// failure here must not replace the diagnosis the caller is about to return. Both halves are
-/// logged so an operator sees a stage that outlived its session.
+/// failure here must not replace the diagnosis the caller is about to return. Every step is
+/// logged so an operator sees a stage that outlived its session or a reservation that did.
+/// The release is [`super::reservation::release`]'s, which keeps the attribution when the
+/// bytes did reach the store before a later step failed.
 async fn fail(context: &UploadContext, upload: &UploadId) {
     match context.blobs().abandon(upload).await {
         Ok(dropped) => tracing::debug!(%upload, dropped, "dropped the staged bytes"),
@@ -1279,12 +1282,16 @@ async fn fail(context: &UploadContext, upload: &UploadId) {
             tracing::error!(%upload, %error, "a failed upload's stage could not be dropped");
         }
     }
-    if let Err(error) = context
+    match context
         .sessions()
         .set_status(upload, UploadSessionStatus::FailedProcessing)
         .await
     {
-        tracing::error!(%upload, %error, "a failed upload's session could not be marked");
+        Ok(Some(failed)) => super::reservation::release_logged(context, &failed).await,
+        Ok(None) => tracing::debug!(%upload, "a failed upload's session was already gone"),
+        Err(error) => {
+            tracing::error!(%upload, %error, "a failed upload's session could not be marked");
+        }
     }
 }
 

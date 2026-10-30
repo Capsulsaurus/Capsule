@@ -1026,6 +1026,7 @@ fn compose(
             blobs.clone(),
             index.clone(),
             authority.clone(),
+            quotas.clone(),
             clock.clone(),
             // The window the operator configured, not the crate default: this policy is what
             // the handshake enforces and what every response advertises (`negotiation`), and the

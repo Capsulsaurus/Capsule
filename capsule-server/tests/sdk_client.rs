@@ -971,6 +971,7 @@ async fn an_escrow_write_outside_the_servers_window_is_a_426_the_sdk_reports_wit
             fixture.blobs.clone(),
             fixture.index.clone(),
             fixture.authority.clone(),
+            fixture.quotas.clone(),
             fixture.clock.clone(),
             UploadPolicy::default().with_protocol_window("2000-01-01", "2000-01-01"),
         ),

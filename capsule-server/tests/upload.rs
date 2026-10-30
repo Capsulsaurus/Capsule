@@ -68,7 +68,18 @@ async fn a_session_opens_and_says_where_to_send_bytes() {
         "an 8 KiB blob is in the smallest tier"
     );
     response.assert_header("location", &format!("/v1/upload/{id}"));
-    response.assert_header("x-capsule-suggested-chunk-size", "262144");
+    response.assert_header(
+        "x-capsule-advice",
+        "chunk=262144, sessions=4, ranges=1, ttl=300",
+    );
+    // A fresh session has the whole 24-hour cap and the whole one-hour survival floor, in
+    // seconds remaining rather than as an instant a skewed client clock would misread.
+    response.assert_header("x-capsule-session-expires-in", "86400");
+    response.assert_header("x-capsule-session-idle-expires-in", "3600");
+    assert!(
+        response.header("x-capsule-suggested-chunk-size").is_none(),
+        "the advice dictionary replaced the single-valued header"
+    );
 
     // The session the server actually opened, read from the store rather than from the body.
     let record = fixture
@@ -114,6 +125,12 @@ async fn a_duplicate_create_returns_the_active_session_and_its_offset() {
         .await;
     response.assert_status(StatusCode::OK);
     response.assert_header("x-capsule-offset", "4096");
+    response.assert_header(
+        "x-capsule-advice",
+        "chunk=262144, sessions=4, ranges=1, ttl=300",
+    );
+    response.assert_header("x-capsule-session-expires-in", "86400");
+    response.assert_header("x-capsule-session-idle-expires-in", "3600");
 
     let body: serde_json::Value = response.json();
     assert_eq!(
@@ -1567,13 +1584,23 @@ async fn head_reports_the_authoritative_offset_and_state() {
     before.assert_header("x-capsule-content-length", "8192");
     before.assert_header("x-capsule-upload-status", "pending");
     before.assert_header("cache-control", "no-store");
+    before.assert_header(
+        "x-capsule-advice",
+        "chunk=262144, sessions=4, ranges=1, ttl=300",
+    );
+    before.assert_header("x-capsule-session-expires-in", "86400");
+    before.assert_header("x-capsule-session-idle-expires-in", "3600");
     assert!(before.bytes().is_empty(), "a HEAD carries no body");
 
+    // Time passes before the first chunk: the cap counts down from creation, and the floor
+    // restarts from the chunk.
+    fixture.clock.advance(jiff::SignedDuration::from_secs(600));
     fixture
         .chunk(&id, 0, &first, &bearer)
         .send()
         .await
         .assert_status(StatusCode::NO_CONTENT);
+    fixture.clock.advance(jiff::SignedDuration::from_secs(60));
 
     let after = fixture
         .client
@@ -1584,6 +1611,8 @@ async fn head_reports_the_authoritative_offset_and_state() {
         .await;
     after.assert_header("x-capsule-offset", "4096");
     after.assert_header("x-capsule-upload-status", "uploading");
+    after.assert_header("x-capsule-session-expires-in", "85740");
+    after.assert_header("x-capsule-session-idle-expires-in", "3540");
 }
 
 #[tokio::test]

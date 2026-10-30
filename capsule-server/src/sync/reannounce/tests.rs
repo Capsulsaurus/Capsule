@@ -144,6 +144,7 @@ impl Server {
             blobs.clone(),
             index.clone(),
             authority.clone(),
+            quotas.clone(),
             clock.clone(),
             UploadPolicy::default(),
         );

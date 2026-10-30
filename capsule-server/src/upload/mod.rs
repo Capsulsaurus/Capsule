@@ -40,7 +40,10 @@
 //!
 //! # What this port still does not carry
 //!
-//! Quota and custody receipts are owned elsewhere and consumed here.
+//! Quota and custody receipts are owned elsewhere and consumed here. The quota ledger is one
+//! of the collaborators because every way a session ends without its bytes — a cancellation, a
+//! `FailedProcessing` — gives its reservation back through [`reservation::release`], one rule
+//! for every terminal path rather than one copy per path.
 //!
 //! # A duplicate is adopted, not merely refused
 //!
@@ -49,12 +52,14 @@
 //! records the blob against the requesting asset, so the collector counts both holders (#672).
 
 pub mod adopt;
+pub mod advice;
 pub mod authority;
 pub mod body;
 pub mod chunk;
 pub mod envelope;
 pub mod finalize;
 pub mod policy;
+pub mod reservation;
 pub mod signer;
 pub mod visibility;
 
@@ -67,6 +72,7 @@ pub use self::envelope::{DeclaredBlob, GateContext, GateReject, ManifestEnvelope
 pub use self::policy::{ChunkReadDeadline, UploadPolicy};
 use crate::blob::BlobStore;
 use crate::index::AssetIndex;
+use crate::quota::QuotaStore;
 use crate::store::{Clock, UploadSessionStore};
 
 /// Everything the upload operations reach for, as one injectable value.
@@ -80,6 +86,7 @@ pub struct UploadContext {
     blobs: Arc<dyn BlobStore>,
     index: Arc<dyn AssetIndex>,
     authority: Arc<dyn WriteAuthority>,
+    quotas: Arc<dyn QuotaStore>,
     clock: Arc<dyn Clock>,
     policy: Arc<UploadPolicy>,
 }
@@ -96,6 +103,7 @@ impl UploadContext {
         blobs: Arc<dyn BlobStore>,
         index: Arc<dyn AssetIndex>,
         authority: Arc<dyn WriteAuthority>,
+        quotas: Arc<dyn QuotaStore>,
         clock: Arc<dyn Clock>,
         policy: UploadPolicy,
     ) -> Self {
@@ -104,6 +112,7 @@ impl UploadContext {
             blobs,
             index,
             authority,
+            quotas,
             clock,
             policy: Arc::new(policy),
         }
@@ -128,6 +137,11 @@ impl UploadContext {
     /// The album and device authority invariants 6 and 7 are decided against.
     pub fn authority(&self) -> &dyn WriteAuthority {
         self.authority.as_ref()
+    }
+
+    /// The quota ledger a session's reservation is charged to and released from.
+    pub fn quotas(&self) -> &dyn QuotaStore {
+        self.quotas.as_ref()
     }
 
     /// The clock every record, deadline and drift bound is stamped from.

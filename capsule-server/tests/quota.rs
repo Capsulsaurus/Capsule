@@ -150,6 +150,131 @@ async fn cancelling_a_session_releases_its_reservation() {
     open(&fixture, &bearer, &payload(b'd', 8192), StatusCode::CREATED).await;
 }
 
+/// Send `bytes` at `offset` into session `id`, asserting the status and, on a refusal, its code.
+async fn send_chunk(
+    fixture: &Fixture,
+    bearer: &str,
+    id: &str,
+    offset: u64,
+    bytes: &[u8],
+    expect: StatusCode,
+    code: Option<&str>,
+) {
+    let response = fixture.chunk(id, offset, bytes, bearer).send().await;
+    response.assert_status(expect);
+    if let Some(code) = code {
+        assert_eq!(response.json::<Value>()["code"], code);
+    }
+}
+
+/// A session finalization refuses ends `FailedProcessing`, and gives its reservation back.
+#[tokio::test]
+async fn a_session_that_fails_finalization_releases_its_reservation() {
+    let fixture = Fixture::with_quota(limits());
+    let bearer = token(&fixture).await;
+    let bytes = payload(b'f', 8192);
+    let opened = open(&fixture, &bearer, &bytes, StatusCode::CREATED).await;
+    let id = opened["id"].as_str().expect("a session id");
+    assert_eq!(snapshot(&fixture, &bearer).await["used"], 8192);
+
+    send_chunk(
+        &fixture,
+        &bearer,
+        id,
+        0,
+        &bytes[..4096],
+        StatusCode::NO_CONTENT,
+        None,
+    )
+    .await;
+    // Honest per-chunk checksums over bytes that do not hash to the declaration: only the
+    // finalize re-hash catches it.
+    send_chunk(
+        &fixture,
+        &bearer,
+        id,
+        4096,
+        &payload(b'z', 4096),
+        StatusCode::BAD_REQUEST,
+        Some("error.upload.content_hash_mismatch"),
+    )
+    .await;
+
+    assert_eq!(
+        snapshot(&fixture, &bearer).await["used"],
+        0,
+        "bytes that never reached the store must not stay charged"
+    );
+    open(&fixture, &bearer, &payload(b'g', 8192), StatusCode::CREATED).await;
+}
+
+/// A chunk that breaks the declared size fails the session, and gives its reservation back.
+#[tokio::test]
+async fn a_session_failed_by_its_declaration_releases_its_reservation() {
+    let fixture = Fixture::with_quota(limits());
+    let bearer = token(&fixture).await;
+    let bytes = payload(b'h', 8192);
+    let opened = open(&fixture, &bearer, &bytes, StatusCode::CREATED).await;
+    let id = opened["id"].as_str().expect("a session id");
+
+    send_chunk(
+        &fixture,
+        &bearer,
+        id,
+        0,
+        &bytes[..4096],
+        StatusCode::NO_CONTENT,
+        None,
+    )
+    .await;
+    send_chunk(
+        &fixture,
+        &bearer,
+        id,
+        4096,
+        &payload(b'h', 8192),
+        StatusCode::BAD_REQUEST,
+        Some("error.upload.size_exceeded"),
+    )
+    .await;
+
+    assert_eq!(snapshot(&fixture, &bearer).await["used"], 0);
+}
+
+/// A session that completes keeps its charge: the bytes are stored, and the attribution pays
+/// for them until the collector removes the blob.
+#[tokio::test]
+async fn a_completed_session_keeps_its_charge() {
+    let fixture = Fixture::with_quota(limits());
+    let bearer = token(&fixture).await;
+    let bytes = payload(b'k', 8192);
+    let opened = open(&fixture, &bearer, &bytes, StatusCode::CREATED).await;
+    let id = opened["id"].as_str().expect("a session id");
+
+    send_chunk(
+        &fixture,
+        &bearer,
+        id,
+        0,
+        &bytes[..4096],
+        StatusCode::NO_CONTENT,
+        None,
+    )
+    .await;
+    send_chunk(
+        &fixture,
+        &bearer,
+        id,
+        4096,
+        &bytes[4096..],
+        StatusCode::NO_CONTENT,
+        None,
+    )
+    .await;
+
+    assert_eq!(snapshot(&fixture, &bearer).await["used"], 8192);
+}
+
 /// Deduplicated bytes are charged to the first uploader only.
 #[tokio::test]
 async fn a_blob_another_account_already_holds_costs_nothing() {

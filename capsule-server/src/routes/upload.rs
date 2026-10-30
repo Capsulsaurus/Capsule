@@ -13,7 +13,7 @@
 //!
 //! | Salvo | Verdict here |
 //! | --- | --- |
-//! | create `201` | kept — [`CreateReply::Created`], with `Location` and `X-Capsule-Suggested-Chunk-Size` |
+//! | create `201` | kept — [`CreateReply::Created`], with `Location`, `X-Capsule-Advice` (which replaced `X-Capsule-Suggested-Chunk-Size`) and the session's relative expiry |
 //! | create `200` (active session for the tuple) | **kept and now documented.** Salvo declared it `undocumented()`; it is [`CreateReply::Existing`], carrying `X-Capsule-Offset` so a resuming client needs no second round trip |
 //! | create `400` "Bad request" (untyped) | **deleted.** Never constructed with a code; the 400 a malformed body actually produces is the `Json` extractor's, which Kynos declares |
 //! | create `401` | kept, and now the framework's — `Auth<AccessToken>` declares it and fills the `WWW-Authenticate` challenge |
@@ -34,7 +34,7 @@
 //! | chunk `409 finalize_in_progress` | **deleted.** Losing the finalize claim is a normal race and the chunk that triggered it was still accepted, so it answers `204`. Telling a client its accepted chunk failed was the Salvo behaviour and it was wrong |
 //! | chunk `500` | kept, narrowed — only a stage **shorter** than its counter, the one inconsistency the server cannot repair. A stage that ran ahead is cut back ([`chunk::append`]) and a collaborator failure is a `503` |
 //! | chunk `429` / `503` / `507` | **added** — the account's or its source address's chunk budget, a collaborator that could not answer, and a full disk. Each carries a retry instant, on the body and on `Retry-After` ([`crate::problem::RetryAfter`]) |
-//! | head `200` | kept — [`HeadReply::Progress`], carrying offset, declared length and state on headers, with `Cache-Control: no-store`. A `Reply` rather than a `NoContent`, because `200 with headers` and `204` are different answers |
+//! | head `200` | kept — [`HeadReply::Progress`], carrying offset, declared length, state, advice and relative expiry on headers, with `Cache-Control: no-store`. A `Reply` rather than a `NoContent`, because `200 with headers` and `204` are different answers |
 //! | head `400` / `401` / `403` / `404` / `500` | kept, except that a session neither the caller's upload nor filed under the caller is the `404`, not a `403` of this surface's own, and the `500` is a `503` with a retry instant. The `403` left is the bearer scheme's. The `400` is the handshake's, declared by the read gate rather than by this surface; the `426` is gone from `HEAD`, because a read is admitted at any protocol date (issue #404) |
 //! | head `409` | **deleted as unreachable.** `HEAD` reports a state, it does not require one. It would have been declared for free by sharing a rejection type with `DELETE`, which is why they are two types |
 //! | delete `204` | kept |
@@ -78,7 +78,9 @@
 //!
 //! # What this port does not have
 //!
-//! **Quota and the custody receipt** are owned by [`crate::upload`], not by this surface.
+//! **Quota and the custody receipt** are owned by [`crate::upload`], not by this surface. A
+//! cancellation gives its reservation back through [`crate::upload::reservation`], as every
+//! other way a session ends without its bytes does.
 
 use capsule_core::crypto::hash::hash_bytes;
 use capsule_i18n::error_codes;
@@ -99,6 +101,7 @@ use crate::store::{
     AlbumId, AssetId, BlobRole, Clock, OwnerId, StoreError, UploadId, UploadSessionRecord,
     UploadSessionStatus, UserId,
 };
+use crate::upload::advice::{Advice, SessionExpiry};
 use crate::upload::body::ChunkBody;
 use crate::upload::chunk::{
     self, MAX_CHUNK_BYTES, parse_checksum, parse_offset, suggested_chunk_size,
@@ -233,8 +236,8 @@ pub struct CreateUploadResponse {
 /// transfer starts at zero or resumes. Salvo rendered the second one undeclared.
 #[derive(Reply)]
 pub enum CreateReply {
-    /// A fresh session. `Location` names it and `X-Capsule-Suggested-Chunk-Size` sizes the
-    /// first chunk.
+    /// A fresh session. `Location` names it, `X-Capsule-Advice` tunes the transfer, and the two
+    /// `X-Capsule-Session-*-Expires-In` headers say how long it lives.
     #[reply(status = 201, description = "Upload session created")]
     Created(CreateUploadResponse),
     /// The session already open for this `(owner, hash, album)` tuple, with its authoritative
@@ -248,20 +251,43 @@ pub enum CreateReply {
 
 /// The response headers `POST /v1/upload` carries.
 ///
-/// Every field is optional because the two replies carry different subsets and a Kynos header
-/// group is described across all of a reply's statuses; a required header that one status
-/// omitted would be a promise the document could not keep.
+/// `Location` and the offset are optional because the two replies carry different subsets and
+/// a Kynos header group is described across all of a reply's statuses; a required header that
+/// one status omitted would be a promise the document could not keep. The advice and the
+/// expiry are on both, so they are required.
 #[derive(HeaderParams)]
 pub struct CreateHeaders {
     /// Where the session lives.
     #[header(rename = "Location")]
     location: Option<String>,
-    /// The starting chunk size.
-    #[header(rename = "X-Capsule-Suggested-Chunk-Size")]
-    suggested_chunk_size: Option<u64>,
+    /// The server's advice, an RFC 9651 dictionary of integers: `chunk`, `sessions`, `ranges`
+    /// and `ttl`. Advisory only; a client clamps every member into its own bounds.
+    #[header(rename = "X-Capsule-Advice")]
+    advice: String,
+    /// Seconds until the session's lifetime cap.
+    #[header(rename = "X-Capsule-Session-Expires-In")]
+    expires_in: u64,
+    /// Seconds until the session's survival floor, after which it may be discarded under
+    /// pressure. Never more than `X-Capsule-Session-Expires-In`.
+    #[header(rename = "X-Capsule-Session-Idle-Expires-In")]
+    idle_expires_in: u64,
     /// The authoritative offset, on a resumed session.
     #[header(rename = "X-Capsule-Offset")]
     offset: Option<u64>,
+}
+
+impl CreateHeaders {
+    /// The headers for `record`'s session, as of the context's clock.
+    fn of(upload: &UploadContext, record: &UploadSessionRecord, offset: Option<u64>) -> Self {
+        let expiry = SessionExpiry::of(record, upload.sessions().ttl(), upload.clock().now());
+        Self {
+            location: Some(session_url(&record.upload_id)),
+            advice: Advice::for_size(record.total_size).to_string(),
+            expires_in: expiry.expires_in,
+            idle_expires_in: expiry.idle_expires_in,
+            offset,
+        }
+    }
 }
 
 /// The headers a chunk carries.
@@ -318,6 +344,16 @@ pub struct HeadHeaders {
     /// Where the session is in its state machine.
     #[header(rename = "X-Capsule-Upload-Status")]
     upload_status: String,
+    /// The server's advice, as on session create.
+    #[header(rename = "X-Capsule-Advice")]
+    advice: String,
+    /// Seconds until the session's lifetime cap.
+    #[header(rename = "X-Capsule-Session-Expires-In")]
+    expires_in: u64,
+    /// Seconds until the session's survival floor. For a session past `uploading` it equals
+    /// the lifetime cap's, because such a session is never discarded under pressure.
+    #[header(rename = "X-Capsule-Session-Idle-Expires-In")]
+    idle_expires_in: u64,
     /// `no-store`: progress is not cacheable.
     #[header(rename = "Cache-Control")]
     cache_control: String,
@@ -1039,14 +1075,8 @@ pub async fn create_upload(
                     "returning the active session for a duplicate create"
                 );
                 let body = describe(&existing.upload_id, existing.total_size);
-                return Ok(WithHeaders::new(
-                    CreateReply::Existing(body),
-                    CreateHeaders {
-                        location: Some(session_url(&existing.upload_id)),
-                        suggested_chunk_size: Some(suggested_chunk_size(existing.total_size)),
-                        offset: Some(existing.received_bytes),
-                    },
-                ));
+                let headers = CreateHeaders::of(&upload, existing, Some(existing.received_bytes));
+                return Ok(WithHeaders::new(CreateReply::Existing(body), headers));
             }
             // Whether the session finished is unknown: it is claimed and recovery drives it, or
             // it failed and the client's next create opens a fresh one. Either is a retry away.
@@ -1254,6 +1284,7 @@ pub async fn create_upload(
         last_progress_at: now,
     };
 
+    let headers = CreateHeaders::of(&upload, &record, None);
     upload.sessions().open(record).await.map_err(|error| {
         store_unavailable(&error, "open an upload session");
         CreateRejection::unavailable(upload.clock())
@@ -1265,15 +1296,9 @@ pub async fn create_upload(
         blob_role = ?request.blob_role,
         "opened an upload session"
     );
-    let body = describe(&upload_id, request.size);
-    let suggested = body.suggested_chunk_size;
     Ok(WithHeaders::new(
-        CreateReply::Created(body),
-        CreateHeaders {
-            location: Some(session_url(&upload_id)),
-            suggested_chunk_size: Some(suggested),
-            offset: None,
-        },
+        CreateReply::Created(describe(&upload_id, request.size)),
+        headers,
     ))
 }
 
@@ -1581,12 +1606,16 @@ pub async fn head_upload(
             .ok_or_else(SessionRejection::not_found)?;
     }
 
+    let expiry = SessionExpiry::of(&record, upload.sessions().ttl(), upload.clock().now());
     Ok(WithHeaders::new(
         HeadReply::Progress,
         HeadHeaders {
             offset: record.received_bytes,
             content_length: record.total_size,
             upload_status: record.status.as_str().to_owned(),
+            advice: Advice::for_size(record.total_size).to_string(),
+            expires_in: expiry.expires_in,
+            idle_expires_in: expiry.idle_expires_in,
             // A cached offset is a client that re-sends bytes the server already has, or skips
             // bytes it does not.
             cache_control: "no-store".to_owned(),
@@ -1603,7 +1632,6 @@ pub async fn head_upload(
 pub async fn cancel_upload(
     Auth(credential): Auth<AccessToken>,
     Inject(upload): Inject<UploadContext>,
-    Inject(quota): Inject<crate::quota::QuotaContext>,
     Path(path): Path<UploadPath>,
 ) -> Result<NoContent, CancelRejection> {
     let record = session_for(&upload, &path, &credential.user).await?;
@@ -1612,7 +1640,7 @@ pub async fn cancel_upload(
         return Err(CancelRejection::not_active());
     }
 
-    let id = record.upload_id;
+    let id = record.upload_id.clone();
     // The bytes first: a discarded record with a stage still on disk is an orphan the scrub has
     // to find, while a dropped stage with a live record is a session whose next chunk fails
     // loudly. Neither is good, and this order is the one the scrub already covers.
@@ -1624,17 +1652,10 @@ pub async fn cancel_upload(
         CancelRejection::unavailable(upload.clock())
     })?;
 
-    // The reservation goes back. Best-effort and logged rather than fatal: the session
-    // is already gone, so failing the response here would tell a client its cancellation did
-    // not happen when it did. A stranded attribution is what the scrub reconciles.
-    if let Ok(address) = ContentAddress::parse(&record.expected_hash)
-        && let Err(error) = quota
-            .quotas()
-            .release(&record.upload_user_id, &address)
-            .await
-    {
-        tracing::error!(%error, upload_id = %id, "a cancelled upload's quota was not released");
-    }
+    // The reservation goes back, unless the stored bytes or another of the uploader's sessions
+    // still hold it. Best-effort and logged rather than fatal: the session is already gone, so
+    // failing the response here would tell a client its cancellation did not happen when it did.
+    crate::upload::reservation::release_logged(&upload, &record).await;
 
     tracing::info!(upload_id = %id, "cancelled an upload session");
     Ok(NoContent)
@@ -1794,17 +1815,22 @@ fn new_upload_id() -> UploadId {
     UploadId::new(Uuid::now_v7().to_string())
 }
 
-/// Drop a session's bytes and mark it failed, for a chunk that broke the declaration.
+/// Drop a session's bytes, mark it failed and give its reservation back, for a chunk that
+/// broke the declaration.
 async fn abandon_failed(upload: &UploadContext, id: &UploadId) {
     if let Err(error) = upload.blobs().abandon(id).await {
         tracing::error!(%error, upload_id = %id, "a failed upload's stage could not be dropped");
     }
-    if let Err(error) = upload
+    match upload
         .sessions()
         .set_status(id, UploadSessionStatus::FailedProcessing)
         .await
     {
-        tracing::error!(%error, upload_id = %id, "a failed upload's session could not be marked");
+        Ok(Some(failed)) => crate::upload::reservation::release_logged(upload, &failed).await,
+        Ok(None) => tracing::debug!(upload_id = %id, "a failed upload's session was already gone"),
+        Err(error) => {
+            tracing::error!(%error, upload_id = %id, "a failed upload's session could not be marked");
+        }
     }
 }
 

@@ -4084,6 +4084,7 @@ impl Fixture {
                 blobs.clone(),
                 index_fault.clone(),
                 authority.clone(),
+                quotas.clone(),
                 clock.clone(),
                 UploadPolicy::default().with_chunk_read_deadline(chunk_deadline.clone()),
             ),
@@ -4233,6 +4234,7 @@ impl Fixture {
         let der = signing_key_der();
         let tokens = Arc::new(signer_from(&der, clock.clone()));
         let issued = Arc::new(SwitchableRevocations::new(clock.clone()));
+        let quotas = Arc::new(SwitchableQuota::new());
         let app = App::new(Modules {
             auth: AuthContext::new(AuthCollaborators {
                 sessions: Arc::new(SwitchableSessions::new(clock.clone())),
@@ -4250,6 +4252,7 @@ impl Fixture {
                 blobs.clone(),
                 index.clone(),
                 authority,
+                quotas.clone(),
                 clock.clone(),
                 UploadPolicy::default(),
             ),
@@ -4279,11 +4282,7 @@ impl Fixture {
             ),
             albums: AlbumContext::new(albums.clone(), clock.clone()),
             membership: MembershipContext::new(members, clock.clone()),
-            quota: QuotaContext::new(
-                Arc::new(SwitchableQuota::new()),
-                clock.clone(),
-                QuotaLimits::unlimited(),
-            ),
+            quota: QuotaContext::new(quotas, clock.clone(), QuotaLimits::unlimited()),
             attestation: AttestationContext::new(
                 receipts,
                 Arc::new(LocalAttestationKey::new(
