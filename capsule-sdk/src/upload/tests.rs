@@ -2139,7 +2139,7 @@ async fn answered_creates_earn_the_lane_budget_back() {
     let cr = creates.clone();
     let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
         ("POST", "/") => {
-            if cr.fetch_add(1, Ordering::SeqCst) % 2 == 0 {
+            if cr.fetch_add(1, Ordering::SeqCst).is_multiple_of(2) {
                 MockResponse::api_error(
                     429,
                     "Too Many Requests",
