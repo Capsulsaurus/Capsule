@@ -1618,21 +1618,75 @@ async fn a_server_that_sends_no_state_is_not_polled() {
     assert!(matches!(outcome, UploadOutcome::Completed { .. }));
 }
 
-/// The poll's waits start small and double up to their ceiling, and the poll gives up once
-/// their sum passes the deadline rather than polling a server that never answers.
-#[test]
-fn the_finalization_poll_backs_off_and_is_bounded() {
-    let mut wait = FINALIZE_POLL_FIRST;
-    let mut schedule = Vec::new();
-    for _ in 0..8 {
-        schedule.push(wait);
-        wait = (wait * 2).min(FINALIZE_POLL_MAX);
-    }
-    assert_eq!(schedule[0], Duration::from_millis(100));
-    assert_eq!(schedule[1], Duration::from_millis(200));
-    assert!(schedule.windows(2).all(|pair| pair[0] <= pair[1]));
-    assert_eq!(*schedule.last().expect("a schedule"), FINALIZE_POLL_MAX);
-    assert!(FINALIZE_POLL_DEADLINE > FINALIZE_POLL_MAX);
+/// Against a server that stays `waiting_for_processing`, the poll's waits start at 100 ms and
+/// double up to their 5 s ceiling, and the poll gives up with `RetriesExhausted` once their sum
+/// reaches the 30-minute deadline rather than polling a server that never answers. Time is
+/// paused, so the waits are read off the clock the `HEAD`s arrive at, not slept.
+#[tokio::test(start_paused = true)]
+async fn the_finalization_poll_backs_off_and_is_bounded() {
+    let arrivals = Arc::new(Mutex::new(Vec::new()));
+    let seen = arrivals.clone();
+    let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+        ("POST", "/") => created("sess-stuck", CHUNK_SIZE_256KB),
+        ("PATCH", "/sess-stuck") => MockResponse::new(204, "No Content")
+            .header("X-Capsule-Offset", ack_offset(req).to_string())
+            .header("X-Capsule-Upload-Status", "waiting_for_processing"),
+        ("HEAD", "/sess-stuck") => {
+            seen.lock()
+                .expect("arrivals")
+                .push(tokio::time::Instant::now());
+            head_at_size("waiting_for_processing", None)
+        }
+        other => panic!("unexpected {other:?}"),
+    })
+    .await;
+
+    let data = vec![5u8; 8192];
+    let error = server
+        .client(PROTOCOL)
+        .upload(&request(8192), &data)
+        .await
+        .expect_err("a finalization that never ends fails the upload");
+    assert!(
+        matches!(error, UploadError::RetriesExhausted(_)),
+        "expected the poll to give up, got {error:?}"
+    );
+
+    let arrivals = arrivals.lock().expect("arrivals");
+    let waits: Vec<Duration> = arrivals
+        .windows(2)
+        .map(|pair| pair[1].duration_since(pair[0]))
+        .collect();
+    let ms = Duration::from_millis;
+    assert_eq!(
+        waits[..7],
+        [
+            ms(100),
+            ms(200),
+            ms(400),
+            ms(800),
+            ms(1600),
+            ms(3200),
+            ms(5000)
+        ],
+        "the waits double from 100 ms to the 5 s ceiling"
+    );
+    assert!(
+        waits[7..]
+            .iter()
+            .all(|wait| *wait == Duration::from_secs(5)),
+        "the waits hold at the ceiling"
+    );
+    let total: Duration = waits.iter().sum();
+    let deadline = Duration::from_mins(30);
+    assert!(
+        total >= deadline,
+        "gave up after {total:?}, before the deadline"
+    );
+    assert!(
+        total.saturating_sub(waits[waits.len() - 1]) < deadline,
+        "polled again after the deadline had passed ({total:?})"
+    );
 }
 
 // ─── HEAD / DELETE / list ───────────────────────────────────────────────────
