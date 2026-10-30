@@ -1317,3 +1317,190 @@ async fn an_asset_with_no_open_session_redacts_to_nothing() {
     assert_eq!(redaction, Redaction::default());
     assert_eq!(seen.lock().unwrap().len(), 1, "only the listing was asked");
 }
+
+// ─── Pushing many bundles across lanes ───────────────────────────────────────
+
+/// A server that opens a fresh session per create, acknowledges every chunk whole, and records
+/// which asset each create was for, in arrival order.
+async fn lane_server() -> (MockServer, Arc<Mutex<Vec<String>>>) {
+    let creates = Arc::new(Mutex::new(Vec::new()));
+    let seen = creates.clone();
+    let sessions = AtomicUsize::new(0);
+    let server = MockServer::start(move |req: &MockRequest| {
+        if req.method == "POST" {
+            let body: serde_json::Value = serde_json::from_slice(&req.body).unwrap();
+            let asset = body["manifest_envelope"]["file_id"].as_str().unwrap();
+            seen.lock().unwrap().push(asset.to_owned());
+            let id = format!("s-{}", sessions.fetch_add(1, Ordering::SeqCst));
+            return MockResponse::new(201, "Created")
+                .header("X-Capsule-Offset", "0")
+                .json_body(format!(
+                    r#"{{"id":{id:?},"upload_url":"/upload/{id}","suggested_chunk_size":262144}}"#
+                ));
+        }
+        let offset: u64 = req
+            .header("X-Capsule-Offset")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+        MockResponse::new(204, "No Content").header(
+            "X-Capsule-Offset",
+            (offset + req.body.len() as u64).to_string(),
+        )
+    })
+    .await;
+    (server, creates)
+}
+
+/// Push two real bundles on one lane under `sessions`, with a one-byte budget, and return each
+/// bundle's asset id and the asset each create was for.
+async fn push_two_on_one_lane(sessions: u32) -> (String, String, Vec<String>) {
+    let (_dir_a, a) = real_bundle();
+    let (_dir_b, b) = real_bundle();
+    let (server, creates) = lane_server().await;
+    let client = server.client(&a.protocol_version);
+    let scheduler = StagedScheduler::new(
+        capsule_library::import::UploadPolicy::Full,
+        ConnectionClass::Unmetered,
+    );
+    let held = HashSet::new();
+    let lanes = [LanePush {
+        server: ServerKey::new(server.base_url()),
+        client: &client,
+        bundles: vec![
+            LaneBundle {
+                bundle: &a,
+                held: &held,
+            },
+            LaneBundle {
+                bundle: &b,
+                held: &held,
+            },
+        ],
+    }];
+    // One byte of budget: every range reserves all of it, so the two bundles' ranges take
+    // turns, and the run still finishes.
+    let results = push_lanes(&scheduler, &lanes, false, 1, LaneWindows::new(sessions, 1)).await;
+    assert_eq!(results.len(), 1);
+    for result in &results[0] {
+        let report = result.as_ref().expect("both bundles push");
+        assert_eq!(
+            report.tier_sequence(),
+            vec![UploadTier::Index, UploadTier::Index, UploadTier::Original],
+            "each bundle still drives its ladder in order"
+        );
+    }
+    assert_eq!(
+        results[0][0].as_ref().unwrap().asset_id,
+        a.asset_id.to_string()
+    );
+    assert_eq!(
+        results[0][1].as_ref().unwrap().asset_id,
+        b.asset_id.to_string()
+    );
+    let order = creates.lock().unwrap().clone();
+    (a.asset_id.to_string(), b.asset_id.to_string(), order)
+}
+
+/// **W bundles of a lane run at once.** With a sessions window of two, the second asset's
+/// first session opens before the first asset's ladder is done; with a window of one, the
+/// lane pushes one asset after the other.
+#[tokio::test]
+async fn a_lane_runs_up_to_w_bundles_at_once() {
+    let (a, b, order) = push_two_on_one_lane(2).await;
+    assert_eq!(order.len(), 6, "three sessions per asset: {order:?}");
+    let first_b = order.iter().position(|asset| *asset == b).unwrap();
+    let last_a = order.iter().rposition(|asset| *asset == a).unwrap();
+    assert!(first_b < last_a, "the two ladders overlapped: {order:?}");
+
+    let (a, b, order) = push_two_on_one_lane(1).await;
+    assert_eq!(
+        order,
+        [&a, &a, &a, &b, &b, &b].map(String::clone),
+        "one asset at a time"
+    );
+}
+
+/// An empty run returns at once, and the run's future can move across threads.
+#[tokio::test]
+async fn an_empty_push_run_returns_nothing() {
+    fn assert_send<T: Send>(value: T) -> T {
+        value
+    }
+    let scheduler = StagedScheduler::new(
+        capsule_library::import::UploadPolicy::Full,
+        ConnectionClass::Unmetered,
+    );
+    let lanes: [LanePush<'_, std::hash::RandomState>; 0] = [];
+    let run = assert_send(push_lanes(
+        &scheduler,
+        &lanes,
+        false,
+        1,
+        LaneWindows::default(),
+    ));
+    assert!(run.await.is_empty());
+}
+
+/// **The gate a bundle runs under** waits for the shared budget and wakes when a reservation is
+/// released, and applies the server's advice to its lane and its session.
+#[tokio::test]
+async fn the_queue_gate_waits_for_the_budget_and_applies_advice() {
+    use std::time::{Duration, Instant};
+
+    let server = ServerKey::new("https://lane.test");
+    let mut queue =
+        UploadQueue::new(100, Duration::from_secs(3600)).with_windows(LaneWindows::new(4, 4));
+    queue.enqueue(&server, QueuedJob::new(UploadTier::Original, (0, 0)));
+    queue.enqueue(&server, QueuedJob::new(UploadTier::Original, (0, 1)));
+    let now = Instant::now();
+    let a = queue.next(now).unwrap();
+    let b = queue.next(now).unwrap();
+    let shared = LaneShared {
+        queue: Mutex::new(queue),
+        freed: tokio::sync::Notify::new(),
+    };
+    let gate_a = QueueGate {
+        shared: &shared,
+        server: &server,
+        grant: a.id,
+    };
+    let gate_b = QueueGate {
+        shared: &shared,
+        server: &server,
+        grant: b.id,
+    };
+    let pending = Duration::from_millis(50);
+
+    let whole = gate_a.reserve(100).await.expect("the whole budget");
+    let mut waiting = gate_b.reserve(10);
+    assert!(
+        tokio::time::timeout(pending, &mut waiting).await.is_err(),
+        "b waits while the budget is full"
+    );
+    gate_a.release(whole);
+    let range = tokio::time::timeout(Duration::from_secs(5), waiting)
+        .await
+        .expect("the release wakes the waiting range")
+        .expect("reserved");
+    assert_eq!(shared.queue().in_use(), 10);
+
+    gate_b.advised(&ServerAdvice::parse(Some("sessions=1, ranges=1, ttl=60")));
+    assert_eq!(shared.queue().sessions_window(&server, Instant::now()), 1);
+    let mut second = gate_b.reserve(10);
+    assert!(
+        tokio::time::timeout(pending, &mut second).await.is_err(),
+        "b's session now holds one range at a time"
+    );
+    gate_b.release(range);
+    tokio::time::timeout(Duration::from_secs(5), second)
+        .await
+        .expect("woken once b's range returned")
+        .expect("reserved");
+
+    shared.queue().complete(b.id, Instant::now());
+    assert_eq!(
+        gate_b.reserve(10).await,
+        None,
+        "a finished grant reserves nothing"
+    );
+}
