@@ -390,6 +390,28 @@ fn from_class_round_trips_every_reported_class() {
     );
 }
 
+#[test]
+fn the_class_admission_is_the_class_tier_gate() {
+    for class in [
+        ConnectionClass::Unmetered,
+        ConnectionClass::Metered,
+        ConnectionClass::Constrained,
+        ConnectionClass::Adverse,
+        ConnectionClass::Offline,
+    ] {
+        let (admission, hold) = TierAdmission::for_class(class);
+        for tier in [UploadTier::Index, UploadTier::Preview, UploadTier::Original] {
+            for force_sync in [false, true] {
+                assert_eq!(
+                    admission.permits(hold, tier, force_sync),
+                    class.permits_tier(tier, force_sync),
+                    "{class:?} {tier:?} force_sync={force_sync}"
+                );
+            }
+        }
+    }
+}
+
 // ─── Generations ─────────────────────────────────────────────────────────────
 
 #[test]

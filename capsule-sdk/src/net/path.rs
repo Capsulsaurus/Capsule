@@ -235,6 +235,31 @@ impl TierAdmission {
             Self::Nothing => false,
         }
     }
+
+    /// Whether `tier` may run under this admission and its `hold`, given the user's
+    /// force-sync consent, which lifts an index-only hold that
+    /// [yields to it](Hold::yields_to_force_sync).
+    #[must_use]
+    pub fn permits(self, hold: Option<Hold>, tier: UploadTier, force_sync: bool) -> bool {
+        self.admits(tier)
+            || (force_sync
+                && self == Self::IndexOnly
+                && hold.is_some_and(Hold::yields_to_force_sync))
+    }
+
+    /// The admission and hold `class` alone implies, for a caller that knows nothing else of
+    /// the path: the tier gate [`ConnectionClass::permits_tier`] states.
+    #[must_use]
+    pub const fn for_class(class: ConnectionClass) -> (Self, Option<Hold>) {
+        match class {
+            ConnectionClass::Unmetered => (Self::All, None),
+            ConnectionClass::Metered | ConnectionClass::Constrained => {
+                (Self::IndexOnly, Some(Hold::Cost))
+            }
+            ConnectionClass::Adverse => (Self::IndexOnly, Some(Hold::Adverse)),
+            ConnectionClass::Offline => (Self::Nothing, Some(Hold::Offline)),
+        }
+    }
 }
 
 /// Why the plan holds back work it would otherwise run.
@@ -293,12 +318,7 @@ impl TransferPlan {
     /// Whether `tier` may run, given the user's force-sync consent.
     #[must_use]
     pub fn permits_tier(&self, tier: UploadTier, force_sync: bool) -> bool {
-        if self.admission.admits(tier) {
-            return true;
-        }
-        force_sync
-            && self.admission == TierAdmission::IndexOnly
-            && self.hold.is_some_and(Hold::yields_to_force_sync)
+        self.admission.permits(self.hold, tier, force_sync)
     }
 
     /// Whether the plan holds bulk work back.
