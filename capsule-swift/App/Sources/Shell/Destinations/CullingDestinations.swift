@@ -108,7 +108,7 @@ struct CullingView: View {
                 titleVisibility: .visible
             ) {
                 Button("app.culling.sweep.confirm", role: .destructive) {
-                    writes.submit { await sweep() }
+                    CullSweep.confirm(on: writes) { await sweep() }
                 }
                 Button("app.common.cancel", role: .cancel) {}
             } message: {
@@ -438,6 +438,13 @@ final class CullWriteQueue {
 /// closure read when the sweep runs, not a value captured when it was
 /// confirmed, so a sweep queued behind verdict writes sees their outcome.
 enum CullSweep {
+    /// What the sweep confirm button does: queue `sweep` behind every verdict
+    /// write already queued, never start it on its own.
+    @MainActor
+    static func confirm(on writes: CullWriteQueue, sweep: @escaping @MainActor () async -> Void) {
+        writes.submit(sweep)
+    }
+
     /// Trash the current candidates and return them, or nil when there are none.
     @MainActor
     static func run(
