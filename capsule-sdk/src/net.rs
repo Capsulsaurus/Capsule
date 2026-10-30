@@ -15,6 +15,7 @@
 //! never a live NIC probe, so every rule is a deterministic unit test.
 
 use std::collections::VecDeque;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use capsule_library::import::UploadTier;
@@ -573,6 +574,186 @@ impl RetryEngine {
     }
 }
 
+// ─── Retry classification ────────────────────────────────────────────────────
+
+/// What one failed request permits, decided before any retry is taken (networking doc, Retry
+/// Policy Classes: "errors are classified before any retry").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RetryVerdict {
+    /// A transient failure: a transport failure, any `5xx`, `408`, `425` or `429`. It may be
+    /// retried under the surface's class, its item's attempt cap and the lane's retry budget.
+    Retryable,
+    /// A contract `4xx` the recovery matrix names an action for (re-align, re-create, re-send,
+    /// merge): the client takes that action, and it charges the same budgets a retry does.
+    Recover,
+    /// A contract refusal the recovery matrix names no action for, or an answer that is not a
+    /// failure at all: surfaced, never retried.
+    Terminal,
+}
+
+impl RetryVerdict {
+    /// A request that got no answer: the connection failed, reset, or timed out.
+    #[must_use]
+    pub const fn of_transport() -> Self {
+        Self::Retryable
+    }
+
+    /// An answer with HTTP `status`. `recovery_names_action` says whether the recovery matrix
+    /// names an action for the `error.*` code the answer carried; it only matters for a `4xx`
+    /// outside the transient set, because a transient status is retryable whatever its code.
+    #[must_use]
+    pub const fn of_status(status: u16, recovery_names_action: bool) -> Self {
+        match status {
+            408 | 425 | 429 | 500..=599 => Self::Retryable,
+            400..=499 if recovery_names_action => Self::Recover,
+            _ => Self::Terminal,
+        }
+    }
+
+    /// Whether this verdict permits another request at all.
+    #[must_use]
+    pub const fn permits_retry(self) -> bool {
+        !matches!(self, Self::Terminal)
+    }
+}
+
+// ─── Lane retry budget ───────────────────────────────────────────────────────
+
+/// The retries one server lane may take while nothing succeeds. Twice an upload's own
+/// recovery cap, so a single item's attempt cap binds before the lane's budget does and the
+/// budget only bites when several items fail against the same server.
+pub const DEFAULT_LANE_RETRY_BUDGET: u32 = 128;
+
+/// Successes that earn one retry back, up to the budget's capacity. Two bounds the retries a
+/// steadily working lane adds to half its successful requests.
+pub const LANE_SUCCESSES_PER_RETRY: u32 = 2;
+
+/// One server lane's shared retry budget (networking doc, Retry Policy Classes: "each server
+/// lane holds one shared retry budget").
+///
+/// Every retry any item on the lane takes spends one token; successes earn tokens back, one per
+/// [`LANE_SUCCESSES_PER_RETRY`], never above the capacity. A server that fails every request
+/// therefore costs at most `capacity` retries in total, however many items are queued for it,
+/// rather than one full retry ladder per item. A pure value; [`LaneRetries`] shares one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LaneRetryBudget {
+    capacity: u32,
+    tokens: u32,
+    /// Successes counted toward the next earned token.
+    successes: u32,
+}
+
+impl Default for LaneRetryBudget {
+    fn default() -> Self {
+        Self::new(DEFAULT_LANE_RETRY_BUDGET)
+    }
+}
+
+impl LaneRetryBudget {
+    /// A full budget of `capacity` retries. Zero is a lane that never retries.
+    #[must_use]
+    pub const fn new(capacity: u32) -> Self {
+        Self {
+            capacity,
+            tokens: capacity,
+            successes: 0,
+        }
+    }
+
+    /// The most retries the budget ever holds.
+    #[must_use]
+    pub const fn capacity(&self) -> u32 {
+        self.capacity
+    }
+
+    /// The retries left before the lane stops retrying.
+    #[must_use]
+    pub const fn remaining(&self) -> u32 {
+        self.tokens
+    }
+
+    /// Spend one retry. `false` means the budget is spent: the caller must not retry, and gives
+    /// the item up as the failure it is.
+    pub fn try_spend(&mut self) -> bool {
+        if self.tokens == 0 {
+            tracing::debug!(
+                capacity = self.capacity,
+                "lane retry budget spent; refusing a retry"
+            );
+            return false;
+        }
+        self.tokens -= 1;
+        tracing::trace!(
+            remaining = self.tokens,
+            "lane retry budget: one retry spent"
+        );
+        true
+    }
+
+    /// Record one request that succeeded, earning a retry back every
+    /// [`LANE_SUCCESSES_PER_RETRY`] successes.
+    pub fn record_success(&mut self) {
+        if self.tokens >= self.capacity {
+            self.successes = 0;
+            return;
+        }
+        self.successes += 1;
+        if self.successes >= LANE_SUCCESSES_PER_RETRY {
+            self.successes = 0;
+            self.tokens += 1;
+            tracing::trace!(
+                remaining = self.tokens,
+                "lane retry budget: one retry earned back"
+            );
+        }
+    }
+}
+
+/// A [`LaneRetryBudget`] shared by everything that retries against one server: every clone is
+/// the same budget. The upload queue holds one per lane and hands it to the upload client that
+/// drives the lane's sessions, so the queue's requeues and the client's request retries spend
+/// from one pool.
+#[derive(Debug, Clone, Default)]
+pub struct LaneRetries(Arc<Mutex<LaneRetryBudget>>);
+
+impl LaneRetries {
+    /// A fresh shared budget of `capacity` retries.
+    #[must_use]
+    pub fn new(capacity: u32) -> Self {
+        Self(Arc::new(Mutex::new(LaneRetryBudget::new(capacity))))
+    }
+
+    /// Spend one retry; `false` when the lane's budget is spent. See
+    /// [`LaneRetryBudget::try_spend`].
+    pub fn try_spend(&self) -> bool {
+        self.with(LaneRetryBudget::try_spend)
+    }
+
+    /// Record one success. See [`LaneRetryBudget::record_success`].
+    pub fn record_success(&self) {
+        self.with(LaneRetryBudget::record_success);
+    }
+
+    /// The retries left.
+    #[must_use]
+    pub fn remaining(&self) -> u32 {
+        self.with(|budget| budget.remaining())
+    }
+
+    /// Whether `other` is this same shared budget.
+    #[must_use]
+    pub fn same_as(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+
+    fn with<T>(&self, f: impl FnOnce(&mut LaneRetryBudget) -> T) -> T {
+        // A panic while holding the lock left a plain counter behind, never a broken invariant,
+        // so a poisoned lock is still a usable budget.
+        let mut budget = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        f(&mut budget)
+    }
+}
+
 /// A non-cryptographic seed for the jitter PRNG from the wall clock, X's a fixed
 /// odd constant and forced nonzero. Only spread matters here.
 fn seed() -> u64 {
@@ -1018,8 +1199,18 @@ pub fn protocol_headers() -> reqwest::header::HeaderMap {
 /// the one place it is installed. A transport built any other way sends no handshake and is
 /// refused by every gated route, which is why nothing in this crate calls
 /// `reqwest::Client::builder()` directly outside tests.
+///
+/// **Parallelism is connections, not streams** (networking doc, HTTP Transport). Every
+/// transport is pinned to HTTP/1.1, so each request in flight at once rides its own pooled
+/// connection: a lane's sessions in flight spread across several TCP windows instead of sharing
+/// the one an HTTP/2 connection would multiplex them onto, which is what keeps a lossy or
+/// high-latency link busy. The pin is explicit rather than left to the SDK's `reqwest` features
+/// leaving `http2` out, so a feature another crate enables can never fold the windows back
+/// onto one connection.
 pub fn http_builder() -> reqwest::ClientBuilder {
-    reqwest::Client::builder().default_headers(protocol_headers())
+    reqwest::Client::builder()
+        .default_headers(protocol_headers())
+        .http1_only()
 }
 
 /// The plain SDK client: [`http_builder`], built.

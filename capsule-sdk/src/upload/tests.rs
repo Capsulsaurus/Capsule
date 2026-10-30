@@ -1218,7 +1218,7 @@ async fn shrinking_cuts_between_accepted_chunks_do_not_spend_the_per_transfer_bu
 /// the per-transfer one.
 #[test]
 fn the_shrinking_cut_budget_refills_on_progress_and_bounds_a_run_without_it() {
-    let mut recovery = Recovery::new();
+    let mut recovery = Recovery::new(LaneRetries::new(u32::MAX), None);
     for _ in 0..MAX_CUTS_SINCE_PROGRESS {
         recovery.charge_cut("cut").unwrap();
     }
@@ -1231,7 +1231,7 @@ fn the_shrinking_cut_budget_refills_on_progress_and_bounds_a_run_without_it() {
         Err(UploadError::RetriesExhausted(_))
     ));
 
-    let mut recovery = Recovery::new();
+    let mut recovery = Recovery::new(LaneRetries::new(u32::MAX), None);
     for _ in 0..MAX_RECOVERIES {
         recovery.charge("re-align").unwrap();
     }
@@ -1243,6 +1243,28 @@ fn the_shrinking_cut_budget_refills_on_progress_and_bounds_a_run_without_it() {
         ),
         "progress does not refill the per-transfer budget"
     );
+}
+
+/// A shrinking cut is a retry to the server lane: it spends from the lane's shared budget, and
+/// fails loudly once that is spent even with the cut budget unspent; the accepted chunks that
+/// refill the cut budget earn toward the lane's.
+#[test]
+fn a_shrinking_cut_spends_the_lane_retry_budget() {
+    let lane = LaneRetries::new(2);
+    let mut recovery = Recovery::new(lane.clone(), None);
+    recovery.charge_cut("cut").unwrap();
+    recovery.charge_cut("cut").unwrap();
+    assert_eq!(lane.remaining(), 0);
+    assert!(matches!(
+        recovery.charge_cut("cut"),
+        Err(UploadError::RetriesExhausted(_))
+    ));
+
+    for _ in 0..crate::net::LANE_SUCCESSES_PER_RETRY {
+        recovery.on_progress();
+    }
+    assert_eq!(lane.remaining(), 1, "accepted chunks earn toward the lane");
+    recovery.charge_cut("cut").unwrap();
 }
 
 /// Bounds short enough to cut a black-holed request inside a test: a 200 ms stall bound and a
@@ -2183,4 +2205,247 @@ async fn an_upload_426_names_the_bound_it_broke() {
         }
         other => panic!("expected UpgradeRequired, got {other:?}"),
     }
+}
+
+// ─── The lane's shared retry budget and the transfer gate ───────────────────
+
+/// **A failing server costs at most the lane's retry budget.** Every transfer to one server
+/// spends from one shared budget, so once a server that only ever asks for a wait has taken the
+/// lane's three retries, the next transfer gives up at its first refusal instead of taking a
+/// full recovery ladder of its own.
+#[tokio::test]
+async fn transfers_to_one_server_share_its_lane_retry_budget() {
+    let creates = Arc::new(AtomicUsize::new(0));
+    let cr = creates.clone();
+    let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+        ("POST", "/") => {
+            cr.fetch_add(1, Ordering::SeqCst);
+            MockResponse::api_error(
+                503,
+                "Service Unavailable",
+                error_codes::UPLOAD_UNAVAILABLE,
+                "down",
+            )
+            .header("Retry-After", "0")
+        }
+        other => panic!("unexpected {other:?}"),
+    })
+    .await;
+
+    let lane = LaneRetries::new(3);
+    let client = server.client(PROTOCOL).with_lane_retries(lane.clone());
+    assert!(client.lane_retries().same_as(&lane));
+    let first = client.upload(&request(4096), &[9u8; 4096]).await;
+    assert!(
+        matches!(first, Err(UploadError::RetriesExhausted(_))),
+        "{first:?}"
+    );
+    assert_eq!(
+        creates.load(Ordering::SeqCst),
+        4,
+        "one try and three retries"
+    );
+
+    let second = client.clone().upload(&request(4096), &[9u8; 4096]).await;
+    assert!(
+        matches!(second, Err(UploadError::RetriesExhausted(_))),
+        "{second:?}"
+    );
+    assert_eq!(
+        creates.load(Ordering::SeqCst),
+        5,
+        "the second transfer to the same server got no retry at all"
+    );
+    assert_eq!(lane.remaining(), 0);
+}
+
+/// Accepted chunks earn the lane's retries back, so a server that recovers is retried again.
+#[tokio::test]
+async fn accepted_chunks_earn_the_lane_budget_back() {
+    let (handler, _) = recording_server(created("sess-earn", CHUNK_SIZE_256KB), "sess-earn");
+    let server = MockServer::start(handler).await;
+    let lane = LaneRetries::new(2);
+    assert!(lane.try_spend());
+    assert!(lane.try_spend());
+    let client = server.client(PROTOCOL).with_lane_retries(lane.clone());
+    // An answered create and four chunks of 256 KiB: two earned retries at one per two
+    // successes.
+    let size = 4 * CHUNK_SIZE_256KB;
+    let data = vec![1u8; size as usize];
+    client.upload(&request(size), &data).await.unwrap();
+    assert_eq!(lane.remaining(), 2);
+}
+
+/// **A server that paces creates does not drain the lane.** Every create is answered `429`
+/// with a `Retry-After` once before it is accepted; the answered create earns toward the lane
+/// as its accepted chunk does, so a one-retry lane honours the wait on every one of many
+/// single-chunk transfers instead of failing them once its first token is spent.
+#[tokio::test]
+async fn answered_creates_earn_the_lane_budget_back() {
+    let creates = Arc::new(AtomicUsize::new(0));
+    let cr = creates.clone();
+    let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+        ("POST", "/") => {
+            if cr.fetch_add(1, Ordering::SeqCst).is_multiple_of(2) {
+                MockResponse::api_error(
+                    429,
+                    "Too Many Requests",
+                    error_codes::UPLOAD_RATE_LIMITED,
+                    "wait",
+                )
+                .header("Retry-After", "0")
+            } else {
+                created("sess-paced", CHUNK_SIZE_256KB)
+            }
+        }
+        ("PATCH", "/sess-paced") => {
+            let new_offset = ack_offset(req);
+            MockResponse::new(204, "No Content").header("X-Capsule-Offset", new_offset.to_string())
+        }
+        other => panic!("unexpected {other:?}"),
+    })
+    .await;
+
+    let lane = LaneRetries::new(1);
+    let client = server.client(PROTOCOL).with_lane_retries(lane.clone());
+    for item in 0..10 {
+        let outcome = client.upload(&request(4096), &[9u8; 4096]).await;
+        assert!(
+            matches!(outcome, Ok(UploadOutcome::Completed { .. })),
+            "item {item}: {outcome:?}"
+        );
+    }
+    assert_eq!(
+        creates.load(Ordering::SeqCst),
+        20,
+        "one wait and one create each"
+    );
+    assert_eq!(lane.remaining(), 1);
+}
+
+/// What a recording gate saw, in order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum GateEvent {
+    Reserved(u64),
+    Released,
+    Advised(Option<u32>),
+}
+
+/// A gate that reserves every range at once and records what the transfer asked of it.
+struct RecordingGate {
+    queue: Mutex<Option<(queue::UploadQueue<()>, queue::GrantId)>>,
+    events: Mutex<Vec<GateEvent>>,
+}
+
+impl RecordingGate {
+    fn new() -> Self {
+        let mut queue = queue::UploadQueue::new(1 << 30, Duration::from_secs(30));
+        let server = queue::ServerKey::new("https://gate.test");
+        queue.enqueue(
+            &server,
+            queue::QueuedJob::new(capsule_library::import::UploadTier::Original, ()),
+        );
+        let grant = queue.next(std::time::Instant::now()).unwrap();
+        Self {
+            queue: Mutex::new(Some((queue, grant.id))),
+            events: Mutex::default(),
+        }
+    }
+
+    fn in_use(&self) -> u64 {
+        self.queue.lock().unwrap().as_ref().unwrap().0.in_use()
+    }
+}
+
+impl TransferGate for RecordingGate {
+    fn reserve(
+        &self,
+        len: u64,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<RangeId>> + Send + '_>> {
+        let mut held = self.queue.lock().unwrap();
+        let (queue, grant) = held.as_mut().unwrap();
+        let range = queue
+            .reserve_range(*grant, len, std::time::Instant::now())
+            .expect("one range at a time fits");
+        self.events.lock().unwrap().push(GateEvent::Reserved(len));
+        Box::pin(std::future::ready(Some(range)))
+    }
+
+    fn release(&self, range: RangeId) {
+        let mut held = self.queue.lock().unwrap();
+        let (queue, _) = held.as_mut().unwrap();
+        assert!(queue.release_range(range, std::time::Instant::now()));
+        self.events.lock().unwrap().push(GateEvent::Released);
+    }
+
+    fn advised(&self, advice: &ServerAdvice) {
+        self.events.lock().unwrap().push(GateEvent::Advised(Some(
+            advice.sessions_window(16, Duration::ZERO),
+        )));
+    }
+}
+
+/// **Every range reserves its length while in flight, and only then.** A gated transfer
+/// reserves each chunk before reading it, gives it back once its request is answered, holds
+/// one range at a time, and reports the advice its create carried.
+#[tokio::test]
+async fn a_gated_transfer_reserves_each_range_while_it_is_in_flight() {
+    let (handler, offsets) = recording_server(created("sess-gate", CHUNK_SIZE_256KB), "sess-gate");
+    let server = MockServer::start(handler).await;
+    let gate = RecordingGate::new();
+    let size = 300 * 1024;
+    let data = vec![4u8; size as usize];
+    let outcome = server
+        .client(PROTOCOL)
+        .upload_gated(&request(size), &data, &gate)
+        .await
+        .unwrap();
+    assert!(matches!(outcome, UploadOutcome::Completed { .. }));
+    assert_eq!(*offsets.lock().unwrap(), vec![0, CHUNK_SIZE_256KB]);
+    assert_eq!(
+        *gate.events.lock().unwrap(),
+        vec![
+            GateEvent::Advised(Some(4)),
+            GateEvent::Reserved(CHUNK_SIZE_256KB),
+            GateEvent::Released,
+            GateEvent::Reserved(size - CHUNK_SIZE_256KB),
+            GateEvent::Released,
+        ]
+    );
+    assert_eq!(
+        gate.in_use(),
+        0,
+        "nothing is held once the transfer is done"
+    );
+}
+
+/// A range whose request fails still gives its bytes back.
+#[tokio::test]
+async fn a_refused_range_gives_its_reservation_back() {
+    let server = MockServer::start(|req| match (req.method.as_str(), req.path.as_str()) {
+        ("POST", "/") => created("sess-refused", CHUNK_SIZE_256KB),
+        ("PATCH", "/sess-refused") => MockResponse::api_error(
+            403,
+            "Forbidden",
+            error_codes::UPLOAD_ALBUM_ACCESS_DENIED,
+            "no",
+        ),
+        other => panic!("unexpected {other:?}"),
+    })
+    .await;
+    let gate = RecordingGate::new();
+    let err = server
+        .client(PROTOCOL)
+        .upload_gated(&request(4096), &[0u8; 4096], &gate)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, UploadError::Rejected { status: 403, .. }),
+        "{err:?}"
+    );
+    assert_eq!(gate.in_use(), 0);
+    assert_eq!(
+        gate.events.lock().unwrap().last(),
+        Some(&GateEvent::Released)
+    );
 }

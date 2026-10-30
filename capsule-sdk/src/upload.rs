@@ -41,14 +41,59 @@ use serde::{Deserialize, Serialize};
 
 use crate::events::{RetryReason, TransferEvent, TransferEvents, millis};
 use crate::net::{
-    ConnectionClass, ExchangeProgress, PacedBody, RequestBounds, RequestCut, RetryClass,
-    RetryDecision, RetryEngine, Sleeper, TokioSleeper, negotiation, within_bounds,
+    ConnectionClass, ExchangeProgress, LaneRetries, PacedBody, RequestBounds, RequestCut,
+    RetryClass, RetryDecision, RetryEngine, Sleeper, TokioSleeper, negotiation, within_bounds,
 };
 
 pub mod advice;
 pub mod queue;
 
 use self::advice::{ServerAdvice, SessionExpiry};
+use self::queue::RangeId;
+
+/// The scheduler a gated transfer runs under ([`UploadClient::upload_gated`]): it holds the
+/// memory each range in flight needs and hears the server's advice. The push driver implements
+/// it over the device's [`UploadQueue`](queue::UploadQueue), so every range any session sends
+/// reserves its length against the one shared byte budget.
+pub trait TransferGate: Sync {
+    /// Wait until the shared budget and the session's ranges window can hold one more range of
+    /// `len` bytes, and reserve it. `None` means the gate holds no session for this transfer any
+    /// more (it was revoked); the range is then sent unreserved and the caller's own report on
+    /// the session decides what happens to it.
+    fn reserve(
+        &self,
+        len: u64,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<RangeId>> + Send + '_>>;
+
+    /// The range `range` returned (answered, refused or cut): give its bytes back.
+    fn release(&self, range: RangeId);
+
+    /// The server sent `advice` on this transfer's session create or `HEAD`.
+    fn advised(&self, advice: &ServerAdvice);
+}
+
+/// One range's reservation, given back however the request ends: answered, refused, cut, or an
+/// early return that drops it.
+struct RangeHold<'g> {
+    gate: &'g dyn TransferGate,
+    range: Option<RangeId>,
+}
+
+impl<'g> RangeHold<'g> {
+    async fn reserve(gate: Option<&'g dyn TransferGate>, len: u64) -> Option<Self> {
+        let gate = gate?;
+        let range = gate.reserve(len).await;
+        Some(Self { gate, range })
+    }
+}
+
+impl Drop for RangeHold<'_> {
+    fn drop(&mut self) {
+        if let Some(range) = self.range.take() {
+            self.gate.release(range);
+        }
+    }
+}
 
 // Constants for chunk sizes (4KB aligned)
 const KB: u64 = 1024;
@@ -1003,8 +1048,9 @@ impl From<WaitAsked> for UploadError {
 }
 
 /// The bounded recovery state one transfer shares across every request it makes:
-/// the recovery budget, and the shared retry engine's backoff schedule.
-struct Recovery {
+/// the recovery budget, the shared retry engine's backoff schedule, the lane's shared retry
+/// budget, and the gate its ranges reserve memory through.
+struct Recovery<'g> {
     /// Recovery actions taken so far, bounded by [`MAX_RECOVERIES`].
     count: u32,
     /// Shrinking cuts since the last accepted chunk, bounded by [`MAX_CUTS_SINCE_PROGRESS`].
@@ -1013,41 +1059,74 @@ struct Recovery {
     /// full jitter, bounded give-up. It governs mid-transfer transport resets and
     /// server-asked waits that name no `Retry-After`.
     engine: RetryEngine,
+    /// The server lane's retry budget, shared with every other transfer to that server: each
+    /// retry or recovery action spends from it besides this transfer's own caps, and each
+    /// answered create, answered `HEAD` and accepted chunk earns toward it.
+    lane: LaneRetries,
+    /// Where each range reserves its memory and the server's advice is reported, when the
+    /// transfer runs under a scheduler.
+    gate: Option<&'g dyn TransferGate>,
 }
 
-impl Recovery {
-    fn new() -> Self {
+impl<'g> Recovery<'g> {
+    fn new(lane: LaneRetries, gate: Option<&'g dyn TransferGate>) -> Self {
         Self {
             count: 0,
             cuts: 0,
             engine: RetryClass::BulkTransfer.engine(),
+            lane,
+            gate,
         }
     }
 
     /// An accepted chunk is real progress: it refills the shrinking-cut budget and the
-    /// transient-reset backoff budget. The per-transfer [`MAX_RECOVERIES`] budget is not
-    /// refilled.
+    /// transient-reset backoff budget, and earns toward the lane's shared retry budget. The
+    /// per-transfer [`MAX_RECOVERIES`] budget is not refilled.
     fn on_progress(&mut self) {
         self.cuts = 0;
         self.engine.reset();
+        self.lane.record_success();
     }
 
-    /// Charge one shrinking cut, failing loudly once a run of them lands nothing.
+    /// Charge one shrinking cut, failing loudly once a run of them lands nothing or the
+    /// lane's shared retry budget is spent: a cut is a retry like any other to the lane.
     fn charge_cut(&mut self, action: &str) -> Result<(), UploadError> {
         self.cuts += 1;
         if self.cuts > MAX_CUTS_SINCE_PROGRESS {
-            Err(UploadError::RetriesExhausted(format!(
+            return Err(UploadError::RetriesExhausted(format!(
                 "{action}: exceeded {MAX_CUTS_SINCE_PROGRESS} shrinking cuts without an accepted chunk"
-            )))
-        } else {
-            Ok(())
+            )));
         }
+        self.spend_lane(action)
     }
 
-    /// Charge one recovery action, failing loudly once the budget is spent.
+    /// Charge one recovery action, failing loudly once this transfer's budget or its lane's
+    /// shared retry budget is spent.
     fn charge(&mut self, action: &str) -> Result<(), UploadError> {
         self.count += 1;
-        guard_budget(self.count, action)
+        guard_budget(self.count, action)?;
+        self.spend_lane(action)
+    }
+
+    /// Spend one retry from the lane's shared budget.
+    fn spend_lane(&self, action: &str) -> Result<(), UploadError> {
+        if self.lane.try_spend() {
+            return Ok(());
+        }
+        tracing::warn!(
+            action,
+            "the server lane's shared retry budget is spent; giving up"
+        );
+        Err(UploadError::RetriesExhausted(format!(
+            "{action}: the retry budget shared by every upload to this server is spent"
+        )))
+    }
+
+    /// Report advice the server sent to the gate, when there is one.
+    fn advised(&self, advice: &ServerAdvice) {
+        if let Some(gate) = self.gate {
+            gate.advised(advice);
+        }
     }
 
     /// Charge a server-asked wait and resolve how long to wait: the server's
@@ -1119,17 +1198,37 @@ pub struct UploadClient {
     sleeper: TokioSleeper,
     /// Where each transfer step is published ([`crate::events`]); disabled by default.
     events: TransferEvents,
+    /// The retry budget every transfer this client (and each clone of it) drives spends from:
+    /// one server's lane.
+    lane: LaneRetries,
 }
 
 impl UploadClient {
-    /// Build a client over an authorized [`UploadTransport`], on an unmetered link.
+    /// Build a client over an authorized [`UploadTransport`], on an unmetered link, with a
+    /// lane retry budget of its own that every clone shares.
     pub fn new(transport: UploadTransport) -> Self {
         Self {
             transport,
             connection: ConnectionClass::Unmetered,
             sleeper: TokioSleeper,
             events: TransferEvents::disabled(),
+            lane: LaneRetries::default(),
         }
+    }
+
+    /// Spend retries from `lane` — the budget the upload queue holds for this client's server
+    /// ([`UploadQueue::lane_retries`](queue::UploadQueue::lane_retries)) — so every transfer to
+    /// the server, and the queue's own retries, share one bound.
+    #[must_use]
+    pub fn with_lane_retries(mut self, lane: LaneRetries) -> Self {
+        self.lane = lane;
+        self
+    }
+
+    /// The lane retry budget this client spends from.
+    #[must_use]
+    pub fn lane_retries(&self) -> &LaneRetries {
+        &self.lane
     }
 
     /// Publish every transfer this client drives to `events` (session, chunk, retry,
@@ -1311,11 +1410,19 @@ impl UploadClient {
     async fn create_waiting(
         &self,
         request: &CreateUploadRequest,
-        recovery: &mut Recovery,
+        recovery: &mut Recovery<'_>,
     ) -> Result<CreateOutcome, UploadError> {
         loop {
             match self.try_create(request).await? {
-                Ok(outcome) => return Ok(outcome),
+                Ok(outcome) => {
+                    // An answered create is a success the lane earns back from, so a server
+                    // that paces creates with `Retry-After` does not drain the lane.
+                    recovery.lane.record_success();
+                    if let CreateOutcome::Created { advice, .. } = &outcome {
+                        recovery.advised(advice);
+                    }
+                    return Ok(outcome);
+                }
                 Err(asked) => {
                     let wait = recovery.server_wait(asked.after, "session create")?;
                     tracing::debug!(?wait, "waiting as the server asked, then creating again");
@@ -1330,11 +1437,19 @@ impl UploadClient {
     async fn head_waiting(
         &self,
         session_id: &str,
-        recovery: &mut Recovery,
+        recovery: &mut Recovery<'_>,
     ) -> Result<Option<HeadInfo>, UploadError> {
         loop {
             match self.try_head(session_id).await? {
-                Ok(info) => return Ok(info),
+                Ok(info) => {
+                    // An answered `HEAD` (the finalization poll's included) earns toward the
+                    // lane's shared budget, as an accepted chunk does.
+                    recovery.lane.record_success();
+                    if let Some(info) = &info {
+                        recovery.advised(&info.advice);
+                    }
+                    return Ok(info);
+                }
                 Err(asked) => {
                     let wait = recovery.server_wait(asked.after, "progress query")?;
                     tracing::debug!(?wait, "waiting as the server asked, then asking HEAD again");
@@ -1506,7 +1621,27 @@ impl UploadClient {
         request: &CreateUploadRequest,
         data: &S,
     ) -> Result<UploadOutcome, UploadError> {
-        self.upload_with(request, data, &mut Recovery::new()).await
+        self.upload_with(request, data, &mut Recovery::new(self.lane.clone(), None))
+            .await
+    }
+
+    /// [`UploadClient::upload`] under a scheduler: every range the transfer sends first
+    /// reserves its length through `gate` and gives it back once the request ends, and the
+    /// advice the server sends on the session's create and `HEAD`s is reported to it. This is
+    /// how a lane's sessions in flight share the device's one byte budget.
+    #[tracing::instrument(level = "debug", skip(self, data, gate), fields(size = request.size, blob_role = ?request.blob_role))]
+    pub async fn upload_gated<S: UploadSource + ?Sized>(
+        &self,
+        request: &CreateUploadRequest,
+        data: &S,
+        gate: &dyn TransferGate,
+    ) -> Result<UploadOutcome, UploadError> {
+        self.upload_with(
+            request,
+            data,
+            &mut Recovery::new(self.lane.clone(), Some(gate)),
+        )
+        .await
     }
 
     /// [`UploadClient::upload`] over a recovery budget the caller may already have
@@ -1515,7 +1650,7 @@ impl UploadClient {
         &self,
         request: &CreateUploadRequest,
         data: &S,
-        recovery: &mut Recovery,
+        recovery: &mut Recovery<'_>,
     ) -> Result<UploadOutcome, UploadError> {
         let (session, suggested, start_offset, start_status) =
             match self.create_waiting(request, recovery).await? {
@@ -1561,7 +1696,7 @@ impl UploadClient {
         request: &CreateUploadRequest,
         data: &S,
     ) -> Result<UploadOutcome, UploadError> {
-        let mut recovery = Recovery::new();
+        let mut recovery = Recovery::new(self.lane.clone(), None);
         if let Some(info) = self.head_waiting(session_id, &mut recovery).await? {
             let mut strategy = AdaptiveChunkSizeStrategy::for_file_size(request.size);
             if let Some(chunk) = info.advice.chunk(Duration::ZERO) {
@@ -1600,7 +1735,7 @@ impl UploadClient {
         data: &S,
         strategy: &mut AdaptiveChunkSizeStrategy,
         start: (u64, Option<String>),
-        recovery: &mut Recovery,
+        recovery: &mut Recovery<'_>,
     ) -> Result<UploadOutcome, UploadError> {
         let size = request.size;
         let (mut offset, mut state) = start;
@@ -1613,6 +1748,9 @@ impl UploadClient {
             // Non-final chunks are exactly the adaptive size (4 KiB-aligned by
             // construction); the final chunk is the remainder (alignment-exempt).
             let want = strategy.next_chunk_size().min(remaining);
+            // Under a scheduler the window's bytes are reserved against the shared budget
+            // before they are read, and given back once its request ends, however it ends.
+            let hold = RangeHold::reserve(recovery.gate, want).await;
             // Read exactly this window — a re-send or a re-align reads it again — so the
             // client holds one chunk of the blob, never the blob.
             let chunk = data.read_at(offset, want as usize)?;
@@ -1633,7 +1771,11 @@ impl UploadClient {
                 offset,
                 len: want,
             });
-            let ack = match self.send_patch(&session_id, &chunk, offset).await {
+            let sent = self.send_patch(&session_id, &chunk, offset).await;
+            // The window's request is over: its bytes go back before any wait below.
+            drop(chunk);
+            drop(hold);
+            let ack = match sent {
                 Ok(ack) => ack,
                 // A mid-transfer connection reset / silent black-hole: back off
                 // through the shared engine and resume from the SAME offset (the
@@ -1653,7 +1795,8 @@ impl UploadClient {
                 } => {
                     state = status;
                     strategy.record_chunk(want, attempt_start.elapsed());
-                    // Real progress refills the shrinking-cut and transient-reset budgets.
+                    // Real progress refills the shrinking-cut and transient-reset budgets,
+                    // and earns toward the lane's shared one.
                     recovery.on_progress();
                     self.events.emit(|| TransferEvent::ChunkAcked {
                         blob: request.hash.clone(),
@@ -1860,7 +2003,7 @@ impl UploadClient {
         session_id: &str,
         size: u64,
         state: Option<&str>,
-        recovery: &mut Recovery,
+        recovery: &mut Recovery<'_>,
     ) -> Result<Settled, UploadError> {
         if !matches!(state, Some(STATUS_WAITING | STATUS_FAILED)) {
             tracing::debug!(%session_id, ?state, "no finalization to wait for");
@@ -1943,16 +2086,17 @@ impl UploadClient {
     ///
     /// # Errors
     ///
-    /// [`UploadError::RetriesExhausted`] once the engine gives up: a bounded give-up keeps a
-    /// dead path from becoming a hot loop.
+    /// [`UploadError::RetriesExhausted`] once the engine gives up, or the server lane's shared
+    /// retry budget is spent: a bounded give-up keeps a dead path from becoming a hot loop.
     async fn back_off_reset(
         &self,
-        recovery: &mut Recovery,
+        recovery: &mut Recovery<'_>,
         request: &CreateUploadRequest,
         session_id: &str,
         (offset, len): (u64, u64),
         reason: &str,
     ) -> Result<(), UploadError> {
+        recovery.spend_lane("transport reset")?;
         match recovery.engine.next_backoff(None) {
             RetryDecision::GiveUp => Err(UploadError::RetriesExhausted(format!(
                 "transport reset unrecovered after {} retries: {reason}",
@@ -1998,7 +2142,7 @@ impl UploadClient {
     async fn recreate(
         &self,
         request: &CreateUploadRequest,
-        recovery: &mut Recovery,
+        recovery: &mut Recovery<'_>,
     ) -> Result<String, UploadError> {
         match self.create_waiting(request, recovery).await? {
             // The caller drives a re-created session from zero, so that is where it starts.
