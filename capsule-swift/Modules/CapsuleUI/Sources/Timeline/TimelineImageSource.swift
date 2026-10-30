@@ -16,8 +16,8 @@ import ImagePipeline
 /// in whichever order they can. A single `thumbnail(for:)` call cannot express
 /// "show me something now, and something better when you have it".
 ///
-/// - Note: ``RepresentationTier/dominantColour`` is deliberately **not** here.
-///   It rides inside ``LibraryAsset/lqip`` and needs no decode, no cache, and no
+/// - Note: The LQIP's dominant colour is deliberately **not** here. It rides
+///   inside ``LibraryAsset/lqip`` and needs no decode, no cache, and no
 ///   `await` — a tile paints it synchronously in its first layout pass, which is
 ///   exactly why the grid is never blank.
 public protocol TimelineImageSource: Sendable {

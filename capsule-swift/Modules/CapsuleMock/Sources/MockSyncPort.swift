@@ -69,13 +69,13 @@ extension MockTransferStore: SyncPort {
             throw CapsuleError(code: .blobPendingUpload, detail: "CapsuleMock: unknown asset")
         }
         guard currentStatus.connectionClass.isUsable else {
-            let degraded = asset.representations
+            let inHand = asset.representations
             await store.applyFetchOutcome(
                 assetID,
-                representations: degraded,
-                state: .fullResolutionUnavailable(bestAvailable: degraded.best)
+                representations: inHand,
+                state: .fullResolutionUnavailable(bestAvailable: MockRenderLadder.ladder.bestAvailable(inHand))
             )
-            return degraded
+            return inHand
         }
         let fetched = asset.representations.adding(tier)
         await store.applyFetchOutcome(assetID, representations: fetched, state: .durable)
