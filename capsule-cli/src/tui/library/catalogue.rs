@@ -37,7 +37,7 @@ pub struct Catalogue {
     /// Every asset the workspace manages, newest capture first (ties by id), trashed and
     /// hidden ones included: each view decides what it leaves out.
     assets: Vec<AssetEntry>,
-    /// Every album the workspace holds keys for, by name then id.
+    /// Every album the workspace holds keys for, in the library's album order (most recent first).
     albums: Vec<AlbumEntry>,
     /// Every stack an asset is a member of, newest first by its newest member's capture (where
     /// that member falls in `assets`), whichever role that member holds.
@@ -289,7 +289,7 @@ impl Catalogue {
         &self.assets
     }
 
-    /// Every album, by name then id.
+    /// Every album, in the library's album order.
     #[must_use]
     pub fn albums(&self) -> &[AlbumEntry] {
         &self.albums
@@ -422,7 +422,7 @@ pub enum Listing {
     },
     /// The albums.
     Albums {
-        /// Every album, by name then id.
+        /// Every album, in the library's album order.
         albums: Vec<ListedAlbum>,
     },
     /// The stacks.
@@ -580,7 +580,8 @@ pub fn collect(ws: &Workspace) -> Catalogue {
             .then_with(|| a.asset_id.cmp(&b.asset_id))
     });
 
-    let mut albums: Vec<AlbumEntry> = ws
+    // Kept in `Workspace::albums()` order (most recent visible asset first): the library owns it.
+    let albums: Vec<AlbumEntry> = ws
         .albums()
         .into_iter()
         .map(|(album_id, name)| AlbumEntry {
@@ -592,11 +593,6 @@ pub fn collect(ws: &Workspace) -> Catalogue {
                 .map_err(|e| e.to_string()),
         })
         .collect();
-    albums.sort_by(|a, b| {
-        a.name
-            .cmp(&b.name)
-            .then_with(|| a.album_id.cmp(&b.album_id))
-    });
 
     // Stacks in the order their first member appears in the (newest-first) asset list, with
     // the primary moved to the front.
