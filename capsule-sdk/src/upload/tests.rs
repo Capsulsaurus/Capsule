@@ -2121,11 +2121,59 @@ async fn accepted_chunks_earn_the_lane_budget_back() {
     assert!(lane.try_spend());
     assert!(lane.try_spend());
     let client = server.client(PROTOCOL).with_lane_retries(lane.clone());
-    // Four chunks of 256 KiB: two earned retries at one per two successes.
+    // An answered create and four chunks of 256 KiB: two earned retries at one per two
+    // successes.
     let size = 4 * CHUNK_SIZE_256KB;
     let data = vec![1u8; size as usize];
     client.upload(&request(size), &data).await.unwrap();
     assert_eq!(lane.remaining(), 2);
+}
+
+/// **A server that paces creates does not drain the lane.** Every create is answered `429`
+/// with a `Retry-After` once before it is accepted; the answered create earns toward the lane
+/// as its accepted chunk does, so a one-retry lane honours the wait on every one of many
+/// single-chunk transfers instead of failing them once its first token is spent.
+#[tokio::test]
+async fn answered_creates_earn_the_lane_budget_back() {
+    let creates = Arc::new(AtomicUsize::new(0));
+    let cr = creates.clone();
+    let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+        ("POST", "/") => {
+            if cr.fetch_add(1, Ordering::SeqCst) % 2 == 0 {
+                MockResponse::api_error(
+                    429,
+                    "Too Many Requests",
+                    error_codes::UPLOAD_RATE_LIMITED,
+                    "wait",
+                )
+                .header("Retry-After", "0")
+            } else {
+                created("sess-paced", CHUNK_SIZE_256KB)
+            }
+        }
+        ("PATCH", "/sess-paced") => {
+            let new_offset = ack_offset(req);
+            MockResponse::new(204, "No Content").header("X-Capsule-Offset", new_offset.to_string())
+        }
+        other => panic!("unexpected {other:?}"),
+    })
+    .await;
+
+    let lane = LaneRetries::new(1);
+    let client = server.client(PROTOCOL).with_lane_retries(lane.clone());
+    for item in 0..10 {
+        let outcome = client.upload(&request(4096), &[9u8; 4096]).await;
+        assert!(
+            matches!(outcome, Ok(UploadOutcome::Completed { .. })),
+            "item {item}: {outcome:?}"
+        );
+    }
+    assert_eq!(
+        creates.load(Ordering::SeqCst),
+        20,
+        "one wait and one create each"
+    );
+    assert_eq!(lane.remaining(), 1);
 }
 
 /// What a recording gate saw, in order.

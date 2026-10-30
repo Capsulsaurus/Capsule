@@ -1050,7 +1050,7 @@ struct Recovery<'g> {
     engine: RetryEngine,
     /// The server lane's retry budget, shared with every other transfer to that server: each
     /// retry or recovery action spends from it besides this transfer's own caps, and each
-    /// accepted chunk earns toward it.
+    /// answered create, answered `HEAD` and accepted chunk earns toward it.
     lane: LaneRetries,
     /// Where each range reserves its memory and the server's advice is reported, when the
     /// transfer runs under a scheduler.
@@ -1382,6 +1382,9 @@ impl UploadClient {
         loop {
             match self.try_create(request).await? {
                 Ok(outcome) => {
+                    // An answered create is a success the lane earns back from, so a server
+                    // that paces creates with `Retry-After` does not drain the lane.
+                    recovery.lane.record_success();
                     if let CreateOutcome::Created { advice, .. } = &outcome {
                         recovery.advised(advice);
                     }
@@ -1406,6 +1409,9 @@ impl UploadClient {
         loop {
             match self.try_head(session_id).await? {
                 Ok(info) => {
+                    // An answered `HEAD` (the finalization poll's included) earns toward the
+                    // lane's shared budget, as an accepted chunk does.
+                    recovery.lane.record_success();
                     if let Some(info) = &info {
                         recovery.advised(&info.advice);
                     }
