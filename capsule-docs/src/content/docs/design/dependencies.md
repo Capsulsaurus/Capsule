@@ -35,6 +35,7 @@ Every Rust version is pinned once in the root `[workspace.dependencies]`; member
 | HTTP body | `http-body-util`; `http-body` | `http-body-util`: only the server's coded-problem interceptor. `http-body`: only the SDK's paced upload body, which records send progress for the per-request stall timer. Both already transitive. |
 | HTTP types | `http` | Only the SDK's refresh-on-401 layer; already transitive. |
 | HTTP client | `reqwest` (`default-features = false`, `rustls-tls`, `json`) | `capsule-sdk`, and the server's OIDC relying party as its only egress. |
+| Socket options | `socket2` (feature `all`) | Only the SDK's [packet marking](/design/networking/#packet-marking) of sockets it holds; already transitive through tokio and hyper-util. |
 | OIDC relying party | `jsonwebtoken` + hand-written discovery, JWKS cache and token exchange | Every claim check is Capsule's ([Authentication](/design/authentication/#signing-in-through-an-identity-provider)). Not `openidconnect` (pulls `chrono`, `log`, vulnerable `rsa`). |
 | REST client codegen | `spargen` **0.5.0** | SDK build-dependency only, from the committed `capsule-server/openapi.json`. Everything that parses is generated; only orchestration is hand-written. Bump the `bytes`/`reqwest`/`serde`/`serde_json` floors together with it. Not Progenitor. |
 | Second factor | `totp-rs` | SHA-1, six digits, 30 s step, one step of drift; replay refusal is the store's compare-and-set. |

@@ -666,3 +666,89 @@ fn the_response_wait_outlasts_the_stall_bound() {
     assert!(bounds.response_wait > bounds.stall);
     assert!(bounds.stall <= Duration::from_secs(30));
 }
+
+// ─── Packet marking ──────────────────────────────────────────────────────────
+
+/// **Lower Effort is DSCP 1 in the top six bits** (RFC 8622): the octet is `0x04`, the ECN bits
+/// clear.
+#[test]
+fn lower_effort_is_dscp_one_with_ecn_clear() {
+    assert_eq!(LOWER_EFFORT_DSCP, 1);
+    assert_eq!(LOWER_EFFORT_TRAFFIC_CLASS, 0x04);
+    assert_eq!(
+        LOWER_EFFORT_TRAFFIC_CLASS & 0b11,
+        0,
+        "ECN bits are the kernel's"
+    );
+}
+
+/// A connected loopback pair on `bind` (`None` where this host has no such loopback).
+async fn loopback_pair(bind: &str) -> Option<(tokio::net::TcpStream, tokio::net::TcpStream)> {
+    let listener = tokio::net::TcpListener::bind(bind).await.ok()?;
+    let addr = listener.local_addr().ok()?;
+    let (dialed, accepted) = tokio::join!(tokio::net::TcpStream::connect(addr), listener.accept());
+    Some((dialed.ok()?, accepted.ok()?.0))
+}
+
+/// **An IPv4 socket is marked through `IP_TOS`**, on both ends of a connection, and reads back
+/// the Lower Effort octet.
+#[tokio::test]
+async fn an_ipv4_socket_is_marked_lower_effort() {
+    let (dialed, accepted) = loopback_pair("127.0.0.1:0").await.expect("IPv4 loopback");
+    for socket in [&dialed, &accepted] {
+        assert_eq!(
+            socket2::SockRef::from(socket).tos_v4().unwrap(),
+            0,
+            "unmarked by default"
+        );
+        assert_eq!(mark_lower_effort(socket), Marking::Marked);
+        assert_eq!(
+            socket2::SockRef::from(socket).tos_v4().unwrap(),
+            LOWER_EFFORT_TRAFFIC_CLASS
+        );
+    }
+}
+
+/// **An IPv6 socket is marked through `IPV6_TCLASS`** where the platform exposes it. Skipped on
+/// a host with no IPv6 loopback.
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
+#[tokio::test]
+async fn an_ipv6_socket_is_marked_lower_effort() {
+    let Some((dialed, accepted)) = loopback_pair("[::1]:0").await else {
+        return;
+    };
+    for socket in [&dialed, &accepted] {
+        assert_eq!(mark_lower_effort(socket), Marking::Marked);
+        assert_eq!(
+            socket2::SockRef::from(socket).tclass_v6().unwrap(),
+            LOWER_EFFORT_TRAFFIC_CLASS
+        );
+    }
+}
+
+/// **An IPv4-mapped IPv6 socket is marked as IPv4**, since its packets are IPv4. Skipped on a
+/// host with no dual-stack IPv6 listener.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn an_ipv4_mapped_socket_is_marked_through_ip_tos() {
+    let Ok(listener) = tokio::net::TcpListener::bind("[::]:0").await else {
+        return;
+    };
+    let port = listener.local_addr().unwrap().port();
+    let (dialed, accepted) = tokio::join!(
+        tokio::net::TcpStream::connect(("127.0.0.1", port)),
+        listener.accept()
+    );
+    let (Ok(_dialed), Ok((accepted, _))) = (dialed, accepted) else {
+        return;
+    };
+    assert!(
+        accepted.local_addr().unwrap().is_ipv6(),
+        "a dual-stack socket"
+    );
+    assert_eq!(mark_lower_effort(&accepted), Marking::Marked);
+    assert_eq!(
+        socket2::SockRef::from(&accepted).tos_v4().unwrap(),
+        LOWER_EFFORT_TRAFFIC_CLASS
+    );
+}
