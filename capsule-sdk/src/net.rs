@@ -705,6 +705,250 @@ impl Sleeper for TokioSleeper {
     }
 }
 
+// ─── Per-request stall bounds ────────────────────────────────────────────────
+
+/// How long a request waits for its response once its body is fully sent: one minute.
+///
+/// Longer than the stall bound, because it covers the server's own work on a write — a chunk's
+/// staging write and `fsync` — rather than bytes on the wire (networking doc, Adverse-Network
+/// Posture). Waiting on a session whose finalization is still running is not this wait: that is
+/// observed by polling `HEAD`, never by holding a request open.
+pub const DEFAULT_RESPONSE_WAIT: Duration = Duration::from_mins(1);
+
+/// The size of one piece a [`PacedBody`] hands the HTTP stack: 16 KiB.
+///
+/// Once the stack's write buffer is full it pulls about one piece per piece written, so a live
+/// link must move one piece per stall bound to be seen moving. At 16 KiB over the default
+/// 20 s stall bound that is 0.8 KiB/s — below the server's 1 KiB/s minimum sustained rate, so
+/// the client never cuts as stalled a link the server would accept. Large enough that the
+/// per-piece bookkeeping is noise beside the bytes.
+pub const PACED_PIECE: usize = 16 * 1024;
+
+/// The two bounds every request runs under: the **stall** bound while bytes should be moving —
+/// sending the request body, or receiving the response body — and the longer **response-wait**
+/// bound between the last request byte and the response head.
+///
+/// Neither is a total-duration timeout: a slow but live request is never cut.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RequestBounds {
+    /// No bytes moved for this long while sending or receiving cuts the request.
+    pub stall: Duration,
+    /// No response head this long after the body was sent cuts the request.
+    pub response_wait: Duration,
+}
+
+impl RequestBounds {
+    /// Bounds of `stall` and `response_wait`.
+    #[must_use]
+    pub const fn new(stall: Duration, response_wait: Duration) -> Self {
+        Self {
+            stall,
+            response_wait,
+        }
+    }
+}
+
+impl Default for RequestBounds {
+    /// The [`StallConfig`] default stall bound — below the server's own, so the client usually
+    /// notices first — and [`DEFAULT_RESPONSE_WAIT`].
+    fn default() -> Self {
+        Self::new(StallConfig::default().stall_after, DEFAULT_RESPONSE_WAIT)
+    }
+}
+
+/// Why a request was cut.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RequestCut {
+    /// No bytes moved for the stall bound, sending or receiving.
+    Stalled,
+    /// The body was handed to the HTTP stack, and no response head came within the
+    /// response-wait bound.
+    ///
+    /// Handed off is not on the wire: the stack's write buffer and the kernel's send buffer may
+    /// still hold the tail of the body, so on a slow enough link this is the body still
+    /// draining as much as a server that never answered.
+    NoResponse,
+}
+
+impl std::fmt::Display for RequestCut {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Stalled => "the request stalled: no bytes moved for the stall bound",
+            Self::NoResponse => "no response arrived within the response-wait bound",
+        })
+    }
+}
+
+/// Where one request's exchange is, and when it last moved.
+#[derive(Debug, Clone, Copy)]
+enum Phase {
+    /// Sending the body; a piece last left at `last`.
+    Sending { last: tokio::time::Instant },
+    /// The body is sent; waiting for the head since `since`.
+    Waiting { since: tokio::time::Instant },
+    /// Receiving the response body; bytes last arrived at `last`.
+    Receiving { last: tokio::time::Instant },
+}
+
+/// The progress of one request, shared between the body that sends it, the code that reads its
+/// response, and [`within_bounds`] that watches both. Cheap to clone: every clone is the same
+/// progress.
+///
+/// Read on tokio's clock, so a paused test clock drives it like every other timer.
+#[derive(Debug, Clone)]
+pub struct ExchangeProgress {
+    phase: std::sync::Arc<std::sync::Mutex<Phase>>,
+}
+
+impl ExchangeProgress {
+    /// A request with nothing (more) to send, waiting for its response from now.
+    #[must_use]
+    pub fn waiting() -> Self {
+        Self {
+            phase: std::sync::Arc::new(std::sync::Mutex::new(Phase::Waiting {
+                since: tokio::time::Instant::now(),
+            })),
+        }
+    }
+
+    fn set(&self, phase: Phase) {
+        // A poisoned lock holds a phase still worth reading: the watcher only reads instants.
+        *self
+            .phase
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = phase;
+    }
+
+    fn phase(&self) -> Phase {
+        *self
+            .phase
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// The body started sending, or a piece of it left, now.
+    pub fn on_sent(&self) {
+        self.set(Phase::Sending {
+            last: tokio::time::Instant::now(),
+        });
+    }
+
+    /// The whole body has been handed off, now: the response wait starts.
+    pub fn on_sent_all(&self) {
+        self.set(Phase::Waiting {
+            since: tokio::time::Instant::now(),
+        });
+    }
+
+    /// Response bytes arrived — or the head did — now.
+    pub fn on_received(&self) {
+        self.set(Phase::Receiving {
+            last: tokio::time::Instant::now(),
+        });
+    }
+
+    /// When the exchange is cut unless it moves first, and as what.
+    fn deadline(&self, bounds: RequestBounds) -> (tokio::time::Instant, RequestCut) {
+        match self.phase() {
+            Phase::Sending { last } | Phase::Receiving { last } => {
+                (last + bounds.stall, RequestCut::Stalled)
+            }
+            Phase::Waiting { since } => (since + bounds.response_wait, RequestCut::NoResponse),
+        }
+    }
+}
+
+/// Drive `exchange` while `progress` keeps moving inside `bounds`; cut it when it does not.
+///
+/// The deadline moves with the progress, so the watcher sleeps to the current deadline, and on
+/// waking re-reads it: progress since pushes it out, and none means the cut. Nothing here bounds
+/// the exchange's total duration.
+///
+/// On a cut `exchange` is dropped, and with it the connection: on HTTP/1.1 it closes, on HTTP/2
+/// the stream resets (networking doc, HTTP Transport).
+///
+/// # Errors
+///
+/// The [`RequestCut`] that ended it.
+pub async fn within_bounds<F: std::future::Future>(
+    bounds: RequestBounds,
+    progress: &ExchangeProgress,
+    exchange: F,
+) -> Result<F::Output, RequestCut> {
+    let mut exchange = std::pin::pin!(exchange);
+    loop {
+        let (deadline, cut) = progress.deadline(bounds);
+        if tokio::time::Instant::now() >= deadline {
+            return Err(cut);
+        }
+        if let Ok(output) = tokio::time::timeout_at(deadline, exchange.as_mut()).await {
+            return Ok(output);
+        }
+    }
+}
+
+/// A request body sent in [`PACED_PIECE`] pieces, recording each piece the HTTP stack pulls in
+/// an [`ExchangeProgress`].
+///
+/// The stack pulls the next piece once it has written the one before, so a pull is the link
+/// moving and a long gap between pulls is the link stalled. Handing out the last piece starts
+/// the response wait — while the stack's write buffer (hyper's holds up to about 400 KiB) and
+/// the kernel's send buffer may still hold the tail unsent. A link too slow to drain that tail
+/// inside the response wait is therefore cut as [`RequestCut::NoResponse`]; the upload client
+/// answers that by re-sending the chunk shorter, so the tail shrinks until it drains in time.
+/// The exact length is advertised, so the request still carries a `Content-Length` and is
+/// never sent chunked.
+#[derive(Debug)]
+pub struct PacedBody {
+    remaining: bytes::Bytes,
+    progress: ExchangeProgress,
+}
+
+impl PacedBody {
+    /// A body of `bytes` that reports to `progress`. Starts the send clock now.
+    #[must_use]
+    pub fn new(bytes: bytes::Bytes, progress: ExchangeProgress) -> Self {
+        progress.on_sent();
+        Self {
+            remaining: bytes,
+            progress,
+        }
+    }
+}
+
+impl http_body::Body for PacedBody {
+    type Data = bytes::Bytes;
+    type Error = std::convert::Infallible;
+
+    fn poll_frame(
+        mut self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>> {
+        if self.remaining.is_empty() {
+            self.progress.on_sent_all();
+            return std::task::Poll::Ready(None);
+        }
+        let take = self.remaining.len().min(PACED_PIECE);
+        let piece = self.remaining.split_to(take);
+        if self.remaining.is_empty() {
+            self.progress.on_sent_all();
+        } else {
+            self.progress.on_sent();
+        }
+        std::task::Poll::Ready(Some(Ok(http_body::Frame::data(piece))))
+    }
+
+    fn size_hint(&self) -> http_body::SizeHint {
+        http_body::SizeHint::with_exact(self.remaining.len() as u64)
+    }
+}
+
+impl From<PacedBody> for reqwest::Body {
+    fn from(body: PacedBody) -> Self {
+        reqwest::Body::wrap(body)
+    }
+}
+
 // ─── Happy Eyeballs at dial ──────────────────────────────────────────────────
 
 /// A bounded per-address TCP connect timeout applied at dial. Keeps a dead path

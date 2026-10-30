@@ -234,8 +234,10 @@ secrecy = { workspace = true }
 # `macros` and `rt-multi-thread` on top of what the blob store's adapter already needs: the
 # `#[tokio::test]` attribute and a runtime to drive it. `net` for the in-process mock identity
 # provider `tests/support/idp.rs` binds on loopback, so the OIDC relying party is exercised
-# over a real socket. Test-only, so the served binary carries none of the three.
-tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread"] }
+# over a real socket. `test-util` for a paused clock, so the chunk read pace is proven over
+# minutes of simulated trickle without waiting for them (`upload/body/tests.rs`). Test-only, so
+# the served binary carries none of the four.
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "test-util"] }
 # The TLS half of the mock identity provider, for the `OIDC_CA_BUNDLE` case: a private CA and
 # a leaf it signs (`rcgen`), served by `tokio-rustls`, so "the relying party trusts the operator's
 # CA and nothing else" is proven over a real handshake. The same three crates, versions and
