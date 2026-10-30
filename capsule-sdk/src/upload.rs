@@ -178,7 +178,7 @@ impl AdaptiveChunkSizeStrategy {
     /// Shrink after a chunk of `stalled` bytes stalled — the server answered
     /// `408 error.upload.chunk_timeout`, or the client cut it: the next chunk, sent at the same
     /// offset, is half that, 4 KiB-aligned down, and at least [`PROTOCOL_MIN_CHUNK`]. The size
-    /// then holds until [`GROW_BACK_AFTER_SUCCESSES`] chunks succeed.
+    /// then holds until a run of chunks succeeds.
     ///
     /// Returns `false` when `stalled` is already at or below the protocol minimum, so nothing
     /// smaller can be sent; the size is then left as it is.
