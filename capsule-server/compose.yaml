@@ -44,7 +44,7 @@ services:
       - postgres_data:/var/lib/postgresql/data:Z,U
 
   valkey:
-    image: docker.io/valkey/valkey:9.0.4
+    image: docker.io/valkey/valkey:9.1.2
     ports:
       # Loopback only, and here it is load-bearing rather than tidy: `--protected-mode no` below
       # is safe *because* nothing outside this machine can reach the port, and the two have to
