@@ -197,6 +197,70 @@ async fn the_store_suite_passes_against_valkey() {
 ///
 /// The read gate only answers; `PEXPIRE` collects. A reader whose clock ran ahead would
 /// otherwise delete, for every replica, state that is still live by the store's own lifetime.
+/// A session re-opened near the end of its lineage lives only until the hard cap, not for a
+/// whole sliding window — the cap survives the rotation that re-opens it.
+#[tokio::test]
+async fn a_reopened_session_never_outlives_its_hard_cap() {
+    let Some(server) = server().await else {
+        return;
+    };
+    let harness = ValkeyHarness::connect(&server.url).await;
+    let session_id = SessionId::new("valkey-hard-cap");
+    let now = Timestamp::UNIX_EPOCH;
+    let left = SignedDuration::from_secs(30);
+    assert!(
+        left < harness.auth.ttl(),
+        "the cap must bite first for this case to mean anything"
+    );
+    let signed_in_at = now
+        .checked_sub(harness.auth.hard_cap() - left)
+        .expect("in range");
+    harness
+        .auth
+        .open_session(SessionRecord {
+            session_id: session_id.clone(),
+            user_id: UserId::new("valkey-hard-cap-user"),
+            created_at: now,
+            authenticated_at: signed_in_at,
+            signed_in_at,
+            last_active_at: now,
+            user_agent: None,
+            ip_address: None,
+            cohort_hash: None,
+            device_id: None,
+        })
+        .await
+        .expect("the session opens");
+
+    harness
+        .advance(left - SignedDuration::from_micros(1))
+        .await
+        .expect("advances");
+    assert!(
+        harness
+            .auth
+            .read_session(&session_id)
+            .await
+            .expect("answers")
+            .is_some(),
+        "just inside the cap the session is live"
+    );
+
+    harness
+        .advance(SignedDuration::from_micros(1))
+        .await
+        .expect("advances");
+    assert_eq!(
+        harness
+            .auth
+            .read_session(&session_id)
+            .await
+            .expect("answers"),
+        None,
+        "at the cap it is gone, though its sliding window has time left"
+    );
+}
+
 #[tokio::test]
 async fn a_logically_expired_record_is_dead_but_left_for_the_collector() {
     let Some(server) = server().await else {
@@ -212,6 +276,7 @@ async fn a_logically_expired_record_is_dead_but_left_for_the_collector() {
             user_id: UserId::new("valkey-logical-expiry-user"),
             created_at,
             authenticated_at: created_at,
+            signed_in_at: created_at,
             last_active_at: created_at,
             user_agent: None,
             ip_address: None,

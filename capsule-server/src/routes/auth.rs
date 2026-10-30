@@ -591,18 +591,21 @@ pub async fn register_user(
     // `authenticated_at`, because registering *is* a credential presentation and a freshness
     // gate measuring from anything else would be measuring from nothing.
     let session_id = new_session_id();
+    let record = SessionRecord {
+        session_id: session_id.clone(),
+        user_id: user.clone(),
+        created_at: now,
+        authenticated_at: now,
+        signed_in_at: now,
+        last_active_at: now,
+        user_agent: None,
+        ip_address: None,
+        cohort_hash: None,
+        device_id: None,
+    };
+    let refresh_ttl = refresh_lifetime(&auth, &record, now);
     auth.sessions()
-        .open_session(SessionRecord {
-            session_id: session_id.clone(),
-            user_id: user.clone(),
-            created_at: now,
-            authenticated_at: now,
-            last_active_at: now,
-            user_agent: None,
-            ip_address: None,
-            cohort_hash: None,
-            device_id: None,
-        })
+        .open_session(record)
         .await
         .map_err(|error| {
             // The account exists and its session does not. Answered as an outage rather than as
@@ -613,7 +616,7 @@ pub async fn register_user(
 
     let issued = auth
         .tokens()
-        .issue(&user, &session_id, auth.sessions().ttl())
+        .issue(&user, &session_id, refresh_ttl)
         .map_err(|error| {
             tracing::error!(%error, "a token pair could not be signed");
             RegisterRejection::unavailable()
@@ -752,22 +755,24 @@ pub(super) async fn open_session_for(
     let device_id = normalize_device_id(device_id);
     let session_id = new_session_id();
 
-    auth.sessions()
-        .open_session(SessionRecord {
-            session_id: session_id.clone(),
-            user_id: user.clone(),
-            created_at: now,
-            // A sign-in *is* a credential presentation, so this is the moment a freshness gate
-            // measures from. A refresh will carry it forward untouched.
-            authenticated_at: now,
-            last_active_at: now,
-            // Both always `None` here, as in Salvo. See the module docs.
-            user_agent: None,
-            ip_address: None,
-            cohort_hash: cohort_hash.clone(),
-            device_id,
-        })
-        .await?;
+    let record = SessionRecord {
+        session_id: session_id.clone(),
+        user_id: user.clone(),
+        created_at: now,
+        // A sign-in *is* a credential presentation, so this is the moment a freshness gate
+        // measures from. A refresh will carry it forward untouched.
+        authenticated_at: now,
+        // And the moment the lineage's hard cap measures from, which nothing ever moves.
+        signed_in_at: now,
+        last_active_at: now,
+        // Both always `None` here, as in Salvo. See the module docs.
+        user_agent: None,
+        ip_address: None,
+        cohort_hash: cohort_hash.clone(),
+        device_id,
+    };
+    let refresh_ttl = refresh_lifetime(auth, &record, now);
+    auth.sessions().open_session(record).await?;
 
     // The durable cohort map, written **after** the session and **never** allowed to
     // fail the sign-in. A cohort is legibility metadata: it groups a physical device's
@@ -786,11 +791,11 @@ pub(super) async fn open_session_for(
     }
 
     // Issued after the record exists, so a token can never name a session the store has not
-    // heard of. The refresh lifetime is the store's own TTL rather than a second constant —
-    // a refresh token that outlives its session record verifies and then fails.
+    // heard of. The refresh lifetime is the record's own remaining life rather than a second
+    // constant — a refresh token that outlives its session record verifies and then fails.
     let issued = auth
         .tokens()
-        .issue(user, &session_id, auth.sessions().ttl())
+        .issue(user, &session_id, refresh_ttl)
         .map_err(|error| StoreError::Unavailable {
             store: "session tokens",
             detail: error.to_string(),
@@ -798,6 +803,22 @@ pub(super) async fn open_session_for(
 
     tracing::info!(user_id = %user, session_id = %session_id, "opened a session");
     Ok(issued)
+}
+
+/// How long a refresh token minted for `record`, opened at `now`, may live.
+///
+/// Exactly as long as the store keeps the record: the sliding window, clipped to the lineage's
+/// hard cap. A token that outlived its record would verify and then fail, and one that died
+/// before it would sign out a device the design says is still signed in.
+fn refresh_lifetime(
+    auth: &AuthContext,
+    record: &SessionRecord,
+    now: jiff::Timestamp,
+) -> jiff::SignedDuration {
+    auth.sessions()
+        .expires_at(record, now)
+        .duration_since(now)
+        .max(jiff::SignedDuration::ZERO)
 }
 
 /// Exchange a refresh token for a new pair, rotating the session.
@@ -863,6 +884,10 @@ pub async fn refresh_token(
         return Err(RefreshRejection::session_expired());
     }
 
+    // No hard-cap check of its own: the store never holds a record past its lineage's cap (see
+    // `AuthStateStore::open_session`), so a session past it was refused above as "no live
+    // session", and the successor below is opened — and its refresh token minted — only for
+    // what is left of the cap.
     let now = auth.clock().now();
     let rotated = new_session_id();
     let successor = SessionRecord {
@@ -873,12 +898,17 @@ pub async fn refresh_token(
         // is not a credential presentation — resetting this would make every re-authentication
         // gate satisfiable by waiting fifteen minutes, which is the same as not having one.
         authenticated_at: record.authenticated_at,
+        // Carried forward for the same reason, and with higher stakes: resetting this would
+        // turn the hard cap into one more sliding window, so a stolen token refreshed daily
+        // would never die.
+        signed_in_at: record.signed_in_at,
         last_active_at: now,
         user_agent: record.user_agent,
         ip_address: record.ip_address,
         cohort_hash: record.cohort_hash,
         device_id: record.device_id,
     };
+    let refresh_ttl = refresh_lifetime(&auth, &successor, now);
 
     auth.sessions()
         .open_session(successor)
@@ -890,7 +920,7 @@ pub async fn refresh_token(
 
     let issued = auth
         .tokens()
-        .issue(&record.user_id, &rotated, auth.sessions().ttl())
+        .issue(&record.user_id, &rotated, refresh_ttl)
         .map_err(|error| {
             tracing::error!(%error, "a rotated token pair could not be signed");
             RefreshRejection::unavailable()

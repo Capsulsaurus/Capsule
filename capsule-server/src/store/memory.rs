@@ -21,7 +21,10 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use jiff::{SignedDuration, Timestamp};
 
-use super::auth::{AuthStateStore, CohortRecord, CohortStore, DEFAULT_SESSION_TTL, SessionRecord};
+use super::auth::{
+    AuthStateStore, CohortRecord, CohortStore, DEFAULT_SESSION_HARD_CAP, DEFAULT_SESSION_TTL,
+    SessionRecord,
+};
 use super::ceremony::{
     CHALLENGE_TTL, ChallengeStore, ChannelStore, DEVICE_SLOW_DOWN_STEP, DevicePollSlot, Direction,
     DrainOutcome, ENROLLMENT_CODE_TTL, EnrollmentStore, OIDC_AUTHORIZATION_TTL, OIDC_DEVICE_TTL,
@@ -113,6 +116,7 @@ impl<T> Entry<T> {
 pub struct InMemoryAuthState {
     clock: Arc<dyn Clock>,
     ttl: SignedDuration,
+    hard_cap: SignedDuration,
     state: Mutex<AuthState>,
 }
 
@@ -167,13 +171,21 @@ impl AuthState {
 }
 
 impl InMemoryAuthState {
-    /// A store on `clock` with the given session lifetime.
+    /// A store on `clock` with the given sliding window and [`DEFAULT_SESSION_HARD_CAP`].
     pub fn new(clock: Arc<dyn Clock>, ttl: SignedDuration) -> Self {
         Self {
             clock,
             ttl,
+            hard_cap: DEFAULT_SESSION_HARD_CAP,
             state: Mutex::new(AuthState::default()),
         }
+    }
+
+    /// The same store with its hard cap set to `hard_cap`.
+    #[must_use]
+    pub fn with_hard_cap(mut self, hard_cap: SignedDuration) -> Self {
+        self.hard_cap = hard_cap;
+        self
     }
 
     /// A store on `clock` with [`DEFAULT_SESSION_TTL`].
@@ -187,6 +199,10 @@ impl AuthStateStore for InMemoryAuthState {
         self.ttl
     }
 
+    fn hard_cap(&self) -> SignedDuration {
+        self.hard_cap
+    }
+
     fn open_session(&self, record: SessionRecord) -> StoreFuture<'_, ()> {
         Box::pin(async move {
             let now = self.clock.now();
@@ -195,10 +211,8 @@ impl AuthStateStore for InMemoryAuthState {
 
             let session_id = record.session_id.clone();
             let user_id = record.user_id.clone();
-            let entry = Entry {
-                record,
-                expires_at: deadline(now, self.ttl),
-            };
+            let expires_at = self.expires_at(&record, now);
+            let entry = Entry { record, expires_at };
             // Re-opening an id that already named a *different* user must not leave the old
             // user's listing pointing at a session that is now someone else's.
             if let Some(previous) = state.sessions.insert(session_id.clone(), entry)
@@ -212,7 +226,7 @@ impl AuthStateStore for InMemoryAuthState {
                 .or_default()
                 .insert(session_id.clone());
 
-            tracing::debug!(%session_id, %user_id, "opened session");
+            tracing::debug!(%session_id, %user_id, %expires_at, "opened session");
             Ok(())
         })
     }

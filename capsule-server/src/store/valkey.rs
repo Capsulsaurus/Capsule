@@ -121,7 +121,10 @@ use redis::{
 };
 use uuid::Uuid;
 
-use super::auth::{AuthStateStore, CohortRecord, CohortStore, DEFAULT_SESSION_TTL, SessionRecord};
+use super::auth::{
+    AuthStateStore, CohortRecord, CohortStore, DEFAULT_SESSION_HARD_CAP, DEFAULT_SESSION_TTL,
+    SessionRecord,
+};
 use super::ceremony::{
     CHALLENGE_TTL, ChallengeStore, ChannelStore, DEVICE_SLOW_DOWN_STEP, DevicePollSlot, Direction,
     DrainOutcome, ENROLLMENT_CODE_TTL, EnrollmentStore, OIDC_AUTHORIZATION_TTL, OIDC_DEVICE_TTL,
@@ -459,6 +462,7 @@ fn encode_session(record: &SessionRecord, expires_at: Timestamp) -> Vec<String> 
         .field("user_id", &record.user_id)
         .field("created_at", record.created_at)
         .field("authenticated_at", record.authenticated_at)
+        .field("signed_in_at", record.signed_in_at)
         .field("last_active_at", record.last_active_at)
         .optional("user_agent", record.user_agent.as_deref())
         .optional("ip_address", record.ip_address.as_deref())
@@ -477,11 +481,24 @@ fn decode_session(flat: Vec<String>) -> Result<SessionRecord, StoreError> {
         ),
         None => None,
     };
+    let created_at = fields.timestamp("created_at")?;
+    let authenticated_at = fields.timestamp("authenticated_at")?;
+    // A record written before `signed_in_at` existed has no such field, and must still decode:
+    // a deploy may not sign anyone out. Its own `created_at` stands in for the lineage's start,
+    // so the cap of a lineage that predates the field runs from its first rotation under this
+    // release. `authenticated_at` would be closer to the true sign-in, and is not used for
+    // exactly that reason: a lineage more than a cap old would then die at its first refresh
+    // after the deploy, which is a forced sign-out the deploy caused.
+    let signed_in_at = match fields.optional("signed_in_at") {
+        Some(_) => fields.timestamp("signed_in_at")?,
+        None => created_at,
+    };
     Ok(SessionRecord {
         session_id: SessionId::new(fields.required("session_id")?),
         user_id: UserId::new(fields.required("user_id")?),
-        created_at: fields.timestamp("created_at")?,
-        authenticated_at: fields.timestamp("authenticated_at")?,
+        created_at,
+        authenticated_at,
+        signed_in_at,
         last_active_at: fields.timestamp("last_active_at")?,
         user_agent: fields.optional("user_agent"),
         ip_address: fields.optional("ip_address"),
@@ -1263,12 +1280,26 @@ pub struct ValkeyAuthState {
     valkey: Valkey,
     clock: Arc<dyn Clock>,
     ttl: SignedDuration,
+    hard_cap: SignedDuration,
 }
 
 impl ValkeyAuthState {
-    /// A store on `valkey` and `clock` with the given session lifetime.
+    /// A store on `valkey` and `clock` with the given sliding window and
+    /// [`DEFAULT_SESSION_HARD_CAP`].
     pub fn new(valkey: Valkey, clock: Arc<dyn Clock>, ttl: SignedDuration) -> Self {
-        Self { valkey, clock, ttl }
+        Self {
+            valkey,
+            clock,
+            ttl,
+            hard_cap: DEFAULT_SESSION_HARD_CAP,
+        }
+    }
+
+    /// The same store with its hard cap set to `hard_cap`.
+    #[must_use]
+    pub fn with_hard_cap(mut self, hard_cap: SignedDuration) -> Self {
+        self.hard_cap = hard_cap;
+        self
     }
 
     /// A store with [`DEFAULT_SESSION_TTL`].
@@ -1331,13 +1362,21 @@ impl AuthStateStore for ValkeyAuthState {
         self.ttl
     }
 
+    fn hard_cap(&self) -> SignedDuration {
+        self.hard_cap
+    }
+
     fn open_session(&self, record: SessionRecord) -> StoreFuture<'_, ()> {
         Box::pin(async move {
-            let expires_at = deadline(self.clock.now(), self.ttl);
+            let now = self.clock.now();
+            // The sliding window clipped to the lineage's hard cap. A record already past its
+            // cap gets a deadline at or before `now`: the read gate refuses it at once and the
+            // one-millisecond floor in `ttl_millis` lets the collector take it.
+            let expires_at = self.expires_at(&record, now);
             let session_id = record.session_id.clone();
             let user_id = record.user_id.clone();
             let mut args = vec![
-                ttl_millis(self.ttl),
+                ttl_millis(expires_at.duration_since(now)),
                 session_id.to_string(),
                 user_id.to_string(),
             ];
@@ -1351,7 +1390,7 @@ impl AuthStateStore for ValkeyAuthState {
                     &args,
                 )
                 .await?;
-            tracing::debug!(%session_id, %user_id, "opened session");
+            tracing::debug!(%session_id, %user_id, %expires_at, "opened session");
             Ok(())
         })
     }

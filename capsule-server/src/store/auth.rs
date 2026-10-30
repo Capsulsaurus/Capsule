@@ -60,6 +60,14 @@ pub struct SessionRecord {
     /// device authorization, and while the server cannot verify a biometric, it can refuse to
     /// act on a session whose owner has not proved anything in hours.
     pub authenticated_at: Timestamp,
+    /// When this session's lineage began: the sign-in (or registration) that opened its first
+    /// record.
+    ///
+    /// Set once and **never moved** — not by a refresh, which carries it across the rotation,
+    /// and not by a re-authentication, which moves [`Self::authenticated_at`] instead. It is
+    /// what the hard cap ([`AuthStateStore::hard_cap`]) measures from, so a session that
+    /// rotates every day still ends on schedule.
+    pub signed_in_at: Timestamp,
     /// When the session was last seen. Refreshed by [`AuthStateStore::touch_session`].
     pub last_active_at: Timestamp,
     /// The `User-Agent` the opening ceremony carried, for the devices listing.
@@ -82,26 +90,64 @@ pub struct SessionRecord {
     pub device_id: Option<Uuid>,
 }
 
-/// The default lifetime an open session is stored under.
+/// The default sliding inactivity window: 180 days without an access-token issuance.
 ///
 /// A deployment may configure a different one when it constructs its adapter; what it may not
 /// do is vary it per call, which is why no operation here takes a TTL.
-pub const DEFAULT_SESSION_TTL: SignedDuration = SignedDuration::from_hours(24);
+pub const DEFAULT_SESSION_TTL: SignedDuration = SignedDuration::from_hours(180 * 24);
+
+/// The default hard cap: 365 days from sign-in, never reset.
+///
+/// Configured with the adapter, like [`DEFAULT_SESSION_TTL`].
+pub const DEFAULT_SESSION_HARD_CAP: SignedDuration = SignedDuration::from_hours(365 * 24);
+
+/// The instant a session (re)opened at `now` stops being honoured.
+///
+/// The earlier of the sliding window measured from `now` and the hard cap measured from
+/// `signed_in_at`. Pure, so the rule both adapters and the refresh route apply is one function
+/// with one set of tests.
+#[must_use]
+pub fn session_deadline(
+    signed_in_at: Timestamp,
+    now: Timestamp,
+    ttl: SignedDuration,
+    hard_cap: SignedDuration,
+) -> Timestamp {
+    super::deadline(now, ttl).min(super::deadline(signed_in_at, hard_cap))
+}
 
 /// Session state: the records, and the per-user view of them.
 ///
 /// See the module docs for why this port has six operations and not the Salvo trait's twelve,
 /// and for why none of them mentions an index.
 pub trait AuthStateStore: std::fmt::Debug + Send + Sync {
-    /// How long an open session lives, from the moment it is opened.
+    /// The sliding inactivity window a session is opened under.
     ///
-    /// Absolute, not sliding: [`Self::touch_session`] records activity and deliberately does
-    /// **not** extend the window. A sliding lifetime would make a session's life a function of
-    /// its traffic — a caller-supplied TTL wearing a different hat.
+    /// Every [`Self::open_session`] — a sign-in, and the rotation every refresh performs — stores
+    /// the record for this long from the moment it is opened, so each access-token issuance
+    /// resets the clock. [`Self::touch_session`] records activity and deliberately does **not**
+    /// extend the window: only an issuance slides it, never a request's traffic.
     fn ttl(&self) -> SignedDuration;
+
+    /// The hard cap on a session lineage, measured from [`SessionRecord::signed_in_at`].
+    ///
+    /// Never reset: a rotation carries `signed_in_at` forward, so no amount of refreshing keeps
+    /// a session alive past it. It bounds the window a silently exfiltrated token stays good
+    /// on an active device.
+    fn hard_cap(&self) -> SignedDuration;
+
+    /// When `record`, opened at `now`, stops being honoured — [`session_deadline`] under this
+    /// store's configured lifetimes.
+    fn expires_at(&self, record: &SessionRecord, now: Timestamp) -> Timestamp {
+        session_deadline(record.signed_in_at, now, self.ttl(), self.hard_cap())
+    }
 
     /// Open `record`'s session, making it visible to
     /// [`Self::read_session`] **and** to [`Self::sessions_for_user`] in one step.
+    ///
+    /// It stays visible until [`Self::expires_at`] — the sliding window from now, clipped to the
+    /// hard cap. A record whose lineage is already past its cap is therefore stored already
+    /// expired, which is the same as not being opened.
     ///
     /// Re-opening an id that is already live replaces the record and does not duplicate the
     /// user's listing — an id is one session, however many times it is written.
@@ -208,3 +254,6 @@ pub trait CohortStore: fmt::Debug + Send + Sync {
     /// being loosened to accept whatever order it holds.
     fn cohorts_for_user<'a>(&'a self, user: &'a UserId) -> StoreFuture<'a, Vec<CohortRecord>>;
 }
+
+#[cfg(test)]
+mod tests;

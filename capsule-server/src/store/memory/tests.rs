@@ -108,6 +108,10 @@ async fn the_whole_suite_passes_in_one_pass() {
 fn production_lifetimes_are_per_ceremony() {
     let stores = InMemoryStores::new();
     assert_eq!(AuthStateStore::ttl(&stores.auth), DEFAULT_SESSION_TTL);
+    assert_eq!(
+        AuthStateStore::hard_cap(&stores.auth),
+        DEFAULT_SESSION_HARD_CAP
+    );
     assert_eq!(UploadSessionStore::ttl(&stores.uploads), LIFETIME_CAP);
     assert_eq!(ChallengeStore::ttl(&stores.challenges), CHALLENGE_TTL);
     assert_eq!(
@@ -124,6 +128,92 @@ fn production_lifetimes_are_per_ceremony() {
         CHALLENGE_TTL, ENROLLMENT_CODE_TTL,
         "a ceremony's window belongs to what it is; if these ever coincide by accident \
              this assertion stops being evidence"
+    );
+}
+
+/// A record opened at `opened_at` in a lineage that signed in at the epoch.
+fn lineage_record(id: &str, opened_at: Timestamp) -> SessionRecord {
+    SessionRecord {
+        session_id: SessionId::new(id),
+        user_id: UserId::new("lineage-user"),
+        created_at: opened_at,
+        authenticated_at: Timestamp::UNIX_EPOCH,
+        signed_in_at: Timestamp::UNIX_EPOCH,
+        last_active_at: opened_at,
+        user_agent: None,
+        ip_address: None,
+        cohort_hash: None,
+        device_id: None,
+    }
+}
+
+/// Each open slides the window; none of them moves the hard cap.
+///
+/// The rotation a refresh performs is a close and an open of a record carrying the lineage's
+/// `signed_in_at`, so this is the cap surviving rotation at the store's level: re-opened
+/// sessions keep living a full window until the window would cross the cap, and then live
+/// only until the cap.
+#[tokio::test]
+async fn reopening_slides_the_window_but_never_past_the_hard_cap() {
+    let clock = ManualClock::default();
+    let store = InMemoryAuthState::new(Arc::new(clock.clone()), SignedDuration::from_hours(24))
+        .with_hard_cap(SignedDuration::from_hours(60));
+    let tick = SignedDuration::from_nanos(1);
+
+    // A sign-in and two rotations, each inside the previous window: hours 0, 23 and 46.
+    for (wait, id) in [(0, "first"), (23, "second"), (23, "third")] {
+        clock.advance(SignedDuration::from_hours(wait));
+        store
+            .open_session(lineage_record(id, clock.now()))
+            .await
+            .expect("opens");
+    }
+    assert!(
+        store
+            .read_session(&SessionId::new("second"))
+            .await
+            .expect("answers")
+            .is_some(),
+        "the second record, opened at hour 23, still has its full window"
+    );
+    // The third opened at hour 46: a full window would run to hour 70, the cap stops it at 60.
+    assert_eq!(
+        store.expires_at(&lineage_record("probe", clock.now()), clock.now()),
+        deadline(Timestamp::UNIX_EPOCH, SignedDuration::from_hours(60))
+    );
+
+    clock.advance(SignedDuration::from_hours(14) - tick);
+    assert!(
+        store
+            .read_session(&SessionId::new("third"))
+            .await
+            .expect("answers")
+            .is_some(),
+        "just inside the cap the latest rotation is live"
+    );
+
+    clock.advance(tick);
+    assert_eq!(
+        store
+            .read_session(&SessionId::new("third"))
+            .await
+            .expect("answers"),
+        None,
+        "at the cap it is gone, ten hours before its window would have closed"
+    );
+
+    // And a record opened past the cap is born expired.
+    store
+        .open_session(lineage_record("late", clock.now()))
+        .await
+        .expect("opens");
+    assert_eq!(
+        store
+            .read_session(&SessionId::new("late"))
+            .await
+            .expect("answers"),
+        None,
+        "a lineage past its cap cannot be re-opened into life"
     );
 }
 
