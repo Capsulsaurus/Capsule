@@ -722,14 +722,19 @@ pub async fn login_user(
 
     let user = match outcome {
         Authentication::Granted(user) => user,
-        Authentication::Locked => {
-            // No account identifier: the directory did not name one, and the route must not
-            // guess. The adapter that made this decision logs which account it was.
+        // The account a refusal names goes to that account's activity log and nowhere else: not
+        // into the answer, which is the same for every address, and not onto the response path,
+        // where a write made only for an address that exists would show in the response time.
+        Authentication::Locked(user) => {
             tracing::warn!("a sign-in was refused: the account is locked");
+            activity.record_detached(&user, ActivityKind::SignInLocked);
             return Err(LoginRejection::account_locked());
         }
-        Authentication::Refused => {
+        Authentication::Refused(account) => {
             tracing::info!("a sign-in was refused: the credentials did not match");
+            if let Some(user) = account {
+                activity.record_detached(&user, ActivityKind::SignInPasswordRefused);
+            }
             return Err(LoginRejection::invalid_credentials());
         }
     };
@@ -1147,11 +1152,11 @@ pub async fn reauthenticate(
 
     match outcome {
         Authentication::Granted(_) => {}
-        Authentication::Locked => {
+        Authentication::Locked(_) => {
             tracing::warn!(%user, "a re-authentication was refused: the account is locked");
             return Err(LoginRejection::account_locked());
         }
-        Authentication::Refused => {
+        Authentication::Refused(_) => {
             tracing::info!(%user, "a re-authentication was refused: the password did not match");
             return Err(LoginRejection::invalid_credentials());
         }

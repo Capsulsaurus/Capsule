@@ -437,13 +437,13 @@ pub async fn change_password(
             }
         })? {
         Authentication::Granted(_) => {}
-        Authentication::Locked => {
+        Authentication::Locked(_) => {
             tracing::warn!(%user, "a password change was refused: the account is locked");
             return Err(ChangePasswordRejection::AccountLocked {
                 code: error_codes::AUTH_ACCOUNT_LOCKED,
             });
         }
-        Authentication::Refused => {
+        Authentication::Refused(_) => {
             tracing::info!(%user, "a password change was refused: the current password is wrong");
             return Err(ChangePasswordRejection::CurrentPasswordInvalid {
                 code: error_codes::AUTH_CURRENT_PASSWORD_INVALID,

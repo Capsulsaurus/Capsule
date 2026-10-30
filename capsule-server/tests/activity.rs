@@ -159,18 +159,132 @@ async fn a_sign_out_is_recorded_against_the_session_it_closed() {
     );
 }
 
-#[tokio::test]
-async fn a_refused_sign_in_records_nothing() {
-    let fixture = Fixture::working();
-    fixture
+/// Present `email` and `password` to the login route, expecting `status`; the request id.
+async fn refused_login(
+    fixture: &Fixture,
+    email: &str,
+    password: &str,
+    status: StatusCode,
+) -> String {
+    let response = fixture
         .client
         .post("/v1/auth/login")
         .header("accept", "application/json")
-        .json(&json!({ "email": EMAIL, "password": "not the password" }))
+        .json(&json!({ "email": email, "password": password }))
         .send()
-        .await
-        .assert_status(StatusCode::UNAUTHORIZED);
+        .await;
+    response.assert_status(status);
+    let request_id = response
+        .header("x-request-id")
+        .expect("every response names its request")
+        .to_owned();
+    fixture.activity_settled().await;
+    request_id
+}
+
+#[tokio::test]
+async fn a_wrong_password_is_recorded_against_the_account_it_was_tried_on() {
+    let fixture = Fixture::working();
+    let request_id = refused_login(
+        &fixture,
+        EMAIL,
+        "not the password",
+        StatusCode::UNAUTHORIZED,
+    )
+    .await;
+
+    let events = held(&fixture, &user()).await;
+    assert_eq!(events.len(), 1, "{events:?}");
+    let event = &events[0];
+    assert_eq!(event.kind, ActivityKind::SignInPasswordRefused);
+    assert_eq!(event.kind.as_str(), "sign_in.password_refused");
+    assert_eq!(
+        event.request_id.as_deref(),
+        Some(request_id.as_str()),
+        "the event names the request that caused it, though it was written off its path"
+    );
+    assert_eq!(
+        event.session_id, None,
+        "a sign-in is not acted by a session"
+    );
+    assert_eq!(
+        event.subject, None,
+        "a refused sign-in opened nothing to name"
+    );
+    assert_eq!(event.at, fixture.clock.now());
+}
+
+#[tokio::test]
+async fn an_unknown_address_records_nothing() {
+    let fixture = Fixture::working();
+    refused_login(
+        &fixture,
+        "nobody@example.test",
+        PASSWORD,
+        StatusCode::UNAUTHORIZED,
+    )
+    .await;
+    // The fixture holds one account, so its log is every log there is.
     assert!(held(&fixture, &user()).await.is_empty());
+}
+
+#[tokio::test]
+async fn a_sign_in_to_a_locked_account_is_recorded_against_it() {
+    let fixture = Fixture::working();
+    fixture.accounts.lock(EMAIL);
+    let request_id = refused_login(&fixture, EMAIL, PASSWORD, StatusCode::LOCKED).await;
+
+    let events = held(&fixture, &user()).await;
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(events[0].kind, ActivityKind::SignInLocked);
+    assert_eq!(events[0].kind.as_str(), "sign_in.locked");
+    assert_eq!(events[0].request_id.as_deref(), Some(request_id.as_str()));
+    assert_eq!(events[0].subject, None);
+}
+
+#[tokio::test]
+async fn a_refused_sign_in_is_answered_the_same_when_the_log_is_down() {
+    let fixture = Fixture::working();
+    fixture.activity.set_unavailable(true);
+    refused_login(
+        &fixture,
+        EMAIL,
+        "not the password",
+        StatusCode::UNAUTHORIZED,
+    )
+    .await;
+    fixture.activity.set_unavailable(false);
+    assert!(held(&fixture, &user()).await.is_empty());
+}
+
+#[tokio::test]
+async fn a_refused_sign_in_is_answered_without_waiting_for_its_write() {
+    let fixture = Fixture::working();
+    // A write that never lands: a login that awaited it would never answer, so the bound below
+    // is generous and still decides the case — no answer within it means the route waited.
+    fixture.activity.stall_writes();
+    let login = |password: &'static str| {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            fixture
+                .client
+                .post("/v1/auth/login")
+                .header("accept", "application/json")
+                .json(&json!({ "email": EMAIL, "password": password }))
+                .send(),
+        )
+    };
+
+    login("not the password")
+        .await
+        .expect("a wrong password is answered while its write is pending")
+        .assert_status(StatusCode::UNAUTHORIZED);
+
+    fixture.accounts.lock(EMAIL);
+    login(PASSWORD)
+        .await
+        .expect("a locked account is answered while its write is pending")
+        .assert_status(StatusCode::LOCKED);
 }
 
 #[tokio::test]

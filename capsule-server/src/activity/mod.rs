@@ -15,6 +15,9 @@
 //!   has happened and returns nothing: a store that cannot record logs the event at `error` and
 //!   the action stands. A sign-out refused because the audit log was down is a security outage
 //!   caused by an audit outage.
+//! - **Recording never discloses an account.** A refused or locked sign-in is recorded only for
+//!   an address that has an account, so its write must not lengthen that response:
+//!   [`ActivityContext::record_detached`] takes it off the response path.
 //! - **Tied to the request log.** Each event carries the request id
 //!   [`crate::request_span`] minted for the request that caused it, which names that request's
 //!   log lines — the detailed, short-lived half of the same story.
@@ -40,6 +43,36 @@ pub const RETENTION: SignedDuration = SignedDuration::from_hours(90 * 24);
 /// per attempt — and the largest page the listing serves.
 pub const MAX_EVENTS_PER_ACCOUNT: usize = 1_000;
 
+/// The window inside which [`ActivityContext::record_detached`] records one event of a kind per
+/// account, and coalesces every later one into it.
+///
+/// A refused or locked sign-in can be caused by anyone who knows an address, and the login route
+/// charges no budget, so without this bound a scripted loop would push the account's whole log
+/// out through [`MAX_EVENTS_PER_ACCOUNT`] in minutes. With it, the two detached kinds add at
+/// most two events an hour to one account's log, and a flood needs weeks of uninterrupted
+/// attempts to displace the rest. Every attempt is still in the request log.
+pub const DETACHED_COALESCE_WINDOW: SignedDuration = SignedDuration::from_hours(1);
+
+/// The most detached writes in flight at once, across every account.
+///
+/// Each one holds a store connection while it runs, from the pool every request shares, so a
+/// password spray across many accounts must not be able to queue writes faster than the store
+/// lands them. An event past the bound is dropped and logged whole at `error`.
+pub const MAX_DETACHED_IN_FLIGHT: usize = 16;
+
+/// What [`ActivityContext::record_detached`] did with an event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Detached {
+    /// The event was stamped and its write started.
+    Started,
+    /// An event of the same kind for the same account was recorded inside
+    /// [`DETACHED_COALESCE_WINDOW`]; this one is counted into it and not written.
+    Coalesced,
+    /// [`MAX_DETACHED_IN_FLIGHT`] writes were already running; the event is logged at `error`
+    /// and not written.
+    Dropped,
+}
+
 /// Every event the activity log records. The set is closed: nothing else is written.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ActivityKind {
@@ -47,6 +80,10 @@ pub enum ActivityKind {
     AccountRegistered,
     /// A password sign-in opened a session.
     SignInPassword,
+    /// A password sign-in was refused: the password was wrong for this account.
+    SignInPasswordRefused,
+    /// A password sign-in was refused because this account is locked.
+    SignInLocked,
     /// A sign-in completed its second factor and opened a session.
     SignInSecondFactor,
     /// A second-factor code was refused for a sign-in whose first factor had verified.
@@ -82,9 +119,11 @@ pub enum ActivityKind {
 
 impl ActivityKind {
     /// Every kind, in the order design/activity-log.md lists them.
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 19] = [
         Self::AccountRegistered,
         Self::SignInPassword,
+        Self::SignInPasswordRefused,
+        Self::SignInLocked,
         Self::SignInSecondFactor,
         Self::SignInSecondFactorRefused,
         Self::SignInOidc,
@@ -107,6 +146,8 @@ impl ActivityKind {
         match self {
             Self::AccountRegistered => "account.registered",
             Self::SignInPassword => "sign_in.password",
+            Self::SignInPasswordRefused => "sign_in.password_refused",
+            Self::SignInLocked => "sign_in.locked",
             Self::SignInSecondFactor => "sign_in.second_factor",
             Self::SignInSecondFactorRefused => "sign_in.second_factor_refused",
             Self::SignInOidc => "sign_in.oidc",
@@ -242,12 +283,109 @@ impl ActivityStore for InMemoryActivity {
 pub struct ActivityContext {
     store: Arc<dyn ActivityStore>,
     clock: Arc<dyn Clock>,
+    /// Writes [`Self::record_detached`] started and nobody has awaited, shared by every clone.
+    detached: Arc<Mutex<tokio::task::JoinSet<()>>>,
+    /// The open coalescing window of each account and detached kind, shared by every clone.
+    windows: Arc<Mutex<Windows>>,
+}
+
+/// The coalescing windows [`ActivityContext::record_detached`] keeps.
+#[derive(Debug, Default)]
+struct Windows {
+    /// When each account's window for a kind opened, and how many events it has absorbed.
+    open: std::collections::HashMap<(UserId, ActivityKind), Window>,
+    /// The size past which the next opening sweeps out closed windows; doubles with the live
+    /// set, so the sweep's cost stays amortized constant per opening.
+    sweep_at: usize,
+}
+
+/// One account's coalescing window for one kind.
+#[derive(Debug, Clone, Copy)]
+struct Window {
+    /// The instant of the event that opened it, the one that was written.
+    opened: Timestamp,
+    /// The events counted into it and not written.
+    coalesced: u64,
+}
+
+impl Window {
+    /// Whether an event at `now` falls inside this window. A clock that stepped back is inside.
+    fn holds(&self, now: Timestamp) -> bool {
+        now.duration_since(self.opened) < DETACHED_COALESCE_WINDOW
+    }
+}
+
+/// The fewest open windows that trigger a sweep.
+const MIN_SWEEP_AT: usize = 1_024;
+
+impl Windows {
+    /// Count `user`'s `kind` at `now` into its open window, or open one.
+    ///
+    /// Returns `true` when the event opened a window and so must be written.
+    fn admit(&mut self, user: &UserId, kind: ActivityKind, now: Timestamp) -> bool {
+        let key = (user.clone(), kind);
+        if let Some(window) = self.open.get_mut(&key)
+            && window.holds(now)
+        {
+            window.coalesced += 1;
+            tracing::debug!(
+                user_id = %user,
+                kind = kind.as_str(),
+                coalesced = window.coalesced,
+                opened = %window.opened,
+                "coalesced an account activity event into its open window"
+            );
+            return false;
+        }
+        if let Some(closed) = self.open.insert(
+            key,
+            Window {
+                opened: now,
+                coalesced: 0,
+            },
+        ) && closed.coalesced > 0
+        {
+            tracing::info!(
+                user_id = %user,
+                kind = kind.as_str(),
+                coalesced = closed.coalesced,
+                opened = %closed.opened,
+                "an account activity window closed with events coalesced into it"
+            );
+        }
+        if self.open.len() > self.sweep_at.max(MIN_SWEEP_AT) {
+            self.open.retain(|(user, kind), window| {
+                let open = window.holds(now);
+                if !open && window.coalesced > 0 {
+                    tracing::info!(
+                        user_id = %user,
+                        kind = kind.as_str(),
+                        coalesced = window.coalesced,
+                        opened = %window.opened,
+                        "an account activity window closed with events coalesced into it"
+                    );
+                }
+                open
+            });
+            self.sweep_at = self.open.len() * 2;
+            tracing::debug!(
+                open = self.open.len(),
+                "swept closed account activity windows"
+            );
+        }
+        true
+    }
 }
 
 impl ActivityContext {
     /// Assembles the module.
     pub fn new(store: Arc<dyn ActivityStore>, clock: Arc<dyn Clock>) -> Self {
-        Self { store, clock }
+        Self {
+            store,
+            clock,
+            detached: Arc::default(),
+            windows: Arc::default(),
+        }
     }
 
     /// Where the log lives.
@@ -272,35 +410,102 @@ impl ActivityContext {
         session: Option<&SessionId>,
         subject: Option<&str>,
     ) {
-        let now = self.clock.now();
-        let event = ActivityEvent {
+        let event = self.stamp(user, kind, session, subject);
+        write(self.store.as_ref(), event).await;
+    }
+
+    /// Record that `kind` happened to `user`, without the caller waiting for the write.
+    ///
+    /// For an event whose *presence* must not show in the response time: a refused or locked
+    /// sign-in is recorded for an address that has an account and not for one that does not, so
+    /// a write awaited on the response path would tell a caller which addresses exist. The
+    /// event is stamped here — its instant and the current request's id — and only the store
+    /// write runs on a task of its own, inside the current span so its log line still names the
+    /// request. It is never awaited on any path, so a known address costs the caller the same as
+    /// an unknown one, whatever the store does.
+    ///
+    /// It keeps fewer guarantees than [`Self::record`], because its events are caused by whoever
+    /// knows an address rather than by the account's own sessions:
+    ///
+    /// - **Coalesced.** One event of a kind is written per account per
+    ///   [`DETACHED_COALESCE_WINDOW`]; the rest are counted into it, each at `debug`, and the
+    ///   count at `info` once the window is over and the next event or a sweep replaces it. The
+    ///   request log still holds every attempt.
+    /// - **Bounded.** Past [`MAX_DETACHED_IN_FLIGHT`] running writes, the event is dropped and
+    ///   logged whole at `error`, as a refused write is.
+    /// - **Drained, not durable, at exit.** A write still in flight when the process stops is
+    ///   lost unless the shutdown awaits [`Self::settled`]; `serve` does, for a bounded time.
+    pub fn record_detached(&self, user: &UserId, kind: ActivityKind) -> Detached {
+        use tracing::Instrument as _;
+
+        let mut detached = lock(&self.detached);
+        // Reap what has finished, so the set holds only writes in flight.
+        while let Some(finished) = detached.try_join_next() {
+            if let Err(error) = finished {
+                tracing::error!(%error, "a detached activity write did not finish");
+            }
+        }
+        let event = self.stamp(user, kind, None, None);
+        let mut windows = lock(&self.windows);
+        if !windows.admit(user, kind, event.at) {
+            return Detached::Coalesced;
+        }
+        if detached.len() >= MAX_DETACHED_IN_FLIGHT {
+            // Nothing was written for this window, so the next attempt opens it again.
+            windows.open.remove(&(user.clone(), kind));
+            tracing::error!(
+                user_id = %event.user_id,
+                kind = kind.as_str(),
+                event_id = event.event_id,
+                at = %event.at,
+                request_id = ?event.request_id,
+                in_flight = detached.len(),
+                "an account activity event was dropped: too many detached writes in flight"
+            );
+            return Detached::Dropped;
+        }
+        drop(windows);
+        let store = Arc::clone(&self.store);
+        detached.spawn(
+            async move { write(store.as_ref(), event).await }.instrument(tracing::Span::current()),
+        );
+        tracing::trace!(
+            user_id = %user,
+            kind = kind.as_str(),
+            in_flight = detached.len(),
+            "detached an account activity write"
+        );
+        Detached::Started
+    }
+
+    /// Wait until every write [`Self::record_detached`] started before this call has finished.
+    ///
+    /// What a test reads the log after, and what a shutdown that wants no event lost awaits.
+    pub async fn settled(&self) {
+        let mut pending = std::mem::take(&mut *lock(&self.detached));
+        while let Some(finished) = pending.join_next().await {
+            if let Err(error) = finished {
+                tracing::error!(%error, "a detached activity write did not finish");
+            }
+        }
+    }
+
+    /// The event `kind` happening to `user` now, in the current request.
+    fn stamp(
+        &self,
+        user: &UserId,
+        kind: ActivityKind,
+        session: Option<&SessionId>,
+        subject: Option<&str>,
+    ) -> ActivityEvent {
+        ActivityEvent {
             event_id: uuid::Uuid::now_v7().to_string(),
             user_id: user.clone(),
             kind,
-            at: now,
+            at: self.clock.now(),
             request_id: crate::request_span::current_request_id().map(|id| id.to_string()),
             session_id: session.cloned(),
             subject: subject.map(str::to_owned),
-        };
-        let event_id = event.event_id.clone();
-        match self.store.record(event, Self::horizon(now)).await {
-            Ok(()) => tracing::info!(
-                user_id = %user,
-                kind = kind.as_str(),
-                event_id,
-                session_id = ?session,
-                subject,
-                "recorded an account activity event"
-            ),
-            Err(error) => tracing::error!(
-                %error,
-                user_id = %user,
-                kind = kind.as_str(),
-                event_id,
-                session_id = ?session,
-                subject,
-                "an account activity event could not be recorded; the action stands"
-            ),
         }
     }
 
@@ -318,6 +523,38 @@ impl ActivityContext {
         self.store
             .recent(user, since, limit.min(MAX_EVENTS_PER_ACCOUNT))
             .await
+    }
+}
+
+/// Append `event` to its account's log, logging it at `error` when the store refuses.
+///
+/// Infallible for the reason [`ActivityContext::record`] gives: the action has already happened.
+async fn write(store: &dyn ActivityStore, event: ActivityEvent) {
+    // The fields the log line names, kept before the event moves into the store.
+    let kind = event.kind;
+    let event_id = event.event_id.clone();
+    let user_id = event.user_id.clone();
+    let session_id = event.session_id.clone();
+    let subject = event.subject.clone();
+    let horizon = ActivityContext::horizon(event.at);
+    match store.record(event, horizon).await {
+        Ok(()) => tracing::info!(
+            user_id = %user_id,
+            kind = kind.as_str(),
+            event_id,
+            session_id = ?session_id,
+            subject,
+            "recorded an account activity event"
+        ),
+        Err(error) => tracing::error!(
+            %error,
+            user_id = %user_id,
+            kind = kind.as_str(),
+            event_id,
+            session_id = ?session_id,
+            subject,
+            "an account activity event could not be recorded; the action stands"
+        ),
     }
 }
 

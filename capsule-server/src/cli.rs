@@ -593,8 +593,33 @@ async fn serve(config: &Config) -> Result<ExitCode> {
         .serve()
         .await
         .map_err(|error| eyre!("serving: {error}"))?;
+    drain_activity(&assembled.app).await;
     tracing::info!("drained and stopped");
     Ok(ExitCode::SUCCESS)
+}
+
+/// How long a stopping server waits for the activity writes its last requests took off their
+/// response path.
+const ACTIVITY_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Wait, for at most [`ACTIVITY_DRAIN_TIMEOUT`], for the detached activity writes to land.
+///
+/// After the listener has drained, so no request can start another. A store that does not answer
+/// in time loses those events; each one's write is abandoned and this says so at `error`.
+async fn drain_activity(app: &crate::App) {
+    use kynos::di::Provides as _;
+
+    let activity: crate::activity::ActivityContext = app.provide();
+    tracing::debug!("waiting for detached account activity writes");
+    if tokio::time::timeout(ACTIVITY_DRAIN_TIMEOUT, activity.settled())
+        .await
+        .is_err()
+    {
+        tracing::error!(
+            timeout = ?ACTIVITY_DRAIN_TIMEOUT,
+            "detached account activity writes did not land before shutdown; their events are lost"
+        );
+    }
 }
 
 /// Re-drive the finalization claims a previous process died holding — album finalizations and
