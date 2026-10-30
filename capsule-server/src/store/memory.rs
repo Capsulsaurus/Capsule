@@ -21,7 +21,10 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use jiff::{SignedDuration, Timestamp};
 
-use super::auth::{AuthStateStore, CohortRecord, CohortStore, DEFAULT_SESSION_TTL, SessionRecord};
+use super::auth::{
+    AuthStateStore, CohortRecord, CohortStore, DEFAULT_SESSION_HARD_CAP, DEFAULT_SESSION_TTL,
+    SessionRecord,
+};
 use super::ceremony::{
     CHALLENGE_TTL, ChallengeStore, ChannelStore, DEVICE_SLOW_DOWN_STEP, DevicePollSlot, Direction,
     DrainOutcome, ENROLLMENT_CODE_TTL, EnrollmentStore, OIDC_AUTHORIZATION_TTL, OIDC_DEVICE_TTL,
@@ -113,6 +116,7 @@ impl<T> Entry<T> {
 pub struct InMemoryAuthState {
     clock: Arc<dyn Clock>,
     ttl: SignedDuration,
+    hard_cap: SignedDuration,
     state: Mutex<AuthState>,
 }
 
@@ -167,27 +171,36 @@ impl AuthState {
 }
 
 impl InMemoryAuthState {
-    /// A store on `clock` with the given session lifetime.
+    /// A store on `clock` with the given sliding window and [`DEFAULT_SESSION_HARD_CAP`].
     pub fn new(clock: Arc<dyn Clock>, ttl: SignedDuration) -> Self {
         Self {
             clock,
             ttl,
+            hard_cap: DEFAULT_SESSION_HARD_CAP,
             state: Mutex::new(AuthState::default()),
         }
+    }
+
+    /// The same store with its hard cap set to `hard_cap`.
+    #[must_use]
+    pub fn with_hard_cap(mut self, hard_cap: SignedDuration) -> Self {
+        self.hard_cap = hard_cap;
+        self
     }
 
     /// A store on `clock` with [`DEFAULT_SESSION_TTL`].
     pub fn with_default_ttl(clock: Arc<dyn Clock>) -> Self {
         Self::new(clock, DEFAULT_SESSION_TTL)
     }
-}
 
-impl AuthStateStore for InMemoryAuthState {
-    fn ttl(&self) -> SignedDuration {
-        self.ttl
-    }
-
-    fn open_session(&self, record: SessionRecord) -> StoreFuture<'_, ()> {
+    /// Store `record` until `expires_at`, indexed under its user: the one write both
+    /// [`AuthStateStore::open_session`] and [`AuthStateStore::restore_session`] make.
+    fn store_session(
+        &self,
+        record: SessionRecord,
+        expires_at: Timestamp,
+        verb: &'static str,
+    ) -> StoreFuture<'_, ()> {
         Box::pin(async move {
             let now = self.clock.now();
             let mut state = lock(&self.state);
@@ -195,10 +208,7 @@ impl AuthStateStore for InMemoryAuthState {
 
             let session_id = record.session_id.clone();
             let user_id = record.user_id.clone();
-            let entry = Entry {
-                record,
-                expires_at: deadline(now, self.ttl),
-            };
+            let entry = Entry { record, expires_at };
             // Re-opening an id that already named a *different* user must not leave the old
             // user's listing pointing at a session that is now someone else's.
             if let Some(previous) = state.sessions.insert(session_id.clone(), entry)
@@ -212,9 +222,29 @@ impl AuthStateStore for InMemoryAuthState {
                 .or_default()
                 .insert(session_id.clone());
 
-            tracing::debug!(%session_id, %user_id, "opened session");
+            tracing::debug!(%session_id, %user_id, %expires_at, verb, "stored session");
             Ok(())
         })
+    }
+}
+
+impl AuthStateStore for InMemoryAuthState {
+    fn ttl(&self) -> SignedDuration {
+        self.ttl
+    }
+
+    fn hard_cap(&self) -> SignedDuration {
+        self.hard_cap
+    }
+
+    fn open_session(&self, record: SessionRecord) -> StoreFuture<'_, ()> {
+        let expires_at = self.expires_at(&record, self.clock.now());
+        self.store_session(record, expires_at, "opened")
+    }
+
+    fn restore_session(&self, record: SessionRecord) -> StoreFuture<'_, ()> {
+        let expires_at = self.expires_at(&record, record.created_at);
+        self.store_session(record, expires_at, "restored")
     }
 
     fn read_session<'a>(
@@ -1521,6 +1551,10 @@ impl super::conformance::Harness for InMemoryStores {
 
     fn oidc_devices(&self) -> &dyn OidcDeviceStore {
         &self.oidc_devices
+    }
+
+    fn now(&self) -> Timestamp {
+        self.clock.now()
     }
 }
 

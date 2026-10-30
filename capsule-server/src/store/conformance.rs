@@ -99,6 +99,14 @@ pub trait Harness: CohortHarness {
     fn oidc_authorizations(&self) -> &dyn OidcAuthorizationStore;
     /// The pending OIDC device authorization store under test (issue #635).
     fn oidc_devices(&self) -> &dyn OidcDeviceStore;
+
+    /// The instant the stores under test currently read as now.
+    ///
+    /// For the one case whose deadline is measured from a record's own timestamp rather than
+    /// from the store's clock: [`restoring_a_session_keeps_its_original_deadline`] must stamp
+    /// its record with the instant it is opened at, or the restore would compute a deadline
+    /// unrelated to the window the open granted.
+    fn now(&self) -> Timestamp;
 }
 
 /// Unwrap a store result, failing with the operation that was expected to work.
@@ -138,6 +146,7 @@ fn session(case: &str, tag: &str, user: &str, offset: i64) -> SessionRecord {
         user_id: UserId::new(format!("{case}-{user}")),
         created_at,
         authenticated_at: created_at,
+        signed_in_at: created_at,
         last_active_at: created_at,
         user_agent: Some(format!("agent-{tag}")),
         ip_address: Some("203.0.113.7".to_owned()),
@@ -477,6 +486,114 @@ pub async fn an_expired_session_leaves_no_listing_entry_behind(h: &dyn Harness) 
         )
         .is_empty(),
         "and a revoke-all cannot count one"
+    );
+}
+
+/// A lineage past its hard cap, re-opened beside a live one of the same user, leaves the live
+/// one listed and revocable.
+///
+/// The two lineages carry different caps, so the past-cap record's remaining life is nil while
+/// the live one has a whole window. The per-user listing is shared by both: the one opened last
+/// must not shorten it, or `sessions_for_user` and `close_all_for_user` (revoke-all, a password
+/// change) would miss a session that is still honoured.
+pub async fn a_past_cap_lineage_does_not_hide_a_live_one(h: &dyn Harness) {
+    let store = h.auth();
+    let live = session("cap-index", "live", "user", 0);
+    let mut past_cap = session("cap-index", "past", "user", 1);
+    // Before any harness clock: the cap has passed whatever "now" the store reads.
+    past_cap.signed_in_at = Timestamp::MIN;
+    past_cap.authenticated_at = Timestamp::MIN;
+
+    ok(store.open_session(live.clone()).await, "open_session");
+    ok(store.open_session(past_cap.clone()).await, "open_session");
+
+    assert_eq!(
+        ok(
+            store.read_session(&past_cap.session_id).await,
+            "read_session"
+        ),
+        None,
+        "a lineage past its cap is stored already expired"
+    );
+    assert_eq!(
+        ok(
+            store.sessions_for_user(&live.user_id).await,
+            "sessions_for_user"
+        ),
+        vec![live.clone()],
+        "the live lineage is still listed"
+    );
+    assert_eq!(
+        ok(
+            store.close_all_for_user(&live.user_id).await,
+            "close_all_for_user"
+        ),
+        vec![live],
+        "and a revoke-all still reaches it"
+    );
+}
+
+/// A session closed and restored dies when the window it was opened under closes, not a
+/// window after the restore.
+///
+/// A restore is not an issuance — a password change closes every session of the account and
+/// puts the caller's back — so it must not slide the window: the record lives exactly as long
+/// as the refresh token minted when it was opened. The step is a microsecond rather than a
+/// nanosecond tick because the Valkey read gate compares microseconds, and the harness clock may
+/// sit between two of them by the time this case runs.
+pub async fn restoring_a_session_keeps_its_original_deadline(h: &dyn Harness) {
+    let store = h.auth();
+    let ttl = store.ttl();
+    let step = SignedDuration::from_micros(1);
+    let opened_at = h.now();
+    let record = SessionRecord {
+        created_at: opened_at,
+        authenticated_at: opened_at,
+        signed_in_at: opened_at,
+        last_active_at: opened_at,
+        ..session("restore", "a", "user", 0)
+    };
+    ok(store.open_session(record.clone()).await, "open_session");
+
+    let elapsed = ttl / 2;
+    ok(h.advance(elapsed).await, "advance into the window");
+    let closed = present(
+        ok(
+            store.close_session(&record.session_id).await,
+            "close_session",
+        ),
+        "the live session it closes",
+    );
+    ok(store.restore_session(closed).await, "restore_session");
+    assert_eq!(
+        ok(store.read_session(&record.session_id).await, "read_session"),
+        Some(record.clone()),
+        "a restored session is the record that was closed"
+    );
+
+    ok(
+        h.advance(ttl - elapsed - step).await,
+        "advance to just inside the original window",
+    );
+    assert_eq!(
+        ok(store.read_session(&record.session_id).await, "read_session"),
+        Some(record.clone()),
+        "just inside the original window the restored session is live"
+    );
+
+    ok(h.advance(step).await, "advance to the original deadline");
+    assert_eq!(
+        ok(store.read_session(&record.session_id).await, "read_session"),
+        None,
+        "a restore must not slide the window it was opened under"
+    );
+    assert!(
+        ok(
+            store.sessions_for_user(&record.user_id).await,
+            "sessions_for_user"
+        )
+        .is_empty(),
+        "and the expired restore leaves no listing entry"
     );
 }
 
@@ -2092,6 +2209,8 @@ pub async fn run_all(h: &dyn Harness) {
     reopening_a_session_id_does_not_duplicate_the_listing(h).await;
     touching_a_session_records_activity_without_extending_its_life(h).await;
     an_expired_session_leaves_no_listing_entry_behind(h).await;
+    a_past_cap_lineage_does_not_hide_a_live_one(h).await;
+    restoring_a_session_keeps_its_original_deadline(h).await;
 
     upload_session_round_trips_every_field(h).await;
     uploader_listing_is_ordered_and_scoped(h).await;

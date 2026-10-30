@@ -19,7 +19,7 @@ use capsule_server::store::{AuthStateStore, Clock, SessionId};
 use jiff::SignedDuration;
 use kynos::http::StatusCode;
 use serde_json::json;
-use support::{EMAIL, Fixture, PASSWORD, SESSION_TTL, user};
+use support::{EMAIL, Fixture, PASSWORD, SESSION_HARD_CAP, SESSION_TTL, user};
 
 /// Post a JSON body to `path`, as a well-formed client would.
 macro_rules! post_json {
@@ -86,8 +86,8 @@ async fn login_issues_a_pair_and_opens_the_session_it_names() {
 
 #[tokio::test]
 async fn the_refresh_token_never_outlives_the_session_it_names() {
-    // The two lifetimes are one fact: the route issues against `AuthStateStore::ttl()`, so a
-    // deployment cannot configure a refresh token that verifies past its own session record.
+    // The two lifetimes are one fact: the route issues against `AuthStateStore::expires_at`, so
+    // a deployment cannot configure a refresh token that verifies past its own session record.
     let fixture = Fixture::working();
 
     let body: TokenResponse = post_json!(
@@ -351,6 +351,132 @@ async fn refresh_rotates_the_session_and_closes_the_one_it_was_given() {
         .expect("store answers");
     assert_eq!(open.len(), 1);
     assert_eq!(open[0].session_id, rotated);
+
+    fixture.client.assert_conformance();
+}
+
+/// Log in and return the pair.
+async fn login(fixture: &Fixture) -> TokenResponse {
+    post_json!(
+        fixture.client,
+        "/v1/auth/login",
+        json!({ "email": EMAIL, "password": PASSWORD })
+    )
+    .assert_status(StatusCode::OK)
+    .json()
+}
+
+/// Refresh `pair` and return its successor.
+async fn refresh(fixture: &Fixture, pair: &TokenResponse) -> TokenResponse {
+    post_json!(
+        fixture.client,
+        "/v1/auth/refresh",
+        json!({ "refresh_token": pair.refresh_token })
+    )
+    .assert_status(StatusCode::OK)
+    .json()
+}
+
+#[tokio::test]
+async fn each_refresh_slides_the_inactivity_window() {
+    // The phone that is used now and then: every refresh buys a whole new window, so a session
+    // refreshed inside each window outlives any single one of them.
+    let fixture = Fixture::working();
+    let just_inside = SESSION_TTL - SignedDuration::from_secs(1);
+    let signed_in_at = fixture.clock.now();
+
+    let mut pair = login(&fixture).await;
+    for _ in 0..3 {
+        fixture.clock.advance(just_inside);
+        pair = refresh(&fixture, &pair).await;
+    }
+    assert!(
+        fixture.clock.now().duration_since(signed_in_at) > SESSION_TTL * 2,
+        "the lineage has outlived two windows"
+    );
+
+    // And idleness still ends it: one whole window without an issuance.
+    fixture.clock.advance(SESSION_TTL);
+    post_json!(
+        fixture.client,
+        "/v1/auth/refresh",
+        json!({ "refresh_token": pair.refresh_token })
+    )
+    .assert_status(StatusCode::UNAUTHORIZED);
+
+    fixture.client.assert_conformance();
+}
+
+#[tokio::test]
+async fn the_hard_cap_survives_rotation() {
+    // The session refreshed every day: rotation carries the sign-in instant forward, so the
+    // lineage still ends at the cap however recently it refreshed.
+    let fixture = Fixture::working();
+    let signed_in_at = fixture.clock.now();
+    let cap_at = signed_in_at + SESSION_HARD_CAP;
+    let day = SignedDuration::from_hours(24);
+
+    let mut pair = login(&fixture).await;
+    while fixture.clock.now() + day < cap_at {
+        fixture.clock.advance(day);
+        pair = refresh(&fixture, &pair).await;
+    }
+
+    let open = fixture
+        .sessions
+        .sessions_for_user(&user())
+        .await
+        .expect("store answers");
+    assert_eq!(open.len(), 1, "one lineage, however many rotations");
+    assert_eq!(
+        open[0].signed_in_at, signed_in_at,
+        "a refresh carries the sign-in instant forward, it never resets it"
+    );
+    assert!(
+        fixture.clock.now() + SESSION_TTL > cap_at,
+        "the last rotation's sliding window would run past the cap"
+    );
+
+    // The last pair was minted with only what is left of the cap, not a whole window.
+    fixture
+        .clock
+        .advance(cap_at.duration_since(fixture.clock.now()) - SignedDuration::from_secs(1));
+    assert!(
+        fixture
+            .tokens
+            .verify(&pair.refresh_token, TokenKind::Refresh)
+            .is_ok(),
+        "a second before the cap the refresh token is live"
+    );
+    fixture.clock.advance(SignedDuration::from_secs(2));
+    assert!(
+        fixture
+            .tokens
+            .verify(&pair.refresh_token, TokenKind::Refresh)
+            .is_err(),
+        "past the cap the refresh token dies with its lineage"
+    );
+    assert!(
+        fixture
+            .sessions
+            .sessions_for_user(&user())
+            .await
+            .expect("store answers")
+            .is_empty(),
+        "and so does the session record, inside its sliding window"
+    );
+    let body: serde_json::Value = post_json!(
+        fixture.client,
+        "/v1/auth/refresh",
+        json!({ "refresh_token": pair.refresh_token })
+    )
+    .assert_status(StatusCode::UNAUTHORIZED)
+    .json();
+    assert_eq!(code_of(&body), "error.auth.session_expired");
+
+    // A fresh sign-in starts a fresh lineage.
+    let again = login(&fixture).await;
+    refresh(&fixture, &again).await;
 
     fixture.client.assert_conformance();
 }
@@ -1120,10 +1246,10 @@ async fn activity_moves_the_listing_and_is_coalesced_to_one_write_a_minute() {
         "the listing shows when the session was last used"
     );
 
-    // And activity is not a lifetime extension. The store's TTL is absolute, so a session that
-    // has been touched every minute for a day is still closed on schedule — a sliding lifetime
-    // would be a caller-supplied TTL, which the store port does not take, wearing activity as a
-    // disguise.
+    // And activity is not a lifetime extension. Only a token issuance slides the window, so a
+    // session that has been touched every minute without refreshing is still closed on
+    // schedule — sliding on traffic would be a caller-supplied TTL, which the store port does
+    // not take, wearing activity as a disguise.
     fixture.clock.advance(SESSION_TTL);
     fixture
         .client

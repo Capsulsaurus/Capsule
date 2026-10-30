@@ -130,6 +130,13 @@ use uuid::Uuid;
 /// one that would hide the arrangement.
 pub(crate) const SESSION_TTL: SignedDuration = SignedDuration::from_hours(24 * 7);
 
+/// The hard cap the fixture's store is built with: a session lineage dies thirty days after its
+/// sign-in however often it refreshes.
+///
+/// Several sliding windows long, so a test can refresh a few times inside it and then watch the
+/// cap, rather than the window, end the session.
+pub(crate) const SESSION_HARD_CAP: SignedDuration = SignedDuration::from_hours(24 * 30);
+
 /// The asset the conformance suite's lifecycle ops act on.
 pub(crate) const OPS_ASSET: &str = "018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5e61";
 
@@ -1211,10 +1218,10 @@ pub(crate) struct SwitchableSessions {
 }
 
 impl SwitchableSessions {
-    /// A working store on `clock`, with [`SESSION_TTL`].
+    /// A working store on `clock`, with [`SESSION_TTL`] and [`SESSION_HARD_CAP`].
     pub(crate) fn new(clock: Arc<ManualClock>) -> Self {
         Self {
-            inner: InMemoryAuthState::new(clock, SESSION_TTL),
+            inner: InMemoryAuthState::new(clock, SESSION_TTL).with_hard_cap(SESSION_HARD_CAP),
             unavailable: AtomicBool::new(false),
             unavailable_after_authentication: AtomicBool::new(false),
         }
@@ -2016,11 +2023,22 @@ impl AuthStateStore for SwitchableSessions {
         self.inner.ttl()
     }
 
+    fn hard_cap(&self) -> SignedDuration {
+        self.inner.hard_cap()
+    }
+
     fn open_session(&self, record: SessionRecord) -> StoreFuture<'_, ()> {
         if self.is_down_past_the_door() {
             return Box::pin(async { Self::refuse() });
         }
         self.inner.open_session(record)
+    }
+
+    fn restore_session(&self, record: SessionRecord) -> StoreFuture<'_, ()> {
+        if self.is_down_past_the_door() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.restore_session(record)
     }
 
     fn read_session<'a>(
@@ -4537,6 +4555,7 @@ impl Fixture {
                 user_id: UserId::new(user_id),
                 created_at: now,
                 authenticated_at: now,
+                signed_in_at: now,
                 last_active_at: now,
                 user_agent: None,
                 ip_address: None,
