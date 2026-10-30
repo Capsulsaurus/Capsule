@@ -83,7 +83,7 @@ Every write that must not tear stages a temp file on the destination filesystem,
 - **Client stack edit.** All sidecars and per-asset provenance records stage and rename as one batch; no partial stack.
 - **Server finalization.** Order: claim (CAS) → re-hash staged file → envelope checks → `BlobStore::commit` (atomic rename + directory fsync) → owner-ledger append → index record and custody receipt in one transaction ([Transfer — Upload](/design/transfer/upload/#finalization-and-integrity)). A crash before commit leaves `incoming/` debris; after commit but before the index transaction, an orphan GC reclaims (or a ledger entry rebuild replays), and the retry is idempotent because the content address is one object. An indexed blob without a receipt, or a receipt without custody, MUST NOT occur. The session stays `WaitingForProcessing` until finalization completes or fails cleanly.
 
-On startup each side scrubs incomplete work. An `incoming/*.bin` shorter than its session's recorded offset fails the session — the file is authoritative. Nothing is published, on either side, before its integrity is verified.
+On startup each side scrubs incomplete work. On the server the session's committed set is authoritative, not the staged file ([Session Lifetime and Discard](/design/transfer/upload/#session-lifetime-and-discard)). Nothing is published, on either side, before its integrity is verified.
 
 ## Encrypted Backups
 

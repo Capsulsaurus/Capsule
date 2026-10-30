@@ -18,7 +18,7 @@ Rules:
 
 - The server MUST refuse to start without `DATABASE_URL` and `VALKEY_URL` unless started with `--memory`, which binds every port to its in-memory adapter and logs a `WARN` on every start. `--memory` is a development profile, never a deployment mode.
 - Each state port has exactly two adapters: volatile stores get Valkey (redis-rs) and in-memory; durable ports get PostgreSQL and in-memory. A Postgres-resident session table, or any generic TTL abstraction, MUST NOT be introduced. The map is stated in [`capsule-server::store`](https://github.com/Capsulsaurus/Capsule/blob/master/capsule-server/src/store/mod.rs).
-- The hot upload path (offsets, status) never touches the durable asset row.
+- The hot upload path (committed set, status) never touches the durable asset row.
 
 ### Schema migrations
 
@@ -29,7 +29,7 @@ Rules:
 
 ```text
 {blob_root}/
-├── incoming/{upload_id}.bin                 # append-only upload, pre-verification
+├── incoming/{upload_id}.bin                 # staged upload, positionally written, pre-verification
 ├── blobs/{hash[0:2]}/{hash[2:4]}/{hash}.bin # finalized, content-addressed, immutable
 ├── ledger/{owner_id}/{first_seq}.log         # owner ledger, append-only, signed
 ├── ledger/{owner_id}/attachments/{hash}      # documents a ledger entry names by hash
@@ -38,7 +38,7 @@ Rules:
 ```
 
 - The whole tree MUST be on one filesystem so finalization renames are atomic.
-- `incoming/`: one append-only file per session; no per-chunk staging, no assembly ([Transfer — Upload](/design/transfer/upload/#append-only-storage)).
+- `incoming/`: one positionally written file per session; no per-chunk staging, no assembly ([Transfer — Upload](/design/transfer/upload/#staging)).
 - `blobs/` is sharded on the hash's own hex prefix so the three enumerations — [integrity scrub](/design/filesystem/maintenance/#server-side-integrity-scrub), [GC](#deletion-and-garbage-collection), [index rebuild](#recovering-the-index-from-blobs-alone) — stay affordable at scale. Lookup is a `stat` at a known address either way.
 - `incoming/` and `quarantine/` are not sharded: neither is content-addressed, and quarantine is read by an operator.
 

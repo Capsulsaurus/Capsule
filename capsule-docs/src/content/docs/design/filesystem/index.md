@@ -19,7 +19,7 @@ Byte transfer is the [transfer protocol](/design/transfer/); metadata sync is [S
 - **Recovery-first.** No database is needed to interpret canonical data. Client sidecars are the source of truth; the server's PostgreSQL index holds only [key-free facts](/design/filesystem/server/#postgresql-what-the-server-knows) and is rebuildable from stored manifests.
 - **Atomic writes.** Temp file + atomic rename on the same filesystem; never overwrite in place ([rules](/design/filesystem/maintenance/#atomic-writes-and-crash-recovery)).
 - **Ephemeral derived data.** Only originals and their canonical metadata are irreplaceable.
-- **4 KiB alignment.** Upload chunks are 4 KiB-aligned so the [append path](/design/transfer/upload/#append-only-storage) stays block-aligned.
+- **4 KiB alignment.** Upload chunks are 4 KiB-aligned so the [staging path](/design/transfer/upload/#staging) stays block-aligned.
 - **Content-addressing.** Server blobs are named by their [ciphertext hash](/design/cryptography/primitives/).
 
 | Concern | Server | Client |

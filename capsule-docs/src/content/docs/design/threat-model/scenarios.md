@@ -12,7 +12,7 @@ One vector per row; each defense has one owner doc.
 | --- | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------- | ----- |
 | 1   | Old client strips unknown sidecar fields | Signature covers `_unknown`; newer schema never written | [Metadata](/design/metadata/#schema-versioning-rules) |
 | 2   | Bytes mismatch declared content type | `content_type` allow-list + sandboxed decoder | [Validation](/design/threat-model/validation/#server-side-validation-invariants) |
-| 3   | Chunk retried at wrong offset | Same offset, different `chunk_hash` → reject | [Upload](/design/transfer/upload/#chunk-rules-and-strictness) |
+| 3   | Chunk retried at a conflicting range | Wholly committed → duplicate, nothing written; partial overlap → reject; changed bytes stopped by the client's chunk-tag guard | [Upload](/design/transfer/upload/#chunk-rules-and-strictness) |
 | 4   | Old manifest replayed to revive a delete | `prior_provenance_hash` advance check, both sides | [Provenance](/design/cryptography/provenance/#provenance-of-library-modifications) |
 | 5   | Re-sign under a weaker suite | Signature covers suite and protocol version | [Keys](/design/cryptography/keys/#write-authorization) |
 | 6   | Concurrent captions                                         | LWW + `superseded_captions` surfaces the loser                                              | [Metadata](/design/metadata/#surfacing-concurrent-edits) |
@@ -20,7 +20,7 @@ One vector per row; each defense has one owner doc.
 | 8   | Corrupt thumbnail overwrites a good one | Signed `DerivativeManifest` chain | [Provenance](/design/cryptography/provenance/#derivative-provenance) |
 | 9   | Fake `timestamp` distorts audit | Audit-only; server `received_at` authoritative | [Keys](/design/cryptography/keys/#write-authorization) |
 | 10  | Dedup TOCTOU duplicates a blob | Check + pending insert in one transaction | [Filesystem](/design/filesystem/server/#content-addressing-and-deduplication) |
-| 11  | Upload exceeds declared size | Cumulative bound at every chunk | [Upload](/design/transfer/upload/#chunk-rules-and-strictness) |
+| 11  | Upload exceeds declared size | Range end checked against the declared size before writing | [Upload](/design/transfer/upload/#chunk-rules-and-strictness) |
 | 12  | Unknown `crypto_suite_id`                                   | `400` at handshake, before any session                                                      | [Validation](/design/threat-model/validation/#protocol-and-capability-negotiation) |
 | 13  | Peer floods the rejected-hash table                         | Per-peer quota, bounded LRU                                                                 | [Federation](/design/federation/#soft-fail-semantics) |
 | 14  | Model swap invalidates AI tags | Model id+version per entry; no cross-model compare | [Metadata](/design/metadata/#tag-provenance-and-namespacing) |

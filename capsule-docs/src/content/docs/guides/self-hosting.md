@@ -19,7 +19,12 @@ never decodes media; clients do all processing and encryption.
   network mount such as NFS works when it supports file locks: `serve` and `purge --apply` take
   a lock on each owner's `ledger/<owner>/.lock` before appending, so a mount with locking
   disabled (`nolock`) lets them interleave unless both run on the same host.
-- **A TLS-terminating reverse proxy** in front of the server.
+- **A TLS-terminating reverse proxy** in front of the server. Configure it to:
+  - accept request bodies of at least 16 MiB, the largest upload chunk;
+  - stream request bodies to the server rather than buffering them;
+  - disable TLS early data (0-RTT), or forward it with the `Early-Data: 1` header so the server can refuse a write;
+  - apply no total-duration timeout to a request body, and an idle timeout longer than the server's stall bound, so a slow but steady chunk is never cut.
+  HTTP/2 and HTTP/3 on the client side of the proxy are optional; clients fall back to HTTP/1.1.
 
 ## Hardware
 

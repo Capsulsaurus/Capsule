@@ -57,7 +57,8 @@ A missing representation MUST NOT remove the asset's metadata or index entry, an
 
 ## Resumption and Verification
 
-- Large blobs are fetched with HTTP `Range`; an interrupted download resumes from the last persisted byte.
+- Large blobs are fetched with HTTP `Range`; an interrupted download resumes from the last persisted byte. The resume position is the partial file's length after an fsync, never a separate counter that could run ahead of it, so a download also resumes across a process restart.
+- A download is written to a temporary file and becomes visible under its final name only by an atomic rename after its content address verifies. A partial or unverified file is never read as the blob. Because a blob's address is its content and its `ETag`, two ranges of one address can never splice two different objects.
 - The client recomputes the ciphertext content hash against the requested address. A mismatch discards the bytes and is retried as transient.
 - The client then decrypts, relying on STREAM's authentication tags to detect truncation, reordering or deletion. A derivative whose bytes match their address but fail authentication is discarded and **not** re-fetched (the manifest commits to that address); the client regenerates it from the original ([Thumbnails](/design/thumbnails/)).
 - Discarding the only local copy of a *local-origin* asset is gated by [Verify Before Destroy](/design/transfer/durability/#verify-before-destroy). Re-fetchable server-origin blobs are always safe to drop.

@@ -23,14 +23,14 @@ Key-free **structural** checks. Canonical list; numbers are stable and cited els
 
 ### On each `PATCH /v1/upload/{id}` chunk
 
-- **9.** Offset = current received count → else `409` + `X-Capsule-Offset`.
-- **10.** Well-shaped chunk: `application/octet-stream` (`415`), non-empty, non-final chunks 4 KiB-aligned (`400`), ≤ protocol max (`413`).
-- **11.** Cumulative received ≤ declared `size` → else `400`/`413`, session `FailedProcessing`.
-- **12.** `(upload_id, offset, chunk_hash)` is new or an exact repeat; `chunk_hash` comes from the **required** `X-Capsule-Checksum` (missing or body mismatch → `400`, nothing persisted). Same offset, different hash → `409`.
+- **9.** The range is admitted against the committed set and the in-flight ranges before any byte is written ([admission](/design/transfer/upload/#chunk-rules-and-strictness)): disjoint → written and committed; wholly committed → duplicate, nothing written; any other overlap → `409 range_conflict`; over the session's in-flight cap → `409 too_many_in_flight`; past the fragment bound → `409 too_fragmented`.
+- **10.** Well-shaped chunk: `application/octet-stream` (`415`), non-empty, offset 4 KiB-aligned and length 4 KiB-aligned unless it ends at `size` (`400`), ≤ protocol max (`413`).
+- **11.** Range end ≤ declared `size` → else `400 size_exceeded`, nothing written.
+- **12.** `chunk_hash` comes from the **required** `X-Capsule-Checksum` and matches the body (missing or mismatch → `400`, nothing persisted).
 
 ### At finalization
 
-- **13.** Total received = declared `size` → else `FailedProcessing`.
+- **13.** Committed set = `[0, size)`, the claim's precondition.
 - **14.** Recomputed ciphertext hash = declared `hash` → else `FailedProcessing`.
 - **15.** 1–8 re-run inside the finalization transaction.
 
@@ -110,7 +110,7 @@ One fail-closed, one-shot gate on every versioned surface, before any state is w
 | `X-Capsule-Protocol-Min/Max` | server, every response     | accepted protocol window                  |
 | `X-Capsule-Min-Client-Build` | server                     | semver deprecation cutoff (advisory)      |
 
-**Census of `X-Capsule-*`**: new headers MUST register here. By pointer: `X-Capsule-Offset`, `-Content-Length`, `-Upload-Status`, `-Checksum` (required on `PATCH`), `-Advice`, `-Session-Expires-In`, `-Session-Idle-Expires-In` ([Transfer — Upload](/design/transfer/upload/#endpoints)); `X-Capsule-Identity-Key` (required on directory publish; invariant 23). `cohort_hash` is deliberately a body field ([Device Cohorts](/design/authentication/#device-cohorts)).
+**Census of `X-Capsule-*`**: new headers MUST register here. By pointer: `X-Capsule-Offset`, `-Committed`, `-Content-Length`, `-Upload-Status`, `-Upload-Error`, `-Checksum` (required on `PATCH`), `-Session-Expires-In`, `-Session-Idle-Expires-In` ([Transfer — Upload](/design/transfer/upload/#endpoints)); `X-Capsule-Advice` ([Network Resilience — Server Advice](/design/networking/#server-advice)); `X-Capsule-Identity-Key` (required on directory publish; invariant 23). `cohort_hash` is deliberately a body field ([Device Cohorts](/design/authentication/#device-cohorts)).
 
 ### Fail-Closed Rules
 
@@ -124,7 +124,7 @@ Duplicates are no-ops; same key, different content is corruption. An unlisted su
 
 | Surface                          | Key                                              | Duplicate                                                  |
 | -------------------------------- | ------------------------------------------------ | ---------------------------------------------------------- |
-| Upload chunk                     | `(upload_id, offset, chunk_hash)`                | Returns current offset                                     |
+| Upload chunk                     | `(upload_id, byte range)`                        | Wholly committed → the session's state, nothing written, bytes not compared and never written (a changed source is stopped by the client's [chunk-tag guard](/design/cryptography/encryption/#encryption-workflow)); partial overlap → `409 error.upload.range_conflict` |
 | Session creation                 | `(owner_id, hash, album_id)`                     | Active session returned; finalized → `409 error.upload.duplicate_blob` + existing asset |
 | Lifecycle manifest               | `(asset_id, prior_provenance_hash, manifest_hash)` | Chain advances once                                      |
 | Metadata update                  | op id + `(asset_id, prior_provenance_hash)`      | Structurally identical                                     |
@@ -140,7 +140,7 @@ Duplicates are no-ops; same key, different content is corruption. An unlisted su
 
 ## Atomicity Invariants
 
-- **Bundle finalization:** manifest, ciphertext, metadata and provenance commit in one transaction; failure → `FailedProcessing`, partials GC'd ([Atomic Writes](/design/filesystem/maintenance/#atomic-writes-and-crash-recovery)).
+- **Blob finalization:** each blob of a bundle finalizes on its own, and its index rows and custody receipt commit in one transaction; failure → `FailedProcessing`, partials GC'd ([Atomic Writes](/design/filesystem/maintenance/#atomic-writes-and-crash-recovery)). A bundle becomes visible only once its provenance and metadata blobs have finalized ([visibility gate](/design/transfer/upload/#what-gets-uploaded)), and a `replace` applies as one act when its manifest lands.
 - **Stack edits:** all `.tmp` staged, renamed together; any failure discards the bundle.
 - **AMK epoch bump + write-tier rotation:** one MLS commit.
 - **Album upgrade:** one MLS commit (`AlbumTombstone`) ([Versioning](/design/versioning/#album-upgrade-ceremony)).

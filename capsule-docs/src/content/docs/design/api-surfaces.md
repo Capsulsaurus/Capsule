@@ -29,7 +29,7 @@ The sync feed carries only opaque envelopes, encrypted metadata and blob referen
 
 ## Why REST/OpenAPI Only
 
-The checked-in OpenAPI document is the public contract and Spargen's input. Kynos owns routing, middleware and deterministic schema emission; Capsule owns auth, protocol headers, error bodies, upload state, blob ports and business rules. One transport keeps negotiation, errors, streaming and test harnesses uniform. GraphQL and gRPC are retired and MUST NOT return; `legacy-review/` may inform contract tests but is never mounted.
+The checked-in OpenAPI document is the public contract and Spargen's input. Kynos owns routing, middleware and deterministic schema emission; Capsule owns auth, protocol headers, error bodies, upload state, blob ports and business rules. One transport keeps negotiation, errors, streaming and test harnesses uniform. Its semantics are independent of the HTTP version underneath ([HTTP Transport](/design/networking/#http-transport)). GraphQL and gRPC are retired and MUST NOT return; `legacy-review/` may inform contract tests but is never mounted.
 
 ### The Document Is 3.2, and Its Version Is Pinned
 
@@ -39,7 +39,7 @@ The server emits with `openapi_as(SpecVersion::V3_2)`, not plain `openapi()`, wh
 
 **Generated** from the contract: every request and response body, every typed parameter, and the byte-serving endpoints (blob fetch with `Range`, derivative reads). A hand-written byte path would be a second parser.
 
-**Hand-written**: only the resumable upload state machine — chunk scheduling, offset resumption, retry laddering, connection budget — which is orchestration over generated calls, not parsing.
+**Hand-written**: only the resumable upload state machine — chunk scheduling, resumption from the committed set, retry laddering, connection budget — which is orchestration over generated calls, not parsing.
 
 ## Negotiation Across Transports
 
@@ -85,6 +85,7 @@ Every problem body also carries a `request_id` member: the same id as that respo
 | Not found, including indistinguishable-404 surfaces | `404` |
 | Stale state (chain, cursor, directory regression) | `409` |
 | Payload too large | `413` |
+| Write forwarded as TLS early data ([HTTP Transport](/design/networking/#http-transport)) | `425` |
 | Unsupported chunk media type | `415` |
 | Protocol outside `[Min, Max]` | `426` |
 | Rate limited | `429` |
