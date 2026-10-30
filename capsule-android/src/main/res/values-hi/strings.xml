@@ -1797,6 +1797,7 @@
     <string name="error_auth_profile_invalid">उस प्रदर्शित नाम का उपयोग नहीं किया जा सकता।</string>
     <string name="error_auth_profile_not_found">वह खाता अब मौजूद नहीं है।</string>
     <string name="error_auth_rate_limited">बहुत अधिक प्रयास। कृपया प्रतीक्षा करें और फिर से प्रयास करें।</string>
+    <string name="error_auth_registration_at_capacity">यह सर्वर अभी बहुत अधिक साइन-अप संभाल रहा है। कृपया थोड़ी देर बाद फिर से प्रयास करें।</string>
     <string name="error_auth_registration_invalid">उस ईमेल या पासवर्ड का उपयोग नहीं किया जा सकता। पासवर्ड में कम से कम 12 वर्ण होने चाहिए।</string>
     <string name="error_auth_revoke_proof_invalid">आपकी पहचान की पुष्टि नहीं हुई। किसी को भी लॉग आउट नहीं किया गया।</string>
     <string name="error_auth_revoke_proof_required">सभी डिवाइस से लॉग आउट करने के लिए अपनी खाता कुंजी से पुष्टि करें।</string>

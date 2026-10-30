@@ -1806,6 +1806,7 @@
   "error.auth.profile_invalid": "Dieser Anzeigename kann nicht verwendet werden.",
   "error.auth.profile_not_found": "Dieses Konto existiert nicht mehr.",
   "error.auth.rate_limited": "Zu viele Versuche. Bitte warten Sie und versuchen Sie es erneut.",
+  "error.auth.registration_at_capacity": "Dieser Server verarbeitet gerade zu viele Registrierungen. Bitte versuche es in Kürze erneut.",
   "error.auth.registration_invalid": "Diese E-Mail-Adresse oder dieses Passwort kann nicht verwendet werden. Passwörter müssen mindestens 12 Zeichen lang sein.",
   "error.auth.revoke_proof_invalid": "Deine Identität konnte nicht bestätigt werden. Es wurde nichts abgemeldet.",
   "error.auth.revoke_proof_required": "Bestätige mit deinem Kontoschlüssel, um dich von allen Geräten abzumelden.",

@@ -7227,6 +7227,10 @@
     "message": "Demasiados intentos. Espera e inténtalo de nuevo.",
     "origin": "machine"
   },
+  "error.auth.registration_at_capacity": {
+    "message": "Este servidor está gestionando demasiados registros en este momento. Inténtalo de nuevo en breve.",
+    "origin": "machine"
+  },
   "error.auth.registration_invalid": {
     "message": "Ese correo electrónico o contraseña no se pueden usar. Las contraseñas deben tener al menos 12 caracteres.",
     "origin": "machine"

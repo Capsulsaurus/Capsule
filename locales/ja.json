@@ -7227,6 +7227,10 @@
     "message": "試行回数が多すぎます。しばらくしてからもう一度お試しください。",
     "origin": "machine"
   },
+  "error.auth.registration_at_capacity": {
+    "message": "このサーバーは現在、多数の新規登録を処理しています。しばらくしてからもう一度お試しください。",
+    "origin": "machine"
+  },
   "error.auth.registration_invalid": {
     "message": "そのメールアドレスまたはパスワードは使用できません。パスワードは 12 文字以上にしてください。",
     "origin": "machine"

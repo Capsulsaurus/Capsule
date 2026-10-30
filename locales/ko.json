@@ -7227,6 +7227,10 @@
     "message": "시도 횟수가 너무 많습니다. 잠시 후 다시 시도해 주세요.",
     "origin": "machine"
   },
+  "error.auth.registration_at_capacity": {
+    "message": "현재 이 서버가 처리 중인 가입 요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.",
+    "origin": "machine"
+  },
   "error.auth.registration_invalid": {
     "message": "해당 이메일 또는 비밀번호는 사용할 수 없습니다. 비밀번호는 12자 이상이어야 합니다.",
     "origin": "machine"

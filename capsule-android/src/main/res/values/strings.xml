@@ -1917,6 +1917,7 @@
     <string name="error_auth_profile_invalid">That display name cannot be used.</string>
     <string name="error_auth_profile_not_found">That account no longer exists.</string>
     <string name="error_auth_rate_limited">Too many attempts. Please wait and try again.</string>
+    <string name="error_auth_registration_at_capacity">This server is handling too many sign-ups right now. Please try again shortly.</string>
     <string name="error_auth_registration_invalid">That email or password can\'t be used. Passwords need at least 12 characters.</string>
     <string name="error_auth_revoke_proof_invalid">That didn\'t confirm as you. Nothing was logged out.</string>
     <string name="error_auth_revoke_proof_required">Confirm with your account key to log out of all devices.</string>

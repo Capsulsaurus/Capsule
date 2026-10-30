@@ -7747,6 +7747,10 @@
     "message": "Too many attempts. Please wait and try again.",
     "context": "High-level error for HTTP 429. Server sends code `error.auth.rate_limited`."
   },
+  "error.auth.registration_at_capacity": {
+    "message": "This server is handling too many sign-ups right now. Please try again shortly.",
+    "context": "HTTP 429 on POST /v1/auth/register: the per-source-address registration rate-limit store is holding as many distinct source addresses as it will hold, so this address could not be given a window of its own. Saturated by design rather than broken - distinct from error.auth.rate_limited, which is this address's own registration budget being spent, and from error.auth.unavailable, which is a 500 meaning a store could not answer at all. The `retry_after` member is an upper bound: it is the limiter window, after which a lapsed window frees room."
+  },
   "error.auth.registration_invalid": {
     "message": "That email or password can't be used. Passwords need at least 12 characters.",
     "context": "HTTP 400 on POST /v1/auth/register: the address is not usable or the password is under the length floor. A length floor and no composition rule — the password authenticates a session, not the master key, and composition rules push people towards shorter, more guessable passwords."

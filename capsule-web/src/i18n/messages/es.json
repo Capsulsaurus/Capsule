@@ -1806,6 +1806,7 @@
   "error.auth.profile_invalid": "Ese nombre visible no se puede usar.",
   "error.auth.profile_not_found": "Esa cuenta ya no existe.",
   "error.auth.rate_limited": "Demasiados intentos. Espera e inténtalo de nuevo.",
+  "error.auth.registration_at_capacity": "Este servidor está gestionando demasiados registros en este momento. Inténtalo de nuevo en breve.",
   "error.auth.registration_invalid": "Ese correo electrónico o contraseña no se pueden usar. Las contraseñas deben tener al menos 12 caracteres.",
   "error.auth.revoke_proof_invalid": "No se pudo confirmar que eres tú. No se cerró ninguna sesión.",
   "error.auth.revoke_proof_required": "Confirma con la clave de tu cuenta para cerrar sesión en todos los dispositivos.",

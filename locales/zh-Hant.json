@@ -7227,6 +7227,10 @@
     "message": "嘗試次數過多。請稍候再試。",
     "origin": "machine"
   },
+  "error.auth.registration_at_capacity": {
+    "message": "此伺服器目前處理的註冊請求過多，請稍後再試。",
+    "origin": "machine"
+  },
   "error.auth.registration_invalid": {
     "message": "無法使用該電子郵件或密碼。密碼至少須有 12 個字元。",
     "origin": "machine"

@@ -7227,6 +7227,10 @@
     "message": "Zu viele Versuche. Bitte warten Sie und versuchen Sie es erneut.",
     "origin": "machine"
   },
+  "error.auth.registration_at_capacity": {
+    "message": "Dieser Server verarbeitet gerade zu viele Registrierungen. Bitte versuche es in Kürze erneut.",
+    "origin": "machine"
+  },
   "error.auth.registration_invalid": {
     "message": "Diese E-Mail-Adresse oder dieses Passwort kann nicht verwendet werden. Passwörter müssen mindestens 12 Zeichen lang sein.",
     "origin": "machine"

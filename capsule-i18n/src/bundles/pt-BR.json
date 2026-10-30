@@ -1806,6 +1806,7 @@
   "error.auth.profile_invalid": "Esse nome de exibição não pode ser usado.",
   "error.auth.profile_not_found": "Essa conta não existe mais.",
   "error.auth.rate_limited": "Muitas tentativas. Aguarde e tente novamente.",
+  "error.auth.registration_at_capacity": "Este servidor está lidando com muitos cadastros no momento. Tente novamente em breve.",
   "error.auth.registration_invalid": "Esse e-mail ou senha não pode ser usado. As senhas precisam ter pelo menos 12 caracteres.",
   "error.auth.revoke_proof_invalid": "Não foi possível confirmar que é você. Nenhuma sessão foi encerrada.",
   "error.auth.revoke_proof_required": "Confirme com a chave da sua conta para sair de todos os dispositivos.",

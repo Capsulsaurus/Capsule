@@ -7227,6 +7227,10 @@
     "message": "Trop de tentatives. Veuillez patienter et réessayer.",
     "origin": "machine"
   },
+  "error.auth.registration_at_capacity": {
+    "message": "Ce serveur gère trop d'inscriptions en ce moment. Veuillez réessayer sous peu.",
+    "origin": "machine"
+  },
   "error.auth.registration_invalid": {
     "message": "Cette adresse e-mail ou ce mot de passe ne peut pas être utilisé. Les mots de passe doivent comporter au moins 12 caractères.",
     "origin": "machine"
