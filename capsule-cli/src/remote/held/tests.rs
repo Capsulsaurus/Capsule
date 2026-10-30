@@ -185,6 +185,40 @@ fn a_restore_of_a_delete_the_server_holds_is_sent_whatever_the_clock() {
     );
 }
 
+/// The one stretch rule `plan` and the delegation ledger share: the records after the head, none
+/// when the head is the last, the last alone when the head is unknown. Only `plan` turns
+/// "none" into a replay of the head.
+#[test]
+fn after_head_is_the_records_the_server_lacks() {
+    let scratch = Scratch::new();
+    let (mut ws, asset) = library(&scratch);
+    ws.soft_delete(&asset, 30).expect("deleted");
+    let chain = records(&ws, &asset);
+    let (create, head) = (chain[0].record_hash(), chain[1].record_hash());
+
+    assert_eq!(
+        actions(after_head(&chain, Some(create))),
+        vec![Action::Delete]
+    );
+    assert!(after_head(&chain, Some(head)).is_empty(), "level: nothing");
+    for unknown in [Some(hash_bytes(b"elsewhere")), None] {
+        assert_eq!(
+            actions(after_head(&chain, unknown)),
+            vec![Action::Delete],
+            "unknown: the head alone"
+        );
+    }
+    assert!(after_head(&[], None).is_empty());
+
+    let chains = ServerChains {
+        heads: HashMap::from([(asset, Some(head))]),
+        latest_changed_at: None,
+    };
+    assert!(chains.is_level(&asset, &chain));
+    assert!(!chains.is_level(&asset, &chain[..1]));
+    assert!(!ServerChains::default().is_level(&asset, &chain));
+}
+
 fn entry(asset_id: &str, manifest_cbor: Vec<u8>, changed_at: &str) -> FeedEntry {
     FeedEntry {
         album_id: b"album".to_vec(),

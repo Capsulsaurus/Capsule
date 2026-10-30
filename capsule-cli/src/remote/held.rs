@@ -6,16 +6,20 @@
 //! then as the stretch of the chain after the head the server holds, in chain order, so each op
 //! chains onto the one before (invariant 17). Until then the record is **held**.
 //!
-//! A held record is kept nowhere but the asset's own provenance chain in the library. Nothing
-//! else records what is held: every run re-derives it by comparing that chain with the head a
-//! fresh feed drain names ([`ServerChains`]), so a lost upload queue, a reinstall that keeps the
-//! library, or a crash between signing and sending loses nothing.
+//! What is sent is never read from anywhere but the asset's own provenance chain in the
+//! library. The delegation ledger keeps a copy of a delegated asset's stretch only to know which
+//! assets wait on a hand-off's custody; its delivery, like `capsule trash` and `capsule push`,
+//! re-derives what to send by comparing the chain with the head a fresh feed drain names
+//! ([`ServerChains`]), so a lost upload queue or ledger, a reinstall that keeps the library, or a
+//! crash between signing and sending loses nothing.
 //!
 //! One stretch is never sent: a `trash-restore` that undoes a held `delete` whose window has
 //! closed. The server judges a restore by when it arrives, so it would apply the delete, refuse
 //! the restore and purge an asset the user restored in time. The pair is withheld instead
 //! ([`HoldReason::RestoreTooLate`]): the server keeps the asset live at the head it holds, and
-//! the library keeps every record.
+//! the library keeps every record. The chain is hash-linked, so nothing after the pair can be
+//! sent either: a later delete of the asset never reaches the server, which keeps it live, and
+//! only the library's own trash holds it.
 
 use std::collections::HashMap;
 
@@ -67,6 +71,14 @@ impl ServerChains {
     /// Whether the server has indexed `asset_id`, and if so the head it holds.
     pub(crate) fn head(&self, asset_id: &Uuid) -> Option<Option<Hash32>> {
         self.heads.get(asset_id).copied()
+    }
+
+    /// Whether the server already holds the head of `records`, `asset_id`'s chain: nothing of it
+    /// is left to send.
+    pub(crate) fn is_level(&self, asset_id: &Uuid, records: &[ProvenanceRecord]) -> bool {
+        records
+            .last()
+            .is_some_and(|head| self.head(asset_id) == Some(Some(head.record_hash())))
     }
 
     /// The clock a held stretch is judged by: this device's, floored by the latest server
@@ -125,11 +137,15 @@ pub(crate) fn plan(
             retention_until: None,
         };
     };
-    let last = records.len().saturating_sub(1);
-    let start = server_head
-        .and_then(|head| records.iter().position(|r| r.record_hash() == head))
-        .map_or(last, |at| (at + 1).min(last));
-    let stretch = records.get(start..).unwrap_or_default();
+    let after = after_head(records, server_head);
+    // Level with the server: the head alone, as a replay.
+    let stretch = if after.is_empty() {
+        records
+            .get(records.len().saturating_sub(1)..)
+            .unwrap_or_default()
+    } else {
+        after
+    };
     if let Some(until) = restore_too_late(stretch, judge) {
         return Delivery::Held {
             reason: HoldReason::RestoreTooLate,
@@ -137,6 +153,23 @@ pub(crate) fn plan(
         };
     }
     Delivery::Send(stretch)
+}
+
+/// The records of `records` (a chain, oldest first) the server lacks when it holds `head`: those
+/// after it, which is none when `head` already is the last; or the last record alone when
+/// `head` is unknown or not in the chain, which the server judges (a stale chain is refused,
+/// never applied).
+///
+/// The one rule for that stretch: [`plan`] sends it, and the delegation ledger holds it until a
+/// hand-off's custody ([`super::lifecycle_ops_after`]).
+pub(crate) fn after_head(
+    records: &[ProvenanceRecord],
+    head: Option<Hash32>,
+) -> &[ProvenanceRecord] {
+    let start = head
+        .and_then(|head| records.iter().position(|r| r.record_hash() == head))
+        .map_or_else(|| records.len().saturating_sub(1), |at| at + 1);
+    records.get(start..).unwrap_or_default()
 }
 
 /// The closed window of a `delete` in `stretch` that a later `trash-restore` of the same

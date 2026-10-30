@@ -1344,12 +1344,7 @@ async fn deliver_held_records(
         let Some(asset) = workspace.asset(asset_id) else {
             continue;
         };
-        let local_head = asset
-            .chain
-            .records()
-            .last()
-            .map(capsule_core::crypto::provenance::ProvenanceRecord::record_hash);
-        if local_head.is_some() && chains.head(asset_id) == Some(local_head) {
+        if chains.is_level(asset_id, asset.chain.records()) {
             tracing::debug!(%asset_id, "push: the server holds this trashed asset's head; nothing to send");
             continue;
         }
@@ -2188,15 +2183,7 @@ pub fn lifecycle_ops_after(
     let Some(asset) = workspace.asset(asset_id) else {
         return Ok(Vec::new());
     };
-    let records = asset.chain.records();
-    let sealed = after.and_then(|hash| records.iter().position(|r| r.record_hash() == hash));
-    let start = if let Some(index) = sealed {
-        index + 1
-    } else {
-        tracing::debug!(%asset_id, "lifecycle ops: the sealed head is not in the chain; the head alone");
-        records.len().saturating_sub(1)
-    };
-    let tail = records.get(start..).unwrap_or_default();
+    let tail = held::after_head(asset.chain.records(), after);
     if !tail
         .iter()
         .any(|r| r.manifest.core.action == Action::Delete)
@@ -2705,7 +2692,7 @@ fn trash_outcome(
 }
 
 /// The server's chain heads off a fresh feed drain, or why the feed could not be read.
-async fn server_chains(
+pub(crate) async fn server_chains(
     remote: &RemoteConfig,
     session: Session,
 ) -> Result<held::ServerChains, String> {
@@ -2720,7 +2707,7 @@ async fn server_chains(
 
 /// What delivering one asset's chain did.
 #[derive(Debug)]
-enum Delivered {
+pub(crate) enum Delivered {
     /// Every record sent was applied; the last one's answer.
     Applied(OpApplied),
     /// Nothing was sent.
@@ -2733,7 +2720,7 @@ enum Delivered {
 /// server has not indexed the asset's create, otherwise every record after the head it holds,
 /// in chain order, each once the one before it was applied.
 #[instrument(skip(remote, session, workspace, chains, now))]
-async fn deliver_chain(
+pub(crate) async fn deliver_chain(
     remote: &RemoteConfig,
     session: &Session,
     workspace: &Workspace,
@@ -3217,7 +3204,7 @@ pub async fn list<C: ConnectionTrait>(
     Ok(syncstore::list_assets(db, include_tombstoned).await?)
 }
 
-mod held;
+pub(crate) mod held;
 
 pub use held::HoldReason;
 
