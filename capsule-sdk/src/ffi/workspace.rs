@@ -1445,13 +1445,22 @@ impl FfiWorkspace {
     /// Use [`signed_manifest`](Self::signed_manifest) when the *manifest* is what is wanted.
     pub fn provenance_head(&self, asset_id: String) -> Result<Vec<u8>, FfiError> {
         let asset_id = parse_uuid("asset_id", &asset_id)?;
+        // Read off the chain head directly: the upload bundle carries the create record, which
+        // is the head only until the first delete, restore or edit.
         self.with(|ws| {
-            Ok(ws
-                .upload_bundle(&asset_id)
-                .map_err(|e| FfiError::Workspace {
-                    detail: format!("reading the provenance head of {asset_id}: {e}"),
-                })?
-                .provenance_blob)
+            let asset = ws.asset(&asset_id).ok_or_else(|| FfiError::Workspace {
+                detail: format!("asset {asset_id} is not managed by this workspace"),
+            })?;
+            let head = asset
+                .chain
+                .records()
+                .last()
+                .ok_or_else(|| FfiError::Workspace {
+                    detail: format!("asset {asset_id} has an empty provenance chain"),
+                })?;
+            capsule_core::cbor::to_canonical_vec(head).map_err(|e| FfiError::Workspace {
+                detail: format!("reading the provenance head of {asset_id}: {e}"),
+            })
         })
     }
 

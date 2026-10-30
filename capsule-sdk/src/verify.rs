@@ -45,7 +45,7 @@ use capsule_library::library::{
     BlobRole, BlobVerdict, CustodyReceipt, ReceiptExpectations, ReleaseDecision, RetainReason,
     StorageVerdict, StorageVerifier, VerifierError, release_is_safe, verify_receipt,
 };
-use capsule_library::lifecycle::UploadBundle;
+use capsule_library::lifecycle::{AssetState, UploadBundle};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, instrument, warn};
 use uuid::Uuid;
@@ -912,6 +912,42 @@ impl HeldRelease {
         }
         Self {
             asset_id: bundle.asset_id,
+            blobs,
+        }
+    }
+
+    /// The blobs a release of `asset`'s original waits on, read off its provenance chain
+    /// **head**: the original ciphertext and, when the head binds one, the sealed metadata blob
+    /// the library holds — exactly the set, in the order,
+    /// [`Workspace::release_move_source`](capsule_library::lifecycle::Workspace::release_move_source)
+    /// declares. Unlike [`for_original`](Self::for_original) it needs no upload bundle, which
+    /// carries the create and cannot be built once an edit has replaced the create's metadata
+    /// blob.
+    #[must_use]
+    pub fn for_head(asset: &AssetState) -> Self {
+        let head = &asset
+            .chain
+            .records()
+            .last()
+            .expect("provenance chain is never empty")
+            .manifest
+            .core;
+        let mut blobs = vec![ReceiptExpectations {
+            ciphertext_hash: head.ciphertext_hash,
+            size: capsule_core::crypto::encryption::ciphertext_len(head.plaintext_size),
+            role: BlobRole::Original,
+            envelope_hash: None,
+        }];
+        if let Some(hash) = head.metadata_blob_hash {
+            blobs.push(ReceiptExpectations {
+                ciphertext_hash: hash,
+                size: asset.metadata_blob.len() as u64,
+                role: BlobRole::Metadata,
+                envelope_hash: None,
+            });
+        }
+        Self {
+            asset_id: asset.asset_id,
             blobs,
         }
     }
