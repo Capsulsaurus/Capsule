@@ -12,6 +12,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
+use capsule_core::crypto::encryption::blob_ciphertext_hash;
 use capsule_core::crypto::keys::{HybridVerifyingKey, MasterKey};
 use capsule_core::crypto::primitives::{Argon2Params, DeviceTier};
 use capsule_library::import::UploadPolicy;
@@ -2126,28 +2127,42 @@ fn creates_on_server<H: std::hash::BuildHasher>(
 }
 
 /// `asset_id`'s upload bundle, or `None` when there is nothing of its create to upload: the
-/// server already holds it (`indexed`), and an edit since replaced the metadata blob it binds,
-/// so the library cannot rebuild it ([`LifecycleError::CreateMetadataSuperseded`]). The records
-/// after the create are delivered as lifecycle ops ([`deliver_live_records`]), so such an asset
-/// is never a failure. One the server does not hold yet still fails: its create has to be
-/// uploaded, and cannot be.
+/// server already holds it (`indexed`), and an edit since replaced the metadata blob it binds.
+/// Such an asset is skipped before its bundle is built, whether or not the library kept the
+/// create's blob ([`Workspace::create_metadata_blob_path`]): the create's index rung is on the
+/// server already, and a library edited before the blob was kept could not rebuild it
+/// ([`LifecycleError::CreateMetadataSuperseded`]). The records after the create are delivered
+/// as lifecycle ops ([`deliver_live_records`]), so such an asset is never a failure.
+///
+/// One the server does not hold yet uploads its create with the kept blob; only a library that
+/// kept none still fails, because its create has to be uploaded and cannot be.
 fn create_bundle(
     workspace: &Workspace,
     indexed: &HashSet<Uuid>,
     asset_id: Uuid,
 ) -> Result<Option<capsule_library::lifecycle::UploadBundle>, LifecycleError> {
-    match workspace.upload_bundle(&asset_id) {
-        Ok(bundle) => Ok(Some(bundle)),
-        Err(LifecycleError::CreateMetadataSuperseded(_)) if indexed.contains(&asset_id) => {
-            tracing::info!(
-                %asset_id,
-                "push: skipped; the server holds this asset's create, which an edit here has \
-                 superseded, so nothing of it is uploaded"
-            );
-            Ok(None)
-        }
-        Err(error) => Err(error),
+    if indexed.contains(&asset_id) && create_metadata_superseded(workspace, &asset_id) {
+        tracing::info!(
+            %asset_id,
+            "push: skipped; the server holds this asset's create, which an edit here has \
+             superseded, so nothing of it is uploaded"
+        );
+        return Ok(None);
     }
+    workspace.upload_bundle(&asset_id).map(Some)
+}
+
+/// Whether an edit replaced the metadata blob `asset_id`'s create binds, so the asset's current
+/// blob is no longer the create's. `false` for an unknown asset and for a create that binds none.
+fn create_metadata_superseded(workspace: &Workspace, asset_id: &Uuid) -> bool {
+    workspace.asset(asset_id).is_some_and(|asset| {
+        asset
+            .chain
+            .records()
+            .first()
+            .and_then(|create| create.manifest.core.metadata_blob_hash)
+            .is_some_and(|bound| blob_ciphertext_hash(&asset.metadata_blob) != bound)
+    })
 }
 
 /// The outcome of an asset skipped because another device holds its open hand-off: nothing of

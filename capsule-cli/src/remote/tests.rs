@@ -658,9 +658,12 @@ fn held_releases_asks_about_an_edited_assets_head() {
         .manifest
         .core
         .clone();
-    assert!(
-        ws.upload_bundle(&moved[0].asset_id).is_err(),
-        "the edit superseded the create's metadata blob"
+    assert_ne!(
+        ws.upload_bundle(&moved[0].asset_id)
+            .expect("the create's bundle")
+            .metadata_blob_hash,
+        head.metadata_blob_hash,
+        "the edit superseded the create's metadata blob, which the upload still carries"
     );
 
     let releases = held_releases(&ws, &moved);
@@ -2355,13 +2358,25 @@ fn listed_with_original(ws: &Workspace, asset: &Uuid, at: usize) -> serde_json::
 }
 
 /// **An asset edited since the server indexed its create is not a failure** (D1 of #1092's
-/// review). The edit replaced the metadata blob the create binds, so the library cannot rebuild
-/// the create; the feed lists the asset and holds its original, so nothing of the create is
-/// left to upload. The push reports it `indexed`, sends the edit as a lifecycle op, and exits
-/// zero; a dry run plans it the same way. Not listed, the same asset still fails: its create has
-/// to be uploaded and cannot be.
+/// review), whether the library kept the create's metadata blob (#1091) or was edited before it
+/// kept one. The feed lists the asset and holds its original, so nothing of the create is left
+/// to upload. The push reports it `indexed`, sends the edit as a lifecycle op, and exits zero; a
+/// dry run plans it the same way.
 #[tokio::test]
 async fn a_push_skips_an_indexed_create_an_edit_superseded_and_sends_the_edit() {
+    indexed_create_an_edit_superseded(false).await;
+}
+
+/// [`a_push_skips_an_indexed_create_an_edit_superseded_and_sends_the_edit`] for a library edited
+/// before the create's blob was kept: still `indexed` while listed, and, not listed, a failure
+/// of kind `bundle`, because its create has to be uploaded and cannot be.
+#[tokio::test]
+async fn an_indexed_create_with_no_kept_blob_is_skipped_and_fails_once_unlisted() {
+    indexed_create_an_edit_superseded(true).await;
+}
+
+/// The shared body of the two tests above; `legacy` removes the kept copy of the create's blob.
+async fn indexed_create_an_edit_superseded(legacy: bool) {
     let EscrowRun {
         _scratch,
         mut ws,
@@ -2371,10 +2386,24 @@ async fn a_push_skips_an_indexed_create_an_edit_superseded_and_sends_the_edit() 
     } = escrow_run().await;
     let at_create = listed_with_original(&ws, &held_back, 0);
     ws.tag_add(&held_back, "beach").expect("tagged");
-    assert!(matches!(
-        ws.upload_bundle(&held_back),
-        Err(LifecycleError::CreateMetadataSuperseded(_))
-    ));
+    let kept = ws.create_metadata_blob_path(&held_back).expect("held");
+    if legacy {
+        std::fs::remove_file(&kept).expect("the edit kept the create's blob");
+        assert!(matches!(
+            ws.upload_bundle(&held_back),
+            Err(LifecycleError::CreateMetadataSuperseded(_))
+        ));
+    } else {
+        let bundle = ws.upload_bundle(&held_back).expect("the create's bundle");
+        assert_eq!(
+            bundle.metadata_blob_hash,
+            ws.asset(&held_back).unwrap().chain.records()[0]
+                .manifest
+                .core
+                .metadata_blob_hash,
+            "the bundle carries the blob the create binds, kept by the edit"
+        );
+    }
     let only = || PushRun {
         assets: Some(vec![held_back]),
         ..PushRun::default()
@@ -2429,11 +2458,17 @@ async fn a_push_skips_an_indexed_create_an_edit_superseded_and_sends_the_edit() 
     let unlisted = push_with(&remote, &mut ws, session, PushOptions::default(), only())
         .await
         .expect("the run completes");
-    assert_eq!(unlisted.failed_assets, 1, "{unlisted:#?}");
-    assert_eq!(
-        unlisted.outcomes[0].error.as_ref().map(|e| e.kind),
-        Some("bundle")
-    );
+    let kind = unlisted.outcomes[0].error.as_ref().map(|e| e.kind);
+    if legacy {
+        assert_eq!(unlisted.failed_assets, 1, "{unlisted:#?}");
+        assert_eq!(kind, Some("bundle"));
+    } else {
+        assert_ne!(
+            kind,
+            Some("bundle"),
+            "the kept blob builds the create's bundle"
+        );
+    }
 }
 
 /// **A feed that cannot be read after the uploads sends nothing** (`deliver_live_records`):
