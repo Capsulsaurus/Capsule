@@ -10,7 +10,7 @@ Capsule is end-to-end encrypted, so the server **cannot** scan content, and no s
 
 - **No content inspection.** The server holds only ciphertext.
 - **No retroactive takedown.** Ciphertext a peer already fetched cannot be recalled; takedown governs future serving.
-- **No silent operations.** Every action affecting user data MUST produce a [provenance record](/design/cryptography/provenance/#provenance-of-library-modifications) visible in the user's audit log.
+- **No silent operations.** Every action affecting user data MUST produce a [provenance record](/design/cryptography/provenance/#provenance-of-library-modifications) and an entry in the user's moderation record (`GET /v1/moderation/record`). The account's [activity log](/design/activity-log/) is a separate record of the user's own security events, not of operator actions.
 
 Moderation *actions* have **no wire surface**: there is no admin authentication model over HTTP, so the admin is the **operator on the host**, authenticated by holding the deployment's database credentials, and actions run through operator commands. The admin reads the federated report queue with `capsule-server moderation reports`. The user reads their own record at `GET /v1/moderation/record`.
 
