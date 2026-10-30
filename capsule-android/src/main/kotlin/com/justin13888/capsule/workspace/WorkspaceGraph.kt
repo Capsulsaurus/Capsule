@@ -50,7 +50,14 @@ interface SoftwareKeyChoice {
     fun choose()
 }
 
-/** [SoftwareKeyChoice] as a marker file beside the library, outside the root the core creates and removes. */
+/**
+ * [SoftwareKeyChoice] as a marker file beside the library, outside the root the core creates and removes.
+ *
+ * The marker is permanent: nothing clears it, because a library created on software keys records
+ * that key and keeps opening on it, so the choice describes the library for its whole life. Moving
+ * a device onto hardware later means creating a new library and enrolling it, which is a separate
+ * flow that would remove this marker as part of that migration; it does not exist yet.
+ */
 class FileSoftwareKeyChoice(
     private val marker: File,
 ) : SoftwareKeyChoice {
