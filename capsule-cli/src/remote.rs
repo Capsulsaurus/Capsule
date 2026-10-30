@@ -1264,6 +1264,13 @@ pub struct PushSummary {
     /// entry per trashed asset with a record to send or still held; none for one the server is
     /// level with, and none on a dry run or under `--force`, which read no server truth.
     pub held_records: Vec<TrashOutcome>,
+    /// What the run did with the records after the create of each live asset it considered:
+    /// an upload carries only the create, so a delete, a restore or an edit signed since is sent
+    /// as a lifecycle op once the server has indexed the create, read off a feed drained after
+    /// this run's uploads (Organization — Deletion State Machine). One entry per live asset
+    /// whose chain the server is not level with; none for a lone create, none for an asset
+    /// handed to another device, and none on a dry run.
+    pub live_records: Vec<TrashOutcome>,
     /// Verified custody receipts persisted to the library this run.
     pub receipts: usize,
     /// Blobs transferred and finalized: the server reported each session `completed`.
@@ -1335,25 +1342,27 @@ fn blobs_held(entries: &[FeedEntry]) -> HashSet<String> {
     held
 }
 
-/// Send the lifecycle records of each `trashed` asset the server does not hold yet, now that
+/// Send the lifecycle records of each of `assets` the server does not hold yet, now that
 /// `chains` says which creates it has indexed ([`deliver_chain`]). An asset the server is level
-/// with has no entry; one whose create is still not indexed is reported held.
+/// with has no entry; one whose create is still not indexed is reported held. An outcome
+/// carries a `retention_until` only for an asset in the trash.
 async fn deliver_held_records(
     remote: &RemoteConfig,
     session: &Session,
     workspace: &Workspace,
-    trashed: &[Uuid],
+    assets: &[Uuid],
     chains: &held::ServerChains,
 ) -> Vec<TrashOutcome> {
     let mut outcomes = Vec::new();
-    for asset_id in trashed {
+    for asset_id in assets {
         let Some(asset) = workspace.asset(asset_id) else {
             continue;
         };
         if chains.is_level(asset_id, asset.chain.records()) {
-            tracing::debug!(%asset_id, "push: the server holds this trashed asset's head; nothing to send");
+            tracing::debug!(%asset_id, "push: the server holds this asset's head; nothing to send");
             continue;
         }
+        let trashed = workspace.is_trashed(asset_id);
         let delivered = deliver_chain(
             remote,
             session,
@@ -1364,13 +1373,54 @@ async fn deliver_held_records(
         )
         .await;
         let outcome = TrashOutcome {
-            retention_until: trashed_until(asset),
+            retention_until: trashed.then(|| trashed_until(asset)).flatten(),
             ..trash_outcome(*asset_id, delivered, trashed_until(asset))
         };
-        tracing::info!(%asset_id, status = ?outcome.status, "push: a trashed asset's held records");
+        tracing::info!(%asset_id, trashed, status = ?outcome.status, "push: an asset's held records");
         outcomes.push(outcome);
     }
     outcomes
+}
+
+/// Send the records after the create of each `live` asset, once this run's uploads are done:
+/// the feed is drained afresh, so a create this run uploaded is indexed by the time its later
+/// records are judged ([`deliver_held_records`]). A feed that cannot be read sends nothing, and
+/// each asset fails as `unavailable`, which a re-run clears.
+async fn deliver_live_records(
+    remote: &RemoteConfig,
+    session: &Session,
+    workspace: &Workspace,
+    live: &[Uuid],
+) -> Vec<TrashOutcome> {
+    if live.is_empty() {
+        return Vec::new();
+    }
+    tracing::info!(
+        assets = live.len(),
+        "push: delivering the records after each live asset's create"
+    );
+    match server_chains(remote, session.clone()).await {
+        Ok(chains) => deliver_held_records(remote, session, workspace, live, &chains).await,
+        Err(message) => live
+            .iter()
+            .map(|asset_id| {
+                failed_trash(
+                    *asset_id,
+                    TrashFailure {
+                        kind: "unavailable",
+                        code: None,
+                        message: format!(
+                            "the server's feed could not be read after the uploads, so whether \
+                             it has indexed the asset is unknown; its later records are held in \
+                             the library and nothing was sent: {message}"
+                        ),
+                        permanent: false,
+                        retention_until: None,
+                    },
+                )
+            })
+            .collect(),
+    }
 }
 
 /// Every entry of a **fresh** feed drain, in feed order, through a scratch [`SyncState`]: start
@@ -1722,7 +1772,7 @@ async fn push_with(
     ));
     // `sync_endpoint` is the bare server origin; the storage and receipt routes hang off `/v1`.
     let verify = StorageVerifyClient::new(VerifyTransport::with_session(
-        session,
+        session.clone(),
         format!("{}/v1", remote.sync_endpoint.trim_end_matches('/')),
     ));
     let scheduler = StagedScheduler::new(options.policy, options.connection);
@@ -1744,6 +1794,21 @@ async fn push_with(
     // Every receipt is checked under the server's pinned key history, so without it no asset
     // could be confirmed: that is a failure of the run, not of an asset.
     let attestation_keys = pinned_attestation_keys(remote, workspace, &verify).await?;
+
+    // An upload carries only an asset's create, so every live asset whose chain moved past it
+    // (a delete and a restore, or an edit) has records to deliver as lifecycle ops once the
+    // server indexes the create, whether this run uploads it or another device did. An asset
+    // handed to another device is left to its hand-off.
+    let later_records: Vec<Uuid> = asset_ids
+        .iter()
+        .filter(|asset_id| !run.delegated.contains(asset_id))
+        .filter(|asset_id| {
+            workspace
+                .asset(asset_id)
+                .is_some_and(|asset| asset.chain.records().len() > 1)
+        })
+        .copied()
+        .collect();
 
     let mut pusher = AssetPusher {
         workspace,
@@ -1777,6 +1842,8 @@ async fn push_with(
         run.tell(|| AssetProgress::Finished(outcome.clone()));
         summary.record(outcome);
     }
+    summary.live_records =
+        deliver_live_records(remote, &session, pusher.workspace, &later_records).await;
     summary.log();
     Ok(summary)
 }
@@ -2044,6 +2111,8 @@ impl PushSummary {
             failed_assets = self.failed_assets,
             delegated_assets = self.delegated_assets,
             trashed_assets = self.trashed_assets,
+            held_records = self.held_records.len(),
+            live_records = self.live_records.len(),
             receipts = self.receipts,
             uploaded = self.uploaded_blobs,
             merged = self.merged_blobs,
@@ -2078,17 +2147,16 @@ pub fn custody_line(summary: &PushSummary) -> String {
             summary.trashed_assets
         );
     }
-    let count = |status| {
-        summary
-            .held_records
+    let count = |outcomes: &[TrashOutcome], status| {
+        outcomes
             .iter()
             .filter(|outcome| outcome.status == status)
             .count()
     };
     let (sent, held, failed) = (
-        count(TrashStatus::Applied),
-        count(TrashStatus::Held),
-        count(TrashStatus::Failed),
+        count(&summary.held_records, TrashStatus::Applied),
+        count(&summary.held_records, TrashStatus::Held),
+        count(&summary.held_records, TrashStatus::Failed),
     );
     if sent > 0 {
         let _ = write!(
@@ -2106,6 +2174,29 @@ pub fn custody_line(summary: &PushSummary) -> String {
         let _ = write!(
             line,
             " {failed} trashed assets' held records were not applied; `--json` says why."
+        );
+    }
+    let (sent, held, failed) = (
+        count(&summary.live_records, TrashStatus::Applied),
+        count(&summary.live_records, TrashStatus::Held),
+        count(&summary.live_records, TrashStatus::Failed),
+    );
+    if sent > 0 {
+        let _ = write!(
+            line,
+            " Sent the records after the create of {sent} assets the server now indexes."
+        );
+    }
+    if held > 0 {
+        let _ = write!(
+            line,
+            " {held} assets keep the records after their create held in the library."
+        );
+    }
+    if failed > 0 {
+        let _ = write!(
+            line,
+            " {failed} assets' records after their create were not applied; `--json` says why."
         );
     }
     line

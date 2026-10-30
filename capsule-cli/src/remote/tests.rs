@@ -2124,3 +2124,158 @@ async fn a_push_sends_a_held_delete_once_the_create_is_indexed() {
     assert!(again.held_records.is_empty(), "{again:#?}");
     assert_eq!(posted_ops(&seen), 1, "nothing sent again");
 }
+
+// ── Records after a live asset's create (#1053) ─────────────────────────
+
+/// A mock whose feed lists `feed`, answering every lifecycle op as applied and everything else
+/// as the escrow mock does (which refuses `full_for`'s escrow, so that album's assets are never
+/// uploaded). Returns the endpoints, a session, and what the mock saw.
+async fn live_records_mock(
+    asset: Uuid,
+    full_for: Uuid,
+    feed: Vec<serde_json::Value>,
+) -> (RemoteConfig, Session, Seen) {
+    let escrow = EscrowMock {
+        full_for,
+        seen: std::sync::Arc::default(),
+    };
+    let seen = escrow.seen.clone();
+    let answer = move |line: &str| {
+        if let Some(page) = feed_answer(line, &feed) {
+            return page;
+        }
+        if line.starts_with("POST /v1/albums/") {
+            escrow.seen.lock().unwrap().push(line.to_owned());
+            return (
+                200,
+                "application/json",
+                applied_body(asset, "trash-restore").to_string(),
+            );
+        }
+        escrow.answer(line)
+    };
+    let (remote, session) = remote_at(&serve_mock(answer).await);
+    (remote, session, seen)
+}
+
+/// **A live asset's chain past its create reaches the server as lifecycle ops** (issue #1053).
+/// The asset was deleted and restored after its create; the server indexes the create, so the
+/// push sends the delete and then the restore, each chaining onto the one before, and reports
+/// them applied. A second push against a server level with the library sends nothing more.
+#[tokio::test]
+async fn a_push_sends_a_live_assets_records_after_its_indexed_create() {
+    use capsule_core::crypto::provenance::Action;
+    let EscrowRun {
+        _scratch,
+        mut ws,
+        full_album,
+        held_back,
+        ..
+    } = escrow_run().await;
+    let at_create = listed(&ws, &held_back, 0);
+    ws.soft_delete(&held_back, 30).expect("deleted");
+    ws.restore(&held_back).expect("restored");
+    assert_eq!(chain_len(&ws, &held_back), 3);
+    let bundle = ws.upload_bundle(&held_back).expect("the create's bundle");
+    assert_eq!(
+        bundle.action,
+        Action::Create,
+        "an upload carries the create"
+    );
+    let (remote, session, seen) = live_records_mock(held_back, full_album, vec![at_create]).await;
+    let only = || PushRun {
+        assets: Some(vec![held_back]),
+        ..PushRun::default()
+    };
+
+    let summary = push_with(&remote, &mut ws, session, PushOptions::default(), only())
+        .await
+        .expect("the run completes");
+
+    assert_eq!(summary.trashed_assets, 0);
+    let live: Vec<_> = summary
+        .live_records
+        .iter()
+        .map(|o| (o.asset_id.clone(), o.status, o.retention_until.clone()))
+        .collect();
+    assert_eq!(
+        live,
+        vec![(held_back.to_string(), TrashStatus::Applied, None)],
+        "{summary:#?}"
+    );
+    assert_eq!(posted_ops(&seen), 2, "the delete, then the restore");
+    assert!(
+        custody_line(&summary).contains("Sent the records after the create of 1 assets"),
+        "{}",
+        custody_line(&summary)
+    );
+    let json = serde_json::to_value(&summary).expect("serializes");
+    assert_eq!(json["live_records"][0]["status"], "applied");
+
+    let at_restore = listed(&ws, &held_back, 2);
+    let (remote, session, seen) = live_records_mock(held_back, full_album, vec![at_restore]).await;
+    let again = push_with(&remote, &mut ws, session, PushOptions::default(), only())
+        .await
+        .expect("the run completes");
+    assert!(again.live_records.is_empty(), "{again:#?}");
+    assert_eq!(posted_ops(&seen), 0, "level with the server: nothing sent");
+}
+
+/// Until the server indexes the create, a live asset's later records are held in the library:
+/// nothing reaches the ops surface, the asset is reported held as `not_indexed`, and a lone
+/// create, which the upload itself delivers, has no entry at all.
+#[tokio::test]
+async fn a_live_assets_records_wait_for_its_create_to_be_indexed() {
+    let EscrowRun {
+        _scratch,
+        mut ws,
+        full_album,
+        held_back,
+        other,
+        ..
+    } = escrow_run().await;
+    ws.soft_delete(&held_back, 30).expect("deleted");
+    ws.restore(&held_back).expect("restored");
+    let (remote, session, seen) = live_records_mock(held_back, full_album, Vec::new()).await;
+
+    let summary = push_with(
+        &remote,
+        &mut ws,
+        session,
+        PushOptions::default(),
+        PushRun {
+            assets: Some(vec![held_back, other]),
+            ..PushRun::default()
+        },
+    )
+    .await
+    .expect("the run completes");
+
+    let live: Vec<_> = summary
+        .live_records
+        .iter()
+        .map(|o| {
+            (
+                o.asset_id.clone(),
+                o.status,
+                o.held.as_ref().map(|h| h.reason),
+            )
+        })
+        .collect();
+    assert_eq!(
+        live,
+        vec![(
+            held_back.to_string(),
+            TrashStatus::Held,
+            Some(HoldReason::NotIndexed)
+        )],
+        "{summary:#?}"
+    );
+    assert_eq!(posted_ops(&seen), 0, "nothing reached the ops surface");
+    assert!(
+        custody_line(&summary)
+            .contains("1 assets keep the records after their create held in the library"),
+        "{}",
+        custody_line(&summary)
+    );
+}
