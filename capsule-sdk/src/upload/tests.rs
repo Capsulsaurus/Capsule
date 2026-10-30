@@ -767,17 +767,222 @@ fn a_server_named_wait_is_read_and_bounded() {
         Duration::from_mins(5),
         "an hour-long ask is waited in five-minute steps"
     );
+}
 
-    // A HEAD answer has no body, so its status names the wait; a code, when
-    // there is one, decides.
-    for status in [429, 503, 507] {
-        assert!(answer_asks_to_wait(status, None), "{status}");
+/// **Every upload answer is classified before it is retried** (networking doc, Retry Policy
+/// Classes; upload recovery matrix). A code the recovery matrix names an action for keeps it;
+/// a code that asks for a wait waits; otherwise any `5xx`, `408`, `425` and `429` wait — a
+/// proxy's bare `502` and a `500 storage_inconsistent` alike — and every other answer ends
+/// the transfer.
+#[test]
+fn every_upload_answer_waits_recovers_or_ends_the_transfer() {
+    use RetryVerdict::{Recover, Retryable, Terminal};
+
+    let table: &[(u16, Option<&str>, RetryVerdict)] = &[
+        // Waits: the three wait codes, and the transient statuses coded or not.
+        (429, Some(error_codes::UPLOAD_RATE_LIMITED), Retryable),
+        (503, Some(error_codes::UPLOAD_UNAVAILABLE), Retryable),
+        (507, Some(error_codes::UPLOAD_STORAGE_FULL), Retryable),
+        (
+            500,
+            Some(error_codes::UPLOAD_STORAGE_INCONSISTENT),
+            Retryable,
+        ),
+        (
+            503,
+            Some(error_codes::UPLOAD_STORAGE_INCONSISTENT),
+            Retryable,
+        ),
+        (500, None, Retryable),
+        (502, None, Retryable),
+        (503, None, Retryable),
+        (504, None, Retryable),
+        (507, None, Retryable),
+        (429, None, Retryable),
+        (408, None, Retryable),
+        (425, None, Retryable),
+        // Recovers: the matrix's own actions, whatever the status.
+        (409, Some(error_codes::UPLOAD_OFFSET_MISMATCH), Recover),
+        (404, Some(error_codes::UPLOAD_SESSION_NOT_FOUND), Recover),
+        (400, Some(error_codes::UPLOAD_CHECKSUM_MISMATCH), Recover),
+        (408, Some(error_codes::UPLOAD_CHUNK_TIMEOUT), Recover),
+        (409, Some(error_codes::UPLOAD_DUPLICATE_BLOB), Recover),
+        // Ends the transfer: every other `4xx`, coded or not.
+        (400, None, Terminal),
+        (403, Some(error_codes::QUOTA_EXCEEDED), Terminal),
+        (409, Some(error_codes::UPLOAD_SESSION_NOT_ACTIVE), Terminal),
+        (413, Some(error_codes::UPLOAD_CHUNK_TOO_LARGE), Terminal),
+        (
+            426,
+            Some(error_codes::PROTOCOL_VERSION_UNSUPPORTED),
+            Terminal,
+        ),
+        (426, None, Terminal),
+        (404, None, Terminal),
+    ];
+    for &(status, code, expected) in table {
+        assert_eq!(
+            upload_answer_verdict(status, code),
+            expected,
+            "{status} {code:?}"
+        );
+        assert_eq!(
+            answer_asks_to_wait(status, code),
+            expected == Retryable,
+            "{status} {code:?}"
+        );
     }
-    assert!(!answer_asks_to_wait(500, None));
-    assert!(!answer_asks_to_wait(
-        503,
-        Some(error_codes::UPLOAD_STORAGE_INCONSISTENT)
-    ));
+}
+
+/// **A server error is a wait, not a failure.** A proxy's bare `502` on the create, a bare
+/// `504` on the `HEAD` after it, and a bare `500` on a chunk are each waited out on the retry
+/// engine's backoff (none names a `Retry-After`), and the chunk resumes from `HEAD`.
+#[tokio::test(start_paused = true)]
+async fn a_server_error_on_any_upload_request_is_waited_out() {
+    let creates = Arc::new(AtomicUsize::new(0));
+    let heads = Arc::new(AtomicUsize::new(0));
+    let patch_offsets = Arc::new(Mutex::new(Vec::<u64>::new()));
+    let (cr, hc, po) = (creates.clone(), heads.clone(), patch_offsets.clone());
+    let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+        ("POST", "/") => {
+            if cr.fetch_add(1, Ordering::SeqCst) == 0 {
+                MockResponse::new(502, "Bad Gateway")
+            } else {
+                created("sess-5xx", CHUNK_SIZE_256KB)
+            }
+        }
+        ("HEAD", "/sess-5xx") => {
+            if hc.fetch_add(1, Ordering::SeqCst) == 0 {
+                MockResponse::new(504, "Gateway Timeout")
+            } else {
+                MockResponse::new(200, "OK")
+                    .header("X-Capsule-Offset", "0")
+                    .header("X-Capsule-Content-Length", "4096")
+                    .header("X-Capsule-Upload-Status", "uploading")
+            }
+        }
+        ("PATCH", "/sess-5xx") => {
+            let mut seen = po.lock().unwrap();
+            seen.push(req.header("X-Capsule-Offset").unwrap().parse().unwrap());
+            if seen.len() == 1 {
+                MockResponse::new(500, "Internal Server Error")
+            } else {
+                MockResponse::new(204, "No Content").header("X-Capsule-Offset", "4096")
+            }
+        }
+        other => panic!("unexpected {other:?}"),
+    })
+    .await;
+
+    let client = server.client(PROTOCOL);
+    let outcome = client.upload(&request(4096), &[9u8; 4096]).await.unwrap();
+
+    assert!(
+        matches!(outcome, UploadOutcome::Completed { .. }),
+        "{outcome:?}"
+    );
+    assert_eq!(creates.load(Ordering::SeqCst), 2, "one wait, one create");
+    assert_eq!(
+        heads.load(Ordering::SeqCst),
+        2,
+        "one waited HEAD, then the answer"
+    );
+    assert_eq!(
+        *patch_offsets.lock().unwrap(),
+        vec![0, 0],
+        "resumed where HEAD said"
+    );
+}
+
+/// **A completing chunk answered `500 storage_inconsistent` resumes from `HEAD`.** The server
+/// may have kept the chunk and finalized: the client waits, asks `HEAD`, and settles on what
+/// it says — the finalized outcome, without re-sending a byte, or the refusal it reports.
+#[tokio::test(start_paused = true)]
+async fn a_completing_chunk_answered_storage_inconsistent_settles_from_head() {
+    for (status, error, expected_ok) in [
+        ("completed", None, true),
+        (
+            "failed_processing",
+            Some(error_codes::UPLOAD_STORAGE_INCONSISTENT),
+            false,
+        ),
+    ] {
+        let patches = Arc::new(AtomicUsize::new(0));
+        let pc = patches.clone();
+        let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+            ("POST", "/") => created("sess-500", CHUNK_SIZE_256KB),
+            ("PATCH", "/sess-500") => {
+                pc.fetch_add(1, Ordering::SeqCst);
+                MockResponse::api_error(
+                    500,
+                    "Internal Server Error",
+                    error_codes::UPLOAD_STORAGE_INCONSISTENT,
+                    "the staged upload and the session's byte count disagree",
+                )
+            }
+            ("HEAD", "/sess-500") => {
+                let head = MockResponse::new(200, "OK")
+                    .header("X-Capsule-Offset", "4096")
+                    .header("X-Capsule-Content-Length", "4096")
+                    .header("X-Capsule-Upload-Status", status);
+                match error {
+                    Some(code) => head.header("X-Capsule-Upload-Error", code),
+                    None => head,
+                }
+            }
+            other => panic!("unexpected {other:?}"),
+        })
+        .await;
+
+        let client = server.client(PROTOCOL);
+        let outcome = client.upload(&request(4096), &[9u8; 4096]).await;
+
+        assert_eq!(patches.load(Ordering::SeqCst), 1, "{status}: never re-sent");
+        if expected_ok {
+            assert!(
+                matches!(outcome, Ok(UploadOutcome::Completed { .. })),
+                "{outcome:?}"
+            );
+        } else {
+            match outcome {
+                Err(UploadError::Rejected { code, .. }) => {
+                    assert_eq!(code.as_deref(), error, "{status}");
+                }
+                other => panic!("expected the finalization refusal, got {other:?}"),
+            }
+        }
+    }
+}
+
+/// **A server error that never ends still ends the transfer.** Every wait charges the
+/// transfer's recovery budget and the lane's shared one, so a server answering every chunk
+/// `500` costs a bounded number of requests and fails loudly.
+#[tokio::test(start_paused = true)]
+async fn a_server_that_always_errs_exhausts_the_budget() {
+    let requests = Arc::new(AtomicUsize::new(0));
+    let rq = requests.clone();
+    let server = MockServer::start(move |req| {
+        rq.fetch_add(1, Ordering::SeqCst);
+        match (req.method.as_str(), req.path.as_str()) {
+            ("POST", "/") => created("sess-down", CHUNK_SIZE_256KB),
+            _ => MockResponse::new(500, "Internal Server Error").header("Retry-After", "0"),
+        }
+    })
+    .await;
+
+    let lane = LaneRetries::new(10);
+    let client = server.client(PROTOCOL).with_lane_retries(lane.clone());
+    let err = client
+        .upload(&request(4096), &[9u8; 4096])
+        .await
+        .unwrap_err();
+
+    assert!(matches!(err, UploadError::RetriesExhausted(_)), "{err:?}");
+    assert_eq!(lane.remaining(), 0, "the lane's budget bounded the waits");
+    assert!(
+        requests.load(Ordering::SeqCst) <= 2 + 10,
+        "a bounded number of requests"
+    );
 }
 
 /// An outage that outlasts one wait: the `HEAD` after the wait is itself a
