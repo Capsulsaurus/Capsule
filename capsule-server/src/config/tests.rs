@@ -490,6 +490,58 @@ fn the_lockout_window_defaults_to_fifteen_minutes_and_is_configurable() {
 }
 
 #[test]
+fn the_session_lifetime_defaults_to_the_design_and_is_configurable() {
+    let config = Config::load(&serveable(), &memory(), Demands::Serve).expect("it loads");
+    assert_eq!(config.session_ttl, SignedDuration::from_hours(180 * 24));
+    assert_eq!(
+        config.session_hard_cap,
+        SignedDuration::from_hours(365 * 24)
+    );
+
+    let mut environment = serveable();
+    environment.insert("SESSION_TTL_DAYS".to_owned(), "30".to_owned());
+    environment.insert("SESSION_HARD_CAP_DAYS".to_owned(), " 90 ".to_owned());
+    let config = Config::load(&environment, &memory(), Demands::Serve).expect("it loads");
+    assert_eq!(config.session_ttl, SignedDuration::from_hours(30 * 24));
+    assert_eq!(config.session_hard_cap, SignedDuration::from_hours(90 * 24));
+
+    // A cap equal to the window is coherent: the window simply never outlives it.
+    environment.insert("SESSION_HARD_CAP_DAYS".to_owned(), "30".to_owned());
+    let config = Config::load(&environment, &memory(), Demands::Serve).expect("it loads");
+    assert_eq!(config.session_hard_cap, config.session_ttl);
+}
+
+#[test]
+fn a_session_lifetime_of_zero_negative_or_not_a_number_is_refused() {
+    for key in ["SESSION_TTL_DAYS", "SESSION_HARD_CAP_DAYS"] {
+        for value in ["0", "-1", "a year", "1.5", "106751991167301"] {
+            let mut environment = serveable();
+            environment.insert(key.to_owned(), value.to_owned());
+            let error =
+                Config::load(&environment, &memory(), Demands::Serve).expect_err("it refuses");
+            assert!(error.names(key), "{key}={value}: {error}");
+        }
+    }
+}
+
+#[test]
+fn a_hard_cap_shorter_than_the_sliding_window_is_refused() {
+    let mut environment = serveable();
+    environment.insert("SESSION_HARD_CAP_DAYS".to_owned(), "179".to_owned());
+    let error = Config::load(&environment, &memory(), Demands::Serve).expect_err("it refuses");
+    assert!(error.names("SESSION_HARD_CAP_DAYS"), "{error}");
+    assert!(!error.names("SESSION_TTL_DAYS"), "{error}");
+
+    // A malformed window is reported once, not again as a cap shorter than its default.
+    let mut environment = serveable();
+    environment.insert("SESSION_TTL_DAYS".to_owned(), "0".to_owned());
+    environment.insert("SESSION_HARD_CAP_DAYS".to_owned(), "30".to_owned());
+    let error = Config::load(&environment, &memory(), Demands::Serve).expect_err("it refuses");
+    assert!(error.names("SESSION_TTL_DAYS"), "{error}");
+    assert!(!error.names("SESSION_HARD_CAP_DAYS"), "{error}");
+}
+
+#[test]
 fn an_explicit_cursor_key_wins_over_the_derived_one() {
     let mut environment = serveable();
     let explicit = base64::Engine::encode(

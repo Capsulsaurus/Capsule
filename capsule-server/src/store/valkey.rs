@@ -2822,17 +2822,25 @@ pub struct ValkeyStores {
 }
 
 impl ValkeyStores {
-    /// Connect to `url` and build every store with its production lifetime.
+    /// Connect to `url` and build every store with its production lifetime, the session store
+    /// on the deployment's sliding window `session_ttl` and hard cap `session_hard_cap`
+    /// (`SESSION_TTL_DAYS`, `SESSION_HARD_CAP_DAYS`).
     ///
     /// # Errors
     ///
     /// As [`Valkey::connect`].
-    pub async fn connect(url: &str, clock: Arc<dyn Clock>) -> Result<Self, StoreError> {
+    pub async fn connect(
+        url: &str,
+        clock: Arc<dyn Clock>,
+        session_ttl: SignedDuration,
+        session_hard_cap: SignedDuration,
+    ) -> Result<Self, StoreError> {
         let valkey = Valkey::connect(url).await?;
         Ok(Self::with_ttl(
             valkey,
             clock,
-            DEFAULT_SESSION_TTL,
+            session_ttl,
+            session_hard_cap,
             LIFETIME_CAP,
             CHALLENGE_TTL,
             ENROLLMENT_CODE_TTL,
@@ -2854,7 +2862,16 @@ impl ValkeyStores {
     ) -> Result<Self, StoreError> {
         let valkey = Valkey::connect(url).await?;
         Ok(Self::with_ttl(
-            valkey, clock, ttl, ttl, ttl, ttl, ttl, ttl, ttl,
+            valkey,
+            clock,
+            ttl,
+            DEFAULT_SESSION_HARD_CAP,
+            ttl,
+            ttl,
+            ttl,
+            ttl,
+            ttl,
+            ttl,
         ))
     }
 
@@ -2866,6 +2883,7 @@ impl ValkeyStores {
         valkey: Valkey,
         clock: Arc<dyn Clock>,
         session: SignedDuration,
+        session_hard_cap: SignedDuration,
         upload: SignedDuration,
         challenge: SignedDuration,
         enrollment: SignedDuration,
@@ -2874,11 +2892,10 @@ impl ValkeyStores {
         oidc_device: SignedDuration,
     ) -> Self {
         Self {
-            auth: Arc::new(ValkeyAuthState::new(
-                valkey.clone(),
-                Arc::clone(&clock),
-                session,
-            )),
+            auth: Arc::new(
+                ValkeyAuthState::new(valkey.clone(), Arc::clone(&clock), session)
+                    .with_hard_cap(session_hard_cap),
+            ),
             uploads: Arc::new(ValkeyUploadSessions::new(
                 valkey.clone(),
                 Arc::clone(&clock),

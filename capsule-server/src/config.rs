@@ -377,6 +377,14 @@ pub struct Config {
     pub lockout_window: SignedDuration,
     /// How many consecutive failures inside that window lock it.
     pub lockout_attempts: u32,
+    /// A session's sliding inactivity window (`SESSION_TTL_DAYS`): how long it survives without
+    /// an access-token issuance. Defaults to
+    /// [`DEFAULT_SESSION_TTL`](crate::store::auth::DEFAULT_SESSION_TTL), 180 days.
+    pub session_ttl: SignedDuration,
+    /// A session's hard cap from sign-in (`SESSION_HARD_CAP_DAYS`), which no refresh extends.
+    /// Defaults to [`DEFAULT_SESSION_HARD_CAP`](crate::store::auth::DEFAULT_SESSION_HARD_CAP),
+    /// 365 days, and is never shorter than [`Self::session_ttl`].
+    pub session_hard_cap: SignedDuration,
     /// The OIDC relying party, if `OIDC_ISSUER` is set.
     pub oidc: Option<OidcConfig>,
     /// Whether password registration and sign-in are refused (`PASSWORD_AUTH_DISABLED`, #1004).
@@ -565,6 +573,8 @@ impl fmt::Debug for Config {
             grace_window,
             lockout_window,
             lockout_attempts,
+            session_ttl,
+            session_hard_cap,
             oidc,
             password_auth_disabled,
             shutdown_timeout,
@@ -602,6 +612,8 @@ impl fmt::Debug for Config {
             .field("grace_window", grace_window)
             .field("lockout_window", lockout_window)
             .field("lockout_attempts", lockout_attempts)
+            .field("session_ttl", session_ttl)
+            .field("session_hard_cap", session_hard_cap)
             .field("oidc", oidc)
             .field("password_auth_disabled", password_auth_disabled)
             .field("shutdown_timeout", shutdown_timeout)
@@ -855,6 +867,34 @@ impl Config {
                 }
             })
             .unwrap_or(DEFAULT_LOCKOUT_ATTEMPTS);
+        // The session lifetime (design/authentication.md, Session Expiry and Revocation; #1085):
+        // a sliding window under a hard cap from sign-in. A cap shorter than the window is
+        // refused rather than accepted: every session would then die at the cap, so the window
+        // the operator set would never be the one that applies. Compared only when both parsed,
+        // so a malformed value is reported once rather than again against its default.
+        let faults_before_session = faults.len();
+        let session_ttl = parse_days(
+            env,
+            "SESSION_TTL_DAYS",
+            crate::store::auth::DEFAULT_SESSION_TTL,
+            &mut faults,
+        );
+        let session_hard_cap = parse_days(
+            env,
+            "SESSION_HARD_CAP_DAYS",
+            crate::store::auth::DEFAULT_SESSION_HARD_CAP,
+            &mut faults,
+        );
+        if faults.len() == faults_before_session && session_hard_cap < session_ttl {
+            faults.push(ConfigFault::Invalid {
+                key: "SESSION_HARD_CAP_DAYS",
+                detail: format!(
+                    "{} days is shorter than the {}-day SESSION_TTL_DAYS window",
+                    session_hard_cap.as_hours() / 24,
+                    session_ttl.as_hours() / 24,
+                ),
+            });
+        }
         let shutdown_timeout = std::time::Duration::from_secs(
             parse_number::<u64>(env, "SHUTDOWN_TIMEOUT_SECONDS", &mut faults)
                 .unwrap_or(DEFAULT_SHUTDOWN_TIMEOUT),
@@ -1033,6 +1073,8 @@ impl Config {
                 grace_window,
                 lockout_window,
                 lockout_attempts,
+                session_ttl,
+                session_hard_cap,
                 oidc,
                 password_auth_disabled,
                 shutdown_timeout,
@@ -1232,6 +1274,40 @@ fn parse_timeout(
             default
         }
         Some(seconds) => std::time::Duration::from_secs(seconds),
+    }
+}
+
+/// Read `key` as a positive whole number of days, or `default` when unset.
+///
+/// Zero and negative values are faults: a zero-day session dies the moment it opens, and a
+/// negative one is a typo rather than a policy. So is a count too large to express as a
+/// duration, which no deployment means.
+fn parse_days(
+    env: &dyn Environment,
+    key: &'static str,
+    default: SignedDuration,
+    faults: &mut Vec<ConfigFault>,
+) -> SignedDuration {
+    const SECONDS_PER_DAY: i64 = 24 * 60 * 60;
+    match parse_number::<i64>(env, key, faults) {
+        None => default,
+        Some(days) if days <= 0 => {
+            faults.push(ConfigFault::Invalid {
+                key,
+                detail: format!("{days} days would end every session as it opens"),
+            });
+            default
+        }
+        Some(days) => days.checked_mul(SECONDS_PER_DAY).map_or_else(
+            || {
+                faults.push(ConfigFault::Invalid {
+                    key,
+                    detail: format!("{days} days is too long to express as a duration"),
+                });
+                default
+            },
+            SignedDuration::from_secs,
+        ),
     }
 }
 
