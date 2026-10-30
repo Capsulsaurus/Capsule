@@ -155,16 +155,38 @@ debug = "line-tables-only"
 
 # Debug info dominates `target/debug` (12 GB with full DWARF on this workspace), which caps
 # how many concurrent worktrees fit on a dev machine. Line tables keep `file:line` in every
-# backtrace and panic — what we actually read day to day — while dropping the variable-level
-# DWARF only a step debugger uses. `unpacked` leaves the remainder in per-object files rather
-# than copying it into every binary.
+# workspace backtrace frame and panic — what we actually read day to day — while dropping the
+# variable-level DWARF only a step debugger uses. `unpacked` leaves the remainder in per-object
+# files rather than copying it into every binary.
 [profile.dev]
 debug = "line-tables-only"
 split-debuginfo = "unpacked"
-# Incremental caches cost far more than they save here: measured 8.5 GB in one worktree and
-# 6.8 GB in another, against a ~90s cold workspace build. With several worktrees in flight
-# that is the difference between building and running out of disk. Full builds it is.
-incremental = false
+# Incremental is on: the edit-rebuild loop is worth more than the disk it costs. These numbers,
+# measured on 2026-10-29, replace the 8.1–8.5 GB of `target/debug/incremental` per worktree
+# that dcc47337 recorded, a figure that did not say whether tests were built. A one-line edit in
+# capsule-core rebuilds in 11–16s instead of 30–37s for `cargo build --workspace`, and in
+# 25–35s instead of 54–62s for `cargo test --workspace --no-run`. In exchange the cache is
+# 2.7 GB after a workspace build and 13 GB once the test targets are built too. A worktree's
+# target grows from 5.6 to 8.4 GB when it only builds, and from 19–20 to 31–32 GB when it also
+# builds tests. Incremental applies only to workspace crates, so the dependency setting below
+# does not shrink this cache.
+# `profile.test` must match: with dev on and test off, the workspace crates both profiles share
+# are rebuilt every time you switch between `cargo build` and `cargo test` (10–66s with no edit).
+# On a machine short of disk, turn both off together for that shell:
+# `CARGO_PROFILE_DEV_INCREMENTAL=false CARGO_PROFILE_TEST_INCREMENTAL=false`
+# (or `CARGO_INCREMENTAL=0`, which overrides both profiles).
+incremental = true
+
+# Dependencies get no debug info at all, which trims their objects and every linked binary.
+# Workspace crates keep `line-tables-only` (above), so their backtrace frames still show
+# `file:line`. Most dependency frames keep their symbol names but lose `file:line`. A panic
+# raised inside a dependency still reports its location, which does not come from debug info.
+# `profile.test` inherits this block. To step through a dependency, override it for one build:
+# `cargo --config 'profile.dev.package."*".debug=2' build`. `CARGO_PROFILE_DEV_DEBUG=2` affects
+# only the workspace crates, and only under `cargo build`, because `profile.test` sets its own
+# `debug`. Tests take `CARGO_PROFILE_TEST_DEBUG=2`.
+[profile.dev.package."*"]
+debug = false
 
 # xtask's screenshot pipeline decodes and Lanczos-resizes ~40 multi-megapixel photos and blurs a
 # 1.5k×3k canvas; unoptimized, that takes minutes instead of seconds. Only build tooling depends
@@ -190,7 +212,12 @@ opt-level = 3
 # in the per-object files. Measured at 6.7 GB of pure duplication across this workspace's test
 # binaries, which is enough to fill a dev machine's disk mid-run and fail a link with `errno=28`.
 # The reasoning above applies unchanged; only the inheritance did not.
+#
+# `incremental` must equal `profile.dev`'s (see the note there): when the two differ, every
+# switch between `cargo build` and `cargo test` rebuilds the workspace crates both use.
+# `[profile.dev.package."*"]` needs no copy here: test builds inherit it, so dependencies get
+# no debug info in tests either.
 [profile.test]
 debug = "line-tables-only"
 split-debuginfo = "unpacked"
-incremental = false
+incremental = true
