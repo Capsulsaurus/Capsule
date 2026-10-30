@@ -27,16 +27,26 @@
 //! The ledger's own [`crate::quota::QuotaStore::release`] then refuses an attribution that is
 //! another account's, so a session never gives back somebody else's charge.
 //!
+//! # Another account's session for the same bytes
+//!
+//! A live session of a *different* account does not keep the attribution: it was admitted
+//! `AlreadyAttributed` against this uploader's charge, and keeping the uploader charged for it
+//! would bill them for bytes they abandoned. The attribution goes, and once it has, [`release`]
+//! asks for a live session of **any** uploader declaring the address and charges the first one
+//! it finds in its place
+//! ([`crate::store::UploadSessionStore::live_for_address`]). Without that step such a session,
+//! whose own post-open re-charge passed long ago, would store its bytes charged to nobody.
+//!
 //! # Racing a create for the same bytes
 //!
 //! The live-session check is not atomic with the ledger's release, so a create that charged
 //! `AlreadyAttributed` could open its session after the check and before the release, and
 //! store its bytes against an attribution that is gone. Both sides write their own fact first
 //! and read the other's after: session creation opens the session and then charges the
-//! address again, and [`release`] releases and then asks for another live session again,
-//! putting the reservation back for one it finds. Whichever order the four steps run in, one
-//! of the two second reads sees the other's write, so a session that stores bytes is charged
-//! for them.
+//! address again, and [`release`] releases and then asks for a live session of any uploader
+//! again, putting the reservation back for one it finds. Whichever order the four steps run
+//! in, one of the two second reads sees the other's write, so a session that stores bytes is
+//! charged for them.
 
 use crate::blob::{BlobError, ContentAddress};
 use crate::store::{StoreError, UploadSessionRecord};
@@ -53,8 +63,8 @@ pub enum Released {
     BytesStored,
     /// Nothing was released: another live session of the uploader declares the address.
     StillReserved,
-    /// The attribution went back, and a session of the uploader that opened for the address
-    /// while it went was charged again — the release raced a create.
+    /// The attribution went back, and a live session for the address — of this uploader or of
+    /// another account, admitted against the attribution that went — was charged in its place.
     Restored,
     /// Nothing was released: the session's declared hash is not a content address.
     ///
@@ -116,17 +126,13 @@ pub async fn release(
         status = record.status.as_str(),
         "released an ended session's quota reservation"
     );
-    // The check above and the release are two operations, and a create for the same address
-    // can open its session between them — after charging `AlreadyAttributed` against the
-    // attribution just released. Asked again now the release is done: a session open by this
-    // point is one the create's own post-open re-charge may already have passed, so the
-    // reservation is put back on its behalf. A session opening after this point re-charges for
+    // A session of any account open by this point was admitted against the attribution just
+    // released — charged `AlreadyAttributed`, whether it opened long before this session ended
+    // or between the check above and the release — and its own post-open re-charge may already
+    // have passed, so nothing else will charge it for the bytes it stores. The reservation is
+    // put back on its uploader's behalf. A session opening after this point re-charges for
     // itself and finds nothing attributed.
-    let Some(other) = other_live_session(context, record).await? else {
-        return Ok(Released::Released);
-    };
-    let Some(holder) = context.sessions().read(&other).await? else {
-        tracing::debug!(%other, "the session that opened during the release is gone");
+    let Some((other, holder)) = live_session_for_address(context, record).await? else {
         return Ok(Released::Released);
     };
     let restored = context
@@ -144,9 +150,32 @@ pub async fn release(
         uploader = %holder.upload_user_id,
         size = holder.total_size,
         restored = matches!(restored, crate::quota::ChargeOutcome::Charged { .. }),
-        "a session opened during the release; its reservation was put back"
+        "a live session declares the released address; its reservation was put back"
     );
     Ok(Released::Restored)
+}
+
+/// The first live session of **any** uploader, other than `record`'s own, that declares the
+/// same bytes and can still be read — with its record, so its uploader can be charged.
+///
+/// Unscoped, unlike [`other_live_session`], because attribution is global: the session left
+/// owing for the bytes may be another account's. One charge is enough, since every other
+/// session for the address is then `AlreadyAttributed` against that one's charge.
+async fn live_session_for_address(
+    context: &UploadContext,
+    record: &UploadSessionRecord,
+) -> Result<Option<(crate::store::UploadId, UploadSessionRecord)>, StoreError> {
+    let live = context
+        .sessions()
+        .live_for_address(&record.expected_hash)
+        .await?;
+    for other in live.into_iter().filter(|other| *other != record.upload_id) {
+        match context.sessions().read(&other).await? {
+            Some(holder) if holder.status.is_active() => return Ok(Some((other, holder))),
+            _ => tracing::debug!(%other, "a live session for the address has since ended"),
+        }
+    }
+    Ok(None)
 }
 
 /// Another live session of `record`'s uploader that declares the same bytes, if one exists.

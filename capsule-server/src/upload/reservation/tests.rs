@@ -343,3 +343,64 @@ async fn a_session_that_opens_during_the_release_gets_the_reservation_back() {
         "the session that opened will store the bytes, so their reservation stands"
     );
 }
+
+/// `session`, uploaded by `user` instead — another account sending the same bytes.
+fn session_of(user: &UserId, tag: &str, status: UploadSessionStatus) -> UploadSessionRecord {
+    let mut record = session(tag, status);
+    record.upload_user_id = user.clone();
+    record.owner_id = OwnerId::new(user.as_str());
+    record
+}
+
+#[tokio::test]
+async fn another_accounts_live_session_is_charged_when_the_holder_lets_go() {
+    let h = harness();
+    let other = UserId::new("reservation-other".to_owned());
+    h.charge(&uploader()).await;
+    // Opened long before the holder's session ends, so its own post-open re-charge found the
+    // holder's attribution and debited nothing; no race with the release is involved.
+    h.context
+        .sessions()
+        .open(session_of(&other, "theirs", UploadSessionStatus::Uploading))
+        .await
+        .expect("opened");
+    let ended = session("cancelled", UploadSessionStatus::Pending);
+
+    assert_eq!(
+        release(&h.context, &ended).await.expect("answers"),
+        Released::Restored
+    );
+    assert_eq!(
+        h.used(&uploader()).await,
+        0,
+        "the holder gave up the bytes, so they stop paying for them"
+    );
+    assert_eq!(
+        h.used(&other).await,
+        BYTES.len() as u64,
+        "the session still sending the bytes is charged for them"
+    );
+}
+
+#[tokio::test]
+async fn another_accounts_ended_session_is_not_charged() {
+    let h = harness();
+    let other = UserId::new("reservation-other".to_owned());
+    h.charge(&uploader()).await;
+    h.context
+        .sessions()
+        .open(session_of(
+            &other,
+            "theirs",
+            UploadSessionStatus::FailedProcessing,
+        ))
+        .await
+        .expect("opened");
+    let ended = session("cancelled", UploadSessionStatus::Pending);
+
+    assert_eq!(
+        release(&h.context, &ended).await.expect("answers"),
+        Released::Released
+    );
+    assert_eq!(h.used(&other).await, 0, "a terminal session stores nothing");
+}

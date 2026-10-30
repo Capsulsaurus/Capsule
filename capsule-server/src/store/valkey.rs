@@ -29,8 +29,8 @@
 //! lifetime. For the direct-read scripts (`READ_RECORD`, `READ_UPLOAD`, `CHUNK_AT`,
 //! `IS_LIVE`, `LOOKUP_CHANNEL` and the mutations guarded by `live`) a false "not live" verdict
 //! costs that replica one early miss and nobody else anything. The index-listing scripts
-//! (`SESSIONS_FOR_USER`, `UPLOADS_FOR_UPLOADER`, `PENDING_FOR_ADDRESS`, `IN_FLIGHT_FOR_ALBUM`,
-//! `LEAST_RECENTLY_PROGRESSED`, `CLAIMED_UPLOADS`) are the residual: they `SREM`/`ZREM` a member whose record they
+//! (`SESSIONS_FOR_USER`, `UPLOADS_FOR_UPLOADER`, `PENDING_FOR_ADDRESS`, `LIVE_FOR_ADDRESS`,
+//! `IN_FLIGHT_FOR_ALBUM`, `LEAST_RECENTLY_PROGRESSED`, `CLAIMED_UPLOADS`) are the residual: they `SREM`/`ZREM` a member whose record they
 //! judge dead, and the index is **shared**, so a fast clock on one replica hides a still-live
 //! record from every replica's listings until a state change re-indexes it or the record
 //! expires for real. The record itself is untouched — a direct read on a well-clocked replica
@@ -46,9 +46,9 @@
 //!
 //! # Indexes are derived, and heal on read
 //!
-//! The per-user session set, the per-uploader set, the per-album set, the pending-address set
-//! and the global progress sorted-set are all derived from the record hashes. Every listing
-//! resolves each member through its record inside the script and drops — `SREM`/`ZREM` — any
+//! The per-user session set, the per-uploader set, the per-album set, the pending-address set,
+//! the live-address set and the global progress sorted-set are all derived from the record
+//! hashes. Every listing resolves each member through its record inside the script and drops — `SREM`/`ZREM` — any
 //! member whose record is gone or no longer matches. That is what makes
 //! `an_expired_session_leaves_no_listing_entry_behind` hold without a second lifetime on the
 //! index: the two independent TTLs the Salvo adapter kept were exactly what leaked. A heal is
@@ -67,6 +67,7 @@
 //! | `capsule:upload:uploader:{uid}` | set | refreshed on open |
 //! | `capsule:upload:album:{album}` | set | refreshed on open |
 //! | `capsule:upload:pending:{uploader}:{hash}` | set | refreshed on open |
+//! | `capsule:upload:address:{hash}` | set | refreshed on open |
 //! | `capsule:upload:progress` | zset (score = `last_progress_at` µs) | none — heals when the pressure sweep (`least_recently_progressed`) walks it, which every `gc --apply` pass does over the whole set (#519) |
 //! | `capsule:upload:claimed` | set (`WaitingForProcessing` ids) | none — a member leaves on a terminal status or a discard, and a lapsed one heals when boot recovery (`claimed`) walks the set |
 //! | `capsule:counter:{kind}:{scope}` | hash (`hits`, `opened_at`) | the counter's window |
@@ -659,6 +660,12 @@ fn pending_key(uploader: &UserId, expected_hash: &str) -> String {
     format!("capsule:upload:pending:{uploader}:{expected_hash}")
 }
 
+/// Every active session declaring `expected_hash`, of any uploader — the index behind
+/// [`UploadSessionStore::live_for_address`], which only quota release reads.
+fn address_key(expected_hash: &str) -> String {
+    format!("capsule:upload:address:{expected_hash}")
+}
+
 fn challenge_key(token: &ChallengeToken) -> String {
     format!("capsule:challenge:{}", token.as_str())
 }
@@ -817,9 +824,9 @@ return {gone, mismatched, found}"
 
 // ---- uploads ------------------------------------------------------------------------------
 
-// KEYS: record, chunks, uploader index, pending set, progress zset, claimed set, [album set].
-// ARGV: ttl_ms, upload_id, in_flight, evictable, score, fields… Re-opening an id under a
-// different uploader, owner, hash or album unindexes the previous record first, as
+// KEYS: record, chunks, uploader index, pending set, progress zset, claimed set, address set,
+// [album set]. ARGV: ttl_ms, upload_id, in_flight, evictable, score, fields… Re-opening an id
+// under a different uploader, owner, hash or album unindexes the previous record first, as
 // `OPEN_SESSION` does for a previous user. The claimed set follows the status just written.
 script!(
     OPEN_UPLOAD,
@@ -829,9 +836,12 @@ if previous[1] then
   if uploader ~= KEYS[3] then redis.call('SREM', uploader, ARGV[2]) end
   local pending = 'capsule:upload:pending:' .. previous[1] .. ':' .. previous[3]
   if pending ~= KEYS[4] then redis.call('SREM', pending, ARGV[2]) end
-  if previous[4] and ('capsule:upload:album:' .. previous[4]) ~= KEYS[7] then
+  if previous[4] and ('capsule:upload:album:' .. previous[4]) ~= KEYS[8] then
     redis.call('SREM', 'capsule:upload:album:' .. previous[4], ARGV[2])
   end
+end
+if previous[3] and ('capsule:upload:address:' .. previous[3]) ~= KEYS[7] then
+  redis.call('SREM', 'capsule:upload:address:' .. previous[3], ARGV[2])
 end
 redis.call('DEL', KEYS[1], KEYS[2])
 redis.call('HSET', KEYS[1], unpack(ARGV, 6))
@@ -841,13 +851,16 @@ redis.call('PEXPIRE', KEYS[3], ARGV[1])
 if ARGV[3] == '1' then
   redis.call('SADD', KEYS[4], ARGV[2])
   redis.call('PEXPIRE', KEYS[4], ARGV[1])
-  if KEYS[7] then
-    redis.call('SADD', KEYS[7], ARGV[2])
-    redis.call('PEXPIRE', KEYS[7], ARGV[1])
+  redis.call('SADD', KEYS[7], ARGV[2])
+  extend(KEYS[7], tonumber(ARGV[1]))
+  if KEYS[8] then
+    redis.call('SADD', KEYS[8], ARGV[2])
+    redis.call('PEXPIRE', KEYS[8], ARGV[1])
   end
 else
   redis.call('SREM', KEYS[4], ARGV[2])
-  if KEYS[7] then redis.call('SREM', KEYS[7], ARGV[2]) end
+  redis.call('SREM', KEYS[7], ARGV[2])
+  if KEYS[8] then redis.call('SREM', KEYS[8], ARGV[2]) end
 end
 if ARGV[4] == '1' then
   redis.call('ZADD', KEYS[5], ARGV[5], ARGV[2])
@@ -937,15 +950,19 @@ local hash = redis.call('HGET', KEYS[1], 'expected_hash')
 local album = redis.call('HGET', KEYS[1], 'album_id')
 local ttl = redis.call('PTTL', KEYS[1])
 local pending = 'capsule:upload:pending:' .. uploader .. ':' .. hash
+local address = 'capsule:upload:address:' .. hash
 if ARGV[4] == '1' then
   redis.call('SADD', pending, ARGV[3])
   extend(pending, ttl)
+  redis.call('SADD', address, ARGV[3])
+  extend(address, ttl)
   if album then
     redis.call('SADD', 'capsule:upload:album:' .. album, ARGV[3])
     extend('capsule:upload:album:' .. album, ttl)
   end
 else
   redis.call('SREM', pending, ARGV[3])
+  redis.call('SREM', address, ARGV[3])
   if album then redis.call('SREM', 'capsule:upload:album:' .. album, ARGV[3]) end
 end
 if ARGV[5] == '1' then
@@ -991,6 +1008,7 @@ if f.upload_user_id then redis.call('SREM', 'capsule:upload:uploader:' .. f.uplo
 if f.upload_user_id and f.expected_hash then
   redis.call('SREM', 'capsule:upload:pending:' .. f.upload_user_id .. ':' .. f.expected_hash, ARGV[2])
 end
+if f.expected_hash then redis.call('SREM', 'capsule:upload:address:' .. f.expected_hash, ARGV[2]) end
 if f.album_id then redis.call('SREM', 'capsule:upload:album:' .. f.album_id, ARGV[2]) end
 if expired(record, ARGV[1]) then return nil end
 return record"
@@ -1014,6 +1032,34 @@ for _, id in ipairs(redis.call('SMEMBERS', KEYS[1])) do
       redis.call('SREM', KEYS[1], id)
       mismatched = mismatched + 1
     elseif r[3] == 'completed' or r[3] == 'failed_processing' then
+      redis.call('SREM', KEYS[1], id)
+      gone = gone + 1
+    else
+      found[#found + 1] = id
+    end
+  end
+end
+return {gone, mismatched, found}"
+);
+
+// KEYS: address set. ARGV: now, expected_hash. Returns {gone, mismatched, {upload_id…}}.
+// `PENDING_FOR_ADDRESS` without the uploader: a terminal session counts as gone.
+script!(
+    LIVE_FOR_ADDRESS,
+    "local gone = 0
+local mismatched = 0
+local found = {}
+for _, id in ipairs(redis.call('SMEMBERS', KEYS[1])) do
+  local key = 'capsule:upload:session:' .. id
+  if not live(key, ARGV[1], 'capsule:upload:chunks:' .. id) then
+    redis.call('SREM', KEYS[1], id)
+    gone = gone + 1
+  else
+    local r = redis.call('HMGET', key, 'expected_hash', 'status')
+    if r[1] ~= ARGV[2] then
+      redis.call('SREM', KEYS[1], id)
+      mismatched = mismatched + 1
+    elseif r[2] == 'completed' or r[2] == 'failed_processing' then
       redis.call('SREM', KEYS[1], id)
       gone = gone + 1
     else
@@ -1523,6 +1569,7 @@ impl UploadSessionStore for ValkeyUploadSessions {
                 pending_key(&record.upload_user_id, &record.expected_hash),
                 PROGRESS_KEY.to_owned(),
                 CLAIMED_KEY.to_owned(),
+                address_key(&record.expected_hash),
             ];
             if let Some(album) = &record.album_id {
                 keys.push(album_key(album));
@@ -1815,6 +1862,24 @@ impl UploadSessionStore for ValkeyUploadSessions {
             // answer — the same rule the in-memory double applies.
             ids.sort();
             Ok(ids.into_iter().next().map(UploadId::new))
+        })
+    }
+
+    fn live_for_address<'a>(&'a self, expected_hash: &'a str) -> StoreFuture<'a, Vec<UploadId>> {
+        Box::pin(async move {
+            let (gone, mismatched, mut ids): (u64, u64, Vec<String>) = self
+                .valkey
+                .eval(
+                    UPLOADS,
+                    &LIVE_FOR_ADDRESS,
+                    &[address_key(expected_hash)],
+                    &[self.now(), expected_hash.to_owned()],
+                )
+                .await?;
+            healed(UPLOADS, expected_hash, gone, mismatched);
+            ids.sort();
+            tracing::debug!(count = ids.len(), "listed live sessions for an address");
+            Ok(ids.into_iter().map(UploadId::new).collect())
         })
     }
 

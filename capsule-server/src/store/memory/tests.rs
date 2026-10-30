@@ -36,6 +36,7 @@ conformance_cases! {
     uploader_listing_is_ordered_and_scoped,
     a_pending_address_is_uploader_scoped_and_ends_with_the_session,
     discarding_a_session_withdraws_its_pending_address,
+    a_live_address_spans_every_uploader_and_ends_with_the_session,
     recording_progress_advances_bytes_clock_and_replay_together,
     chunk_replay_is_offset_addressed,
     finalization_is_claimed_exactly_once,

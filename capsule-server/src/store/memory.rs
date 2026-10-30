@@ -639,6 +639,25 @@ impl UploadSessionStore for InMemoryUploadSessions {
         })
     }
 
+    fn live_for_address<'a>(&'a self, expected_hash: &'a str) -> StoreFuture<'a, Vec<UploadId>> {
+        Box::pin(async move {
+            let now = self.clock.now();
+            let mut state = lock(&self.state);
+            state.purge(now);
+            // A scan, as for `pending_for_address`; a real adapter indexes `expected_hash`.
+            let mut matches: Vec<UploadId> = state
+                .sessions
+                .values()
+                .map(|entry| &entry.record)
+                .filter(|record| record.status.is_active() && record.expected_hash == expected_hash)
+                .map(|record| record.upload_id.clone())
+                .collect();
+            matches.sort();
+            tracing::debug!(count = matches.len(), "listed live sessions for an address");
+            Ok(matches)
+        })
+    }
+
     fn in_flight_for_album<'a>(&'a self, album: &'a AlbumId) -> StoreFuture<'a, u64> {
         Box::pin(async move {
             let now = self.clock.now();

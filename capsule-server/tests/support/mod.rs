@@ -2353,6 +2353,13 @@ impl UploadSessionStore for SwitchableUploads {
         self.inner.pending_for_address(uploader, expected_hash)
     }
 
+    fn live_for_address<'a>(&'a self, expected_hash: &'a str) -> StoreFuture<'a, Vec<UploadId>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.live_for_address(expected_hash)
+    }
+
     fn in_flight_for_album<'a>(&'a self, album: &'a AlbumId) -> StoreFuture<'a, u64> {
         if self.is_down() {
             return Box::pin(async { Self::refuse() });

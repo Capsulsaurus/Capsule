@@ -373,6 +373,21 @@ pub trait UploadSessionStore: std::fmt::Debug + Send + Sync {
         expected_hash: &'a str,
     ) -> StoreFuture<'a, Option<UploadId>>;
 
+    /// Every active session declaring `expected_hash`, whoever uploads it, smallest id first.
+    ///
+    /// The question quota release asks after giving an attribution back
+    /// ([`crate::upload::reservation`]): attribution is keyed by content address globally, so a
+    /// session of **another** account may have been admitted against the attribution just
+    /// released, and is now the one that has to be charged for the bytes it will store.
+    ///
+    /// Unscoped on purpose, and therefore server-internal only. It must never back an answer to
+    /// a caller: that would tell any account that can name a hash whether somebody else is
+    /// uploading it — the signal [`Self::pending_for_address`] is uploader-scoped to withhold.
+    ///
+    /// Terminal sessions never match, as for [`Self::pending_for_address`]. Adapters need a
+    /// secondary index on `expected_hash`; scanning is acceptable only in the in-memory double.
+    fn live_for_address<'a>(&'a self, expected_hash: &'a str) -> StoreFuture<'a, Vec<UploadId>>;
+
     /// How many sessions are still in flight against `album`.
     ///
     /// The drain count versioning.md step 3 asks the server to expose: *"the upgrade cannot
