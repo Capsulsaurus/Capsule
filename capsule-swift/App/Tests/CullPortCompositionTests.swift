@@ -90,6 +90,23 @@ struct PortBackedCullPortTests {
         #expect(members.allSatisfy { $0.cull == .reject })
     }
 
+    @Test("a library page that fails ends the pass with its error, after the pages before it")
+    func failedPageEndsThePass() async {
+        let port = PortBackedCullPort(library: FailingPageLibrary(), organize: mock.organize, stacks: mock.stacks)
+        var batches: [[CullAsset]] = []
+        var failure: (any Error)?
+        do {
+            for try await batch in port.pass(over: .default, batchSize: 2) {
+                batches.append(batch)
+            }
+        } catch {
+            failure = error
+        }
+
+        #expect(failure is FailingPageLibrary.PageFailure)
+        #expect(batches == [[CullAsset(id: Places.id(1)), CullAsset(id: Places.id(2))]])
+    }
+
     @Test("an asset flag and the sweep reach the library")
     func flagAndSweep() async throws {
         let rows = try await mock.library.assets(matching: .default, offset: 0, limit: 2).items
@@ -114,7 +131,49 @@ struct PortBackedCullPortTests {
     }
 }
 
+/// What a sweep that stopped partway leaves in the pass.
+@Suite("A partial sweep")
+struct CullSweepIncompleteTests {
+    private struct Failure: Error {}
+
+    @Test("the assets an incomplete sweep moved leave the pass; the rest stay")
+    func movedAssetsLeaveThePass() {
+        var pass = CullingPass(assets: (1 ... 3).map { CullAsset(id: Places.id($0), cull: .reject) })
+        let incomplete = CullSweepIncomplete(moved: [Places.id(1)], underlying: Failure())
+
+        let moved = CullSweep.moved(before: incomplete)
+        pass.remove(Set(moved))
+
+        #expect(moved == [Places.id(1)])
+        #expect(pass.sweepCandidates == [Places.id(2), Places.id(3)])
+    }
+
+    @Test("any other sweep failure names nothing moved")
+    func otherFailureMovesNothing() {
+        #expect(CullSweep.moved(before: Failure()).isEmpty)
+    }
+}
+
 // MARK: - Fixtures
+
+/// A library whose first page answers with `limit` rows and whose every later
+/// page fails.
+private struct FailingPageLibrary: LibraryPort {
+    struct PageFailure: Error {}
+
+    func assets(matching _: TimelineQuery, offset: Int, limit: Int) async throws -> Page<LibraryAsset> {
+        guard offset == 0 else { throw PageFailure() }
+        return Page(items: (1 ... max(1, limit)).map { Places.row($0) }, request: PageRequest(offset: offset, limit: limit))
+    }
+
+    func dayCounts(matching _: TimelineQuery) async throws -> [DayCount] { [] }
+    func assetCount(matching _: TimelineQuery) async throws -> Int { 0 }
+    func asset(for _: AssetID) async throws -> LibraryAsset? { nil }
+    func assets(for _: [AssetID]) async throws -> [LibraryAsset] { [] }
+    func sidecar(for _: AssetID) async throws -> SidecarV1? { nil }
+    func provenanceChain(for _: AssetID) async throws -> [ProvenanceRecord] { [] }
+    func changes() -> AsyncStream<LibraryChange> { AsyncStream { $0.finish() } }
+}
 
 private enum Places {
     static let stackID = StackID("0192f0c0-9999-7000-8000-000000000009")
