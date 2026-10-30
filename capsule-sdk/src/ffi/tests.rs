@@ -641,6 +641,47 @@ async fn ffi_enroll_album_seal_upload_sync_apply_round_trip() {
     }
 }
 
+/// #998: `albums()` hands every app the one album order, so no app sorts its own: the album
+/// with the most recent visible asset first, an empty album by its UUIDv7 creation time, and
+/// the derived default album (whose id carries no time) last while it is empty.
+#[test]
+fn ffi_albums_are_listed_by_their_most_recent_asset() {
+    let lib = tempfile::TempDir::new().unwrap();
+    let workspace = enroll(lib.path());
+    let minted_at =
+        |secs| uuid::Uuid::new_v7(uuid::Timestamp::from_unix(uuid::NoContext, secs, 0)).to_string();
+    let older = workspace
+        .ensure_album(minted_at(1_000_000_000), "Older".into())
+        .unwrap();
+    let newer = workspace
+        .ensure_album(minted_at(1_100_000_000), "Newer".into())
+        .unwrap();
+    let default = workspace
+        .ensure_album(workspace.default_album_id().unwrap(), "Camera Roll".into())
+        .unwrap();
+    let order = |ws: &FfiWorkspace| -> Vec<String> {
+        ws.albums()
+            .unwrap()
+            .into_iter()
+            .map(|a| a.album_id)
+            .collect()
+    };
+    assert_eq!(
+        order(&workspace),
+        vec![newer.clone(), older.clone(), default.clone()]
+    );
+
+    // An asset without EXIF is dated by the import clock, later than either album's creation.
+    workspace
+        .seal_asset(
+            older.clone(),
+            "shot.jpg".into(),
+            b"\xFF\xD8\xFF order".to_vec(),
+        )
+        .unwrap();
+    assert_eq!(order(&workspace), vec![older, newer, default]);
+}
+
 /// A tampered original quarantines with the chokepoint's own reason code rather than
 /// erroring — one hostile feed row must not abort a sync page.
 #[tokio::test]
