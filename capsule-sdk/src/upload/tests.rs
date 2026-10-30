@@ -1166,11 +1166,105 @@ async fn a_chunk_that_always_times_out_exhausts_the_budget() {
         matches!(err, UploadError::RetriesExhausted(_)),
         "got {err:?}"
     );
+    // Six halvings take 256 KiB to the 4 KiB minimum; those cuts are charged to the budget
+    // progress refills, and every re-send at the minimum to the per-transfer one.
     assert_eq!(
         patch_count.load(Ordering::SeqCst),
-        MAX_RECOVERIES as usize + 1,
-        "every re-send is charged to the one budget"
+        6 + MAX_RECOVERIES as usize + 1,
+        "every re-send at the minimum is charged to the per-transfer budget"
     );
+}
+
+/// **A long upload over a link that slows down again and again.** Every chunk above the
+/// protocol minimum times out, so each time the size grows back after a run of landed chunks
+/// it is cut down again. Shrinking cuts are charged to a budget each accepted chunk refills, so
+/// a transfer that keeps making progress completes however many cuts it takes in total, well
+/// past the per-transfer [`MAX_RECOVERIES`] ceiling.
+#[tokio::test]
+async fn shrinking_cuts_between_accepted_chunks_do_not_spend_the_per_transfer_budget() {
+    let cuts = Arc::new(AtomicUsize::new(0));
+    let c = cuts.clone();
+    let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+        ("POST", "/") => created("sess-flaky", CHUNK_SIZE_256KB),
+        ("PATCH", "/sess-flaky") => {
+            if req.body.len() as u64 > PROTOCOL_MIN_CHUNK {
+                c.fetch_add(1, Ordering::SeqCst);
+                return chunk_timeout();
+            }
+            MockResponse::new(204, "No Content")
+                .header("X-Capsule-Offset", ack_offset(req).to_string())
+        }
+        other => panic!("unexpected {other:?}"),
+    })
+    .await;
+
+    let client = server.client(PROTOCOL);
+    let data = vec![2u8; 2 * 1024 * 1024];
+    let outcome = client
+        .upload(&request(data.len() as u64), &data)
+        .await
+        .expect("progress refills the shrinking-cut budget");
+
+    assert!(matches!(outcome, UploadOutcome::Completed { .. }));
+    assert!(
+        cuts.load(Ordering::SeqCst) > MAX_RECOVERIES as usize,
+        "the transfer took {} cuts, more than the per-transfer ceiling",
+        cuts.load(Ordering::SeqCst)
+    );
+}
+
+/// A run of shrinking cuts that lands nothing fails loudly once it passes
+/// [`MAX_CUTS_SINCE_PROGRESS`], and an accepted chunk refills that budget without refilling
+/// the per-transfer one.
+#[test]
+fn the_shrinking_cut_budget_refills_on_progress_and_bounds_a_run_without_it() {
+    let mut recovery = Recovery::new(LaneRetries::new(u32::MAX), None);
+    for _ in 0..MAX_CUTS_SINCE_PROGRESS {
+        recovery.charge_cut("cut").unwrap();
+    }
+    recovery.on_progress();
+    for _ in 0..MAX_CUTS_SINCE_PROGRESS {
+        recovery.charge_cut("cut").unwrap();
+    }
+    assert!(matches!(
+        recovery.charge_cut("cut"),
+        Err(UploadError::RetriesExhausted(_))
+    ));
+
+    let mut recovery = Recovery::new(LaneRetries::new(u32::MAX), None);
+    for _ in 0..MAX_RECOVERIES {
+        recovery.charge("re-align").unwrap();
+    }
+    recovery.on_progress();
+    assert!(
+        matches!(
+            recovery.charge("re-align"),
+            Err(UploadError::RetriesExhausted(_))
+        ),
+        "progress does not refill the per-transfer budget"
+    );
+}
+
+/// A shrinking cut is a retry to the server lane: it spends from the lane's shared budget, and
+/// fails loudly once that is spent even with the cut budget unspent; the accepted chunks that
+/// refill the cut budget earn toward the lane's.
+#[test]
+fn a_shrinking_cut_spends_the_lane_retry_budget() {
+    let lane = LaneRetries::new(2);
+    let mut recovery = Recovery::new(lane.clone(), None);
+    recovery.charge_cut("cut").unwrap();
+    recovery.charge_cut("cut").unwrap();
+    assert_eq!(lane.remaining(), 0);
+    assert!(matches!(
+        recovery.charge_cut("cut"),
+        Err(UploadError::RetriesExhausted(_))
+    ));
+
+    for _ in 0..crate::net::LANE_SUCCESSES_PER_RETRY {
+        recovery.on_progress();
+    }
+    assert_eq!(lane.remaining(), 1, "accepted chunks earn toward the lane");
+    recovery.charge_cut("cut").unwrap();
 }
 
 /// Bounds short enough to cut a black-holed request inside a test: a 200 ms stall bound and a
@@ -1269,6 +1363,59 @@ async fn a_chunk_too_slow_to_drain_inside_the_response_wait_is_resent_shorter() 
     assert!(
         patches[3..].iter().all(|&(_, len)| len <= DRAINS_IN_TIME),
         "the size holds after the cut: {patches:?}"
+    );
+}
+
+/// **A ceiling-sized chunk on a link that falls to about 1 KiB/s.** A chunk grown to the
+/// 16 MiB ceiling needs twelve halvings to reach what such a link drains inside the response
+/// wait. Here the link drains only the protocol minimum until a chunk lands, then recovers.
+/// Every cut that shrinks is a stall re-send, not a transport reset, so the eight reset retries
+/// are never spent on them and the transfer completes rather than giving up at 64 KiB.
+#[tokio::test]
+async fn a_ceiling_chunk_on_a_link_that_falls_to_a_crawl_shrinks_past_the_reset_budget() {
+    let patches = Arc::new(Mutex::new(Vec::<(u64, usize)>::new()));
+    let p = patches.clone();
+    let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+        ("POST", "/") => created("sess-crawl", CHUNK_SIZE_16MB),
+        ("PATCH", "/sess-crawl") => {
+            let mut seen = p.lock().unwrap();
+            let offset = req.header("X-Capsule-Offset").unwrap().parse().unwrap();
+            seen.push((offset, req.body.len()));
+            // Slow until the first chunk lands: everything above the minimum goes unanswered.
+            if offset == 0 && req.body.len() as u64 > PROTOCOL_MIN_CHUNK {
+                return MockResponse::hold_open();
+            }
+            MockResponse::new(204, "No Content")
+                .header("X-Capsule-Offset", ack_offset(req).to_string())
+        }
+        other => panic!("unexpected {other:?}"),
+    })
+    .await;
+
+    let client = server.client(PROTOCOL).with_request_bounds(short_bounds());
+    // The 16 MiB ceiling is the >= 100 MiB tier's.
+    let data = vec![6u8; 100 * 1024 * 1024];
+    let outcome = tokio::time::timeout(
+        Duration::from_secs(60),
+        client.upload(&request(data.len() as u64), &data),
+    )
+    .await
+    .expect("shrinking cuts take no reset backoff")
+    .expect("a cut that shrinks does not spend the reset retries");
+
+    assert!(matches!(outcome, UploadOutcome::Completed { .. }));
+    let patches = patches.lock().unwrap();
+    let halvings: Vec<(u64, usize)> = (0..=12)
+        .map(|n| (0, (CHUNK_SIZE_16MB >> n) as usize))
+        .collect();
+    assert_eq!(
+        patches[..13],
+        halvings[..],
+        "each unanswered cut is re-sent at the same offset, half the size, down to the minimum"
+    );
+    assert_eq!(
+        patches[13].0, PROTOCOL_MIN_CHUNK,
+        "the minimum chunk landed"
     );
 }
 
