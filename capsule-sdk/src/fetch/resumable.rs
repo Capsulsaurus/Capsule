@@ -55,7 +55,9 @@ impl<S: Sleeper, C: MonotonicClock> RangedFetcher<S, C> {
     /// Bytes land in [`partial_path`]`(dest)`, one bounded window at a time (as
     /// [`fetch_into`](Self::fetch_into)), each `fsync`ed before the next is requested. An
     /// attempt that finds a partial already there re-hashes it in bounded memory and resumes
-    /// from its length. On success the partial is synced and atomically renamed over `dest`.
+    /// from its length. On success the partial is synced and atomically renamed over `dest`;
+    /// the directory holding `dest` is then synced, and a failure of that last sync is logged,
+    /// not returned, because the verified blob has already landed.
     ///
     /// On [`FetchError::IntegrityFailed`] the partial is deleted and `dest` is untouched. Every
     /// other error leaves the partial for the next attempt to resume. `dest`'s directory must
@@ -177,9 +179,22 @@ fn open_partial(partial: &Path, expected_len: u64) -> io::Result<(File, Resume)>
 }
 
 /// Rename the verified partial over `dest`, then make the rename itself durable.
+///
+/// Only a failed rename is an error: the partial is then still in place for the next attempt.
+/// Once the rename returns, the verified blob is at `dest` and the partial is gone, so a failure
+/// to `fsync` the parent directory is logged rather than raised. A crash before the directory
+/// reaches disk can at worst revert the rename, which brings back the complete partial; the next
+/// attempt re-verifies it and lands it without fetching a byte.
 fn land(partial: &Path, dest: &Path) -> io::Result<()> {
     fs::rename(partial, dest)?;
-    sync_parent(dest)
+    if let Err(error) = sync_parent(dest) {
+        tracing::warn!(
+            dest = %dest.display(),
+            %error,
+            "download landed but its directory could not be synced; the rename may not survive a crash"
+        );
+    }
+    Ok(())
 }
 
 /// `fsync` the directory holding `path`, so a rename into it survives a crash. Windows has no

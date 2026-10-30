@@ -539,7 +539,8 @@ pub enum FetchError {
     /// local write failed, or a decrypting sink rejected a chunk. Whatever the sink holds is
     /// unverified and must be discarded. For [`RangedFetcher::fetch_to_file`] it is a failure
     /// reading, writing, syncing or renaming the partial file; the partial is kept, unverified,
-    /// for the next attempt to resume and verify.
+    /// for the next attempt to resume and verify. A failure to sync the destination's directory
+    /// after the rename is logged, not returned here.
     #[error("writing the fetched blob failed: {0}")]
     Sink(#[source] std::io::Error),
     /// A derivative's ciphertext hashed correctly but failed AEAD authentication under the
