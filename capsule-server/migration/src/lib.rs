@@ -22,6 +22,7 @@
 //!   verify an owner ledger against;
 //! - `000023` (#741): `album_key_escrows`, each album's keys sealed under the master key beside
 //!   the escrow.
+//! - `000024` (#1003): `activity_events`, the account activity log.
 //!
 //! # Every instant is a `BIGINT` of microseconds since the Unix epoch
 //!
@@ -108,6 +109,7 @@ migrations![
     m20260902_000021_owner_sync_epochs,
     m20260902_000022_owner_ledger_heads,
     m20260902_000023_album_key_escrows,
+    m20260902_000024_activity_log,
 ];
 
 /// The content checksum of one migration's source: lowercase hex SHA-256.

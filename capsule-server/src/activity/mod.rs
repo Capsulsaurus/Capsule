@@ -1,0 +1,325 @@
+//! The account activity log — the owner's record of what was done to and with their account.
+//!
+//! design/activity-log.md is the contract; this module is its port. The rules that shape it:
+//!
+//! - **A closed event set.** [`ActivityKind`] is every event the server writes. A new kind is an
+//!   additive change on the wire, and a client renders one it does not know generically.
+//! - **Identifiers, never content.** The server is end-to-end encrypted, so an event carries the
+//!   ids the server already holds — the acting session, the session or link it is about — and
+//!   nothing a client encrypted. There is no client address and no user agent: both outlive the
+//!   session they describe, and adding a field later is additive where withdrawing one is not.
+//! - **Append-only, bounded.** An event is never updated. It leaves the log only by the
+//!   retention bound: [`RETENTION`] by age and [`MAX_EVENTS_PER_ACCOUNT`] by count, enforced by
+//!   [`ActivityStore::record`] for the account it appends to, and by every read for age.
+//! - **Recording never refuses the act.** [`ActivityContext::record`] is called after the action
+//!   has happened and returns nothing: a store that cannot record logs the event at `error` and
+//!   the action stands. A sign-out refused because the audit log was down is a security outage
+//!   caused by an audit outage.
+//! - **Tied to the request log.** Each event carries the request id
+//!   [`crate::request_span`] minted for the request that caused it, which names that request's
+//!   log lines — the detailed, short-lived half of the same story.
+//!
+//! # Adapters
+//!
+//! [`InMemoryActivity`] is the deterministic double and [`PostgresActivity`] the durable store;
+//! both pass the one suite in [`conformance`].
+
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
+
+use jiff::{SignedDuration, Timestamp};
+
+use crate::store::{Clock, SessionId, StoreError, StoreFuture, UserId};
+
+/// How long an event stays in the log.
+pub const RETENTION: SignedDuration = SignedDuration::from_hours(90 * 24);
+
+/// The most events one account's log keeps; the oldest beyond it are deleted on the next append.
+///
+/// The bound a burst cannot exceed — a scripted loop against the second factor writes one event
+/// per attempt — and the largest page the listing serves.
+pub const MAX_EVENTS_PER_ACCOUNT: usize = 1_000;
+
+/// Every event the activity log records. The set is closed: nothing else is written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ActivityKind {
+    /// An account was created.
+    AccountRegistered,
+    /// A password sign-in opened a session.
+    SignInPassword,
+    /// A sign-in completed its second factor and opened a session.
+    SignInSecondFactor,
+    /// A second-factor code was refused for a password that had verified.
+    SignInSecondFactorRefused,
+    /// An identity-provider sign-in opened a session.
+    SignInOidc,
+    /// A session signed itself out.
+    SignOut,
+    /// A session revoked another session of the account.
+    SessionRevoked,
+    /// Every session was revoked with master-key proof.
+    SessionsRevokedAll,
+    /// The account password changed.
+    PasswordChanged,
+    /// A second factor was confirmed.
+    TotpEnabled,
+    /// A second factor was removed.
+    TotpDisabled,
+    /// A cross-device enrollment code was redeemed.
+    DeviceEnrolled,
+    /// A share link was created.
+    ShareLinkCreated,
+    /// A share link was revoked.
+    ShareLinkRevoked,
+    /// A guest-upload link was provisioned.
+    DropLinkCreated,
+    /// A guest-upload link was revoked.
+    DropLinkRevoked,
+}
+
+impl ActivityKind {
+    /// Every kind, in the order design/activity-log.md lists them.
+    pub const ALL: [Self; 16] = [
+        Self::AccountRegistered,
+        Self::SignInPassword,
+        Self::SignInSecondFactor,
+        Self::SignInSecondFactorRefused,
+        Self::SignInOidc,
+        Self::SignOut,
+        Self::SessionRevoked,
+        Self::SessionsRevokedAll,
+        Self::PasswordChanged,
+        Self::TotpEnabled,
+        Self::TotpDisabled,
+        Self::DeviceEnrolled,
+        Self::ShareLinkCreated,
+        Self::ShareLinkRevoked,
+        Self::DropLinkCreated,
+        Self::DropLinkRevoked,
+    ];
+
+    /// The name this kind travels under, on the wire, in its column and in a log field.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::AccountRegistered => "account.registered",
+            Self::SignInPassword => "sign_in.password",
+            Self::SignInSecondFactor => "sign_in.second_factor",
+            Self::SignInSecondFactorRefused => "sign_in.second_factor_refused",
+            Self::SignInOidc => "sign_in.oidc",
+            Self::SignOut => "sign_out",
+            Self::SessionRevoked => "session.revoked",
+            Self::SessionsRevokedAll => "sessions.revoked_all",
+            Self::PasswordChanged => "password.changed",
+            Self::TotpEnabled => "totp.enabled",
+            Self::TotpDisabled => "totp.disabled",
+            Self::DeviceEnrolled => "device.enrolled",
+            Self::ShareLinkCreated => "share_link.created",
+            Self::ShareLinkRevoked => "share_link.revoked",
+            Self::DropLinkCreated => "drop_link.created",
+            Self::DropLinkRevoked => "drop_link.revoked",
+        }
+    }
+
+    /// The kind `token` names, or `None` for a token this server does not write.
+    pub fn from_token(token: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|kind| kind.as_str() == token)
+    }
+}
+
+/// One entry in an account's activity log.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActivityEvent {
+    /// This server's id for the event, a UUIDv7.
+    pub event_id: String,
+    /// The account whose log it is in.
+    pub user_id: UserId,
+    /// What happened.
+    pub kind: ActivityKind,
+    /// The server's clock when it was recorded.
+    pub at: Timestamp,
+    /// The request id of the request that caused it, when a request did.
+    pub request_id: Option<String>,
+    /// The session that acted, when one did. Absent for an unauthenticated act — a sign-in, a
+    /// revoke-all redeemed with master-key proof.
+    pub session_id: Option<SessionId>,
+    /// The identifier the event is about: a session, a share link, a drop link.
+    pub subject: Option<String>,
+}
+
+/// The activity log port.
+pub trait ActivityStore: std::fmt::Debug + Send + Sync {
+    /// Append `event` to its account's log, then delete that account's events recorded before
+    /// `retain_from` and every event beyond the newest [`MAX_EVENTS_PER_ACCOUNT`] — one
+    /// operation, so the log of an account that is recording never exceeds its bound.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::Rejected`] if an event with the same `event_id` is already in the
+    /// account's log. The id is a fresh UUIDv7 per event, so a collision is a bug, not a retry.
+    fn record(&self, event: ActivityEvent, retain_from: Timestamp) -> StoreFuture<'_, ()>;
+
+    /// `user`'s events recorded at or after `since`, newest first, at most `limit` of them.
+    ///
+    /// Newest first in the order they were **recorded**, not re-sorted by `at`: two events may
+    /// share an instant, and the order a reader follows is the order the server wrote them.
+    fn recent<'a>(
+        &'a self,
+        user: &'a UserId,
+        since: Timestamp,
+        limit: usize,
+    ) -> StoreFuture<'a, Vec<ActivityEvent>>;
+}
+
+/// A deterministic in-memory adapter.
+#[derive(Debug, Default)]
+pub struct InMemoryActivity {
+    /// Each account's log, oldest first.
+    logs: Mutex<BTreeMap<UserId, Vec<ActivityEvent>>>,
+}
+
+impl InMemoryActivity {
+    /// An empty log.
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+/// Take the lock, recovering from a poisoned mutex.
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+impl ActivityStore for InMemoryActivity {
+    fn record(&self, event: ActivityEvent, retain_from: Timestamp) -> StoreFuture<'_, ()> {
+        Box::pin(async move {
+            let mut logs = lock(&self.logs);
+            let log = logs.entry(event.user_id.clone()).or_default();
+            if log.iter().any(|held| held.event_id == event.event_id) {
+                return Err(StoreError::Rejected {
+                    store: "activity",
+                    detail: format!("event {} is already recorded", event.event_id),
+                });
+            }
+            log.push(event);
+            log.retain(|held| held.at >= retain_from);
+            let excess = log.len().saturating_sub(MAX_EVENTS_PER_ACCOUNT);
+            log.drain(..excess);
+            Ok(())
+        })
+    }
+
+    fn recent<'a>(
+        &'a self,
+        user: &'a UserId,
+        since: Timestamp,
+        limit: usize,
+    ) -> StoreFuture<'a, Vec<ActivityEvent>> {
+        Box::pin(async move {
+            Ok(lock(&self.logs)
+                .get(user)
+                .map(|log| {
+                    log.iter()
+                        .rev()
+                        .filter(|event| event.at >= since)
+                        .take(limit)
+                        .cloned()
+                        .collect()
+                })
+                .unwrap_or_default())
+        })
+    }
+}
+
+/// The activity module's collaborators.
+#[derive(Debug, Clone)]
+pub struct ActivityContext {
+    store: Arc<dyn ActivityStore>,
+    clock: Arc<dyn Clock>,
+}
+
+impl ActivityContext {
+    /// Assembles the module.
+    pub fn new(store: Arc<dyn ActivityStore>, clock: Arc<dyn Clock>) -> Self {
+        Self { store, clock }
+    }
+
+    /// Where the log lives.
+    pub fn store(&self) -> &dyn ActivityStore {
+        self.store.as_ref()
+    }
+
+    /// The oldest instant a read may return at `now`.
+    fn horizon(now: Timestamp) -> Timestamp {
+        now.checked_sub(RETENTION).unwrap_or(Timestamp::MIN)
+    }
+
+    /// Record that `kind` happened to `user`, acted by `session` and about `subject`.
+    ///
+    /// Called **after** the action, and infallible by design: a store that cannot record logs
+    /// the whole event at `error` — so the operator's log still holds it — and the action
+    /// stands. The request id is the current request's, read from [`crate::request_span`].
+    pub async fn record(
+        &self,
+        user: &UserId,
+        kind: ActivityKind,
+        session: Option<&SessionId>,
+        subject: Option<&str>,
+    ) {
+        let now = self.clock.now();
+        let event = ActivityEvent {
+            event_id: uuid::Uuid::now_v7().to_string(),
+            user_id: user.clone(),
+            kind,
+            at: now,
+            request_id: crate::request_span::current_request_id().map(|id| id.to_string()),
+            session_id: session.cloned(),
+            subject: subject.map(str::to_owned),
+        };
+        let event_id = event.event_id.clone();
+        match self.store.record(event, Self::horizon(now)).await {
+            Ok(()) => tracing::info!(
+                user_id = %user,
+                kind = kind.as_str(),
+                event_id,
+                session_id = ?session,
+                subject,
+                "recorded an account activity event"
+            ),
+            Err(error) => tracing::error!(
+                %error,
+                user_id = %user,
+                kind = kind.as_str(),
+                event_id,
+                session_id = ?session,
+                subject,
+                "an account activity event could not be recorded; the action stands"
+            ),
+        }
+    }
+
+    /// `user`'s most recent events inside the retention window, newest first, at most `limit`.
+    ///
+    /// # Errors
+    ///
+    /// The store's own error, for the route to answer as an outage.
+    pub async fn recent(
+        &self,
+        user: &UserId,
+        limit: usize,
+    ) -> Result<Vec<ActivityEvent>, StoreError> {
+        let since = Self::horizon(self.clock.now());
+        self.store
+            .recent(user, since, limit.min(MAX_EVENTS_PER_ACCOUNT))
+            .await
+    }
+}
+
+pub mod conformance;
+pub mod postgres;
+
+pub use postgres::PostgresActivity;
+
+#[cfg(test)]
+mod tests;

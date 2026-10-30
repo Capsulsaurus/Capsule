@@ -28,7 +28,7 @@
 //! TTL abstraction is planned.
 //!
 //! Each module owns one port and, where it has one, the surface over it. [`routes`](mod@routes) is the only
-//! module that knows about HTTP: everything under it — [`album`], [`directory`], [`discovery`],
+//! module that knows about HTTP: everything under it — [`activity`], [`album`], [`directory`], [`discovery`],
 //! [`enrollment`], [`escrow`], [`federation`], [`gc`], [`index`], [`membership`],
 //! [`moderation`],
 //! [`negotiation`], [`quota`],
@@ -62,6 +62,7 @@
 //! `cargo nextest run` on a machine with no container runtime is green and says what it did not
 //! prove — which is the acceptance gap design/module-map.md sets for the framework.
 
+pub mod activity;
 pub mod album;
 pub mod app;
 pub mod attestation;
