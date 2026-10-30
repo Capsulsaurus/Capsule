@@ -39,7 +39,7 @@ use std::sync::{Arc, Mutex};
 use capsule_core::crypto::hash::Hash32;
 use capsule_core::crypto::keys::{
     HardwareBackedSigner, HardwareKeyAgreement, HardwareSigner, HardwareSignerError, P256HybridDek,
-    P256HybridSigningKey, Signer, encapsulate_to_p256_public,
+    Signer, encapsulate_to_p256_public,
 };
 use capsule_core::crypto::primitives::DeviceTier;
 use capsule_core::crypto::provenance::ProvenanceRecord;
@@ -48,8 +48,9 @@ use capsule_core::sidecar::{
     LabelError, Region, RegionError, RegionShape, SidecarV1, normalize_label,
 };
 use capsule_library::lifecycle::{
-    FeedDrain, LifecycleError, QuarantineReason, RemoteAssetFacts, RemoteEntry, RemoteHead,
-    RemoteOriginal, SyncApplyOutcome, TrashEntry, UploadBundle, Workspace, hash_ciphertext_from,
+    FeedDrain, HardwareSignerBinding, LifecycleError, QuarantineReason, RemoteAssetFacts,
+    RemoteEntry, RemoteHead, RemoteOriginal, SyncApplyOutcome, TrashEntry, UploadBundle, Workspace,
+    hash_ciphertext_from,
 };
 use jiff::Timestamp;
 use uuid::Uuid;
@@ -99,7 +100,8 @@ impl From<FfiHardwareSignerError> for HardwareSignerError {
 ///
 /// The byte shapes are fixed by the constructor the element is handed to, not by the trait:
 ///
-/// - [`FfiWorkspace::create_with_p256_hardware_signer`] — the **P-256** shape shipping
+/// - [`FfiWorkspace::create_with_p256_hardware_signer`] and
+///   [`FfiWorkspace::open_with_p256_hardware_signer`] — the **P-256** shape shipping
 ///   elements actually provide: [`enroll`](Self::enroll) /
 ///   [`classical_public_key`](Self::classical_public_key) return a SEC1 public key and
 ///   [`sign_classical`](Self::sign_classical) a **DER-encoded ECDSA** signature over
@@ -1209,10 +1211,12 @@ impl FfiWorkspace {
     /// composition shipping secure elements actually provide, none of which do Ed25519. The
     /// post-quantum ML-DSA-65 half is the software-sealed `ml_seed` (32 bytes).
     ///
-    /// The published device key carries the P-256 tag and `verify_asset` dispatches on it, so
-    /// this is constructor parity with `capsule-core`'s own
-    /// `create_with_p256_hardware_signer` — the same core call, reached through this
-    /// namespace's [`FfiHardwareSigner`] seam.
+    /// The published device key carries the P-256 tag and `verify_asset` dispatches on it. The
+    /// library records the binding (the alias, `ml_seed` sealed under the account master key,
+    /// and the published key), so every later launch reopens it with
+    /// [`open_with_p256_hardware_signer`](Self::open_with_p256_hardware_signer) on the same
+    /// key; plain [`open`](Self::open) refuses such a library. An element that refuses
+    /// enrollment fails this call before anything is written under `root`.
     #[uniffi::constructor]
     pub fn create_with_p256_hardware_signer(
         root: String,
@@ -1224,24 +1228,59 @@ impl FfiWorkspace {
         client: FfiClientBuild,
     ) -> Result<Arc<Self>, FfiError> {
         let seed = parse_ml_seed(&ml_seed)?;
-        let signer = P256HybridSigningKey::enroll(
-            Arc::new(ForeignHardwareSigner(hardware)),
-            key_alias,
-            &seed,
-        )
-        .map_err(|e| FfiError::Workspace {
-            detail: format!("hardware P-256 key enrollment failed: {e}"),
-        })?;
-        let workspace = Workspace::create_with_hardware_signer(
+        let workspace = Workspace::create_with_p256_hardware_signer(
             &PathBuf::from(root),
             &passphrase,
             DeviceTier::from(tier).params(),
-            Box::new(signer) as Box<dyn Signer>,
+            HardwareSignerBinding {
+                element: Arc::new(ForeignHardwareSigner(hardware)),
+                key_alias,
+            },
+            &seed,
         )?
         .with_client_id(&client.client_id, &client.semver);
         tracing::info!(
             user_id = %workspace.user_id(),
             "workspace created with a hardware-bound P-256 device key"
+        );
+        Ok(Self::wrap(workspace))
+    }
+
+    /// **Open** the existing library at `root` as [`open`](Self::open) does, re-attaching
+    /// `hardware`, the element that holds this device's P-256 signing key. Required for a
+    /// library made by
+    /// [`create_with_p256_hardware_signer`](Self::create_with_p256_hardware_signer): the element
+    /// is asked for the key under the alias the library recorded, never to make a new one, and
+    /// the rebuilt key must be the one this device published. An element that lost the key or
+    /// is unavailable fails the open with [`FfiError::Workspace`] rather than letting the
+    /// library sign with another key.
+    ///
+    /// The library's record decides, not the caller: a library created with the software key
+    /// opens on it and `hardware` is not used. `key_alias` is used only when `root` holds a
+    /// laid-out library with no account yet, whose fresh account is then enrolled under it.
+    #[uniffi::constructor]
+    pub fn open_with_p256_hardware_signer(
+        root: String,
+        passphrase: Vec<u8>,
+        tier: FfiDeviceTier,
+        hardware: Arc<dyn FfiHardwareSigner>,
+        key_alias: String,
+        client: FfiClientBuild,
+    ) -> Result<Arc<Self>, FfiError> {
+        let workspace = Workspace::open_with_hardware_signer(
+            &PathBuf::from(root),
+            &passphrase,
+            DeviceTier::from(tier).params(),
+            HardwareSignerBinding {
+                element: Arc::new(ForeignHardwareSigner(hardware)),
+                key_alias,
+            },
+        )?
+        .with_client_id(&client.client_id, &client.semver);
+        tracing::info!(
+            user_id = %workspace.user_id(),
+            albums = workspace.albums().len(),
+            "workspace opened with a hardware signing element attached"
         );
         Ok(Self::wrap(workspace))
     }

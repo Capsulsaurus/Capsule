@@ -3,10 +3,12 @@ package com.justin13888.capsule.workspace
 import com.justin13888.capsule.screens.domain.AssetId
 import uniffi.capsule_sdk.FfiClientBuild
 import uniffi.capsule_sdk.FfiDeviceTier
+import uniffi.capsule_sdk.FfiHardwareSigner
 import uniffi.capsule_sdk.FfiWorkspace
 import uniffi.capsule_sdk.FfiWorkspaceInterface
 import java.io.File
 import java.io.IOException
+import java.security.SecureRandom
 import java.util.logging.Logger
 
 /** The library this device holds, opened, with the subjects the home menu opens editors on. */
@@ -39,9 +41,15 @@ class LibraryLockedException(
  * [LibraryLockedException] and left as it is. Nothing here ever deletes or recreates a
  * library that holds an account or any media, because that would discard the assets in it.
  *
- * The device signing key is the account's software key: `FfiWorkspace.open` takes no
- * hardware signer, so a key enrolled in StrongBox at creation would be replaced by the
- * software one at the next launch. The library's unlock secret is what the keystore holds.
+ * The device signing key is held by [signer] (StrongBox on a device, a software stand-in in
+ * tests) under [DEVICE_SIGNING_KEY_ALIAS]: a new library is created on it with
+ * `createWithP256HardwareSigner`, and every launch after reopens it with
+ * `openWithP256HardwareSigner`, so the key the device publishes is the same at every launch.
+ * The library records which key it signs with, so a library created on the software key (any
+ * library from before the key moved into the keystore) keeps opening on that key. When the
+ * keystore refuses the key the launch fails and can be retried; nothing here falls back to
+ * software keys on its own. A `null` [signer] is the documented deviation of software keys
+ * (`app.enrollment.failure.hardware.*`), and only a caller that offered that choice passes it.
  */
 class LibraryLifecycle(
     private val root: File,
@@ -50,6 +58,10 @@ class LibraryLifecycle(
     private val client: FfiClientBuild,
     /** The name the default album is created under, from the catalog. */
     private val defaultAlbumName: String,
+    /** The element holding the device signing key, or `null` for software keys. */
+    private val signer: FfiHardwareSigner?,
+    /** Draws the 32-byte seed of the signing key's post-quantum half, sealed by the library at creation. */
+    private val signingSeed: () -> ByteArray = { ByteArray(SIGNING_SEED_BYTES).also { SecureRandom().nextBytes(it) } },
 ) {
     /** Open the library, creating it first when this device has none. Blocks: run it off the main thread. */
     fun open(): OpenedLibrary {
@@ -58,16 +70,33 @@ class LibraryLifecycle(
         val workspace =
             if (exists) {
                 val passphrase = existingPassphrase()
-                log.info("library: opening ${root.path}")
-                FfiWorkspace.open(root.path, passphrase, tier, client)
+                log.info("library: opening ${root.path} (signingElement=${signer != null})")
+                if (signer != null) {
+                    FfiWorkspace.openWithP256HardwareSigner(root.path, passphrase, tier, signer, DEVICE_SIGNING_KEY_ALIAS, client)
+                } else {
+                    FfiWorkspace.open(root.path, passphrase, tier, client)
+                }
             } else {
                 // The secret is written before the library, so no library ever exists without one.
                 val passphrase = secrets.loadOrCreate()
                 // Only the parent: a root the core makes itself is one it removes again when
                 // creation fails, so a failed first launch leaves nothing half-made to open.
                 root.parentFile?.mkdirs()
-                log.info("library: creating ${root.path}")
-                FfiWorkspace.create(root.path, passphrase, tier, client)
+                log.info("library: creating ${root.path} (signingElement=${signer != null})")
+                if (signer != null) {
+                    // A refused enrollment fails before the core writes anything under the root.
+                    FfiWorkspace.createWithP256HardwareSigner(
+                        root.path,
+                        passphrase,
+                        tier,
+                        signer,
+                        DEVICE_SIGNING_KEY_ALIAS,
+                        signingSeed(),
+                        client,
+                    )
+                } else {
+                    FfiWorkspace.create(root.path, passphrase, tier, client)
+                }
             }
         // Idempotent: the default album is there from the first launch, so the album editor
         // and the first import always have somewhere to go.
@@ -123,6 +152,11 @@ class LibraryLifecycle(
     companion object {
         /** The directory a library keeps its own state in, under its root. */
         const val LIBRARY_DIR = ".library"
+
+        /** The keystore alias of the device signing key. The library records it; renaming it here never moves a library. */
+        const val DEVICE_SIGNING_KEY_ALIAS = "capsule-device-dsk"
+
+        private const val SIGNING_SEED_BYTES = 32
 
         /** What the core writes under [LIBRARY_DIR] while creating, before any account exists. */
         private val INIT_FILES = listOf("version.cbor", "config.cbor")

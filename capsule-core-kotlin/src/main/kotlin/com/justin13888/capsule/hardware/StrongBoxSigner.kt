@@ -1,5 +1,6 @@
 package com.justin13888.capsule.hardware
 
+import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyInfo
 import android.security.keystore.KeyProperties
@@ -8,8 +9,8 @@ import uniffi.capsule_sdk.FfiHardwareSignerException
 import java.security.KeyFactory
 import java.security.KeyPairGenerator
 import java.security.KeyStore
+import java.security.PrivateKey
 import java.security.Signature
-import java.security.interfaces.ECPrivateKey
 import java.security.interfaces.ECPublicKey
 
 /**
@@ -33,22 +34,27 @@ class StrongBoxSigner(
 ) : FfiHardwareSigner {
     private val keyStore: KeyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
 
-    private fun privateKey(keyAlias: String): ECPrivateKey {
-        (keyStore.getKey(keyAlias, null) as? ECPrivateKey)?.let { return it }
+    // An AndroidKeyStore EC private key is a `PrivateKey` and an `ECKey`, never an `ECPrivateKey`:
+    // its scalar is unreadable, so the interface that exposes it is not implemented.
+    private fun existingKey(keyAlias: String): PrivateKey? = keyStore.getKey(keyAlias, null) as? PrivateKey
+
+    private fun createdKey(keyAlias: String): PrivateKey {
+        existingKey(keyAlias)?.let { return it }
         val generator = KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_EC, ANDROID_KEYSTORE)
         val spec =
             KeyGenParameterSpec
                 .Builder(keyAlias, KeyProperties.PURPOSE_SIGN)
                 .setAlgorithmParameterSpec(java.security.spec.ECGenParameterSpec("secp256r1"))
                 .setDigests(KeyProperties.DIGEST_SHA256)
-                .setIsStrongBoxBacked(strongBoxBacked)
+                // The setter exists from API 28; below it there is no StrongBox and the key is in the TEE.
+                .apply { if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) setIsStrongBoxBacked(strongBoxBacked) }
                 .build()
         generator.initialize(spec)
-        return generator.generateKeyPair().private as ECPrivateKey
+        return generator.generateKeyPair().private
     }
 
     override fun enroll(keyAlias: String): ByteArray {
-        privateKey(keyAlias)
+        createdKey(keyAlias)
         return classicalPublicKey(keyAlias)
     }
 
@@ -71,7 +77,8 @@ class StrongBoxSigner(
         msg: ByteArray,
     ): ByteArray =
         Signature.getInstance("SHA256withECDSA").run {
-            initSign(privateKey(keyAlias))
+            // Only an enrolled key signs: a missing one is reported, never replaced by a new key.
+            initSign(existingKey(keyAlias) ?: throw FfiHardwareSignerException.NotFound("no StrongBox key for alias $keyAlias"))
             update(msg)
             sign()
         }

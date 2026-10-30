@@ -1732,6 +1732,102 @@ fn ffi_hardware_enrollment_failures_are_typed() {
     }
 }
 
+/// **Relaunch.** A library created on a hardware P-256 signing key reopens through
+/// `open_with_p256_hardware_signer` on the same key: the signed device directory it publishes is
+/// byte-identical across the relaunch and an asset sealed before it still verifies. Plain `open`
+/// and an element that cannot produce the key are refused, as typed workspace errors, rather
+/// than reopening the library on the software key.
+#[test]
+fn ffi_p256_hardware_signer_library_reopens_on_the_same_key() {
+    let lib = tempfile::TempDir::new().unwrap();
+    let root = lib.path().to_string_lossy().into_owned();
+    let (directory, asset) = {
+        let workspace = FfiWorkspace::create_with_p256_hardware_signer(
+            root.clone(),
+            b"pw".to_vec(),
+            FfiDeviceTier::LowRam,
+            Arc::new(MockElement::new()),
+            "capsule-device-dsk".into(),
+            vec![9u8; 32],
+            client_build(),
+        )
+        .expect("a hardware-bound workspace enrolls");
+        let album = workspace.create_album("Trip".into()).unwrap();
+        let asset = workspace
+            .seal_asset(album, "hw.jpg".into(), b"\xFF\xD8\xFF hw bytes".to_vec())
+            .unwrap();
+        (workspace.signed_device_directory().unwrap(), asset)
+    };
+
+    match FfiWorkspace::open(
+        root.clone(),
+        b"pw".to_vec(),
+        FfiDeviceTier::LowRam,
+        client_build(),
+    ) {
+        Err(FfiError::Workspace { .. }) => {}
+        Err(other) => panic!("expected a typed workspace error, got {other:?}"),
+        Ok(_) => panic!("a hardware-signed library must not open on the software key"),
+    }
+    match FfiWorkspace::open_with_p256_hardware_signer(
+        root.clone(),
+        b"pw".to_vec(),
+        FfiDeviceTier::LowRam,
+        Arc::new(MockElement::unavailable()),
+        "capsule-device-dsk".into(),
+        client_build(),
+    ) {
+        Err(FfiError::Workspace { .. }) => {}
+        Err(other) => panic!("expected a typed workspace error, got {other:?}"),
+        Ok(_) => panic!("an unavailable element must not yield a workspace"),
+    }
+
+    let reopened = FfiWorkspace::open_with_p256_hardware_signer(
+        root,
+        b"pw".to_vec(),
+        FfiDeviceTier::LowRam,
+        Arc::new(MockElement::new()),
+        "capsule-device-dsk".into(),
+        client_build(),
+    )
+    .expect("the library reopens with its element");
+    assert_eq!(reopened.signed_device_directory().unwrap(), directory);
+    assert!(matches!(
+        reopened.verify_asset(asset).unwrap(),
+        FfiVerifyOutcome::Accept
+    ));
+}
+
+/// A library created on the software key opens through `open_with_p256_hardware_signer` on that
+/// key, its published directory unchanged: the library's own record decides, so an app may
+/// always pass its element on relaunch, including over a library from before the binding was
+/// recorded.
+#[test]
+fn ffi_p256_hardware_signer_open_keeps_a_software_library_on_its_software_key() {
+    let lib = tempfile::TempDir::new().unwrap();
+    let root = lib.path().to_string_lossy().into_owned();
+    let directory = FfiWorkspace::create(
+        root.clone(),
+        b"pw".to_vec(),
+        FfiDeviceTier::LowRam,
+        client_build(),
+    )
+    .unwrap()
+    .signed_device_directory()
+    .unwrap();
+
+    let reopened = FfiWorkspace::open_with_p256_hardware_signer(
+        root,
+        b"pw".to_vec(),
+        FfiDeviceTier::LowRam,
+        Arc::new(MockElement::unavailable()),
+        "capsule-device-dsk".into(),
+        client_build(),
+    )
+    .expect("a software library ignores the element");
+    assert_eq!(reopened.signed_device_directory().unwrap(), directory);
+}
+
 // ─── Ed25519 hardware signer + hardware DEK (the harness surfaces, #424) ─────
 
 /// A software stand-in for an **Ed25519** element behind [`FfiHardwareSigner`]: a 32-byte

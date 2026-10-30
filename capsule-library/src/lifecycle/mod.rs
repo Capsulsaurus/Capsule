@@ -88,6 +88,7 @@ pub use self::upload::{
     DerivativeBlob, OPAQUE_CONTENT_TYPE, OriginalCiphertext, UploadBundle,
     WIRE_ORIGINAL_CONTENT_TYPES, wire_content_type,
 };
+pub use crate::account::HardwareSignerBinding;
 use crate::db::DatabaseDriver;
 use crate::library::{Library, LibraryError};
 
