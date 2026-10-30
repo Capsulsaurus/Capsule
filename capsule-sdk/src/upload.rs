@@ -1329,6 +1329,12 @@ impl UploadClient {
         self
     }
 
+    /// The connection class this client sizes its chunks for.
+    #[must_use]
+    pub fn connection_class(&self) -> ConnectionClass {
+        self.connection
+    }
+
     /// Run every request this client sends under `bounds` instead of
     /// [`RequestBounds::default`].
     #[must_use]

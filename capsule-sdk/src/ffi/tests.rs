@@ -1003,6 +1003,28 @@ async fn ffi_push_asset_plans_from_the_reported_path() {
     );
 }
 
+/// **The upload client sizes chunks for the plan's class.** Once the detector promotes the
+/// link to `adverse`, every upload client the session builds targets the shorter chunk
+/// request duration.
+#[tokio::test]
+async fn ffi_upload_client_follows_the_plans_class() {
+    let chunks = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let server = recording_upload_server(chunks).await;
+    let session = login(&server).await;
+    assert_eq!(
+        session.upload_client().connection_class(),
+        ConnectionClass::Unmetered
+    );
+    for _ in 0..3 {
+        session.path.record(crate::net::TransferSignal::Reset);
+    }
+    assert_eq!(
+        session.upload_client().connection_class(),
+        ConnectionClass::Adverse,
+        "a promoted link shortens the chunk requests"
+    );
+}
+
 /// An unknown asset is refused before any request, and a malformed id is the caller's.
 #[tokio::test]
 async fn ffi_push_asset_refuses_an_unknown_asset() {

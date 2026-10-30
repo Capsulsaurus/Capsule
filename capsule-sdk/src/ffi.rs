@@ -1030,9 +1030,11 @@ impl FfiSession {
     /// transfer window whatever the original's size. The workspace lock is held only while the
     /// bundle is built, never across the network.
     ///
-    /// Every blob is driven; one the server already holds answers `duplicate_blob` and comes
-    /// back [`FfiUploadOutcome::AlreadyStored`], so pushing twice is safe. The album must
-    /// already be provisioned on the server.
+    /// Every blob the reported path admits is driven ([`set_path`](Self::set_path)); the tiers
+    /// it holds back are counted in [`FfiPushReport::deferred`] and wait for the next push. A
+    /// blob the server already holds answers `duplicate_blob` and comes back
+    /// [`FfiUploadOutcome::AlreadyStored`], so pushing twice is safe. The album must already be
+    /// provisioned on the server.
     ///
     /// **A create the server refused is re-sealed and retried once** (issue #822). When the
     /// album's epoch moved past the one the asset was sealed under, the server refuses its
@@ -1248,14 +1250,17 @@ impl FfiSession {
         }
     }
 
-    /// An upload client on the current path's pooled connections.
+    /// An upload client on the current path's pooled connections, sizing its chunks to the
+    /// current plan's class: under `adverse` each chunk request targets the shorter duration.
     fn upload_client(&self) -> UploadClient {
         let transport = UploadTransport::with_session(
             self.path_session(),
             self.upload_base_url.clone(),
             self.protocol_version.clone(),
         );
-        UploadClient::new(transport).with_events(self.events.clone())
+        UploadClient::new(transport)
+            .with_events(self.events.clone())
+            .with_connection_class(self.path.plan().class)
     }
 
     /// Drive one bundle's ladder. The workspace lock is not held: the bundle is owned.
@@ -1269,14 +1274,18 @@ impl FfiSession {
         // Full ordering where the path allows it; the plan stages the push where it holds bulk
         // back, and a path change that closes a running tier cancels and re-plans the push.
         let held = HashSet::<String>::new();
+        let started_on = self.path.snapshot().generation;
         let pushed = run_under_path(&self.path, UploadPolicy::Full, false, |scheduler| {
             let client = self.upload_client();
             let held = &held;
             async move { crate::push::push_bundle(&client, &scheduler, bundle, held, false).await }
         })
         .await;
-        if let Some(signal) = path::link_signal(&pushed) {
-            let plan = self.path.record(signal);
+        // Only an outcome on the path the push started on: if the path changed under it, the
+        // detector was reset for a link this outcome never measured.
+        if let Some(signal) = path::link_signal(&pushed)
+            && let Some(plan) = self.path.record_on(started_on, signal)
+        {
             tracing::debug!(?signal, class = ?plan.class, "ffi: the push's outcome fed the adverse detector");
         }
         pushed
