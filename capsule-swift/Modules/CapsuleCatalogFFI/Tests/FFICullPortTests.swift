@@ -82,8 +82,8 @@ private func collect(_ stream: AsyncThrowingStream<[CullAsset], any Error>) asyn
 
 @Suite("FFICullPort — the workspace's cull verbs as the CullPort")
 struct FFICullPortTests {
-    private static func uuid(_ n: Int) -> String {
-        String(format: "0192f0c4-0000-7000-8000-%012d", n)
+    private static func uuid(_ number: Int) -> String {
+        String(format: "0192f0c4-0000-7000-8000-%012d", number)
     }
 
     private static let stack = "0192f0c4-9999-7000-8000-000000000001"
@@ -101,7 +101,7 @@ struct FFICullPortTests {
         let batches = try await collect(port.pass(over: TimelineQuery(includeStackHidden: true), batchSize: 200))
 
         let stackID = StackID(Self.stack)
-        #expect(batches == [[
+        let expected = [
             CullAsset(id: .managed(uuid: Self.uuid(1)), cull: .pick),
             CullAsset(
                 id: .managed(uuid: Self.uuid(2)),
@@ -114,7 +114,8 @@ struct FFICullPortTests {
                 stack: CullStackPlace(stackID: stackID, isCover: true)
             ),
             CullAsset(id: .managed(uuid: Self.uuid(4)), cull: .neutral),
-        ]])
+        ]
+        #expect(batches == [expected])
         #expect(workspace.calls == [
             .stackMemberships, .assetsByCull(.pick), .assetsByCull(.neutral), .assetsByCull(.reject),
         ])

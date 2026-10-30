@@ -14,16 +14,18 @@ struct CullingVerdictOrderTests {
         let library = Library()
         let gate = Gate()
         let queue = CullWriteQueue()
-        let members: CullVerdictWrite.Members = { _ in
+        let flagStack: CullVerdictWrite.FlagStack = { _, flag in
             await gate.wait()
-            return [Fixture.id(1), Fixture.id(2)]
+            let members = [Fixture.id(1), Fixture.id(2)]
+            try await library.setCull(flag, members)
+            return members
         }
         let stackVerdict = CullVerdict(flag: .reject, stackID: Fixture.stackID, targets: [Fixture.id(1)], serial: 0)
         let assetVerdict = CullVerdict(flag: .pick, stackID: nil, targets: [Fixture.id(2)], serial: 1)
 
         for verdict in [stackVerdict, assetVerdict] {
             queue.submit {
-                _ = try? await CullVerdictWrite.run(verdict, members: members, setCull: library.setCull)
+                _ = try? await CullVerdictWrite.run(verdict, flagStack: flagStack, setCull: library.setCull)
             }
         }
         // Let the single-asset write run if anything would let it overtake.
@@ -47,14 +49,14 @@ struct CullingVerdictOrderTests {
     func failureKeepsTheQueueRunning() async {
         let library = Library()
         let queue = CullWriteQueue()
-        let members: CullVerdictWrite.Members = { _ in throw Failure() }
+        let flagStack: CullVerdictWrite.FlagStack = { _, _ in throw Failure() }
         let stackVerdict = CullVerdict(flag: .reject, stackID: Fixture.stackID, targets: [Fixture.id(1)], serial: 0)
         let assetVerdict = CullVerdict(flag: .pick, stackID: nil, targets: [Fixture.id(1)], serial: 1)
         let outcomes = Outcomes()
 
         for verdict in [stackVerdict, assetVerdict] {
             queue.submit {
-                let written = try? await CullVerdictWrite.run(verdict, members: members, setCull: library.setCull)
+                let written = try? await CullVerdictWrite.run(verdict, flagStack: flagStack, setCull: library.setCull)
                 outcomes.values.append(written != nil)
             }
         }
@@ -127,7 +129,7 @@ struct CullingVerdictOrderTests {
         }
     }
 
-    @Test("a stack verdict writes every listed member, then any target the port missed")
+    @Test("a stack verdict flags the stack, then any target the stack no longer lists")
     func stackWriteTargets() async throws {
         let library = Library()
         let verdict = CullVerdict(
@@ -139,29 +141,52 @@ struct CullingVerdictOrderTests {
 
         let written = try await CullVerdictWrite.run(
             verdict,
-            members: { _ in [Fixture.id(1), Fixture.id(2)] },
+            flagStack: { stackID, flag in
+                #expect(stackID == Fixture.stackID)
+                try await library.setCull(flag, [Fixture.id(1), Fixture.id(2)])
+                return [Fixture.id(1), Fixture.id(2)]
+            },
             setCull: library.setCull
         )
 
         #expect(written == [Fixture.id(1), Fixture.id(2), Fixture.id(3)])
-        #expect(await library.writes == [Write(flag: .pick, ids: written)])
+        #expect(await library.writes == [
+            Write(flag: .pick, ids: [Fixture.id(1), Fixture.id(2)]),
+            Write(flag: .pick, ids: [Fixture.id(3)]),
+        ])
     }
 
-    @Test("a single-asset verdict never asks the stack port")
+    @Test("a stack verdict whose targets the stack all lists writes nothing more")
+    func stackWriteCoveredByTheStack() async throws {
+        let library = Library()
+        let verdict = CullVerdict(flag: .reject, stackID: Fixture.stackID, targets: [Fixture.id(1)], serial: 0)
+
+        let written = try await CullVerdictWrite.run(
+            verdict,
+            flagStack: { _, _ in [Fixture.id(1), Fixture.id(2)] },
+            setCull: library.setCull
+        )
+
+        #expect(written == [Fixture.id(1), Fixture.id(2)])
+        #expect(await library.writes.isEmpty)
+    }
+
+    @Test("a single-asset verdict never flags a stack")
     func singleAssetSkipsTheStackPort() async throws {
         let library = Library()
         let verdict = CullVerdict(flag: .neutral, stackID: nil, targets: [Fixture.id(4)], serial: 0)
 
         let written = try await CullVerdictWrite.run(
             verdict,
-            members: { _ in
-                Issue.record("asked the stack port for a single-asset verdict")
+            flagStack: { _, _ in
+                Issue.record("flagged a stack for a single-asset verdict")
                 return []
             },
             setCull: library.setCull
         )
 
         #expect(written == [Fixture.id(4)])
+        #expect(await library.writes == [Write(flag: .neutral, ids: [Fixture.id(4)])])
     }
 }
 

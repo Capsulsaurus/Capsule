@@ -27,9 +27,17 @@ struct LanePorts {
     /// Where a RAW original's embedded preview is read. `nil` without a Rust
     /// core, which draws every rung from the original.
     var embeddedPreviews: (any EmbeddedPreviewPort)?
+    /// What the cull pass reads and writes: the workspace's cull verbs in the
+    /// FFI lane, the mock world's library, organize and stack ports otherwise.
+    let cull: any CullPort
 
     /// The mock world's own adapters.
     static func mock(_ mock: MockEnvironment) -> LanePorts {
-        LanePorts(labels: mock.labels, transferEvents: mock.transferEvents)
+        LanePorts(labels: mock.labels, transferEvents: mock.transferEvents, cull: mockCull(mock))
+    }
+
+    /// The cull pass over the mock world's ports.
+    static func mockCull(_ mock: MockEnvironment) -> any CullPort {
+        PortBackedCullPort(library: mock.library, organize: mock.organize, stacks: mock.stacks)
     }
 }
