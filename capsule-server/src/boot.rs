@@ -942,6 +942,12 @@ fn compose(
         // Endpoints only; the issuer and client id stay the server's.
         server_info = server_info.with_oidc();
     }
+    // Configuration refuses the switch without an issuer, so a record that says "no passwords"
+    // always also publishes where the identity provider is.
+    if config.password_auth_disabled {
+        tracing::info!("password sign-in is disabled; accounts sign in through the OIDC provider");
+        server_info = server_info.without_passwords();
+    }
     // Published only when the deployment federates (#509): a `FEDERATION_URL` without
     // `FEDERATION_ENABLED` is an endpoint nothing behind it would answer.
     if let Some(url) = config.federation_endpoint() {
@@ -1006,18 +1012,26 @@ fn compose(
     // index the rebuild and the scrub verify the ledger against (#757).
     .with_ledger(Arc::new(AnchoredLedger::new(ledger, index.clone())));
 
+    let auth = AuthContext::new(AuthCollaborators {
+        sessions,
+        accounts: accounts.accounts,
+        registry: accounts.registry,
+        profiles: accounts.profiles,
+        passwords: accounts.passwords,
+        challenges,
+        cohorts,
+        tokens: tokens.clone(),
+        clock: clock.clone(),
+    });
+    // The same switch the discovery record above publishes, read once from the same field.
+    let auth = if config.password_auth_disabled {
+        auth.without_passwords()
+    } else {
+        auth
+    };
+
     let app = App::new(Modules {
-        auth: AuthContext::new(AuthCollaborators {
-            sessions,
-            accounts: accounts.accounts,
-            registry: accounts.registry,
-            profiles: accounts.profiles,
-            passwords: accounts.passwords,
-            challenges,
-            cohorts,
-            tokens: tokens.clone(),
-            clock: clock.clone(),
-        }),
+        auth,
         totp: TotpContext::new(
             totp,
             // The issuer is what an authenticator app shows beside the code, so it is this

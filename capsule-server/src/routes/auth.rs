@@ -30,6 +30,7 @@
 //! | logout `401` | kept, and now the framework's, with the `WWW-Authenticate` challenge the document declares |
 //! | logout `500` | kept |
 //! | — | **`403` added** to logout: a live refresh token presented as a bearer credential is valid but insufficient. Salvo answered 401 |
+//! | — | **`403` added** to register, login and reauthenticate: the deployment refuses passwords (`PASSWORD_AUTH_DISABLED`), `error.auth.password_disabled` |
 //!
 //! Every status above is produced by a test. That is not a stylistic claim: the document is
 //! generated from these types, and `assert_declared_responses_covered` fails on any response the
@@ -146,6 +147,16 @@ pub enum RegisterRejection {
         code: &'static str,
     },
 
+    /// This deployment accepts sign-in only through its identity provider
+    /// (`PASSWORD_AUTH_DISABLED`, #1004), so no password account can be created.
+    #[error("password sign-in is disabled on this server")]
+    #[problem(status = 403, title = "Password sign-in disabled")]
+    PasswordDisabled {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
     /// Too many registrations from this source address, **or** the limiter is holding as many
     /// distinct sources as it will hold (#1001).
     ///
@@ -187,6 +198,13 @@ impl RegisterRejection {
     fn unavailable() -> Self {
         Self::Unavailable {
             code: error_codes::AUTH_UNAVAILABLE,
+        }
+    }
+
+    /// Password registration is switched off on this deployment.
+    fn password_disabled() -> Self {
+        Self::PasswordDisabled {
+            code: error_codes::AUTH_PASSWORD_DISABLED,
         }
     }
 
@@ -401,6 +419,17 @@ pub enum LoginRejection {
         code: &'static str,
     },
 
+    /// This deployment accepts sign-in only through its identity provider
+    /// (`PASSWORD_AUTH_DISABLED`, #1004), so no password is checked — for any account, including
+    /// one that already exists.
+    #[error("password sign-in is disabled on this server")]
+    #[problem(status = 403, title = "Password sign-in disabled")]
+    PasswordDisabled {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
     /// The account is refusing attempts after too many failures.
     #[error("the account is locked after too many failed sign-in attempts")]
     #[problem(status = 423, title = "Account locked")]
@@ -424,6 +453,12 @@ impl LoginRejection {
     fn invalid_credentials() -> Self {
         Self::InvalidCredentials {
             code: error_codes::AUTH_INVALID_CREDENTIALS,
+        }
+    }
+
+    fn password_disabled() -> Self {
+        Self::PasswordDisabled {
+            code: error_codes::AUTH_PASSWORD_DISABLED,
         }
     }
 
@@ -549,6 +584,13 @@ pub async fn register_user(
     client: ClientAddr,
     Json(request): Json<RegisterRequest>,
 ) -> Result<Json<TokenResponse>, RegisterRejection> {
+    // Before the limiter, and before anything else: a deployment that refuses passwords has no
+    // registration surface to protect, so there is nothing to charge and nothing to probe.
+    if auth.passwords_disabled() {
+        tracing::info!("a registration was refused: password sign-in is disabled");
+        return Err(RegisterRejection::password_disabled());
+    }
+
     // Charged first, so a malformed attempt and a probe of a taken address both spend the
     // source's budget. The source is the address the router resolved through the trusted
     // proxies (#704), never a forwarding header taken on its word.
@@ -649,6 +691,13 @@ pub async fn login_user(
     Inject(totp): Inject<crate::auth::TotpContext>,
     Json(request): Json<LoginRequest>,
 ) -> Result<LoginReply, LoginRejection> {
+    // Before the directory is asked anything, so no password is hashed and no account's
+    // existence or lockout state is disclosed (#1004).
+    if auth.passwords_disabled() {
+        tracing::info!("a sign-in was refused: password sign-in is disabled");
+        return Err(LoginRejection::password_disabled());
+    }
+
     // The password crosses this line once and never comes back: `authenticate` borrows it, and
     // what returns is a decision.
     let outcome = auth
@@ -1011,7 +1060,8 @@ pub struct ReauthenticateResponse {
 /// The same refusals as a sign-in, for the same reasons: a wrong password is
 /// `401 error.auth.invalid_credentials`, a locked account is `403`, and the account directory
 /// failing is `500`. A caller that guessed a password here learns exactly what it would learn
-/// at `/v1/auth/login`, and no more.
+/// at `/v1/auth/login`, and no more. A deployment that refuses passwords answers
+/// `403 error.auth.password_disabled` before the password is checked, as login does.
 #[kynos::post(
     "/v1/auth/reauthenticate",
     operation_id = "reauthenticate",
@@ -1023,6 +1073,12 @@ pub async fn reauthenticate(
     Json(request): Json<ReauthenticateRequest>,
 ) -> Result<Json<ReauthenticateResponse>, LoginRejection> {
     let user = UserId::new(credential.user.as_str());
+
+    // A password presentation like any other, refused for the same reason login is (#1004).
+    if auth.passwords_disabled() {
+        tracing::info!(%user, "a re-authentication was refused: password sign-in is disabled");
+        return Err(LoginRejection::password_disabled());
+    }
 
     // The account is the credential's, never a request field: this operation must not be usable
     // to test another account's password.
