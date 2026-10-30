@@ -52,7 +52,7 @@ The table is the contract, not an inventory. Native encoders sit behind the opt-
 | --- | --- | --- | --- |
 | `media-linked-codecs` (CLI) | JXL (lossy q=50) + AVIF | JXL + AVIF, q=70 | WebP (`rawshift-image` fails to compile it on aarch64) |
 | `media` only (FFI, cross) | JXL **lossless** (q=50 is advisory) | none | AVIF, lossy JXL (native code), WebP |
-| Either | — | — | All video derivatives (`rawshift-video` unpublished) |
+| Either | — | — | All video derivatives (`rawshift-video` 0.1.1 is an unimplemented placeholder) |
 
 Decode covers JPEG, PNG, JXL, TIFF, GIF, ARW and DNG in every build, plus AVIF under `media-avif-decode` (system libdav1d; not on Windows). Capsule pre-walks RAW IFD chains to bound value sizes and nesting depth (≤16) before handing them to the RAW reader. **HEIC is refused by decision** (libheif/libde265 are LGPL-3.0; see [Dependencies](/design/dependencies/)); WebP, other RAW families, and AVIF without the feature are recognised and refused.
 
@@ -62,6 +62,10 @@ Nothing is silent: an absent codec is `media::MediaError::UnsupportedFormat`, an
 ### Video Previews
 
 Video derivatives (first-frame still, H.264 preview) are the planned `capsule-core::media::video` half of the media module, separate because transcode needs its own toolchain. They are signed through the same [`DerivativeManifest`](#derivative-provenance) path as stills.
+
+- **Toolchain.** Video derivatives come from `rawshift-video`, never from a codec Capsule links itself. Encode goes through hardware codecs behind Rawshift's `VideoEncoder` seam. ffmpeg is excluded from every build ([Licensing — The video transcoder seam](/design/licensing/#the-video-transcoder-seam)).
+- **First frame.** The extracted frame becomes a `DecodedImage`, so the thumbnail tier, the pixel budget and the LQIP are the still path's, unchanged.
+- **Until `rawshift-video` ships.** A video sniffs to no still format, and its import reports `DeferredNoCodec`, never a missing asset. The original is stored, signed and verified like any other file.
 
 If an original is no larger than a tier's long edge, that tier references the original: its local manifest carries the sentinel `format = "original"`, which is distinct from a missing derivative (rebuildable from the original).
 

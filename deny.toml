@@ -134,6 +134,24 @@ ignore = [
 # Duplicate versions are reported, not refused: the graph carries several (three rand)
 # that only upstream releases can collapse.
 multiple-versions = "warn"
+# The video toolchain decision (licensing doc, "The video transcoder seam"). Video derivatives
+# come from rawshift-video, and ffmpeg is excluded from every build. The licence allowlist alone
+# cannot enforce that, because these binding crates carry a permissive licence (WTFPL, MIT) while
+# the C library they link or vendor is LGPL, or GPL once x264 or x265 is in it. So they are
+# refused by name. Lifting a ban is a policy change: update the licensing doc first.
+deny = [
+    { crate = "ffmpeg-next", reason = "ffmpeg is excluded from every build; video comes from rawshift-video (licensing doc)" },
+    { crate = "ffmpeg-sys-next", reason = "ffmpeg is excluded from every build; video comes from rawshift-video (licensing doc)" },
+    { crate = "ffmpeg-sys", reason = "ffmpeg is excluded from every build; video comes from rawshift-video (licensing doc)" },
+    { crate = "ffmpeg-the-third", reason = "ffmpeg is excluded from every build; video comes from rawshift-video (licensing doc)" },
+    { crate = "ffmpeg-sys-the-third", reason = "ffmpeg is excluded from every build; video comes from rawshift-video (licensing doc)" },
+    { crate = "rsmpeg", reason = "ffmpeg is excluded from every build; video comes from rawshift-video (licensing doc)" },
+    { crate = "rusty_ffmpeg", reason = "ffmpeg is excluded from every build; video comes from rawshift-video (licensing doc)" },
+    { crate = "ac-ffmpeg", reason = "ffmpeg is excluded from every build; video comes from rawshift-video (licensing doc)" },
+    { crate = "x264", reason = "binds the GPL libx264; video comes from rawshift-video (licensing doc)" },
+    { crate = "x264-sys", reason = "binds the GPL libx264; video comes from rawshift-video (licensing doc)" },
+    { crate = "x265-sys", reason = "binds the GPL libx265; video comes from rawshift-video (licensing doc)" },
+]
 
 [sources]
 # Every crate comes from crates.io. A git dependency or another registry is a supply-chain
