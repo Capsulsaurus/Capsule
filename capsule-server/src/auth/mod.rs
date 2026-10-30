@@ -31,8 +31,8 @@
 //! # Password sign-in can be switched off
 //!
 //! An OIDC-only deployment (`PASSWORD_AUTH_DISABLED`, #1004) builds its context with
-//! [`AuthContext::with_password_setting`] over `true`; see [`PasswordSetting`]. The password operations — register, login,
-//! reauthenticate — then refuse with `error.auth.password_disabled` before any password reaches
+//! [`AuthContext::with_password_setting`] over `true`; see [`PasswordSetting`]. The password
+//! operations — register, login, reauthenticate — then refuse with `error.auth.password_disabled` before any password reaches
 //! a directory, so no Argon2 runs on an unauthenticated request. Every local account is refused,
 //! including one created before the switch: there is no break-glass account, because a named
 //! exception is a password door kept open on exactly the account an attacker most wants.
