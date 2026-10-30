@@ -941,7 +941,7 @@ pub enum FfiTrashRefusal {
 
 /// A trash verb's failure: the refusals a trash view names as [`FfiError::Trash`], everything
 /// else as the workspace failure it is.
-fn trash_error(error: LifecycleError) -> FfiError {
+pub(super) fn trash_error(error: LifecycleError) -> FfiError {
     let (refusal, code, retention_until) = match &error {
         LifecycleError::NotFound(_) => (FfiTrashRefusal::NotFound, None, None),
         LifecycleError::NotInTrash(_) => (FfiTrashRefusal::NotInTrash, None, None),
@@ -978,7 +978,7 @@ pub struct FfiWorkspace {
 impl FfiWorkspace {
     /// Run `f` under the workspace lock, surfacing a poisoned lock as a typed error rather
     /// than a panic across the boundary.
-    fn with<T>(
+    pub(super) fn with<T>(
         &self,
         f: impl FnOnce(&mut Workspace) -> Result<T, FfiError>,
     ) -> Result<T, FfiError> {
@@ -1038,7 +1038,7 @@ impl FfiWorkspace {
 }
 
 /// Parse a UUID from foreign code into a typed error rather than panicking at the boundary.
-fn parse_uuid(field: &str, value: &str) -> Result<Uuid, FfiError> {
+pub(super) fn parse_uuid(field: &str, value: &str) -> Result<Uuid, FfiError> {
     Uuid::parse_str(value).map_err(|e| FfiError::InvalidArgument {
         detail: format!("{field}: {value:?} is not a UUID ({e})"),
     })
