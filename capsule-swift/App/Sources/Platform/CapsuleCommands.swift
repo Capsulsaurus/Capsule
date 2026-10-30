@@ -19,6 +19,28 @@ extension FocusedValues {
         get { self[RouterFocusedValue.self] }
         set { self[RouterFocusedValue.self] = newValue }
     }
+
+    var culling: CullingCommandTarget? {
+        get { self[CullingFocusedValue.self] }
+        set { self[CullingFocusedValue.self] = newValue }
+    }
+}
+
+// MARK: - CullingCommandTarget
+
+/// The focused scene's culling surface, as the menu sees it.
+///
+/// The router declines every cull verb, and paging, because they act on the
+/// asset a culling surface is showing rather than on navigation. While one is
+/// on screen it publishes this, so the Culling menu and the arrow keys reach it
+/// and its items enable only when the verb would do something.
+struct CullingCommandTarget {
+    let accepts: @MainActor (NavigationAction) -> Bool
+    let perform: @MainActor (NavigationAction) -> Void
+}
+
+struct CullingFocusedValue: FocusedValueKey {
+    typealias Value = CullingCommandTarget
 }
 
 // MARK: - CapsuleCommands
@@ -47,6 +69,7 @@ struct CapsuleCommands: Commands {
     private static let documentationURL = "https://capsule.photos/docs"
 
     @FocusedValue(\.router) private var router: Router?
+    @FocusedValue(\.culling) private var culling: CullingCommandTarget?
 
     var body: some Commands {
         // Replace the stock "New Window" group: Capsule's File menu is about
@@ -67,6 +90,10 @@ struct CapsuleCommands: Commands {
 
         CommandGroup(after: .toolbar) {
             items(in: .view)
+        }
+
+        CommandMenu("apple.menu.culling") {
+            items(in: .culling)
         }
     }
 
@@ -100,7 +127,9 @@ struct CapsuleCommands: Commands {
 
     private func item(_ command: NavigationCommand) -> some View {
         Button(LocalizedStringKey(command.titleKey), systemImage: command.systemImage) {
-            _ = router?.perform(command.action)
+            if router?.perform(command.action) != true, culling?.accepts(command.action) == true {
+                culling?.perform(command.action)
+            }
         }
         .keyboardShortcut(command.shortcut)
         .disabled(!canPerform(command.action))
@@ -108,12 +137,13 @@ struct CapsuleCommands: Commands {
 
     /// Whether firing this item would do anything.
     ///
-    /// Asked of the router rather than assumed, so an item the router declines
-    /// greys out instead of silently swallowing the keystroke — the failure the
-    /// notification stopgap had, made visible.
+    /// Asked of the router, then of a focused culling surface, rather than
+    /// assumed, so an item neither takes greys out instead of silently
+    /// swallowing the keystroke — the failure the notification stopgap had,
+    /// made visible.
     private func canPerform(_ action: NavigationAction) -> Bool {
-        guard let router else { return false }
-        return router.accepts(action)
+        if router?.accepts(action) == true { return true }
+        return culling?.accepts(action) ?? false
     }
 }
 
@@ -134,7 +164,9 @@ private extension View {
     }
 }
 
-private extension KeyEquivalent {
+// Internal rather than private: the culling surface matches key presses against
+// the same catalog on a phone, where no menu delivers them.
+extension KeyEquivalent {
     /// The catalog spells arrows as cases because `CapsuleNavigation` may not
     /// import SwiftUI; this is where they become key equivalents.
     init(_ key: CommandKey) {
@@ -142,11 +174,12 @@ private extension KeyEquivalent {
         case let .character(character): self.init(character)
         case .leftArrow: self = .leftArrow
         case .rightArrow: self = .rightArrow
+        case .delete: self = .delete
         }
     }
 }
 
-private extension EventModifiers {
+extension EventModifiers {
     init(_ modifiers: CommandModifiers) {
         var result: EventModifiers = []
         if modifiers.contains(.command) { result.insert(.command) }
