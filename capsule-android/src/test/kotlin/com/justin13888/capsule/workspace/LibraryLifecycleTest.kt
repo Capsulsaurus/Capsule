@@ -171,10 +171,11 @@ class LibraryLifecycleTest {
                 override fun enroll(keyAlias: String): ByteArray = throw FfiHardwareSignerException.Unavailable("keystore refused")
             }
 
-        // An element's own exception reaches the app as an internal error today, since the core cannot lift a flat
-        // error thrown by a foreign implementation; either way the launch fails.
+        // The core lifts the element's own exception and fails the create with a typed workspace error, which the
+        // lifecycle keeps alongside the refusal it reports.
         val failure = assertFailsWith<HardwareEnrollmentRefusedException> { lifecycle(signer = refusing).open() }
         assertTrue(failure.cause is FfiHardwareSignerException.Unavailable)
+        assertTrue(failure.suppressed.single() is FfiException.Workspace)
         // Nothing was laid out, so the next launch creates the library rather than judging a half-made one.
         assertTrue(!File(root, LibraryLifecycle.LIBRARY_DIR).exists())
         val library = open()

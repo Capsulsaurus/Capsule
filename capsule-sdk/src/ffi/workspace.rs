@@ -64,34 +64,68 @@ use crate::upload::UploadError;
 /// Failure surfaced by a foreign [`FfiHardwareSigner`]. Mirrors `capsule-core`'s
 /// `HardwareSignerError` variant for variant — it is the same contract, declared in the
 /// `capsule_sdk` namespace because core's own type carries no uniffi derive.
-#[derive(Debug, thiserror::Error, uniffi::Error)]
-#[uniffi(flat_error)]
+///
+/// The error is **thrown by foreign code** — it is the declared error of the
+/// [`FfiHardwareSigner`] and [`FfiHardwareKeyAgreement`] foreign traits — so Rust must *lift*
+/// it, and uniffi lifts only a non-flat error. Every variant therefore carries a named
+/// `detail` field (the element's own English diagnostic), which also gives the Kotlin
+/// exceptions and Swift cases the same `(detail)` shape. Core's error keeps `detail` only on
+/// [`Backend`](Self::Backend); for the other variants it is logged at the seam and dropped.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, uniffi::Error)]
 pub enum FfiHardwareSignerError {
     /// The user cancelled the biometric / the element refused authentication.
-    #[error("hardware authentication cancelled")]
-    AuthCancelled,
+    #[error("hardware authentication cancelled: {detail}")]
+    AuthCancelled {
+        /// The element's English diagnostic.
+        detail: String,
+    },
     /// No secure element is available on this device.
-    #[error("hardware secure element unavailable")]
-    Unavailable,
+    #[error("hardware secure element unavailable: {detail}")]
+    Unavailable {
+        /// The element's English diagnostic.
+        detail: String,
+    },
     /// No key exists for the requested alias.
-    #[error("hardware key not found")]
-    NotFound,
+    #[error("hardware key not found: {detail}")]
+    NotFound {
+        /// The element's English diagnostic.
+        detail: String,
+    },
     /// The private key was readable — non-exportability is violated (a failure).
-    #[error("hardware private key is exportable")]
-    Exportable,
+    #[error("hardware private key is exportable: {detail}")]
+    Exportable {
+        /// The element's English diagnostic.
+        detail: String,
+    },
     /// Any other backend error.
-    #[error("hardware backend error: {0}")]
-    Backend(String),
+    #[error("hardware backend error: {detail}")]
+    Backend {
+        /// The element's English diagnostic.
+        detail: String,
+    },
+}
+
+/// A foreign element that throws something other than [`FfiHardwareSignerError`] (an
+/// unchecked `KeyStoreException`, a Swift error of another type) or breaks the FFI contract
+/// reaches Rust as an *unexpected* callback error. Without this conversion uniffi panics on
+/// it — inside a workspace call, with the workspace lock held — so it is lifted as a typed
+/// [`Backend`](FfiHardwareSignerError::Backend) failure instead.
+impl From<uniffi::UnexpectedUniFFICallbackError> for FfiHardwareSignerError {
+    fn from(err: uniffi::UnexpectedUniFFICallbackError) -> Self {
+        tracing::warn!(reason = %err.reason, "ffi: hardware element threw an undeclared error");
+        Self::Backend { detail: err.reason }
+    }
 }
 
 impl From<FfiHardwareSignerError> for HardwareSignerError {
     fn from(err: FfiHardwareSignerError) -> Self {
+        tracing::debug!(error = %err, "ffi: hardware element refused");
         match err {
-            FfiHardwareSignerError::AuthCancelled => Self::AuthCancelled,
-            FfiHardwareSignerError::Unavailable => Self::Unavailable,
-            FfiHardwareSignerError::NotFound => Self::NotFound,
-            FfiHardwareSignerError::Exportable => Self::Exportable,
-            FfiHardwareSignerError::Backend(detail) => Self::Backend(detail),
+            FfiHardwareSignerError::AuthCancelled { .. } => Self::AuthCancelled,
+            FfiHardwareSignerError::Unavailable { .. } => Self::Unavailable,
+            FfiHardwareSignerError::NotFound { .. } => Self::NotFound,
+            FfiHardwareSignerError::Exportable { .. } => Self::Exportable,
+            FfiHardwareSignerError::Backend { detail } => Self::Backend(detail),
         }
     }
 }
