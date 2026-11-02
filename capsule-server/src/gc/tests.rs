@@ -1614,3 +1614,116 @@ async fn a_purge_dry_run_appends_nothing_to_the_ledger() {
         .expect("a pass");
     assert!(h.ledger_entries().await.is_empty());
 }
+
+/// An activity log holding `expired` events per account in `stale` recorded a day after the
+/// epoch, one event recorded exactly at the horizon of `now`, and one inside the window.
+async fn activity_log(
+    stale: &[&str],
+    expired: usize,
+    now: Timestamp,
+) -> Arc<crate::activity::InMemoryActivity> {
+    use crate::activity::{ActivityEvent, ActivityKind};
+    let log = Arc::new(crate::activity::InMemoryActivity::new());
+    let event = |user: &str, n: usize, at: Timestamp| ActivityEvent {
+        event_id: format!("{user}-{n}"),
+        user_id: crate::store::UserId::new(user),
+        kind: ActivityKind::SignOut,
+        at,
+        request_id: None,
+        session_id: None,
+        subject: None,
+    };
+    for user in stale {
+        for n in 0..expired {
+            log.record(
+                event(user, n, Timestamp::UNIX_EPOCH + days(1)),
+                Timestamp::MIN,
+            )
+            .await
+            .expect("a record");
+        }
+    }
+    let horizon = crate::activity::horizon(now);
+    log.record(event("active", 0, horizon), Timestamp::MIN)
+        .await
+        .expect("a record");
+    log.record(event("active", 1, now), Timestamp::MIN)
+        .await
+        .expect("a record");
+    log
+}
+
+#[tokio::test]
+async fn an_applied_pass_deletes_every_accounts_expired_activity_in_batches() {
+    let h = Harness::new();
+    h.clock.advance(days(100));
+    let now = h.clock.now();
+    // More expired events than one batch, across accounts that stopped recording.
+    let per_account = ACTIVITY_SWEEP_BATCH / 2 + 3;
+    let log = activity_log(&["gone-quiet", "also-quiet"], per_account, now).await;
+    let context = h.context.clone().with_activity_sweep(log.clone());
+
+    let report = collect(&context, Mode::Apply).await.expect("a pass");
+
+    assert_eq!(
+        report.expired_activity,
+        u64::try_from(per_account * 2).expect("a small count")
+    );
+    assert_eq!(
+        log.count_expired(crate::activity::horizon(now))
+            .await
+            .expect("a count"),
+        0,
+        "no event past retention remains, for any account"
+    );
+    for user in ["gone-quiet", "also-quiet"] {
+        let held = log
+            .recent(&crate::store::UserId::new(user), Timestamp::MIN, usize::MAX)
+            .await
+            .expect("a read");
+        assert!(held.is_empty(), "{user} still holds {held:?}");
+    }
+    let active = log
+        .recent(
+            &crate::store::UserId::new("active"),
+            Timestamp::MIN,
+            usize::MAX,
+        )
+        .await
+        .expect("a read");
+    assert_eq!(
+        active.len(),
+        2,
+        "the event at the horizon and the one inside the window are kept"
+    );
+}
+
+#[tokio::test]
+async fn a_dry_run_counts_the_expired_activity_and_deletes_none() {
+    let h = Harness::new();
+    h.clock.advance(days(100));
+    let now = h.clock.now();
+    let log = activity_log(&["gone-quiet"], 3, now).await;
+    let context = h.context.clone().with_activity_sweep(log.clone());
+
+    let report = collect(&context, Mode::DryRun).await.expect("a pass");
+
+    assert_eq!(report.expired_activity, 3);
+    assert_eq!(
+        log.count_expired(crate::activity::horizon(now))
+            .await
+            .expect("a count"),
+        3,
+        "a dry run deletes nothing"
+    );
+}
+
+#[tokio::test]
+async fn a_collector_without_the_activity_store_sweeps_no_activity() {
+    let h = Harness::new();
+    h.clock.advance(days(100));
+
+    let report = collect(&h.context, Mode::Apply).await.expect("a pass");
+
+    assert_eq!(report.expired_activity, 0);
+}

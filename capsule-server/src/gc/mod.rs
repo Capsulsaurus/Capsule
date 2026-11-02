@@ -74,6 +74,17 @@
 //! that sweep over the whole view — see [`ProgressSweep`]. A dry run skips it, because it
 //! removes entries, and a dry run removes nothing.
 //!
+//! # The pass also sweeps expired account activity (#1112)
+//!
+//! The account activity log deletes an account's expired events when that account records
+//! again, so an account that stopped recording keeps them until something sweeps the table
+//! (design/activity-log.md, Retention). A collection pass carrying the activity store
+//! ([`CollectionContext::with_activity_sweep`]) ends by deleting every event recorded before
+//! [`crate::activity::horizon`] of its own clock, in batches of [`ACTIVITY_SWEEP_BATCH`] so no
+//! statement holds locks on more rows than that. A dry run counts them instead and deletes
+//! nothing; both report the number as [`CollectionReport::expired_activity`]. The sweep reads
+//! no blob and no asset row, and deletes nothing but activity events past retention.
+//!
 //! # A purge is ledgered before it is applied (#767)
 //!
 //! The owner ledger is never rewritten, so a retention purge appends a purge entry to the
@@ -99,6 +110,7 @@ use std::sync::Arc;
 
 use jiff::{SignedDuration, Timestamp};
 
+use crate::activity::ActivityStore;
 use crate::attestation::AttestationContext;
 use crate::blob::{BlobStore, ContentAddress};
 use crate::index::{AssetIndex, AssetRow, PurgeOutcome, purge_refusal};
@@ -112,6 +124,13 @@ use crate::store::{AssetId, StoreError, StoreFuture, UploadSessionStore};
 /// Long enough for an in-flight finalization retry to re-reference it, and short enough that an
 /// orphan is not held forever. The design's range is 24–72 hours.
 pub const DEFAULT_GRACE_WINDOW: SignedDuration = SignedDuration::from_hours(24);
+
+/// The most expired activity events one sweep statement deletes.
+///
+/// The sweep deletes in batches of this size until a batch comes back short, so a backlog of any
+/// size never holds row locks on more than this many events at once, and an append to the same
+/// table waits on at most one batch.
+pub const ACTIVITY_SWEEP_BATCH: usize = 1_000;
 
 /// Whether a pass may change anything.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -157,6 +176,11 @@ pub struct CollectionReport {
     /// is exactly the complaint this exists to answer, and an operator needs to be able to say
     /// what the pass gave back and to whom.
     pub credited: Vec<(crate::store::UserId, u64)>,
+    /// Account activity events past retention: deleted by an applied pass, counted by a dry run.
+    ///
+    /// A count rather than a list: the events are the owners' records, and their ids name
+    /// nothing an operator acts on. Zero when the collector carries no activity store.
+    pub expired_activity: u64,
 }
 
 /// What one purge pass found.
@@ -247,6 +271,8 @@ pub struct CollectionContext {
     progress: Option<Arc<dyn ProgressSweep>>,
     /// Set by [`Self::with_attestation`]; `None` refuses an applied purge.
     attestation: Option<AttestationContext>,
+    /// Set by [`Self::with_activity_sweep`]; `None` sweeps no activity events.
+    activity: Option<Arc<dyn ActivityStore>>,
 }
 
 impl CollectionContext {
@@ -270,6 +296,7 @@ impl CollectionContext {
             grace_window,
             progress: None,
             attestation: None,
+            activity: None,
         }
     }
 
@@ -291,6 +318,17 @@ impl CollectionContext {
     #[must_use]
     pub fn with_progress_sweep(mut self, sweep: Arc<dyn ProgressSweep>) -> Self {
         self.progress = Some(sweep);
+        self
+    }
+
+    /// The same collector, ending every pass with a sweep of `activity`'s expired events: deleted
+    /// by an applied pass, counted by a dry run (#1112).
+    ///
+    /// A builder for the reason [`Self::with_progress_sweep`] is: the sweep is housekeeping the
+    /// pass carries for another store.
+    #[must_use]
+    pub fn with_activity_sweep(mut self, activity: Arc<dyn ActivityStore>) -> Self {
+        self.activity = Some(activity);
         self
     }
 
@@ -343,6 +381,7 @@ pub async fn collect(
     }
 
     sweep_progress(context, now, mode).await?;
+    report.expired_activity = sweep_activity(context, now, mode).await?;
 
     tracing::info!(
         marked = report.marked.len(),
@@ -350,6 +389,7 @@ pub async fn collect(
         swept = report.swept.len(),
         reprieved = report.reprieved.len(),
         dangling = report.dangling.len(),
+        expired_activity = report.expired_activity,
         "a collection pass finished"
     );
     Ok(report)
@@ -371,6 +411,42 @@ async fn sweep_progress(
     let evictable = progress.sweep_progress(now).await?;
     tracing::info!(evictable, "swept the upload-progress view");
     Ok(())
+}
+
+/// Sweep the activity log's expired events, if this collector carries the store: delete them
+/// in batches on an applied pass, count them on a dry run. Answers how many.
+///
+/// The instant is [`crate::activity::horizon`] of the pass's clock, the same one every read
+/// hides events before, so the sweep deletes only what no read could return.
+async fn sweep_activity(
+    context: &CollectionContext,
+    now: Timestamp,
+    mode: Mode,
+) -> Result<u64, StoreError> {
+    let Some(activity) = &context.activity else {
+        return Ok(0);
+    };
+    let before = crate::activity::horizon(now);
+    if !mode.applies() {
+        let expired = activity.count_expired(before).await?;
+        tracing::info!(expired, %before, "a dry run counted the expired activity events");
+        return Ok(expired);
+    }
+    let mut deleted = 0_u64;
+    let mut batches = 0_u64;
+    loop {
+        let batch = activity
+            .delete_expired(before, ACTIVITY_SWEEP_BATCH)
+            .await?;
+        deleted = deleted.saturating_add(batch);
+        batches += 1;
+        tracing::debug!(batch, deleted, "deleted a batch of expired activity events");
+        if batch < u64::try_from(ACTIVITY_SWEEP_BATCH).unwrap_or(u64::MAX) {
+            break;
+        }
+    }
+    tracing::info!(deleted, batches, %before, "swept the expired activity events");
+    Ok(deleted)
 }
 
 /// Decide one blob.

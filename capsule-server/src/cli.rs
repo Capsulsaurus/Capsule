@@ -126,13 +126,15 @@ pub enum Command {
         backend: BackendArgs,
     },
 
-    /// Sweep blobs nothing references any more.
+    /// Sweep blobs nothing references any more, and account activity past retention.
     ///
     /// Two passes, by design: a blob that reaches zero references is *marked*, and a later pass
     /// sweeps it once the grace window has passed and the count is still zero. That is what
-    /// gives an in-flight finalization retry time to re-reference it.
+    /// gives an in-flight finalization retry time to re-reference it. Every pass also deletes
+    /// the account activity events older than the 90-day retention window, which an account
+    /// that stopped recording would otherwise keep; a dry run counts them.
     Gc {
-        /// Carry it out. Without this nothing is marked, unmarked or swept.
+        /// Carry it out. Without this nothing is marked, unmarked, swept or deleted.
         ///
         /// Dry run is the default for the two subcommands that write, because the first thing an
         /// operator does with a collector is find out what it thinks.
@@ -1123,6 +1125,18 @@ impl std::fmt::Display for Rendered<'_, CollectionReport> {
             for (user, bytes) in &report.credited {
                 writeln!(f, "    {user} {bytes}")?;
             }
+        }
+        if report.expired_activity > 0 {
+            quiet = false;
+            let verb = match mode {
+                Mode::Apply => "deleted",
+                Mode::DryRun => "would delete",
+            };
+            writeln!(
+                f,
+                "  expired activity events ({verb} {})",
+                report.expired_activity
+            )?;
         }
         if quiet {
             writeln!(f, "  nothing to do")?;
