@@ -122,6 +122,8 @@ pub fn code_for(status: u16) -> &'static str {
         // The blob reads' `Delivery`, for a range that starts past the last byte.
         416 => error_codes::REQUEST_RANGE_NOT_SATISFIABLE,
         422 => error_codes::REQUEST_UNPROCESSABLE,
+        // [`TooEarly`] carries its own; named here so a `425` from anywhere else is not vague.
+        425 => error_codes::REQUEST_TOO_EARLY,
         501 => error_codes::REQUEST_NOT_IMPLEMENTED,
         _ => UNMAPPED,
     }
@@ -270,6 +272,97 @@ where
             tracing::debug!(status, seconds, "a refusal carries Retry-After");
         }
         Ok(continued.with_headers(RetryAfterHeader { retry_after }))
+    }
+}
+
+// ===========================================================================================
+// Early data
+// ===========================================================================================
+
+/// The request header a TLS-terminating proxy sets on a request it forwards from TLS 1.3 early
+/// data (RFC 8470 §5.1). Its only defined value is `1`.
+pub const EARLY_DATA_HEADER: &str = "Early-Data";
+
+/// Whether `request` is a **write** that arrived as TLS early data: a non-safe method carrying
+/// `Early-Data: 1`.
+///
+/// Early data can be replayed by anyone who captured it, so a write in it could take effect
+/// twice; a safe method cannot change anything and is let through ("early data MAY carry `GET`
+/// and `HEAD`", design/networking.md, HTTP Transport). Any instance of the header with the value
+/// `1` counts, since a proxy chain may append rather than replace it; any other value is not the
+/// one RFC 8470 defines and is ignored.
+#[must_use]
+pub fn is_early_write(request: &Request) -> bool {
+    !request.method().is_safe()
+        && request
+            .headers()
+            .get_all(EARLY_DATA_HEADER)
+            .iter()
+            .any(|value| value.as_bytes().trim_ascii() == b"1")
+}
+
+/// The refusal of a write that arrived as TLS early data.
+#[derive(Debug, thiserror::Error, kynos::prelude::ApiError)]
+pub enum TooEarlyRejection {
+    /// A non-safe method carried `Early-Data: 1`.
+    #[error("this write arrived as TLS early data; re-send it once the handshake has completed")]
+    #[problem(status = 425, title = "Too early")]
+    TooEarly {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+}
+
+/// Refuses a write forwarded as TLS early data with `425 Too Early`, before its body is read.
+///
+/// # Mounted per group, on the writes
+///
+/// The rule covers every non-safe operation, the protocol-exempt guest deposits and session
+/// upkeep included. It is the **first** interceptor of every group of writes in
+/// `lib.rs::router` — ahead of the body-size cap, so the body is never read — and of no group
+/// of reads, for the protocol gates' reason: an interceptor's declaration is its type, so a read
+/// mounted behind this would declare a `425` it can never render. The method is still checked
+/// here, so a safe method that ever lands in a write group is let through rather than refused.
+/// The root router's coder and protocol window sit outside every group, so the `425` leaves
+/// coded and advertised.
+///
+/// The SDK classifies a `425` as retryable by status: it re-sends the same request, which a
+/// client that keeps writes out of early data sends after the handshake.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TooEarly;
+
+impl TooEarly {
+    /// The interceptor.
+    #[must_use]
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl<C: Sync + 'static> Interceptor<C> for TooEarly {
+    type Reads = ();
+    type Adds = ();
+    type Short = TooEarlyRejection;
+
+    async fn intercept(
+        &self,
+        request: Request,
+        (): (),
+        _context: &C,
+        next: Next<'_, C>,
+    ) -> Result<Continued<()>, TooEarlyRejection> {
+        if is_early_write(&request) {
+            tracing::info!(
+                method = %request.method(),
+                path = request.uri().path(),
+                "a write arrived as TLS early data and was refused with 425"
+            );
+            return Err(TooEarlyRejection::TooEarly {
+                code: error_codes::REQUEST_TOO_EARLY,
+            });
+        }
+        Ok(next.run(request).await)
     }
 }
 

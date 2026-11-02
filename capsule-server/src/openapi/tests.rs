@@ -171,3 +171,31 @@ fn the_capsule_problems_carry_everything_the_base_one_does() {
         }
     }
 }
+
+/// **Every write declares the early-data `425`, and no read does** (design/networking.md, HTTP
+/// Transport): the router-wide refusal reads the method, and the document says the same.
+#[test]
+fn the_early_data_refusal_is_declared_on_every_write_and_no_read() {
+    let json = serde_json::to_value(document()).expect("a document serializes");
+
+    let (mut writes, mut reads) = (0_usize, 0_usize);
+    for (path, item) in json["paths"].as_object().expect("paths") {
+        for (method, operation) in item.as_object().expect("a path item") {
+            let Some(responses) = operation.get("responses").and_then(|r| r.as_object()) else {
+                continue;
+            };
+            let declared = responses.contains_key("425");
+            if matches!(method.as_str(), "get" | "head" | "options" | "trace") {
+                assert!(!declared, "{method} {path} is safe and declares a 425");
+                reads += 1;
+            } else {
+                assert!(declared, "{method} {path} is a write and declares no 425");
+                writes += 1;
+            }
+        }
+    }
+    assert!(
+        writes > 0 && reads > 0,
+        "both kinds of operation were checked"
+    );
+}

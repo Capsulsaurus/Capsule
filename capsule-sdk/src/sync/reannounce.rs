@@ -227,6 +227,7 @@ fn map_error(error: rest::Error<rest::ReannounceManifestsError>) -> SyncError {
                 | Refusal::Status413(problem)
                 | Refusal::Status415(problem)
                 | Refusal::Status422(problem)
+                | Refusal::Status425(problem)
                 | Refusal::Status426(problem)
                 | Refusal::Status500(problem) => (
                     Some(problem.code.clone()),

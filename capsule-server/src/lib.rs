@@ -170,8 +170,16 @@ pub fn router() -> Router<App, Propagate, ServerInterceptors, impl Sized> {
         // whose largest legitimate body is bounded carries [`limits::bounded_body_size`], and only
         // the chunk-carrying and protocol-unbounded writes, in the group after it, keep the
         // backstop.
+        //
+        // Every group of non-safe operations — gated or exempt — opens with
+        // [`problem::TooEarly`], ahead of its body cap, so a write forwarded as TLS early data is
+        // `425` before a byte of its body is read (design/networking.md, HTTP Transport). A group
+        // of reads carries none, for the gates' reason: an interceptor's declaration is its type,
+        // and a read never renders the `425`. That is also why the exempt group is split into its
+        // reads and its two session-upkeep writes.
         .group(
             Group::<App>::new("/")
+                .intercept(problem::TooEarly::new())
                 .intercept(limits::bounded_body_size())
                 .intercept(negotiation::ProtocolGate::new())
                 // The account: opening sessions and revoking them all. Refreshing and closing one
@@ -236,6 +244,7 @@ pub fn router() -> Router<App, Propagate, ServerInterceptors, impl Sized> {
         // serve. See [`limits::body_size`].
         .group(
             Group::<App>::new("/")
+                .intercept(problem::TooEarly::new())
                 .intercept(limits::body_size())
                 .intercept(negotiation::ProtocolGate::new())
                 .mount(kynos::routes![
@@ -250,6 +259,7 @@ pub fn router() -> Router<App, Propagate, ServerInterceptors, impl Sized> {
         // See [`upload::body`].
         .group(
             Group::<App>::new("/")
+                .intercept(problem::TooEarly::new())
                 .intercept(upload::body::LengthlessChunkDeadline::new())
                 .intercept(limits::body_size())
                 .intercept(negotiation::ProtocolGate::new())
@@ -272,6 +282,7 @@ pub fn router() -> Router<App, Propagate, ServerInterceptors, impl Sized> {
         .group(
             Group::<App>::new("/")
                 .intercept(routes::federation::FederationGate::new())
+                .intercept(problem::TooEarly::new())
                 .intercept(limits::federation_body_size())
                 .intercept(negotiation::ProtocolGate::new())
                 .mount(kynos::routes![
@@ -359,19 +370,30 @@ pub fn router() -> Router<App, Propagate, ServerInterceptors, impl Sized> {
                     routes::share::share_metadata,
                     routes::share::share_wrapped_secret,
                     routes::share::share_blob,
+                    routes::drop::drop_status,
+                ]),
+        )
+        // The exempt session-upkeep writes, apart from the exempt reads only so that they, and
+        // not the reads, refuse early data.
+        .group(
+            Group::<App>::new("/")
+                .intercept(problem::TooEarly::new())
+                .intercept(limits::bounded_body_size())
+                .mount(kynos::routes![
                     routes::auth::refresh_token,
                     routes::auth::logout,
-                    routes::drop::drop_status,
                 ]),
         )
         .group(
             Group::<App>::new("/")
+                .intercept(problem::TooEarly::new())
                 .intercept(limits::body_size())
                 .mount(kynos::routes![routes::drop::create_drop]),
         )
         // The guest's chunk route, alone for the album chunk route's reason (#717).
         .group(
             Group::<App>::new("/")
+                .intercept(problem::TooEarly::new())
                 .intercept(upload::body::LengthlessChunkDeadline::new())
                 .intercept(limits::body_size())
                 .mount(kynos::routes![routes::drop::append_drop_chunk]),
