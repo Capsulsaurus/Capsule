@@ -1544,16 +1544,29 @@ fn short_bounds() -> RequestBounds {
     RequestBounds::new(Duration::from_millis(200), Duration::from_millis(400))
 }
 
+/// A `HEAD` answer for a session that holds nothing yet, counting how often it was asked.
+fn empty_head(heads: &AtomicUsize, size: u64) -> MockResponse {
+    heads.fetch_add(1, Ordering::SeqCst);
+    MockResponse::new(200, "OK")
+        .header("X-Capsule-Offset", "0")
+        .header("X-Capsule-Committed", "")
+        .header("X-Capsule-Content-Length", size.to_string())
+        .header("X-Capsule-Upload-Status", "pending")
+}
+
 /// **Black-holed request.** The server reads a whole chunk and then never answers, holding the
 /// connection open. Without a bound of its own the client would wait until the OS gave up;
-/// with one it cuts the request at the response wait and re-sends the same offset, shorter,
-/// which lands.
+/// with one it cuts the request at the response wait. The answer was lost, so it reads `HEAD`
+/// before it sends anything again, then re-sends the same offset, shorter, which lands.
 #[tokio::test]
 async fn a_request_that_is_never_answered_is_cut_and_resent() {
     let patches = Arc::new(Mutex::new(Vec::<(u64, usize)>::new()));
+    let heads = Arc::new(AtomicUsize::new(0));
     let p = patches.clone();
+    let h = heads.clone();
     let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
         ("POST", "/") => created("sess-hole", CHUNK_SIZE_256KB),
+        ("HEAD", "/sess-hole") => empty_head(&h, 64 * 1024),
         ("PATCH", "/sess-hole") => {
             let mut seen = p.lock().unwrap();
             let offset = req.header("X-Capsule-Offset").unwrap().parse().unwrap();
@@ -1585,6 +1598,11 @@ async fn a_request_that_is_never_answered_is_cut_and_resent() {
         vec![(0, 64 * 1024), (0, 32 * 1024), (32 * 1024, 32 * 1024)],
         "cut, then re-sent at the same offset, half the size"
     );
+    assert_eq!(
+        heads.load(Ordering::SeqCst),
+        1,
+        "the lost answer is followed by a HEAD before the re-send"
+    );
     assert!(started.elapsed() >= short_bounds().response_wait);
 }
 
@@ -1598,9 +1616,12 @@ async fn a_request_that_is_never_answered_is_cut_and_resent() {
 async fn a_chunk_too_slow_to_drain_inside_the_response_wait_is_resent_shorter() {
     const DRAINS_IN_TIME: usize = 64 * 1024;
     let patches = Arc::new(Mutex::new(Vec::<(u64, usize)>::new()));
+    let heads = Arc::new(AtomicUsize::new(0));
     let p = patches.clone();
+    let h = heads.clone();
     let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
         ("POST", "/") => created("sess-drain", CHUNK_SIZE_256KB),
+        ("HEAD", "/sess-drain") => empty_head(&h, CHUNK_SIZE_256KB),
         ("PATCH", "/sess-drain") => {
             let offset = req.header("X-Capsule-Offset").unwrap().parse().unwrap();
             p.lock().unwrap().push((offset, req.body.len()));
@@ -1635,6 +1656,11 @@ async fn a_chunk_too_slow_to_drain_inside_the_response_wait_is_resent_shorter() 
         patches[3..].iter().all(|&(_, len)| len <= DRAINS_IN_TIME),
         "the size holds after the cut: {patches:?}"
     );
+    assert_eq!(
+        heads.load(Ordering::SeqCst),
+        2,
+        "every unanswered chunk is followed by a HEAD before anything is re-sent"
+    );
 }
 
 /// **A ceiling-sized chunk on a link that falls to about 1 KiB/s.** A chunk grown to the
@@ -1645,9 +1671,12 @@ async fn a_chunk_too_slow_to_drain_inside_the_response_wait_is_resent_shorter() 
 #[tokio::test]
 async fn a_ceiling_chunk_on_a_link_that_falls_to_a_crawl_shrinks_past_the_reset_budget() {
     let patches = Arc::new(Mutex::new(Vec::<(u64, usize)>::new()));
+    let heads = Arc::new(AtomicUsize::new(0));
     let p = patches.clone();
+    let h = heads.clone();
     let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
         ("POST", "/") => created("sess-crawl", CHUNK_SIZE_16MB),
+        ("HEAD", "/sess-crawl") => empty_head(&h, 100 * 1024 * 1024),
         ("PATCH", "/sess-crawl") => {
             let mut seen = p.lock().unwrap();
             let offset = req.header("X-Capsule-Offset").unwrap().parse().unwrap();
@@ -1687,6 +1716,11 @@ async fn a_ceiling_chunk_on_a_link_that_falls_to_a_crawl_shrinks_past_the_reset_
     assert_eq!(
         patches[13].0, PROTOCOL_MIN_CHUNK,
         "the minimum chunk landed"
+    );
+    assert_eq!(
+        heads.load(Ordering::SeqCst),
+        12,
+        "each unanswered cut reads HEAD before the shorter re-send"
     );
 }
 
@@ -2010,7 +2044,7 @@ async fn a_failed_finalization_is_the_rejection_head_names() {
         ("waiting_for_processing", None),
         (
             "failed_processing",
-            Some(error_codes::UPLOAD_CONTENT_HASH_MISMATCH),
+            Some(error_codes::UPLOAD_ENVELOPE_REJECTED),
         ),
     ]);
     let server = MockServer::start(handler).await;
@@ -2024,14 +2058,197 @@ async fn a_failed_finalization_is_the_rejection_head_names() {
 
     match error {
         UploadError::Rejected { code, .. } => {
-            assert_eq!(
-                code.as_deref(),
-                Some(error_codes::UPLOAD_CONTENT_HASH_MISMATCH)
-            );
+            assert_eq!(code.as_deref(), Some(error_codes::UPLOAD_ENVELOPE_REJECTED));
         }
         other => panic!("expected the finalization's rejection, got {other:?}"),
     }
     assert_eq!(heads.load(Ordering::SeqCst), 2);
+}
+
+/// A source whose identity check reports a change from the `n`th check on (1-based); `None`
+/// never does.
+struct ChangingSource {
+    bytes: Vec<u8>,
+    changes_at: Option<usize>,
+    checks: AtomicUsize,
+}
+
+impl ChangingSource {
+    fn new(bytes: Vec<u8>, changes_at: Option<usize>) -> Self {
+        Self {
+            bytes,
+            changes_at,
+            checks: AtomicUsize::new(0),
+        }
+    }
+}
+
+impl UploadSource for ChangingSource {
+    fn read_at(&self, offset: u64, len: usize) -> std::io::Result<Cow<'_, [u8]>> {
+        self.bytes.read_at(offset, len)
+    }
+
+    fn check_unchanged(&self) -> Result<(), SourceChanged> {
+        let n = self.checks.fetch_add(1, Ordering::SeqCst) + 1;
+        match self.changes_at {
+            Some(at) if n >= at => Err(SourceChanged::new("the file's modification time moved")),
+            _ => Ok(()),
+        }
+    }
+}
+
+/// **`content_hash_mismatch`, source unchanged.** Finalization refused the hash, but the source
+/// is still what the bundle was built from, so the session is re-created once and the blob sent
+/// again; a second refusal is the rejection.
+#[tokio::test]
+async fn a_refused_hash_of_an_unchanged_source_recreates_the_session_once() {
+    let creates = Arc::new(AtomicUsize::new(0));
+    let c = creates.clone();
+    let (inner, heads) = finalizing_server(vec![(
+        "failed_processing",
+        Some(error_codes::UPLOAD_CONTENT_HASH_MISMATCH),
+    )]);
+    let server = MockServer::start(move |req: &MockRequest| {
+        if req.method == "POST" {
+            c.fetch_add(1, Ordering::SeqCst);
+        }
+        inner(req)
+    })
+    .await;
+
+    let data = ChangingSource::new(vec![2u8; 8192], None);
+    let error = server
+        .client(PROTOCOL)
+        .upload(&request(8192), &data)
+        .await
+        .expect_err("a second refusal fails the upload");
+
+    assert_eq!(
+        error.error_code(),
+        Some(error_codes::UPLOAD_CONTENT_HASH_MISMATCH)
+    );
+    assert_eq!(creates.load(Ordering::SeqCst), 2, "re-created exactly once");
+    assert_eq!(
+        heads.load(Ordering::SeqCst),
+        2,
+        "each session's outcome read once"
+    );
+}
+
+/// **`content_hash_mismatch`, source changed.** The source no longer matches its bundle, so the
+/// transfer ends with the typed source-changed error and its client-side code, and nothing is
+/// re-created.
+#[tokio::test]
+async fn a_refused_hash_of_a_changed_source_is_the_typed_source_change() {
+    let creates = Arc::new(AtomicUsize::new(0));
+    let c = creates.clone();
+    let (inner, _heads) = finalizing_server(vec![(
+        "failed_processing",
+        Some(error_codes::UPLOAD_CONTENT_HASH_MISMATCH),
+    )]);
+    let server = MockServer::start(move |req: &MockRequest| {
+        if req.method == "POST" {
+            c.fetch_add(1, Ordering::SeqCst);
+        }
+        inner(req)
+    })
+    .await;
+
+    // The check before the only window passes; the one after the refusal finds the change.
+    let data = ChangingSource::new(vec![2u8; 8192], Some(2));
+    let error = server
+        .client(PROTOCOL)
+        .upload(&request(8192), &data)
+        .await
+        .expect_err("a changed source fails the upload");
+
+    assert!(
+        matches!(error, UploadError::SourceChanged(_)),
+        "typed: {error:?}"
+    );
+    assert_eq!(error.error_code(), Some(error_codes::UPLOAD_SOURCE_CHANGED));
+    assert_eq!(creates.load(Ordering::SeqCst), 1, "nothing re-created");
+}
+
+/// **A source that changes mid-upload.** The identity check before a window's read finds the
+/// change: nothing of that window is sent, the session is cancelled, and the transfer ends with
+/// the typed error.
+#[tokio::test]
+async fn a_source_that_changes_before_a_window_is_read_stops_and_cancels_the_session() {
+    let patches = Arc::new(Mutex::new(Vec::<u64>::new()));
+    let deletes = Arc::new(AtomicUsize::new(0));
+    let p = patches.clone();
+    let d = deletes.clone();
+    let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+        ("POST", "/") => created("sess-chg", CHUNK_SIZE_256KB),
+        ("PATCH", "/sess-chg") => {
+            p.lock()
+                .unwrap()
+                .push(req.header("X-Capsule-Offset").unwrap().parse().unwrap());
+            MockResponse::new(204, "No Content")
+                .header("X-Capsule-Offset", ack_offset(req).to_string())
+        }
+        ("DELETE", "/sess-chg") => {
+            d.fetch_add(1, Ordering::SeqCst);
+            MockResponse::new(204, "No Content")
+        }
+        other => panic!("unexpected {other:?}"),
+    })
+    .await;
+
+    let size = 3 * CHUNK_SIZE_256KB;
+    let data = ChangingSource::new(vec![9u8; size as usize], Some(2));
+    let error = server
+        .client(PROTOCOL)
+        .upload(&request(size), &data)
+        .await
+        .expect_err("a changed source fails the upload");
+
+    assert!(matches!(error, UploadError::SourceChanged(_)), "{error:?}");
+    assert_eq!(
+        *patches.lock().unwrap(),
+        vec![0],
+        "nothing after the change is sent"
+    );
+    assert_eq!(
+        deletes.load(Ordering::SeqCst),
+        1,
+        "the session is cancelled"
+    );
+}
+
+/// A source that finds a re-derived window differs from what it first sealed refuses the read
+/// with [`SourceChanged`] as the error's payload; the transfer ends typed, not as an I/O error.
+#[tokio::test]
+async fn a_read_refused_as_a_source_change_is_typed() {
+    struct TagMismatch;
+    impl UploadSource for TagMismatch {
+        fn read_at(&self, _: u64, _: usize) -> std::io::Result<Cow<'_, [u8]>> {
+            Err(std::io::Error::other(SourceChanged::new(
+                "a re-derived STREAM chunk's tag differs from the one recorded",
+            )))
+        }
+    }
+    let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+        ("POST", "/") => created("sess-tag", CHUNK_SIZE_256KB),
+        ("DELETE", "/sess-tag") => MockResponse::new(204, "No Content"),
+        other => panic!("unexpected {other:?}"),
+    })
+    .await;
+
+    let error = server
+        .client(PROTOCOL)
+        .upload(&request(8192), &TagMismatch)
+        .await
+        .expect_err("a refused read fails the upload");
+    match error {
+        UploadError::SourceChanged(changed) => assert!(changed.reason.contains("tag")),
+        other => panic!("expected a typed source change, got {other:?}"),
+    }
+
+    // Any other read failure stays an I/O error.
+    let plain = UploadError::of_read(std::io::Error::other("disk on fire"));
+    assert!(matches!(plain, UploadError::Io(_)), "{plain:?}");
 }
 
 /// A duplicate create that hands back a full session `waiting_for_processing` sends nothing more

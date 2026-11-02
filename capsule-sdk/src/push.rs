@@ -498,6 +498,7 @@ impl PushError {
     pub fn kind(&self) -> &'static str {
         match self {
             Self::Album(_) => "album",
+            Self::Upload(UploadError::SourceChanged(_)) => "source_changed",
             Self::Upload(_) => "upload",
             Self::CreateRefused { .. } => "create_refused",
             Self::UnknownBlob { .. } => "unknown_blob",
