@@ -141,6 +141,16 @@ impl CommittedSet {
                 .any(|&(from, to)| from <= start && end <= to)
     }
 
+    /// Whether any byte of `[start, end)` is in the set.
+    #[must_use]
+    pub fn overlaps(&self, start: u64, end: u64) -> bool {
+        start < end
+            && self
+                .ranges
+                .iter()
+                .any(|&(from, to)| from < end && start < to)
+    }
+
     /// Add `[start, end)`, coalescing with whatever it touches. An empty range adds nothing.
     pub fn insert(&mut self, start: u64, end: u64) {
         if start >= end {

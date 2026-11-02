@@ -76,6 +76,19 @@ fn insert_coalesces_whatever_it_touches() {
 }
 
 #[test]
+fn overlaps_is_any_shared_byte() {
+    let mut set = CommittedSet::empty();
+    set.insert(2 * K, 4 * K);
+    assert!(set.overlaps(3 * K, 5 * K));
+    assert!(set.overlaps(0, 2 * K + 1));
+    assert!(set.overlaps(2 * K, 4 * K));
+    assert!(!set.overlaps(0, 2 * K), "touching is not overlapping");
+    assert!(!set.overlaps(4 * K, 5 * K), "touching is not overlapping");
+    assert!(!set.overlaps(3 * K, 3 * K), "an empty range shares nothing");
+    assert!(!CommittedSet::empty().overlaps(0, K));
+}
+
+#[test]
 fn an_empty_blob_is_covered_by_nothing() {
     assert!(CommittedSet::empty().covers(0));
     assert_eq!(next_range(&CommittedSet::empty(), &[], 0, K), None);

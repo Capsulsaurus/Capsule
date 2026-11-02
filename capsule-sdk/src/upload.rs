@@ -1012,9 +1012,10 @@ pub trait UploadSource: Sync {
     /// refuses the blob's hash.
     ///
     /// [`SourceIdentity::Affirmed`] is a positive claim that every byte the source returns is
-    /// the byte it returned before; only then does a refused hash re-create the session and send
-    /// the blob again. A source that cannot say — the default — answers
-    /// [`SourceIdentity::Unknown`], and a refused hash ends its transfer: re-sending ranges that
+    /// the byte it returned before; only then is a range this transfer already read sent again
+    /// (a lost answer, a re-plan, a re-created or resumed session) or a refused hash answered
+    /// with a re-created session. A source that cannot say — the default — answers
+    /// [`SourceIdentity::Unknown`], and its transfer ends at the first such re-send: ranges that
     /// may now seal to different ciphertexts under the same nonces would hand the server two
     /// ciphertexts per nonce. Bytes held in memory cannot change, so they affirm.
     ///
@@ -1298,6 +1299,10 @@ struct Recovery<'g> {
     /// Where each range reserves its memory and the server's advice is reported, when the
     /// transfer runs under a scheduler.
     gate: Option<&'g dyn TransferGate>,
+    /// Every byte this transfer has read for a request, in any of its sessions. A range that
+    /// overlaps it is a re-send, and is read again only from a source that affirms it is
+    /// unchanged (see [`UploadClient::fly`]).
+    sent: CommittedSet,
 }
 
 impl<'g> Recovery<'g> {
@@ -1308,6 +1313,7 @@ impl<'g> Recovery<'g> {
             engine: RetryClass::BulkTransfer.engine(),
             lane,
             gate,
+            sent: CommittedSet::empty(),
         }
     }
 
@@ -2244,6 +2250,9 @@ impl UploadClient {
         data: &S,
     ) -> Result<UploadOutcome, UploadError> {
         let mut recovery = Recovery::new(self.lane.clone(), None);
+        // The session predates this transfer, so any byte of the blob may already have been
+        // sent: every read is a re-send, from a source that must affirm it is unchanged.
+        recovery.sent = CommittedSet::prefix(request.size);
         if let Some(info) = self.head_waiting(session_id, &mut recovery).await? {
             let mut strategy = AdaptiveChunkSizeStrategy::for_file_size(request.size);
             if let Some(chunk) = info.advice.chunk(Duration::ZERO) {
@@ -2407,12 +2416,15 @@ impl UploadClient {
                         break;
                     };
                     flying.push(range);
+                    let resend = recovery.sent.overlaps(range.0, range.1);
+                    recovery.sent.insert(range.0, range.1);
                     flights.push(Box::pin(self.fly(
                         cursor.session_id.clone(),
                         request,
                         data,
                         gate,
                         range,
+                        resend,
                     )));
                 }
             }
@@ -2457,6 +2469,13 @@ impl UploadClient {
     /// Send one planned range: reserve its bytes under the scheduler, check the source, read
     /// exactly that window — a re-send reads it again, so the client holds a window of the
     /// blob, never the blob — and `PATCH` it.
+    ///
+    /// A `resend` overlaps bytes this transfer already read for a request (a lost answer, a
+    /// re-plan after `range_conflict`, a re-created or resumed session, a lost range record).
+    /// Its window is re-derived only from a source whose check, made just before the read,
+    /// affirms it is unchanged ([`SourceIdentity::Affirmed`]): re-deriving changed bytes would
+    /// put a second ciphertext under the nonces the first read spent. Any other source ends the
+    /// transfer with [`UploadError::SourceChanged`] and sends nothing again.
     async fn fly<S: UploadSource + ?Sized>(
         &self,
         session_id: String,
@@ -2464,6 +2483,7 @@ impl UploadClient {
         data: &S,
         gate: Option<&dyn TransferGate>,
         range: (u64, u64),
+        resend: bool,
     ) -> Flight {
         let (offset, end) = range;
         let len = end - offset;
@@ -2472,7 +2492,14 @@ impl UploadClient {
         let hold = RangeHold::reserve(gate, len).await;
         let mut started = std::time::Instant::now();
         let sent = async {
-            data.check_unchanged()?;
+            let identity = data.check_unchanged()?;
+            if resend && identity != SourceIdentity::Affirmed {
+                tracing::warn!(%session_id, offset, len, "a range already sent would be read again from a source that cannot affirm it is unchanged; not re-sending");
+                return Err(UploadError::SourceChanged(SourceChanged::new(
+                    "the source cannot affirm it is unchanged, so a range already sent is not \
+                     read and sent again",
+                )));
+            }
             let window = data
                 .read_at(offset, usize::try_from(len).unwrap_or(usize::MAX))
                 .map_err(UploadError::of_read)?;
