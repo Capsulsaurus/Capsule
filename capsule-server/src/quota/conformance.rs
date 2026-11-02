@@ -41,20 +41,27 @@ pub trait Harness: Send + Sync {
     /// The ledger under test.
     fn quotas(&self) -> &dyn QuotaStore;
 
-    /// Make `user` a subscriber of the pulled album `album` and have that album hold `address`,
-    /// of `size` bytes: what a committed pulled page leaves behind for the ledger to count.
+    /// Make `user` a subscriber of `peer`'s pulled album `album` and have that album hold
+    /// `address`, of `size` bytes: what a committed pulled page leaves behind for the ledger to
+    /// count.
     ///
     /// Setup rather than a port operation: the ledger never writes a pulled holding, it reads it.
     fn hold_pulled<'a>(
         &'a self,
         user: &'a UserId,
+        peer: &'a str,
         album: &'a str,
         address: &'a ContentAddress,
         size: u64,
     ) -> StoreFuture<'a, ()>;
 
-    /// End `user`'s subscription to the pulled album `album`.
-    fn unsubscribe<'a>(&'a self, user: &'a UserId, album: &'a str) -> StoreFuture<'a, ()>;
+    /// End `user`'s subscription to `peer`'s pulled album `album`.
+    fn unsubscribe<'a>(
+        &'a self,
+        user: &'a UserId,
+        peer: &'a str,
+        album: &'a str,
+    ) -> StoreFuture<'a, ()>;
 }
 
 /// Unwrap a ledger result, failing with the operation that was expected to work.
@@ -820,6 +827,12 @@ pub async fn expired_reservations_are_listed_earliest_first_and_bounded(h: &dyn 
 // Pulled blobs
 // ===========================================================================================
 
+/// The peer the pulled cases' albums are pulled from.
+const PEER: &str = "quota-conformance-peer";
+
+/// A second peer, for the case that holds one blob through two peers.
+const OTHER_PEER: &str = "quota-conformance-other-peer";
+
 /// The usage of `owner`, as the ledger reports it.
 async fn used(h: &dyn Harness, owner: &UserId) -> u64 {
     ok(h.quotas().usage(owner).await, "read usage").used
@@ -837,7 +850,7 @@ pub async fn a_pulled_blob_counts_in_full_against_each_subscriber(h: &dyn Harnes
     let blob = address("pulledshared", 1);
     for subscriber in [&first, &second] {
         ok(
-            h.hold_pulled(subscriber, "pulledshared-album", &blob, 40)
+            h.hold_pulled(subscriber, PEER, "pulledshared-album", &blob, 40)
                 .await,
             "hold a pulled blob",
         );
@@ -846,7 +859,7 @@ pub async fn a_pulled_blob_counts_in_full_against_each_subscriber(h: &dyn Harnes
     assert_eq!(used(h, &second).await, 40, "charged in full, never split");
 
     ok(
-        h.unsubscribe(&first, "pulledshared-album").await,
+        h.unsubscribe(&first, PEER, "pulledshared-album").await,
         "unsubscribe",
     );
     assert_eq!(used(h, &first).await, 0, "the unsubscribe released it");
@@ -864,29 +877,35 @@ pub async fn a_pulled_blob_counts_once_across_a_subscribers_albums(h: &dyn Harne
     let blob = address("pulledonce", 1);
     let other = address("pulledonce", 2);
     ok(
-        h.hold_pulled(&owner, "pulledonce-a", &blob, 30).await,
+        h.hold_pulled(&owner, PEER, "pulledonce-a", &blob, 30).await,
         "hold a pulled blob",
     );
     ok(
-        h.hold_pulled(&owner, "pulledonce-b", &blob, 30).await,
+        h.hold_pulled(&owner, PEER, "pulledonce-b", &blob, 30).await,
         "hold the same blob through a second album",
     );
     ok(
-        h.hold_pulled(&owner, "pulledonce-b", &other, 5).await,
+        h.hold_pulled(&owner, PEER, "pulledonce-b", &other, 5).await,
         "hold a second blob",
     );
     assert_eq!(used(h, &owner).await, 35, "the shared blob counts once");
 
-    ok(h.unsubscribe(&owner, "pulledonce-a").await, "unsubscribe");
+    ok(
+        h.unsubscribe(&owner, PEER, "pulledonce-a").await,
+        "unsubscribe",
+    );
     assert_eq!(
         used(h, &owner).await,
         35,
         "still held through the other album, so still charged"
     );
-    ok(h.unsubscribe(&owner, "pulledonce-b").await, "unsubscribe");
+    ok(
+        h.unsubscribe(&owner, PEER, "pulledonce-b").await,
+        "unsubscribe",
+    );
     assert_eq!(used(h, &owner).await, 0);
     ok(
-        h.unsubscribe(&owner, "pulledonce-b").await,
+        h.unsubscribe(&owner, PEER, "pulledonce-b").await,
         "unsubscribe twice",
     );
     assert_eq!(used(h, &owner).await, 0, "a second release credits nothing");
@@ -902,7 +921,8 @@ pub async fn a_pulled_blob_the_subscriber_uploaded_counts_once(h: &dyn Harness) 
         "charge an address",
     );
     ok(
-        h.hold_pulled(&owner, "pulledmine-album", &blob, 50).await,
+        h.hold_pulled(&owner, PEER, "pulledmine-album", &blob, 50)
+            .await,
         "hold the same blob pulled",
     );
     assert_eq!(
@@ -924,7 +944,7 @@ pub async fn a_pulled_blob_the_subscriber_uploaded_counts_once(h: &dyn Harness) 
         "the bytes are still held through the album, so they are still charged"
     );
     ok(
-        h.unsubscribe(&owner, "pulledmine-album").await,
+        h.unsubscribe(&owner, PEER, "pulledmine-album").await,
         "unsubscribe",
     );
     assert_eq!(used(h, &owner).await, 0);
@@ -943,7 +963,7 @@ pub async fn a_pulled_blob_another_account_uploaded_still_counts_for_the_receive
         "charge an address",
     );
     ok(
-        h.hold_pulled(&receiver, "pulledtheirs-album", &blob, 25)
+        h.hold_pulled(&receiver, PEER, "pulledtheirs-album", &blob, 25)
             .await,
         "hold the same blob pulled",
     );
@@ -960,8 +980,14 @@ pub async fn a_pulled_blob_another_account_uploaded_still_counts_for_the_receive
 pub async fn pulled_bytes_count_toward_the_hard_limit(h: &dyn Harness) {
     let owner = user("pulledlimit", 1);
     ok(
-        h.hold_pulled(&owner, "pulledlimit-album", &address("pulledlimit", 1), 150)
-            .await,
+        h.hold_pulled(
+            &owner,
+            PEER,
+            "pulledlimit-album",
+            &address("pulledlimit", 1),
+            150,
+        )
+        .await,
         "hold a pulled blob",
     );
     assert_eq!(
@@ -976,6 +1002,50 @@ pub async fn pulled_bytes_count_toward_the_hard_limit(h: &dyn Harness) {
     let usage = ok(h.quotas().usage(&owner).await, "read usage");
     assert_eq!(usage.used, 210);
     assert_eq!(usage.over_since, Some(day(3)));
+}
+
+/// A blob held through albums on two different peers is charged once, and an album is named by
+/// its peer as well as its id: unsubscribing from one peer's album leaves the same-id album on
+/// the other peer, and what it holds, charged.
+pub async fn a_pulled_blob_counts_once_across_a_subscribers_peers(h: &dyn Harness) {
+    let owner = user("pulledpeers", 1);
+    let blob = address("pulledpeers", 1);
+    let other = address("pulledpeers", 2);
+    ok(
+        h.hold_pulled(&owner, PEER, "pulledpeers-album", &blob, 30)
+            .await,
+        "hold a pulled blob",
+    );
+    ok(
+        h.hold_pulled(&owner, OTHER_PEER, "pulledpeers-album", &blob, 30)
+            .await,
+        "hold the same blob through the same-id album on a second peer",
+    );
+    ok(
+        h.hold_pulled(&owner, OTHER_PEER, "pulledpeers-album", &other, 5)
+            .await,
+        "hold a second blob on the second peer",
+    );
+    assert_eq!(
+        used(h, &owner).await,
+        35,
+        "the blob both peers hold counts once"
+    );
+
+    ok(
+        h.unsubscribe(&owner, PEER, "pulledpeers-album").await,
+        "unsubscribe from the first peer's album",
+    );
+    assert_eq!(
+        used(h, &owner).await,
+        35,
+        "the second peer's album still holds both blobs"
+    );
+    ok(
+        h.unsubscribe(&owner, OTHER_PEER, "pulledpeers-album").await,
+        "unsubscribe from the second peer's album",
+    );
+    assert_eq!(used(h, &owner).await, 0);
 }
 
 // ===========================================================================================
@@ -1012,6 +1082,7 @@ pub async fn run_all(h: &dyn Harness) {
     a_pulled_blob_the_subscriber_uploaded_counts_once(h).await;
     a_pulled_blob_another_account_uploaded_still_counts_for_the_receiver(h).await;
     pulled_bytes_count_toward_the_hard_limit(h).await;
+    a_pulled_blob_counts_once_across_a_subscribers_peers(h).await;
 }
 
 #[cfg(test)]

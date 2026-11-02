@@ -30,16 +30,22 @@ impl Harness for MemoryHarness {
     fn hold_pulled<'a>(
         &'a self,
         user: &'a UserId,
+        peer: &'a str,
         album: &'a str,
         address: &'a ContentAddress,
         size: u64,
     ) -> StoreFuture<'a, ()> {
-        self.pulled.hold(user, album, address, size);
+        self.pulled.hold(user, peer, album, address, size);
         Box::pin(async { Ok(()) })
     }
 
-    fn unsubscribe<'a>(&'a self, user: &'a UserId, album: &'a str) -> StoreFuture<'a, ()> {
-        self.pulled.unsubscribe(user, album);
+    fn unsubscribe<'a>(
+        &'a self,
+        user: &'a UserId,
+        peer: &'a str,
+        album: &'a str,
+    ) -> StoreFuture<'a, ()> {
+        self.pulled.unsubscribe(user, peer, album);
         Box::pin(async { Ok(()) })
     }
 }
@@ -82,6 +88,7 @@ conformance_cases! {
     a_pulled_blob_the_subscriber_uploaded_counts_once,
     a_pulled_blob_another_account_uploaded_still_counts_for_the_receiver,
     pulled_bytes_count_toward_the_hard_limit,
+    a_pulled_blob_counts_once_across_a_subscribers_peers,
 }
 
 /// The whole suite, in one pass on one ledger.

@@ -452,10 +452,14 @@ pub trait PulledHoldings: std::fmt::Debug + Send + Sync {
     fn held_by<'a>(&'a self, user: &'a UserId) -> StoreFuture<'a, BTreeMap<ContentAddress, u64>>;
 }
 
+/// One account's subscription to one peer's album: `(subscriber, peer, album)`, the key
+/// `federation_subscriptions` uses, so two peers' albums that share an id are two albums.
+type Subscription = (UserId, String, String);
+
 /// A deterministic [`PulledHoldings`]: which albums each account holds which blobs through.
 #[derive(Debug, Default)]
 pub struct InMemoryPulledHoldings {
-    held: Mutex<BTreeMap<(UserId, String), BTreeMap<ContentAddress, u64>>>,
+    held: Mutex<BTreeMap<Subscription, BTreeMap<ContentAddress, u64>>>,
 }
 
 impl InMemoryPulledHoldings {
@@ -464,17 +468,24 @@ impl InMemoryPulledHoldings {
         Self::default()
     }
 
-    /// `user` holds `address`, of `size` bytes, through `album`.
-    pub fn hold(&self, user: &UserId, album: &str, address: &ContentAddress, size: u64) {
+    /// `user` holds `address`, of `size` bytes, through `peer`'s album `album`.
+    pub fn hold(
+        &self,
+        user: &UserId,
+        peer: &str,
+        album: &str,
+        address: &ContentAddress,
+        size: u64,
+    ) {
         lock(&self.held)
-            .entry((user.clone(), album.to_owned()))
+            .entry((user.clone(), peer.to_owned(), album.to_owned()))
             .or_default()
             .insert(address.clone(), size);
     }
 
-    /// `user` no longer subscribes to `album`.
-    pub fn unsubscribe(&self, user: &UserId, album: &str) {
-        lock(&self.held).remove(&(user.clone(), album.to_owned()));
+    /// `user` no longer subscribes to `peer`'s album `album`.
+    pub fn unsubscribe(&self, user: &UserId, peer: &str, album: &str) {
+        lock(&self.held).remove(&(user.clone(), peer.to_owned(), album.to_owned()));
     }
 }
 
@@ -483,7 +494,7 @@ impl PulledHoldings for InMemoryPulledHoldings {
         Box::pin(async move {
             let held = lock(&self.held);
             let mut blobs = BTreeMap::new();
-            for ((holder, _), album) in held.iter() {
+            for ((holder, _, _), album) in held.iter() {
                 if holder == user {
                     for (address, size) in album {
                         let entry = blobs.entry(address.clone()).or_insert(0);

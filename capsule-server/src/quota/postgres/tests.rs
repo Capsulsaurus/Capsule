@@ -16,9 +16,6 @@ mod postgres_conformance {
         connection: DatabaseConnection,
     }
 
-    /// The peer every conformance album is pulled from.
-    const PEER: &str = "quota-conformance-peer";
-
     impl PostgresHarness {
         /// Run `sql` with `values`, as conformance setup.
         async fn run(&self, sql: &str, values: Vec<Value>) -> Result<(), StoreError> {
@@ -45,12 +42,13 @@ mod postgres_conformance {
         fn hold_pulled<'a>(
             &'a self,
             user: &'a UserId,
+            peer: &'a str,
             album: &'a str,
             address: &'a ContentAddress,
             size: u64,
         ) -> StoreFuture<'a, ()> {
             Box::pin(async move {
-                let job = || vec![Value::from(PEER), Value::from(album.to_owned())];
+                let job = || vec![Value::from(peer.to_owned()), Value::from(album.to_owned())];
                 let mut subscription = vec![Value::from(user.as_str().to_owned())];
                 subscription.extend(job());
                 self.run(
@@ -82,14 +80,19 @@ mod postgres_conformance {
             })
         }
 
-        fn unsubscribe<'a>(&'a self, user: &'a UserId, album: &'a str) -> StoreFuture<'a, ()> {
+        fn unsubscribe<'a>(
+            &'a self,
+            user: &'a UserId,
+            peer: &'a str,
+            album: &'a str,
+        ) -> StoreFuture<'a, ()> {
             Box::pin(async move {
                 self.run(
                     "DELETE FROM federation_subscriptions \
                      WHERE subscriber_id = $1 AND peer_id = $2 AND album_id = $3",
                     vec![
                         Value::from(user.as_str().to_owned()),
-                        Value::from(PEER),
+                        Value::from(peer.to_owned()),
                         Value::from(album.to_owned()),
                     ],
                 )
