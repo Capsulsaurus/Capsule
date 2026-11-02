@@ -7815,6 +7815,10 @@
     "message": "أرسل الرفع بيانات أكثر مما أعلن عنه.",
     "origin": "machine"
   },
+  "error.upload.source_changed": {
+    "message": "تغيّر هذا الملف أثناء رفعه، لذلك أُوقف رفعه.",
+    "origin": "machine"
+  },
   "error.upload.stale_revival": {
     "message": "يستند هذا التغيير إلى نسخة قديمة من العنصر.",
     "origin": "machine"

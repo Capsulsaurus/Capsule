@@ -7815,6 +7815,10 @@
     "message": "上传发送的数据超过了其声明的大小。",
     "origin": "machine"
   },
+  "error.upload.source_changed": {
+    "message": "此文件在上传过程中发生了变化，因此已停止上传。",
+    "origin": "machine"
+  },
   "error.upload.stale_revival": {
     "message": "此更改基于该项目的过时版本。",
     "origin": "machine"

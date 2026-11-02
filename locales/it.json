@@ -7815,6 +7815,10 @@
     "message": "Il caricamento ha inviato più dati di quanti ne avesse dichiarati.",
     "origin": "machine"
   },
+  "error.upload.source_changed": {
+    "message": "Questo file è cambiato durante il caricamento, quindi il caricamento è stato interrotto.",
+    "origin": "machine"
+  },
   "error.upload.stale_revival": {
     "message": "Questa modifica si basa su una versione non aggiornata dell'elemento.",
     "origin": "machine"

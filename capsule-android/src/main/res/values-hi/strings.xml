@@ -1944,6 +1944,7 @@
     <string name="error_upload_session_not_active">यह अपलोड पहले ही पूरा हो चुका है।</string>
     <string name="error_upload_session_not_found">अपलोड सत्र समाप्त हो गया। फिर से शुरू किया जा रहा है…</string>
     <string name="error_upload_size_exceeded">अपलोड ने अपने घोषित आकार से अधिक डेटा भेजा।</string>
+    <string name="error_upload_source_changed">अपलोड के दौरान यह फ़ाइल बदल गई, इसलिए इसका अपलोड रोक दिया गया।</string>
     <string name="error_upload_stale_revival">यह परिवर्तन आइटम के पुराने संस्करण पर आधारित है।</string>
     <string name="error_upload_storage_full">सर्वर का स्टोरेज भर गया है। जगह ख़ाली होने पर अपलोड फिर से शुरू होगा।</string>
     <string name="error_upload_storage_inconsistent">सर्वर को स्टोरेज समस्या आई। कृपया फिर से प्रयास करें।</string>

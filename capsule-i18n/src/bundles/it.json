@@ -1953,6 +1953,7 @@
   "error.upload.session_not_active": "Questo caricamento è già terminato.",
   "error.upload.session_not_found": "La sessione di caricamento è scaduta. Ricomincio…",
   "error.upload.size_exceeded": "Il caricamento ha inviato più dati di quanti ne avesse dichiarati.",
+  "error.upload.source_changed": "Questo file è cambiato durante il caricamento, quindi il caricamento è stato interrotto.",
   "error.upload.stale_revival": "Questa modifica si basa su una versione non aggiornata dell'elemento.",
   "error.upload.storage_full": "Lo spazio di archiviazione del server è esaurito. Il caricamento riprenderà quando verrà liberato spazio.",
   "error.upload.storage_inconsistent": "Il server ha riscontrato un problema di archiviazione. Riprova.",

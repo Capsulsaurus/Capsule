@@ -1953,6 +1953,7 @@
   "error.upload.session_not_active": "此上傳已完成。",
   "error.upload.session_not_found": "上傳工作階段已過期。正在重新開始…",
   "error.upload.size_exceeded": "上傳傳送的資料超過了其宣告的大小。",
+  "error.upload.source_changed": "此檔案在上傳過程中發生了變更，因此已停止上傳。",
   "error.upload.stale_revival": "此變更基於該項目的過時版本。",
   "error.upload.storage_full": "伺服器的儲存空間已滿。釋放空間後，上傳將會恢復。",
   "error.upload.storage_inconsistent": "伺服器遇到儲存問題。請重試。",

@@ -1953,6 +1953,7 @@
   "error.upload.session_not_active": "Ce téléversement est déjà terminé.",
   "error.upload.session_not_found": "La session de téléversement a expiré. Redémarrage…",
   "error.upload.size_exceeded": "Le téléversement a envoyé plus de données qu'il n'en avait déclaré.",
+  "error.upload.source_changed": "Ce fichier a changé pendant son téléversement, qui a donc été arrêté.",
   "error.upload.stale_revival": "Cette modification repose sur une version obsolète de l'élément.",
   "error.upload.storage_full": "Le serveur n'a plus d'espace de stockage. Le téléversement reprendra une fois de l'espace libéré.",
   "error.upload.storage_inconsistent": "Le serveur a rencontré un problème de stockage. Veuillez réessayer.",

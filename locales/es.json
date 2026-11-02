@@ -7815,6 +7815,10 @@
     "message": "La subida envió más datos de los que declaró.",
     "origin": "machine"
   },
+  "error.upload.source_changed": {
+    "message": "Este archivo cambió mientras se subía, así que se detuvo su subida.",
+    "origin": "machine"
+  },
   "error.upload.stale_revival": {
     "message": "Este cambio se basa en una versión desactualizada del elemento.",
     "origin": "machine"

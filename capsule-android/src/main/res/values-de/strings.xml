@@ -1944,6 +1944,7 @@
     <string name="error_upload_session_not_active">Dieser Upload ist bereits abgeschlossen.</string>
     <string name="error_upload_session_not_found">Die Upload-Sitzung ist abgelaufen. Neustart…</string>
     <string name="error_upload_size_exceeded">Der Upload hat mehr Daten gesendet als angegeben.</string>
+    <string name="error_upload_source_changed">Diese Datei hat sich während des Uploads geändert, daher wurde der Upload angehalten.</string>
     <string name="error_upload_stale_revival">Diese Änderung basiert auf einer veralteten Version des Elements.</string>
     <string name="error_upload_storage_full">Der Server hat keinen Speicherplatz mehr. Das Hochladen wird fortgesetzt, sobald Speicherplatz frei ist.</string>
     <string name="error_upload_storage_inconsistent">Auf dem Server ist ein Speicherproblem aufgetreten. Bitte versuchen Sie es erneut.</string>

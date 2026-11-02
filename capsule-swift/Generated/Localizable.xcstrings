@@ -163701,6 +163701,88 @@
         }
       }
     },
+    "error.upload.source_changed": {
+      "localizations": {
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "تغيّر هذا الملف أثناء رفعه، لذلك أُوقف رفعه."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diese Datei hat sich während des Uploads geändert, daher wurde der Upload angehalten."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This file changed while it was uploading, so its upload was stopped."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este archivo cambió mientras se subía, así que se detuvo su subida."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ce fichier a changé pendant son téléversement, qui a donc été arrêté."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "अपलोड के दौरान यह फ़ाइल बदल गई, इसलिए इसका अपलोड रोक दिया गया।"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Questo file è cambiato durante il caricamento, quindi il caricamento è stato interrotto."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "アップロード中にこのファイルが変更されたため、アップロードを停止しました。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "업로드 중에 이 파일이 변경되어 업로드를 중단했습니다."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este arquivo mudou enquanto era enviado, então o envio foi interrompido."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Этот файл изменился во время загрузки, поэтому загрузка остановлена."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此文件在上传过程中发生了变化，因此已停止上传。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此檔案在上傳過程中發生了變更，因此已停止上傳。"
+          }
+        }
+      }
+    },
     "error.upload.stale_revival": {
       "localizations": {
         "ar": {
