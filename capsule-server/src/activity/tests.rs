@@ -247,13 +247,26 @@ fn closed_windows_are_swept_once_the_set_outgrows_its_bound() {
                 None,
                 at
             ),
-            Admission::Opened
+            Admission::Opened { subject: None }
         );
     }
     assert_eq!(
         windows.open.len(),
         MIN_SWEEP_AT,
         "nothing is swept up to the bound"
+    );
+    assert_eq!(
+        windows.admit(
+            &UserId::new("early"),
+            ActivityKind::SignInLocked,
+            None,
+            at + SignedDuration::from_mins(30)
+        ),
+        Admission::Opened { subject: None }
+    );
+    assert_eq!(
+        windows.sweeps, 0,
+        "no sweep runs before any window can have closed"
     );
 
     let later = at + DETACHED_COALESCE_WINDOW;
@@ -264,12 +277,13 @@ fn closed_windows_are_swept_once_the_set_outgrows_its_bound() {
             None,
             later
         ),
-        Admission::Opened
+        Admission::Opened { subject: None }
     );
+    assert_eq!(windows.sweeps, 1);
     assert_eq!(
         windows.open.len(),
-        1,
-        "only the window opened just now survives"
+        2,
+        "only the window still open and the one opened just now survive"
     );
 }
 
@@ -277,33 +291,164 @@ fn closed_windows_are_swept_once_the_set_outgrows_its_bound() {
 fn the_accumulator_opens_no_window_past_its_bound_and_still_coalesces_the_open_ones() {
     let mut windows = Windows::default();
     let at = Timestamp::UNIX_EPOCH;
-    let owner = UserId::new("owner");
     let served = ActivityKind::ShareLinkServed;
-    for link in 0..MAX_OPEN_WINDOWS {
+    let owner = |n: usize| UserId::new(format!("owner-{n}"));
+    for n in 0..MAX_OPEN_WINDOWS {
         assert_eq!(
-            windows.admit(&owner, served, Some(&format!("link-{link}")), at),
-            Admission::Opened
+            windows.admit(&owner(n), served, Some("link"), at),
+            Admission::Opened {
+                subject: Some("link".to_owned())
+            }
+        );
+    }
+    let late = UserId::new("late");
+    let half_way = at + SignedDuration::from_mins(30);
+    for _ in 0..1_000 {
+        assert_eq!(
+            windows.admit(&late, served, Some("link"), half_way),
+            Admission::Full,
+            "nothing can have closed, so the set stays at its bound"
         );
     }
     assert_eq!(
-        windows.admit(&owner, served, Some("one too many"), at),
-        Admission::Full,
-        "a sweep that frees nothing leaves the set at its bound"
+        windows.sweeps, 0,
+        "a full set whose windows all still hold refuses without rescanning itself"
     );
     assert_eq!(windows.open.len(), MAX_OPEN_WINDOWS);
     assert_eq!(
-        windows.admit(&owner, served, Some("link-0"), at),
+        windows.admit(&owner(0), served, Some("link"), half_way),
         Admission::Coalesced,
         "a window already open still absorbs its link's serves"
     );
 
     let later = at + DETACHED_COALESCE_WINDOW;
     assert_eq!(
-        windows.admit(&owner, served, Some("one too many"), later),
-        Admission::Opened,
-        "once the open windows close, the sweep makes room"
+        windows.admit(&late, served, Some("link"), later),
+        Admission::Opened {
+            subject: Some("link".to_owned())
+        },
+        "once the open windows close, one sweep makes room"
     );
+    assert_eq!(windows.sweeps, 1);
     assert_eq!(windows.open.len(), 1);
+}
+
+#[test]
+fn a_dropped_named_window_gives_its_name_back() {
+    let mut windows = Windows::default();
+    let at = Timestamp::UNIX_EPOCH;
+    let owner = UserId::new("owner");
+    let served = ActivityKind::ShareLinkServed;
+    for link in 0..MAX_NAMED_SERVED_PER_ACCOUNT {
+        windows.admit(&owner, served, Some(&format!("link-{link}")), at);
+    }
+    windows.withdraw(&owner, served, Some("link-0".to_owned()));
+    assert_eq!(
+        windows.admit(&owner, served, Some("link-0"), at),
+        Admission::Opened {
+            subject: Some("link-0".to_owned())
+        },
+        "a window whose event was not written does not count against the account"
+    );
+}
+
+#[tokio::test]
+async fn an_account_names_a_bounded_number_of_links_and_peers_per_window() {
+    let (activity, clock) = context();
+    let owner = UserId::new("owner");
+    for link in 0..MAX_NAMED_SERVED_PER_ACCOUNT - 1 {
+        assert_eq!(
+            activity.record_served(&owner, Served::ShareLink(&format!("link-{link}"))),
+            Detached::Started
+        );
+    }
+    assert_eq!(
+        activity.record_served(&owner, Served::Peer("peer-a.test")),
+        Detached::Started,
+        "links and peers share the account's names"
+    );
+    for link in 100..140 {
+        let expected = if link == 100 {
+            Detached::Started
+        } else {
+            Detached::Coalesced
+        };
+        assert_eq!(
+            activity.record_served(&owner, Served::ShareLink(&format!("link-{link}"))),
+            expected,
+            "every link past the bound is counted into one unnamed event"
+        );
+    }
+    assert_eq!(
+        activity.record_served(&owner, Served::Peer("peer-b.test")),
+        Detached::Started,
+        "each served kind has an unnamed window of its own"
+    );
+    assert_eq!(
+        activity.record_served(&owner, Served::Peer("peer-c.test")),
+        Detached::Coalesced
+    );
+    assert_eq!(
+        activity.record_served(&owner, Served::ShareLink("link-0")),
+        Detached::Coalesced,
+        "a link named before the bound keeps its own window"
+    );
+    assert_eq!(
+        activity.record_served(&UserId::new("other"), Served::ShareLink("link-x")),
+        Detached::Started,
+        "one account's links spend no other account's names"
+    );
+    activity.settled().await;
+
+    let events = activity.recent(&owner, 1_000).await.expect("a read");
+    assert_eq!(events.len(), MAX_NAMED_SERVED_PER_ACCOUNT + 2);
+    let unnamed: Vec<ActivityKind> = events
+        .iter()
+        .filter(|event| event.subject.is_none())
+        .map(|event| event.kind)
+        .collect();
+    assert_eq!(
+        unnamed,
+        [ActivityKind::PeerServed, ActivityKind::ShareLinkServed]
+    );
+
+    clock.advance(DETACHED_COALESCE_WINDOW);
+    assert_eq!(
+        activity.record_served(&owner, Served::ShareLink("link-120")),
+        Detached::Started,
+        "the next window names links again"
+    );
+    activity.settled().await;
+    let newest = activity.recent(&owner, 1).await.expect("a read");
+    assert_eq!(newest[0].subject.as_deref(), Some("link-120"));
+}
+
+#[tokio::test]
+async fn a_full_serving_set_never_drops_a_sign_in_event() {
+    let (activity, clock) = context();
+    {
+        let mut served = lock(&activity.served_windows);
+        let at = clock.now();
+        for n in 0..MAX_OPEN_WINDOWS {
+            served.admit(
+                &UserId::new(format!("owner-{n}")),
+                ActivityKind::ShareLinkServed,
+                Some("link"),
+                at,
+            );
+        }
+    }
+    assert_eq!(
+        activity.record_served(&UserId::new("late"), Served::ShareLink("link")),
+        Detached::Dropped,
+        "the serving set is at its bound"
+    );
+    assert_eq!(
+        activity.record_detached(&UserId::new("alice"), ActivityKind::SignInPasswordRefused),
+        Detached::Started,
+        "sign-in windows are not serving's to spend"
+    );
+    activity.settled().await;
 }
 
 #[tokio::test]
