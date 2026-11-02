@@ -17,8 +17,8 @@
 //! # Reusing a harness
 //!
 //! Every case scopes its own account, so cases may share one store and [`run_all`] does. The
-//! sweep cases reach across accounts, so they record their expired events before [`at`]'s origin,
-//! where no other case records, and sweep only up to it.
+//! sweep cases reach across accounts, so they record their expired events before the fixed
+//! origin every other case records after, and sweep only up to it.
 
 use jiff::{SignedDuration, Timestamp};
 
@@ -234,8 +234,8 @@ pub async fn a_duplicate_event_id_is_refused_and_the_first_stands(h: &dyn Harnes
     assert_eq!(everything(h, "duplicate").await, vec![first]);
 }
 
-/// Every event an account that has stopped recording holds before the origin, the instants
-/// `before_origin` seconds before [`at`]'s origin.
+/// Record one event of `case` for each entry of `before_origin`, that many seconds before the
+/// fixed origin: the log of an account that has stopped recording.
 async fn record_before_origin(h: &dyn Harness, case: &str, before_origin: &[i64]) {
     for (n, secs) in before_origin.iter().enumerate() {
         record(h, event(case, n + 1, -secs)).await;
