@@ -1,7 +1,7 @@
 //! Invariant 20: everything a peer sends is re-validated before anything of it is written.
 //!
-//! design/threat-model/validation.md: on federation pull, invariants 1–18 are re-applied and
-//! federation never loosens a rule; invariant 25 binds the metadata blob. This module is that
+//! design/threat-model/validation.md: on federation pull, invariants 1–18 and 25 are re-applied,
+//! each as strict as the compacted feed lets a receiver check it. This module is that
 //! re-application, as two pure functions over values — [`screen_page`] over a page of the feed
 //! and the album's last accepted state, [`check_metadata_blob`] over the bytes fetched for one
 //! entry — so every rule is asserted directly, and the puller only times and sequences them.
@@ -24,7 +24,7 @@
 //! | 16 | The manifest decodes through the server's one parser, is canonical, keeps the presence rules, and its action agrees with the entry's change. |
 //! | 17 | The stale-revival defense: a manifest the asset already moved past, or a second `create`, is refused. |
 //! | 18 | An asset's AMK epoch never regresses along its chain as this server accepted it. Not album-wide: the feed re-mints a position without a new record and replays from zero after a restart, so an honest feed serves an older epoch after a newer one. MLS is the authority on the album's epoch, checked by the receiving client. |
-//! | 25 | The metadata blob's content hash is its address. A record that binds one names it as `metadata_blob_hash` and the entry names that blob; a record that binds none is served with the blob the asset holds, which must be the held one when the record is or directly continues the held head. |
+//! | 25 | The metadata blob's content hash is its address. A record that binds one names it as `metadata_blob_hash` and the entry names that blob; a record that binds none is served with the blob the asset holds, which must be the held one when the record is or directly continues the held head, and never replaces the held one when it skips past it. |
 //!
 //! Beyond them, the feed's own contract: every entry names the subscribed album, and `sync_seq`
 //! strictly increases past the high-water mark (the anti-rewind rule of design/sync.md).
@@ -225,8 +225,8 @@ pub fn screen_page(
     let mut needed: BTreeMap<Hash32, Option<u64>> = BTreeMap::new();
     for entry in page.entries {
         let screened = screen_entry(entry, album, &mut state, ctx, rules)?;
-        if let Some(accepted) = screened {
-            if let Some(hash) = accepted.metadata_blob {
+        if let Some((accepted, fetch)) = screened {
+            if let Some(hash) = fetch {
                 let size = accepted
                     .blobs
                     .iter()
@@ -253,14 +253,15 @@ pub fn screen_page(
 }
 
 /// One entry, applied to `state` when it passes. `None` when it is passed over: an entry with no
-/// manifest from an established peer, which its home server could not produce.
+/// manifest from an established peer, which its home server could not produce. Beside the entry,
+/// the metadata blob the page must fetch for it, if any.
 fn screen_entry(
     entry: SyncEntry,
     album: uuid::Uuid,
     state: &mut PulledAlbum,
     ctx: &Context<'_>,
     rules: &Rules,
-) -> Result<Option<AcceptedEntry>, Refused> {
+) -> Result<Option<(AcceptedEntry, Option<Hash32>)>, Refused> {
     // The feed's own contract: the album asked for, in strictly increasing order.
     if uuid::Uuid::parse_str(&entry.album_id).ok() != Some(album) {
         return Err(Invalid::new("invariant 6", "an entry names another album").into());
@@ -329,19 +330,22 @@ fn screen_entry(
                     },
                 );
             }
-            return Ok(Some(AcceptedEntry {
-                asset_id,
-                sync_seq,
-                change,
-                changed_at,
-                manifest: None,
-                head: None,
-                metadata_blob: None,
-                blobs: Vec::new(),
-                derivative_manifests: Vec::new(),
-                original_held: entry.original_held,
-                purged,
-            }));
+            return Ok(Some((
+                AcceptedEntry {
+                    asset_id,
+                    sync_seq,
+                    change,
+                    changed_at,
+                    manifest: None,
+                    head: None,
+                    metadata_blob: None,
+                    blobs: Vec::new(),
+                    derivative_manifests: Vec::new(),
+                    original_held: entry.original_held,
+                    purged,
+                },
+                None,
+            )));
         }
         if rules.manifest_required {
             return Err(Invalid::new(
@@ -425,7 +429,7 @@ fn screen_entry(
     let head = hash_bytes(&bytes);
     let held = state.assets.get(&asset_id);
     // 25: the entry names the metadata blob the asset's records bind.
-    let metadata_blob = metadata_bound(core, head, metadata_named, held)?;
+    let (metadata_blob, fetch) = metadata_bound(core, head, metadata_named, held)?;
     // 17: the stale-revival defense.
     if let Some(held) = held {
         if held.superseded.contains(&head) {
@@ -471,37 +475,48 @@ fn screen_entry(
     };
     state.assets.insert(asset_id.clone(), next);
 
-    Ok(Some(AcceptedEntry {
-        asset_id,
-        sync_seq,
-        change,
-        changed_at,
-        manifest: Some(bytes),
-        head: Some(head),
-        metadata_blob,
-        blobs,
-        derivative_manifests,
-        original_held: entry.original_held,
-        purged,
-    }))
+    Ok(Some((
+        AcceptedEntry {
+            asset_id,
+            sync_seq,
+            change,
+            changed_at,
+            manifest: Some(bytes),
+            head: Some(head),
+            metadata_blob,
+            blobs,
+            derivative_manifests,
+            original_held: entry.original_held,
+            purged,
+        },
+        fetch,
+    )))
 }
 
 /// Invariant 25 on one entry: the metadata blob it names, given its record and the asset's held
-/// head. Answers the blob the page must fetch and the asset now carries.
+/// head. Answers the blob the asset now carries, and the blob the page must fetch for it.
 ///
 /// A record that binds one (`create`, `replace`, `metadata-update`) must be served with exactly
 /// that blob. A `delete` is served with none. A record that binds none (`derivative-*`,
 /// `trash-restore`) is served with the blob the asset's last binding record committed to, which
-/// the home server keeps: when it is the head held here or directly continues it, that is the
-/// held blob; when it continues past records this server never pulled, the binding record is
-/// one the compacted feed no longer serves, so the named blob is taken at its address (fetched
-/// and checked against it) and the receiving client verifies the chain with keys.
+/// the home server keeps:
+///
+/// - When this server holds no blob for the asset, the binding record is one the compacted feed
+///   no longer serves, so the named blob is taken at its address (fetched and checked against
+///   it) and the receiving client verifies the chain with keys.
+/// - When the record is the head held here or directly continues it, the named blob must be the
+///   held one, so a swap is refused.
+/// - When it continues past records this server never pulled, the named blob is never taken
+///   over the held one: only a signed binding record proves a newer blob, and a record binding
+///   none proves nothing about it. A peer could otherwise pair a genuine skipping record with an
+///   older genuine blob of the same asset and roll back what this server holds. The held blob
+///   is kept and nothing is fetched; a newer blob arrives with the next binding record.
 fn metadata_bound(
     core: &ManifestCore,
     head: Hash32,
     named: Option<Hash32>,
     held: Option<&AssetHead>,
-) -> Result<Option<Hash32>, Invalid> {
+) -> Result<(Option<Hash32>, Option<Hash32>), Invalid> {
     if core.action.binds_metadata_blob() || core.action == Action::Delete {
         if named != core.metadata_blob_hash {
             return Err(Invalid::new(
@@ -509,22 +524,28 @@ fn metadata_bound(
                 "the entry's metadata blob is not the one the manifest commits to",
             ));
         }
-        return Ok(named);
+        return Ok((named, named));
     }
-    let Some(held) = held.filter(|held| {
-        held.metadata_blob.is_some()
-            && (held.head == head || core.prior_provenance_hash == Some(held.head))
-    }) else {
-        tracing::debug!(action = ?core.action, "a record binding no metadata blob continues past records this server never pulled; its blob is taken at its address");
-        return Ok(named);
+    let Some(held) = held.filter(|held| held.metadata_blob.is_some()) else {
+        tracing::debug!(action = ?core.action, "a record binding no metadata blob names one this server does not hold; it is taken at its address");
+        return Ok((named, named));
     };
-    if named != held.metadata_blob {
+    if named == held.metadata_blob {
+        return Ok((named, named));
+    }
+    if held.head == head || core.prior_provenance_hash == Some(held.head) {
         return Err(Invalid::new(
             "invariant 25",
             "a record binding no metadata blob is served with another than the asset holds",
         ));
     }
-    Ok(named)
+    tracing::info!(
+        action = ?core.action,
+        named = ?named.map(|hash| hash.to_hex()),
+        held = ?held.metadata_blob.map(|hash| hash.to_hex()),
+        "a record binding no metadata blob skips past the held head with another blob; the held blob is kept"
+    );
+    Ok((held.metadata_blob, None))
 }
 
 /// Decode `bytes` through the server's one manifest parser, and require the record form, in its

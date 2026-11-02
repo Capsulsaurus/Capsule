@@ -804,6 +804,58 @@ fn a_head_binding_no_metadata_blob_cannot_swap_the_one_its_asset_holds() {
 }
 
 #[test]
+fn a_record_binding_none_that_skips_the_held_head_cannot_roll_back_its_metadata_blob() {
+    // A genuine derivative-add or trash-restore that continues past records this server never
+    // pulled, paired with an older genuine metadata blob of the same asset: the record proves
+    // nothing about the blob, so the held one is kept and the named one is never fetched.
+    let first = create(1);
+    let state = holding(1, &first);
+    let unseen = hash_bytes(b"a record this server never pulled");
+    let older = b"an older metadata blob of the same asset";
+    for action in [
+        Action::DerivativeAdd,
+        Action::DerivativeReplace,
+        Action::TrashRestore,
+    ] {
+        let skipping = record(core(asset(1), action, Some(unseen), 1));
+        let mut served = entry(asset(1), 2, "updated", Some(&skipping));
+        served["metadata_blob"] = serde_json::json!(hash_bytes(older).to_hex());
+        let screened = screen(page(vec![served], "c2", false), &state, &established())
+            .unwrap_or_else(|refused| panic!("{action:?}: {refused}"));
+        assert_eq!(
+            screened.page.entries[0].metadata_blob,
+            Some(hash_bytes(METADATA)),
+            "{action:?}: the entry carries the held blob"
+        );
+        assert!(
+            screened.needed.is_empty(),
+            "{action:?}: the named blob is never fetched"
+        );
+        let held = &screened.page.state.assets[&asset(1).to_string()];
+        assert_eq!(held.head, hash_bytes(&skipping), "{action:?}");
+        assert_eq!(
+            held.metadata_blob,
+            Some(hash_bytes(METADATA)),
+            "{action:?}: the held blob is kept"
+        );
+    }
+
+    // Served with the held blob, the same record is accepted and its blob checked as before.
+    let skipping = record(core(asset(1), Action::DerivativeAdd, Some(unseen), 1));
+    let screened = screen(
+        page(
+            vec![entry(asset(1), 2, "updated", Some(&skipping))],
+            "c2",
+            false,
+        ),
+        &state,
+        &established(),
+    )
+    .expect("a skipping record served with the held blob is accepted");
+    assert_eq!(screened.needed.len(), 1);
+}
+
+#[test]
 fn a_restore_brings_back_the_metadata_blob_the_delete_kept() {
     let first = create(1);
     let state = holding(1, &first);

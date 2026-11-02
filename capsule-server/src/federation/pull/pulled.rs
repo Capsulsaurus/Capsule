@@ -127,8 +127,9 @@ pub struct AcceptedEntry {
     pub manifest: Option<Vec<u8>>,
     /// The record's hash, the asset's chain head after this entry.
     pub head: Option<Hash32>,
-    /// The metadata blob the entry names, whose bytes the page carries: the one the manifest
-    /// commits to, or, under a record that binds none, the one the asset's chain last bound.
+    /// The metadata blob the asset carries after this entry: the one the manifest commits to,
+    /// or, under a record that binds none, the one the asset's chain last bound. Its bytes are
+    /// in this page, or were kept by an earlier one when the record keeps the held blob.
     pub metadata_blob: Option<Hash32>,
     /// The asset's blobs, by address. Their bytes are fetched when a member views them.
     pub blobs: Vec<PulledBlob>,
