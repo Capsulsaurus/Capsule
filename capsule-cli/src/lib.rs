@@ -23,8 +23,8 @@ use capsule_library::lifecycle::{DerivativeStatus, Workspace, unanchored_sidecar
 use capsule_sdk::cache_budget::DesktopConnectionClass;
 use cli::{
     AuthCommands, CacheCommands, CameraCommands, Cli, Commands, EditCommands, EditLibraryArgs,
-    ImportProviderArg, LabelArgs, LabelCommands, LibraryCommands, PathArgs, PeerCommands,
-    RegionCommands, RepairCommands, ShareCommands, SyncCommands, TrashCommands,
+    FederationCommands, ImportProviderArg, LabelArgs, LabelCommands, LibraryCommands, PathArgs,
+    PeerCommands, RegionCommands, RepairCommands, ShareCommands, SyncCommands, TrashCommands,
 };
 use colored::*;
 use dialoguer::{Confirm, Input, Password};
@@ -44,6 +44,7 @@ pub mod cull;
 pub mod db;
 pub mod demo;
 pub mod edit;
+pub mod federation;
 pub mod i18n;
 pub mod import_report;
 pub mod import_run;
@@ -856,6 +857,19 @@ async fn dispatch(command: Commands) -> Result<()> {
                 .await?;
             }
             ShareCommands::Revoke { opaque_id, json } => share_revoke(&opaque_id, json).await?,
+        },
+
+        // ── Federation ────────────────────────────────────────────────────
+        Commands::Federation { command } => match command {
+            FederationCommands::Subscribe { issuer, json } => {
+                federation_subscribe(&issuer, &mut std::io::stdin().lock(), json).await?;
+            }
+            FederationCommands::List { json } => federation_list(json).await?,
+            FederationCommands::Unsubscribe {
+                peer,
+                album_id,
+                json,
+            } => federation_unsubscribe(&peer, &album_id, json).await?,
         },
 
         // ── Peer ──────────────────────────────────────────────────────────
@@ -2801,6 +2815,123 @@ async fn share_revoke(opaque_id: &str, json: bool) -> Result<()> {
             share::describe_error(&error)
         )),
     }
+}
+
+/// What `capsule federation list --json` prints.
+#[derive(Debug, serde::Serialize)]
+struct SubscriptionsReport {
+    /// Every subscription, live or lapsed, ordered by peer and then album.
+    subscriptions: Vec<federation::SubscriptionEntry>,
+}
+
+/// What `capsule federation unsubscribe --json` prints.
+#[derive(Debug, serde::Serialize)]
+struct UnsubscribeReport {
+    /// The album's home server, as given.
+    peer: String,
+    /// The album, as given.
+    album_id: String,
+    /// Always true: the album is no longer pulled for this account. A refusal exits non-zero
+    /// and prints no document.
+    unsubscribed: bool,
+}
+
+/// `capsule federation subscribe`: post the capability read from `stdin` for `issuer`'s album.
+///
+/// With `json`, stdout carries exactly one document, [`federation::Subscribed`].
+async fn federation_subscribe(
+    issuer: &str,
+    stdin: &mut impl std::io::BufRead,
+    json: bool,
+) -> Result<()> {
+    let token = read_stdin_secret(stdin, "the capability token")?;
+    let remote = remote::RemoteConfig::from_env();
+    let store = session_store()?;
+    let subscribed = federation::subscribe(&remote, &store, issuer, &token)
+        .await
+        .map_err(|error| {
+            eyre!(
+                "Subscription not recorded: {}",
+                federation::describe_error(&error)
+            )
+        })?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&subscribed)?);
+        return Ok(());
+    }
+    let entry = &subscribed.subscription;
+    let line = if subscribed.created {
+        format!("Subscribed to album {} on {}.", entry.album_id, entry.peer)
+    } else {
+        format!(
+            "Already subscribed to album {} on {}; its access now lasts until {}.",
+            entry.album_id, entry.peer, entry.expires_at
+        )
+    };
+    println!("{}", line.green());
+    Ok(())
+}
+
+/// `capsule federation list`: the signed-in account's subscriptions.
+///
+/// With `json`, stdout carries exactly one document, [`SubscriptionsReport`].
+async fn federation_list(json: bool) -> Result<()> {
+    let remote = remote::RemoteConfig::from_env();
+    let store = session_store()?;
+    let subscriptions = federation::list(&remote, &store).await.map_err(|error| {
+        eyre!(
+            "Subscriptions not listed: {}",
+            federation::describe_error(&error)
+        )
+    })?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&SubscriptionsReport { subscriptions })?
+        );
+        return Ok(());
+    }
+    if subscriptions.is_empty() {
+        println!(
+            "{}",
+            "No subscriptions to albums on other servers.".yellow()
+        );
+        return Ok(());
+    }
+    for entry in &subscriptions {
+        let state = if entry.live {
+            format!("live until {}", entry.expires_at).green()
+        } else {
+            "lapsed: post a fresh invite to resume".yellow()
+        };
+        println!("{}  {}  {state}", entry.peer, entry.album_id.bold());
+    }
+    Ok(())
+}
+
+/// `capsule federation unsubscribe`: stop pulling `album_id` from `peer` for this account.
+///
+/// With `json`, stdout carries exactly one document, [`UnsubscribeReport`].
+async fn federation_unsubscribe(peer: &str, album_id: &str, json: bool) -> Result<()> {
+    let remote = remote::RemoteConfig::from_env();
+    let store = session_store()?;
+    federation::unsubscribe(&remote, &store, peer, album_id)
+        .await
+        .map_err(|error| eyre!("Not unsubscribed: {}", federation::describe_error(&error)))?;
+    if json {
+        let report = UnsubscribeReport {
+            peer: peer.to_owned(),
+            album_id: album_id.to_owned(),
+            unsubscribed: true,
+        };
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
+    println!(
+        "{}",
+        format!("Album {album_id} on {peer} is no longer pulled for this account.").green()
+    );
+    Ok(())
 }
 
 /// A whole-run `capsule peer` failure, as the line the process exits with.
