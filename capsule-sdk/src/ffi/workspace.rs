@@ -930,8 +930,10 @@ pub struct FfiPurgeOutcome {
     /// The purged asset (UUID string).
     pub asset_id: String,
     /// The signed shorter-retention `delete` an early purge appended, as the opaque canonical
-    /// CBOR provenance record [`FfiWorkspace::provenance_head`] would have returned. Send it to
-    /// the album's ops surface so the server may purge too; when that delivery fails,
+    /// CBOR provenance record [`FfiWorkspace::provenance_head`] would have returned. It goes to
+    /// the album's ops surface so the server may purge too, through
+    /// [`FfiSession::deliver_purge`](super::FfiSession::deliver_purge), which sends it with any
+    /// `delete` it chains onto that the server never saw; when that delivery fails,
     /// [`FfiWorkspace::purged_record`] hands the same record back from the kept chain. `None`
     /// when the window had closed.
     pub reissue_record: Option<Vec<u8>>,
@@ -1975,8 +1977,10 @@ impl FfiWorkspace {
     /// The signed `delete` that ended a purged asset, the head of its kept provenance chain, as
     /// the opaque canonical CBOR record [`FfiPurgeOutcome::reissue_record`] carries. After an
     /// early purge it is that same re-issue, so a delivery to the album's ops surface that
-    /// failed can be resent from here, also after a reopen. `None` for an asset this workspace
-    /// has not purged.
+    /// failed can be resent from here, also after a reopen
+    /// ([`FfiSession::apply_lifecycle_op`](super::FfiSession::apply_lifecycle_op), or
+    /// [`FfiSession::deliver_purge`](super::FfiSession::deliver_purge) for the whole stretch).
+    /// `None` for an asset this workspace has not purged.
     pub fn purged_record(&self, asset_id: String) -> Result<Option<Vec<u8>>, FfiError> {
         let asset_id = parse_uuid("asset_id", &asset_id)?;
         self.with(|ws| {
