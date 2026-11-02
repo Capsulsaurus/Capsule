@@ -7587,6 +7587,10 @@
     "message": "Capsule n'a pas pu envoyer cette partie du fichier.",
     "origin": "machine"
   },
+  "error.request.too_early": {
+    "message": "Cette requête a été envoyée trop tôt. Veuillez réessayer.",
+    "origin": "machine"
+  },
   "error.request.too_large": {
     "message": "Cette requête était trop volumineuse pour être acceptée.",
     "origin": "machine"
@@ -7779,6 +7783,10 @@
     "message": "Vous ne pouvez pas téléverser au nom de cet utilisateur.",
     "origin": "machine"
   },
+  "error.upload.range_conflict": {
+    "message": "Une partie de ce téléversement est déjà en cours d'envoi. Reprise…",
+    "origin": "machine"
+  },
   "error.upload.rate_limited": {
     "message": "Le téléversement est suspendu un instant. Il reprendra de lui-même.",
     "origin": "machine"
@@ -7821,6 +7829,14 @@
   },
   "error.upload.timestamp_out_of_range": {
     "message": "L'horloge de votre appareil semble incorrecte. Vérifiez sa date et son heure.",
+    "origin": "machine"
+  },
+  "error.upload.too_fragmented": {
+    "message": "Ce téléversement comporte trop de lacunes. Comblement en cours…",
+    "origin": "machine"
+  },
+  "error.upload.too_many_in_flight": {
+    "message": "Trop de parties de ce téléversement sont envoyées en même temps. Ralentissement…",
     "origin": "machine"
   },
   "error.upload.unavailable": {

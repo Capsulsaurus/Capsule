@@ -1887,6 +1887,7 @@
     <string name="error_request_not_found">Capsule はそれを見つけられませんでした。</string>
     <string name="error_request_not_implemented">Capsule はそのリクエストを処理できませんでした。</string>
     <string name="error_request_range_not_satisfiable">Capsule はファイルのその部分を送信できませんでした。</string>
+    <string name="error_request_too_early">そのリクエストは早すぎるタイミングで送信されました。もう一度お試しください。</string>
     <string name="error_request_too_large">そのリクエストは大きすぎるため受け付けられませんでした。</string>
     <string name="error_request_unauthenticated">もう一度サインインしてください。</string>
     <string name="error_request_unprocessable">そのリクエストの一部が正しくありません。</string>
@@ -1935,6 +1936,7 @@
     <string name="error_upload_missing_offset">アップロードリクエストに位置マーカーがありません。</string>
     <string name="error_upload_offset_mismatch">アップロードの同期がずれたため、再調整しています。</string>
     <string name="error_upload_owner_not_permitted">このユーザーの代わりにアップロードすることはできません。</string>
+    <string name="error_upload_range_conflict">このアップロードの一部はすでに送信中です。再開しています…</string>
     <string name="error_upload_rate_limited">アップロードを一時停止しています。自動的に再開されます。</string>
     <string name="error_upload_receipt_not_available">アップロードが完了していないため、ストレージの受領証はまだ利用できません。</string>
     <string name="error_upload_replace_incomplete">Capsule はこの写真の新しいバージョンを受信中です。自動的に完了します。</string>
@@ -1946,6 +1948,8 @@
     <string name="error_upload_storage_full">サーバーのストレージ容量が不足しています。空き容量が確保されるとアップロードが再開されます。</string>
     <string name="error_upload_storage_inconsistent">サーバーでストレージの問題が発生しました。もう一度お試しください。</string>
     <string name="error_upload_timestamp_out_of_range">デバイスの時計が正しくないようです。日付と時刻を確認してください。</string>
+    <string name="error_upload_too_fragmented">このアップロードには欠けている部分が多すぎます。補っています…</string>
+    <string name="error_upload_too_many_in_flight">このアップロードの同時送信数が多すぎます。速度を落としています…</string>
     <string name="error_upload_unavailable">アップロードを完了できませんでした。もう一度お試しください。</string>
     <string name="error_upload_unknown_crypto_suite">このアプリのバージョンは、サーバーが認識しない暗号スイートを使用しています。</string>
     <string name="error_upload_unknown_derivative_format">このサムネイルまたはプレビューはサポートされていない形式です。</string>

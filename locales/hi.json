@@ -7587,6 +7587,10 @@
     "message": "Capsule फ़ाइल का वह हिस्सा नहीं भेज सका।",
     "origin": "machine"
   },
+  "error.request.too_early": {
+    "message": "वह अनुरोध बहुत जल्दी भेजा गया था। कृपया फिर से प्रयास करें।",
+    "origin": "machine"
+  },
   "error.request.too_large": {
     "message": "वह अनुरोध स्वीकार करने के लिए बहुत बड़ा था।",
     "origin": "machine"
@@ -7779,6 +7783,10 @@
     "message": "आप इस उपयोगकर्ता की ओर से अपलोड नहीं कर सकते।",
     "origin": "machine"
   },
+  "error.upload.range_conflict": {
+    "message": "इस अपलोड का एक हिस्सा पहले से भेजा जा रहा है। फिर से शुरू हो रहा है…",
+    "origin": "machine"
+  },
   "error.upload.rate_limited": {
     "message": "अपलोड कुछ देर के लिए रुका है। यह अपने आप फिर शुरू हो जाएगा।",
     "origin": "machine"
@@ -7821,6 +7829,14 @@
   },
   "error.upload.timestamp_out_of_range": {
     "message": "आपके डिवाइस की घड़ी ग़लत लगती है। इसकी तारीख़ और समय जाँचें।",
+    "origin": "machine"
+  },
+  "error.upload.too_fragmented": {
+    "message": "इस अपलोड में बहुत अधिक अंतराल हैं। उन्हें भरा जा रहा है…",
+    "origin": "machine"
+  },
+  "error.upload.too_many_in_flight": {
+    "message": "इस अपलोड के बहुत सारे हिस्से एक साथ भेजे जा रहे हैं। गति धीमी की जा रही है…",
     "origin": "machine"
   },
   "error.upload.unavailable": {

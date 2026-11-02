@@ -1370,9 +1370,12 @@ async fn lane_server() -> (MockServer, Arc<Mutex<Vec<String>>>) {
     (server, creates)
 }
 
-/// Push two real bundles on one lane under `sessions`, with a one-byte budget, and return each
-/// bundle's asset id and the asset each create was for.
-async fn push_two_on_one_lane(sessions: u32) -> (String, String, Vec<String>) {
+/// Push two real bundles on one lane under `sessions` and the lane's `session_cap`, with a
+/// one-byte budget, and return each bundle's asset id and the asset each create was for.
+async fn push_two_on_one_lane(
+    sessions: u32,
+    session_cap: Option<u32>,
+) -> (String, String, Vec<String>) {
     let (_dir_a, a) = real_bundle();
     let (_dir_b, b) = real_bundle();
     let (server, creates) = lane_server().await;
@@ -1395,6 +1398,7 @@ async fn push_two_on_one_lane(sessions: u32) -> (String, String, Vec<String>) {
                 held: &held,
             },
         ],
+        session_cap,
     }];
     // One byte of budget: every range reserves all of it, so the two bundles' ranges take
     // turns, and the run still finishes.
@@ -1425,17 +1429,29 @@ async fn push_two_on_one_lane(sessions: u32) -> (String, String, Vec<String>) {
 /// lane pushes one asset after the other.
 #[tokio::test]
 async fn a_lane_runs_up_to_w_bundles_at_once() {
-    let (a, b, order) = push_two_on_one_lane(2).await;
+    let (a, b, order) = push_two_on_one_lane(2, None).await;
     assert_eq!(order.len(), 6, "three sessions per asset: {order:?}");
     let first_b = order.iter().position(|asset| *asset == b).unwrap();
     let last_a = order.iter().rposition(|asset| *asset == a).unwrap();
     assert!(first_b < last_a, "the two ladders overlapped: {order:?}");
 
-    let (a, b, order) = push_two_on_one_lane(1).await;
+    let (a, b, order) = push_two_on_one_lane(1, None).await;
     assert_eq!(
         order,
         [&a, &a, &a, &b, &b, &b].map(String::clone),
         "one asset at a time"
+    );
+}
+
+/// **W never exceeds the account's live-session cap.** A lane whose cap is one pushes one asset
+/// after the other even under a window of two.
+#[tokio::test]
+async fn a_lanes_session_cap_bounds_its_window() {
+    let (a, b, order) = push_two_on_one_lane(2, Some(1)).await;
+    assert_eq!(
+        order,
+        [&a, &a, &a, &b, &b, &b].map(String::clone),
+        "the cap holds the lane to one session at a time"
     );
 }
 

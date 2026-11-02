@@ -1887,6 +1887,7 @@
     <string name="error_request_not_found">تعذّر على Capsule العثور على ذلك.</string>
     <string name="error_request_not_implemented">تعذّر على Capsule معالجة هذا الطلب.</string>
     <string name="error_request_range_not_satisfiable">تعذّر على Capsule إرسال ذلك الجزء من الملف.</string>
+    <string name="error_request_too_early">أُرسل هذا الطلب مبكرًا جدًا. يُرجى المحاولة مرة أخرى.</string>
     <string name="error_request_too_large">كان هذا الطلب أكبر من أن يُقبل.</string>
     <string name="error_request_unauthenticated">يُرجى تسجيل الدخول مرة أخرى.</string>
     <string name="error_request_unprocessable">بعض أجزاء هذا الطلب غير مفهومة.</string>
@@ -1935,6 +1936,7 @@
     <string name="error_upload_missing_offset">كان طلب الرفع يفتقر إلى علامة الموضع.</string>
     <string name="error_upload_offset_mismatch">فقد الرفع تزامنه وتجري إعادة محاذاته.</string>
     <string name="error_upload_owner_not_permitted">لا يمكنك الرفع نيابةً عن هذا المستخدم.</string>
+    <string name="error_upload_range_conflict">جزء من هذا الرفع قيد الإرسال بالفعل. جارٍ الاستئناف…</string>
     <string name="error_upload_rate_limited">تم إيقاف الرفع مؤقتًا للحظة. سيُستأنف تلقائيًا.</string>
     <string name="error_upload_receipt_not_available">لم يكتمل الرفع، لذا لا يتوفر إيصال التخزين الخاص به بعد.</string>
     <string name="error_upload_replace_incomplete">لا يزال Capsule يستقبل الإصدار الجديد من هذه الصورة. سينتهي ذلك تلقائيًا.</string>
@@ -1946,6 +1948,8 @@
     <string name="error_upload_storage_full">نفدت مساحة التخزين على الخادم. سيُستأنف الرفع بمجرد تحرير مساحة.</string>
     <string name="error_upload_storage_inconsistent">واجه الخادم مشكلة في التخزين. يُرجى المحاولة مرة أخرى.</string>
     <string name="error_upload_timestamp_out_of_range">يبدو أن ساعة جهازك غير صحيحة. تحقّق من التاريخ والوقت.</string>
+    <string name="error_upload_too_fragmented">يحتوي هذا الرفع على فجوات كثيرة جدًا. جارٍ ملؤها…</string>
+    <string name="error_upload_too_many_in_flight">يُرسَل عدد كبير جدًا من أجزاء هذا الرفع في الوقت نفسه. جارٍ الإبطاء…</string>
     <string name="error_upload_unavailable">تعذّر إكمال الرفع. يُرجى المحاولة مرة أخرى.</string>
     <string name="error_upload_unknown_crypto_suite">يستخدم هذا الإصدار من التطبيق مجموعة تشفير لا يتعرّف عليها الخادم.</string>
     <string name="error_upload_unknown_derivative_format">هذه الصورة المصغّرة أو المعاينة بتنسيق غير مدعوم.</string>

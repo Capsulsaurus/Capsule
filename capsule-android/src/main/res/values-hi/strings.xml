@@ -1887,6 +1887,7 @@
     <string name="error_request_not_found">Capsule उसे ढूँढ नहीं सका।</string>
     <string name="error_request_not_implemented">Capsule उस अनुरोध को संभाल नहीं सका।</string>
     <string name="error_request_range_not_satisfiable">Capsule फ़ाइल का वह हिस्सा नहीं भेज सका।</string>
+    <string name="error_request_too_early">वह अनुरोध बहुत जल्दी भेजा गया था। कृपया फिर से प्रयास करें।</string>
     <string name="error_request_too_large">वह अनुरोध स्वीकार करने के लिए बहुत बड़ा था।</string>
     <string name="error_request_unauthenticated">कृपया फिर से साइन इन करें।</string>
     <string name="error_request_unprocessable">उस अनुरोध का कुछ हिस्सा समझ में नहीं आया।</string>
@@ -1935,6 +1936,7 @@
     <string name="error_upload_missing_offset">अपलोड अनुरोध में इसका स्थिति चिह्न नहीं था।</string>
     <string name="error_upload_offset_mismatch">अपलोड सिंक से बाहर हो गया और फिर से संरेखित हो रहा है।</string>
     <string name="error_upload_owner_not_permitted">आप इस उपयोगकर्ता की ओर से अपलोड नहीं कर सकते।</string>
+    <string name="error_upload_range_conflict">इस अपलोड का एक हिस्सा पहले से भेजा जा रहा है। फिर से शुरू हो रहा है…</string>
     <string name="error_upload_rate_limited">अपलोड कुछ देर के लिए रुका है। यह अपने आप फिर शुरू हो जाएगा।</string>
     <string name="error_upload_receipt_not_available">अपलोड पूरा नहीं हुआ है, इसलिए इसकी स्टोरेज रसीद अभी उपलब्ध नहीं है।</string>
     <string name="error_upload_replace_incomplete">Capsule अभी इस फ़ोटो का नया संस्करण प्राप्त कर रहा है। यह अपने आप पूरा हो जाएगा।</string>
@@ -1946,6 +1948,8 @@
     <string name="error_upload_storage_full">सर्वर का स्टोरेज भर गया है। जगह ख़ाली होने पर अपलोड फिर से शुरू होगा।</string>
     <string name="error_upload_storage_inconsistent">सर्वर को स्टोरेज समस्या आई। कृपया फिर से प्रयास करें।</string>
     <string name="error_upload_timestamp_out_of_range">आपके डिवाइस की घड़ी ग़लत लगती है। इसकी तारीख़ और समय जाँचें।</string>
+    <string name="error_upload_too_fragmented">इस अपलोड में बहुत अधिक अंतराल हैं। उन्हें भरा जा रहा है…</string>
+    <string name="error_upload_too_many_in_flight">इस अपलोड के बहुत सारे हिस्से एक साथ भेजे जा रहे हैं। गति धीमी की जा रही है…</string>
     <string name="error_upload_unavailable">अपलोड पूरा नहीं किया जा सका। कृपया फिर से प्रयास करें।</string>
     <string name="error_upload_unknown_crypto_suite">ऐप का यह संस्करण एक ऐसा एन्क्रिप्शन सूट उपयोग करता है जिसे सर्वर नहीं पहचानता।</string>
     <string name="error_upload_unknown_derivative_format">यह थंबनेल या प्रीव्यू ऐसे प्रारूप में है जो समर्थित नहीं है।</string>

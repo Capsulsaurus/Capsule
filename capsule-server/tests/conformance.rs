@@ -294,6 +294,22 @@ async fn every_declared_response_is_exercised() {
             .assert_status(StatusCode::BAD_REQUEST);
     }
 
+    // 425 is declared on every write, gated or exempt, because every group of writes opens with
+    // the early-data refusal. So every write that declares it produces it here, refused before
+    // anything else is read (design/networking.md, HTTP Transport).
+    for (method, template, operation) in operations(&document) {
+        if operation.pointer("/responses/425").is_none() {
+            continue;
+        }
+        let verb = kynos::http::Method::from_bytes(method.as_bytes()).expect("a method");
+        client
+            .method(verb, &concrete(&template))
+            .header("early-data", "1")
+            .send()
+            .await
+            .assert_status(StatusCode::TOO_EARLY);
+    }
+
     // A valid handshake and no credential: the bearer scheme's 401, carrying the window like
     // every other refusal — the gate admitted the request and authentication refused it, in
     // that order.
@@ -750,9 +766,10 @@ async fn every_declared_response_is_exercised() {
         .patch(&session)
         .header("authorization", &bearer)
         .header("x-capsule-protocol", PROTOCOL_VERSION)
-        .header("x-capsule-offset", "8192")
-        .header("x-capsule-checksum", &checksum(&second))
-        .body("application/octet-stream", second.clone())
+        // Partly committed: the first 4 KiB already landed, so the range is a conflict.
+        .header("x-capsule-offset", "0")
+        .header("x-capsule-checksum", &checksum(&whole))
+        .body("application/octet-stream", whole.clone())
         .send()
         .await
         .assert_status(StatusCode::CONFLICT);

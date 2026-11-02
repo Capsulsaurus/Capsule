@@ -8255,6 +8255,10 @@
     "message": "Capsule couldn't send that part of the file.",
     "context": "HTTP 416 on a blob read: the requested byte range starts past the end of the blob. A client resuming a download with a stale offset reaches it; re-fetching from the start recovers."
   },
+  "error.request.too_early": {
+    "message": "That request was sent too early. Please try again.",
+    "context": "HTTP 425: a write (any non-safe method) reached the server as TLS early data, which a replay could repeat, so it was refused before its body was read. Clients re-send the same request once the handshake has completed and rarely show this; it surfaces only when the retries give up."
+  },
   "error.request.too_large": {
     "message": "That request was too large to accept.",
     "context": "HTTP 413: the request body passed the server's transport backstop and was abandoned before a handler saw it. Distinct from error.upload.chunk_too_large, which is the upload protocol's own bound and tells a client its chunking is wrong."
@@ -8361,11 +8365,11 @@
   },
   "error.upload.chunk_conflict": {
     "message": "The upload sent conflicting data and was stopped.",
-    "context": "HTTP 409, invariant 12: a PATCH at an already-acknowledged offset with a different chunk hash — the structural defense against a faulty client retrying with garbage."
+    "context": "HTTP 409, sent only by servers that predate block-grid uploads: a PATCH at an already-acknowledged offset with a different chunk hash. A current server answers a re-send of committed bytes as a duplicate and never sends this; the key stays so a client talking to an older server still localizes it."
   },
   "error.upload.chunk_not_aligned": {
     "message": "An upload chunk was incorrectly sized.",
-    "context": "HTTP 400, invariant 10: non-final chunk not a multiple of 4 KiB."
+    "context": "HTTP 400, invariant 10: the range's offset is not a multiple of 4 KiB, or its length is not and it does not end at the declared size."
   },
   "error.upload.chunk_timeout": {
     "message": "An upload chunk took too long to arrive.",
@@ -8441,11 +8445,15 @@
   },
   "error.upload.offset_mismatch": {
     "message": "The upload got out of sync and is realigning.",
-    "context": "HTTP 409, invariant 9: PATCH offset differs from the current received-byte count. Response carries the authoritative X-Capsule-Offset; the client realigns."
+    "context": "HTTP 409, sent only by servers that predate block-grid uploads: PATCH offset differs from the current received-byte count, with the authoritative offset; the client realigns. A current server admits ranges in any order and answers range_conflict instead; the key stays so a client talking to an older server still localizes it."
   },
   "error.upload.owner_not_permitted": {
     "message": "You can't upload on behalf of this user.",
     "context": "HTTP 403: owner_id differs from the uploader without a verified relationship."
+  },
+  "error.upload.range_conflict": {
+    "message": "Part of this upload is already on its way. Resuming…",
+    "context": "HTTP 409, invariant 9: the PATCH range overlaps a range of the session still in flight, or is partly committed. Nothing was written. Carries X-Capsule-Committed, and Retry-After when the overlap is in flight; the client re-plans from the committed set."
   },
   "error.upload.rate_limited": {
     "message": "Uploading is paused for a moment. It'll resume on its own.",
@@ -8490,6 +8498,14 @@
   "error.upload.timestamp_out_of_range": {
     "message": "Your device's clock appears to be wrong. Check its date and time.",
     "context": "HTTP 400, invariant 8: envelope timestamp outside the gross-drift sanity window (default ±30 days)."
+  },
+  "error.upload.too_fragmented": {
+    "message": "This upload has too many gaps. Filling them in…",
+    "context": "HTTP 409, invariant 9: admitting the range could leave the committed set past its 64-fragment bound. Nothing was written. Carries Retry-After when other ranges of the session are in flight; the client lets its own ranges finish, then fills the lowest gap first."
+  },
+  "error.upload.too_many_in_flight": {
+    "message": "Too many parts of this upload are being sent at once. Slowing down…",
+    "context": "HTTP 409, invariant 9: the session already has its in-flight cap of ranges being written (the advice's `ranges`). Nothing was written. Carries Retry-After; the client narrows its window to the advertised cap."
   },
   "error.upload.unavailable": {
     "message": "The upload couldn't be completed. Please try again.",

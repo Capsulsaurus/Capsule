@@ -746,7 +746,8 @@ async fn retry(fixture: &Fixture, bearer: &str, first: &[u8], second: &[u8], who
         .read_for_test(&id)
         .await
         .expect("the session exists")
-        .received_bytes;
+        .committed
+        .prefix();
     for (offset, chunk) in [(0_u64, first), (4096, second)] {
         if offset < from {
             continue;

@@ -398,6 +398,9 @@ pub mod error_codes {
     /// `error.request.range_not_satisfiable`
     pub const REQUEST_RANGE_NOT_SATISFIABLE: &str = "error.request.range_not_satisfiable";
 
+    /// `error.request.too_early`
+    pub const REQUEST_TOO_EARLY: &str = "error.request.too_early";
+
     /// `error.request.too_large`
     pub const REQUEST_TOO_LARGE: &str = "error.request.too_large";
 
@@ -542,6 +545,9 @@ pub mod error_codes {
     /// `error.upload.owner_not_permitted`
     pub const UPLOAD_OWNER_NOT_PERMITTED: &str = "error.upload.owner_not_permitted";
 
+    /// `error.upload.range_conflict`
+    pub const UPLOAD_RANGE_CONFLICT: &str = "error.upload.range_conflict";
+
     /// `error.upload.rate_limited`
     pub const UPLOAD_RATE_LIMITED: &str = "error.upload.rate_limited";
 
@@ -574,6 +580,12 @@ pub mod error_codes {
 
     /// `error.upload.timestamp_out_of_range`
     pub const UPLOAD_TIMESTAMP_OUT_OF_RANGE: &str = "error.upload.timestamp_out_of_range";
+
+    /// `error.upload.too_fragmented`
+    pub const UPLOAD_TOO_FRAGMENTED: &str = "error.upload.too_fragmented";
+
+    /// `error.upload.too_many_in_flight`
+    pub const UPLOAD_TOO_MANY_IN_FLIGHT: &str = "error.upload.too_many_in_flight";
 
     /// `error.upload.unavailable`
     pub const UPLOAD_UNAVAILABLE: &str = "error.upload.unavailable";

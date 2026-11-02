@@ -63,7 +63,7 @@
 //! | `capsule:session:{sid}` | hash | session TTL |
 //! | `capsule:user_sessions:{uid}` | set | refreshed to the session TTL on every open |
 //! | `capsule:upload:session:{id}` | hash | lifetime cap |
-//! | `capsule:upload:chunks:{id}` | hash (`offset` → chunk) | the record's remaining TTL |
+//! | `capsule:upload:chunks:{id}` | hash (`offset` → chunk), written only by servers that predate the committed set; nothing writes it now, and a session's open and discard still delete it | the record's remaining TTL |
 //! | `capsule:upload:uploader:{uid}` | set | refreshed on open |
 //! | `capsule:upload:album:{album}` | set | refreshed on open |
 //! | `capsule:upload:pending:{uploader}:{hash}` | set | refreshed on open |
@@ -138,8 +138,8 @@ use super::ids::{
     OidcNonce, OidcState, OwnerId, PkceVerifier, SessionId, UploadId, UserId,
 };
 use super::upload::{
-    AcceptedChunk, BlobRole, FinalizeClaim, LIFETIME_CAP, UnclaimedDiscard, UploadSessionRecord,
-    UploadSessionStatus, UploadSessionStore,
+    BlobRole, CommittedRange, CommittedSet, FinalizeClaim, LIFETIME_CAP, UnclaimedDiscard,
+    UploadSessionRecord, UploadSessionStatus, UploadSessionStore,
 };
 use super::{Clock, StoreError, StoreFuture, deadline};
 
@@ -539,7 +539,11 @@ fn encode_upload(record: &UploadSessionRecord, expires_at: Timestamp) -> Vec<Str
         .field("blob_role", record.blob_role.as_str())
         .optional("intent_id", record.intent_id.as_deref())
         .field("manifest_envelope", &record.manifest_envelope)
-        .field("received_bytes", record.received_bytes)
+        .field("committed", record.committed.to_stored())
+        // The contiguous prefix, beside the set it derives from: the merge script keeps both, so
+        // a server that predates the committed set reads a counter it can resume from.
+        .field("received_bytes", record.committed.prefix())
+        .field("in_flight_cap", record.in_flight_cap)
         .field("total_size", record.total_size)
         .field("status", record.status.as_str())
         .optional("failure_code", record.failure_code.as_deref())
@@ -556,6 +560,17 @@ fn decode_upload(flat: Vec<String>) -> Result<UploadSessionRecord, StoreError> {
         .ok_or_else(|| fields.corrupt("blob_role is not a known role".to_owned()))?;
     let status = parse_status(fields.required("status")?)
         .ok_or_else(|| fields.corrupt("status is not a known status".to_owned()))?;
+    // A session opened before the committed set holds only its append counter, which was a
+    // contiguous prefix; it reads back as that prefix, under the one-range cap it was served by.
+    let committed = match fields.optional("committed") {
+        Some(stored) => CommittedSet::from_stored(&stored)
+            .ok_or_else(|| fields.corrupt("committed is not a normal range set".to_owned()))?,
+        None => CommittedSet::prefix_of(fields.number("received_bytes")?),
+    };
+    let in_flight_cap = match fields.optional("in_flight_cap") {
+        Some(_) => fields.number("in_flight_cap")?,
+        None => 1,
+    };
     Ok(UploadSessionRecord {
         upload_id: UploadId::new(fields.required("upload_id")?),
         asset_id: AssetId::new(fields.required("asset_id")?),
@@ -569,49 +584,13 @@ fn decode_upload(flat: Vec<String>) -> Result<UploadSessionRecord, StoreError> {
         blob_role,
         intent_id: fields.optional("intent_id"),
         manifest_envelope: fields.required("manifest_envelope")?.to_owned(),
-        received_bytes: fields.number("received_bytes")?,
+        committed,
+        in_flight_cap,
         total_size: fields.number("total_size")?,
         status,
         failure_code: fields.optional("failure_code"),
         created_at: fields.timestamp("created_at")?,
         last_progress_at: fields.timestamp("last_progress_at")?,
-    })
-}
-
-/// `chunk_hash \t next_offset \t accepted_at`: the hash is hex and a timestamp has no tab.
-fn encode_chunk(chunk: &AcceptedChunk) -> String {
-    format!(
-        "{}\t{}\t{}",
-        chunk.chunk_hash, chunk.next_offset, chunk.accepted_at
-    )
-}
-
-fn decode_chunk(offset: u64, packed: &str) -> Result<AcceptedChunk, StoreError> {
-    let corrupt = |detail: String| StoreError::Corrupt {
-        store: UPLOADS,
-        record: "AcceptedChunk",
-        detail,
-    };
-    let mut parts = packed.split('\t');
-    let chunk_hash = parts
-        .next()
-        .ok_or_else(|| corrupt("no chunk hash".to_owned()))?
-        .to_owned();
-    let next_offset = parts
-        .next()
-        .ok_or_else(|| corrupt("no next offset".to_owned()))?
-        .parse()
-        .map_err(|error| corrupt(format!("next offset is not a number: {error}")))?;
-    let accepted_at = parts
-        .next()
-        .ok_or_else(|| corrupt("no accepted_at".to_owned()))?
-        .parse()
-        .map_err(|error| corrupt(format!("accepted_at is not a timestamp: {error}")))?;
-    Ok(AcceptedChunk {
-        offset,
-        chunk_hash,
-        next_offset,
-        accepted_at,
     })
 }
 
@@ -923,37 +902,52 @@ end
 return {gone, mismatched, found}"
 );
 
-// KEYS: record, chunks, progress zset. ARGV: now, offset, packed chunk, next_offset,
-// accepted_at, score, upload_id. The counter, the clock and the replay entry move together.
+// KEYS: record, chunks, progress zset. ARGV: now, start, end, accepted_at, score, upload_id.
+// Merges `[start, end)` into the stored committed set, `CommittedSet::with_range`'s rule, and
+// moves the prefix, the clock and the status with it — one step, so two ranges recorded at once
+// both land. A record that predates the set is read as its counter's prefix first. `%.0f`
+// because Lua numbers are doubles: exact for every size under 2^53 bytes.
 script!(
-    RECORD_PROGRESS,
+    RECORD_RANGE,
     "if not live(KEYS[1], ARGV[1], KEYS[2]) then return nil end
 local status = redis.call('HGET', KEYS[1], 'status')
 if status == 'completed' or status == 'failed_processing' then return nil end
-redis.call('HSET', KEYS[2], ARGV[2], ARGV[3])
-local ttl = redis.call('PTTL', KEYS[1])
-if ttl > 0 then redis.call('PEXPIRE', KEYS[2], ttl) end
-redis.call('HSET', KEYS[1], 'received_bytes', ARGV[4], 'last_progress_at', ARGV[5], 'progress_score', ARGV[6])
+local committed = redis.call('HGET', KEYS[1], 'committed')
+if not committed then
+  local counter = tonumber(redis.call('HGET', KEYS[1], 'received_bytes') or '0')
+  committed = ''
+  if counter > 0 then committed = string.format('0-%.0f', counter) end
+end
+local s = tonumber(ARGV[2])
+local e = tonumber(ARGV[3])
+local merged = {}
+local placed = false
+for a, b in string.gmatch(committed, '(%d+)-(%d+)') do
+  a = tonumber(a)
+  b = tonumber(b)
+  if b < s then
+    merged[#merged + 1] = string.format('%.0f-%.0f', a, b)
+  elseif a > e then
+    if not placed then
+      merged[#merged + 1] = string.format('%.0f-%.0f', s, e)
+      placed = true
+    end
+    merged[#merged + 1] = string.format('%.0f-%.0f', a, b)
+  else
+    if a < s then s = a end
+    if b > e then e = b end
+  end
+end
+if not placed then merged[#merged + 1] = string.format('%.0f-%.0f', s, e) end
+local first, through = string.match(merged[1], '(%d+)-(%d+)')
+local prefix = '0'
+if first == '0' then prefix = through end
+redis.call('HSET', KEYS[1], 'committed', table.concat(merged, ','), 'received_bytes', prefix, 'last_progress_at', ARGV[4], 'progress_score', ARGV[5])
 if status == 'pending' then
   redis.call('HSET', KEYS[1], 'status', 'uploading')
   status = 'uploading'
 end
-if status == 'uploading' then redis.call('ZADD', KEYS[3], ARGV[6], ARGV[7]) end
-return redis.call('HGETALL', KEYS[1])"
-);
-
-// KEYS: record, chunks. ARGV: now, offset.
-script!(
-    CHUNK_AT,
-    "if not live(KEYS[1], ARGV[1], KEYS[2]) then return nil end
-return redis.call('HGET', KEYS[2], ARGV[2])"
-);
-
-// KEYS: record, chunks. ARGV: now, on_disk. The one write that does not touch the clock.
-script!(
-    RECONCILE_BYTES,
-    "if not live(KEYS[1], ARGV[1], KEYS[2]) then return nil end
-redis.call('HSET', KEYS[1], 'received_bytes', ARGV[2])
+if status == 'uploading' then redis.call('ZADD', KEYS[3], ARGV[5], ARGV[6]) end
 return redis.call('HGETALL', KEYS[1])"
 );
 
@@ -1590,7 +1584,7 @@ impl ValkeyUploadSessions {
         micros(self.clock.now()).to_string()
     }
 
-    /// The four keys most record scripts take: the record, its replay hash, the eviction view
+    /// The four keys most record scripts take: the record, its legacy replay hash, the eviction view
     /// and the claimed view. A script that maintains neither view simply does not name them.
     fn record_keys(upload: &UploadId) -> [String; 4] {
         [
@@ -1703,23 +1697,22 @@ impl UploadSessionStore for ValkeyUploadSessions {
         })
     }
 
-    fn record_progress<'a>(
+    fn record_range<'a>(
         &'a self,
         upload: &'a UploadId,
-        chunk: AcceptedChunk,
+        range: CommittedRange,
     ) -> StoreFuture<'a, Option<UploadSessionRecord>> {
         Box::pin(async move {
             let updated = self
                 .record_script(
-                    &RECORD_PROGRESS,
+                    &RECORD_RANGE,
                     upload,
                     &[
                         self.now(),
-                        chunk.offset.to_string(),
-                        encode_chunk(&chunk),
-                        chunk.next_offset.to_string(),
-                        chunk.accepted_at.to_string(),
-                        micros(chunk.accepted_at).to_string(),
+                        range.start.to_string(),
+                        range.end.to_string(),
+                        range.accepted_at.to_string(),
+                        micros(range.accepted_at).to_string(),
                         upload.to_string(),
                     ],
                 )
@@ -1727,51 +1720,16 @@ impl UploadSessionStore for ValkeyUploadSessions {
             if let Some(record) = &updated {
                 tracing::debug!(
                     %upload,
-                    received_bytes = record.received_bytes,
-                    "accepted chunk"
+                    start = range.start,
+                    end = range.end,
+                    fragments = record.committed.fragments(),
+                    prefix = record.committed.prefix(),
+                    "recorded a committed range"
                 );
             } else {
-                tracing::debug!(%upload, "progress found no active session");
+                tracing::debug!(%upload, "a range found no active session to record against");
             }
             Ok(updated)
-        })
-    }
-
-    fn chunk_at<'a>(
-        &'a self,
-        upload: &'a UploadId,
-        offset: u64,
-    ) -> StoreFuture<'a, Option<AcceptedChunk>> {
-        Box::pin(async move {
-            let packed: Option<String> = self
-                .valkey
-                .eval(
-                    UPLOADS,
-                    &CHUNK_AT,
-                    &[upload_key(upload), chunks_key(upload)],
-                    &[self.now(), offset.to_string()],
-                )
-                .await?;
-            tracing::trace!(%upload, offset, hit = packed.is_some(), "chunk replay lookup");
-            packed
-                .map(|packed| decode_chunk(offset, &packed))
-                .transpose()
-        })
-    }
-
-    fn reconcile_received_bytes<'a>(
-        &'a self,
-        upload: &'a UploadId,
-        on_disk: u64,
-    ) -> StoreFuture<'a, Option<UploadSessionRecord>> {
-        Box::pin(async move {
-            let reconciled = self
-                .record_script(&RECONCILE_BYTES, upload, &[self.now(), on_disk.to_string()])
-                .await?;
-            if reconciled.is_some() {
-                tracing::info!(%upload, now = on_disk, "reconciled received bytes to disk");
-            }
-            Ok(reconciled)
         })
     }
 

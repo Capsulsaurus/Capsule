@@ -7587,6 +7587,10 @@
     "message": "Capsule no pudo enviar esa parte del archivo.",
     "origin": "machine"
   },
+  "error.request.too_early": {
+    "message": "Esa solicitud se envió demasiado pronto. Inténtalo de nuevo.",
+    "origin": "machine"
+  },
   "error.request.too_large": {
     "message": "Esa solicitud era demasiado grande para aceptarla.",
     "origin": "machine"
@@ -7779,6 +7783,10 @@
     "message": "No puedes subir en nombre de este usuario.",
     "origin": "machine"
   },
+  "error.upload.range_conflict": {
+    "message": "Parte de esta subida ya está en camino. Reanudando…",
+    "origin": "machine"
+  },
   "error.upload.rate_limited": {
     "message": "La subida está en pausa un momento. Se reanudará sola.",
     "origin": "machine"
@@ -7821,6 +7829,14 @@
   },
   "error.upload.timestamp_out_of_range": {
     "message": "El reloj de tu dispositivo parece estar mal. Comprueba su fecha y hora.",
+    "origin": "machine"
+  },
+  "error.upload.too_fragmented": {
+    "message": "Esta subida tiene demasiados huecos. Completándolos…",
+    "origin": "machine"
+  },
+  "error.upload.too_many_in_flight": {
+    "message": "Se están enviando demasiadas partes de esta subida a la vez. Reduciendo el ritmo…",
     "origin": "machine"
   },
   "error.upload.unavailable": {

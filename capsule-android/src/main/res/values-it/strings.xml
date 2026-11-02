@@ -1887,6 +1887,7 @@
     <string name="error_request_not_found">Capsule non è riuscito a trovarlo.</string>
     <string name="error_request_not_implemented">Capsule non è riuscito a gestire questa richiesta.</string>
     <string name="error_request_range_not_satisfiable">Capsule non è riuscito a inviare quella parte del file.</string>
+    <string name="error_request_too_early">La richiesta è stata inviata troppo presto. Riprova.</string>
     <string name="error_request_too_large">La richiesta era troppo grande per essere accettata.</string>
     <string name="error_request_unauthenticated">Accedi di nuovo.</string>
     <string name="error_request_unprocessable">Una parte della richiesta non era valida.</string>
@@ -1935,6 +1936,7 @@
     <string name="error_upload_missing_offset">Alla richiesta di caricamento mancava il marcatore di posizione.</string>
     <string name="error_upload_offset_mismatch">Il caricamento si è desincronizzato e si sta riallineando.</string>
     <string name="error_upload_owner_not_permitted">Non puoi caricare per conto di questo utente.</string>
+    <string name="error_upload_range_conflict">Parte di questo caricamento è già in corso. Ripresa in corso…</string>
     <string name="error_upload_rate_limited">Il caricamento è in pausa per un momento. Riprenderà automaticamente.</string>
     <string name="error_upload_receipt_not_available">Il caricamento non è terminato, quindi la ricevuta di archiviazione non è ancora disponibile.</string>
     <string name="error_upload_replace_incomplete">Capsule sta ancora ricevendo la nuova versione di questa foto. Terminerà automaticamente.</string>
@@ -1946,6 +1948,8 @@
     <string name="error_upload_storage_full">Lo spazio di archiviazione del server è esaurito. Il caricamento riprenderà quando verrà liberato spazio.</string>
     <string name="error_upload_storage_inconsistent">Il server ha riscontrato un problema di archiviazione. Riprova.</string>
     <string name="error_upload_timestamp_out_of_range">L\'orologio del tuo dispositivo sembra errato. Controlla data e ora.</string>
+    <string name="error_upload_too_fragmented">Questo caricamento ha troppe lacune. Completamento in corso…</string>
+    <string name="error_upload_too_many_in_flight">Troppe parti di questo caricamento vengono inviate contemporaneamente. Rallentamento…</string>
     <string name="error_upload_unavailable">Impossibile completare il caricamento. Riprova.</string>
     <string name="error_upload_unknown_crypto_suite">Questa versione dell\'app usa una suite di crittografia che il server non riconosce.</string>
     <string name="error_upload_unknown_derivative_format">Questa miniatura o anteprima è in un formato non supportato.</string>

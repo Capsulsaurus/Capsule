@@ -20,6 +20,9 @@
 //! - [`conformance`] — the suite both adapters pass.
 //! - [`worker`] — [`PullWorker`], which drives one round of due jobs through a [`Puller`] and
 //!   applies the failure policy: back-off, the error budget, the circuit, the CPU budget.
+//! - [`puller`] — [`RemotePuller`], the production [`Puller`]: one pull of one album from its
+//!   home server, over [`remote`]'s generated, signed ([`signer`]) and bounded calls, through
+//!   [`validate`]'s re-application of invariant 20, into [`pulled`]'s [`PulledAlbums`].
 //!
 //! # Times are the caller's
 //!
@@ -35,11 +38,21 @@ use super::PeerId;
 use crate::store::{AlbumId, deadline};
 
 pub mod conformance;
+#[cfg(test)]
+pub(crate) mod fixtures;
 pub mod jobs;
+pub mod pulled;
+pub mod puller;
+pub mod remote;
+pub mod signer;
+pub mod validate;
 pub mod valkey;
 pub mod worker;
 
 pub use self::jobs::{InMemoryPullJobs, JobState, PullJobs};
+pub use self::pulled::{InMemoryPulledAlbums, PulledAlbums};
+pub use self::puller::{RemotePuller, RemotePullerParts};
+pub use self::signer::{Ed25519RequestSigner, RequestSigner};
 pub use self::worker::{
     HintOutcome, JobOutcome, JobSource, PULL_DEADLINE, PullFailure, PullReport, PullWorker,
     PullWorkerParts, Puller, TickReport,

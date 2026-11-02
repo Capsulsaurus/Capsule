@@ -2041,6 +2041,7 @@
     <string name="error_request_not_found">Capsule couldn\'t find that.</string>
     <string name="error_request_not_implemented">Capsule couldn\'t handle that request.</string>
     <string name="error_request_range_not_satisfiable">Capsule couldn\'t send that part of the file.</string>
+    <string name="error_request_too_early">That request was sent too early. Please try again.</string>
     <string name="error_request_too_large">That request was too large to accept.</string>
     <string name="error_request_unauthenticated">Please sign in again.</string>
     <string name="error_request_unprocessable">Some of that request didn\'t make sense.</string>
@@ -2089,6 +2090,7 @@
     <string name="error_upload_missing_offset">The upload request was missing its position marker.</string>
     <string name="error_upload_offset_mismatch">The upload got out of sync and is realigning.</string>
     <string name="error_upload_owner_not_permitted">You can\'t upload on behalf of this user.</string>
+    <string name="error_upload_range_conflict">Part of this upload is already on its way. Resuming…</string>
     <string name="error_upload_rate_limited">Uploading is paused for a moment. It\'ll resume on its own.</string>
     <string name="error_upload_receipt_not_available">The upload hasn\'t finished, so its storage receipt isn\'t available yet.</string>
     <string name="error_upload_replace_incomplete">Capsule is still receiving this photo\'s new version. It\'ll finish on its own.</string>
@@ -2100,6 +2102,8 @@
     <string name="error_upload_storage_full">The server is out of storage space. Uploading will resume once space is freed.</string>
     <string name="error_upload_storage_inconsistent">The server hit a storage problem. Please try again.</string>
     <string name="error_upload_timestamp_out_of_range">Your device\'s clock appears to be wrong. Check its date and time.</string>
+    <string name="error_upload_too_fragmented">This upload has too many gaps. Filling them in…</string>
+    <string name="error_upload_too_many_in_flight">Too many parts of this upload are being sent at once. Slowing down…</string>
     <string name="error_upload_unavailable">The upload couldn\'t be completed. Please try again.</string>
     <string name="error_upload_unknown_crypto_suite">This app version uses an encryption suite the server doesn\'t recognize.</string>
     <string name="error_upload_unknown_derivative_format">This thumbnail or preview is in a format that is not supported.</string>

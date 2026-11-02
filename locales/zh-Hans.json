@@ -7587,6 +7587,10 @@
     "message": "Capsule 无法发送文件的该部分。",
     "origin": "machine"
   },
+  "error.request.too_early": {
+    "message": "该请求发送得过早，请重试。",
+    "origin": "machine"
+  },
   "error.request.too_large": {
     "message": "该请求过大，无法接受。",
     "origin": "machine"
@@ -7779,6 +7783,10 @@
     "message": "您无法代表此用户上传。",
     "origin": "machine"
   },
+  "error.upload.range_conflict": {
+    "message": "此上传的一部分已在发送中。正在继续…",
+    "origin": "machine"
+  },
   "error.upload.rate_limited": {
     "message": "上传暂时暂停，稍后将自动恢复。",
     "origin": "machine"
@@ -7821,6 +7829,14 @@
   },
   "error.upload.timestamp_out_of_range": {
     "message": "您设备的时钟似乎不正确。请检查其日期和时间。",
+    "origin": "machine"
+  },
+  "error.upload.too_fragmented": {
+    "message": "此上传的缺口过多。正在补齐…",
+    "origin": "machine"
+  },
+  "error.upload.too_many_in_flight": {
+    "message": "此上传同时发送的部分过多。正在放慢速度…",
     "origin": "machine"
   },
   "error.upload.unavailable": {

@@ -1,0 +1,128 @@
+use super::*;
+use crate::federation::PeerId;
+use crate::store::AlbumId;
+
+fn job() -> JobKey {
+    JobKey::new(PeerId::new("home.test"), AlbumId::new("album"))
+}
+
+fn hash(byte: u8) -> Hash32 {
+    Hash32([byte; 32])
+}
+
+/// A head at `head` that has superseded nothing yet.
+fn at(head: Hash32, deleted: bool) -> AssetHead {
+    AssetHead {
+        head,
+        superseded: Vec::new(),
+        deleted,
+        amk_version: 1,
+        metadata_blob: Some(hash(9)),
+    }
+}
+
+fn page(high_water: u64) -> ValidatedPage {
+    ValidatedPage {
+        entries: Vec::new(),
+        metadata_blobs: BTreeMap::from([(hash(9), b"meta".to_vec())]),
+        state: PulledAlbum {
+            cursor: Some(format!("c{high_water}")),
+            high_water: Some(high_water),
+            ..PulledAlbum::default()
+        },
+    }
+}
+
+#[tokio::test]
+async fn an_album_never_pulled_reads_as_the_start() {
+    let store = InMemoryPulledAlbums::new();
+    assert_eq!(
+        store.read(&job()).await.expect("read"),
+        PulledAlbum::default()
+    );
+}
+
+#[tokio::test]
+async fn a_commit_lands_only_from_the_position_it_was_validated_at() {
+    let store = InMemoryPulledAlbums::new();
+    assert!(store.commit(&job(), None, page(3)).await.expect("commit"));
+    assert_eq!(store.read(&job()).await.expect("read").high_water, Some(3));
+    assert_eq!(
+        store.metadata_blob(&job(), &hash(9)),
+        Some(b"meta".to_vec())
+    );
+
+    // Validated from the start, but the album has moved to 3 since.
+    assert!(!store.commit(&job(), None, page(5)).await.expect("commit"));
+    assert_eq!(store.read(&job()).await.expect("read").high_water, Some(3));
+
+    assert!(
+        store
+            .commit(&job(), Some(3), page(5))
+            .await
+            .expect("commit")
+    );
+    assert_eq!(store.read(&job()).await.expect("read").high_water, Some(5));
+}
+
+#[tokio::test]
+async fn a_restart_forgets_the_position_and_keeps_the_heads() {
+    let store = InMemoryPulledAlbums::new();
+    let mut first = page(4);
+    first
+        .state
+        .assets
+        .insert("asset".into(), at(hash(1), false));
+    first.state.amk_version = Some(2);
+    assert!(store.commit(&job(), None, first).await.expect("commit"));
+
+    store.restart(&job()).await.expect("restart");
+    let state = store.read(&job()).await.expect("read");
+    assert_eq!(state.cursor, None);
+    assert_eq!(state.high_water, None);
+    assert_eq!(state.amk_version, Some(2));
+    assert_eq!(state.assets["asset"].head, hash(1));
+}
+
+#[test]
+fn advancing_a_head_remembers_what_it_superseded() {
+    let start = at(hash(1), false);
+    let same = start.advanced(at(hash(1), true));
+    assert_eq!(same.head, hash(1));
+    assert!(
+        same.superseded.is_empty(),
+        "the same head supersedes nothing"
+    );
+    assert!(same.deleted);
+
+    let next = start.advanced(AssetHead {
+        amk_version: 2,
+        metadata_blob: Some(hash(8)),
+        ..at(hash(2), false)
+    });
+    assert_eq!(next.head, hash(2));
+    assert_eq!(next.superseded, vec![hash(1)]);
+    assert_eq!(next.amk_version, 2, "the epoch is the new record's");
+    assert_eq!(next.metadata_blob, Some(hash(8)));
+
+    // History is the held head's, whatever the successor was built with.
+    let after = next.advanced(AssetHead {
+        superseded: vec![hash(7)],
+        ..at(hash(3), false)
+    });
+    assert_eq!(after.superseded, vec![hash(1), hash(2)]);
+}
+
+#[test]
+fn the_superseded_heads_are_bounded() {
+    let mut head = at(Hash32([0; 32]), false);
+    for step in 1..=200_u16 {
+        let mut bytes = [0_u8; 32];
+        bytes[..2].copy_from_slice(&step.to_be_bytes());
+        head = head.advanced(at(Hash32(bytes), false));
+    }
+    assert_eq!(head.superseded.len(), MAX_SUPERSEDED_HEADS);
+    let mut newest = [0_u8; 32];
+    newest[..2].copy_from_slice(&199_u16.to_be_bytes());
+    assert_eq!(head.superseded.last(), Some(&Hash32(newest)));
+}

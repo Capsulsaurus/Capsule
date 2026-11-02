@@ -83,7 +83,7 @@ impl BlobStore for InMemoryBlobStore {
         })
     }
 
-    fn append<'a>(
+    fn write_staged<'a>(
         &'a self,
         upload: &'a UploadId,
         offset: u64,
@@ -99,36 +99,19 @@ impl BlobStore for InMemoryBlobStore {
                     upload: upload.clone(),
                 })?;
 
-            let actual = staged.len() as u64;
-            if offset != actual {
-                return Err(BlobError::OffsetMismatch {
-                    upload: upload.clone(),
-                    offset,
-                    actual,
-                });
+            // A write past the end leaves a hole of zeros, as a sparse file reads back.
+            let start = usize::try_from(offset).map_err(|_| BlobError::Backend {
+                operation: "write to a stage",
+                detail: format!("offset {offset} does not fit in memory"),
+            })?;
+            let end = start + bytes.len();
+            if staged.len() < end {
+                staged.resize(end, 0);
             }
-
-            staged.extend_from_slice(bytes);
+            staged[start..end].copy_from_slice(bytes);
             let length = staged.len() as u64;
-            tracing::trace!(%upload, offset, appended = bytes.len(), length, "appended to a stage");
+            tracing::trace!(%upload, offset, written = bytes.len(), length, "wrote a staged range");
             Ok(length)
-        })
-    }
-
-    fn truncate_staged<'a>(
-        &'a self,
-        upload: &'a UploadId,
-        len: u64,
-    ) -> BlobFuture<'a, Option<u64>> {
-        Box::pin(async move {
-            check_upload_id(upload)?;
-            let mut state = lock(&self.state);
-            let Some(staged) = state.staged.get_mut(upload) else {
-                return Ok(None);
-            };
-            // Shrinks only; `truncate` on a shorter vector is already a no-op.
-            staged.truncate(usize::try_from(len).unwrap_or(usize::MAX));
-            Ok(Some(staged.len() as u64))
         })
     }
 
