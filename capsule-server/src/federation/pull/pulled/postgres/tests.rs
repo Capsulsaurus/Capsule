@@ -253,6 +253,79 @@ mod postgres_conformance {
 
         let quotas = crate::quota::PostgresQuota::new(database.connection().clone());
         charged_to_quota(&budgeted, &subscriptions, &quotas).await;
+
+        held_blobs_outlive_the_durable_collector(&store, &blobs, database.connection()).await;
+    }
+
+    /// The regression #1141 is, on the durable arm: a pulled page's metadata blob survives a
+    /// collector over the same database and blob store past the grace window, and forgetting
+    /// the job (its row deleted, cascading to its claims) leaves the blob collectable.
+    async fn held_blobs_outlive_the_durable_collector(
+        store: &PostgresPulledAlbums,
+        blobs: &Arc<InMemoryBlobStore>,
+        connection: &sea_orm::DatabaseConnection,
+    ) {
+        use sea_orm::ConnectionTrait as _;
+
+        use crate::gc::{CollectionContext, DEFAULT_GRACE_WINDOW, Mode, collect};
+        use crate::store::memory::ManualClock;
+
+        let job = JobKey::new(PeerId::new("home.gc.test"), AlbumId::new("held-a"));
+        let held: &[u8] = b"a pulled metadata blob the durable collector must keep";
+        assert_eq!(
+            store
+                .commit(&job, None, page(1, &[held]))
+                .await
+                .expect("commit"),
+            Committed::Written
+        );
+        let address =
+            crate::blob::ContentAddress::parse(&hash_bytes(held).to_hex()).expect("an address");
+
+        let clock = Arc::new(ManualClock::new(jiff::Timestamp::now()));
+        let context = CollectionContext::new(
+            Arc::new(crate::index::postgres::PostgresAssetIndex::new(
+                connection.clone(),
+            )),
+            blobs.clone(),
+            Arc::new(crate::gc::PostgresCollection::new(connection.clone())),
+            Arc::new(crate::quota::PostgresQuota::new(connection.clone())),
+            Arc::new(crate::share::postgres::PostgresShares::new(
+                connection.clone(),
+            )),
+            clock.clone(),
+            DEFAULT_GRACE_WINDOW,
+        )
+        .with_held_blobs(Arc::new(store.clone()));
+        let three_days = jiff::SignedDuration::from_hours(72);
+
+        let report = collect(&context, Mode::Apply).await.expect("a pass");
+        assert!(!report.marked.contains(&address), "{report:?}");
+        clock.advance(three_days);
+        let report = collect(&context, Mode::Apply).await.expect("a pass");
+        assert!(!report.swept.contains(&address), "{report:?}");
+        assert!(
+            blobs.stat(&address).await.expect("stat").is_some(),
+            "a held pulled metadata blob must outlive the grace window"
+        );
+
+        connection
+            .execute_raw(sea_orm::Statement::from_sql_and_values(
+                sea_orm::DbBackend::Postgres,
+                "DELETE FROM federation_pulled_albums WHERE peer_id = $1 AND album_id = $2",
+                vec![
+                    job.peer.as_str().to_owned().into(),
+                    job.album.as_str().to_owned().into(),
+                ],
+            ))
+            .await
+            .expect("forgetting the job");
+        let report = collect(&context, Mode::Apply).await.expect("a pass");
+        assert!(report.marked.contains(&address), "released: {report:?}");
+        clock.advance(three_days);
+        let report = collect(&context, Mode::Apply).await.expect("a pass");
+        assert!(report.swept.contains(&address), "{report:?}");
+        assert!(blobs.stat(&address).await.expect("stat").is_none());
     }
 
     /// `user` subscribed to `job`, already lapsed.
