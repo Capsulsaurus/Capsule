@@ -849,6 +849,50 @@ async fn serve_escrow_mock(mock: EscrowMock) -> String {
 pub(crate) async fn serve_mock(
     answer: impl Fn(&str) -> (u16, &'static str, String) + Clone + Send + Sync + 'static,
 ) -> String {
+    serve_wire_mock(move |request: &WireRequest| {
+        let (status, content_type, body) = answer(&request.line);
+        WireAnswer {
+            status,
+            headers: vec![("content-type", content_type.to_owned())],
+            body,
+            delay: std::time::Duration::ZERO,
+        }
+    })
+    .await
+}
+
+/// One request a [`serve_wire_mock`] server read.
+struct WireRequest {
+    /// `METHOD path`.
+    line: String,
+    /// Every header, its name lowercased.
+    headers: Vec<(String, String)>,
+    body: Vec<u8>,
+}
+
+impl WireRequest {
+    fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case(name))
+            .map(|(_, value)| value.as_str())
+    }
+}
+
+/// How a [`serve_wire_mock`] server answers one request.
+struct WireAnswer {
+    status: u16,
+    headers: Vec<(&'static str, String)>,
+    body: String,
+    /// How long the server waits, having read the request, before it answers.
+    delay: std::time::Duration,
+}
+
+/// Serve `answer` on an ephemeral loopback port and return its origin: it is handed each whole
+/// request and returns the whole answer. Each connection answers one request and closes.
+async fn serve_wire_mock(
+    answer: impl Fn(&WireRequest) -> WireAnswer + Clone + Send + Sync + 'static,
+) -> String {
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
     let mock = answer;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -895,9 +939,33 @@ pub(crate) async fn serve_mock(
                     parts.next().unwrap_or_default(),
                     parts.next().unwrap_or_default()
                 );
-                let (status, content_type, body) = mock(&line);
+                let headers = head
+                    .lines()
+                    .skip(1)
+                    .filter_map(|line| line.split_once(':'))
+                    .map(|(key, value)| (key.trim().to_lowercase(), value.trim().to_owned()))
+                    .collect();
+                let request = WireRequest {
+                    line,
+                    headers,
+                    body: buf[head_end..head_end + length].to_vec(),
+                };
+                let WireAnswer {
+                    status,
+                    headers,
+                    body,
+                    delay,
+                } = mock(&request);
+                if !delay.is_zero() {
+                    tokio::time::sleep(delay).await;
+                }
+                let headers = headers.iter().fold(String::new(), |mut out, (key, value)| {
+                    use std::fmt::Write as _;
+                    let _ = write!(out, "{key}: {value}\r\n");
+                    out
+                });
                 let response = format!(
-                    "HTTP/1.1 {status} X\r\ncontent-type: {content_type}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    "HTTP/1.1 {status} X\r\n{headers}content-length: {}\r\nconnection: close\r\n\r\n{body}",
                     body.len()
                 );
                 let _ = socket.write_all(response.as_bytes()).await;
@@ -1106,6 +1174,316 @@ async fn a_delegated_asset_is_skipped_and_reported_while_the_rest_is_pushed() {
             }),
             "nothing of the delegated asset was sent (dry run: {dry_run})"
         );
+    }
+}
+
+// ── A run's bundles through the server's lane (#1094) ───────────────────
+
+/// What the lane mock saw: each create's asset in arrival order, and the most upload sessions
+/// it held open at once.
+#[derive(Clone)]
+struct LaneMock {
+    /// The escrow, feed and attestation-key routes every push reads; it refuses no escrow.
+    escrow: EscrowMock,
+    /// Refuse every provenance blob at finalization (`error.upload.envelope_rejected`), the
+    /// answer a create sealed at a stale album epoch meets.
+    refuse_creates: bool,
+    state: std::sync::Arc<std::sync::Mutex<LaneState>>,
+}
+
+#[derive(Default)]
+struct LaneState {
+    creates: Vec<String>,
+    /// Each open session's declared size, by id: open from its create until a chunk reaches
+    /// that size.
+    open: std::collections::HashMap<String, u64>,
+    /// The sessions the mock refuses at finalization.
+    refused: HashSet<String>,
+    most_open: usize,
+    sessions: usize,
+}
+
+impl LaneMock {
+    fn answer(&self, request: &WireRequest) -> WireAnswer {
+        let json = |status, body: serde_json::Value| WireAnswer {
+            status,
+            headers: vec![("content-type", "application/json".to_owned())],
+            body: body.to_string(),
+            delay: std::time::Duration::ZERO,
+        };
+        let line = request.line.as_str();
+        if line == "POST /v1/albums" {
+            let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+            return json(
+                200,
+                serde_json::json!({ "album_id": body["album_id"], "created": true }),
+            );
+        }
+        if line == "POST /v1/upload" {
+            let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+            let mut state = self.state.lock().unwrap();
+            let asset = body["manifest_envelope"]["file_id"].as_str().unwrap();
+            state.creates.push(asset.to_owned());
+            let id = format!("s-{}", state.sessions);
+            state.sessions += 1;
+            state
+                .open
+                .insert(id.clone(), body["size"].as_u64().unwrap());
+            state.most_open = state.most_open.max(state.open.len());
+            if self.refuse_creates && body["blob_role"] == "provenance" {
+                state.refused.insert(id.clone());
+            }
+            let mut created = json(
+                201,
+                serde_json::json!({
+                    "id": id,
+                    "upload_url": format!("/v1/upload/{id}"),
+                    "suggested_chunk_size": 262_144,
+                }),
+            );
+            created.headers.push(("x-capsule-offset", "0".to_owned()));
+            // A server slow to open a session: a create of another bundle on the lane arrives
+            // while this one is still open.
+            created.delay = std::time::Duration::from_millis(50);
+            return created;
+        }
+        if let Some(id) = line.strip_prefix("PATCH /v1/upload/") {
+            let offset: u64 = request
+                .header("x-capsule-offset")
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(0);
+            let reached = offset + request.body.len() as u64;
+            let mut state = self.state.lock().unwrap();
+            if state.open.get(id).is_some_and(|size| reached >= *size) {
+                state.open.remove(id);
+            }
+            let mut headers = vec![("x-capsule-offset", reached.to_string())];
+            if state.refused.contains(id) {
+                headers.push((
+                    "x-capsule-upload-status",
+                    "waiting_for_processing".to_owned(),
+                ));
+            }
+            return WireAnswer {
+                status: 204,
+                headers,
+                body: String::new(),
+                delay: std::time::Duration::ZERO,
+            };
+        }
+        if line.starts_with("HEAD /v1/upload/") {
+            // Only a refused session is ever polled: it finalized into `failed_processing`.
+            return WireAnswer {
+                status: 200,
+                headers: vec![
+                    ("x-capsule-offset", "0".to_owned()),
+                    ("x-capsule-upload-status", "failed_processing".to_owned()),
+                    (
+                        "x-capsule-upload-error",
+                        capsule_i18n::error_codes::UPLOAD_ENVELOPE_REJECTED.to_owned(),
+                    ),
+                ],
+                body: String::new(),
+                delay: std::time::Duration::ZERO,
+            };
+        }
+        let (status, content_type, body) = self.escrow.answer(line);
+        WireAnswer {
+            status,
+            headers: vec![("content-type", content_type.to_owned())],
+            body,
+            delay: std::time::Duration::ZERO,
+        }
+    }
+}
+
+/// How [`push_three_on_the_lane`] sets its run up.
+#[derive(Clone, Copy)]
+struct LaneRun {
+    windows: LaneWindows,
+    /// The mock refuses every create at finalization.
+    refuse_creates: bool,
+    /// The album moves to a newer epoch after the import, so a refused create can be re-sealed.
+    rotate: bool,
+}
+
+impl LaneRun {
+    fn under(windows: LaneWindows) -> Self {
+        Self {
+            windows,
+            refuse_creates: false,
+            rotate: false,
+        }
+    }
+}
+
+/// Import three assets into a fresh library, push them to the lane mock as `run` says, and
+/// return the summary, the assets in the order the run took them, and what the mock saw.
+async fn push_three_on_the_lane(run: LaneRun) -> (PushSummary, Vec<Uuid>, LaneMock, Scratch) {
+    let scratch = Scratch::new();
+    let lib = scratch.0.join("library");
+    std::fs::create_dir_all(&lib).unwrap();
+    let mut ws = Workspace::create_with_params(
+        &lib,
+        b"passphrase",
+        capsule_core::crypto::primitives::Argon2Params {
+            mem_kib: 64,
+            t_cost: 1,
+            p_cost: 1,
+        },
+    )
+    .unwrap();
+    let album = ws.default_album_id();
+    ws.ensure_album(album, "Lane").unwrap();
+    let opts = capsule_library::lifecycle::SignedImportOptions {
+        move_source: false,
+        defer_source_release: false,
+        stack: None,
+        enrichment: None,
+    };
+    for at in 0..3 {
+        let source = scratch.0.join(format!("lane-{at}.jpg"));
+        std::fs::write(&source, format!("lane photo {at}")).unwrap();
+        ws.import_asset_with(album, &source, &opts).unwrap();
+    }
+    let assets = ws.asset_ids();
+    if run.rotate {
+        ws.rotate_epoch(album).unwrap();
+    }
+
+    let mock = LaneMock {
+        escrow: EscrowMock {
+            full_for: Uuid::nil(),
+            seen: std::sync::Arc::default(),
+        },
+        refuse_creates: run.refuse_creates,
+        state: std::sync::Arc::default(),
+    };
+    let served = mock.clone();
+    let origin = serve_wire_mock(move |request| served.answer(request)).await;
+    let (remote, session) = remote_at(&origin);
+    let summary = push_in_windows(
+        &remote,
+        &mut ws,
+        session,
+        PushOptions::default(),
+        PushRun::default(),
+        run.windows,
+    )
+    .await
+    .expect("the run reaches its assets");
+    (summary, assets, mock, scratch)
+}
+
+/// **A refused create is re-sealed and sent through the lane once more.** With a newer epoch to
+/// re-seal at, each asset whose create the server refused is re-sealed and pushed again, and a
+/// second refusal fails it as `create_refused`; with none, it fails as the `upload` refusal it
+/// was, carrying the server's code, and is sent once. Either way no rung past the refused
+/// provenance blob is opened.
+#[tokio::test]
+async fn a_refused_create_is_resealed_and_pushed_through_the_lane_again() {
+    for rotate in [true, false] {
+        let (summary, assets, mock, _scratch) = push_three_on_the_lane(LaneRun {
+            windows: LaneWindows::default(),
+            refuse_creates: true,
+            rotate,
+        })
+        .await;
+        let state = mock.state.lock().unwrap();
+
+        assert_eq!(summary.outcomes.len(), assets.len());
+        for outcome in &summary.outcomes {
+            assert_eq!(outcome.status, AssetPushStatus::Failed, "{outcome:?}");
+            assert_eq!(outcome.resealed, rotate, "{outcome:?}");
+            let error = outcome.error.as_ref().expect("a failure");
+            assert_eq!(
+                error.kind,
+                if rotate { "create_refused" } else { "upload" },
+                "{outcome:?}"
+            );
+            assert_eq!(
+                error.code.as_deref(),
+                Some(capsule_i18n::error_codes::UPLOAD_ENVELOPE_REJECTED)
+            );
+            let sent = state
+                .creates
+                .iter()
+                .filter(|asset| **asset == outcome.asset_id)
+                .count();
+            assert_eq!(
+                sent,
+                if rotate { 2 } else { 1 },
+                "one provenance create per bundle sent: {outcome:?}"
+            );
+        }
+        assert_eq!(
+            state.refused.len(),
+            state.creates.len(),
+            "only creates sent"
+        );
+    }
+}
+
+/// **A run pushes W of its assets at once.** Under the default window the server holds more
+/// than one of the run's upload sessions open at once; under a window of one it holds one at a
+/// time and sees each asset's sessions one after another. Either way every asset's outcome is
+/// reported, in the run's order, with every blob it sent counted: the transfer is the same and
+/// the mock's refused custody check fails each asset the same way.
+#[tokio::test]
+async fn a_push_runs_w_assets_at_once_and_a_window_of_one_runs_them_in_turn() {
+    for (windows, concurrent) in [
+        (LaneWindows::default(), true),
+        (LaneWindows::new(1, 4), false),
+    ] {
+        let (summary, assets, mock, _scratch) =
+            push_three_on_the_lane(LaneRun::under(windows)).await;
+        let state = mock.state.lock().unwrap();
+
+        let reported: Vec<String> = summary
+            .outcomes
+            .iter()
+            .map(|o| o.asset_id.clone())
+            .collect();
+        let expected: Vec<String> = assets.iter().map(Uuid::to_string).collect();
+        assert_eq!(
+            reported, expected,
+            "one outcome per asset, in the run's order"
+        );
+        for outcome in &summary.outcomes {
+            assert_eq!(outcome.status, AssetPushStatus::Failed, "{outcome:?}");
+            assert_eq!(
+                outcome.error.as_ref().map(|e| e.kind),
+                Some("verify_unavailable"),
+                "{outcome:?}"
+            );
+            let sent = state
+                .creates
+                .iter()
+                .filter(|asset| **asset == outcome.asset_id)
+                .count();
+            assert!(sent > 0, "{outcome:?}");
+            assert_eq!(outcome.uploaded, sent, "every session counted: {outcome:?}");
+            assert!(!outcome.resealed);
+        }
+        assert_eq!(summary.pushed_assets, 3);
+        assert!(state.open.is_empty(), "every session completed");
+
+        if concurrent {
+            assert!(
+                state.most_open > 1,
+                "more than one session open at once: {}",
+                state.most_open
+            );
+        } else {
+            assert_eq!(state.most_open, 1, "one session at a time");
+            let mut runs = state.creates.clone();
+            runs.dedup();
+            assert_eq!(
+                runs, expected,
+                "each asset's sessions one after another: {:?}",
+                state.creates
+            );
+        }
     }
 }
 
