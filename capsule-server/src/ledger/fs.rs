@@ -13,8 +13,8 @@
 //! 4. fsyncs the owner's directory if step 2 created the segment.
 //!
 //! A write that fails part-way is cut back to the segment's previous length before the error
-//! is returned, exactly as [`crate::blob::BlobStore::append`] cuts a stage back: the bytes were
-//! never acknowledged, and leaving them would make the next append's frame unreadable.
+//! is returned: the bytes were never acknowledged, and leaving them would make the next append's
+//! frame unreadable.
 //!
 //! # Attachments
 //!

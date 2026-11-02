@@ -23,16 +23,16 @@
 //! | create `426` | kept — the manifest envelope's `protocol_version` pin, refused by the envelope gate. The *header* handshake is no longer this surface's: [`crate::negotiation::ProtocolGate`] answers it before the handler runs, and the accepted window rides `X-Capsule-Protocol-Min`/`-Max` on every response |
 //! | create `500` | **now `503`** — a collaborator that could not answer, with `error.upload.unavailable` and a retry instant (transfer/upload.md, Hostile Clients) |
 //! | create `429` / `507` | **added** — the account's or its source address's session budget, or the live-session cap (`error.upload.rate_limited`), and a full disk (`error.upload.storage_full`); both carry a retry instant |
-//! | chunk `204` | kept — with the authoritative `X-Capsule-Offset` and `X-Capsule-Upload-Status`. The completing chunk is answered `waiting_for_processing` the moment it holds the finalize claim, never once finalization ends (#1040) |
+//! | chunk `204` | kept — with the committed prefix on `X-Capsule-Offset`, the full committed set on `X-Capsule-Committed`, and `X-Capsule-Upload-Status`. The completing chunk is answered `waiting_for_processing` the moment it holds the finalize claim, never once finalization ends (#1040) |
 //! | chunk `400` | kept, and now *coded*: missing offset, missing checksum, checksum mismatch, empty chunk, misalignment and size exceeded each carry their own `error.upload.*`. The two finalization failures are no longer a chunk's answer: no chunk waits for finalization, so they are `HEAD`'s `X-Capsule-Upload-Error` and the session list's `error_code` |
 //! | chunk `403` | **folded into the `404`.** Only the uploader may append, and anyone else is told what a caller naming an unknown session is told — "foreign is unknown" (transfer/upload.md, Hostile Clients). The `403` that remains declared is the bearer scheme's |
 //! | chunk `404` | kept — unknown, expired, discarded and foreign sessions are one answer |
-//! | chunk `409` | kept — offset mismatch (carrying the authoritative offset), chunk conflict, session not active. `replace_incomplete` and `stale_revival` moved to `X-Capsule-Upload-Error` with the other finalization failures |
+//! | chunk `409` | **reworked for the block grid** — `range_conflict` (carrying the committed set, on the body and on `X-Capsule-Committed`, and a retry instant when the overlap is in flight), `too_many_in_flight` and `too_fragmented` (each with a retry instant when a range is in flight), and session not active. Offset mismatch and chunk conflict are retired: a range is admitted wherever it lies, and a committed one sent again is a duplicate. `replace_incomplete` and `stale_revival` moved to `X-Capsule-Upload-Error` with the other finalization failures |
 //! | chunk `413` | kept — the 16 MiB protocol ceiling, reachable because the transport backstop sits above it |
 //! | chunk `415` | kept, and it keeps its code. Kynos's own `Binary` rejection declares `400`, `415` *and* a `422` a raw-bytes body cannot produce, and carries no `error.*` code; [`ChunkBody`] delegates the enforcement to `Binary` and replaces only the rejection, so the `415` is `error.upload.unsupported_media_type` and the phantom `422` is gone |
 //! | chunk `408` | **added** (#717) — a body cut for stalling or for falling below the minimum sustained rate, never for its total duration (#1041), `error.upload.chunk_timeout`. [`ChunkBody`] bounds the read and nothing after it, so finalization is never cut short by it |
 //! | chunk `409 finalize_in_progress` | **deleted.** Losing the finalize claim is a normal race and the chunk that triggered it was still accepted, so it answers `204`. Telling a client its accepted chunk failed was the Salvo behaviour and it was wrong |
-//! | chunk `500` | kept, narrowed — only a stage **shorter** than its counter, the one inconsistency the server cannot repair. A stage that ran ahead is cut back ([`chunk::append`]) and a collaborator failure is a `503` |
+//! | chunk `500` | kept, narrowed — only a live session whose stage is gone, the one inconsistency the server cannot repair. Bytes a write left outside the committed set are garbage the next write of their range overwrites ([`chunk::write_range`]), and a collaborator failure is a `503` |
 //! | chunk `429` / `503` / `507` | **added** — the account's or its source address's chunk budget, a collaborator that could not answer, and a full disk. Each carries a retry instant, on the body and on `Retry-After` ([`crate::problem::RetryAfter`]) |
 //! | head `200` | kept — [`HeadReply::Progress`], carrying offset, declared length, state, advice and relative expiry on headers, with `Cache-Control: no-store`, and a `failed_processing` session's `error.*` code in `X-Capsule-Upload-Error`. A `Reply` rather than a `NoContent`, because `200 with headers` and `204` are different answers. It starts the finalization of a full, unclaimed session and never waits for it |
 //! | head `400` / `401` / `403` / `404` / `500` | kept, except that a session neither the caller's upload nor filed under the caller is the `404`, not a `403` of this surface's own, and the `500` is a `503` with a retry instant. The `403` left is the bearer scheme's. The `400` is the handshake's, declared by the read gate rather than by this surface; the `426` is gone from `HEAD`, because a read is admitted at any protocol date (issue #404) |
@@ -46,19 +46,19 @@
 //! Every status above is produced by a test in `tests/upload.rs`, because
 //! `assert_declared_responses_covered` fails on any the document promises and none produced.
 //!
-//! # One place the protocol asks for a header this surface cannot send
+//! # Headers on a refusal
 //!
 //! A Kynos `ApiError` renders an RFC 9457 problem and has **no seam for a response header**, so
-//! the `X-Capsule-Offset` the protocol's census puts on a `409` rides as a problem **extension
-//! member** instead. The data a client needs to recover is there and is machine-readable; the
-//! spelling is not the one the census names. The alternative was to render the rejection as a
-//! plain-JSON `Reply` variant, which would have cost it its `error.*` code — a worse trade,
-//! since the code is what a client switches on. Recorded rather than hidden.
+//! a refusal says what a client needs in a problem **extension member**, and an interceptor
+//! lifts it onto the header the protocol names: the `committed` set of a `409 range_conflict`
+//! onto `X-Capsule-Committed` ([`CommittedOnRefusal`], on the chunk route alone), and every
+//! `retry_after` onto `Retry-After` ([`crate::problem::RetryAfter`], router-wide). Rendering the
+//! rejection as a plain-JSON `Reply` variant instead would have cost it its `error.*` code — a
+//! worse trade, since the code is what a client switches on.
 //!
-//! The `X-Capsule-Protocol-Min`/`-Max` pair used to be the second such place. It is not any
-//! more: issue #404 moved the handshake onto [`crate::negotiation`], whose advertising
-//! interceptor sits outside every rejection and stamps the window on all of them. The seam an
-//! `ApiError` lacks, an `Interceptor` has.
+//! The `X-Capsule-Protocol-Min`/`-Max` pair is the same pattern: issue #404 moved the handshake
+//! onto [`crate::negotiation`], whose advertising interceptor sits outside every rejection and
+//! stamps the window on all of them. The seam an `ApiError` lacks, an `Interceptor` has.
 //!
 //! # `409 duplicate_blob` refuses the session, and adopts the blob
 //!
@@ -308,11 +308,11 @@ impl CreateHeaders {
 /// request the handshake already admitted.
 #[derive(HeaderParams)]
 pub struct ChunkHeaders {
-    /// Where in the blob this chunk starts.
+    /// Where in the blob this chunk's range starts: a multiple of 4 KiB, anywhere in the blob.
     #[header(rename = "X-Capsule-Offset")]
     offset: Option<String>,
-    /// The chunk's SHA-256, bare lowercase hex. Required: the idempotency tuple is undefined
-    /// without it.
+    /// The chunk's SHA-256, bare lowercase hex. Required: the bytes are verified against it
+    /// before any of them is written.
     #[header(rename = "X-Capsule-Checksum")]
     checksum: Option<String>,
 }
@@ -1441,12 +1441,13 @@ pub async fn create_upload(
     ))
 }
 
-/// Append a chunk, and finalize when it completes the declared size.
+/// Write one range of the blob, and finalize when the committed set reaches the declared size.
 ///
 /// Every rule the [chunk
 /// contract](../../../capsule-docs/src/content/docs/design/transfer/upload.md) fixes is
-/// checked before a byte is written, and the checksum is verified against the received bytes
-/// *first*, so a chunk corrupted in transit persists nothing.
+/// checked before a byte is written — the checksum against the received bytes *first*, so a
+/// chunk corrupted in transit persists nothing, then admission against the committed set and the
+/// ranges in flight ([`chunk::admit`]).
 #[kynos::patch("/v1/upload/{id}", operation_id = "append_chunk", tag = UploadTag)]
 #[allow(
     clippy::too_many_arguments,

@@ -15539,8 +15539,8 @@
         "tags": [
           "upload"
         ],
-        "summary": "Append a chunk, and finalize when it completes the declared size.",
-        "description": "Every rule the [chunk\ncontract](../../../capsule-docs/src/content/docs/design/transfer/upload.md) fixes is\nchecked before a byte is written, and the checksum is verified against the received bytes\n*first*, so a chunk corrupted in transit persists nothing.",
+        "summary": "Write one range of the blob, and finalize when the committed set reaches the declared size.",
+        "description": "Every rule the [chunk\ncontract](../../../capsule-docs/src/content/docs/design/transfer/upload.md) fixes is\nchecked before a byte is written — the checksum against the received bytes *first*, so a\nchunk corrupted in transit persists nothing, then admission against the committed set and the\nranges in flight ([`chunk::admit`]).",
         "operationId": "append_chunk",
         "parameters": [
           {
@@ -15555,7 +15555,7 @@
           {
             "name": "X-Capsule-Offset",
             "in": "header",
-            "description": "Where in the blob this chunk starts.",
+            "description": "Where in the blob this chunk's range starts: a multiple of 4 KiB, anywhere in the blob.",
             "required": false,
             "schema": {
               "type": [
@@ -15567,7 +15567,7 @@
           {
             "name": "X-Capsule-Checksum",
             "in": "header",
-            "description": "The chunk's SHA-256, bare lowercase hex. Required: the idempotency tuple is undefined\nwithout it.",
+            "description": "The chunk's SHA-256, bare lowercase hex. Required: the bytes are verified against it\nbefore any of them is written.",
             "required": false,
             "schema": {
               "type": [

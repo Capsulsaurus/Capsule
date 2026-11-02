@@ -40,7 +40,7 @@
 //! There are two write paths, and neither writes `blobs/{hash}.tmp`.
 //!
 //! - **The upload path has no temp file at all.** `incoming/{upload_id}.bin` *is* the staging
-//!   file — that is what the append-only upload protocol already builds — and finalization
+//!   file — the upload protocol writes each range into it at its offset — and finalization
 //!   renames it straight to its content address. The whole tree is on one filesystem
 //!   (design/filesystem/server.md; the requirement is recorded in `self-hosting.md`), so that
 //!   rename is atomic.
@@ -336,7 +336,7 @@ pub trait BlobStore: fmt::Debug + Send + Sync {
     ///
     /// For a blob the server already holds whole — a signed manifest envelope object, a
     /// federation pull that has been buffered, a test fixture. The streaming path is
-    /// [`Self::begin`] / [`Self::append`] / [`Self::commit`]; this one materialises its argument
+    /// [`Self::begin`] / [`Self::write_staged`] / [`Self::commit`]; this one materialises its argument
     /// by definition, so it is not the path a multi-gigabyte original takes.
     fn put<'a>(&'a self, address: &'a ContentAddress, bytes: &'a [u8])
     -> BlobFuture<'a, Placement>;
