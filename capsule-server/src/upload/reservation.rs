@@ -336,7 +336,8 @@ pub async fn release_logged(context: &UploadContext, record: &UploadSessionRecor
 /// ledger no longer attributes was released by the reservation sweep between this
 /// finalization's commit and now, so the committed bytes are charged to the uploader here,
 /// settled, through the ledger directly: they are on the server, and refusing them now would
-/// cost storage rather than save it, the reason [`charge_finalizing`] charges past the check.
+/// cost storage rather than save it, the reason a finalizing session is charged past the check
+/// when [`release`] restores a reservation.
 ///
 /// Best-effort, as [`release_logged`] is: the bytes are committed and the session completes
 /// either way. A settle that fails leaves the reservation to the sweep, which finds the blob
