@@ -42,6 +42,7 @@ use crate::federation::{
 use crate::gc::{CollectionReport, Mode, PurgeReport};
 use crate::ledger::ChainFault;
 use crate::ledger::rebuild::RebuildReport;
+use crate::ledger::rebuild::sizes::{Resized, SizeRepairReport, ZeroSized};
 use crate::moderation::FederatedReport;
 use crate::scrub::{Depth, ScrubReport};
 use crate::store::UserId;
@@ -209,6 +210,24 @@ pub enum Command {
         /// rewritten, accepting the ledger as it stands so the server writes to it again.
         #[arg(long, requires = "apply")]
         accept_rewrites: bool,
+
+        /// Where state lives.
+        #[command(flatten)]
+        backend: BackendArgs,
+    },
+
+    /// Record the real size of every blob reference the index holds at size 0.
+    ///
+    /// Lifecycle ops once re-pointed an asset's manifest, metadata and replaced original at size
+    /// 0, which the sync feed then served. Dry run by default: reports each reference it would
+    /// repair from the length the blob store holds it at, and writes nothing. With `--apply` it
+    /// records those sizes, changing only a reference still at size 0 with the same address.
+    /// A reference whose blob is missing or empty is reported and kept as it is, and the pass
+    /// exits non-zero for it. Running it again finds nothing to repair.
+    RepairSizes {
+        /// Carry it out. Without this nothing is written.
+        #[arg(long)]
+        apply: bool,
 
         /// Where state lives.
         #[command(flatten)]
@@ -409,6 +428,7 @@ impl Command {
             | Self::Purge { .. }
             | Self::Scrub { .. }
             | Self::Rebuild { .. }
+            | Self::RepairSizes { .. }
             | Self::Quota { .. }
             | Self::Peer { .. }
             | Self::Moderation { .. } => Demands::Maintenance,
@@ -439,7 +459,8 @@ impl Command {
             }
             Self::Purge { backend, .. }
             | Self::Scrub { backend, .. }
-            | Self::Rebuild { backend, .. } => {
+            | Self::Rebuild { backend, .. }
+            | Self::RepairSizes { backend, .. } => {
                 overrides.blob_root.clone_from(&backend.blob_root);
                 overrides.memory = backend.memory;
             }
@@ -507,6 +528,7 @@ pub async fn run() -> Result<ExitCode> {
             accept_rewrites,
             ..
         } => rebuild(&config, mode(apply), accept_rewrites).await,
+        Command::RepairSizes { apply, .. } => repair_sizes(&config, mode(apply)).await,
         Command::Quota { action } => quota(&config, &action).await,
         Command::Peer { action } => peer(&config, &action).await,
         Command::Moderation { action } => moderation(&config, &action).await,
@@ -821,6 +843,23 @@ async fn rebuild(config: &Config, mode: Mode, accept_rewrites: bool) -> Result<E
         .map_err(|error| eyre!("the index rebuild could not finish: {error}"))?;
     print!("{}", render_rebuild(&report, mode));
     Ok(if report.has_faults() {
+        ExitCode::from(EXIT_FINDINGS)
+    } else {
+        ExitCode::SUCCESS
+    })
+}
+
+/// Record the real size of every blob reference the index holds at size `0` (#1128).
+///
+/// Exits [`EXIT_FINDINGS`] when a reference could not be repaired — its blob is missing or empty
+/// — and zero otherwise, including when there was nothing to repair.
+async fn repair_sizes(config: &Config, mode: Mode) -> Result<ExitCode> {
+    let maintenance = maintenance(config).await?;
+    let report = crate::ledger::rebuild::sizes::repair_sizes(&maintenance.rebuild, mode)
+        .await
+        .map_err(|error| eyre!("the size repair could not finish: {error}"))?;
+    print!("{}", render_size_repair(&report, mode));
+    Ok(if report.has_findings() {
         ExitCode::from(EXIT_FINDINGS)
     } else {
         ExitCode::SUCCESS
@@ -1171,6 +1210,62 @@ impl std::fmt::Display for Rendered<'_, PurgeReport> {
             writeln!(f, "  {class} ({})", assets.len())?;
             for asset in assets {
                 writeln!(f, "    {asset}")?;
+            }
+        }
+        if quiet {
+            writeln!(f, "  nothing to do")?;
+        }
+        Ok(())
+    }
+}
+
+/// Render a size repair pass.
+///
+/// Every reference is listed with its asset, role and address, so an operator can find the row
+/// a missing or empty blob belongs to without a second query.
+fn render_size_repair(report: &SizeRepairReport, mode: Mode) -> Rendered<'_, SizeRepairReport> {
+    Rendered(report, mode)
+}
+
+impl std::fmt::Display for Rendered<'_, SizeRepairReport> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self(report, mode) = *self;
+        writeln!(f, "size repair ({})", posture(mode))?;
+        let mut quiet = true;
+        for (class, resized) in [
+            ("repaired", &report.repaired),
+            ("moved before repair, left alone", &report.moved),
+        ] {
+            if resized.is_empty() {
+                continue;
+            }
+            quiet = false;
+            writeln!(f, "  {class} ({})", resized.len())?;
+            for Resized { reference, size } in resized {
+                let ZeroSized {
+                    asset,
+                    role,
+                    address,
+                } = reference;
+                writeln!(f, "    {asset} {} {address} -> {size} bytes", role.as_str())?;
+            }
+        }
+        for (class, references) in [
+            ("blob missing, kept", &report.missing),
+            ("blob empty, kept", &report.empty),
+        ] {
+            if references.is_empty() {
+                continue;
+            }
+            quiet = false;
+            writeln!(f, "  {class} ({})", references.len())?;
+            for ZeroSized {
+                asset,
+                role,
+                address,
+            } in references
+            {
+                writeln!(f, "    {asset} {} {address}", role.as_str())?;
             }
         }
         if quiet {

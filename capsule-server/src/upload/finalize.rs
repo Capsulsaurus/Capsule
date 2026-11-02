@@ -1067,7 +1067,11 @@ async fn apply_replace(
                 manifest_hash,
                 prior_provenance_hash: prior,
                 amk_version: u64::from(envelope.amk_version),
-                provenance: address.clone(),
+                // The manifest is this session's own blob, measured against the stage's length.
+                provenance: crate::index::OpBlob {
+                    address: address.clone(),
+                    size: record.total_size,
+                },
                 metadata: Some(metadata),
                 original: Some(original),
                 retention_until: None,
@@ -1126,7 +1130,7 @@ async fn named_blob(
     context: &UploadContext,
     hex: Option<&str>,
     field: &'static str,
-) -> Result<ContentAddress, FinalizeFailure> {
+) -> Result<crate::index::OpBlob, FinalizeFailure> {
     let Some(hex) = hex else {
         // Refused at the gate; reaching here means a session predates that check.
         return Err(FinalizeFailure::EnvelopeRejected(
@@ -1140,11 +1144,17 @@ async fn named_blob(
         .stat(&address)
         .await
         .map_err(blob_unavailable("stat a blob a replace names"))?;
-    if present.is_none() {
+    let Some(present) = present else {
         tracing::info!(%address, field, "a replace named a blob the store does not hold");
         return Err(FinalizeFailure::ReplaceIncomplete { field });
-    }
-    Ok(address)
+    };
+    // The member finalized through its own session, which measured these bytes; the store's
+    // length is that measurement, read once here because this is the only place the manifest's
+    // finalization meets the member (#1128).
+    Ok(crate::index::OpBlob {
+        address,
+        size: present.size,
+    })
 }
 
 /// What one pass over the staged bytes established.

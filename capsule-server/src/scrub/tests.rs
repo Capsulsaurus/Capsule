@@ -224,7 +224,10 @@ impl Harness {
                 manifest_hash: hash_bytes(&bytes),
                 prior_provenance_hash: row.chain_head,
                 amk_version: 0,
-                provenance: address.clone(),
+                provenance: crate::index::OpBlob {
+                    address: address.clone(),
+                    size: bytes.len() as u64,
+                },
                 metadata: None,
                 original: None,
                 retention_until: None,
@@ -516,8 +519,13 @@ async fn a_mirrored_fact_that_disagrees_with_the_signed_manifest_is_reported() {
                 .await
                 .expect("read")
                 .expect("the row exists")
-                .address_for(BlobRole::Provenance)
-                .cloned()
+                .blobs
+                .into_iter()
+                .find(|blob| blob.role == BlobRole::Provenance)
+                .map(|blob| crate::index::OpBlob {
+                    address: blob.address,
+                    size: blob.size,
+                })
                 .expect("a provenance blob"),
             metadata: None,
             original: None,
@@ -553,7 +561,8 @@ async fn a_provenance_blob_that_is_not_a_manifest_is_reported_rather_than_assume
 
     // Re-point the provenance role at bytes that are not a manifest, the only way a lifecycle
     // write legitimately moves that role — which is what makes this reachable at all.
-    let junk = h.store(b"not CBOR, not a manifest, not anything").await;
+    let junk_bytes = b"not CBOR, not a manifest, not anything";
+    let junk = h.store(junk_bytes).await;
     h.index
         .apply_op(crate::index::LifecycleOp {
             asset_id: id.clone(),
@@ -569,7 +578,10 @@ async fn a_provenance_blob_that_is_not_a_manifest_is_reported_rather_than_assume
                 .expect("the row exists")
                 .chain_head,
             amk_version: 0,
-            provenance: junk.clone(),
+            provenance: crate::index::OpBlob {
+                address: junk.clone(),
+                size: junk_bytes.len() as u64,
+            },
             metadata: None,
             original: None,
             retention_until: None,
@@ -695,7 +707,11 @@ async fn purging_a_tombstone_takes_the_chain_with_it() {
         .expect("read")
         .expect("the row exists")
         .chain_head;
-    let delete_manifest = h.store(b"purged-delete-manifest").await;
+    let delete_bytes = b"purged-delete-manifest";
+    let delete_manifest = crate::index::OpBlob {
+        address: h.store(delete_bytes).await,
+        size: delete_bytes.len() as u64,
+    };
     h.index
         .apply_op(crate::index::LifecycleOp {
             asset_id: id.clone(),

@@ -180,6 +180,14 @@ impl Harness {
         address
     }
 
+    /// Store `bytes` and name them as a lifecycle op's blob, at their size.
+    async fn op_blob(&self, bytes: &[u8]) -> crate::index::OpBlob {
+        crate::index::OpBlob {
+            address: self.store(bytes).await,
+            size: bytes.len() as u64,
+        }
+    }
+
     /// Publish `asset` holding `bytes` as a derivative, and return the address.
     async fn publish(&self, asset: &str, bytes: &[u8]) -> ContentAddress {
         let id = AssetId::new(asset);
@@ -245,7 +253,7 @@ impl Harness {
                     .chain_head,
                 amk_version: 1,
                 provenance: self
-                    .store(format!("{asset}-delete-manifest").as_bytes())
+                    .op_blob(format!("{asset}-delete-manifest").as_bytes())
                     .await,
                 original: None,
                 metadata: None,
@@ -612,7 +620,7 @@ async fn a_restore_clears_the_retention_floor() {
             manifest_hash: Hash32([2; 32]),
             prior_provenance_hash: head,
             amk_version: 1,
-            provenance: h.store(b"restored-manifest").await,
+            provenance: h.op_blob(b"restored-manifest").await,
             original: None,
             metadata: None,
             retention_until: None,
@@ -907,6 +915,16 @@ impl AssetIndex for RacesTheListing {
         self.inner.set_hold(asset, hold)
     }
 
+    fn repair_blob_size<'a>(
+        &'a self,
+        asset: &'a AssetId,
+        role: BlobRole,
+        address: &'a ContentAddress,
+        size: u64,
+    ) -> crate::index::IndexFuture<'a, crate::index::SizeRepair> {
+        self.inner.repair_blob_size(asset, role, address, size)
+    }
+
     fn reference_count<'a>(
         &'a self,
         address: &'a ContentAddress,
@@ -1064,7 +1082,7 @@ async fn a_restore_between_listing_and_purge_keeps_its_bytes() {
         manifest_hash: Hash32([2; 32]),
         prior_provenance_hash: before.chain_head,
         amk_version: 1,
-        provenance: h.store(b"raced-restore-manifest").await,
+        provenance: h.op_blob(b"raced-restore-manifest").await,
         original: None,
         metadata: None,
         retention_until: None,
@@ -1134,7 +1152,7 @@ async fn a_restore_after_the_window_is_refused_and_the_purge_proceeds() {
             manifest_hash: Hash32([2; 32]),
             prior_provenance_hash: before.chain_head,
             amk_version: 1,
-            provenance: h.store(b"late-restore-manifest").await,
+            provenance: h.op_blob(b"late-restore-manifest").await,
             original: None,
             metadata: None,
             retention_until: None,

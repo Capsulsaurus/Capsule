@@ -45,8 +45,8 @@ use sea_orm::{
 use super::{
     AssetIndex, AssetRow, AssetState, BlobOutcome, BlobRecord, BlobRef, BlobReference, Custody,
     FeedEntry, HoldOutcome, IndexFuture, LifecycleOp, OpAction, OpOutcome, PendingAsset,
-    PurgeOutcome, Receipted, Reservation, RestoreOutcome, ServingHold, create_epoch, entry_for,
-    is_singular, set_singular,
+    PurgeOutcome, Receipted, Reservation, RestoreOutcome, ServingHold, SizeRepair, create_epoch,
+    entry_for, is_singular, set_singular,
 };
 use crate::attestation;
 use crate::blob::ContentAddress;
@@ -1229,6 +1229,45 @@ impl AssetIndex for PostgresAssetIndex {
             } else {
                 HoldOutcome::NotFound
             })
+        })
+    }
+
+    fn repair_blob_size<'a>(
+        &'a self,
+        asset: &'a AssetId,
+        role: BlobRole,
+        address: &'a ContentAddress,
+        size: u64,
+    ) -> IndexFuture<'a, SizeRepair> {
+        Box::pin(async move {
+            // Under the asset row's `FOR UPDATE`, like every other writer: `persist` rewrites a
+            // row's whole blob set, so an unlocked `UPDATE` here would be overwritten — size 0
+            // and all — by an op that hydrated the row before it and committed after it, while
+            // this pass reported the reference repaired.
+            let transaction = begin(&self.connection).await?;
+            let Some(mut row) = hydrate_locked(&transaction, asset).await? else {
+                return Ok(SizeRepair::NotFound);
+            };
+            // The guard is re-checked on the locked row: a reference a live op re-pointed
+            // between the pass's listing and this write no longer matches.
+            let Some(blob) = row.blobs.iter_mut().find(|blob| {
+                size > 0 && blob.size == 0 && blob.role == role && &blob.address == address
+            }) else {
+                return Ok(SizeRepair::Unchanged);
+            };
+            blob.size = size;
+            // A published row moves to the feed's head, so a device that already synced it at
+            // size 0 is sent it again at its real size. An unpublished row has no position.
+            if row.sync_seq.is_some() {
+                row.sync_seq = Some(mint(&transaction, &row.owner_id).await?);
+            }
+            persist(&transaction, &row).await?;
+            commit(transaction).await?;
+            tracing::info!(
+                %asset, role = role.as_str(), %address, size, sync_seq = row.sync_seq,
+                "a blob reference recorded at size 0 now carries its size"
+            );
+            Ok(SizeRepair::Repaired)
         })
     }
 

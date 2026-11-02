@@ -174,6 +174,19 @@ async fn a_replace_bundle_supersedes_the_original_and_reaches_the_feed() {
         row.sync_seq > Some(published_seq),
         "a replace is a change every device has to hear about, so it takes a new position"
     );
+    // #1128: each re-pointed member is recorded at the size its bytes have, never at 0.
+    for (role, bytes) in [
+        (BlobRole::Original, &original),
+        (BlobRole::Metadata, &metadata),
+        (BlobRole::Provenance, &manifest),
+    ] {
+        let size = row
+            .blobs
+            .iter()
+            .find(|blob| blob.role == role)
+            .map(|blob| blob.size);
+        assert_eq!(size, Some(bytes.len() as u64), "{role:?}");
+    }
 
     // And it reaches a device that had already seen the asset as an **update**, not as a new
     // asset. The distinction is a fact about the reader rather than about the row — a device

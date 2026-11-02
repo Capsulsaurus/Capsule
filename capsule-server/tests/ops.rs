@@ -292,6 +292,25 @@ async fn the_feed_serves_the_lifecycle_manifest_byte_for_byte() {
         support::checksum(b"new metadata"),
         "the metadata update did not re-point the metadata blob"
     );
+
+    // #1128: the re-pointed blobs are recorded at the sizes of the bytes the op carried.
+    let row = fixture
+        .index
+        .read(&AssetId::new(ASSET))
+        .await
+        .expect("the index answers")
+        .expect("the asset exists");
+    let size = |role| {
+        row.blobs
+            .iter()
+            .find(|blob| blob.role == role)
+            .map(|blob| blob.size)
+    };
+    assert_eq!(
+        size(BlobRole::Provenance),
+        Some(manifest("m1").len() as u64)
+    );
+    assert_eq!(size(BlobRole::Metadata), Some(b"new metadata".len() as u64));
 }
 
 /// The same manifest twice is one application, one sequence number, one identical body.

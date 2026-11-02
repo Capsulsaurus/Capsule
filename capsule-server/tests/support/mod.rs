@@ -4055,6 +4055,19 @@ impl AssetIndex for SwitchableIndex {
         self.inner.set_hold(asset, hold)
     }
 
+    fn repair_blob_size<'a>(
+        &'a self,
+        asset: &'a AssetId,
+        role: capsule_server::store::BlobRole,
+        address: &'a ContentAddress,
+        size: u64,
+    ) -> IndexFuture<'a, capsule_server::index::SizeRepair> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.repair_blob_size(asset, role, address, size)
+    }
+
     fn reference_count<'a>(&'a self, address: &'a ContentAddress) -> IndexFuture<'a, u64> {
         if self.is_down() {
             return Box::pin(async { Self::refuse() });
