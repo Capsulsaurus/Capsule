@@ -90,7 +90,9 @@ fn size_from(value: i64) -> Result<u64, StoreError> {
 ///
 /// The total is the account's attributions plus its pulled holdings: the distinct addresses in
 /// `federation_pulled_metadata_blobs` of every album it subscribes to, live or lapsed, that it is
-/// not itself attributed (the module's docs, "Pulled blobs").
+/// not itself attributed (the module's docs, "Pulled blobs"). That subquery runs in time linear in
+/// every `(album, blob)` row the account's subscriptions hold, which no row count caps on an
+/// unlimited deployment; keeping a per-account total instead is #1171.
 async fn usage_of<C: ConnectionTrait>(
     connection: &C,
     user: &UserId,
