@@ -1939,53 +1939,58 @@ async fn a_range_written_but_never_recorded_is_simply_sent_again() {
     );
 }
 
-/// Two requests for one range never write it at once: the second, arriving while the first is
-/// in flight, is a `range_conflict` with `Retry-After`, and writes nothing; once the first has
-/// landed, the same re-send is a duplicate.
+/// Two requests for one range never write it at once. A range overlapping one in flight is a
+/// `range_conflict` with `Retry-After` at once, and writes nothing; a re-send of exactly the
+/// range in flight — the lost acknowledgement a current client re-sends after — waits for the
+/// first attempt and is answered as the duplicate it then is.
 #[tokio::test]
-async fn a_range_sent_while_it_is_in_flight_is_a_conflict_to_wait_out() {
+async fn a_range_sent_while_it_is_in_flight_waits_or_conflicts() {
     let fixture = Fixture::working();
     let bearer = fixture.bearer().await;
     let (first, _, whole) = blob();
     let id = fixture.open_session(&whole, "original", &bearer).await;
 
-    // Park the first write inside the blob store, so the second request arrives while the
-    // first holds its claim — the lost acknowledgement a client re-sends after.
+    // Park the first write inside the blob store, so the later requests arrive while the
+    // first holds its claim.
     let hold = fixture.blobs.hold_appends();
     let racing = async {
         let one = fixture.chunk(&id, 0, &first, &bearer).send();
-        let two = async {
+        let rest = async {
             hold.entered.notified().await;
-            let second = fixture.chunk(&id, 0, &first, &bearer).send().await;
-            assert!(
-                tokio::time::timeout(
-                    std::time::Duration::from_millis(50),
-                    hold.entered.notified()
-                )
-                .await
-                .is_err(),
-                "the second request never reached the blob store"
-            );
-            hold.release.add_permits(1);
-            second
+            let overlap = fixture.chunk(&id, 0, &whole, &bearer).send().await;
+            let resend = fixture.chunk(&id, 0, &first, &bearer).send();
+            let release = async {
+                assert!(
+                    tokio::time::timeout(
+                        std::time::Duration::from_millis(50),
+                        hold.entered.notified()
+                    )
+                    .await
+                    .is_err(),
+                    "neither later request reached the blob store"
+                );
+                hold.release.add_permits(1);
+            };
+            let (resend, ()) = tokio::join!(resend, release);
+            (overlap, resend)
         };
-        tokio::join!(one, two)
+        tokio::join!(one, rest)
     };
-    let (one, two) = racing.await;
+    let (one, (overlap, resend)) = racing.await;
     one.assert_status(StatusCode::NO_CONTENT);
     one.assert_header("x-capsule-offset", "4096");
-    two.assert_status(StatusCode::CONFLICT);
-    two.assert_header("x-capsule-committed", "");
+
+    overlap.assert_status(StatusCode::CONFLICT);
+    overlap.assert_header("x-capsule-committed", "");
     assert!(
-        two.header("retry-after").is_some(),
+        overlap.header("retry-after").is_some(),
         "a conflict with a range in flight is waited out"
     );
-    let body: serde_json::Value = two.json();
+    let body: serde_json::Value = overlap.json();
     assert_eq!(code(&body), "error.upload.range_conflict");
 
-    let again = fixture.chunk(&id, 0, &first, &bearer).send().await;
-    again.assert_status(StatusCode::NO_CONTENT);
-    again.assert_header("x-capsule-committed", "0-4095");
+    resend.assert_status(StatusCode::NO_CONTENT);
+    resend.assert_header("x-capsule-committed", "0-4095");
     assert_eq!(
         fixture.blobs.staged_len_for_test(&id).await,
         Some(4096),
@@ -2085,8 +2090,9 @@ async fn a_range_past_the_fragment_bound_is_refused_and_a_gap_fill_is_not() {
 
 /// A claim is released only once its write has returned, whether or not the request that took
 /// it is still there: a client that gives up on a slow write and retries is refused until that
-/// write lands, so the abandoned write can never overwrite the retry.
-#[tokio::test]
+/// write lands, so the abandoned write can never overwrite the retry. The retry waits the
+/// server's bound for that write first; time is paused so the bound passes at once.
+#[tokio::test(start_paused = true)]
 async fn an_abandoned_write_keeps_its_claim_until_it_returns() {
     let fixture = Fixture::working();
     let bearer = fixture.bearer().await;
@@ -2104,7 +2110,8 @@ async fn an_abandoned_write_keeps_its_claim_until_it_returns() {
         }
     }
 
-    // Its retry, with the same range, finds the claim still held by the write nobody awaits.
+    // Its retry, with the same range, finds the claim still held by the write nobody awaits,
+    // and still held once the wait for it is over.
     let retry = fixture.chunk(&id, 0, &first, &bearer).send().await;
     retry.assert_status(StatusCode::CONFLICT);
     assert_eq!(code(&retry.json()), "error.upload.range_conflict");
