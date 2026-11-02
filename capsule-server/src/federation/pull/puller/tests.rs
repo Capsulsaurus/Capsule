@@ -15,6 +15,7 @@ use crate::federation::pull::fixtures::{
 };
 use crate::federation::pull::pulled::{InMemoryPulledAlbums, PeerCachingBudget, PulledAlbum};
 use crate::federation::pull::signer::Ed25519RequestSigner;
+use crate::federation::rejected_hashes::{InMemoryRejectedHashes, RejectedHashBounds};
 use crate::federation::scheme::{REQUEST_SIGNATURE_HEADER, RequestClaim, RequestSignature};
 use crate::federation::{InMemoryPeers, InMemorySubscriptions};
 use crate::store::memory::ManualClock;
@@ -186,6 +187,7 @@ struct Harness {
     clock: Arc<ManualClock>,
     subscriptions: Arc<InMemorySubscriptions>,
     pulled: Arc<InMemoryPulledAlbums>,
+    rejected: Arc<dyn RejectedHashes>,
     signer: Arc<Ed25519RequestSigner>,
     puller: RemotePuller,
 }
@@ -210,6 +212,15 @@ impl Harness {
 
     /// [`Self::new`], with the member's caching budget on the home server at `budget`.
     async fn budgeted(budget: PeerCachingBudget) -> Self {
+        Self::assembled(
+            budget,
+            Arc::new(InMemoryRejectedHashes::new(RejectedHashBounds::default())),
+        )
+        .await
+    }
+
+    /// [`Self::budgeted`], remembering refused revivals in `rejected`.
+    async fn assembled(budget: PeerCachingBudget, rejected: Arc<dyn RejectedHashes>) -> Self {
         let clock = Arc::new(ManualClock::new(now()));
         let issuer = CapabilityCodec::from_pkcs8(&pkcs8(), HOME, clock.clone()).expect("a codec");
         let peers = Arc::new(InMemoryPeers::new());
@@ -227,6 +238,7 @@ impl Harness {
             subscriptions: subscriptions.clone(),
             peers,
             pulled: pulled.clone(),
+            rejected: rejected.clone(),
             signer: signer.clone(),
             backend: home.clone(),
             clock: clock.clone(),
@@ -239,6 +251,7 @@ impl Harness {
             clock,
             subscriptions,
             pulled,
+            rejected,
             signer,
             puller,
         };
@@ -794,4 +807,132 @@ async fn a_successor_longer_than_a_subscription_keeps_is_never_kept() {
     let report = harness.pull(PeerTier::Established).await;
     assert_eq!(failure(&report), "validation");
     assert_eq!(harness.tokens().await, before);
+}
+
+/// A rejected-hash table that cannot be written.
+#[derive(Debug)]
+struct Unwritable;
+
+impl RejectedHashes for Unwritable {
+    fn record(
+        &self,
+        _rejection: crate::federation::rejected_hashes::Rejection,
+        _now: Timestamp,
+    ) -> crate::store::StoreFuture<'_, ()> {
+        Box::pin(async {
+            Err(crate::store::StoreError::Unavailable {
+                store: "rejected hashes",
+                detail: "down".to_owned(),
+            })
+        })
+    }
+
+    fn lookup<'a>(
+        &'a self,
+        _hash: &'a capsule_core::crypto::hash::Hash32,
+        _now: Timestamp,
+    ) -> crate::store::StoreFuture<'a, Option<crate::federation::rejected_hashes::RejectedHash>>
+    {
+        Box::pin(async { Ok(None) })
+    }
+}
+
+/// Pull `create(1)` then its successor, so the album has moved past the first record.
+async fn moved_past_the_first(harness: &Harness) -> Vec<u8> {
+    let first = create(1);
+    let second = record(core(
+        asset(1),
+        Action::MetadataUpdate,
+        Some(hash_bytes(&first)),
+        1,
+    ));
+    harness.home.serve_page(a_page(
+        vec![entry(asset(1), 1, "created", Some(&first))],
+        "c1",
+        true,
+    ));
+    harness.home.serve_page(a_page(
+        vec![entry(asset(1), 2, "updated", Some(&second))],
+        "c2",
+        false,
+    ));
+    harness.home.serve_blob(METADATA);
+    assert_eq!(harness.pull(PeerTier::Established).await.result, Ok(()));
+    first
+}
+
+#[tokio::test]
+async fn a_stale_revival_is_refused_and_its_hash_remembered() {
+    let harness = Harness::new().await;
+    let first = moved_past_the_first(&harness).await;
+    let head = hash_bytes(&first);
+    assert_eq!(
+        harness.rejected.lookup(&head, now()).await.expect("lookup"),
+        None,
+        "nothing refused yet"
+    );
+
+    harness.clock.advance(SignedDuration::from_mins(5));
+    harness.home.serve_page(a_page(
+        vec![entry(asset(1), 3, "updated", Some(&first))],
+        "c3",
+        false,
+    ));
+    let report = harness.pull(PeerTier::Established).await;
+    assert_eq!(
+        failure(&report),
+        "validation",
+        "a revival spends the error budget"
+    );
+    assert_eq!(
+        harness.state().await.high_water,
+        Some(2),
+        "nothing was written"
+    );
+
+    let remembered = harness
+        .rejected
+        .lookup(&head, harness.clock.now())
+        .await
+        .expect("lookup")
+        .expect("the revived hash is remembered");
+    assert_eq!(remembered.rejection.peer, PeerId::new(HOME));
+    assert_eq!(remembered.rejection.album, album());
+    assert_eq!(remembered.rejection.asset_id, asset(1).to_string());
+    assert_eq!(remembered.rejection.rule, "invariant 17");
+    assert_eq!(remembered.first_rejected_at, harness.clock.now());
+    assert_eq!(remembered.references, 1);
+}
+
+#[tokio::test]
+async fn other_validation_failures_remember_nothing() {
+    let harness = Harness::new().await;
+    let stray_record = create(2);
+    let mut stray = entry(asset(2), 1, "created", Some(&stray_record));
+    stray["album_id"] = serde_json::json!(uuid::Uuid::from_u128(99).to_string());
+    harness.home.serve_page(a_page(vec![stray], "c1", false));
+    let report = harness.pull(PeerTier::Established).await;
+    assert_eq!(failure(&report), "validation");
+    assert_eq!(
+        harness
+            .rejected
+            .lookup(&hash_bytes(&stray_record), now())
+            .await
+            .expect("lookup"),
+        None
+    );
+}
+
+#[tokio::test]
+async fn a_revival_is_refused_even_when_its_hash_cannot_be_remembered() {
+    let harness = Harness::assembled(PeerCachingBudget::unlimited(), Arc::new(Unwritable)).await;
+    let first = moved_past_the_first(&harness).await;
+    harness.home.serve_page(a_page(
+        vec![entry(asset(1), 3, "updated", Some(&first))],
+        "c3",
+        false,
+    ));
+    let report = harness.pull(PeerTier::Established).await;
+    assert_eq!(failure(&report), "validation", "the refusal stands");
+    assert_eq!(harness.state().await.high_water, Some(2));
 }

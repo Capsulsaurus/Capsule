@@ -73,6 +73,18 @@ impl RejectedHashBounds {
         Self { capacity, ttl_days }
     }
 
+    /// These bounds, holding at most `capacity` rows.
+    #[must_use]
+    pub const fn with_capacity(self, capacity: NonZeroU32) -> Self {
+        Self { capacity, ..self }
+    }
+
+    /// These bounds, keeping a row `ttl_days` days after its last reference.
+    #[must_use]
+    pub const fn with_ttl_days(self, ttl_days: NonZeroU32) -> Self {
+        Self { ttl_days, ..self }
+    }
+
     /// The most rows the table holds.
     pub const fn capacity(self) -> u32 {
         self.capacity.get()

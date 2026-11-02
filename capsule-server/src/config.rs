@@ -358,6 +358,11 @@ pub struct Config {
     /// [`DEFAULT_PEER_BUDGET_PERCENT`](crate::federation::pull::pulled::DEFAULT_PEER_BUDGET_PERCENT),
     /// 25 (design/quota.md).
     pub peer_budget_percent: u8,
+    /// How many refused federated hashes the soft-fail table keeps
+    /// (`FEDERATION_REJECTED_HASH_CAPACITY`, at least 1, default 100,000), and for how many days
+    /// after their last reference (`FEDERATION_REJECTED_HASH_TTL_DAYS`, at least 1, default 90).
+    /// design/federation.md, Soft-Fail Semantics.
+    pub rejected_hash_bounds: crate::federation::rejected_hashes::RejectedHashBounds,
     /// The filesystem tree ciphertext blobs are written to. There is no object store.
     pub blob_root: Option<PathBuf>,
     /// The Postgres URL, once an adapter reads it (#402).
@@ -567,6 +572,7 @@ impl fmt::Debug for Config {
             federation_url,
             federation_enabled,
             peer_budget_percent,
+            rejected_hash_bounds,
             blob_root,
             database_url,
             valkey_url,
@@ -598,6 +604,7 @@ impl fmt::Debug for Config {
             .field("federation_url", federation_url)
             .field("federation_enabled", federation_enabled)
             .field("peer_budget_percent", peer_budget_percent)
+            .field("rejected_hash_bounds", rejected_hash_bounds)
             .field("blob_root", blob_root)
             .field("database_url", &database_url.as_deref().map(redacted_url))
             .field("valkey_url", &valkey_url.as_deref().map(redacted_url))
@@ -733,6 +740,26 @@ impl Config {
                     }
                 })
                 .unwrap_or(crate::federation::pull::pulled::DEFAULT_PEER_BUDGET_PERCENT);
+        // Both bounds are counts that must not be zero: a table that keeps nothing, or keeps
+        // it for no time, is not a bound but a switch, and nothing asks for one.
+        let rejected_hash_bounds = {
+            let mut bounds = crate::federation::rejected_hashes::RejectedHashBounds::default();
+            if let Some(capacity) = parse_number::<std::num::NonZeroU32>(
+                env,
+                "FEDERATION_REJECTED_HASH_CAPACITY",
+                &mut faults,
+            ) {
+                bounds = bounds.with_capacity(capacity);
+            }
+            if let Some(days) = parse_number::<std::num::NonZeroU32>(
+                env,
+                "FEDERATION_REJECTED_HASH_TTL_DAYS",
+                &mut faults,
+            ) {
+                bounds = bounds.with_ttl_days(days);
+            }
+            bounds
+        };
 
         // ── Storage ─────────────────────────────────────────────────────────────────────
         // `UPLOAD_DIR` is the name the retired deployment used, accepted so an operator's
@@ -1085,6 +1112,7 @@ impl Config {
                 federation_url,
                 federation_enabled,
                 peer_budget_percent,
+                rejected_hash_bounds,
                 blob_root,
                 database_url,
                 valkey_url,

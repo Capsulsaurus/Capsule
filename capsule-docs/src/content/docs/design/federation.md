@@ -10,7 +10,7 @@ Federation lets an album owned on one Capsule server be shared with users whose 
 
 Federation is deferred. Every federation operation answers `404 error.federation.not_configured` unless the deployment sets `FEDERATION_ENABLED=true` **and** `FEDERATION_URL` (`serve` refuses to start with the switch on and no URL). Off, the read primitives honour no capability and `server-info` publishes no `federation_url`; the routes stay in the OpenAPI document either way.
 
-Shipped: minting, refresh, revocation, the capability arm of the pull path, request signatures, signed report intake, the server-level blocklist, the events/hour and bytes/hour budgets with the serving-side probation tier, the operator commands that pin, block, unblock and show a peer (`capsule-server peer …`), and the [egress pull worker](#egress-pull-worker): the job schedule and lease, hint scheduling, the error budget and circuit breaker, CPU/hour, the receiving-side probation budgets, local album subscriptions (at most 1,000 per account), the pull itself over the server's HTTP client with re-validation of pulled data, the worker running in `serve`, and the per-`(receiving_user, source_peer)` caching budget on what a pull holds. Open: counting pulled blobs in the receiver's `quota_used` ([#1162](https://github.com/Capsulsaurus/Capsule/issues/1162)), the rejected-hash table and the breadcrumb index ([#1157](https://github.com/Capsulsaurus/Capsule/issues/1157)), and the hint channel ([#1158](https://github.com/Capsulsaurus/Capsule/issues/1158)). A peer whose key no operator has pinned can present no capability (`401`) and file no report (`403 error.federation.peer_unknown`).
+Shipped: minting, refresh, revocation, the capability arm of the pull path, request signatures, signed report intake, the server-level blocklist, the events/hour and bytes/hour budgets with the serving-side probation tier, the operator commands that pin, block, unblock and show a peer (`capsule-server peer …`), and the [egress pull worker](#egress-pull-worker): the job schedule and lease, hint scheduling, the error budget and circuit breaker, CPU/hour, the receiving-side probation budgets, local album subscriptions (at most 1,000 per account), the pull itself over the server's HTTP client with re-validation of pulled data, the worker running in `serve`, the per-`(receiving_user, source_peer)` caching budget on what a pull holds, the rejected-hash table a pull records each refused stale revival in, and the breadcrumb index read from what a pull committed. Open: counting pulled blobs in the receiver's `quota_used` ([#1162](https://github.com/Capsulsaurus/Capsule/issues/1162)) and the hint channel ([#1158](https://github.com/Capsulsaurus/Capsule/issues/1158)). A peer whose key no operator has pinned can present no capability (`401`) and file no report (`403 error.federation.peer_unknown`).
 
 **Before federation is enabled in a real deployment**, every MUST in this document holds, including re-validation of pulled data at the [boundary](#validation-at-the-boundary) and the [per-peer limits](#per-peer-compartmentalization).
 
@@ -171,7 +171,7 @@ The home server serves only an asset's **current** manifest. A presented manifes
 
 ## Soft-Fail Semantics
 
-A federated event that fails validation is not applied, not shown and grants no authority, but its hash is **remembered** so Capsule's view does not silently diverge from peers that accepted it. The table is bounded: default 100,000 entries, 90-day TTL, LRU by last reference, both configurable.
+A federated event that fails validation is not applied, not shown and grants no authority, but its hash is **remembered** so Capsule's view does not silently diverge from peers that accepted it. The table is bounded: default 100,000 entries (`FEDERATION_REJECTED_HASH_CAPACITY`), 90-day TTL (`FEDERATION_REJECTED_HASH_TTL_DAYS`), LRU by last reference, both configurable. A reference is the same hash presented again; reading the table is none. Eviction only forgets that a refusal happened: no blob, entry or head is held through a row, and the refusal itself rests on the asset's superseded heads, not on the table.
 
 ## Reconstructing State Without Trusting Peers
 
@@ -188,7 +188,7 @@ An unreachable remote asset is shown as unavailable and retried; its index entry
 
 ## Federated Breadcrumb Index
 
-Search uses two tiers: the full local [AI/ML](/design/ai/) index for local and cached content, and a lightweight per-asset breadcrumb (hash, timestamp, author, size, album) for accessible remote albums. Viewing a remote album fetches and **promotes** its assets through the normal indexing pipeline, charged to the receiver's quota. Nothing is pre-indexed wholesale.
+Search uses two tiers: the full local [AI/ML](/design/ai/) index for local and cached content, and a lightweight per-asset breadcrumb (hash, timestamp, author, size, album) for accessible remote albums. A breadcrumb is read from the asset's latest entry a pull committed, so it is only ever built from re-validated input and stores nothing of its own; an asset whose latest entry is a delete or a purged tombstone has none. Reads are paged by asset id, at most 1,000 at a time. Viewing a remote album fetches and **promotes** its assets through the normal indexing pipeline, charged to the receiver's quota. Nothing is pre-indexed wholesale.
 
 ## Moderation Hooks
 
