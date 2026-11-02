@@ -558,6 +558,78 @@ async fn refusals_are_typed() {
     }
 }
 
+/// A kept chain whose newest record no longer verifies (its device signature is damaged on
+/// disk, and the library reopened) is refused as a workspace error before anything is sent:
+/// the server cannot verify signatures, so an unverifiable record must never become the chain
+/// head.
+#[tokio::test]
+async fn a_purge_with_an_unverifiable_kept_record_sends_nothing() {
+    let (server, seen) = ops_server(|req| applied(req, 1)).await;
+    let session = login(&server).await;
+    let root = tempfile::TempDir::new().unwrap();
+    let (workspace, asset) = sealed(root.path());
+    workspace.delete_asset(asset.clone(), 30).unwrap();
+    let delete = workspace.provenance_head(asset.clone()).unwrap();
+    let purged = workspace.purge_asset(asset.clone()).unwrap();
+    purged.reissue_record.expect("an early purge re-issues");
+    drop(workspace);
+
+    // Damage the re-issue in the kept chain: its device signature is replaced by another
+    // signature of the record. The chain's links still hold, so the library reads it whole.
+    let file_name = format!("{}.provenance.cbor", asset.replace('-', ""));
+    let path = find_file(root.path(), &file_name).expect("the purge keeps its chain on disk");
+    let mut kept: Vec<ProvenanceRecord> =
+        capsule_core::cbor::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let last = kept.last_mut().unwrap();
+    last.manifest.device_sig = last.manifest.write_sig.clone();
+    std::fs::write(&path, capsule_core::cbor::to_canonical_vec(&kept).unwrap()).unwrap();
+
+    let reopened = reopen(root.path());
+    assert_eq!(
+        reopened.purged_asset_ids().unwrap(),
+        vec![asset.clone()],
+        "the damaged chain is still read as a purge"
+    );
+    let result = session
+        .deliver_purge(
+            server.base_url(),
+            reopened.clone(),
+            asset.clone(),
+            Some(delete),
+        )
+        .await;
+    match result {
+        Err(FfiError::Workspace { detail }) => {
+            assert!(
+                detail.contains(&format!("the kept chain of {asset}")),
+                "{detail}"
+            );
+            assert!(detail.contains("device signature"), "{detail}");
+        }
+        other => panic!("expected a workspace error, got {other:?}"),
+    }
+    assert!(
+        seen.lock().unwrap().is_empty(),
+        "nothing reached the server"
+    );
+}
+
+/// The path of the file named `name` anywhere under `dir`.
+fn find_file(dir: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
+    for entry in std::fs::read_dir(dir).ok()? {
+        let entry = entry.ok()?;
+        let path = entry.path();
+        if entry.file_type().ok()?.is_dir() {
+            if let Some(found) = find_file(&path, name) {
+                return Some(found);
+            }
+        } else if entry.file_name() == name {
+            return Some(path);
+        }
+    }
+    None
+}
+
 #[tokio::test]
 async fn bad_arguments_are_refused_before_anything_is_sent() {
     let (server, seen) = ops_server(|req| applied(req, 1)).await;
