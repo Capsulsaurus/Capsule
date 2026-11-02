@@ -14,7 +14,7 @@
 //!
 //! - **Dry run by default.** It reports what it would repair and writes nothing until
 //!   [`Mode::Apply`].
-//! - It writes only through [`AssetIndex::repair_blob_size`], which changes a reference's size
+//! - It writes only through [`crate::index::AssetIndex::repair_blob_size`], which changes a reference's size
 //!   **only** where it is `0` and the role and address still match. It never changes an address,
 //!   a role, a non-zero size, or any other column, so a reference a live op re-pointed after
 //!   the listing is left alone.
