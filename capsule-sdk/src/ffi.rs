@@ -12,6 +12,8 @@
 //! [`push_assets`](crate::ffi::FfiSession::push_assets),
 //! [`upload_status`](crate::ffi::FfiSession::upload_status),
 //! [`fetch_blob_to_path`](crate::ffi::FfiSession::fetch_blob_to_path),
+//! [`apply_lifecycle_op`](crate::ffi::FfiSession::apply_lifecycle_op),
+//! [`deliver_purge`](crate::ffi::FfiSession::deliver_purge),
 //! [`sync_pull`](crate::ffi::FfiSession::sync_pull),
 //! [`logout`](crate::ffi::FfiSession::logout)) rides that handle, and
 //! [`transfer_events`](crate::ffi::FfiSession::transfer_events) subscribes to the step-by-step
@@ -126,6 +128,14 @@ pub use ladder::{
     FfiEmbeddedPreview, FfiLocalHoldings, FfiNextStep, FfiRenderRequest, FfiRenderStep,
     FfiRendition, FfiRepresentation, FfiRungSource, embedded_preview, render_step,
 };
+
+/// Lifecycle ops from an app: a signed `delete` or `trash-restore` record, judged at the
+/// boundary and sent to its album's ops surface, and a purge's delivery from the chain the
+/// workspace kept. Separated because it is the one surface where a workspace record meets the
+/// network, and where the rule that holds a delete until its create is indexed lives.
+mod ops;
+
+pub use ops::{FfiLifecycleOpOutcome, MAX_OP_RECORD_BYTES};
 
 // ─── Errors ──────────────────────────────────────────────────────────────────
 
