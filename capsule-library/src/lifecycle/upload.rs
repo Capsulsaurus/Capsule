@@ -200,8 +200,8 @@ impl UploadBundle {
 /// on disk after that point yields bytes the server's finalize-time hash check refuses, never
 /// bytes it stores under the wrong address.
 ///
-/// It also records the plaintext file's identity as it stood when that verification began
-/// ([`FileIdentity`]), so [`check_unchanged`](Self::check_unchanged) can answer cheaply whether
+/// It also records the plaintext file's identity (length, modification time and, on Unix,
+/// inode and status-change time) as it stood when that verification began, so [`check_unchanged`](Self::check_unchanged) can answer cheaply whether
 /// the file is still the one verified. A ciphertext window read again while it is unchanged is
 /// byte-identical to the first read, so re-sending it puts no second ciphertext under a nonce.
 #[derive(Clone)]
@@ -309,8 +309,8 @@ impl OriginalCiphertext {
     /// same length, modification time and (on Unix) inode and status-change time. One `stat`,
     /// cheap enough to run before every window is read and again after.
     ///
-    /// `Ok` is a positive claim, up to the limit [`FileIdentity`] names: every window read
-    /// while it holds is the window read before.
+    /// `Ok` is a positive claim that every window read while it holds is the window read
+    /// before, up to one limit: an edit that keeps every one of those attributes is not seen.
     ///
     /// # Errors
     ///
