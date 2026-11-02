@@ -19,7 +19,8 @@ use jiff::Timestamp;
 use super::{
     AssetIndex, AssetRow, AssetState, BlobOutcome, BlobRecord, BlobRef, Custody, FeedEntry,
     HoldOutcome, IndexFuture, LifecycleOp, OpAction, OpOutcome, PendingAsset, PurgeOutcome,
-    Receipted, Reservation, RestoreOutcome, ServingHold, entry_for, is_singular, set_singular,
+    Receipted, Reservation, RestoreOutcome, ServingHold, SizeRepair, entry_for, is_singular,
+    set_singular,
 };
 use crate::attestation::InMemoryReceipts;
 use crate::blob::ContentAddress;
@@ -532,6 +533,29 @@ impl AssetIndex for InMemoryAssetIndex {
                 tracing::info!(%asset, "an asset's serving hold was lifted");
             }
             Ok(HoldOutcome::Applied)
+        })
+    }
+
+    fn repair_blob_size<'a>(
+        &'a self,
+        asset: &'a AssetId,
+        role: BlobRole,
+        address: &'a ContentAddress,
+        size: u64,
+    ) -> IndexFuture<'a, SizeRepair> {
+        Box::pin(async move {
+            let mut inner = lock(&self.inner);
+            let Some(row) = inner.rows.get_mut(asset) else {
+                return Ok(SizeRepair::NotFound);
+            };
+            let Some(blob) = row.blobs.iter_mut().find(|blob| {
+                size > 0 && blob.size == 0 && blob.role == role && &blob.address == address
+            }) else {
+                return Ok(SizeRepair::Unchanged);
+            };
+            blob.size = size;
+            tracing::info!(%asset, role = role.as_str(), %address, size, "a blob reference recorded at size 0 now carries its size");
+            Ok(SizeRepair::Repaired)
         })
     }
 

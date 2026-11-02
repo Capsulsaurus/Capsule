@@ -379,7 +379,10 @@ pub async fn a_shared_blob_survives_purging_one_holder(
                 manifest_hash: capsule_core::crypto::hash::Hash32([0x72; 32]),
                 prior_provenance_hash: prior,
                 amk_version: 1,
-                provenance: delete_manifest.clone(),
+                provenance: crate::index::OpBlob {
+                    address: delete_manifest.clone(),
+                    size: b"gc-shared/delete manifest".len() as u64,
+                },
                 original: None,
                 metadata: None,
                 retention_until: Some(at(1)),

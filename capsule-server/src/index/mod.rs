@@ -139,6 +139,22 @@ pub enum HoldOutcome {
     NotFound,
 }
 
+/// What [`AssetIndex::repair_blob_size`] did to one blob reference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SizeRepair {
+    /// The reference was recorded at size `0` and now carries the size asked for.
+    Repaired,
+    /// Nothing was written: the reference already carries a non-zero size, the asset holds no
+    /// reference with that role and address, or the size asked for is itself `0`.
+    ///
+    /// One answer for all three, because each means the same thing to the repair pass — this
+    /// reference needs nothing — and because a second run over a repaired index must answer
+    /// exactly this for every row, which is what makes the pass idempotent.
+    Unchanged,
+    /// No such asset.
+    NotFound,
+}
+
 /// One blob the asset holds, as the index knows it: a role and an address, never bytes.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct BlobRef {
@@ -522,6 +538,21 @@ impl OpAction {
     }
 }
 
+/// A blob a lifecycle op points a singular role at: its address, and its size in bytes.
+///
+/// The size rides the op because the op's producer is the one that learned it — the ops route
+/// holds the bytes it stored, and a replace's finalization measured each member it names — and
+/// the index must not learn it any other way: re-`stat`ing the store from here would make the
+/// index depend on the store. A row's [`BlobRef::size`] is what the sync feed serves for a
+/// client to budget a fetch by, so it is never `0` for a blob that has bytes (#1128).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpBlob {
+    /// Its ciphertext content address.
+    pub address: ContentAddress,
+    /// Its size in bytes, as the op's producer measured it.
+    pub size: u64,
+}
+
 /// One accepted lifecycle write, as the index applies it.
 ///
 /// Every field is a fact the gate has already checked. The index decides the two *stateful*
@@ -546,14 +577,14 @@ pub struct LifecycleOp {
     pub amk_version: u64,
     /// The stored provenance blob holding the signed manifest, so the feed serves those exact
     /// bytes for a lifecycle write as it does for an upload.
-    pub provenance: ContentAddress,
+    pub provenance: OpBlob,
     /// The stored metadata blob, when the action carries one.
-    pub metadata: Option<ContentAddress>,
+    pub metadata: Option<OpBlob>,
     /// The stored **original** blob, when the action carries one.
     ///
     /// Only a [`OpAction::Replace`] does. The other four leave the asset's bytes alone by
     /// definition, which is what makes them expressible on a route that never sees a byte.
-    pub original: Option<ContentAddress>,
+    pub original: Option<OpBlob>,
     /// The retention floor the manifest signed, when it carries one.
     ///
     /// Meaningful on a `delete`. A `trash-restore` clears it, because an asset back in the live
@@ -887,6 +918,23 @@ pub trait AssetIndex: std::fmt::Debug + Send + Sync {
         hold: Option<ServingHold>,
     ) -> IndexFuture<'a, HoldOutcome>;
 
+    /// Record `size` for `asset`'s `role` reference to `address`, **only** where that reference
+    /// is recorded at size `0`.
+    ///
+    /// The `capsule-server repair-sizes` pass's one write, for rows a lifecycle op re-pointed
+    /// before ops carried their blobs' sizes (#1128). Narrow by construction: it never changes
+    /// an address, a role, a non-zero size, or any other column, and a `size` of `0` writes
+    /// nothing — so running the pass twice, or alongside a live server that re-points the same
+    /// role, can only ever fill in a size that was missing. A reference the row no longer holds
+    /// (an op re-pointed it after the pass listed it) is [`SizeRepair::Unchanged`].
+    fn repair_blob_size<'a>(
+        &'a self,
+        asset: &'a AssetId,
+        role: BlobRole,
+        address: &'a ContentAddress,
+        size: u64,
+    ) -> IndexFuture<'a, SizeRepair>;
+
     /// How many asset rows reference `address`.
     ///
     /// A **query**, which is the contract: a blob's reference count is derived from the rows
@@ -1103,7 +1151,8 @@ pub(crate) fn create_epoch(row: &AssetRow, blob: &BlobRecord) -> Option<u64> {
 /// Shared by every adapter for the reason [`entry_for`] is: the retention rule below —
 /// a superseded *manifest* is kept referenced rather than dropped — is exactly the kind of thing
 /// two implementations drift on, and the drift reclaims the server's own rebuttal evidence.
-pub(crate) fn set_singular(row: &mut AssetRow, role: BlobRole, address: &ContentAddress) {
+pub(crate) fn set_singular(row: &mut AssetRow, role: BlobRole, blob: &OpBlob) {
+    let address = &blob.address;
     // Retention rule: only the provenance role. The other singular roles are ciphertext, and
     // the old bytes of a replaced original are exactly what the collector is for.
     if role == BlobRole::Provenance
@@ -1117,9 +1166,8 @@ pub(crate) fn set_singular(row: &mut AssetRow, role: BlobRole, address: &Content
     row.blobs.push(BlobRef {
         role,
         address: address.clone(),
-        // Size is not a fact this path learns: the bytes were stored by whoever put them in the
-        // blob store, and re-`stat`ing here would make the index depend on the store.
-        size: 0,
+        // The op's producer measured it; see [`OpBlob`].
+        size: blob.size,
     });
     row.blobs
         .sort_by(|a, b| (a.role, a.address.as_str()).cmp(&(b.role, b.address.as_str())));

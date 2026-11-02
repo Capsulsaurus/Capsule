@@ -45,8 +45,8 @@ use sea_orm::{
 use super::{
     AssetIndex, AssetRow, AssetState, BlobOutcome, BlobRecord, BlobRef, BlobReference, Custody,
     FeedEntry, HoldOutcome, IndexFuture, LifecycleOp, OpAction, OpOutcome, PendingAsset,
-    PurgeOutcome, Receipted, Reservation, RestoreOutcome, ServingHold, create_epoch, entry_for,
-    is_singular, set_singular,
+    PurgeOutcome, Receipted, Reservation, RestoreOutcome, ServingHold, SizeRepair, create_epoch,
+    entry_for, is_singular, set_singular,
 };
 use crate::attestation;
 use crate::blob::ContentAddress;
@@ -1228,6 +1228,58 @@ impl AssetIndex for PostgresAssetIndex {
                 HoldOutcome::Unchanged
             } else {
                 HoldOutcome::NotFound
+            })
+        })
+    }
+
+    fn repair_blob_size<'a>(
+        &'a self,
+        asset: &'a AssetId,
+        role: BlobRole,
+        address: &'a ContentAddress,
+        size: u64,
+    ) -> IndexFuture<'a, SizeRepair> {
+        Box::pin(async move {
+            // The `size = 0` guard is the whole contract, held by the statement rather than by a
+            // read before it: a row a live op re-points between the pass's listing and this
+            // write no longer matches, so the write cannot land on a reference it did not mean.
+            if size > 0 {
+                let applied = self
+                    .connection
+                    .execute_raw(Statement::from_sql_and_values(
+                        DbBackend::Postgres,
+                        "UPDATE asset_blobs SET size = $4 \
+                         WHERE asset_id = $1 AND role = $2 AND address = $3 AND size = 0",
+                        [
+                            Value::from(asset.as_str().to_owned()),
+                            Value::from(role.as_str().to_owned()),
+                            Value::from(address.as_str().to_owned()),
+                            Value::from(size_to_column(size)?),
+                        ],
+                    ))
+                    .await
+                    .map_err(PORT.failing("repairing a blob reference's size"))?;
+                if applied.rows_affected() > 0 {
+                    tracing::info!(
+                        %asset, role = role.as_str(), %address, size,
+                        "a blob reference recorded at size 0 now carries its size"
+                    );
+                    return Ok(SizeRepair::Repaired);
+                }
+            }
+            let exists = self
+                .connection
+                .query_one_raw(Statement::from_sql_and_values(
+                    DbBackend::Postgres,
+                    "SELECT 1 AS present FROM assets WHERE asset_id = $1",
+                    [Value::from(asset.as_str().to_owned())],
+                ))
+                .await
+                .map_err(PORT.failing("reading an asset row"))?;
+            Ok(if exists.is_some() {
+                SizeRepair::Unchanged
+            } else {
+                SizeRepair::NotFound
             })
         })
     }

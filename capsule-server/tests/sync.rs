@@ -11,7 +11,7 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use capsule_core::crypto::hash::Hash32;
 use capsule_server::blob::{BlobStore, ContentAddress};
 use capsule_server::index::{
-    AssetIndex, BlobRecord, LifecycleOp, OpAction, OpOutcome, PendingAsset, PurgeOutcome,
+    AssetIndex, BlobRecord, LifecycleOp, OpAction, OpBlob, OpOutcome, PendingAsset, PurgeOutcome,
 };
 use capsule_server::membership::{MemberRole, MembershipStore as _, RosterRecord};
 use capsule_server::store::{AlbumId, AssetId, BlobRole, OwnerId, UserId};
@@ -330,7 +330,10 @@ async fn delete(
             manifest_hash: Hash32::from_bytes([0xde; 32]),
             prior_provenance_hash: chain_head,
             amk_version: 1,
-            provenance,
+            provenance: OpBlob {
+                address: provenance,
+                size: delete_manifest.len() as u64,
+            },
             metadata: None,
             original: None,
             retention_until: Some(retention_until),
@@ -410,6 +413,130 @@ async fn a_purged_tombstone_carries_no_manifest_and_the_purge_signal() {
     assert_eq!(
         entry["purged"], true,
         "a purged asset's tombstone carries the signal a client records its tombstone on"
+    );
+}
+
+/// Apply one lifecycle op to `asset`, chaining onto its head, with `manifest` as its provenance
+/// blob and `original` as the replaced original when it carries one.
+async fn apply(
+    fixture: &Fixture,
+    asset: &AssetId,
+    action: OpAction,
+    manifest: &[u8],
+    original: Option<&[u8]>,
+) {
+    let provenance = OpBlob {
+        address: store_blob(fixture, manifest).await,
+        size: manifest.len() as u64,
+    };
+    let original = match original {
+        Some(bytes) => Some(OpBlob {
+            address: store_blob(fixture, bytes).await,
+            size: bytes.len() as u64,
+        }),
+        None => None,
+    };
+    let chain_head = fixture
+        .index
+        .read(asset)
+        .await
+        .expect("the index reads")
+        .expect("the row exists")
+        .chain_head;
+    let outcome = fixture
+        .index
+        .apply_op(LifecycleOp {
+            asset_id: asset.clone(),
+            owner_id: owner(),
+            album_id: album(),
+            action,
+            manifest_hash: capsule_core::crypto::hash::hash_bytes(manifest),
+            prior_provenance_hash: chain_head,
+            amk_version: 1,
+            provenance,
+            metadata: None,
+            original,
+            retention_until: None,
+            at: Timestamp::UNIX_EPOCH,
+        })
+        .await
+        .expect("the index applies");
+    assert!(
+        matches!(outcome, OpOutcome::Applied { .. }),
+        "the {action:?} applies: {outcome:?}"
+    );
+}
+
+/// The served blobs of the only entry on a fresh page, asserting none is listed at size 0.
+async fn served_blobs(fixture: &Fixture, bearer: &str, after: &str) -> Vec<Value> {
+    let body = page(fixture, bearer, "", StatusCode::OK).await;
+    let blobs = body["entries"][0]["blobs"]
+        .as_array()
+        .expect("an array")
+        .clone();
+    assert!(!blobs.is_empty(), "after {after} the entry lists its blobs");
+    for blob in &blobs {
+        assert!(
+            blob["size"].as_u64().expect("a size") > 0,
+            "after {after} the feed served a blob at size 0, which a client budgets as free \
+             and a federation puller refuses under invariant 4: {blob}"
+        );
+    }
+    blobs
+}
+
+/// No served blob is listed at size 0 after a `derivative-add` or a `replace` (#1128).
+#[tokio::test]
+async fn a_lifecycle_op_never_serves_a_blob_at_size_zero() {
+    let fixture = Fixture::working();
+    let bearer = bearer(&fixture).await;
+    let (asset, _) = publish(&fixture, "sized").await;
+    let original = store_blob(&fixture, b"ciphertext-original-sized").await;
+    record(&fixture, &asset, BlobRole::Original, &original, 25).await;
+    let thumbnail = b"ciphertext-thumbnail-sized";
+    let derivative = store_blob(&fixture, thumbnail).await;
+    record(
+        &fixture,
+        &asset,
+        BlobRole::Derivative,
+        &derivative,
+        thumbnail.len() as u64,
+    )
+    .await;
+
+    apply(
+        &fixture,
+        &asset,
+        OpAction::Derivative,
+        b"signed-derivative-add-for-sized",
+        None,
+    )
+    .await;
+    served_blobs(&fixture, &bearer, "a derivative-add").await;
+
+    let replaced = b"ciphertext-replaced-original-sized, longer than the first";
+    apply(
+        &fixture,
+        &asset,
+        OpAction::Replace,
+        b"signed-replace-for-sized",
+        Some(replaced),
+    )
+    .await;
+    let blobs = served_blobs(&fixture, &bearer, "a replace").await;
+    let original = blobs
+        .iter()
+        .find(|blob| blob["role"] == "original")
+        .expect("the replaced original is served");
+    assert_eq!(
+        original["hash"],
+        support::checksum(replaced),
+        "the feed serves the replaced original"
+    );
+    assert_eq!(
+        original["size"],
+        replaced.len() as u64,
+        "at the size the replace measured"
     );
 }
 

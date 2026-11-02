@@ -32,8 +32,8 @@ use jiff::Timestamp;
 
 use super::{
     AssetIndex, AssetRow, AssetState, BlobOutcome, BlobRecord, ChangeKind, Custody, HoldOutcome,
-    LifecycleOp, OpAction, OpOutcome, PendingAsset, PurgeOutcome, Receipted, Reservation,
-    RestoreOutcome, ServingHold,
+    LifecycleOp, OpAction, OpBlob, OpOutcome, PendingAsset, PurgeOutcome, Receipted, Reservation,
+    RestoreOutcome, ServingHold, SizeRepair,
 };
 use crate::attestation::{ReceiptDraft, ReceiptLog, ReceiptSigner};
 use crate::blob::ContentAddress;
@@ -62,6 +62,20 @@ fn address(seed: &str) -> ContentAddress {
     match ContentAddress::parse(&hex) {
         Ok(parsed) => parsed,
         Err(error) => panic!("the suite built a malformed address from {seed:?}: {error}"),
+    }
+}
+
+/// The size [`sized`] gives the blob named by `seed`: non-zero and distinct per seed length,
+/// so a case can tell which op's size a reference carries.
+fn size_of(seed: &str) -> u64 {
+    4096 + seed.len() as u64
+}
+
+/// A lifecycle op's blob from a seed: [`address`] at [`size_of`].
+fn sized(seed: &str) -> OpBlob {
+    OpBlob {
+        address: address(seed),
+        size: size_of(seed),
     }
 }
 
@@ -986,7 +1000,7 @@ pub(crate) fn op(
         manifest_hash: hash,
         prior_provenance_hash: prior,
         amk_version: 1,
-        provenance: address(&format!("{case}prov{n}")),
+        provenance: sized(&format!("{case}prov{n}")),
         original: None,
         metadata: None,
         retention_until: None,
@@ -1510,6 +1524,213 @@ pub async fn an_op_on_an_asset_that_is_not_the_callers_is_not_found(index: &dyn 
     let _ = asset;
 }
 
+/// The size `row` records for its `role` reference, if it holds one.
+fn size_for(row: &AssetRow, role: BlobRole) -> Option<u64> {
+    row.blobs
+        .iter()
+        .find(|blob| blob.role == role)
+        .map(|blob| blob.size)
+}
+
+/// Every lifecycle op records each blob it re-points at the size the op carried (#1128).
+///
+/// The sync feed serves a row's sizes verbatim, for a client to budget a fetch by and for a
+/// federation puller to re-check invariant 4 against; a re-point that recorded `0` failed every
+/// pull of an asset that had seen any op.
+pub async fn every_lifecycle_op_records_its_blobs_at_their_sizes(index: &dyn AssetIndex) {
+    let (asset, _) = publish(index, "op-size", 1).await;
+    record(index, &asset, blob(BlobRole::Original, "op-size-o1")).await;
+
+    let steps: [(OpAction, &str, Option<&str>, Option<&str>); 5] = [
+        (
+            OpAction::MetadataUpdate,
+            "op-size-p2",
+            Some("op-size-m2"),
+            None,
+        ),
+        (OpAction::Derivative, "op-size-p3x", None, None),
+        (OpAction::Delete, "op-size-p4xx", None, None),
+        (OpAction::TrashRestore, "op-size-p5xxx", None, None),
+        (
+            OpAction::Replace,
+            "op-size-p6xxxx",
+            Some("op-size-m6xxxx"),
+            Some("op-size-o6xxxxx"),
+        ),
+    ];
+    for (n, (action, provenance, metadata, original)) in (10_u8..).zip(steps) {
+        let mut step = op(
+            "op-size",
+            1,
+            action,
+            head_of(index, &asset).await,
+            manifest(n),
+        );
+        step.provenance = sized(provenance);
+        step.metadata = metadata.map(sized);
+        step.original = original.map(sized);
+        let outcome = ok(index.apply_op(step).await, "apply an op");
+        assert!(
+            matches!(outcome, OpOutcome::Applied { .. }),
+            "{action:?} answered {outcome:?}"
+        );
+
+        let row = ok(index.read(&asset).await, "read").expect("the row exists");
+        assert_eq!(
+            size_for(&row, BlobRole::Provenance),
+            Some(size_of(provenance)),
+            "{action:?} records its manifest at the size it carried"
+        );
+        if let Some(metadata) = metadata {
+            assert_eq!(
+                size_for(&row, BlobRole::Metadata),
+                Some(size_of(metadata)),
+                "{action:?} records its metadata blob at the size it carried"
+            );
+        }
+        if let Some(original) = original {
+            assert_eq!(
+                size_for(&row, BlobRole::Original),
+                Some(size_of(original)),
+                "{action:?} records its original at the size it carried"
+            );
+        }
+        assert!(
+            row.blobs.iter().all(|blob| blob.size > 0),
+            "after {action:?} no reference is recorded at size 0: {:?}",
+            row.blobs
+        );
+    }
+}
+
+/// A size repair fills in a reference recorded at size `0` and touches nothing else.
+///
+/// The `repair-sizes` pass's one write. It must never change an address or a non-zero size,
+/// must not invent a `0`, and must answer the same on a second run — the properties that let an
+/// operator run it twice, or beside a live server, without changing anything it should not.
+pub async fn a_size_repair_fills_only_a_zero_size(index: &dyn AssetIndex) {
+    let (asset, _) = publish(index, "size-fix", 1).await;
+    // A re-point recorded at size 0 — what an op wrote before ops carried their sizes.
+    let mut legacy = op(
+        "size-fix",
+        1,
+        OpAction::MetadataUpdate,
+        head_of(index, &asset).await,
+        manifest(40),
+    );
+    legacy.provenance = OpBlob {
+        address: address("size-fix-p2"),
+        size: 0,
+    };
+    legacy.metadata = Some(OpBlob {
+        address: address("size-fix-m2"),
+        size: 0,
+    });
+    ok(index.apply_op(legacy).await, "apply a legacy op");
+    record(index, &asset, blob(BlobRole::Original, "size-fix-o1")).await;
+    let before = ok(index.read(&asset).await, "read").expect("the row exists");
+
+    let repair = |role, seed: &'static str, size| {
+        let asset = asset.clone();
+        async move {
+            ok(
+                index
+                    .repair_blob_size(&asset, role, &address(seed), size)
+                    .await,
+                "repair a size",
+            )
+        }
+    };
+
+    // Nothing that does not match a size-0 reference exactly writes.
+    assert_eq!(
+        repair(BlobRole::Provenance, "size-fix-other", 77).await,
+        SizeRepair::Unchanged,
+        "another address is not this reference"
+    );
+    assert_eq!(
+        repair(BlobRole::Metadata, "size-fix-p2", 77).await,
+        SizeRepair::Unchanged,
+        "another role is not this reference"
+    );
+    assert_eq!(
+        repair(BlobRole::Provenance, "size-fix-p2", 0).await,
+        SizeRepair::Unchanged,
+        "a repair to 0 writes nothing"
+    );
+    assert_eq!(
+        repair(BlobRole::Original, "size-fix-o1", 77).await,
+        SizeRepair::Unchanged,
+        "a non-zero size is never changed"
+    );
+    assert_eq!(
+        ok(index.read(&asset).await, "read").expect("the row exists"),
+        before,
+        "no refused repair changed the row"
+    );
+
+    assert_eq!(
+        repair(BlobRole::Provenance, "size-fix-p2", 512).await,
+        SizeRepair::Repaired
+    );
+    assert_eq!(
+        repair(BlobRole::Metadata, "size-fix-m2", 256).await,
+        SizeRepair::Repaired
+    );
+    let after = ok(index.read(&asset).await, "read").expect("the row exists");
+    assert_eq!(size_for(&after, BlobRole::Provenance), Some(512));
+    assert_eq!(size_for(&after, BlobRole::Metadata), Some(256));
+    assert_eq!(
+        size_for(&after, BlobRole::Original),
+        size_for(&before, BlobRole::Original)
+    );
+    let addresses = |row: &AssetRow| {
+        row.blobs
+            .iter()
+            .map(|blob| (blob.role, blob.address.clone()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(addresses(&after), addresses(&before), "no address moved");
+    assert_eq!(
+        AssetRow {
+            blobs: before.blobs.clone(),
+            ..after.clone()
+        },
+        before,
+        "nothing but the sizes changed"
+    );
+
+    // Idempotent: the same repair again, or a different size for the repaired reference, finds
+    // nothing at 0.
+    assert_eq!(
+        repair(BlobRole::Provenance, "size-fix-p2", 512).await,
+        SizeRepair::Unchanged
+    );
+    assert_eq!(
+        repair(BlobRole::Provenance, "size-fix-p2", 9).await,
+        SizeRepair::Unchanged
+    );
+    assert_eq!(
+        ok(index.read(&asset).await, "read").expect("the row exists"),
+        after
+    );
+
+    assert_eq!(
+        ok(
+            index
+                .repair_blob_size(
+                    &AssetId::new("size-fix-unknown"),
+                    BlobRole::Provenance,
+                    &address("size-fix-p2"),
+                    512,
+                )
+                .await,
+            "repair an unknown asset"
+        ),
+        SizeRepair::NotFound
+    );
+}
+
 /// A lifecycle write **retains** the manifest it supersedes.
 ///
 /// The provenance role moves; the manifest it moved off does not become an orphan. Two
@@ -1534,7 +1755,7 @@ pub async fn a_lifecycle_write_retains_the_manifest_it_supersedes(index: &dyn As
     // Each link is its own object. `op` reuses one provenance address, and content addressing
     // means two identical manifests *are* one blob — so a case about a chain has to vary it, or
     // it is asserting about a single link twice.
-    update.provenance = address("op-keep-prov-2");
+    update.provenance = sized("op-keep-prov-2");
     ok(index.apply_op(update).await, "apply");
 
     let row = ok(index.read(&asset).await, "read").expect("the row exists");
@@ -1562,7 +1783,7 @@ pub async fn a_lifecycle_write_retains_the_manifest_it_supersedes(index: &dyn As
         head_of(index, &asset).await,
         manifest(32),
     );
-    again.provenance = address("op-keep-prov-3");
+    again.provenance = sized("op-keep-prov-3");
     ok(index.apply_op(again).await, "apply");
     assert_eq!(
         ok(index.read(&asset).await, "read")
@@ -1581,7 +1802,7 @@ pub async fn a_lifecycle_write_retains_the_manifest_it_supersedes(index: &dyn As
         head_of(index, &asset).await,
         manifest(33),
     );
-    delete.provenance = address("op-keep-prov-4");
+    delete.provenance = sized("op-keep-prov-4");
     delete.retention_until = Some(Timestamp::UNIX_EPOCH);
     ok(index.apply_op(delete).await, "delete");
     assert!(matches!(
@@ -1633,8 +1854,8 @@ pub async fn a_replace_repoints_the_original_the_upload_path_may_not_move(index:
         head_of(index, &asset).await,
         manifest(77),
     );
-    replace.original = Some(address("op-repl-newbytes"));
-    replace.metadata = Some(address("op-repl-newmeta"));
+    replace.original = Some(sized("op-repl-newbytes"));
+    replace.metadata = Some(sized("op-repl-newmeta"));
     let sync_seq = match ok(index.apply_op(replace).await, "apply a replace") {
         OpOutcome::Applied { sync_seq, .. } => sync_seq,
         other => panic!("a replace answered {other:?}"),
@@ -1668,7 +1889,7 @@ pub async fn a_replace_repoints_the_original_the_upload_path_may_not_move(index:
         Some(manifest(1)),
         manifest(78),
     );
-    stale.original = Some(address("op-repl-newerbytes"));
+    stale.original = Some(sized("op-repl-newerbytes"));
     assert_eq!(
         ok(index.apply_op(stale).await, "apply a stale replace"),
         OpOutcome::StaleChain {
@@ -1694,7 +1915,7 @@ pub async fn a_lifecycle_write_repoints_the_provenance_blob(index: &dyn AssetInd
         head_of(index, &asset).await,
         manifest(12),
     );
-    update.metadata = Some(address("op-prov-newmeta"));
+    update.metadata = Some(sized("op-prov-newmeta"));
     ok(index.apply_op(update).await, "apply");
 
     let row = ok(index.read(&asset).await, "read").expect("the row exists");
@@ -1848,7 +2069,7 @@ pub async fn a_purge_rechecks_state_and_retention_under_the_lock(index: &dyn Ass
     let (asset, _) = publish(index, "purge-race", 1).await;
     let head = head_of(index, &asset).await;
     let mut delete = op("purge-race", 1, OpAction::Delete, head, manifest(91));
-    delete.provenance = address("purge-race-delete");
+    delete.provenance = sized("purge-race-delete");
     delete.retention_until = Some(Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_hours(1));
     let deleted = ok(index.apply_op(delete).await, "delete");
     assert!(matches!(deleted, OpOutcome::Applied { .. }), "{deleted:?}");
@@ -1865,7 +2086,7 @@ pub async fn a_purge_rechecks_state_and_retention_under_the_lock(index: &dyn Ass
         head_of(index, &asset).await,
         manifest(92),
     );
-    restore.provenance = address("purge-race-restore");
+    restore.provenance = sized("purge-race-restore");
     let restored = ok(index.apply_op(restore).await, "restore");
     assert!(
         matches!(restored, OpOutcome::Applied { .. }),
@@ -1993,7 +2214,7 @@ pub async fn a_restore_after_the_retention_window_is_refused(index: &dyn AssetIn
         head_of(index, &asset).await,
         manifest(101),
     );
-    delete.provenance = address("restore-late-delete");
+    delete.provenance = sized("restore-late-delete");
     delete.retention_until = Some(floor);
     let deleted = ok(index.apply_op(delete).await, "delete");
     assert!(matches!(deleted, OpOutcome::Applied { .. }), "{deleted:?}");
@@ -2007,7 +2228,7 @@ pub async fn a_restore_after_the_retention_window_is_refused(index: &dyn AssetIn
         before.chain_head,
         manifest(102),
     );
-    late.provenance = address("restore-late-restore");
+    late.provenance = sized("restore-late-restore");
     late.at = floor;
     assert_eq!(
         ok(index.apply_op(late.clone()).await, "restore at the floor"),
@@ -2038,7 +2259,7 @@ pub async fn a_restore_after_the_retention_window_is_refused(index: &dyn AssetIn
         before.chain_head,
         manifest(103),
     );
-    touch.provenance = address("restore-late-touch");
+    touch.provenance = sized("restore-late-touch");
     touch.at = after_floor;
     let OpOutcome::Applied { row, sync_seq } = ok(
         index.apply_op(touch).await,
@@ -2069,7 +2290,7 @@ pub async fn a_restore_after_the_retention_window_is_refused(index: &dyn AssetIn
         purged.chain_head,
         manifest(104),
     );
-    revive.provenance = address("restore-late-revive");
+    revive.provenance = sized("restore-late-revive");
     revive.at = Timestamp::UNIX_EPOCH;
     assert_eq!(
         ok(index.apply_op(revive).await, "restore a purged row"),
@@ -2092,7 +2313,7 @@ pub async fn a_restore_after_the_retention_window_is_refused(index: &dyn AssetIn
         head_of(index, &inside).await,
         manifest(105),
     );
-    delete.provenance = address("restore-inside-delete");
+    delete.provenance = sized("restore-inside-delete");
     delete.retention_until = Some(floor);
     let deleted = ok(index.apply_op(delete).await, "delete");
     assert!(matches!(deleted, OpOutcome::Applied { .. }), "{deleted:?}");
@@ -2103,7 +2324,7 @@ pub async fn a_restore_after_the_retention_window_is_refused(index: &dyn AssetIn
         head_of(index, &inside).await,
         manifest(106),
     );
-    restore.provenance = address("restore-inside-restore");
+    restore.provenance = sized("restore-inside-restore");
     let OpOutcome::Applied { sync_seq, .. } =
         ok(index.apply_op(restore.clone()).await, "restore inside")
     else {
@@ -2124,7 +2345,7 @@ pub async fn a_restore_after_the_retention_window_is_refused(index: &dyn AssetIn
         head_of(index, &floorless).await,
         manifest(107),
     );
-    delete.provenance = address("restore-floorless-delete");
+    delete.provenance = sized("restore-floorless-delete");
     let deleted = ok(index.apply_op(delete).await, "delete without a floor");
     assert!(matches!(deleted, OpOutcome::Applied { .. }), "{deleted:?}");
     let mut restore = op(
@@ -2134,7 +2355,7 @@ pub async fn a_restore_after_the_retention_window_is_refused(index: &dyn AssetIn
         head_of(index, &floorless).await,
         manifest(108),
     );
-    restore.provenance = address("restore-floorless-restore");
+    restore.provenance = sized("restore-floorless-restore");
     restore.at = after_floor;
     assert!(matches!(
         ok(
@@ -2986,6 +3207,8 @@ pub async fn run_all(index: &dyn AssetIndex) {
     an_op_on_an_asset_that_is_not_the_callers_is_not_found(index).await;
     a_lifecycle_write_repoints_the_provenance_blob(index).await;
     a_replace_repoints_the_original_the_upload_path_may_not_move(index).await;
+    every_lifecycle_op_records_its_blobs_at_their_sizes(index).await;
+    a_size_repair_fills_only_a_zero_size(index).await;
     a_lifecycle_write_retains_the_manifest_it_supersedes(index).await;
     references_are_counted_from_the_rows_that_name_them(index).await;
     purging_drops_the_references_and_keeps_the_tombstone(index).await;
