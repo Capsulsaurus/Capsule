@@ -297,6 +297,22 @@ pub const FEDERATED_REPORT_NONCE: Budget = Budget::new(1, crate::federation::REP
 pub const FEDERATED_REQUEST_NONCE: Budget =
     Budget::new(1, crate::federation::scheme::REQUEST_NONCE_WINDOW);
 
+/// Signed pull hints at `POST /v1/federation/hints` from one **verified** home server (#1158).
+///
+/// Six hundred an hour, ten a minute, charged once the signature has verified under the peer's
+/// pinned key. A hint is one schedule write and moves a job no sooner than
+/// [`HINT_FLOOR`](crate::federation::pull::HINT_FLOOR) after its last pull, so a peer hinting
+/// at the whole budget still costs at most one pull a minute per album; the budget bounds the
+/// writes, not the pulls. A spent budget costs a peer nothing but its albums' next interval.
+pub const FEDERATED_HINTS: Budget = Budget::new(600, SignedDuration::from_hours(1));
+
+/// One use of one hint nonce, per verified home server (#1158).
+///
+/// A limit of one over [`HINT_NONCE_WINDOW`](crate::federation::hints::HINT_NONCE_WINDOW): the
+/// second hint carrying a nonce inside the span its first could still be fresh in is a replay.
+pub const FEDERATED_HINT_NONCE: Budget =
+    Budget::new(1, crate::federation::hints::HINT_NONCE_WINDOW);
+
 /// Capability mints per account (#529).
 ///
 /// Sixty an hour. An owner sharing an album mints one grant per peer; sixty is an owner sharing

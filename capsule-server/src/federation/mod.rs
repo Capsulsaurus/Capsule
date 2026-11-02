@@ -25,6 +25,9 @@
 //!   `capsule-server peer …` acts on it, a block's cascade over the issued grants included.
 //! - [`pull`] — the egress pull worker's engine: each job's schedule, the lease that keeps two
 //!   replicas off one job, the per-peer circuit, and the failure policy that drives them.
+//! - [`hints`] — the pull hint a home server may push on the low-trust channel: its signed
+//!   claim, and [`HintReceiver`](hints::HintReceiver), the port the route hands a verified hint
+//!   to (the [`PullWorker`](pull::PullWorker) in production).
 //! - [`rejected_hashes`] — [`RejectedHashes`](rejected_hashes::RejectedHashes), the bounded
 //!   soft-fail table: the hash of every federated event a pull refused, so this server's view
 //!   does not silently diverge from a peer that accepted it.
@@ -49,6 +52,7 @@ use std::sync::Arc;
 pub mod breadcrumbs;
 pub mod capability;
 pub mod conformance;
+pub mod hints;
 pub mod memory;
 pub mod peers;
 pub mod postgres;
@@ -63,6 +67,7 @@ pub use self::capability::{
     ALBUM_URN_PREFIX, CapabilityCodec, CapabilityError, CapabilityGrant, MintError, MintRequest,
     Minted, Scope, album_from_urn, album_urn, verify_received,
 };
+pub use self::hints::{HintClaim, HintError, HintReceiver, RecordingHints};
 pub use self::memory::{InMemoryCapabilities, InMemoryPeers};
 pub use self::peers::{
     BlockOutcome, Blocked, InvalidSigningKey, PeerAdministration, PeerRecord, PeerStore,
@@ -219,6 +224,7 @@ pub struct FederationContext {
     subscriptions: Arc<dyn SubscriptionStore>,
     clock: Arc<dyn Clock>,
     enabled: Arc<dyn FederationSetting>,
+    hints: Option<Arc<dyn HintReceiver>>,
 }
 
 impl FederationContext {
@@ -239,7 +245,23 @@ impl FederationContext {
             subscriptions,
             clock,
             enabled,
+            hints: None,
         }
+    }
+
+    /// Hand every verified pull hint to `receiver`: the [`PullWorker`](pull::PullWorker) where
+    /// the deployment federates.
+    ///
+    /// Without one a verified hint is answered exactly as it is with one, and acts on nothing.
+    #[must_use]
+    pub fn with_hints(mut self, receiver: Arc<dyn HintReceiver>) -> Self {
+        self.hints = Some(receiver);
+        self
+    }
+
+    /// What acts on a verified pull hint, where something does.
+    pub fn hints(&self) -> Option<&dyn HintReceiver> {
+        self.hints.as_deref()
     }
 
     /// The albums this server pulls from peers for its own members.

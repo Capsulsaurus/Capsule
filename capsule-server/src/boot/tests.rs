@@ -656,6 +656,8 @@ async fn a_pull_worker_is_assembled_and_started_only_when_federation_is_switched
     .expect("it assembles");
     assert!(off.pull_worker.is_none(), "a URL alone federates nothing");
     assert!(off.spawn_pull_worker().is_none(), "and nothing is pulled");
+    let federation: crate::federation::FederationContext = kynos::di::Provides::provide(&off.app);
+    assert!(federation.hints().is_none(), "and no hint reaches anything");
 
     let on = assemble(&memory_config_with(
         root.path(),
@@ -667,6 +669,11 @@ async fn a_pull_worker_is_assembled_and_started_only_when_federation_is_switched
     .await
     .expect("it assembles");
     assert!(on.pull_worker.is_some());
+    let federation: crate::federation::FederationContext = kynos::di::Provides::provide(&on.app);
+    assert!(
+        federation.hints().is_some(),
+        "a verified hint reaches the worker the server runs"
+    );
     let running = on
         .spawn_pull_worker()
         .expect("a federating server starts its worker");

@@ -1301,14 +1301,22 @@ fn compose(
         attestation: attestation.clone(),
         discovery: DiscoveryContext::new(server_info, revocations),
         escrow: EscrowContext::new(escrow, clock.clone()),
-        federation: FederationContext::new(FederationCollaborators {
-            codec: capabilities,
-            capabilities: issued,
-            peers,
-            subscriptions,
-            clock: clock.clone(),
-            enabled: Arc::new(config.federation_endpoint().is_some()),
-        }),
+        federation: {
+            let federation = FederationContext::new(FederationCollaborators {
+                codec: capabilities,
+                capabilities: issued,
+                peers,
+                subscriptions,
+                clock: clock.clone(),
+                enabled: Arc::new(config.federation_endpoint().is_some()),
+            });
+            // A verified pull hint reaches the worker that runs the job it names, the same one
+            // `spawn_pull_worker` starts. No worker, no receiver: the route answers the same.
+            match &pull_worker {
+                Some(worker) => federation.with_hints(worker.clone()),
+                None => federation,
+            }
+        },
         enrollment: EnrollmentContext::new(enrollments, channels, clock.clone()),
         moderation: ModerationContext::new(moderation),
         share: ShareContext::new(shares, blobs.clone(), clock.clone()),
