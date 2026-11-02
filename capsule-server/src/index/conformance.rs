@@ -1558,7 +1558,8 @@ pub async fn every_lifecycle_op_records_its_blobs_at_their_sizes(index: &dyn Ass
             Some("op-size-o6xxxxx"),
         ),
     ];
-    for (n, (action, provenance, metadata, original)) in (10_u8..).zip(steps) {
+    // Manifest seeds no other case uses: the replay table is index-wide.
+    for (n, (action, provenance, metadata, original)) in (140_u8..).zip(steps) {
         let mut step = op(
             "op-size",
             1,

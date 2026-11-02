@@ -3,7 +3,7 @@ use clap::{CommandFactory as _, Parser as _};
 use super::{
     Cli, CollectionReport, Command, Mode, ModerationCommand, PeerAction, PurgeReport, QuotaAction,
     RebuildReport, ScrubReport, mode, render_block, render_collection, render_peer, render_pin,
-    render_purge, render_rebuild, render_reports, render_scrub,
+    render_purge, render_rebuild, render_reports, render_scrub, render_size_repair,
 };
 use crate::federation::{BlockOutcome, Blocked, PeerId, PeerRecord, PinOutcome};
 
@@ -467,6 +467,54 @@ fn a_rebuild_is_a_dry_run_unless_applied() {
     ));
     // Accepting a rewrite is a write, so it is refused without `--apply`.
     assert!(Cli::try_parse_from(["capsule-server", "rebuild", "--accept-rewrites"]).is_err());
+}
+
+#[test]
+fn a_size_repair_is_a_maintenance_dry_run_unless_applied() {
+    let dry = Cli::parse_from(["capsule-server", "repair-sizes", "--memory"]).command;
+    assert!(matches!(dry, Command::RepairSizes { apply: false, .. }));
+    assert!(matches!(dry.demands(), crate::config::Demands::Maintenance));
+    let applied = Cli::parse_from(["capsule-server", "repair-sizes", "--apply"]).command;
+    assert!(matches!(applied, Command::RepairSizes { apply: true, .. }));
+}
+
+#[test]
+fn a_size_repair_report_names_every_reference_and_its_posture() {
+    use crate::ledger::rebuild::sizes::{Resized, SizeRepairReport, ZeroSized};
+    use crate::store::{AssetId, BlobRole};
+
+    let reference = |name: &str, role| ZeroSized {
+        asset: AssetId::new(name),
+        role,
+        address: crate::blob::ContentAddress::parse(&"ab".repeat(32)).expect("an address"),
+    };
+    let report = SizeRepairReport {
+        applied: false,
+        repaired: vec![Resized {
+            reference: reference("fixed", BlobRole::Provenance),
+            size: 812,
+        }],
+        moved: vec![Resized {
+            reference: reference("raced", BlobRole::Metadata),
+            size: 9,
+        }],
+        missing: vec![reference("lost", BlobRole::Original)],
+        empty: vec![reference("hollow", BlobRole::Metadata)],
+    };
+    let rendered = render_size_repair(&report, Mode::DryRun).to_string();
+    assert!(rendered.contains("dry run"), "{rendered}");
+    assert!(rendered.contains("repaired (1)"), "{rendered}");
+    assert!(rendered.contains("fixed provenance"), "{rendered}");
+    assert!(rendered.contains("-> 812 bytes"), "{rendered}");
+    assert!(rendered.contains("moved before repair"), "{rendered}");
+    assert!(rendered.contains("blob missing, kept (1)"), "{rendered}");
+    assert!(rendered.contains("lost original"), "{rendered}");
+    assert!(rendered.contains("blob empty, kept (1)"), "{rendered}");
+    assert!(rendered.contains("hollow metadata"), "{rendered}");
+
+    let quiet = render_size_repair(&SizeRepairReport::default(), Mode::Apply).to_string();
+    assert!(quiet.contains("applied"), "{quiet}");
+    assert!(quiet.contains("nothing to do"), "{quiet}");
 }
 
 #[test]
