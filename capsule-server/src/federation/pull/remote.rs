@@ -579,9 +579,17 @@ impl PeerClient {
             rest::Error::Redirect(error) => {
                 RemoteError::Malformed(format!("the peer redirected: {error}"))
             }
-            rest::Error::RequestConstruction(error) => {
-                RemoteError::Malformed(format!("the request could not be built: {error}"))
-            }
+            rest::Error::RequestConstruction(error) => match connect_failure(&error) {
+                Some(reason) => {
+                    tracing::warn!(
+                        %reason,
+                        base = %self.base,
+                        "the peer could not be connected to"
+                    );
+                    RemoteError::Unreachable(reason)
+                }
+                None => RemoteError::Malformed(format!("the request could not be built: {error}")),
+            },
             rest::Error::Transport(error) | rest::Error::InterruptedBody(error) => {
                 RemoteError::Unreachable(error.to_string())
             }
@@ -589,6 +597,34 @@ impl PeerClient {
             rest::Error::Protocol(error) => RemoteError::Unreachable(error.to_string()),
         }
     }
+}
+
+/// The whole reason a connection to the peer failed, when `error` is a connect-time failure.
+///
+/// reqwest reports every failure to open a connection - a refused port, a name that does not
+/// resolve, a TLS handshake whose certificate does not verify, a connect that outlasts
+/// [`CONNECT_TIMEOUT`] - as its request class, and spargen sorts that class into
+/// [`rest::Error::RequestConstruction`]. None of them is the peer's input failing validation, so
+/// the pull backs off rather than charging the peer's error budget. Every other cause there (a
+/// response hyper could not parse, a request the generated code could not assemble) stays
+/// [`RemoteError::Malformed`].
+///
+/// The reason is the whole source chain, so a certificate the handshake refused is logged with
+/// the verifier's own words. Nothing here relaxes verification: the connection was never made.
+fn connect_failure(error: &rest::RequestError) -> Option<String> {
+    let source = std::error::Error::source(error)?;
+    let reqwest = source.downcast_ref::<reqwest::Error>()?;
+    if !(reqwest.is_connect() || reqwest.is_timeout()) {
+        return None;
+    }
+    let mut reason = reqwest.to_string();
+    let mut next = std::error::Error::source(reqwest);
+    while let Some(cause) = next {
+        reason.push_str(": ");
+        reason.push_str(&cause.to_string());
+        next = cause.source();
+    }
+    Some(reason)
 }
 
 #[cfg(test)]
