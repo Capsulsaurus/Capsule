@@ -7587,6 +7587,10 @@
     "message": "Capsule 无法发送文件的该部分。",
     "origin": "machine"
   },
+  "error.request.too_early": {
+    "message": "该请求发送得过早，请重试。",
+    "origin": "machine"
+  },
   "error.request.too_large": {
     "message": "该请求过大，无法接受。",
     "origin": "machine"

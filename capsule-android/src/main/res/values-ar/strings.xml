@@ -1887,6 +1887,7 @@
     <string name="error_request_not_found">تعذّر على Capsule العثور على ذلك.</string>
     <string name="error_request_not_implemented">تعذّر على Capsule معالجة هذا الطلب.</string>
     <string name="error_request_range_not_satisfiable">تعذّر على Capsule إرسال ذلك الجزء من الملف.</string>
+    <string name="error_request_too_early">أُرسل هذا الطلب مبكرًا جدًا. يُرجى المحاولة مرة أخرى.</string>
     <string name="error_request_too_large">كان هذا الطلب أكبر من أن يُقبل.</string>
     <string name="error_request_unauthenticated">يُرجى تسجيل الدخول مرة أخرى.</string>
     <string name="error_request_unprocessable">بعض أجزاء هذا الطلب غير مفهومة.</string>

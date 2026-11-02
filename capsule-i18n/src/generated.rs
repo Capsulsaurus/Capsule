@@ -398,6 +398,9 @@ pub mod error_codes {
     /// `error.request.range_not_satisfiable`
     pub const REQUEST_RANGE_NOT_SATISFIABLE: &str = "error.request.range_not_satisfiable";
 
+    /// `error.request.too_early`
+    pub const REQUEST_TOO_EARLY: &str = "error.request.too_early";
+
     /// `error.request.too_large`
     pub const REQUEST_TOO_LARGE: &str = "error.request.too_large";
 

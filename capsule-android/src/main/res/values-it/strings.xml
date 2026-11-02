@@ -1887,6 +1887,7 @@
     <string name="error_request_not_found">Capsule non è riuscito a trovarlo.</string>
     <string name="error_request_not_implemented">Capsule non è riuscito a gestire questa richiesta.</string>
     <string name="error_request_range_not_satisfiable">Capsule non è riuscito a inviare quella parte del file.</string>
+    <string name="error_request_too_early">La richiesta è stata inviata troppo presto. Riprova.</string>
     <string name="error_request_too_large">La richiesta era troppo grande per essere accettata.</string>
     <string name="error_request_unauthenticated">Accedi di nuovo.</string>
     <string name="error_request_unprocessable">Una parte della richiesta non era valida.</string>

@@ -7587,6 +7587,10 @@
     "message": "تعذّر على Capsule إرسال ذلك الجزء من الملف.",
     "origin": "machine"
   },
+  "error.request.too_early": {
+    "message": "أُرسل هذا الطلب مبكرًا جدًا. يُرجى المحاولة مرة أخرى.",
+    "origin": "machine"
+  },
   "error.request.too_large": {
     "message": "كان هذا الطلب أكبر من أن يُقبل.",
     "origin": "machine"

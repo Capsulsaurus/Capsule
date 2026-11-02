@@ -851,7 +851,9 @@ fn store_escrow_error(error: rest::Error<rest::StoreEscrowError>) -> RecoveryErr
             },
             rest::StoreEscrowError::Status401(problem)
             | rest::StoreEscrowError::Status403(problem) => refused(&problem),
-            rest::StoreEscrowError::Status500(problem) => unavailable(&problem),
+            // A write that reached the server as TLS early data: re-sent later, it lands.
+            rest::StoreEscrowError::Status425(problem)
+            | rest::StoreEscrowError::Status500(problem) => unavailable(&problem),
             // The body-size backstop carries no problem body at all, so there is no code to
             // carry and this client does not invent one. Every other code in this module is
             // the server's own, and a code minted here would assert that the server said
@@ -916,7 +918,8 @@ fn store_sealed_identity_error(
             },
             rest::StoreSealedIdentityError::Status401(problem)
             | rest::StoreSealedIdentityError::Status403(problem) => refused(&problem),
-            rest::StoreSealedIdentityError::Status500(problem) => unavailable(&problem),
+            rest::StoreSealedIdentityError::Status425(problem)
+            | rest::StoreSealedIdentityError::Status500(problem) => unavailable(&problem),
             rest::StoreSealedIdentityError::Status413(problem) => RecoveryError::Malformed {
                 code: Some(problem.code.clone()),
                 detail: "the sealed identity exceeds the server's request-body limit".to_owned(),
@@ -974,7 +977,8 @@ fn store_album_keys_error(error: rest::Error<rest::StoreAlbumKeysError>) -> Reco
             },
             rest::StoreAlbumKeysError::Status401(problem)
             | rest::StoreAlbumKeysError::Status403(problem) => refused(&problem),
-            rest::StoreAlbumKeysError::Status500(problem) => unavailable(&problem),
+            rest::StoreAlbumKeysError::Status425(problem)
+            | rest::StoreAlbumKeysError::Status500(problem) => unavailable(&problem),
             rest::StoreAlbumKeysError::Status413(problem) => RecoveryError::Malformed {
                 code: Some(problem.code.clone()),
                 detail: "the album key escrow exceeds the server's request-body limit".to_owned(),

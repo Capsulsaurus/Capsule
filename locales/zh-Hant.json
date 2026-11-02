@@ -7587,6 +7587,10 @@
     "message": "Capsule 無法傳送檔案的該部分。",
     "origin": "machine"
   },
+  "error.request.too_early": {
+    "message": "該請求傳送得過早，請重試。",
+    "origin": "machine"
+  },
   "error.request.too_large": {
     "message": "該請求過大，無法接受。",
     "origin": "machine"

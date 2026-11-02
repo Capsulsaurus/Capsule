@@ -1896,6 +1896,7 @@
   "error.request.not_found": "O Capsule não conseguiu encontrar isso.",
   "error.request.not_implemented": "O Capsule não conseguiu processar essa solicitação.",
   "error.request.range_not_satisfiable": "O Capsule não conseguiu enviar essa parte do arquivo.",
+  "error.request.too_early": "Essa solicitação foi enviada cedo demais. Tente novamente.",
   "error.request.too_large": "Essa solicitação era grande demais para ser aceita.",
   "error.request.unauthenticated": "Entre novamente.",
   "error.request.unprocessable": "Parte dessa solicitação não fez sentido.",

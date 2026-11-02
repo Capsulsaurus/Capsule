@@ -449,6 +449,7 @@ fn refresh_refusal(error: rest::Error<rest::RefreshCapabilityError>) -> Federati
             | rest::RefreshCapabilityError::Status404(problem)
             | rest::RefreshCapabilityError::Status409(problem)
             | rest::RefreshCapabilityError::Status413(problem)
+            | rest::RefreshCapabilityError::Status425(problem)
             | rest::RefreshCapabilityError::Status426(problem)
             | rest::RefreshCapabilityError::Status429(problem)
             | rest::RefreshCapabilityError::Status500(problem) => FederationError::Refused {

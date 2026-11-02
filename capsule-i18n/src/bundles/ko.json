@@ -1896,6 +1896,7 @@
   "error.request.not_found": "Capsule이 해당 항목을 찾지 못했습니다.",
   "error.request.not_implemented": "Capsule이 해당 요청을 처리하지 못했습니다.",
   "error.request.range_not_satisfiable": "Capsule이 파일의 해당 부분을 보낼 수 없습니다.",
+  "error.request.too_early": "요청이 너무 일찍 전송되었습니다. 다시 시도해 주세요.",
   "error.request.too_large": "요청이 너무 커서 수락할 수 없습니다.",
   "error.request.unauthenticated": "다시 로그인해 주세요.",
   "error.request.unprocessable": "요청의 일부를 이해할 수 없습니다.",

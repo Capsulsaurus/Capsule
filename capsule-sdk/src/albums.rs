@@ -483,6 +483,7 @@ fn publish_refusal(error: crate::rest::Error<crate::rest::PublishAlbumRosterErro
         | Refusal::Status413(problem)
         | Refusal::Status415(problem)
         | Refusal::Status422(problem)
+        | Refusal::Status425(problem)
         | Refusal::Status426(problem)
         | Refusal::Status500(problem) => (Some(problem.code.clone()), None),
     };
@@ -734,6 +735,7 @@ fn op_refusal(error: crate::rest::Error<crate::rest::AlbumLifecycleOpError>) -> 
         | Refusal::Status413(problem)
         | Refusal::Status415(problem)
         | Refusal::Status422(problem)
+        | Refusal::Status425(problem)
         | Refusal::Status500(problem) => (problem.code, None, None),
         Refusal::Status426(problem) => (problem.code, None, None),
     };

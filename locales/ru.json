@@ -7587,6 +7587,10 @@
     "message": "Capsule не удалось отправить эту часть файла.",
     "origin": "machine"
   },
+  "error.request.too_early": {
+    "message": "Этот запрос отправлен слишком рано. Повторите попытку.",
+    "origin": "machine"
+  },
   "error.request.too_large": {
     "message": "Этот запрос слишком велик.",
     "origin": "machine"

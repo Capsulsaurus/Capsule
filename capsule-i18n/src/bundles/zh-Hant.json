@@ -1896,6 +1896,7 @@
   "error.request.not_found": "Capsule 找不到該內容。",
   "error.request.not_implemented": "Capsule 無法處理該請求。",
   "error.request.range_not_satisfiable": "Capsule 無法傳送檔案的該部分。",
+  "error.request.too_early": "該請求傳送得過早，請重試。",
   "error.request.too_large": "該請求過大，無法接受。",
   "error.request.unauthenticated": "請重新登入。",
   "error.request.unprocessable": "該請求中有部分內容無法解讀。",
