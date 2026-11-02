@@ -517,6 +517,123 @@ async fn the_progress_sweep_drops_an_expired_session_from_the_view() {
     assert!(!indexed(after), "and the collector's sweep is that walk");
 }
 
+/// A session an append-only server wrote — a counter, no committed set, no cap — is served on
+/// after the upgrade: it reads as its counter's prefix under a one-range cap, and the next range
+/// recorded merges onto that prefix rather than replacing it.
+#[tokio::test]
+async fn a_session_written_before_the_committed_set_merges_onto_its_prefix() {
+    use capsule_server::store::CommittedRange;
+
+    let Some(server) = server().await else {
+        return;
+    };
+    let harness = ValkeyHarness::connect(&server.url).await;
+    let upload_id = UploadId::new("valkey-legacy-counter");
+    harness
+        .uploads
+        .open(UploadSessionRecord {
+            upload_id: upload_id.clone(),
+            asset_id: AssetId::new("valkey-legacy-counter-asset"),
+            owner_id: OwnerId::new("valkey-legacy-counter-owner"),
+            upload_user_id: UserId::new("valkey-legacy-counter-uploader"),
+            album_id: None,
+            content_type: None,
+            expected_hash: "e".repeat(64),
+            crypto_suite_id: 1,
+            protocol_version: "2026-08-29".to_owned(),
+            blob_role: BlobRole::Original,
+            intent_id: None,
+            manifest_envelope: "{}".to_owned(),
+            committed: capsule_server::store::CommittedSet::default(),
+            in_flight_cap: 4,
+            total_size: 12_288,
+            status: UploadSessionStatus::Uploading,
+            failure_code: None,
+            created_at: harness.clock.now(),
+            last_progress_at: harness.clock.now(),
+        })
+        .await
+        .expect("the session opens");
+
+    // Rewrite it as the old server left it: 4096 bytes received, and nothing else.
+    let client = redis::Client::open(server.url.as_str()).expect("the URL opens");
+    let mut connection = client
+        .get_multiplexed_async_connection()
+        .await
+        .expect("a second connection");
+    let key = format!("capsule:upload:session:{upload_id}");
+    let _: i64 = redis::cmd("HDEL")
+        .arg(&key)
+        .arg("committed")
+        .arg("in_flight_cap")
+        .query_async(&mut connection)
+        .await
+        .expect("HDEL answers");
+    let _: i64 = redis::cmd("HSET")
+        .arg(&key)
+        .arg("received_bytes")
+        .arg("4096")
+        .query_async(&mut connection)
+        .await
+        .expect("HSET answers");
+
+    let legacy = harness
+        .uploads
+        .read(&upload_id)
+        .await
+        .expect("the store answers")
+        .expect("the session is live");
+    assert_eq!(legacy.committed.ranges(), &[(0, 4096)]);
+    assert_eq!(
+        legacy.in_flight_cap, 1,
+        "served one range at a time, as it was"
+    );
+
+    let merged = harness
+        .uploads
+        .record_range(
+            &upload_id,
+            CommittedRange {
+                start: 8192,
+                end: 12_288,
+                accepted_at: harness.clock.now(),
+            },
+        )
+        .await
+        .expect("the store answers")
+        .expect("the session is live");
+    assert_eq!(
+        merged.committed.ranges(),
+        &[(0, 4096), (8192, 12_288)],
+        "the range lands beside the prefix it inherited"
+    );
+    let filled = harness
+        .uploads
+        .record_range(
+            &upload_id,
+            CommittedRange {
+                start: 4096,
+                end: 8192,
+                accepted_at: harness.clock.now(),
+            },
+        )
+        .await
+        .expect("the store answers")
+        .expect("the session is live");
+    assert!(filled.is_full(), "{:?}", filled.committed);
+
+    let counter: String = redis::cmd("HGET")
+        .arg(&key)
+        .arg("received_bytes")
+        .query_async(&mut connection)
+        .await
+        .expect("HGET answers");
+    assert_eq!(
+        counter, "12288",
+        "the prefix is kept beside the set, for a server that reads only the counter"
+    );
+}
+
 /// The claimed view heals a member its record no longer backs.
 ///
 /// `capsule:upload:claimed` has no lifetime of its own, and every script that writes a status
