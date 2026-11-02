@@ -533,6 +533,12 @@ impl Drop for UdpRelay {
 
 impl UdpRelay {
     async fn to(upstream: SocketAddr) -> Self {
+        Self::holding_first(upstream, Duration::ZERO).await
+    }
+
+    /// A relay that holds the client's first datagram for `hold` before forwarding it, so a
+    /// QUIC dial through it connects, but only after a TCP dial with no delay has won.
+    async fn holding_first(upstream: SocketAddr, hold: Duration) -> Self {
         let front = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
             .await
             .expect("front");
@@ -545,11 +551,15 @@ impl UdpRelay {
         let drops = dropping.clone();
         let task = tokio::spawn(async move {
             let mut client = None;
+            let mut hold = Some(hold).filter(|hold| !hold.is_zero());
             let (mut up, mut down) = (vec![0; 65_536], vec![0; 65_536]);
             loop {
                 tokio::select! {
                     Ok((len, from)) = front.recv_from(&mut up) => {
                         client = Some(from);
+                        if let Some(hold) = hold.take() {
+                            tokio::time::sleep(hold).await;
+                        }
                         if !drops.load(Ordering::SeqCst) {
                             let _ = back.send(&up[..len]).await;
                         }
@@ -815,6 +825,53 @@ async fn a_quic_dial_that_fails_while_tcp_connects_records_udp_unusable() {
         },
         "a new network starts with no record"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_quic_dial_that_connects_after_tcp_won_is_pooled_for_the_next_request() {
+    let server = server().await;
+    let slow = UdpRelay::holding_first(server.quic_addr, Duration::from_millis(150)).await;
+    let transport = transport(&server, Duration::ZERO, STALL);
+    let origin = Origin::from_uri(&server.origin_uri("/").parse().expect("uri")).expect("origin");
+    let key = origin.key();
+    transport
+        .policy()
+        .observe_alt_svc(&key, &alt_svc_to(slow.addr));
+    server.advertise(alt_svc_to(slow.addr));
+    let bounds = config(server.roots.clone(), STALL).bounds;
+
+    let first = send_chunk(
+        &transport,
+        || put(&server, 0, Bytes::from_static(b"first")),
+        bounds,
+    )
+    .await;
+    assert_eq!(first.via, Via::Tcp, "TCP had no delay and should win");
+
+    // The lost QUIC dial finishes in the background and is pooled.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while !lock(&transport.pool).contains_key(&origin) {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the late QUIC dial was never pooled"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    let second = send_chunk(
+        &transport,
+        || put(&server, 1, Bytes::from_static(b"second")),
+        bounds,
+    )
+    .await;
+    assert_eq!(second.via, Via::Quic);
+    assert!(second.failures.is_empty(), "{:?}", second.failures);
+    assert_eq!(server.quic_connections.load(Ordering::SeqCst), 1);
+    assert_eq!(transport.tcp.dials.load(Ordering::SeqCst), 1, "no new dial");
+    assert!(matches!(
+        transport.policy().choose(&key, NET),
+        TransportChoice::Race { .. }
+    ));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
