@@ -19,7 +19,9 @@ use capsule_server::blob::BlobStore;
 use capsule_server::drop::{DropStore, UploadLinkRecord};
 use capsule_server::index::{AssetIndex, BlobRecord, PendingAsset};
 use capsule_server::quota::{DEFAULT_GRACE_WINDOW, QuotaLimits, QuotaStore};
+use capsule_server::store::upload::LIFETIME_CAP;
 use capsule_server::store::{AssetId, BlobRole, Clock};
+use capsule_server::upload::reservation::ReservationSweep;
 use jiff::{SignedDuration, Timestamp};
 use kynos::http::StatusCode;
 use serde_json::{Value, json};
@@ -283,6 +285,101 @@ async fn a_completed_session_keeps_its_charge() {
     .await;
 
     assert_eq!(snapshot(&fixture, &bearer).await["used"], 8192);
+}
+
+/// The reservation sweep over the fixture's own ledger, blobs and sessions.
+fn reservation_sweep(fixture: &Fixture) -> ReservationSweep {
+    ReservationSweep::new(
+        fixture.quotas.clone(),
+        fixture.blobs.clone(),
+        fixture.uploads.clone(),
+        limits(),
+    )
+}
+
+/// Move the clock past every session opened so far, and sweep the expired reservations.
+async fn expire_and_sweep(fixture: &Fixture) {
+    fixture
+        .clock
+        .advance(LIFETIME_CAP + SignedDuration::from_secs(1));
+    reservation_sweep(fixture)
+        .sweep(fixture.clock.now())
+        .await
+        .expect("the sweep answers");
+}
+
+/// A session that expires without its bytes gives its reservation back through the sweep, and
+/// the space is usable again (#1059).
+#[tokio::test]
+async fn an_expired_session_releases_its_reservation_through_the_sweep() {
+    let fixture = Fixture::with_quota(limits());
+    let bearer = token(&fixture).await;
+    let bytes = payload(b'e', 8192);
+    let opened = open(&fixture, &bearer, &bytes, StatusCode::CREATED).await;
+    let id = opened["id"].as_str().expect("a session id");
+    send_chunk(
+        &fixture,
+        &bearer,
+        id,
+        0,
+        &bytes[..4096],
+        StatusCode::NO_CONTENT,
+        None,
+    )
+    .await;
+
+    expire_and_sweep(&fixture).await;
+
+    let bearer = token(&fixture).await;
+    assert_eq!(
+        snapshot(&fixture, &bearer).await["used"],
+        0,
+        "bytes that never arrived must not stay charged once their session expired"
+    );
+    open(&fixture, &bearer, &payload(b'h', 8192), StatusCode::CREATED).await;
+}
+
+/// A completed upload's charge is settled, and the sweep never releases it (#1059).
+#[tokio::test]
+async fn a_completed_uploads_charge_survives_the_sweep() {
+    let fixture = Fixture::with_quota(limits());
+    let bearer = token(&fixture).await;
+    let bytes = payload(b'm', 8192);
+    let opened = open(&fixture, &bearer, &bytes, StatusCode::CREATED).await;
+    let id = opened["id"].as_str().expect("a session id");
+    send_chunk(
+        &fixture,
+        &bearer,
+        id,
+        0,
+        &bytes[..4096],
+        StatusCode::NO_CONTENT,
+        None,
+    )
+    .await;
+    send_chunk(
+        &fixture,
+        &bearer,
+        id,
+        4096,
+        &bytes[4096..],
+        StatusCode::NO_CONTENT,
+        None,
+    )
+    .await;
+    assert_eq!(
+        fixture.uploads.terminal_for_test(id).await.status.as_str(),
+        "completed"
+    );
+
+    expire_and_sweep(&fixture).await;
+
+    let bearer = token(&fixture).await;
+    assert_eq!(
+        snapshot(&fixture, &bearer).await["used"],
+        8192,
+        "a committed blob's charge goes only when the collector removes the blob"
+    );
 }
 
 /// Deduplicated bytes are charged to the first uploader only.
