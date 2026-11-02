@@ -164,6 +164,10 @@ pub const EXPECTED_MIGRATIONS: &[ExpectedMigration] = &[
         name: "m20260902_000027_upload_reservations",
         checksum: "476e419f899a991cabe33db0f213c35208bbf2eb61d5113ce55c19670f939d1b",
     },
+    ExpectedMigration {
+        name: "m20260902_000028_federation_pulled_albums",
+        checksum: "08d856e544a5eae810f9224f9ddbdc35e7efcfbedddf77d105a628eb70ed14bf",
+    },
 ];
 
 /// The command an operator runs to apply them.

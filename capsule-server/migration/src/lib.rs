@@ -30,6 +30,8 @@
 //! - `000027` (#1059): `quota_attributions.reserved_until`, the reservation state an upload
 //!   session's charge carries until a finalization settles it or the reservation sweep
 //!   releases it.
+//! - `000028` (#1124): `federation_pulled_albums` and its children, the federation pull's
+//!   accepted entries, asset heads and held metadata blobs, per job.
 //!
 //! # Every instant is a `BIGINT` of microseconds since the Unix epoch
 //!
@@ -120,6 +122,7 @@ migrations![
     m20260902_000025_federation_subscriptions,
     m20260902_000026_activity_events_at_index,
     m20260902_000027_upload_reservations,
+    m20260902_000028_federation_pulled_albums,
 ];
 
 /// The content checksum of one migration's source: lowercase hex SHA-256.
