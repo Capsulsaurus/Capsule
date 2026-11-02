@@ -1017,6 +1017,9 @@ async fn dispatch(command: Commands) -> Result<()> {
             }
         }
 
+        // ── Server info ───────────────────────────────────────────────────
+        Commands::ServerInfo { json } => server_info(json).await?,
+
         // ── List ──────────────────────────────────────────────────────────
         Commands::List { include_deleted } => list(include_deleted).await?,
 
@@ -1176,10 +1179,38 @@ fn read_stdin_secret(reader: &mut impl std::io::BufRead, flag: &str) -> Result<S
     Ok(secret)
 }
 
+/// What a password sign-in or registration says on a server that accepts only its identity
+/// provider: the English catalog message for `error.auth.password_disabled`, and the sign-in that
+/// works there.
+pub(crate) fn password_disabled_refusal() -> String {
+    format!(
+        "{} Sign in with `capsule auth login --oidc`, or `capsule auth login --oidc --device` \
+         from another device.",
+        error_message(capsule_i18n::error_codes::AUTH_PASSWORD_DISABLED)
+    )
+}
+
+/// Refuse a password sign-in or registration before anything is asked for, when the server's
+/// `server-info` record says it refuses passwords ([`remote::password_sign_in_disabled`]: an
+/// unreadable record lets the prompt through, and the server stays the authority).
+///
+/// Returns what the record said, for the `--json` report of a sign-in that went on.
+async fn refuse_password_if_disabled(remote: &remote::RemoteConfig) -> Result<bool> {
+    let disabled = remote::password_sign_in_disabled(remote).await;
+    if disabled {
+        tracing::info!("server refuses passwords; not asking for one");
+        return Err(eyre!(password_disabled_refusal()));
+    }
+    Ok(disabled)
+}
+
 /// `capsule auth register`: create an account over the SDK and persist the session.
 async fn auth_register(email: Option<String>, password_stdin: bool) -> Result<()> {
     let remote = remote::RemoteConfig::from_env();
     let store = session_store()?;
+    refuse_password_if_disabled(&remote)
+        .await
+        .map_err(|refusal| eyre!("Could not create the account: {refusal}"))?;
 
     // An address and a password, and nothing else. The server takes nothing else: a
     // display name is a fact about a person, and the profile surface that would hold one is
@@ -1221,6 +1252,9 @@ const PASSWORD_PROMPT: &str = "Password";
 async fn auth_login(email: Option<String>, password_stdin: bool, json: bool) -> Result<()> {
     let remote = remote::RemoteConfig::from_env();
     let store = session_store()?;
+    let password_disabled = refuse_password_if_disabled(&remote)
+        .await
+        .map_err(|refusal| login_failed(&refusal.to_string()))?;
 
     let email = flag_or_prompt(email, EMAIL_PROMPT.to_owned())?;
     let password = read_password(
@@ -1241,6 +1275,7 @@ async fn auth_login(email: Option<String>, password_stdin: bool, json: bool) -> 
             signed_in: true,
             email,
             second_factor,
+            password_disabled,
         };
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
@@ -1258,6 +1293,79 @@ struct LoginReport {
     email: String,
     /// Whether the sign-in asked for an authenticator code.
     second_factor: bool,
+    /// What the server's `server-info` record said about password sign-in
+    /// (`auth.password_disabled`): `false` here, since a server that said `true` is refused
+    /// before the password is asked for, and an unreadable or older record reads `false`.
+    password_disabled: bool,
+}
+
+/// What `capsule server-info --json` prints: how the server signs people in.
+#[derive(Debug, PartialEq, Eq, serde::Serialize)]
+struct ServerInfoReport {
+    /// The server's canonical origin.
+    server_id: String,
+    /// Whether the server has an identity provider (`capsule auth login --oidc`).
+    oidc: bool,
+    /// Whether the server refuses password registration and sign-in. `false` for a server
+    /// whose record predates the field.
+    password_disabled: bool,
+}
+
+impl From<capsule_sdk::auth::SignInOptions> for ServerInfoReport {
+    fn from(options: capsule_sdk::auth::SignInOptions) -> Self {
+        Self {
+            server_id: options.server_id,
+            oidc: options.oidc,
+            password_disabled: options.password_disabled,
+        }
+    }
+}
+
+/// The lines a person reads after `capsule server-info`.
+fn server_info_lines(report: &ServerInfoReport) -> Vec<String> {
+    vec![
+        format!("Server: {}", printable(&report.server_id)),
+        format!(
+            "Identity provider: {}",
+            if report.oidc {
+                "available (capsule auth login --oidc)"
+            } else {
+                "not configured"
+            }
+        ),
+        format!(
+            "Password sign-in: {}",
+            if report.password_disabled {
+                "refused"
+            } else {
+                "accepted"
+            }
+        ),
+    ]
+}
+
+/// `capsule server-info`: read the server's public `server-info` record and say how it signs
+/// people in. Unlike the advisory read a sign-in makes, a record that cannot be read fails the
+/// command: reading it is all this command does.
+///
+/// With `json`, stdout carries exactly one document, [`ServerInfoReport`].
+async fn server_info(json: bool) -> Result<()> {
+    let remote = remote::RemoteConfig::from_env();
+    let report =
+        ServerInfoReport::from(remote::sign_in_options(&remote).await.map_err(|error| {
+            eyre!(
+                "Could not read the server's info: {}",
+                describe_remote_error(&error)
+            )
+        })?);
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        for line in server_info_lines(&report) {
+            println!("{line}");
+        }
+    }
+    Ok(())
 }
 
 /// What `capsule auth logout --json` prints.
