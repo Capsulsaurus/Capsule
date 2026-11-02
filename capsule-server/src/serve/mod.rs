@@ -205,6 +205,9 @@ pub enum ServeResolution {
         address: ContentAddress,
         /// Its complete length, which every `Range` offset is relative to.
         size: u64,
+        /// The account the holder it is served through is filed under — whose blob it is, for
+        /// the activity event a peer's fetch records. Never put on the wire.
+        owner: crate::store::OwnerId,
     },
     /// Nothing references the address **yet**, and the caller has an upload of exactly these
     /// bytes in flight.
@@ -360,6 +363,7 @@ pub async fn resolve(
         return Ok(ServeResolution::Serve {
             address,
             size: stat.size,
+            owner: reference.owner_id,
         });
     }
 
