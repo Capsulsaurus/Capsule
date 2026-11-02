@@ -339,14 +339,18 @@ pub async fn release_logged(context: &UploadContext, record: &UploadSessionRecor
 /// cost storage rather than save it, the reason a finalizing session is charged past the check
 /// when [`release`] restores a reservation.
 ///
+/// A settle the ledger cannot answer is logged, and the session completes: the reservation
+/// it could not settle is still an attribution the sweep lists, and the sweep finds the
+/// committed blob and settles it then ([`ReservationSweep`]). Idempotent: a settled
+/// attribution settles again as `true`, and a charge of an attributed address debits nothing.
+///
 /// # Errors
 ///
-/// [`StoreError`] when the ledger could not settle, or could not charge bytes whose
-/// reservation was already swept. Either way the committed bytes may be attributed to nobody:
-/// a settle that fails cannot tell whether the sweep released the row first, and once the row
-/// is gone no sweep lists the address again. So the failure is the finalizer's, not a log
-/// line: it leaves the session claimed rather than `Completed`, and the claim is re-driven
-/// through this settle until the charge lands ([`super::finalize::recover`]).
+/// [`StoreError`] only when the settle found the reservation already swept and the ledger
+/// could not charge the committed bytes. Nothing attributes the address then, and no sweep
+/// lists it again, so the bytes would be charged to nobody: the failure is the finalizer's,
+/// not a log line. It leaves the session claimed rather than `Completed`, and the claim is
+/// re-driven through this settle until the charge lands ([`super::finalize::recover`]).
 pub async fn settle(
     context: &UploadContext,
     record: &UploadSessionRecord,
@@ -356,9 +360,21 @@ pub async fn settle(
         tracing::warn!(%upload_id, "a completed session's hash is not a content address; nothing to settle");
         return Ok(());
     };
-    if context.quotas().settle(&address).await? {
-        tracing::debug!(%upload_id, "settled a completed session's reservation");
-        return Ok(());
+    match context.quotas().settle(&address).await {
+        Ok(true) => {
+            tracing::debug!(%upload_id, "settled a completed session's reservation");
+            return Ok(());
+        }
+        Ok(false) => {}
+        Err(error) => {
+            tracing::error!(
+                %error,
+                %upload_id,
+                "a completed session's reservation was not settled; the sweep settles it on \
+                 finding the blob"
+            );
+            return Ok(());
+        }
     }
     let outcome = context
         .quotas()

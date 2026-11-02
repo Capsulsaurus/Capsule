@@ -57,6 +57,8 @@ enum Arrival {
     Blob,
     /// Nothing lands, and every release and charge fails: a ledger that stopped answering.
     Refusal,
+    /// Nothing lands in a release; the next settle fails, once, and the rest answers.
+    SettleRefusal,
 }
 
 /// A ledger whose release lets another writer go first: what `arrival` holds becomes visible
@@ -101,9 +103,29 @@ impl RacingQuota {
             Some(Arrival::Blob) => {
                 self.blobs.put(address, BYTES).await.expect("stored");
             }
+            Some(Arrival::SettleRefusal) => {
+                *self
+                    .arrival
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                    Some(Arrival::SettleRefusal);
+            }
             Some(Arrival::Refusal) | None => {}
         }
         Ok(())
+    }
+
+    /// Whether this settle fails: an [`Arrival::SettleRefusal`] is taken by the first settle.
+    fn refuses_settle(&self) -> bool {
+        let mut arrival = self
+            .arrival
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if matches!(*arrival, Some(Arrival::SettleRefusal)) {
+            *arrival = None;
+            return true;
+        }
+        false
     }
 }
 
@@ -147,6 +169,14 @@ impl crate::quota::QuotaStore for RacingQuota {
     }
 
     fn settle<'a>(&'a self, address: &'a ContentAddress) -> crate::store::StoreFuture<'a, bool> {
+        if self.refuses_settle() {
+            return Box::pin(async {
+                Err(crate::store::StoreError::Unavailable {
+                    store: "quota",
+                    detail: "settle refused by the test".to_owned(),
+                })
+            });
+        }
         self.inner.settle(address)
     }
 
@@ -945,6 +975,52 @@ async fn a_settle_whose_charge_fails_after_a_sweep_is_surfaced() {
         "bytes nobody is charged for must not complete as if they were"
     );
     assert_eq!(h.used(&uploader()).await, 0);
+}
+
+#[tokio::test]
+async fn a_settle_the_ledger_cannot_answer_completes_and_leaves_the_reservation_to_the_sweep() {
+    let h = racing_harness(Arrival::SettleRefusal);
+    h.reserve(&uploader()).await;
+    h.blobs.put(&address(), BYTES).await.expect("stored");
+
+    settle(
+        &h.context,
+        &session("unsettled", UploadSessionStatus::WaitingForProcessing),
+    )
+    .await
+    .expect("a reservation still held completes; the sweep settles it");
+    assert_eq!(
+        h.used(&uploader()).await,
+        BYTES.len() as u64,
+        "the reservation still charges the uploader"
+    );
+    h.clock.advance(past_the_cap());
+    assert_eq!(
+        h.swept().await.settled,
+        vec![address()],
+        "the sweep finds the blob and settles the reservation the finalizer could not"
+    );
+    assert_eq!(h.used(&uploader()).await, BYTES.len() as u64);
+}
+
+#[tokio::test]
+async fn a_settle_is_idempotent() {
+    let h = harness();
+    h.reserve(&uploader()).await;
+    h.blobs.put(&address(), BYTES).await.expect("stored");
+    let record = session("settled-twice", UploadSessionStatus::WaitingForProcessing);
+
+    settle(&h.context, &record)
+        .await
+        .expect("the ledger answers");
+    settle(&h.context, &record)
+        .await
+        .expect("a re-driven settle answers");
+    assert_eq!(
+        h.used(&uploader()).await,
+        BYTES.len() as u64,
+        "settling twice charges once"
+    );
 }
 
 #[tokio::test]

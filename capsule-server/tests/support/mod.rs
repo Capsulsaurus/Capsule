@@ -3427,6 +3427,8 @@ pub(crate) struct SwitchableQuota {
     unavailable: AtomicBool,
     /// Fail [`QuotaStore::charge`] alone, so a caller that reads usage first gets past the read.
     charges_unavailable: AtomicBool,
+    /// Fail [`QuotaStore::settle`] alone: a ledger that stops answering at a completion.
+    settles_unavailable: AtomicBool,
     /// Release this account's attribution of the charged address once the next charge has
     /// answered: another session ending between a create's charge and its open.
     release_after_next_charge: std::sync::Mutex<Option<UserId>>,
@@ -3446,6 +3448,12 @@ impl SwitchableQuota {
     /// Make every subsequent charge fail while reads keep answering, or stop.
     pub(crate) fn set_charges_unavailable(&self, unavailable: bool) {
         self.charges_unavailable
+            .store(unavailable, Ordering::SeqCst);
+    }
+
+    /// Make every subsequent settle fail while the rest keeps answering, or stop.
+    pub(crate) fn set_settles_unavailable(&self, unavailable: bool) {
+        self.settles_unavailable
             .store(unavailable, Ordering::SeqCst);
     }
 
@@ -3536,7 +3544,7 @@ impl QuotaStore for SwitchableQuota {
     }
 
     fn settle<'a>(&'a self, address: &'a ContentAddress) -> StoreFuture<'a, bool> {
-        if self.is_down() {
+        if self.is_down() || self.settles_unavailable.load(Ordering::SeqCst) {
             return Box::pin(async { Self::refuse() });
         }
         self.inner.settle(address)

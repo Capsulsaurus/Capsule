@@ -3214,6 +3214,46 @@ async fn a_completion_whose_bytes_cannot_be_charged_stays_claimed_until_they_are
     );
 }
 
+/// A finalizer whose reservation is still held, and whose ledger then cannot settle it,
+/// completes: the reservation still charges the uploader, and the sweep settles it on finding
+/// the blob (#1059).
+#[tokio::test]
+async fn a_completion_whose_reservation_cannot_be_settled_completes_still_charged() {
+    use capsule_server::quota::QuotaStore as _;
+
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (first, second, whole) = blob();
+    let id = fixture.open_session(&whole, "original", &bearer).await;
+    fixture
+        .chunk(&id, 0, &first, &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    strand(&fixture, &id, &second, &whole, true).await;
+    fixture.quotas.set_settles_unavailable(true);
+
+    let recovery = recover_at_boot(&fixture).await;
+    assert_eq!(recovery.completed.len(), 1, "{recovery:?}");
+    assert_eq!(terminal_status(&fixture, &id).await, "completed");
+    fixture.quotas.set_settles_unavailable(false);
+    let record = fixture
+        .uploads
+        .read_for_test(&id)
+        .await
+        .expect("the session survives");
+    assert_eq!(
+        fixture
+            .quotas
+            .usage(&record.upload_user_id)
+            .await
+            .expect("the ledger answers")
+            .used,
+        whole.len() as u64,
+        "the unsettled reservation still charges the uploader"
+    );
+}
+
 #[tokio::test]
 async fn a_recovered_claim_with_neither_stage_nor_blob_fails_rather_than_completing() {
     let fixture = Fixture::working();
