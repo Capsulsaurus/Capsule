@@ -10,7 +10,9 @@
 //!   session they describe, and adding a field later is additive where withdrawing one is not.
 //! - **Append-only, bounded.** An event is never updated. It leaves the log only by the
 //!   retention bound: [`RETENTION`] by age and [`MAX_EVENTS_PER_ACCOUNT`] by count, enforced by
-//!   [`ActivityStore::record`] for the account it appends to, and by every read for age.
+//!   [`ActivityStore::record`] for the account it appends to, and by every read for age. An
+//!   account that stops recording keeps its expired rows until the operator's sweep
+//!   ([`ActivityStore::delete_expired`], run by `capsule-server gc --apply`) deletes them.
 //! - **Recording never refuses the act.** [`ActivityContext::record`] is called after the action
 //!   has happened and returns nothing: a store that cannot record logs the event at `error` and
 //!   the action stands. A sign-out refused because the audit log was down is a security outage
@@ -284,6 +286,30 @@ pub trait ActivityStore: std::fmt::Debug + Send + Sync {
         since: Timestamp,
         limit: usize,
     ) -> StoreFuture<'a, Vec<ActivityEvent>>;
+
+    /// How many events, across every account, were recorded before `before`.
+    ///
+    /// What [`Self::delete_expired`] would delete if called until it deleted nothing: the
+    /// operator's dry-run count.
+    fn count_expired(&self, before: Timestamp) -> StoreFuture<'_, u64>;
+
+    /// Delete at most `limit` events, across every account, recorded before `before`, and answer
+    /// how many it deleted.
+    ///
+    /// The operator's sweep (design/activity-log.md, Retention): an account that records nothing
+    /// more is never pruned by [`Self::record`], so its expired rows go only by this. An event
+    /// recorded at or after `before` is never deleted. Bounded by `limit` so one call holds its
+    /// locks on at most that many rows; a caller deletes everything by calling it until it
+    /// answers fewer than `limit`.
+    fn delete_expired(&self, before: Timestamp, limit: usize) -> StoreFuture<'_, u64>;
+}
+
+/// The oldest instant the log keeps at `now`: [`RETENTION`] before it.
+///
+/// What every read passes as its `since`, every append as its `retain_from`, and the operator's
+/// sweep as its `before`, so the three cannot disagree about which events have expired.
+pub fn horizon(now: Timestamp) -> Timestamp {
+    now.checked_sub(RETENTION).unwrap_or(Timestamp::MIN)
 }
 
 /// A deterministic in-memory adapter.
@@ -344,6 +370,35 @@ impl ActivityStore for InMemoryActivity {
                         .collect()
                 })
                 .unwrap_or_default())
+        })
+    }
+
+    fn count_expired(&self, before: Timestamp) -> StoreFuture<'_, u64> {
+        Box::pin(async move {
+            let expired = lock(&self.logs)
+                .values()
+                .flatten()
+                .filter(|event| event.at < before)
+                .count();
+            Ok(u64::try_from(expired).unwrap_or(u64::MAX))
+        })
+    }
+
+    fn delete_expired(&self, before: Timestamp, limit: usize) -> StoreFuture<'_, u64> {
+        Box::pin(async move {
+            let mut logs = lock(&self.logs);
+            let mut deleted = 0_usize;
+            for log in logs.values_mut() {
+                log.retain(|event| {
+                    let expired = deleted < limit && event.at < before;
+                    if expired {
+                        deleted += 1;
+                    }
+                    !expired
+                });
+            }
+            logs.retain(|_, log| !log.is_empty());
+            Ok(u64::try_from(deleted).unwrap_or(u64::MAX))
         })
     }
 }
@@ -607,11 +662,6 @@ impl ActivityContext {
         self.store.as_ref()
     }
 
-    /// The oldest instant a read may return at `now`.
-    fn horizon(now: Timestamp) -> Timestamp {
-        now.checked_sub(RETENTION).unwrap_or(Timestamp::MIN)
-    }
-
     /// Record that `kind` happened to `user`, acted by `session` and about `subject`.
     ///
     /// Called **after** the action, and infallible by design: a store that cannot record logs
@@ -776,7 +826,7 @@ impl ActivityContext {
         user: &UserId,
         limit: usize,
     ) -> Result<Vec<ActivityEvent>, StoreError> {
-        let since = Self::horizon(self.clock.now());
+        let since = horizon(self.clock.now());
         self.store
             .recent(user, since, limit.min(MAX_EVENTS_PER_ACCOUNT))
             .await
@@ -793,8 +843,8 @@ async fn write(store: &dyn ActivityStore, event: ActivityEvent) {
     let user_id = event.user_id.clone();
     let session_id = event.session_id.clone();
     let subject = event.subject.clone();
-    let horizon = ActivityContext::horizon(event.at);
-    match store.record(event, horizon).await {
+    let retain_from = horizon(event.at);
+    match store.record(event, retain_from).await {
         Ok(()) => tracing::info!(
             user_id = %user_id,
             kind = kind.as_str(),

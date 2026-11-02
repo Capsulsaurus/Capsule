@@ -157,6 +157,10 @@ pub const EXPECTED_MIGRATIONS: &[ExpectedMigration] = &[
         checksum: "1e54bb2dd7acc24fa3b07ab3f56180a4fd30e790113c170aa86343634a341d33",
     },
     ExpectedMigration {
+        name: "m20260902_000026_activity_events_at_index",
+        checksum: "9bae6d6933662825b0078f9c6a9b29a4f1db9214446d41c11958e2c27fd7a80a",
+    },
+    ExpectedMigration {
         name: "m20260902_000027_upload_reservations",
         checksum: "476e419f899a991cabe33db0f213c35208bbf2eb61d5113ce55c19670f939d1b",
     },

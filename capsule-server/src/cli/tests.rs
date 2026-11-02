@@ -345,6 +345,25 @@ fn a_collection_pass_names_the_blobs_rather_than_counting_them() {
 }
 
 #[test]
+fn a_collection_pass_reports_the_expired_activity_it_deleted_or_would_delete() {
+    let report = CollectionReport {
+        expired_activity: 42,
+        ..CollectionReport::default()
+    };
+    let applied = render_collection(&report, Mode::Apply).to_string();
+    assert!(
+        applied.contains("expired activity events (deleted 42)"),
+        "{applied}"
+    );
+    assert!(!applied.contains("nothing to do"), "{applied}");
+    let dry = render_collection(&report, Mode::DryRun).to_string();
+    assert!(
+        dry.contains("expired activity events (would delete 42)"),
+        "{dry}"
+    );
+}
+
+#[test]
 fn a_purge_reports_what_is_still_waiting() {
     // "Why has this not gone yet" is exactly the question a dry run is run to answer.
     let report = PurgeReport {

@@ -11,6 +11,10 @@
 //! [`ActivityStore::record`] applies to the account it appends to inside the same transaction:
 //! by age (`at` before `retain_from`) and by count (every row older than the newest
 //! [`MAX_EVENTS_PER_ACCOUNT`]). Both deletes walk the `(user_id, seq)` index of one account.
+//!
+//! The operator's sweep ([`ActivityStore::delete_expired`]) is the one delete across accounts,
+//! for the rows of accounts that stopped recording. It walks the `at` index (`000026`) in
+//! batches of a bounded size, so neither a count nor a batch reads the whole table.
 
 use sea_orm::{
     ConnectionTrait, DatabaseConnection, DatabaseTransaction, DbBackend, Statement,
@@ -158,6 +162,48 @@ impl ActivityStore for PostgresActivity {
                 });
             }
             Ok(events)
+        })
+    }
+
+    fn count_expired(&self, before: jiff::Timestamp) -> StoreFuture<'_, u64> {
+        Box::pin(async move {
+            let row = self
+                .connection
+                .query_one_raw(Statement::from_sql_and_values(
+                    DbBackend::Postgres,
+                    "SELECT COUNT(*) AS expired FROM activity_events WHERE at < $1",
+                    [Value::from(to_micros(before))],
+                ))
+                .await
+                .map_err(PORT.failing("counting expired activity events"))?
+                .ok_or_else(|| PORT.undecodable("a count answered no row".to_owned()))?;
+            let expired: i64 = row
+                .try_get("", "expired")
+                .map_err(PORT.failing("counting expired activity events"))?;
+            Ok(u64::try_from(expired).unwrap_or(0))
+        })
+    }
+
+    fn delete_expired(&self, before: jiff::Timestamp, limit: usize) -> StoreFuture<'_, u64> {
+        Box::pin(async move {
+            // One bounded statement: the subquery walks the `at` index to at most `limit` rows,
+            // so the delete locks no more than that many, whatever the backlog.
+            let deleted = self
+                .connection
+                .execute_raw(Statement::from_sql_and_values(
+                    DbBackend::Postgres,
+                    "DELETE FROM activity_events WHERE seq IN ( \
+                       SELECT seq FROM activity_events WHERE at < $1 ORDER BY at LIMIT $2)",
+                    [
+                        Value::from(to_micros(before)),
+                        Value::from(i64::try_from(limit).unwrap_or(i64::MAX)),
+                    ],
+                ))
+                .await
+                .map_err(PORT.failing("deleting expired activity events"))?
+                .rows_affected();
+            tracing::debug!(deleted, limit, "deleted a batch of expired activity events");
+            Ok(deleted)
         })
     }
 }

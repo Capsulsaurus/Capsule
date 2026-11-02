@@ -477,6 +477,9 @@ struct Stores {
     subscriptions: Arc<dyn SubscriptionStore>,
     /// The moderation store: written by report intake, read by `capsule-server moderation …`.
     moderation: Arc<dyn ModerationStore>,
+    /// The account activity log: durable, so Postgres on the durable arm (design/activity-log.md).
+    /// Written by the application and swept by `gc` (#1112). Here so both are one store.
+    activity: Arc<dyn ActivityStore>,
 }
 
 impl Stores {
@@ -511,7 +514,10 @@ impl Stores {
                 self.uploads.clone(),
                 QuotaLimits::unlimited(),
             ),
-        )));
+        )))
+        // An account that stopped recording keeps its expired activity rows until a sweep
+        // deletes them, so `gc --apply` does (#1112).
+        .with_activity_sweep(self.activity.clone());
         if let Some(attestation) = purge_signer {
             collection = collection.with_attestation(attestation);
         }
@@ -631,6 +637,7 @@ impl Base {
             peers: Arc::new(InMemoryPeers::new()),
             subscriptions: Arc::new(InMemorySubscriptions::new()),
             moderation: Arc::new(InMemoryModeration::new()),
+            activity: Arc::new(InMemoryActivity::new()),
             root: self.root,
             clock: self.clock,
             blobs: self.blobs,
@@ -653,6 +660,7 @@ impl Base {
             peers: Arc::new(PostgresPeers::new(connection.clone())),
             subscriptions: Arc::new(PostgresSubscriptions::new(connection.clone())),
             moderation: Arc::new(PostgresModeration::new(connection.clone())),
+            activity: Arc::new(PostgresActivity::new(connection.clone())),
             root: self.root,
             clock: self.clock,
             blobs: self.blobs,
@@ -762,8 +770,6 @@ struct Ports {
     oidc_authorizations: Arc<dyn OidcAuthorizationStore>,
     /// The pending OIDC device authorizations (issue #635), on the same terms.
     oidc_devices: Arc<dyn OidcDeviceStore>,
-    /// The account activity log: durable, so Postgres on the durable arm (design/activity-log.md).
-    activity: Arc<dyn ActivityStore>,
 }
 
 /// The credential verifier, built once.
@@ -810,7 +816,6 @@ fn memory_ports(
         counters: Arc::new(InMemoryCounters::new()),
         oidc_authorizations: Arc::new(InMemoryOidcAuthorizations::with_default_ttl(clock.clone())),
         oidc_devices: Arc::new(InMemoryOidcDevices::with_default_ttl(clock.clone())),
-        activity: Arc::new(InMemoryActivity::new()),
     })
 }
 
@@ -851,7 +856,6 @@ fn durable_ports(
         counters: Arc::new(ValkeyCounters::new(valkey.valkey().clone())),
         oidc_authorizations: valkey.oidc_authorizations(),
         oidc_devices: valkey.oidc_devices(),
-        activity: Arc::new(PostgresActivity::new(db())),
     })
 }
 
@@ -898,6 +902,7 @@ fn compose(
     let peers = stores.peers.clone();
     let subscriptions = stores.subscriptions.clone();
     let moderation = stores.moderation.clone();
+    let activity = stores.activity.clone();
 
     // The signer is built from the private key alone and derives its own public half, which is
     // what lets `ServerInfo` below publish the key tokens actually verify under rather than one
@@ -927,7 +932,6 @@ fn compose(
         counters,
         oidc_authorizations,
         oidc_devices,
-        activity,
     } = ports;
     // The production write authority, not a permissive double: it reads the
     // album's own pin and the account's published device directory, so invariants 6 and 7 mean

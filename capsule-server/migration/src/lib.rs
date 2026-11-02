@@ -25,6 +25,8 @@
 //! - `000024` (#1003): `activity_events`, the account activity log.
 //! - `000025` (#1035): `federation_subscriptions`, the albums this server pulls from peers for
 //!   its own members.
+//! - `000026` (#1112): an index on `activity_events (at)`, for the operator's sweep of expired
+//!   activity events.
 //! - `000027` (#1059): `quota_attributions.reserved_until`, the reservation state an upload
 //!   session's charge carries until a finalization settles it or the reservation sweep
 //!   releases it.
@@ -116,6 +118,7 @@ migrations![
     m20260902_000023_album_key_escrows,
     m20260902_000024_activity_log,
     m20260902_000025_federation_subscriptions,
+    m20260902_000026_activity_events_at_index,
     m20260902_000027_upload_reservations,
 ];
 
