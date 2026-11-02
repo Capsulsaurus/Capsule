@@ -1935,6 +1935,7 @@
     <string name="error_upload_missing_offset">В запросе на загрузку отсутствовала метка позиции.</string>
     <string name="error_upload_offset_mismatch">Загрузка рассинхронизировалась и повторно выравнивается.</string>
     <string name="error_upload_owner_not_permitted">Вы не можете загружать от имени этого пользователя.</string>
+    <string name="error_upload_range_conflict">Часть этой загрузки уже передаётся. Возобновление…</string>
     <string name="error_upload_rate_limited">Загрузка ненадолго приостановлена. Она возобновится автоматически.</string>
     <string name="error_upload_receipt_not_available">Загрузка не завершена, поэтому квитанция о сохранении пока недоступна.</string>
     <string name="error_upload_replace_incomplete">Capsule ещё получает новую версию этого фото. Это завершится автоматически.</string>
@@ -1946,6 +1947,8 @@
     <string name="error_upload_storage_full">На сервере закончилось место. Загрузка возобновится, когда место освободится.</string>
     <string name="error_upload_storage_inconsistent">На сервере возникла проблема с хранилищем. Повторите попытку.</string>
     <string name="error_upload_timestamp_out_of_range">Похоже, часы вашего устройства выставлены неверно. Проверьте дату и время.</string>
+    <string name="error_upload_too_fragmented">В этой загрузке слишком много пропусков. Заполняем их…</string>
+    <string name="error_upload_too_many_in_flight">Слишком много частей этой загрузки отправляется одновременно. Замедляем…</string>
     <string name="error_upload_unavailable">Не удалось завершить загрузку. Повторите попытку.</string>
     <string name="error_upload_unknown_crypto_suite">Эта версия приложения использует набор шифрования, который сервер не распознаёт.</string>
     <string name="error_upload_unknown_derivative_format">Эта миниатюра или превью в неподдерживаемом формате.</string>

@@ -7779,6 +7779,10 @@
     "message": "您無法代表此使用者上傳。",
     "origin": "machine"
   },
+  "error.upload.range_conflict": {
+    "message": "此上傳的一部分已在傳送中。正在繼續…",
+    "origin": "machine"
+  },
   "error.upload.rate_limited": {
     "message": "上傳暫時暫停，稍後會自動恢復。",
     "origin": "machine"
@@ -7821,6 +7825,14 @@
   },
   "error.upload.timestamp_out_of_range": {
     "message": "您裝置的時鐘似乎不正確。請檢查其日期和時間。",
+    "origin": "machine"
+  },
+  "error.upload.too_fragmented": {
+    "message": "此上傳的缺口過多。正在補齊…",
+    "origin": "machine"
+  },
+  "error.upload.too_many_in_flight": {
+    "message": "此上傳同時傳送的部分過多。正在放慢速度…",
     "origin": "machine"
   },
   "error.upload.unavailable": {

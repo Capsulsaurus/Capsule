@@ -7779,6 +7779,10 @@
     "message": "このユーザーの代わりにアップロードすることはできません。",
     "origin": "machine"
   },
+  "error.upload.range_conflict": {
+    "message": "このアップロードの一部はすでに送信中です。再開しています…",
+    "origin": "machine"
+  },
   "error.upload.rate_limited": {
     "message": "アップロードを一時停止しています。自動的に再開されます。",
     "origin": "machine"
@@ -7821,6 +7825,14 @@
   },
   "error.upload.timestamp_out_of_range": {
     "message": "デバイスの時計が正しくないようです。日付と時刻を確認してください。",
+    "origin": "machine"
+  },
+  "error.upload.too_fragmented": {
+    "message": "このアップロードには欠けている部分が多すぎます。補っています…",
+    "origin": "machine"
+  },
+  "error.upload.too_many_in_flight": {
+    "message": "このアップロードの同時送信数が多すぎます。速度を落としています…",
     "origin": "machine"
   },
   "error.upload.unavailable": {

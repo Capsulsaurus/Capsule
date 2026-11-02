@@ -1935,6 +1935,7 @@
     <string name="error_upload_missing_offset">La demande de téléversement était dépourvue de son marqueur de position.</string>
     <string name="error_upload_offset_mismatch">Le téléversement s\'est désynchronisé et se réaligne.</string>
     <string name="error_upload_owner_not_permitted">Vous ne pouvez pas téléverser au nom de cet utilisateur.</string>
+    <string name="error_upload_range_conflict">Une partie de ce téléversement est déjà en cours d\'envoi. Reprise…</string>
     <string name="error_upload_rate_limited">Le téléversement est suspendu un instant. Il reprendra de lui-même.</string>
     <string name="error_upload_receipt_not_available">Le téléversement n\'est pas terminé, son reçu de stockage n\'est donc pas encore disponible.</string>
     <string name="error_upload_replace_incomplete">Capsule reçoit encore la nouvelle version de cette photo. L\'opération se terminera d\'elle-même.</string>
@@ -1946,6 +1947,8 @@
     <string name="error_upload_storage_full">Le serveur n\'a plus d\'espace de stockage. Le téléversement reprendra une fois de l\'espace libéré.</string>
     <string name="error_upload_storage_inconsistent">Le serveur a rencontré un problème de stockage. Veuillez réessayer.</string>
     <string name="error_upload_timestamp_out_of_range">L\'horloge de votre appareil semble incorrecte. Vérifiez sa date et son heure.</string>
+    <string name="error_upload_too_fragmented">Ce téléversement comporte trop de lacunes. Comblement en cours…</string>
+    <string name="error_upload_too_many_in_flight">Trop de parties de ce téléversement sont envoyées en même temps. Ralentissement…</string>
     <string name="error_upload_unavailable">Le téléversement n\'a pas pu être effectué. Veuillez réessayer.</string>
     <string name="error_upload_unknown_crypto_suite">Cette version de l\'application utilise une suite de chiffrement que le serveur ne reconnaît pas.</string>
     <string name="error_upload_unknown_derivative_format">Cette vignette ou cet aperçu est dans un format non pris en charge.</string>

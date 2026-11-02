@@ -1935,6 +1935,7 @@
     <string name="error_upload_missing_offset">A la solicitud de subida le faltaba su marcador de posición.</string>
     <string name="error_upload_offset_mismatch">La subida se desincronizó y se está realineando.</string>
     <string name="error_upload_owner_not_permitted">No puedes subir en nombre de este usuario.</string>
+    <string name="error_upload_range_conflict">Parte de esta subida ya está en camino. Reanudando…</string>
     <string name="error_upload_rate_limited">La subida está en pausa un momento. Se reanudará sola.</string>
     <string name="error_upload_receipt_not_available">La subida no ha terminado, por lo que su recibo de almacenamiento aún no está disponible.</string>
     <string name="error_upload_replace_incomplete">Capsule aún está recibiendo la nueva versión de esta foto. Terminará sola.</string>
@@ -1946,6 +1947,8 @@
     <string name="error_upload_storage_full">El servidor no tiene espacio de almacenamiento. La subida se reanudará cuando se libere espacio.</string>
     <string name="error_upload_storage_inconsistent">El servidor tuvo un problema de almacenamiento. Inténtalo de nuevo.</string>
     <string name="error_upload_timestamp_out_of_range">El reloj de tu dispositivo parece estar mal. Comprueba su fecha y hora.</string>
+    <string name="error_upload_too_fragmented">Esta subida tiene demasiados huecos. Completándolos…</string>
+    <string name="error_upload_too_many_in_flight">Se están enviando demasiadas partes de esta subida a la vez. Reduciendo el ritmo…</string>
     <string name="error_upload_unavailable">No se pudo completar la subida. Inténtalo de nuevo.</string>
     <string name="error_upload_unknown_crypto_suite">Esta versión de la aplicación usa un conjunto de cifrado que el servidor no reconoce.</string>
     <string name="error_upload_unknown_derivative_format">Esta miniatura o vista previa está en un formato no compatible.</string>
