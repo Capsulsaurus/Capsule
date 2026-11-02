@@ -2305,9 +2305,8 @@ impl AssetPusher<'_> {
                 // so the server refused it for good. Re-seal it at the album's current epoch and
                 // push it once more; a second refusal fails the asset like any other.
                 Err(PushError::CreateRefused { source, .. }) => {
-                    match self.reseal(&mut slots[at], *source, run) {
-                        Ok(()) => resealed.push(at),
-                        Err(error) => slots[at].fail(&error),
+                    if self.reseal(&mut slots[at], *source, run) {
+                        resealed.push(at);
                     }
                 }
                 other => slots[at].pushed = Some(other),
@@ -2369,26 +2368,35 @@ impl AssetPusher<'_> {
         Ok(Some(bundle))
     }
 
-    /// Re-seal the create the server refused (`refused`) at its album's current epoch, and
-    /// put the re-sealed bundle in `slot` to be sent again.
+    /// Re-seal the create the server refused (`refused`) at its album's current epoch, and put
+    /// the re-sealed bundle in `slot` to be sent again. Returns whether it is to be sent; an
+    /// asset that could not be re-sealed fails in `slot`.
     #[instrument(skip_all, fields(asset_id = %slot.outcome.asset_id))]
     fn reseal(
         &mut self,
         slot: &mut BatchSlot,
         refused: UploadError,
         run: &mut PushRun<'_>,
-    ) -> Result<(), AssetError> {
-        let Some(asset_id) = slot.bundle.as_ref().map(|bundle| bundle.asset_id) else {
-            return Err(AssetError::Push(PushError::Upload(refused)));
+    ) -> bool {
+        let Some((asset_id, amk_version)) = slot
+            .bundle
+            .as_ref()
+            .map(|bundle| (bundle.asset_id, bundle.amk_version))
+        else {
+            slot.fail(&AssetError::Push(PushError::Upload(refused)));
+            return false;
         };
         tracing::warn!(
-            amk_version = slot.bundle.as_ref().map(|bundle| bundle.amk_version),
+            amk_version,
             "push: the server refused this create; re-sealing it at the album's current epoch"
         );
-        let resealed = self
-            .workspace
-            .reseal_create(&asset_id)
-            .map_err(|error| AssetError::Reseal { refused, error })?;
+        let resealed = match self.workspace.reseal_create(&asset_id) {
+            Ok(resealed) => resealed,
+            Err(error) => {
+                slot.fail(&AssetError::Reseal { refused, error });
+                return false;
+            }
+        };
         slot.outcome.resealed = true;
         tracing::info!(
             from_epoch = resealed.from_epoch,
@@ -2396,10 +2404,17 @@ impl AssetPusher<'_> {
             derivatives = resealed.derivatives,
             "push: create re-sealed; pushing it again"
         );
-        let bundle = self.workspace.upload_bundle(&asset_id)?;
-        run.tell(|| started(&bundle));
-        slot.bundle = Some(bundle);
-        Ok(())
+        match self.workspace.upload_bundle(&asset_id) {
+            Ok(bundle) => {
+                run.tell(|| started(&bundle));
+                slot.bundle = Some(bundle);
+                true
+            }
+            Err(error) => {
+                slot.fail(&AssetError::Bundle(error));
+                false
+            }
+        }
     }
 
     /// Send the bundles of `slots` at `which` through the server's lane, up to W at once, and

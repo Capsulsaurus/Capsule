@@ -959,10 +959,11 @@ async fn serve_wire_mock(
                 if !delay.is_zero() {
                     tokio::time::sleep(delay).await;
                 }
-                let headers: String = headers
-                    .iter()
-                    .map(|(key, value)| format!("{key}: {value}\r\n"))
-                    .collect();
+                let headers = headers.iter().fold(String::new(), |mut out, (key, value)| {
+                    use std::fmt::Write as _;
+                    let _ = write!(out, "{key}: {value}\r\n");
+                    out
+                });
                 let response = format!(
                     "HTTP/1.1 {status} X\r\n{headers}content-length: {}\r\nconnection: close\r\n\r\n{body}",
                     body.len()
