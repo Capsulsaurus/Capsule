@@ -8,6 +8,7 @@
 //! keys/amk-ledger.cbor    # the AMKs needed, sealed under the passphrase-derived wrap key
 //! blobs/{ciphertext_hash} # encrypted asset ciphertext
 //! meta/{asset_id}         # encrypted metadata blob
+//! create-meta/{asset_id}  # encrypted metadata blob the create binds, when an edit superseded it
 //! provenance/{asset_id}   # the full per-asset provenance chain (canonical CBOR)
 //! receipts/{asset_id}     # the asset's custody-receipt log, verbatim (when held)
 //! attestations/{asset_id} # the asset's signed storage-attestation log, verbatim (when held)
@@ -40,7 +41,7 @@ use uuid::Uuid;
 use super::{ARTIFACT_FORMAT_VERSION, BackupError};
 use crate::cbor;
 use crate::crypto::authority::{ReferenceAuthority, SignedEpochLedger};
-use crate::crypto::encryption::{decrypt_asset_vec, recover_file_key};
+use crate::crypto::encryption::{blob_ciphertext_hash, decrypt_asset_vec, recover_file_key};
 use crate::crypto::hash::{self, Hash32};
 use crate::crypto::keys::{Amk, HybridVerifyingKey, Signer};
 use crate::crypto::primitives::{Argon2Params, CRYPTO_SUITE_ID, PROTOCOL_VERSION, info};
@@ -108,6 +109,12 @@ pub struct BackupAsset {
     pub ciphertext: Arc<dyn CiphertextSource>,
     /// Encrypted metadata blob (wire format).
     pub metadata_blob: Vec<u8>,
+    /// The sealed metadata blob the chain's `create` binds, when a later edit replaced it as
+    /// [`metadata_blob`](Self::metadata_blob) (empty = none: the create binds the current blob,
+    /// or no blob). An upload carries the create, and only these exact bytes answer its
+    /// `metadata_blob_hash`, so a library that has not uploaded the asset yet needs them back.
+    /// Rides the `create-meta/{asset_id}` entry, additive within format 2.
+    pub create_metadata_blob: Vec<u8>,
     /// The asset's provenance chain (oldest first).
     pub provenance: Vec<ProvenanceRecord>,
     /// The asset's custody-receipt log (`{uuid}.receipts.cbor` bytes; empty = none). Evidence,
@@ -259,7 +266,8 @@ fn blob_role_order(role: &str) -> u8 {
         "docs" => 5,
         "attestations" => 6,
         "library" => 7,
-        _ => 8,
+        "create-meta" => 8,
+        _ => 9,
     }
 }
 
@@ -659,6 +667,14 @@ fn export_inner(
                 Cow::Borrowed(&a.receipts),
             ));
         }
+        // The create's superseded metadata blob, likewise, still sealed. Additive: an older
+        // reader hash-checks it as a manifest entry and otherwise ignores it.
+        if !a.create_metadata_blob.is_empty() {
+            asset_entries.push((
+                format!("create-meta/{}", a.asset_id),
+                Cow::Borrowed(&a.create_metadata_blob),
+            ));
+        }
         // So does the signed storage-attestation log.
         if !a.attestations.is_empty() {
             asset_entries.push((
@@ -847,6 +863,11 @@ pub struct RestoredAsset {
     pub plaintext: Vec<u8>,
     /// The metadata blob (still encrypted; written verbatim).
     pub metadata_blob: Vec<u8>,
+    /// The sealed metadata blob the chain's `create` binds, when the artifact carried one that
+    /// answers the create's `metadata_blob_hash` (empty otherwise: an artifact from before the
+    /// entry existed, an asset whose create binds its current blob, or a carried blob that did
+    /// not answer, which is dropped with a warning) — kept beside the chain on commit.
+    pub create_metadata_blob: Vec<u8>,
     /// The provenance chain.
     pub provenance: Vec<ProvenanceRecord>,
     /// The asset's custody-receipt log (`{uuid}.receipts.cbor` bytes; empty if the artifact
@@ -1056,6 +1077,8 @@ impl BackupArtifact {
             .cloned()
             .unwrap_or_default();
 
+        let create_metadata_blob = self.create_metadata_blob(asset_id, &provenance);
+
         // The custody-receipt log rides the artifact when the exporter held one.
         let receipts = self
             .files
@@ -1075,10 +1098,43 @@ impl BackupArtifact {
             asset_id: *asset_id,
             plaintext,
             metadata_blob,
+            create_metadata_blob,
             provenance,
             receipts,
             attestations,
         })
+    }
+
+    /// The `create-meta/{asset_id}` blob, when it answers the `metadata_blob_hash` the chain's
+    /// `create` signed; empty otherwise.
+    ///
+    /// A carried blob that does not answer is dropped with a warning rather than refusing the
+    /// restore: it only matters to uploading the create, and the asset, its chain and its current
+    /// metadata restore without it. Checking it against the signed create (not only the
+    /// manifest's entry hash) keeps a library from ever holding create bytes the server would
+    /// refuse under that address.
+    fn create_metadata_blob(&self, asset_id: &Uuid, provenance: &[ProvenanceRecord]) -> Vec<u8> {
+        let Some(carried) = self.files.get(&format!("create-meta/{asset_id}")) else {
+            return Vec::new();
+        };
+        let bound = provenance
+            .first()
+            .and_then(|create| create.manifest.core.metadata_blob_hash);
+        if bound == Some(blob_ciphertext_hash(carried)) {
+            tracing::debug!(
+                asset_id = %asset_id,
+                bytes = carried.len(),
+                "backup: the create's kept metadata blob restored"
+            );
+            return carried.clone();
+        }
+        tracing::warn!(
+            asset_id = %asset_id,
+            create_binds_blob = bound.is_some(),
+            "backup: the carried create metadata blob does not answer the create; dropped, and \
+             the create cannot be uploaded from this library"
+        );
+        Vec::new()
     }
 
     /// The escrowed AMK rows this artifact carries: `(album_id, epoch, amk)`.

@@ -260,12 +260,14 @@ impl Workspace {
                 &asset.asset_id,
                 capture_utc,
             ))?;
+            let create_metadata_blob = self.superseded_create_metadata_blob(asset)?;
             assets.push(BackupAsset {
                 album_id: asset.album_id,
                 asset_id: asset.asset_id,
                 // Export the exact sealed blob the manifest committed to (re-sealing would draw
                 // a fresh nonce and break the `metadata_blob_hash` content address).
                 metadata_blob: asset.metadata_blob.clone(),
+                create_metadata_blob,
                 // The original as a source, not its bytes: the export streams it into the
                 // artifact one STREAM chunk at a time, as a push does, so exporting never holds
                 // the library's ciphertext. `verified_original` has just verified it re-derives
@@ -277,6 +279,52 @@ impl Workspace {
             });
         }
         Ok(PeerExport { assets, amks })
+    }
+
+    /// The sealed blob `asset`'s `create` binds, when an edit has replaced it as the asset's
+    /// current blob: the copy kept beside the chain, which an upload of the create needs and the
+    /// head's blob cannot stand in for. Empty when the create binds the current blob or none.
+    ///
+    /// A library edited before it kept that copy has nothing that answers the create; the asset
+    /// exports without it, as it did before, and a warning says its create stays unuploadable.
+    ///
+    /// # Errors
+    ///
+    /// [`LifecycleError::Io`] when the kept copy exists and cannot be read: like the evidence
+    /// logs, an artifact silently missing it would lose the only bytes that upload the create.
+    fn superseded_create_metadata_blob(&self, asset: &AssetState) -> Result<Vec<u8>> {
+        let bound = asset
+            .chain
+            .records()
+            .first()
+            .expect("provenance chain is never empty")
+            .manifest
+            .core
+            .metadata_blob_hash;
+        let Some(bound) = bound else {
+            return Ok(Vec::new());
+        };
+        if blob_ciphertext_hash(&asset.metadata_blob) == bound {
+            return Ok(Vec::new());
+        }
+        match self.create_metadata_blob(asset, Some(bound)) {
+            Ok(kept) => {
+                tracing::debug!(
+                    asset_id = %asset.asset_id,
+                    bytes = kept.len(),
+                    "backup: carrying the create's superseded metadata blob"
+                );
+                Ok(kept)
+            }
+            Err(LifecycleError::CreateMetadataSuperseded(_)) => {
+                tracing::warn!(
+                    asset_id = %asset.asset_id,
+                    "backup: no kept copy answers the create's metadata blob; exported without it"
+                );
+                Ok(Vec::new())
+            }
+            Err(e) => Err(e),
+        }
     }
 
     /// The label records that ride the artifact: every exported album's record (so a restore
@@ -582,11 +630,76 @@ impl Workspace {
             &crate::library::attestations_path(&self.root, &restored.asset_id, Some(capture_utc)),
             &restored.attestations,
         )?;
+        // The create's superseded metadata blob, for the same reason and in the same place: an
+        // upload of the create needs these bytes, and the chain must not land without them. A
+        // held asset's current blob is offered too: `write_asset_files` is about to overwrite
+        // it, and it may be the last copy that answers the create.
+        self.restore_create_metadata_blob(
+            &asset,
+            &restored.create_metadata_blob,
+            held.map(|h| h.metadata_blob.as_slice()),
+        )?;
         self.write_asset_files(&asset, &restored.plaintext)?;
         self.index_asset_row(&asset)?;
         self.index_original_representation(&asset, restored.plaintext.len())?;
         self.assets.insert(restored.asset_id, asset);
         Ok(())
+    }
+
+    /// Keep the create's metadata blob at
+    /// [`create_metadata_blob_path`](Self::create_metadata_blob_path) before a restore writes
+    /// `asset` over whatever this workspace held. `carried` is the blob the artifact carried,
+    /// which already answers the create's `metadata_blob_hash`
+    /// ([`backup::RestoredAsset::create_metadata_blob`]); `held_current` is the current blob of
+    /// the asset this workspace already holds, if any.
+    ///
+    /// When the artifact carried none, the held current blob is kept instead if it answers the
+    /// create and the restored head replaces it: a never-edited asset updated by a peer that
+    /// edited it without keeping the create's blob (an older build, or an edit made before the
+    /// blob was kept) would otherwise lose the last copy that uploads its create. Nothing is
+    /// written when neither applies. A copy already on disk that answers the same hash holds the
+    /// same bytes and is left alone; one that does not is replaced.
+    fn restore_create_metadata_blob(
+        &self,
+        asset: &AssetState,
+        carried: &[u8],
+        held_current: Option<&[u8]>,
+    ) -> Result<()> {
+        let blob = if carried.is_empty() {
+            let bound = asset
+                .chain
+                .records()
+                .first()
+                .expect("provenance chain is never empty")
+                .manifest
+                .core
+                .metadata_blob_hash;
+            match (bound, held_current) {
+                (Some(bound), Some(current))
+                    if !current.is_empty()
+                        && current != asset.metadata_blob.as_slice()
+                        && blob_ciphertext_hash(current) == bound =>
+                {
+                    tracing::debug!(
+                        asset_id = %asset.asset_id,
+                        "backup: keeping the held blob the create binds before the restore replaces it"
+                    );
+                    current
+                }
+                _ => return Ok(()),
+            }
+        } else {
+            carried
+        };
+        let held = fs::read(self.create_metadata_blob_path_of(asset)).ok();
+        if held.is_some_and(|held| blob_ciphertext_hash(&held) == blob_ciphertext_hash(blob)) {
+            tracing::debug!(
+                asset_id = %asset.asset_id,
+                "backup: the create's metadata blob is already kept; keeping it"
+            );
+            return Ok(());
+        }
+        self.write_create_metadata_blob(asset, blob)
     }
 
     /// Merge a verified artifact's escrowed `(album_id, epoch, amk)` rows — and each album's
