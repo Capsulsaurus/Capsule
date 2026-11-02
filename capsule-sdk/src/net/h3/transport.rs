@@ -1058,19 +1058,26 @@ where
 
 /// Resolve `endpoint` (the origin's host when it names none) and dial it as the origin: the
 /// certificate must be valid for the origin, whatever host the advertisement names (RFC 7838
-/// §2.1).
+/// §2.1). The lookup and the dial share one `dial_timeout`, so a dial that lost the race is
+/// bounded by it rather than by the system resolver.
 async fn dial_quic(
     dialer: H3Dialer,
     origin: Origin,
     endpoint: H3Endpoint,
 ) -> Result<H3Connection, TransportError> {
-    let host = endpoint.host.as_deref().unwrap_or(origin.host());
-    let addr = tokio::net::lookup_host((host, endpoint.port))
+    let timeout = dialer.inner.dial_timeout;
+    let dial = async {
+        let host = endpoint.host.as_deref().unwrap_or(origin.host());
+        let addr = tokio::net::lookup_host((host, endpoint.port))
+            .await
+            .map_err(|e| TransportError::QuicDial(e.to_string()))?
+            .next()
+            .ok_or_else(|| TransportError::QuicDial(format!("{host} resolved to no address")))?;
+        dialer.dial(addr, origin.host()).await
+    };
+    tokio::time::timeout(timeout, dial)
         .await
-        .map_err(|e| TransportError::QuicDial(e.to_string()))?
-        .next()
-        .ok_or_else(|| TransportError::QuicDial(format!("{host} resolved to no address")))?;
-    dialer.dial(addr, origin.host()).await
+        .map_err(|_| TransportError::QuicDial("the dial timed out".to_owned()))?
 }
 
 #[cfg(test)]
