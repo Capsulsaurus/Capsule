@@ -7471,6 +7471,22 @@
     "message": "تم إيقاف هذا المصدر مؤقتًا بعد أخطاء متكررة.",
     "origin": "machine"
   },
+  "error.federation.hint_at_capacity": {
+    "message": "يتعامل هذا الخادم مع عدد كبير جدًا من إشعارات التحديث حاليًا. يُرجى الانتظار ثم المحاولة مرة أخرى.",
+    "origin": "machine"
+  },
+  "error.federation.hint_malformed": {
+    "message": "إشعار التحديث هذا غير صالح.",
+    "origin": "machine"
+  },
+  "error.federation.hint_rate_limited": {
+    "message": "إشعارات تحديث كثيرة جدًا من هذا الخادم. يُرجى الانتظار ثم المحاولة مرة أخرى.",
+    "origin": "machine"
+  },
+  "error.federation.hint_unsigned": {
+    "message": "تعذّر التحقق من إشعار التحديث.",
+    "origin": "machine"
+  },
   "error.federation.member_not_on_roster": {
     "message": "هذا الشخص ليس ضمن قائمة أعضاء هذا الألبوم.",
     "origin": "machine"

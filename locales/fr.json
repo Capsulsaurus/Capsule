@@ -7471,6 +7471,22 @@
     "message": "Cette source est temporairement mise en attente après des erreurs répétées.",
     "origin": "machine"
   },
+  "error.federation.hint_at_capacity": {
+    "message": "Ce serveur traite trop d'avis de mise à jour en ce moment. Veuillez patienter et réessayer.",
+    "origin": "machine"
+  },
+  "error.federation.hint_malformed": {
+    "message": "Cet avis de mise à jour n'est pas valide.",
+    "origin": "machine"
+  },
+  "error.federation.hint_rate_limited": {
+    "message": "Trop d'avis de mise à jour provenant de ce serveur. Veuillez patienter et réessayer.",
+    "origin": "machine"
+  },
+  "error.federation.hint_unsigned": {
+    "message": "L'avis de mise à jour n'a pas pu être vérifié.",
+    "origin": "machine"
+  },
   "error.federation.member_not_on_roster": {
     "message": "Cette personne ne figure pas dans la liste des membres de cet album.",
     "origin": "machine"

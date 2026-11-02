@@ -7471,6 +7471,22 @@
     "message": "此来源在多次出错后暂时被退避处理。",
     "origin": "machine"
   },
+  "error.federation.hint_at_capacity": {
+    "message": "此服务器当前正在处理的更新通知过多。请稍候再试。",
+    "origin": "machine"
+  },
+  "error.federation.hint_malformed": {
+    "message": "该更新通知无效。",
+    "origin": "machine"
+  },
+  "error.federation.hint_rate_limited": {
+    "message": "来自此服务器的更新通知过多。请稍候再试。",
+    "origin": "machine"
+  },
+  "error.federation.hint_unsigned": {
+    "message": "无法验证该更新通知。",
+    "origin": "machine"
+  },
   "error.federation.member_not_on_roster": {
     "message": "此人不在该相册的成员名单中。",
     "origin": "machine"

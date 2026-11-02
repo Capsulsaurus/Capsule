@@ -2012,6 +2012,10 @@
     <string name="error_federation_capability_malformed">That sharing request isn\'t valid.</string>
     <string name="error_federation_capability_revoked">Access to this shared album has been revoked.</string>
     <string name="error_federation_circuit_open">This source is temporarily backed off after repeated errors.</string>
+    <string name="error_federation_hint_at_capacity">This server is handling too many update notices right now. Please wait and try again.</string>
+    <string name="error_federation_hint_malformed">That update notice isn\'t valid.</string>
+    <string name="error_federation_hint_rate_limited">Too many update notices from this server. Please wait and try again.</string>
+    <string name="error_federation_hint_unsigned">The update notice could not be verified.</string>
     <string name="error_federation_member_not_on_roster">That person isn\'t on this album\'s member list.</string>
     <string name="error_federation_mint_at_capacity">This server is handling too many access grants right now. Please try again shortly.</string>
     <string name="error_federation_not_configured">This server doesn\'t share albums with other servers.</string>

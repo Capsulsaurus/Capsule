@@ -1858,6 +1858,10 @@
     <string name="error_federation_capability_malformed">Diese Freigabeanfrage ist ungültig.</string>
     <string name="error_federation_capability_revoked">Der Zugriff auf dieses geteilte Album wurde widerrufen.</string>
     <string name="error_federation_circuit_open">Diese Quelle wird nach wiederholten Fehlern vorübergehend zurückgestellt.</string>
+    <string name="error_federation_hint_at_capacity">Dieser Server verarbeitet gerade zu viele Aktualisierungsmeldungen. Bitte warten Sie und versuchen Sie es erneut.</string>
+    <string name="error_federation_hint_malformed">Diese Aktualisierungsmeldung ist ungültig.</string>
+    <string name="error_federation_hint_rate_limited">Zu viele Aktualisierungsmeldungen von diesem Server. Bitte warten Sie und versuchen Sie es erneut.</string>
+    <string name="error_federation_hint_unsigned">Die Aktualisierungsmeldung konnte nicht verifiziert werden.</string>
     <string name="error_federation_member_not_on_roster">Diese Person steht nicht auf der Mitgliederliste dieses Albums.</string>
     <string name="error_federation_mint_at_capacity">Dieser Server verarbeitet gerade zu viele Zugriffsberechtigungen. Bitte versuche es in Kürze erneut.</string>
     <string name="error_federation_not_configured">Dieser Server teilt keine Alben mit anderen Servern.</string>

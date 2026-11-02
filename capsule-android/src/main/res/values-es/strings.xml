@@ -1858,6 +1858,10 @@
     <string name="error_federation_capability_malformed">Esa solicitud para compartir no es válida.</string>
     <string name="error_federation_capability_revoked">Se ha revocado el acceso a este álbum compartido.</string>
     <string name="error_federation_circuit_open">Esta fuente está temporalmente en espera tras errores repetidos.</string>
+    <string name="error_federation_hint_at_capacity">Este servidor está gestionando demasiados avisos de actualización en este momento. Espera e inténtalo de nuevo.</string>
+    <string name="error_federation_hint_malformed">Ese aviso de actualización no es válido.</string>
+    <string name="error_federation_hint_rate_limited">Demasiados avisos de actualización de este servidor. Espera e inténtalo de nuevo.</string>
+    <string name="error_federation_hint_unsigned">No se pudo verificar el aviso de actualización.</string>
     <string name="error_federation_member_not_on_roster">Esa persona no está en la lista de miembros de este álbum.</string>
     <string name="error_federation_mint_at_capacity">Este servidor está gestionando demasiadas concesiones de acceso en este momento. Inténtalo de nuevo en breve.</string>
     <string name="error_federation_not_configured">Este servidor no comparte álbumes con otros servidores.</string>

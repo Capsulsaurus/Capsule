@@ -7471,6 +7471,22 @@
     "message": "Diese Quelle wird nach wiederholten Fehlern vorübergehend zurückgestellt.",
     "origin": "machine"
   },
+  "error.federation.hint_at_capacity": {
+    "message": "Dieser Server verarbeitet gerade zu viele Aktualisierungsmeldungen. Bitte warten Sie und versuchen Sie es erneut.",
+    "origin": "machine"
+  },
+  "error.federation.hint_malformed": {
+    "message": "Diese Aktualisierungsmeldung ist ungültig.",
+    "origin": "machine"
+  },
+  "error.federation.hint_rate_limited": {
+    "message": "Zu viele Aktualisierungsmeldungen von diesem Server. Bitte warten Sie und versuchen Sie es erneut.",
+    "origin": "machine"
+  },
+  "error.federation.hint_unsigned": {
+    "message": "Die Aktualisierungsmeldung konnte nicht verifiziert werden.",
+    "origin": "machine"
+  },
   "error.federation.member_not_on_roster": {
     "message": "Diese Person steht nicht auf der Mitgliederliste dieses Albums.",
     "origin": "machine"
