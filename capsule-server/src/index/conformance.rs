@@ -1692,13 +1692,27 @@ pub async fn a_size_repair_fills_only_a_zero_size(index: &dyn AssetIndex) {
             .collect::<Vec<_>>()
     };
     assert_eq!(addresses(&after), addresses(&before), "no address moved");
+    // The repaired row moves to its owner's feed head, so a device that synced it at size 0
+    // is sent it again.
+    let owner = before.owner_id.clone();
+    let moved = after.sync_seq.expect("a published row keeps a position");
+    assert!(
+        moved > before.sync_seq.expect("the row was published"),
+        "a repair moves the row's feed position"
+    );
+    assert_eq!(
+        moved,
+        ok(index.head_seq(&owner).await, "head"),
+        "the repaired row is the feed's head"
+    );
     assert_eq!(
         AssetRow {
             blobs: before.blobs.clone(),
+            sync_seq: before.sync_seq,
             ..after.clone()
         },
         before,
-        "nothing but the sizes changed"
+        "nothing but the sizes and the feed position changed"
     );
 
     // Idempotent: the same repair again, or a different size for the repaired reference, finds

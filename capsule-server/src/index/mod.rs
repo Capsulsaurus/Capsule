@@ -927,6 +927,12 @@ pub trait AssetIndex: std::fmt::Debug + Send + Sync {
     /// nothing — so running the pass twice, or alongside a live server that re-points the same
     /// role, can only ever fill in a size that was missing. A reference the row no longer holds
     /// (an op re-pointed it after the pass listed it) is [`SizeRepair::Unchanged`].
+    ///
+    /// The write holds the asset row's lock like every other writer, so a concurrent op cannot
+    /// write its earlier read of the row back over the repaired size. A repaired row that is on
+    /// the feed takes the owner's next sequence number, so a device that already synced it at
+    /// size `0` is sent it again; an unpublished row takes none. Nothing else about the row
+    /// changes.
     fn repair_blob_size<'a>(
         &'a self,
         asset: &'a AssetId,

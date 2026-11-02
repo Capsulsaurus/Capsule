@@ -227,6 +227,7 @@ async fn apply_repairs_only_zero_sizes_and_a_rerun_finds_nothing() {
                         ..blob.clone()
                     })
                     .collect(),
+                sync_seq: None,
                 ..row.clone()
             })
             .collect::<Vec<_>>()
@@ -234,7 +235,11 @@ async fn apply_repairs_only_zero_sizes_and_a_rerun_finds_nothing() {
     assert_eq!(
         shape(&after),
         shape(&before),
-        "nothing but sizes changed: no address, role, state or sequence moved"
+        "nothing but sizes and the feed position changed: no address, role or state moved"
+    );
+    assert!(
+        row.sync_seq > before[0].sync_seq,
+        "a repaired row moves to the feed's head so synced devices see its sizes"
     );
 
     let again = repair_sizes(&h.context, Mode::Apply)

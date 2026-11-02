@@ -16,8 +16,9 @@
 //!   [`Mode::Apply`].
 //! - It writes only through [`crate::index::AssetIndex::repair_blob_size`], which changes a reference's size
 //!   **only** where it is `0` and the role and address still match. It never changes an address,
-//!   a role, a non-zero size, or any other column, so a reference a live op re-pointed after
-//!   the listing is left alone.
+//!   a role, or a non-zero size, so a reference a live op re-pointed after the listing is left
+//!   alone. A repaired row on the feed takes its owner's next sequence number, so a device
+//!   that already synced it at size `0` is sent it again; no other column changes.
 //! - A reference whose blob the store does not hold is reported and **kept**: the scrub owns
 //!   the dangling reference, and a repair that dropped it would discard the evidence of a write
 //!   the server accepted.

@@ -1240,47 +1240,34 @@ impl AssetIndex for PostgresAssetIndex {
         size: u64,
     ) -> IndexFuture<'a, SizeRepair> {
         Box::pin(async move {
-            // The `size = 0` guard is the whole contract, held by the statement rather than by a
-            // read before it: a row a live op re-points between the pass's listing and this
-            // write no longer matches, so the write cannot land on a reference it did not mean.
-            if size > 0 {
-                let applied = self
-                    .connection
-                    .execute_raw(Statement::from_sql_and_values(
-                        DbBackend::Postgres,
-                        "UPDATE asset_blobs SET size = $4 \
-                         WHERE asset_id = $1 AND role = $2 AND address = $3 AND size = 0",
-                        [
-                            Value::from(asset.as_str().to_owned()),
-                            Value::from(role.as_str().to_owned()),
-                            Value::from(address.as_str().to_owned()),
-                            Value::from(size_to_column(size)?),
-                        ],
-                    ))
-                    .await
-                    .map_err(PORT.failing("repairing a blob reference's size"))?;
-                if applied.rows_affected() > 0 {
-                    tracing::info!(
-                        %asset, role = role.as_str(), %address, size,
-                        "a blob reference recorded at size 0 now carries its size"
-                    );
-                    return Ok(SizeRepair::Repaired);
-                }
+            // Under the asset row's `FOR UPDATE`, like every other writer: `persist` rewrites a
+            // row's whole blob set, so an unlocked `UPDATE` here would be overwritten — size 0
+            // and all — by an op that hydrated the row before it and committed after it, while
+            // this pass reported the reference repaired.
+            let transaction = begin(&self.connection).await?;
+            let Some(mut row) = hydrate_locked(&transaction, asset).await? else {
+                return Ok(SizeRepair::NotFound);
+            };
+            // The guard is re-checked on the locked row: a reference a live op re-pointed
+            // between the pass's listing and this write no longer matches.
+            let Some(blob) = row.blobs.iter_mut().find(|blob| {
+                size > 0 && blob.size == 0 && blob.role == role && &blob.address == address
+            }) else {
+                return Ok(SizeRepair::Unchanged);
+            };
+            blob.size = size;
+            // A published row moves to the feed's head, so a device that already synced it at
+            // size 0 is sent it again at its real size. An unpublished row has no position.
+            if row.sync_seq.is_some() {
+                row.sync_seq = Some(mint(&transaction, &row.owner_id).await?);
             }
-            let exists = self
-                .connection
-                .query_one_raw(Statement::from_sql_and_values(
-                    DbBackend::Postgres,
-                    "SELECT 1 AS present FROM assets WHERE asset_id = $1",
-                    [Value::from(asset.as_str().to_owned())],
-                ))
-                .await
-                .map_err(PORT.failing("reading an asset row"))?;
-            Ok(if exists.is_some() {
-                SizeRepair::Unchanged
-            } else {
-                SizeRepair::NotFound
-            })
+            persist(&transaction, &row).await?;
+            commit(transaction).await?;
+            tracing::info!(
+                %asset, role = role.as_str(), %address, size, sync_seq = row.sync_seq,
+                "a blob reference recorded at size 0 now carries its size"
+            );
+            Ok(SizeRepair::Repaired)
         })
     }
 
