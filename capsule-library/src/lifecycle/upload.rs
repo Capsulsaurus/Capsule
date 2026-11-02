@@ -199,12 +199,80 @@ impl UploadBundle {
 /// against the manifest's `ciphertext_hash` when it built the bundle; a plaintext file changed
 /// on disk after that point yields bytes the server's finalize-time hash check refuses, never
 /// bytes it stores under the wrong address.
+///
+/// It also records the plaintext file's identity as it stood when that verification began
+/// ([`FileIdentity`]), so [`check_unchanged`](Self::check_unchanged) can answer cheaply whether
+/// the file is still the one verified. A ciphertext window read again while it is unchanged is
+/// byte-identical to the first read, so re-sending it puts no second ciphertext under a nonce.
 #[derive(Clone)]
 pub struct OriginalCiphertext {
     path: PathBuf,
     file_key: [u8; 32],
     nonce_prefix: [u8; NONCE_PREFIX_LEN],
     plaintext_size: u64,
+    identity: FileIdentity,
+}
+
+/// The plaintext on disk is no longer the file an [`OriginalCiphertext`] was verified from.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("the original changed on disk since its ciphertext was verified: {reason}")]
+pub struct OriginalChanged {
+    /// What differs, in English, for logs.
+    pub reason: String,
+}
+
+/// What a plaintext file looked like on disk: its length, its modification time and, on Unix,
+/// its device and inode (a file replaced by a rename is another inode) and its status-change
+/// time (which a write bumps even when the modification time is set back).
+///
+/// A cheap stand-in for the content: an edit that keeps every one of these is not seen. The
+/// per-chunk authentication tags a later change records with the bundle close that gap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FileIdentity {
+    len: u64,
+    modified: Option<std::time::SystemTime>,
+    file_id: Option<(u64, u64)>,
+    status_changed: Option<(i64, i64)>,
+}
+
+impl FileIdentity {
+    /// The identity of the file at `path` now.
+    fn of(path: &std::path::Path) -> io::Result<Self> {
+        let meta = fs::metadata(path)?;
+        #[cfg(unix)]
+        let (file_id, status_changed) = {
+            use std::os::unix::fs::MetadataExt as _;
+            (
+                Some((meta.dev(), meta.ino())),
+                Some((meta.ctime(), meta.ctime_nsec())),
+            )
+        };
+        #[cfg(not(unix))]
+        let (file_id, status_changed) = (None, None);
+        Ok(Self {
+            len: meta.len(),
+            modified: meta.modified().ok(),
+            file_id,
+            status_changed,
+        })
+    }
+
+    /// What differs between `self` (as recorded) and `now`, or `None` when nothing does.
+    fn difference(&self, now: &Self) -> Option<String> {
+        if self.len != now.len {
+            return Some(format!("its length is {} bytes, not {}", now.len, self.len));
+        }
+        if self.file_id != now.file_id {
+            return Some("it was replaced by another file".to_owned());
+        }
+        if self.modified != now.modified {
+            return Some("its modification time changed".to_owned());
+        }
+        if self.status_changed != now.status_changed {
+            return Some("its status-change time changed".to_owned());
+        }
+        None
+    }
 }
 
 impl std::fmt::Debug for OriginalCiphertext {
@@ -218,6 +286,48 @@ impl std::fmt::Debug for OriginalCiphertext {
 }
 
 impl OriginalCiphertext {
+    /// The source over the plaintext at `path`, recording that file's identity now. Call it
+    /// before the ciphertext is verified, so a change made during the verification differs
+    /// from what was recorded.
+    fn open(
+        path: PathBuf,
+        file_key: [u8; 32],
+        nonce_prefix: [u8; NONCE_PREFIX_LEN],
+        plaintext_size: u64,
+    ) -> io::Result<Self> {
+        let identity = FileIdentity::of(&path)?;
+        Ok(Self {
+            path,
+            file_key,
+            nonce_prefix,
+            plaintext_size,
+            identity,
+        })
+    }
+
+    /// Whether the plaintext on disk is still the file this ciphertext was verified from: the
+    /// same length, modification time and (on Unix) inode and status-change time. One `stat`,
+    /// cheap enough to run before every window is read and again after.
+    ///
+    /// `Ok` is a positive claim, up to the limit [`FileIdentity`] names: every window read
+    /// while it holds is the window read before.
+    ///
+    /// # Errors
+    ///
+    /// [`OriginalChanged`] naming what differs, or that the file can no longer be read.
+    pub fn check_unchanged(&self) -> std::result::Result<(), OriginalChanged> {
+        let now = FileIdentity::of(&self.path).map_err(|error| OriginalChanged {
+            reason: format!("it can no longer be read: {error}"),
+        })?;
+        match self.identity.difference(&now) {
+            None => Ok(()),
+            Some(reason) => {
+                tracing::warn!(path = %self.path.display(), %reason, "the original changed on disk since its ciphertext was verified");
+                Err(OriginalChanged { reason })
+            }
+        }
+    }
+
     /// The ciphertext's length in bytes — what `POST /upload` declares as `size`.
     #[must_use]
     pub fn size(&self) -> u64 {
@@ -446,12 +556,14 @@ impl Workspace {
         album: &AlbumKeys,
         core: &ManifestCore,
     ) -> Result<OriginalCiphertext> {
-        let original = OriginalCiphertext {
-            path: self.media_path(asset),
-            file_key: self.original_file_key(album, core)?,
-            nonce_prefix: core.nonce_prefix,
-            plaintext_size: core.plaintext_size,
-        };
+        let path = self.media_path(asset);
+        let original = OriginalCiphertext::open(
+            path.clone(),
+            self.original_file_key(album, core)?,
+            core.nonce_prefix,
+            core.plaintext_size,
+        )
+        .map_err(|e| LifecycleError::Io(format!("stat {}: {e}", path.display())))?;
         let rederived = original
             .rederive()
             .map_err(|e| LifecycleError::Io(e.to_string()))?;

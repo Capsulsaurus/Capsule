@@ -1204,12 +1204,7 @@ fn push_and_restore_peak(size: u64, window: usize) -> usize {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("original.bin");
     fs::File::create(&path).unwrap().set_len(size).unwrap();
-    let original = OriginalCiphertext {
-        path,
-        file_key: [0x42; 32],
-        nonce_prefix: [7; NONCE_PREFIX_LEN],
-        plaintext_size: size,
-    };
+    let original = OriginalCiphertext::open(path, [0x42; 32], [7; NONCE_PREFIX_LEN], size).unwrap();
 
     let ((pushed_hash, restored), peak) = crate::test_heap::peak_during(|| {
         let mut sent = Sha256Hasher::new();
@@ -1418,4 +1413,96 @@ fn a_streamed_import_signs_what_the_buffered_writer_would() {
             "{name}: staged copies left behind: {leftovers:?}"
         );
     }
+}
+
+/// An original over a fresh plaintext file of `len` bytes, its identity recorded now.
+fn original_over(dir: &TempDir, len: usize) -> (std::path::PathBuf, OriginalCiphertext) {
+    use capsule_core::crypto::encryption::NONCE_PREFIX_LEN;
+
+    let path = dir.path().join("original.bin");
+    fs::write(&path, vec![0x5a; len]).unwrap();
+    let original =
+        OriginalCiphertext::open(path.clone(), [0x42; 32], [7; NONCE_PREFIX_LEN], len as u64)
+            .unwrap();
+    (path, original)
+}
+
+#[test]
+fn an_untouched_original_affirms_it_is_unchanged() {
+    let dir = TempDir::new().unwrap();
+    let (_, original) = original_over(&dir, 8192);
+    let _ = original.read_at(0, 4096).unwrap();
+    assert_eq!(original.check_unchanged(), Ok(()));
+    assert_eq!(original.check_unchanged(), Ok(()));
+}
+
+#[test]
+fn a_bundles_original_affirms_it_is_unchanged() {
+    let lib = TempDir::new().unwrap();
+    let src = TempDir::new().unwrap();
+    let (_, asset_id) = library_with_one_asset(&lib, &src);
+    let ws = Workspace::open(lib.path(), b"passphrase", FAST).unwrap();
+    let bundle = ws.upload_bundle(&asset_id).expect("bundle");
+    assert_eq!(bundle.original.check_unchanged(), Ok(()));
+}
+
+#[test]
+fn an_original_whose_length_changed_is_refused() {
+    use std::io::Write as _;
+
+    let dir = TempDir::new().unwrap();
+    let (path, original) = original_over(&dir, 8192);
+    fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap()
+        .write_all(b"x")
+        .unwrap();
+    let changed = original.check_unchanged().unwrap_err();
+    assert!(changed.reason.contains("length"), "{changed}");
+}
+
+#[test]
+fn an_original_edited_in_place_is_refused() {
+    use std::io::Write as _;
+
+    let dir = TempDir::new().unwrap();
+    let (path, original) = original_over(&dir, 8192);
+    let file = fs::OpenOptions::new().write(true).open(&path).unwrap();
+    (&file).write_all(&[0xa5; 16]).unwrap();
+    // A write inside one clock tick can leave the time as it was; set it apart explicitly, as
+    // any real edit some time after the bundle was built does.
+    file.set_modified(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1))
+        .unwrap();
+    drop(file);
+    assert!(original.check_unchanged().is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn an_original_replaced_by_a_rename_is_refused() {
+    let dir = TempDir::new().unwrap();
+    let (path, original) = original_over(&dir, 8192);
+    let replacement = dir.path().join("replacement.bin");
+    fs::write(&replacement, vec![0x5a; 8192]).unwrap();
+    let modified = fs::metadata(&path).unwrap().modified().unwrap();
+    fs::File::options()
+        .write(true)
+        .open(&replacement)
+        .unwrap()
+        .set_modified(modified)
+        .unwrap();
+    fs::rename(&replacement, &path).unwrap();
+    // Same length and modification time: the inode tells them apart.
+    let changed = original.check_unchanged().unwrap_err();
+    assert!(changed.reason.contains("replaced"), "{changed}");
+}
+
+#[test]
+fn an_original_deleted_from_disk_is_refused() {
+    let dir = TempDir::new().unwrap();
+    let (path, original) = original_over(&dir, 8192);
+    fs::remove_file(&path).unwrap();
+    let changed = original.check_unchanged().unwrap_err();
+    assert!(changed.reason.contains("no longer be read"), "{changed}");
 }
