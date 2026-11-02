@@ -2316,6 +2316,69 @@ async fn a_server_that_keeps_losing_ranges_exhausts_the_recovery_budget() {
     );
 }
 
+/// **A `HEAD` that drops ranges the server acknowledged, mid-transfer.** Chunks up to 1 MiB are
+/// accepted, larger ones go unanswered, and every `HEAD` says the server holds nothing. Each
+/// accepted chunk refills the budgets progress refills, so only the per-transfer recovery
+/// budget can end this: every `HEAD` below what was acknowledged is charged to it, and the
+/// transfer ends exhausted within a bounded number of `HEAD`s instead of restarting from 0
+/// forever. Time is paused, so the response waits are not slept.
+#[tokio::test(start_paused = true)]
+async fn a_head_below_what_the_server_acknowledged_exhausts_the_recovery_budget() {
+    const SIZE: u64 = 64 * 1024 * 1024;
+    const ANSWERED: usize = 1024 * 1024;
+    const HEAD_BOUND: usize = 2 * MAX_RECOVERIES as usize;
+    let heads = Arc::new(AtomicUsize::new(0));
+    let accepted = Arc::new(AtomicUsize::new(0));
+    let h = heads.clone();
+    let a = accepted.clone();
+    let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+        ("POST", "/") => created("sess-forget", CHUNK_SIZE_16MB),
+        // Past the bound the server reports the blob finalized, so a client that is never
+        // charged for the dropped ranges completes and fails the test instead of hanging it.
+        ("HEAD", "/sess-forget") if h.load(Ordering::SeqCst) >= HEAD_BOUND => {
+            MockResponse::new(200, "OK")
+                .header("X-Capsule-Offset", SIZE.to_string())
+                .header("X-Capsule-Content-Length", SIZE.to_string())
+                .header("X-Capsule-Upload-Status", "completed")
+        }
+        ("HEAD", "/sess-forget") => empty_head(&h, SIZE),
+        ("PATCH", "/sess-forget") => {
+            if req.body.len() > ANSWERED {
+                return MockResponse::hold_open();
+            }
+            a.fetch_add(1, Ordering::SeqCst);
+            MockResponse::new(204, "No Content")
+                .header("X-Capsule-Offset", ack_offset(req).to_string())
+        }
+        other => panic!("unexpected {other:?}"),
+    })
+    .await;
+
+    let client = server.client(PROTOCOL).with_request_bounds(short_bounds());
+    let data = vec![8u8; SIZE as usize];
+    let error = tokio::time::timeout(
+        Duration::from_hours(1),
+        client.upload(&request(SIZE), &data),
+    )
+    .await
+    .expect("the transfer ends rather than restarting forever")
+    .expect_err("a server that keeps forgetting what it acknowledged ends the upload");
+
+    assert!(
+        matches!(error, UploadError::RetriesExhausted(_)),
+        "{error:?}"
+    );
+    let heads = heads.load(Ordering::SeqCst);
+    assert!(
+        accepted.load(Ordering::SeqCst) > 0,
+        "the server acknowledged ranges before it dropped them"
+    );
+    assert!(
+        heads < HEAD_BOUND,
+        "each HEAD below what was acknowledged is charged: {heads} HEADs"
+    );
+}
+
 /// **A source that changes mid-upload.** The identity check before a window's read finds the
 /// change: nothing of that window is sent, the session is cancelled, and the transfer ends with
 /// the typed error.

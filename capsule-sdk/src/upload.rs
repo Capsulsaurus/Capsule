@@ -1447,6 +1447,14 @@ struct Start {
     advice: ServerAdvice,
 }
 
+/// Whether `held` still holds every byte of `acknowledged`.
+fn holds_all(held: &CommittedSet, acknowledged: &CommittedSet) -> bool {
+    acknowledged
+        .ranges()
+        .iter()
+        .all(|&(start, end)| held.contains(start, end))
+}
+
 /// How far along the state machine a reported session state is, so the answers of ranges that
 /// return out of order never move it backwards: the completing range's `waiting_for_processing`
 /// is not undone by an `uploading` answered before it.
@@ -2796,6 +2804,15 @@ impl UploadClient {
                     let held = info
                         .committed
                         .unwrap_or_else(|| CommittedSet::prefix(info.offset.min(size)));
+                    // A server that lost ranges it acknowledged would otherwise have the
+                    // client re-send them forever, each round refilling every budget that
+                    // progress refills: a `HEAD` holding less than was acknowledged is a
+                    // recovery like a lost range record at finalization. A re-align already
+                    // charged for the `HEAD` it reads.
+                    if !step.realign && !holds_all(&held, &cursor.committed) {
+                        tracing::warn!(session_id = %cursor.session_id, acknowledged = %cursor.committed.to_header(), committed = %held.to_header(), "HEAD reports fewer bytes than the server acknowledged; re-planning from it");
+                        recovery.charge("re-plan after the server lost acknowledged ranges")?;
+                    }
                     if step.realign {
                         self.emit_retried(
                             request,
