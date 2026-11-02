@@ -15,7 +15,7 @@
 //! Postgres + Valkey, real protocol gate, real disk) — lives in that crate's
 //! `src/tests/sdk_client.rs`, which dev-depends on `capsule-sdk`.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use super::*;
@@ -1569,6 +1569,19 @@ fn empty_head(heads: &AtomicUsize, size: u64) -> MockResponse {
         .header("X-Capsule-Upload-Status", "pending")
 }
 
+/// A `HEAD` answer for a session that holds the prefix `[0, held)`, the truth a server that
+/// acknowledged every chunk up to `held` reports.
+fn prefix_head(held: u64, size: u64) -> MockResponse {
+    MockResponse::new(200, "OK")
+        .header("X-Capsule-Offset", held.to_string())
+        .header(
+            "X-Capsule-Committed",
+            CommittedSet::prefix(held).to_header(),
+        )
+        .header("X-Capsule-Content-Length", size.to_string())
+        .header("X-Capsule-Upload-Status", "uploading")
+}
+
 /// **Black-holed request.** The server reads a whole chunk and then never answers, holding the
 /// connection open. Without a bound of its own the client would wait until the OS gave up;
 /// with one it cuts the request at the response wait. The answer was lost, so it reads `HEAD`
@@ -1683,15 +1696,29 @@ async fn a_chunk_too_slow_to_drain_inside_the_response_wait_is_resent_shorter() 
 /// wait. Here the link drains only the protocol minimum until a chunk lands, then recovers.
 /// Every cut that shrinks is a stall re-send, not a transport reset, so the eight reset retries
 /// are never spent on them and the transfer completes rather than giving up at 64 KiB.
+///
+/// `HEAD` reports what the server acknowledged. Once the link recovers the chunk grows again,
+/// and a slow runner can still miss the response wait on a grown chunk; the server has already
+/// accepted it, so the honest answer moves the client on rather than back to offset 0, where
+/// the crawl would start over.
 #[tokio::test]
 async fn a_ceiling_chunk_on_a_link_that_falls_to_a_crawl_shrinks_past_the_reset_budget() {
+    const SIZE: u64 = 100 * 1024 * 1024;
     let patches = Arc::new(Mutex::new(Vec::<(u64, usize)>::new()));
-    let heads = Arc::new(AtomicUsize::new(0));
+    let heads_while_crawling = Arc::new(AtomicUsize::new(0));
+    let landed = Arc::new(AtomicU64::new(0));
     let p = patches.clone();
-    let h = heads.clone();
+    let h = heads_while_crawling.clone();
+    let l = landed.clone();
     let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
         ("POST", "/") => created("sess-crawl", CHUNK_SIZE_16MB),
-        ("HEAD", "/sess-crawl") => empty_head(&h, 100 * 1024 * 1024),
+        ("HEAD", "/sess-crawl") => {
+            let held = l.load(Ordering::SeqCst);
+            if held == 0 {
+                h.fetch_add(1, Ordering::SeqCst);
+            }
+            prefix_head(held, SIZE)
+        }
         ("PATCH", "/sess-crawl") => {
             let mut seen = p.lock().unwrap();
             let offset = req.header("X-Capsule-Offset").unwrap().parse().unwrap();
@@ -1700,8 +1727,9 @@ async fn a_ceiling_chunk_on_a_link_that_falls_to_a_crawl_shrinks_past_the_reset_
             if offset == 0 && req.body.len() as u64 > PROTOCOL_MIN_CHUNK {
                 return MockResponse::hold_open();
             }
-            MockResponse::new(204, "No Content")
-                .header("X-Capsule-Offset", ack_offset(req).to_string())
+            let acked = ack_offset(req);
+            l.fetch_max(acked, Ordering::SeqCst);
+            MockResponse::new(204, "No Content").header("X-Capsule-Offset", acked.to_string())
         }
         other => panic!("unexpected {other:?}"),
     })
@@ -1709,7 +1737,7 @@ async fn a_ceiling_chunk_on_a_link_that_falls_to_a_crawl_shrinks_past_the_reset_
 
     let client = server.client(PROTOCOL).with_request_bounds(short_bounds());
     // The 16 MiB ceiling is the >= 100 MiB tier's.
-    let data = vec![6u8; 100 * 1024 * 1024];
+    let data = vec![6u8; SIZE as usize];
     let outcome = tokio::time::timeout(
         Duration::from_secs(60),
         client.upload(&request(data.len() as u64), &data),
@@ -1733,7 +1761,7 @@ async fn a_ceiling_chunk_on_a_link_that_falls_to_a_crawl_shrinks_past_the_reset_
         "the minimum chunk landed"
     );
     assert_eq!(
-        heads.load(Ordering::SeqCst),
+        heads_while_crawling.load(Ordering::SeqCst),
         12,
         "each unanswered cut reads HEAD before the shorter re-send"
     );
