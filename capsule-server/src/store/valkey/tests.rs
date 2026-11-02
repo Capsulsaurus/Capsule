@@ -246,7 +246,8 @@ fn an_upload_session_round_trips_through_its_hash_encoding() {
         blob_role: BlobRole::Provenance,
         intent_id: Some("intent".to_owned()),
         manifest_envelope: "{\"tag\":\"x\"}".to_owned(),
-        received_bytes: 12,
+        committed: CommittedSet::prefix_of(12).with_range(16, 20),
+        in_flight_cap: 4,
         total_size: 34,
         status: UploadSessionStatus::FailedProcessing,
         failure_code: Some("error.upload.content_hash_mismatch".to_owned()),
@@ -258,17 +259,80 @@ fn an_upload_session_round_trips_through_its_hash_encoding() {
 }
 
 #[test]
-fn a_chunk_round_trips_through_its_packed_encoding() {
-    let chunk = AcceptedChunk {
-        offset: 4096,
-        chunk_hash: "b".repeat(64),
-        next_offset: 8192,
-        accepted_at: deadline(Timestamp::UNIX_EPOCH, SignedDuration::from_nanos(123)),
+fn an_upload_session_stored_before_the_committed_set_reads_as_its_prefix() {
+    // A record an append-only server wrote: a counter, no set, no cap. It is served on as the
+    // contiguous prefix it was, one range at a time.
+    let record = UploadSessionRecord {
+        upload_id: UploadId::new("legacy"),
+        asset_id: AssetId::new("asset"),
+        owner_id: OwnerId::new("owner"),
+        upload_user_id: UserId::new("uploader"),
+        album_id: None,
+        content_type: None,
+        expected_hash: "a".repeat(64),
+        crypto_suite_id: 3,
+        protocol_version: "2026-08-29".to_owned(),
+        blob_role: BlobRole::Original,
+        intent_id: None,
+        manifest_envelope: String::new(),
+        committed: CommittedSet::prefix_of(8192),
+        in_flight_cap: 1,
+        total_size: 16384,
+        status: UploadSessionStatus::Uploading,
+        failure_code: None,
+        created_at: Timestamp::UNIX_EPOCH,
+        last_progress_at: Timestamp::UNIX_EPOCH,
     };
-    assert_eq!(
-        decode_chunk(4096, &encode_chunk(&chunk)).expect("decodes"),
-        chunk
-    );
+    let mut flat = encode_upload(&record, Timestamp::UNIX_EPOCH);
+    for name in ["committed", "in_flight_cap"] {
+        let at = flat
+            .iter()
+            .position(|field| field == name)
+            .expect("the field is encoded");
+        flat.drain(at..at + 2);
+    }
+    assert_eq!(decode_upload(flat).expect("decodes"), record);
+}
+
+#[test]
+fn a_committed_set_that_is_not_normal_is_corrupt() {
+    let record_flat = |committed: &str| {
+        let mut flat = encode_upload(
+            &UploadSessionRecord {
+                upload_id: UploadId::new("up"),
+                asset_id: AssetId::new("asset"),
+                owner_id: OwnerId::new("owner"),
+                upload_user_id: UserId::new("uploader"),
+                album_id: None,
+                content_type: None,
+                expected_hash: "a".repeat(64),
+                crypto_suite_id: 3,
+                protocol_version: "2026-08-29".to_owned(),
+                blob_role: BlobRole::Original,
+                intent_id: None,
+                manifest_envelope: String::new(),
+                committed: CommittedSet::default(),
+                in_flight_cap: 1,
+                total_size: 16384,
+                status: UploadSessionStatus::Uploading,
+                failure_code: None,
+                created_at: Timestamp::UNIX_EPOCH,
+                last_progress_at: Timestamp::UNIX_EPOCH,
+            },
+            Timestamp::UNIX_EPOCH,
+        );
+        let at = flat
+            .iter()
+            .position(|field| field == "committed")
+            .expect("the set is encoded");
+        flat[at + 1] = committed.to_owned();
+        flat
+    };
+    assert!(decode_upload(record_flat("0-4096,8192-12288")).is_ok());
+    assert!(matches!(
+        decode_upload(record_flat("0-4096,4096-8192")),
+        Err(StoreError::Corrupt { .. })
+    ));
 }
 
 #[test]
@@ -286,9 +350,6 @@ fn a_field_that_will_not_parse_is_corrupt_not_absent() {
         matches!(error, StoreError::Corrupt { store: "auth", .. }),
         "{error:?}"
     );
-
-    let error = decode_chunk(0, "hash-only").expect_err("refuses");
-    assert!(matches!(error, StoreError::Corrupt { .. }), "{error:?}");
 }
 
 #[test]

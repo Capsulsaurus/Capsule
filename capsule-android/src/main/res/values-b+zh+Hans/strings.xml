@@ -1935,6 +1935,7 @@
     <string name="error_upload_missing_offset">上传请求缺少位置标记。</string>
     <string name="error_upload_offset_mismatch">上传失去同步，正在重新对齐。</string>
     <string name="error_upload_owner_not_permitted">您无法代表此用户上传。</string>
+    <string name="error_upload_range_conflict">此上传的一部分已在发送中。正在继续…</string>
     <string name="error_upload_rate_limited">上传暂时暂停，稍后将自动恢复。</string>
     <string name="error_upload_receipt_not_available">上传尚未完成，因此其存储回执尚不可用。</string>
     <string name="error_upload_replace_incomplete">Capsule 仍在接收此照片的新版本，完成后将自动处理。</string>
@@ -1946,6 +1947,8 @@
     <string name="error_upload_storage_full">服务器存储空间不足。释放空间后将恢复上传。</string>
     <string name="error_upload_storage_inconsistent">服务器遇到存储问题。请重试。</string>
     <string name="error_upload_timestamp_out_of_range">您设备的时钟似乎不正确。请检查其日期和时间。</string>
+    <string name="error_upload_too_fragmented">此上传的缺口过多。正在补齐…</string>
+    <string name="error_upload_too_many_in_flight">此上传同时发送的部分过多。正在放慢速度…</string>
     <string name="error_upload_unavailable">无法完成上传，请重试。</string>
     <string name="error_upload_unknown_crypto_suite">此应用版本使用了服务器无法识别的加密套件。</string>
     <string name="error_upload_unknown_derivative_format">此缩略图或预览的格式不受支持。</string>

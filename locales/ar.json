@@ -7779,6 +7779,10 @@
     "message": "لا يمكنك الرفع نيابةً عن هذا المستخدم.",
     "origin": "machine"
   },
+  "error.upload.range_conflict": {
+    "message": "جزء من هذا الرفع قيد الإرسال بالفعل. جارٍ الاستئناف…",
+    "origin": "machine"
+  },
   "error.upload.rate_limited": {
     "message": "تم إيقاف الرفع مؤقتًا للحظة. سيُستأنف تلقائيًا.",
     "origin": "machine"
@@ -7821,6 +7825,14 @@
   },
   "error.upload.timestamp_out_of_range": {
     "message": "يبدو أن ساعة جهازك غير صحيحة. تحقّق من التاريخ والوقت.",
+    "origin": "machine"
+  },
+  "error.upload.too_fragmented": {
+    "message": "يحتوي هذا الرفع على فجوات كثيرة جدًا. جارٍ ملؤها…",
+    "origin": "machine"
+  },
+  "error.upload.too_many_in_flight": {
+    "message": "يُرسَل عدد كبير جدًا من أجزاء هذا الرفع في الوقت نفسه. جارٍ الإبطاء…",
     "origin": "machine"
   },
   "error.upload.unavailable": {

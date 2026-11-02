@@ -253,6 +253,9 @@ pub fn router() -> Router<App, Propagate, ServerInterceptors, impl Sized> {
                 .intercept(upload::body::LengthlessChunkDeadline::new())
                 .intercept(limits::body_size())
                 .intercept(negotiation::ProtocolGate::new())
+                // `X-Capsule-Committed` on a `409 range_conflict`, lifted from the problem's
+                // body as `Retry-After` is router-wide.
+                .intercept(routes::upload::CommittedOnRefusal::new())
                 .mount(kynos::routes![routes::upload::append_chunk]),
         )
         // Federation's lifecycle: minting, revoking and refreshing the capability a peer pulls
@@ -474,5 +477,7 @@ pub fn openapi() -> kynos::Result<kynos::openapi::Document> {
     // it is declared there and taken off the success responses Kynos files an interceptor's
     // headers under.
     openapi::describe_retry_after_header(&mut document);
+    // The same gap for the chunk route's `X-Capsule-Committed` on a `409 range_conflict`.
+    openapi::describe_refusal_committed_header(&mut document);
     Ok(document)
 }

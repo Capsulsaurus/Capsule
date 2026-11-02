@@ -37,7 +37,7 @@
 //!   document claim it, that one makes the claim true for the framework's own responses.
 //! - **Everything else is per-response and optional**, listed in [`EXTRAS`]. Optional because a
 //!   status carries one response in a description while an enum may reach it from several
-//!   variants — `ChunkRejection`'s `409` is an offset mismatch *or* a plain conflict — so a
+//!   variants — `ChunkRejection`'s `409` is a range conflict *or* a plain conflict — so a
 //!   member one variant renders is a member the response *may* carry.
 //!
 //! # The honest limit
@@ -146,17 +146,31 @@ const EXTRAS: &[Extra] = &[
         }],
     },
     Extra {
-        component: "OffsetMismatchProblem",
+        component: "UploadChunkConflictProblem",
         operation: "append_chunk",
         status: 409,
-        members: &[Member {
-            name: "offset",
-            json_type: "integer",
-            format: None,
-            description: "The offset the server is actually at, so a client resumes from it \
-                          instead of asking again.",
-            nullable: false,
-        }],
+        members: &[
+            Member {
+                name: "committed",
+                json_type: "string",
+                format: None,
+                description: "On `error.upload.range_conflict`, the session's committed set as \
+                              `X-Capsule-Committed` spells it, which the response also carries: \
+                              comma-separated inclusive byte ranges. The client re-plans from \
+                              it. Absent on every other conflict.",
+                nullable: true,
+            },
+            Member {
+                name: "retry_after",
+                json_type: "integer",
+                format: Some("uint64"),
+                description: "When the caller may retry, as Unix seconds; the `Retry-After` \
+                              header carries the same instant as a delay. Set on \
+                              `error.upload.too_many_in_flight`, and on `range_conflict` and \
+                              `too_fragmented` when a range of the session is in flight.",
+                nullable: true,
+            },
+        ],
     },
     Extra {
         component: "DirectoryConflictProblem",
@@ -648,6 +662,40 @@ pub(crate) fn describe_retry_after_header(document: &mut Document) {
                     );
                 }
             }
+        }
+    }
+}
+
+/// Files `X-Capsule-Committed` under the chunk route's `409`, where
+/// [`crate::routes::upload::CommittedOnRefusal`] attaches it.
+///
+/// The interceptor's header is one Kynos describes on success responses only, and the chunk's
+/// `204` already declares the same header itself, required. So the one refusal that carries it
+/// — `range_conflict`, among the `409`s — is declared here, optional, as the [`EXTRAS`] row's
+/// `committed` member is.
+pub(crate) fn describe_refusal_committed_header(document: &mut Document) {
+    let header: kynos::openapi::Header = serde_json::from_value(serde_json::json!({
+        "description": "On `error.upload.range_conflict`, the session's committed set to re-plan \
+                        from: comma-separated inclusive byte ranges, as `HEAD` spells it. Absent \
+                        on every other refusal.",
+        "schema": { "type": "string" },
+    }))
+    .expect("a literal header object is a header");
+
+    for item in document.paths.items.values_mut() {
+        let Some(operation) = item.patch.as_deref_mut() else {
+            continue;
+        };
+        if operation.operation_id.as_deref() != Some("append_chunk") {
+            continue;
+        }
+        if let Some(kynos::openapi::RefOr::Item(response)) =
+            operation.responses.responses.get_mut("409")
+        {
+            response.headers.insert(
+                "X-Capsule-Committed".to_owned(),
+                kynos::openapi::RefOr::Item(header.clone()),
+            );
         }
     }
 }

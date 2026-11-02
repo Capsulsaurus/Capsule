@@ -15285,12 +15285,19 @@
             "description": "Progress and state on X-Capsule-* headers, no body",
             "headers": {
               "X-Capsule-Offset": {
-                "description": "The next byte the server expects.",
+                "description": "The committed prefix: where a client sending in order resumes.",
                 "required": true,
                 "schema": {
                   "type": "integer",
                   "minimum": 0.0,
                   "format": "uint64"
+                }
+              },
+              "X-Capsule-Committed": {
+                "description": "The full committed set, as comma-separated inclusive byte ranges such as\n`0-1048575,2097152-4194303`, never more than 64 of them; empty when nothing is committed.\nA client sending out of order re-plans from this, never from its own record of what it\nsent.",
+                "required": true,
+                "schema": {
+                  "type": "string"
                 }
               },
               "X-Capsule-Content-Length": {
@@ -15532,8 +15539,8 @@
         "tags": [
           "upload"
         ],
-        "summary": "Append a chunk, and finalize when it completes the declared size.",
-        "description": "Every rule the [chunk\ncontract](../../../capsule-docs/src/content/docs/design/transfer/upload.md) fixes is\nchecked before a byte is written, and the checksum is verified against the received bytes\n*first*, so a chunk corrupted in transit persists nothing.",
+        "summary": "Write one range of the blob, and finalize when the committed set reaches the declared size.",
+        "description": "Every rule the [chunk\ncontract](../../../capsule-docs/src/content/docs/design/transfer/upload.md) fixes is\nchecked before a byte is written — the checksum against the received bytes *first*, so a\nchunk corrupted in transit persists nothing, then admission against the committed set and the\nranges in flight ([`chunk::admit`]).",
         "operationId": "append_chunk",
         "parameters": [
           {
@@ -15548,7 +15555,7 @@
           {
             "name": "X-Capsule-Offset",
             "in": "header",
-            "description": "Where in the blob this chunk starts.",
+            "description": "Where in the blob this chunk's range starts: a multiple of 4 KiB, anywhere in the blob.",
             "required": false,
             "schema": {
               "type": [
@@ -15560,7 +15567,7 @@
           {
             "name": "X-Capsule-Checksum",
             "in": "header",
-            "description": "The chunk's SHA-256, bare lowercase hex. Required: the idempotency tuple is undefined\nwithout it.",
+            "description": "The chunk's SHA-256, bare lowercase hex. Required: the bytes are verified against it\nbefore any of them is written.",
             "required": false,
             "schema": {
               "type": [
@@ -15840,12 +15847,19 @@
             "description": "the request succeeded and there is no content to send",
             "headers": {
               "X-Capsule-Offset": {
-                "description": "The next byte the server expects.",
+                "description": "The committed prefix: where a client sending in order continues.",
                 "required": true,
                 "schema": {
                   "type": "integer",
                   "minimum": 0.0,
                   "format": "uint64"
+                }
+              },
+              "X-Capsule-Committed": {
+                "description": "The full committed set, as comma-separated inclusive byte ranges such as\n`0-1048575,2097152-4194303`, never more than 64 of them; empty when nothing is committed.",
+                "required": true,
+                "schema": {
+                  "type": "string"
                 }
               },
               "X-Capsule-Upload-Status": {
@@ -15932,7 +15946,7 @@
             }
           },
           "409": {
-            "description": "Offset mismatch; Chunk conflict; Session not active",
+            "description": "Range conflict; Too many ranges in flight; Too fragmented; Session not active",
             "headers": {
               "X-Capsule-Protocol-Min": {
                 "description": "The oldest protocol version this server accepts.",
@@ -15964,12 +15978,26 @@
                 "schema": {
                   "type": "string"
                 }
+              },
+              "Retry-After": {
+                "description": "Seconds to wait before retrying (RFC 9110 delta-seconds): the problem's `retry_after` instant, measured from the server's clock.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 0.0,
+                  "format": "uint64"
+                }
+              },
+              "X-Capsule-Committed": {
+                "description": "On `error.upload.range_conflict`, the session's committed set to re-plan from: comma-separated inclusive byte ranges, as `HEAD` spells it. Absent on every other refusal.",
+                "schema": {
+                  "type": "string"
+                }
               }
             },
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/OffsetMismatchProblem"
+                  "$ref": "#/components/schemas/UploadChunkConflictProblem"
                 }
               }
             }
@@ -19670,7 +19698,7 @@
                 }
               },
               "X-Capsule-Offset": {
-                "description": "The authoritative offset, on a resumed session.",
+                "description": "The committed prefix, on a resumed session.",
                 "required": false,
                 "schema": {
                   "type": [
@@ -19679,6 +19707,16 @@
                   ],
                   "minimum": 0.0,
                   "format": "uint64"
+                }
+              },
+              "X-Capsule-Committed": {
+                "description": "The full committed set, on a resumed session: comma-separated inclusive byte ranges, as\non `HEAD`.",
+                "required": false,
+                "schema": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
                 }
               },
               "X-Capsule-Upload-Status": {
@@ -19770,7 +19808,7 @@
                 }
               },
               "X-Capsule-Offset": {
-                "description": "The authoritative offset, on a resumed session.",
+                "description": "The committed prefix, on a resumed session.",
                 "required": false,
                 "schema": {
                   "type": [
@@ -19779,6 +19817,16 @@
                   ],
                   "minimum": 0.0,
                   "format": "uint64"
+                }
+              },
+              "X-Capsule-Committed": {
+                "description": "The full committed set, on a resumed session: comma-separated inclusive byte ranges, as\non `HEAD`.",
+                "required": false,
+                "schema": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
                 }
               },
               "X-Capsule-Upload-Status": {
@@ -31491,7 +31539,7 @@
           "drops"
         ],
         "summary": "Append one chunk to a drop session.",
-        "description": "The link is the credential: possession of the opaque id, plus a session that belongs to it.\nEverything after that is [`crate::upload::chunk::append`] — the album path's own function.",
+        "description": "The link is the credential: possession of the opaque id, plus a session that belongs to it.\nEverything after that is [`crate::upload::chunk::write_range`] — the album path's own\nfunction.",
         "operationId": "append_drop_chunk",
         "parameters": [
           {
@@ -34560,7 +34608,7 @@
             "type": "integer",
             "minimum": 0.0,
             "format": "uint64",
-            "description": "Bytes durably accepted so far — the offset a resume continues from."
+            "description": "The committed prefix — where a client sending in order resumes. One that sends out of\norder reads the full committed set from `HEAD`'s `X-Capsule-Committed`."
           },
           "total_size": {
             "type": "integer",
@@ -35568,7 +35616,7 @@
         "title": "DuplicateBlobProblem",
         "description": "An RFC 9457 problem detail."
       },
-      "OffsetMismatchProblem": {
+      "UploadChunkConflictProblem": {
         "properties": {
           "type": {
             "type": "string"
@@ -35596,9 +35644,20 @@
             "type": "string",
             "description": "The UUIDv7 this server minted for the request, as the `X-Request-Id` header carries it. Quote it when reporting the failure: it names the request's log lines."
           },
-          "offset": {
-            "type": "integer",
-            "description": "The offset the server is actually at, so a client resumes from it instead of asking again."
+          "committed": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "On `error.upload.range_conflict`, the session's committed set as `X-Capsule-Committed` spells it, which the response also carries: comma-separated inclusive byte ranges. The client re-plans from it. Absent on every other conflict."
+          },
+          "retry_after": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint64",
+            "description": "When the caller may retry, as Unix seconds; the `Retry-After` header carries the same instant as a delay. Set on `error.upload.too_many_in_flight`, and on `range_conflict` and `too_fragmented` when a range of the session is in flight."
           }
         },
         "additionalProperties": true,
@@ -35608,7 +35667,7 @@
           "status",
           "code"
         ],
-        "title": "OffsetMismatchProblem",
+        "title": "UploadChunkConflictProblem",
         "description": "An RFC 9457 problem detail."
       },
       "DirectoryConflictProblem": {

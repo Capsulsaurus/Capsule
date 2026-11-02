@@ -12,7 +12,7 @@
 //!
 //! # Chunks are the album path's, verbatim
 //!
-//! `PATCH /d/{opaque-id}/{upload_id}` runs [`crate::upload::chunk::append`] — the same function
+//! `PATCH /d/{opaque-id}/{upload_id}` runs [`crate::upload::chunk::write_range`] — the same function
 //! `PATCH /v1/upload/{id}` runs. Invariants 9–12 mean the same thing on both surfaces, and the
 //! contract says so in as many words. What differs is authorization: an album chunk is the
 //! session's uploader, a drop chunk is whoever holds the link, and that one difference is the
@@ -977,7 +977,9 @@ pub async fn create_drop(
         // A drop carries no manifest. The album path's envelope gate never runs here, which is
         // invariant 30's *absence* clause made structural rather than checked.
         manifest_envelope: String::new(),
-        received_bytes: 0,
+        committed: crate::store::CommittedSet::default(),
+        // The guest drop client sends in order, one range at a time.
+        in_flight_cap: 1,
         total_size: request.size,
         status: UploadSessionStatus::Pending,
         failure_code: None,
@@ -1031,7 +1033,8 @@ pub async fn create_drop(
 /// Append one chunk to a drop session.
 ///
 /// The link is the credential: possession of the opaque id, plus a session that belongs to it.
-/// Everything after that is [`crate::upload::chunk::append`] — the album path's own function.
+/// Everything after that is [`crate::upload::chunk::write_range`] — the album path's own
+/// function.
 #[kynos::patch(
     "/d/{opaque_id}/{upload_id}",
     operation_id = "append_drop_chunk",
@@ -1112,7 +1115,7 @@ pub async fn append_drop_chunk(
     // with no inbox row, which is why it outlives the request either way.
     let declared_size = record.total_size;
     let landed = tokio::spawn(
-        append_and_deposit(drops.clone(), record, offset, body, received_hash)
+        append_and_deposit(drops.clone(), record, offset, body)
             .instrument(tracing::Span::current()),
     )
     .await
@@ -1128,18 +1131,19 @@ pub async fn append_drop_chunk(
         DropChunkRejection::unavailable(drops.clock())
     })?;
 
-    let next_offset = match landed {
-        chunk::Accepted::Advanced { next_offset, .. }
-        | chunk::Accepted::Replayed { next_offset, .. } => next_offset,
-        chunk::Accepted::Conflict => {
-            return Err(DropChunkRejection::refused(
-                "that offset already holds different bytes",
-            ));
-        }
-        chunk::Accepted::OffsetMismatch { expected } => {
+    let committed = match landed {
+        chunk::Accepted::Committed { committed, .. }
+        | chunk::Accepted::Duplicate { committed, .. } => committed,
+        chunk::Accepted::RangeConflict { committed, .. } => {
             return Err(DropChunkRejection::refused(&format!(
-                "this session is at offset {expected}"
+                "that range overlaps one already sent; this session is at offset {}",
+                committed.prefix()
             )));
+        }
+        chunk::Accepted::TooManyInFlight | chunk::Accepted::TooFragmented { .. } => {
+            return Err(DropChunkRejection::refused(
+                "send one chunk at a time, in order",
+            ));
         }
         chunk::Accepted::NotAligned => {
             return Err(DropChunkRejection::refused("the chunk is not aligned"));
@@ -1167,7 +1171,7 @@ pub async fn append_drop_chunk(
 
     // A drop holding every byte has its deposit running — started by this chunk, or by the
     // request that raced it — and anything short of that is still uploading.
-    let upload_status = if next_offset == declared_size {
+    let upload_status = if committed.is_full(declared_size) {
         UploadSessionStatus::WaitingForProcessing
     } else {
         UploadSessionStatus::Uploading
@@ -1175,7 +1179,7 @@ pub async fn append_drop_chunk(
     Ok(WithHeaders::new(
         NoContent,
         DropOffsetHeader {
-            offset: next_offset,
+            offset: committed.prefix(),
             upload_status: upload_status.as_str().to_owned(),
         },
     ))
@@ -1295,7 +1299,7 @@ pub async fn drop_status(
     );
     Ok(DropStatusReply::Status(DropStatusResponse {
         status: record.status.as_str().to_owned(),
-        received_bytes: record.received_bytes,
+        received_bytes: record.committed.prefix(),
         total_size: record.total_size,
         error_code,
     }))
@@ -1864,22 +1868,20 @@ async fn append_and_deposit(
     record: UploadSessionRecord,
     offset: u64,
     body: ChunkBody,
-    received_hash: String,
 ) -> Result<chunk::Accepted, crate::store::StoreError> {
-    let accepted = chunk::append(
+    let accepted = chunk::write_range(
         drops.sessions(),
         drops.blobs(),
         drops.clock(),
         &record,
         offset,
         body.bytes(),
-        &received_hash,
     )
     .await?;
     let finishes = matches!(
         accepted,
-        chunk::Accepted::Advanced { complete: true, .. }
-            | chunk::Accepted::Replayed {
+        chunk::Accepted::Committed { complete: true, .. }
+            | chunk::Accepted::Duplicate {
                 unfinished: true,
                 ..
             }

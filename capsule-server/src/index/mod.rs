@@ -754,7 +754,7 @@ pub trait AssetIndex: std::fmt::Debug + Send + Sync {
     /// in the same operation when the change is one a client can observe.
     ///
     /// One call, because the blob row, the state transition and the sequence number describe
-    /// one event — the same reason [`crate::store::UploadSessionStore::record_progress`] is one
+    /// one event — the same reason [`crate::store::UploadSessionStore::record_range`] is one
     /// call. Splitting them is how the retired server could publish an asset whose sequence
     /// number had not been minted yet.
     fn record_blob<'a>(

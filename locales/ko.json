@@ -7779,6 +7779,10 @@
     "message": "이 사용자를 대신하여 업로드할 수 없습니다.",
     "origin": "machine"
   },
+  "error.upload.range_conflict": {
+    "message": "이 업로드의 일부가 이미 전송 중입니다. 재개하는 중…",
+    "origin": "machine"
+  },
   "error.upload.rate_limited": {
     "message": "업로드가 잠시 일시 정지되었습니다. 자동으로 재개됩니다.",
     "origin": "machine"
@@ -7821,6 +7825,14 @@
   },
   "error.upload.timestamp_out_of_range": {
     "message": "기기의 시계가 잘못된 것 같습니다. 날짜와 시간을 확인해 주세요.",
+    "origin": "machine"
+  },
+  "error.upload.too_fragmented": {
+    "message": "이 업로드에 빈 구간이 너무 많습니다. 채우는 중…",
+    "origin": "machine"
+  },
+  "error.upload.too_many_in_flight": {
+    "message": "이 업로드의 너무 많은 부분이 동시에 전송되고 있습니다. 속도를 줄이는 중…",
     "origin": "machine"
   },
   "error.upload.unavailable": {

@@ -7779,6 +7779,10 @@
     "message": "Sie können nicht im Namen dieses Benutzers hochladen.",
     "origin": "machine"
   },
+  "error.upload.range_conflict": {
+    "message": "Ein Teil dieses Uploads ist bereits unterwegs. Wird fortgesetzt…",
+    "origin": "machine"
+  },
   "error.upload.rate_limited": {
     "message": "Das Hochladen ist kurz pausiert. Es wird automatisch fortgesetzt.",
     "origin": "machine"
@@ -7821,6 +7825,14 @@
   },
   "error.upload.timestamp_out_of_range": {
     "message": "Die Uhr Ihres Geräts scheint falsch zu sein. Überprüfen Sie Datum und Uhrzeit.",
+    "origin": "machine"
+  },
+  "error.upload.too_fragmented": {
+    "message": "Dieser Upload hat zu viele Lücken. Sie werden gefüllt…",
+    "origin": "machine"
+  },
+  "error.upload.too_many_in_flight": {
+    "message": "Zu viele Teile dieses Uploads werden gleichzeitig gesendet. Wird verlangsamt…",
     "origin": "machine"
   },
   "error.upload.unavailable": {

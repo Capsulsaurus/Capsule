@@ -162963,6 +162963,88 @@
         }
       }
     },
+    "error.upload.range_conflict": {
+      "localizations": {
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "جزء من هذا الرفع قيد الإرسال بالفعل. جارٍ الاستئناف…"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ein Teil dieses Uploads ist bereits unterwegs. Wird fortgesetzt…"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Part of this upload is already on its way. Resuming…"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Parte de esta subida ya está en camino. Reanudando…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Une partie de ce téléversement est déjà en cours d'envoi. Reprise…"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "इस अपलोड का एक हिस्सा पहले से भेजा जा रहा है। फिर से शुरू हो रहा है…"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Parte di questo caricamento è già in corso. Ripresa in corso…"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このアップロードの一部はすでに送信中です。再開しています…"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 업로드의 일부가 이미 전송 중입니다. 재개하는 중…"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Parte deste envio já está a caminho. Retomando…"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Часть этой загрузки уже передаётся. Возобновление…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此上传的一部分已在发送中。正在继续…"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此上傳的一部分已在傳送中。正在繼續…"
+          }
+        }
+      }
+    },
     "error.upload.rate_limited": {
       "localizations": {
         "ar": {
@@ -163861,6 +163943,170 @@
           "stringUnit": {
             "state": "translated",
             "value": "您裝置的時鐘似乎不正確。請檢查其日期和時間。"
+          }
+        }
+      }
+    },
+    "error.upload.too_fragmented": {
+      "localizations": {
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "يحتوي هذا الرفع على فجوات كثيرة جدًا. جارٍ ملؤها…"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dieser Upload hat zu viele Lücken. Sie werden gefüllt…"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This upload has too many gaps. Filling them in…"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Esta subida tiene demasiados huecos. Completándolos…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ce téléversement comporte trop de lacunes. Comblement en cours…"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "इस अपलोड में बहुत अधिक अंतराल हैं। उन्हें भरा जा रहा है…"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Questo caricamento ha troppe lacune. Completamento in corso…"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このアップロードには欠けている部分が多すぎます。補っています…"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 업로드에 빈 구간이 너무 많습니다. 채우는 중…"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este envio tem lacunas demais. Preenchendo…"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "В этой загрузке слишком много пропусков. Заполняем их…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此上传的缺口过多。正在补齐…"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此上傳的缺口過多。正在補齊…"
+          }
+        }
+      }
+    },
+    "error.upload.too_many_in_flight": {
+      "localizations": {
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "يُرسَل عدد كبير جدًا من أجزاء هذا الرفع في الوقت نفسه. جارٍ الإبطاء…"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zu viele Teile dieses Uploads werden gleichzeitig gesendet. Wird verlangsamt…"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Too many parts of this upload are being sent at once. Slowing down…"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Se están enviando demasiadas partes de esta subida a la vez. Reduciendo el ritmo…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Trop de parties de ce téléversement sont envoyées en même temps. Ralentissement…"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "इस अपलोड के बहुत सारे हिस्से एक साथ भेजे जा रहे हैं। गति धीमी की जा रही है…"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Troppe parti di questo caricamento vengono inviate contemporaneamente. Rallentamento…"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このアップロードの同時送信数が多すぎます。速度を落としています…"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 업로드의 너무 많은 부분이 동시에 전송되고 있습니다. 속도를 줄이는 중…"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Partes demais deste envio estão sendo enviadas ao mesmo tempo. Diminuindo o ritmo…"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Слишком много частей этой загрузки отправляется одновременно. Замедляем…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此上传同时发送的部分过多。正在放慢速度…"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此上傳同時傳送的部分過多。正在放慢速度…"
           }
         }
       }
