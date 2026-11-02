@@ -56,7 +56,8 @@ use crate::fetch::{FetchError, HttpBlobSource, RangedFetcher};
 use crate::net::ConnectionClass;
 use crate::net::path::{GenerationPool, PathMonitor, PathSample};
 use crate::push::{
-    AssetPushReport, LaneBundle, LanePush, PUSH_BYTE_BUDGET, PushError, PushedBlob, push_lanes,
+    AssetPushReport, LaneBundle, LanePush, PUSH_BATCH_BUNDLES, PUSH_BYTE_BUDGET, PushError,
+    PushedBlob, push_lanes,
 };
 use crate::recovery::{EscrowStored, RecoveryClient, RecoveryError};
 use crate::staged::{TierSessionOutcome, run_under_path};
@@ -661,6 +662,24 @@ impl From<AssetPushReport> for FfiPushReport {
     }
 }
 
+/// How one asset of an [`FfiSession::push_assets`] call ended.
+#[derive(uniffi::Enum)]
+pub enum FfiPushAssetResult {
+    /// The asset's admitted ladder ran: what [`FfiSession::push_asset`] would have returned.
+    Pushed {
+        /// What the push did, the asset id included.
+        report: FfiPushReport,
+    },
+    /// The asset did not push: the error [`FfiSession::push_asset`] would have failed with.
+    /// It stays local, and pushing it again is safe.
+    Failed {
+        /// The asset id, as the caller passed it.
+        asset_id: String,
+        /// Why the asset did not push.
+        error: FfiError,
+    },
+}
+
 // ─── Sync mirrors ────────────────────────────────────────────────────────────
 
 /// FFI mirror of [`ChangeKind`].
@@ -1047,25 +1066,76 @@ impl FfiSession {
     /// asset stays local. That detail names no missing key: the refusal may have had nothing to
     /// do with the epoch (a revoked device, withdrawn write access), or another device rotated
     /// the album and its key has not reached this one yet.
+    ///
+    /// To push several assets, use [`push_assets`](Self::push_assets): one call here is one
+    /// bundle on the server's lane, so the lane never holds more than one session open.
     pub async fn push_asset(
         &self,
         workspace: Arc<FfiWorkspace>,
         asset_id: String,
     ) -> Result<FfiPushReport, FfiError> {
-        let bundle = workspace.bundle(&asset_id)?;
-        let refused = match self.push_bundle(&bundle).await {
-            Err(PushError::CreateRefused { source, .. }) => source,
-            other => return Ok(other?.into()),
-        };
-        tracing::warn!(
-            asset_id = %bundle.asset_id,
-            amk_version = bundle.amk_version,
-            "ffi: the server refused this create; re-sealing it at the album's current epoch"
-        );
-        workspace.reseal(&bundle.asset_id, &refused)?;
-        let resealed = workspace.bundle(&asset_id)?;
-        let report = self.push_bundle(&resealed).await?;
+        let report = self
+            .push_batch(&workspace, std::slice::from_ref(&asset_id))
+            .await
+            .into_iter()
+            .next()
+            .expect("push_batch returns one result per asset id")?;
         Ok(report.into())
+    }
+
+    /// **Push** several sealed assets of `workspace` in one call, returning one
+    /// [`FfiPushAssetResult`] per id, in the order of `asset_ids`.
+    ///
+    /// Every asset is pushed exactly as [`push_asset`](Self::push_asset) pushes one — its
+    /// original streamed in bounded windows, the tiers the reported path holds back counted in
+    /// [`FfiPushReport::deferred`], and a create the server refused re-sealed and retried once —
+    /// but the assets share one run of the server's lane: up to W of them have their sessions
+    /// open at once, every range any of them sends reserves against one device-wide byte
+    /// budget, and their retries spend from one lane budget. Calling `push_asset` concurrently
+    /// instead gives each call its own budget, so the budgets add up rather than being shared.
+    ///
+    /// The ids are pushed in batches of a bounded size, so a list of any length holds only one
+    /// batch's bundles in memory at a time. One asset's failure is its own
+    /// ([`FfiPushAssetResult::Failed`], carrying the error `push_asset` would have returned for
+    /// it): the others still push, and the call itself never fails.
+    pub async fn push_assets(
+        &self,
+        workspace: Arc<FfiWorkspace>,
+        asset_ids: Vec<String>,
+    ) -> Vec<FfiPushAssetResult> {
+        tracing::info!(
+            assets = asset_ids.len(),
+            batch = PUSH_BATCH_BUNDLES,
+            "ffi: pushing several sealed assets through one lane"
+        );
+        let mut results = Vec::with_capacity(asset_ids.len());
+        for batch in asset_ids.chunks(PUSH_BATCH_BUNDLES) {
+            let pushed = self.push_batch(&workspace, batch).await;
+            results.extend(
+                batch
+                    .iter()
+                    .zip(pushed)
+                    .map(|(asset_id, pushed)| match pushed {
+                        Ok(report) => FfiPushAssetResult::Pushed {
+                            report: report.into(),
+                        },
+                        Err(error) => FfiPushAssetResult::Failed {
+                            asset_id: asset_id.clone(),
+                            error,
+                        },
+                    }),
+            );
+        }
+        let failed = results
+            .iter()
+            .filter(|result| matches!(result, FfiPushAssetResult::Failed { .. }))
+            .count();
+        tracing::info!(
+            assets = results.len(),
+            failed,
+            "ffi: pushed several sealed assets"
+        );
+        results
     }
 
     /// **Fetch** the blob at content address `hash` (`size` bytes, as the sync feed's
@@ -1265,19 +1335,107 @@ impl FfiSession {
             .with_connection_class(self.path.plan().class)
     }
 
-    /// Drive one bundle's ladder. The workspace lock is not held: the bundle is owned.
+    /// Push the assets `asset_ids` names — at most one batch — and return how each ended, in
+    /// the order of `asset_ids`. The workspace lock is held only while a bundle is built or
+    /// re-sealed, never across the network.
     ///
-    /// The bundle runs as the one job of this server's lane in
-    /// [`push_lanes`], so its ranges reserve against the push byte
-    /// budget, the server's advice narrows its ranges window, and its retries spend from the
-    /// lane's budget, exactly as a lane of many bundles does.
-    async fn push_bundle(&self, bundle: &UploadBundle) -> Result<AssetPushReport, PushError> {
-        tracing::info!(
-            asset_id = %bundle.asset_id,
-            amk_version = bundle.amk_version,
-            original_bytes = bundle.original.size(),
-            "ffi: pushing a sealed asset"
-        );
+    /// Every bundle that builds goes through one [`push_bundles`](Self::push_bundles) run. A
+    /// create the server refused for good is re-sealed at the album's current epoch (issue
+    /// #822), and every re-sealed bundle goes through one more run, once: a second refusal
+    /// fails its asset.
+    async fn push_batch(
+        &self,
+        workspace: &FfiWorkspace,
+        asset_ids: &[String],
+    ) -> Vec<Result<AssetPushReport, FfiError>> {
+        let mut outcomes: Vec<Option<Result<AssetPushReport, FfiError>>> =
+            Vec::with_capacity(asset_ids.len());
+        let mut bundles = Vec::with_capacity(asset_ids.len());
+        let mut bundled_at = Vec::with_capacity(asset_ids.len());
+        for (at, asset_id) in asset_ids.iter().enumerate() {
+            match workspace.bundle(asset_id) {
+                Ok(bundle) => {
+                    bundles.push(bundle);
+                    bundled_at.push(at);
+                    outcomes.push(None);
+                }
+                Err(error) => {
+                    tracing::warn!(%asset_id, %error, "ffi: the asset's bundle could not be built");
+                    outcomes.push(Some(Err(error)));
+                }
+            }
+        }
+
+        let pushed = self.push_bundles(&bundles).await;
+        let mut resealed = Vec::new();
+        let mut resealed_at = Vec::new();
+        for ((bundle, &at), pushed) in bundles.iter().zip(&bundled_at).zip(pushed) {
+            let refused = match pushed {
+                Err(PushError::CreateRefused { source, .. }) => source,
+                other => {
+                    outcomes[at] = Some(other.map_err(FfiError::from));
+                    continue;
+                }
+            };
+            tracing::warn!(
+                asset_id = %bundle.asset_id,
+                amk_version = bundle.amk_version,
+                "ffi: the server refused this create; re-sealing it at the album's current epoch"
+            );
+            match workspace
+                .reseal(&bundle.asset_id, &refused)
+                .and_then(|()| workspace.bundle(&asset_ids[at]))
+            {
+                Ok(bundle) => {
+                    resealed.push(bundle);
+                    resealed_at.push(at);
+                }
+                Err(error) => outcomes[at] = Some(Err(error)),
+            }
+        }
+        // The first run's bundles are done with: only the re-sealed ones stay in memory.
+        drop(bundles);
+
+        if !resealed.is_empty() {
+            tracing::info!(
+                resealed = resealed.len(),
+                "ffi: pushing the re-sealed creates again, once"
+            );
+            let retried = self.push_bundles(&resealed).await;
+            for (at, pushed) in resealed_at.into_iter().zip(retried) {
+                outcomes[at] = Some(pushed.map_err(FfiError::from));
+            }
+        }
+        outcomes
+            .into_iter()
+            .map(|outcome| outcome.expect("every asset of the batch ended exactly once"))
+            .collect()
+    }
+
+    /// Drive `bundles` through one run of this server's lane, returning each bundle's result
+    /// in their order. The workspace lock is not held: the bundles are owned.
+    ///
+    /// The bundles are the jobs of this server's lane in [`push_lanes`], so up to W of them
+    /// have sessions open at once, their ranges reserve against the one push byte budget, the
+    /// server's advice narrows the lane's windows, and their retries spend from the lane's
+    /// budget. The run happens under the reported path ([`run_under_path`]): a path change that
+    /// closes a running tier cancels and re-plans it. Each outcome observed on the path the run
+    /// started on feeds the adverse detector.
+    async fn push_bundles(
+        &self,
+        bundles: &[UploadBundle],
+    ) -> Vec<Result<AssetPushReport, PushError>> {
+        if bundles.is_empty() {
+            return Vec::new();
+        }
+        for bundle in bundles {
+            tracing::info!(
+                asset_id = %bundle.asset_id,
+                amk_version = bundle.amk_version,
+                original_bytes = bundle.original.size(),
+                "ffi: pushing a sealed asset"
+            );
+        }
         // Full ordering where the path allows it; the plan stages the push where it holds bulk
         // back, and a path change that closes a running tier cancels and re-plans the push.
         let held = HashSet::<String>::new();
@@ -1289,9 +1447,11 @@ impl FfiSession {
                 let lanes = [LanePush {
                     server: ServerKey::new(self.upload_base_url.clone()),
                     client: &client,
-                    bundles: vec![LaneBundle { bundle, held }],
-                    // The server publishes no live-session cap, and one bundle opens one session
-                    // at a time.
+                    bundles: bundles
+                        .iter()
+                        .map(|bundle| LaneBundle { bundle, held })
+                        .collect(),
+                    // The server publishes no live-session cap; its advice narrows W instead.
                     session_cap: None,
                 }];
                 push_lanes(
@@ -1304,17 +1464,23 @@ impl FfiSession {
                 .await
                 .into_iter()
                 .flatten()
-                .next()
-                .expect("push_lanes returns one result per queued bundle")
+                .collect::<Vec<_>>()
             }
         })
         .await;
-        // Only an outcome on the path the push started on: if the path changed under it, the
-        // detector was reset for a link this outcome never measured.
-        if let Some(signal) = path::link_signal(&pushed)
-            && let Some(plan) = self.path.record_on(started_on, signal)
-        {
-            tracing::debug!(?signal, class = ?plan.class, "ffi: the push's outcome fed the adverse detector");
+        debug_assert_eq!(
+            pushed.len(),
+            bundles.len(),
+            "push_lanes returns one result per queued bundle"
+        );
+        // Only outcomes on the path the push started on: if the path changed under it, the
+        // detector was reset for a link these outcomes never measured.
+        for result in &pushed {
+            if let Some(signal) = path::link_signal(result)
+                && let Some(plan) = self.path.record_on(started_on, signal)
+            {
+                tracing::debug!(?signal, class = ?plan.class, "ffi: the push's outcome fed the adverse detector");
+            }
         }
         pushed
     }
