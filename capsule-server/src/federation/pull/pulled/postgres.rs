@@ -33,6 +33,11 @@
 //! it enforces a [`PeerCachingBudget`] as the [port's docs](super) count it. [`Uncharged`], the
 //! default of [`PostgresPulledAlbums::new`], charges nothing.
 //!
+//! The receivers' `quota_used` is not written here at all: the quota ledger
+//! ([`crate::quota::PostgresQuota`]) reads the `federation_pulled_metadata_blobs` rows this commit
+//! inserts, so a written page is counted from the instant it commits and a rolled-back one never
+//! is, whichever hook is assembled.
+//!
 //! # The budget is read under the job's lock
 //!
 //! [`PeerBudgetCharge`] reads each subscriber's usage in one statement inside the commit's

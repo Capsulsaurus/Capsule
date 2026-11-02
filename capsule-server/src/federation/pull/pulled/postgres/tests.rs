@@ -77,13 +77,16 @@ mod postgres_conformance {
     use super::super::{HeldBlob, PeerBudgetCharge, PostgresPulledAlbums, PulledBlobCharge};
     use crate::blob::{BlobStore, InMemoryBlobStore};
     use crate::federation::PeerId;
+    use crate::federation::capability::Scope;
     use crate::federation::pull::JobKey;
     use crate::federation::pull::pulled::conformance::{self, Inspect as _};
     use crate::federation::pull::pulled::{
         Committed, OverBudget, PeerCachingBudget, PulledAlbum, PulledAlbums as _, ValidatedPage,
     };
     use crate::federation::subscriptions::postgres::PostgresSubscriptions;
+    use crate::federation::subscriptions::{CapabilityToken, Subscription, SubscriptionStore as _};
     use crate::postgres::testing;
+    use crate::quota::QuotaStore as _;
     use crate::store::{AlbumId, StoreFuture, UserId};
 
     /// Records every charge, and refuses them all once told to.
@@ -247,5 +250,86 @@ mod postgres_conformance {
                 conformance::BUDGET,
             ))));
         conformance::run_budget(&budgeted, &subscriptions).await;
+
+        let quotas = crate::quota::PostgresQuota::new(database.connection().clone());
+        charged_to_quota(&budgeted, &subscriptions, &quotas).await;
+    }
+
+    /// `user` subscribed to `job`, already lapsed.
+    async fn subscribe(subscriptions: &PostgresSubscriptions, user: &UserId, job: &JobKey) {
+        let at = jiff::Timestamp::UNIX_EPOCH;
+        subscriptions
+            .put(Subscription {
+                subscriber: user.clone(),
+                peer: job.peer.clone(),
+                album: job.album.clone(),
+                scope: Scope::Read,
+                jti: format!("quota-{user}-{job}"),
+                token: CapabilityToken::new(format!("token-quota-{user}-{job}")),
+                issued_at: at,
+                expires_at: at,
+                min_protocol_version: "2026-06-01".to_owned(),
+                subscribed_at: at,
+                updated_at: at,
+            })
+            .await
+            .expect("subscribing");
+    }
+
+    /// What `user`'s quota ledger says they use.
+    async fn used(quotas: &crate::quota::PostgresQuota, user: &UserId) -> u64 {
+        quotas.usage(user).await.expect("reading usage").used
+    }
+
+    /// A written page charges every subscriber's `quota_used` (#1162), lapsed ones too; a page
+    /// the budget refuses charges nobody; an unsubscribe releases one subscriber only.
+    async fn charged_to_quota(
+        store: &PostgresPulledAlbums,
+        subscriptions: &PostgresSubscriptions,
+        quotas: &crate::quota::PostgresQuota,
+    ) {
+        let job = JobKey::new(PeerId::new("home.quota.test"), AlbumId::new("quota-a"));
+        let (alice, bob) = (UserId::new("quota-alice"), UserId::new("quota-bob"));
+        subscribe(subscriptions, &alice, &job).await;
+        subscribe(subscriptions, &bob, &job).await;
+
+        let held: &[u8] = b"a metadata blob the quota counts";
+        assert_eq!(
+            store
+                .commit(&job, None, page(1, &[held]))
+                .await
+                .expect("commit"),
+            Committed::Written
+        );
+        let size = u64::try_from(held.len()).expect("a small size");
+        assert_eq!(
+            used(quotas, &alice).await,
+            size,
+            "charged in full to each subscriber"
+        );
+        assert_eq!(used(quotas, &bob).await, size);
+
+        let over = vec![7_u8; usize::try_from(conformance::BUDGET).expect("a small budget")];
+        assert!(matches!(
+            store
+                .commit(&job, Some(1), page(2, &[held, &over]))
+                .await
+                .expect("commit"),
+            Committed::OverBudget(_)
+        ));
+        assert_eq!(
+            used(quotas, &alice).await,
+            size,
+            "a refused page is rolled back, and so is its charge"
+        );
+
+        assert!(
+            subscriptions
+                .remove(&alice, &job.peer, &job.album)
+                .await
+                .expect("unsubscribing")
+        );
+        assert_eq!(used(quotas, &alice).await, 0, "the unsubscribe released it");
+        assert_eq!(used(quotas, &bob).await, size, "for that subscriber only");
     }
 }

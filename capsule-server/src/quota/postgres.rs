@@ -12,6 +12,16 @@
 //! one of the two columns of `quota_usage`; the other is when an operator suspended the account
 //! (`suspended_since`, #705), which no charge or release touches.
 //!
+//! # Pulled blobs are read, not charged (#1162)
+//!
+//! An account's pulled metadata blobs ([`super`], "Pulled blobs") are part of the same derived
+//! total: the usage statement sums the distinct addresses the federation pull holds for the albums the
+//! account subscribes to (`federation_subscriptions` joined with
+//! `federation_pulled_metadata_blobs`, along both tables' primary keys), less the ones it is
+//! itself attributed here. No row of this ledger records them, so the charge is written by the
+//! pulled page's own commit, released by the unsubscribe or forget that removes the holding, and
+//! correct for every page committed before this ledger counted them, with nothing to backfill.
+//!
 //! # Why `charge` is a transaction and not one statement
 //!
 //! The port's requirement is that the check and the debit are atomic against two concurrent
@@ -74,9 +84,15 @@ fn size_from(value: i64) -> Result<u64, StoreError> {
 
 /// The account's total and crossing, read through `connection`.
 ///
-/// One statement with two scalar subqueries rather than two round trips, so the total and the
+/// One statement with scalar subqueries rather than several round trips, so the total and the
 /// clock come from one snapshot: read separately, a concurrent release between them could report
 /// a total that is already under the limit beside a crossing that has already been cleared.
+///
+/// The total is the account's attributions plus its pulled holdings: the distinct addresses in
+/// `federation_pulled_metadata_blobs` of every album it subscribes to, live or lapsed, that it is
+/// not itself attributed (the module's docs, "Pulled blobs"). That subquery runs in time linear in
+/// every `(album, blob)` row the account's subscriptions hold, which no row count caps on an
+/// unlimited deployment; keeping a per-account total instead is #1171.
 async fn usage_of<C: ConnectionTrait>(
     connection: &C,
     user: &UserId,
@@ -86,7 +102,16 @@ async fn usage_of<C: ConnectionTrait>(
             DbBackend::Postgres,
             "SELECT \
                (SELECT COALESCE(SUM(size), 0)::bigint FROM quota_attributions WHERE user_id = $1) \
-                 AS used, \
+                 AS attributed, \
+               (SELECT COALESCE(SUM(held.size), 0)::bigint FROM ( \
+                  SELECT b.address, MAX(b.size) AS size \
+                  FROM federation_subscriptions s \
+                  JOIN federation_pulled_metadata_blobs b \
+                    ON b.peer_id = s.peer_id AND b.album_id = s.album_id \
+                  WHERE s.subscriber_id = $1 \
+                    AND NOT EXISTS (SELECT 1 FROM quota_attributions a \
+                                    WHERE a.address = b.address AND a.user_id = $1) \
+                  GROUP BY b.address) held) AS pulled, \
                (SELECT over_since FROM quota_usage WHERE user_id = $1) AS over_since, \
                (SELECT suspended_since FROM quota_usage WHERE user_id = $1) AS suspended_since",
             [Value::from(user.as_str().to_owned())],
@@ -98,11 +123,14 @@ async fn usage_of<C: ConnectionTrait>(
             detail: "the usage query returned no row".to_owned(),
         })?;
     let failed = PORT.failing("reading an account's usage");
-    let used: i64 = read.try_get("", "used").map_err(&failed)?;
+    let attributed: i64 = read.try_get("", "attributed").map_err(&failed)?;
+    let pulled: i64 = read.try_get("", "pulled").map_err(&failed)?;
     let over_since: Option<i64> = read.try_get("", "over_since").map_err(&failed)?;
     let suspended_since: Option<i64> = read.try_get("", "suspended_since").map_err(&failed)?;
+    let (attributed, pulled) = (size_from(attributed)?, size_from(pulled)?);
+    tracing::trace!(%user, attributed, pulled, "an account's usage");
     Ok(StoredUsage {
-        used: size_from(used)?,
+        used: attributed.saturating_add(pulled),
         over_since: over_since.map(instant_from).transpose()?,
         suspended_since: suspended_since.map(instant_from).transpose()?,
     })
