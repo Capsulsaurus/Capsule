@@ -23,10 +23,10 @@
 //!   `HEAD` in TLS 1.3 early data, and this build takes none of it.
 //! - **Windows cover the bandwidth-delay product** within a fixed memory budget ([`size_window`]).
 //!
-//! No build races: [`H3Policy::for_build`] is incapable in every build, with or without the
-//! off-by-default `http3` cargo feature, because no HTTP/3 transport adapter exists yet (the SDK's
-//! `reqwest` 0.12 exposes HTTP/3 only under `--cfg reqwest_unstable`). Every transport stays
-//! pinned to HTTP/1.1 ([`super::http_builder`]).
+//! Only a build with the off-by-default `http3` cargo feature races: it compiles the transport
+//! adapter that consumes this policy (`transport`, over quinn, h3 and h3-quinn), and
+//! [`H3Policy::for_build`] is capable there and incapable everywhere else. The SDK's `reqwest`
+//! clients stay pinned to HTTP/1.1 ([`super::http_builder`]) in every build.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, PoisonError};
@@ -36,6 +36,9 @@ use tracing::instrument;
 
 use super::MonotonicClock;
 use super::path::PathGeneration;
+
+#[cfg(feature = "http3")]
+pub mod transport;
 
 /// The ALPN protocol id an advertisement must carry. Draft ids (`h3-29` and earlier) are ignored.
 pub const H3_ALPN: &str = "h3";
@@ -248,10 +251,10 @@ impl<C: MonotonicClock> H3Policy<C> {
         }
     }
 
-    /// The policy for this build: incapable in every build until an HTTP/3 transport lands, so
-    /// [`H3Policy::choose`] can never answer a race that nothing could dial.
+    /// The policy for this build: capable only where the `http3` feature compiled the transport
+    /// that dials QUIC, so [`H3Policy::choose`] never answers a race that nothing could dial.
     pub fn for_build(clock: C) -> Self {
-        Self::new(clock, false)
+        Self::new(clock, cfg!(feature = "http3"))
     }
 
     fn state(&self) -> std::sync::MutexGuard<'_, State> {

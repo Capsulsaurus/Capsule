@@ -244,11 +244,11 @@ fn incapable_build_always_rides_tcp() {
 }
 
 #[test]
-fn for_build_is_incapable_until_a_transport_exists() {
+fn for_build_races_only_where_the_http3_feature_built_the_transport() {
     let policy = H3Policy::for_build(HandClock::default());
     policy.observe_alt_svc(ORIGIN, r#"h3=":443""#);
     let raced = matches!(policy.choose(ORIGIN, NET), TransportChoice::Race { .. });
-    assert!(!raced);
+    assert_eq!(raced, cfg!(feature = "http3"));
 }
 
 // ─── UDP unusable and fallback at the request boundary ───────────────────────
