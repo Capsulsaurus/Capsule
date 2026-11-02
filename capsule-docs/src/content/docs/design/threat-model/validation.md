@@ -45,7 +45,11 @@ Enforced inside the critical section that mints the sequence number, for [lifecy
 ### On federation pull (server-to-server)
 
 - **19.** Capability verifies, unexpired, `jti` unrevoked (≤ 15 min cache), and recorded here for the member's grant epoch → else `401`/`403`.
-- **20.** 1–18 re-applied; federation never loosens rules. Open: #964 (no inbound federated writes yet).
+- **20.** 1–18 and 25 re-applied to every pulled entry, each as strict as the compacted feed lets a receiver check it. Open: #964 (no inbound federated writes yet). Where the feed cannot show what the write-time rule reads, the pull applies it as follows:
+  - **7** is left to the receiving client, which holds the device directory a capability does not reach.
+  - **17** refuses a manifest behind the held head and a second `create`. The feed serves only an asset's current manifest, so a pull cannot require `prior_provenance_hash` to equal the held head.
+  - **18** holds **per asset**: an asset's `amk_version` never regresses along its own chain. The feed re-mints an asset's position without a new record and replays from zero after a restart, so an honest feed serves an older epoch's record after a newer one. The receiving client checks the epoch against the MLS commit chain.
+  - **25**: a record that binds a metadata blob is served with exactly that blob. A record that binds none never replaces a metadata blob this server holds. Only a signed binding record proves a newer blob.
 - **21.** Per-peer budgets (events, bytes, CPU per hour), keyed on peer origin not token → else `429`. Open: #964 (CPU unmetered; it is the pull worker's).
 
 ### On the sync feed, directory publish, and federated reports
