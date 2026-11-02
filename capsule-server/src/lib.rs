@@ -145,8 +145,9 @@ pub fn router() -> Router<App, Propagate, ServerInterceptors, impl Sized> {
         // producers on one route, so a router-wide cap would leave no group room for a tighter
         // one (#478). Every operation is still covered by exactly one, including the thirteen the
         // protocol gate exempts, which get groups holding nothing but the cap. The group's cap
-        // is its **first** interceptor, so it stays outermost beneath `Negotiation` and an
-        // oversized body is refused before the gate reads anything. See [`limits`].
+        // comes before every interceptor that reads anything — only the early-data refusal and
+        // the federation gate, neither of which reads a body, sit ahead of it — so an oversized
+        // body is refused before the gate reads anything. See [`limits`].
         // The protocol gate is two `Group`s, not a router interceptor, for two reasons the type
         // system makes concrete. First, the design exempts thirteen operations, and a group is how
         // Kynos spells "these and not those": an operation mounted inside declares the handshake

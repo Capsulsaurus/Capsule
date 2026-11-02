@@ -173,7 +173,8 @@ fn the_capsule_problems_carry_everything_the_base_one_does() {
 }
 
 /// **Every write declares the early-data `425`, and no read does** (design/networking.md, HTTP
-/// Transport): the router-wide refusal reads the method, and the document says the same.
+/// Transport). The refusal is mounted per group, so this is what catches a new group of writes
+/// that forgot it, or a read placed behind it.
 #[test]
 fn the_early_data_refusal_is_declared_on_every_write_and_no_read() {
     let json = serde_json::to_value(document()).expect("a document serializes");
