@@ -40,12 +40,14 @@ It is not the [provenance](/design/cryptography/provenance/) chain, which signs 
 | `share_link.revoked` | a share link is revoked | the link's id |
 | `drop_link.created` | a guest-upload link is provisioned | the link's id |
 | `drop_link.revoked` | a guest-upload link is revoked | the link's id |
+| `share_link.served` | a share link serves the first blob of a window; aggregated, see [Serving](#serving) | the link's id |
+| `peer.served` | a federated peer, under a capability over one of the account's albums, is served the first blob of a window; aggregated, see [Serving](#serving) | the peer's id |
 
 Not recorded, each for a stated reason:
 
 - **A sign-in attempt against an address no account answers to**, including a federated account's address, which holds no password. There is no account whose log it belongs in.
 - **A refused re-authentication or password change.** Both are acted by a session the account already holds; their refusals are in the request log.
-- **Blob downloads.** One event per blob per request would grow with library size and record an access pattern over content addresses. Downloads by a share link or a federated peer are the security-relevant subset; they need an aggregation (per link or peer, per window) before they are recorded.
+- **Blob downloads by the account or by a member of its albums on this server.** One event per blob per request would grow with library size and record an access pattern over content addresses, and these readers hold a session the owner's roster admitted. Downloads through a share link or by a federated peer are the security-relevant subset, and are recorded aggregated (see [Serving](#serving)).
 - **A first escrow, and the sealed identity and album-key slots beside it.** A first escrow invalidates no recovery secret, and the other slots are sealed under the master key, so replacing them changes nothing that opens the account. Only replacing the master-key escrow is a credential change.
 - **Token refresh.** It rotates a session that is already recorded, once per access-token lifetime, and would bury every other event.
 
@@ -74,6 +76,16 @@ An account's log keeps events for **90 days** and at most **1,000 events**, whic
 - The count bound is what keeps a burst of events (a scripted loop against the second factor) from growing the table without limit. The cost of the bound is that such a flood pushes the account's older events out of its log; the request log still holds them for as long as the operator keeps it.
 - `sign_in.password_refused` and `sign_in.locked` are caused by anyone who knows an address, and the password sign-in route charges no budget for them. So each is **coalesced**: one is written per account per hour, the attempts after it in that hour are counted into it, and the count goes to the operator's log (at `info`) when the next attempt of that kind for the account, or a sweep of expired windows (run when many accounts are tracked), closes the window after the hour is over; an account that goes quiet may never have its count logged above `debug`. Every attempt is still in the request log. A wrong-password flood therefore adds at most two events an hour to an account's log, and needs weeks of uninterrupted attempts to push out the events before it. Coalescing is per server process, and decides nothing about the sign-in's answer.
 - Those two events are written off the response path, at most 16 at a time per server process. One past that bound is not written and is logged at `error` with its fields. A server that is stopping waits a few seconds for the ones in flight; any still in flight after that are lost, and the stop logs it at `error`.
+
+## Serving
+
+A blob served to somebody other than the account is one request per blob, so it is recorded **aggregated**: one event per account and link or peer per hour, never one per blob.
+
+- The first delivery that carries bytes (`200` or `206`) through a share link, or to a peer under a capability, in an hour writes one `share_link.served` or `peer.served` naming the link or the peer. Every later one in that hour is counted into it and not written; the count goes to the operator's log (at `info`) when the window closes, as for the coalesced sign-in events. A revalidation (`304`), a refused range and a refused fetch serve nothing and record nothing.
+- The event carries the link's or the peer's id and nothing about what was read: no content address, no album id, no size, no client address. Which blobs a link serves is the owner's own record; which of them a viewer fetched is not the server's to keep.
+- The event is written when the window opens, so it says that serving started and when; how much was served is in the operator's log, not in the event, because an event is never updated. A count on the event would be an additive field.
+- An account's own downloads record nothing, and neither do a member's on this server.
+- The windows are kept in memory, per server process, beside the sign-in windows and under the same 16-write in-flight bound: no blob request makes a store write of its own, and none waits on one. At most 65,536 windows are open at once; an event that would open one past that is not written and is logged at `error` with its fields. A restart forgets the open windows, so the first serve after it writes again.
 
 ## The Port
 
