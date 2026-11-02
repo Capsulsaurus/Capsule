@@ -4,28 +4,32 @@
 //!
 //! A model upload server runs over a real TCP socket, because the SDK's client is a genuine
 //! `reqwest` client rather than an injectable transport. It keeps the authoritative state of
-//! every session — the bytes received, whether the blob finalized — and answers the honest
-//! protocol: a `PATCH` at the wrong offset is an `offset_mismatch` naming the right one, a
-//! checksum that does not match its body is refused, a repeated create returns the active
-//! session with its offset. Each request first draws the next fault from a proptest-generated
-//! schedule: a server-asked wait, a dropped connection, a response lost after the server applied
-//! the request (the duplicate a retry then sends), a short write, a rolled-back offset, a lost
-//! session, a server error (before or after the server applied the request), a version refusal,
-//! a `duplicate_blob`, or the client process dying mid-request.
+//! every session — which bytes of the blob it has committed, on the protocol's 4 KiB grid, and
+//! whether the blob finalized — and answers the block-grid protocol honestly: a range disjoint
+//! from the committed set is written, one wholly inside it is a duplicate answered `204`, one
+//! partly inside it is a `409 range_conflict` carrying the set, a checksum that does not match
+//! its body is refused, and a repeated create returns the active session with its committed
+//! set. Each request first draws the next fault from a proptest-generated schedule: a
+//! server-asked wait, a dropped connection, a response lost after the server applied the request
+//! (the lost ACK), a refused overlap with a range in flight, a full in-flight window, a fragment
+//! bound, a lost record of a committed range, a lost session, a server error (before or after the
+//! server applied the request), a version refusal, a `duplicate_blob`, or the client process
+//! dying mid-request.
 //!
-//! The driver plays the app around the SDK: an attempt that ends in a transport failure, an
-//! exhausted retry budget (a run of server errors and dropped connections the retry engine's
-//! backoff gives up on) or a kill is resumed — from the session it was told about when it has
-//! one, from scratch otherwise — and every other end state is final. The properties:
+//! The client runs with a ranges window drawn from 1 to 4, so the schedule cancels and reorders
+//! ranges in flight. The driver plays the app around the SDK: an attempt that ends in a transport
+//! failure, an exhausted retry budget or a kill is resumed — from the session it was told about
+//! when it has one, from scratch otherwise — and every other end state is final. The properties:
 //!
-//! - **The right end state.** No refusal reached: the transfer completes, the session it names is
-//!   the one the server finalized, and the server holds exactly the client's bytes. A version
-//!   refusal reached: the run ends in [`UploadError::UpgradeRequired`], whichever request drew
-//!   it. A server error is a wait the transfer recovers from, resuming from `HEAD`, so it ends
-//!   as if it never happened. A `duplicate_blob`: a merge.
-//! - **Server truth.** The client never sends a chunk at an offset the server did not give it,
-//!   except straight after a fault that hid the server's answer from it (a lost response, a
-//!   kill); every chunk's checksum matches its body.
+//! - **The declared hash.** No refusal reached: the transfer completes, the session it names is
+//!   the one the server finalized, and the server holds exactly the client's bytes, so the blob
+//!   hashes to what the client declared. A version refusal reached: the run ends in
+//!   [`UploadError::UpgradeRequired`]. A `duplicate_blob`: a merge naming the structured
+//!   `existing_asset`.
+//! - **Server truth.** Every range sits on the grid, inside the declared size, with a checksum
+//!   matching its body. The client re-plans from the committed set the server reports, so it never
+//!   sends a range overlapping bytes it was told are committed, except after a fault that hid an
+//!   answer from it (a lost response, a kill).
 //!
 //! The clock is paused, so the retry engine's backoff costs nothing, and every case runs under a
 //! fixed, printed seed (`PROPTEST_RNG_SEED` overrides it) that a failure replays from.
@@ -53,6 +57,8 @@ const CASES: u32 = 96;
 /// The longest fault schedule. Short of the client's recovery budget (64 actions), so the
 /// budget is never what ends a case; that ceiling has its own unit test.
 const MAX_FAULTS: usize = 24;
+/// The protocol's block grid.
+const GRID: usize = 4096;
 
 // ── The fault schedule ───────────────────────────────────────────────────────
 
@@ -69,18 +75,20 @@ enum Fault {
     StorageFull,
     /// Close the connection without answering; nothing applied.
     Drop,
-    /// Apply the request, then close the connection without answering: the client's retry is
-    /// the duplicate delivery.
+    /// Apply the request, then close the connection without answering: the lost ACK.
     LostResponse,
-    /// A `PATCH`: keep only the first half of the chunk and acknowledge that.
-    ShortWrite,
     /// A `PATCH`: refuse with `checksum_mismatch`; nothing applied.
     CorruptInTransit,
-    /// A `PATCH`: the server lost its last half of the received bytes and says so with an
-    /// `offset_mismatch` naming the rolled-back offset.
-    Rollback,
-    /// A `PATCH`: `offset_mismatch` without the offset header, so the client must ask `HEAD`.
-    MismatchWithoutOffset,
+    /// A `PATCH`: `409 range_conflict` with the committed set and `Retry-After: 0`, as if the
+    /// range overlapped one still in flight; nothing applied.
+    OverlapInFlight,
+    /// A `PATCH`: `409 too_many_in_flight`, `Retry-After: 0`; nothing applied.
+    WindowFull,
+    /// A `PATCH`: `409 too_fragmented`, `Retry-After: 0`; nothing applied.
+    Fragmented,
+    /// The session store loses the record of the highest committed range before this request:
+    /// those bytes are outside the committed set again and must be sent again.
+    LostRecord,
     /// The session expires before this request is served.
     SessionLost,
     /// The client process dies while this request is in flight; the server applies it.
@@ -105,10 +113,11 @@ fn fault() -> impl Strategy<Value = Fault> {
         1 => Just(Fault::StorageFull),
         2 => Just(Fault::Drop),
         2 => Just(Fault::LostResponse),
-        2 => Just(Fault::ShortWrite),
         1 => Just(Fault::CorruptInTransit),
-        1 => Just(Fault::Rollback),
-        1 => Just(Fault::MismatchWithoutOffset),
+        1 => Just(Fault::OverlapInFlight),
+        1 => Just(Fault::WindowFull),
+        1 => Just(Fault::Fragmented),
+        1 => Just(Fault::LostRecord),
         1 => Just(Fault::SessionLost),
         1 => Just(Fault::Kill),
         1 => Just(Fault::ServerError),
@@ -130,8 +139,72 @@ enum Refusal {
 #[derive(Debug)]
 struct Session {
     id: String,
-    received: Vec<u8>,
+    /// The staged bytes; only the committed ones mean anything.
+    staged: Vec<u8>,
+    /// Which bytes are committed.
+    held: Vec<bool>,
     finalized: bool,
+}
+
+impl Session {
+    fn new(id: String, size: usize) -> Self {
+        Self {
+            id,
+            staged: vec![0; size],
+            held: vec![false; size],
+            finalized: false,
+        }
+    }
+
+    fn full(&self) -> bool {
+        self.held.iter().all(|&h| h)
+    }
+
+    fn prefix(&self) -> usize {
+        self.held
+            .iter()
+            .position(|&h| !h)
+            .unwrap_or(self.held.len())
+    }
+
+    /// The committed set's ranges, half-open.
+    fn ranges(&self) -> Vec<(usize, usize)> {
+        ranges_of(&self.held)
+    }
+
+    /// `X-Capsule-Committed`.
+    fn committed(&self) -> String {
+        self.ranges()
+            .iter()
+            .map(|(start, end)| format!("{start}-{}", end - 1))
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+
+    fn status(&self) -> &'static str {
+        if self.finalized {
+            "completed"
+        } else {
+            "uploading"
+        }
+    }
+}
+
+fn ranges_of(held: &[bool]) -> Vec<(usize, usize)> {
+    let mut ranges = Vec::new();
+    let mut at = 0;
+    while at < held.len() {
+        if held[at] {
+            let start = at;
+            while at < held.len() && held[at] {
+                at += 1;
+            }
+            ranges.push((start, at));
+        } else {
+            at += 1;
+        }
+    }
+    ranges
 }
 
 #[derive(Debug, Default)]
@@ -142,9 +215,13 @@ struct Model {
     sessions: Vec<Session>,
     /// The last session id whose create response reached the client.
     told_session: Option<String>,
-    /// The client may be acting on a stale offset: a response that would have corrected it
-    /// was lost.
+    /// What the client was told is committed, per byte, on the session it was told about.
+    told: Vec<bool>,
+    /// The client may not have heard of something the server applied: a response was lost or the
+    /// process died, so a duplicate or an overlap is not a violation.
     stale: bool,
+    /// A client process died with requests in flight; they may land at any later point.
+    killed: bool,
     refusal: Option<Refusal>,
     violations: Vec<String>,
     requests: usize,
@@ -196,8 +273,11 @@ impl Reply {
         Self::error(status, code).header("Retry-After", 0)
     }
 
-    fn offset(offset: usize) -> Self {
-        Self::new(204).header("X-Capsule-Offset", offset)
+    /// The state a session reports on a `204`, a `HEAD` or a resumed create.
+    fn progress(self, session: &Session) -> Self {
+        self.header("X-Capsule-Offset", session.prefix())
+            .header("X-Capsule-Committed", session.committed())
+            .header("X-Capsule-Upload-Status", session.status())
     }
 }
 
@@ -250,15 +330,17 @@ impl Model {
             }
             Fault::DuplicateBlob if is_create => {
                 self.refusal = Some(Refusal::Duplicate);
-                let mut reply = Reply::error(409, error_codes::UPLOAD_DUPLICATE_BLOB);
-                reply.body = format!(
-                    r#"{{"error":"This content is already stored as asset existing-asset","code":"{}"}}"#,
-                    error_codes::UPLOAD_DUPLICATE_BLOB
-                );
-                return Answer::Reply(reply);
+                return Answer::Reply(duplicate());
             }
             Fault::SessionLost => {
                 self.sessions.retain(|s| s.finalized);
+            }
+            Fault::LostRecord => {
+                if let Some(session) = self.session(&id).filter(|s| !s.finalized)
+                    && let Some(&(start, end)) = session.ranges().last()
+                {
+                    session.held[start..end].fill(false);
+                }
             }
             _ => {}
         }
@@ -279,6 +361,9 @@ impl Model {
                 Answer::Close
             }
             Fault::Kill => {
+                // The dying process's other requests may still land after its successor reads
+                // the session, so no overlap after this is a violation.
+                self.killed = true;
                 self.stale = true;
                 kill.notify_one();
                 Answer::Reply(reply)
@@ -287,36 +372,75 @@ impl Model {
                 Answer::Reply(Reply::error(500, error_codes::UPLOAD_STORAGE_INCONSISTENT))
             }
             _ => {
-                if is_create && reply.status < 300 {
-                    self.told_session = reply.body.split('"').nth(3).map(str::to_string);
-                }
+                self.learn(req, &id, &reply, is_create);
                 Answer::Reply(reply)
             }
         }
     }
 
+    /// Record what an answer that reaches the client tells it: a create or a `HEAD` states the
+    /// committed set, and the client re-plans from it; a chunk's answer adds to it.
+    fn learn(&mut self, req: &Request, id: &str, reply: &Reply, is_create: bool) {
+        if reply.status >= 300 {
+            return;
+        }
+        if is_create {
+            self.told_session = reply.body.split('"').nth(3).map(str::to_string);
+        } else if self.told_session.as_deref() != Some(id) {
+            return;
+        }
+        let Some(committed) = reply
+            .headers
+            .iter()
+            .find(|(k, _)| k == "X-Capsule-Committed")
+            .map(|(_, v)| v.clone())
+        else {
+            return;
+        };
+        let mut told = vec![false; self.size];
+        for part in committed.split(',').filter(|p| !p.is_empty()) {
+            let (start, last) = part.split_once('-').expect("a range");
+            let (start, last): (usize, usize) = (start.parse().unwrap(), last.parse().unwrap());
+            told[start..=last].fill(true);
+        }
+        if req.method == "PATCH" {
+            for (byte, held) in told.iter_mut().enumerate() {
+                *held |= self.told.get(byte).copied().unwrap_or(false);
+            }
+        } else {
+            // The client now re-plans from server truth again.
+            self.stale = self.killed;
+        }
+        self.told = told;
+    }
+
     /// `POST /upload`: the active session for this blob when there is one (`200` with its
-    /// offset), a fresh session otherwise.
+    /// committed set), a fresh session otherwise.
     fn create(&mut self) -> Reply {
         if self.sessions.iter().any(|s| s.finalized) {
             // The blob is already stored: an honest server merges rather than re-receives it.
             self.refusal = Some(Refusal::Duplicate);
-            return Reply::error(409, error_codes::UPLOAD_DUPLICATE_BLOB);
+            return duplicate();
         }
-        let (status, id, offset) = if let Some(active) = self.active() {
-            (200, active.id.clone(), active.received.len())
-        } else {
+        let size = self.size;
+        let resumed = self.active().is_some();
+        if !resumed {
             let id = format!("sess-{}", self.sessions.len());
-            self.sessions.push(Session {
-                id: id.clone(),
-                received: Vec::new(),
-                finalized: false,
-            });
-            (201, id, 0)
-        };
-        let mut reply = Reply::new(status)
+            self.sessions.push(Session::new(id, size));
+        }
+        let session = self.active().expect("an active session");
+        let id = session.id.clone();
+        let mut reply = Reply::new(if resumed { 200 } else { 201 })
             .header("Content-Type", "application/json")
-            .header("X-Capsule-Offset", offset);
+            .header(
+                "X-Capsule-Advice",
+                "chunk=262144, sessions=4, ranges=4, ttl=300",
+            );
+        if resumed {
+            reply = reply.progress(session);
+        } else {
+            reply = reply.header("X-Capsule-Committed", "");
+        }
         reply.body =
             format!(r#"{{"id":"{id}","upload_url":"/upload/{id}","suggested_chunk_size":262144}}"#);
         reply
@@ -325,17 +449,16 @@ impl Model {
     fn head(&mut self, id: &str) -> Reply {
         let size = self.size;
         match self.session(id) {
-            Some(session) => Reply::new(200)
-                .header("X-Capsule-Offset", session.received.len())
-                .header("X-Capsule-Content-Length", size)
-                .header(
-                    "X-Capsule-Upload-Status",
-                    if session.finalized {
-                        "completed"
-                    } else {
-                        "receiving"
-                    },
-                ),
+            Some(session) => {
+                // A full session nobody claimed is finalized by the `HEAD` that meets it.
+                if session.full() {
+                    session.finalized = true;
+                }
+                Reply::new(200)
+                    .progress(session)
+                    .header("X-Capsule-Content-Length", size)
+                    .header("X-Capsule-Advice", "ranges=4")
+            }
             None => Reply::new(404),
         }
     }
@@ -343,70 +466,83 @@ impl Model {
     fn patch(&mut self, id: &str, req: &Request, fault: Fault) -> Reply {
         let size = self.size;
         let stale = self.stale;
+        let told = self.told.clone();
         let offset: usize = req
             .header("X-Capsule-Offset")
             .and_then(|v| v.parse().ok())
             .unwrap_or(usize::MAX);
+        let end = offset.saturating_add(req.body.len());
         let checksum = hex::encode(Sha256::digest(&req.body));
-        let mut violation = None;
+        let mut violations = Vec::new();
+        if req.header("X-Capsule-Checksum") != Some(checksum.as_str()) {
+            violations.push(format!("range at {offset} carried a wrong checksum"));
+        }
+        if !offset.is_multiple_of(GRID)
+            || (!req.body.len().is_multiple_of(GRID) && end != size)
+            || end > size
+            || req.body.is_empty()
+        {
+            violations.push(format!(
+                "range [{offset}, {end}) is off the grid or the blob"
+            ));
+        }
         let reply = match self.session(id) {
             None => Reply::error(404, error_codes::UPLOAD_SESSION_NOT_FOUND),
-            Some(session) if session.finalized => Reply::offset(session.received.len()),
+            Some(_) if !violations.is_empty() => {
+                Reply::error(400, error_codes::UPLOAD_CHECKSUM_MISMATCH)
+            }
+            Some(session) if session.finalized => Reply::new(204).progress(session),
             Some(session) => {
-                if req.header("X-Capsule-Checksum") != Some(checksum.as_str()) {
-                    violation = Some(format!("chunk at {offset} carried a wrong checksum"));
-                    Reply::error(400, error_codes::UPLOAD_CHECKSUM_MISMATCH)
-                } else if offset != session.received.len() {
-                    if !stale {
-                        violation = Some(format!(
-                            "client sent offset {offset} while the server had told it {}",
-                            session.received.len()
-                        ));
+                let overlaps_told = told.get(offset..end).is_some_and(|t| t.iter().any(|&h| h));
+                if overlaps_told && !stale {
+                    violations.push(format!(
+                        "range [{offset}, {end}) overlaps bytes the client was told are committed"
+                    ));
+                }
+                let held = &session.held[offset..end];
+                match fault {
+                    Fault::CorruptInTransit => {
+                        Reply::error(400, error_codes::UPLOAD_CHECKSUM_MISMATCH)
                     }
-                    Reply::error(409, error_codes::UPLOAD_OFFSET_MISMATCH)
-                        .header("X-Capsule-Offset", session.received.len())
-                } else {
-                    match fault {
-                        Fault::CorruptInTransit => {
-                            Reply::error(400, error_codes::UPLOAD_CHECKSUM_MISMATCH)
+                    Fault::OverlapInFlight => Reply::wait(409, error_codes::UPLOAD_RANGE_CONFLICT)
+                        .header("X-Capsule-Committed", session.committed()),
+                    Fault::WindowFull => Reply::wait(409, error_codes::UPLOAD_TOO_MANY_IN_FLIGHT),
+                    Fault::Fragmented => Reply::wait(409, error_codes::UPLOAD_TOO_FRAGMENTED),
+                    _ if held.iter().all(|&h| h) => Reply::new(204).progress(session),
+                    _ if held.iter().any(|&h| h) => {
+                        Reply::error(409, error_codes::UPLOAD_RANGE_CONFLICT)
+                            .header("X-Capsule-Committed", session.committed())
+                    }
+                    _ => {
+                        session.staged[offset..end].copy_from_slice(&req.body);
+                        session.held[offset..end].fill(true);
+                        let mut reply = Reply::new(204).progress(session);
+                        if session.full() {
+                            session.finalized = true;
+                            reply = Reply::new(204)
+                                .header("X-Capsule-Offset", size)
+                                .header("X-Capsule-Committed", session.committed())
+                                .header("X-Capsule-Upload-Status", "waiting_for_processing");
                         }
-                        Fault::MismatchWithoutOffset => {
-                            Reply::error(409, error_codes::UPLOAD_OFFSET_MISMATCH)
-                        }
-                        Fault::Rollback => {
-                            let kept = session.received.len() / 2;
-                            session.received.truncate(kept);
-                            Reply::error(409, error_codes::UPLOAD_OFFSET_MISMATCH)
-                                .header("X-Capsule-Offset", kept)
-                        }
-                        _ => {
-                            let take = if fault == Fault::ShortWrite {
-                                req.body.len() / 2
-                            } else {
-                                req.body.len()
-                            };
-                            session.received.extend_from_slice(&req.body[..take]);
-                            if session.received.len() > size {
-                                violation = Some("client sent past the declared size".into());
-                            }
-                            if session.received.len() == size {
-                                session.finalized = true;
-                            }
-                            Reply::offset(session.received.len())
-                        }
+                        reply
                     }
                 }
             }
         };
-        if let Some(v) = violation {
-            self.violations.push(v);
-        }
-        if reply.status < 300 || reply.status == 409 {
-            // The client now holds (or is about to learn) the server's offset.
-            self.stale = false;
-        }
+        self.violations.extend(violations);
         reply
     }
+}
+
+/// `409 duplicate_blob` naming the existing asset in the structured member, and in a detail that
+/// does not end in it, so only the structured member names it.
+fn duplicate() -> Reply {
+    let mut reply = Reply::error(409, error_codes::UPLOAD_DUPLICATE_BLOB);
+    reply.body = format!(
+        r#"{{"error":"this library already holds these bytes","code":"{}","existing_asset":"existing-asset"}}"#,
+        error_codes::UPLOAD_DUPLICATE_BLOB
+    );
+    reply
 }
 
 // ── The socket around the model ──────────────────────────────────────────────
@@ -547,6 +683,7 @@ enum Attempt {
 async fn run_schedule(
     size: usize,
     salt: u8,
+    ranges: u32,
     faults: Vec<Fault>,
 ) -> Result<(Model, Result<UploadOutcome, UploadError>), TestCaseError> {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
@@ -594,7 +731,8 @@ async fn run_schedule(
             format!("http://{addr}/upload"),
             "2026-01-01",
             StaticToken("token".into()),
-        ));
+        ))
+        .with_ranges_window(ranges);
         let told = model.lock().expect("model lock").told_session.clone();
         let upload = async {
             match told {
@@ -608,8 +746,12 @@ async fn run_schedule(
             result = upload => Attempt::Finished(result),
         };
         match attempt {
-            Attempt::Killed
-            | Attempt::Finished(Err(
+            // With ranges in flight together, a refusal one of them drew may never reach the
+            // process that died; the next attempt meets whatever the server still answers.
+            Attempt::Killed => {
+                model.lock().expect("model lock").refusal = None;
+            }
+            Attempt::Finished(Err(
                 UploadError::Transport(_)
                 | UploadError::RetriesExhausted(_)
                 | UploadError::WaitsExhausted { .. },
@@ -638,26 +780,26 @@ fn check(
             let finalized: Vec<&Session> = model.sessions.iter().filter(|s| s.finalized).collect();
             prop_assert_eq!(finalized.len(), 1, "exactly one session finalizes");
             prop_assert_eq!(&finalized[0].id, session_id);
+            let expected = blob(size, salt);
             prop_assert!(
-                finalized[0].received == blob(size, salt),
+                finalized[0].staged == expected,
                 "the server holds other bytes than the client's"
+            );
+            prop_assert_eq!(
+                hex::encode(Sha256::digest(&finalized[0].staged)),
+                hex::encode(Sha256::digest(&expected)),
+                "the finalized blob hashes to the declared hash"
             );
         }
         (Some(Refusal::Version), Err(UploadError::UpgradeRequired { min, max, .. })) => {
             prop_assert_eq!(min.as_deref(), Some("2099-01-01"));
             prop_assert_eq!(max.as_deref(), Some("2099-12-31"));
         }
+        // However the duplicate is met — on the first create or re-creating a lost session —
+        // it is a merge naming the structured `existing_asset`.
         (Some(Refusal::Duplicate), Ok(UploadOutcome::AlreadyStored { asset_ref })) => {
             prop_assert_eq!(asset_ref, "existing-asset");
         }
-        // A duplicate met while re-creating a lost session surfaces as the typed rejection the
-        // caller resolves as the same merge one level up.
-        (
-            Some(Refusal::Duplicate),
-            Err(UploadError::Rejected {
-                code: Some(code), ..
-            }),
-        ) if code == error_codes::UPLOAD_DUPLICATE_BLOB => {}
         (refusal, outcome) => {
             return Err(TestCaseError::fail(format!(
                 "refusal {refusal:?} ended as {outcome:?}"
@@ -695,17 +837,18 @@ fn every_fault_schedule_reaches_the_right_end_state() {
         // From one byte to a little over three default chunks (256 KiB each).
         1usize..(3 * 256 * 1024 + 4096),
         any::<u8>(),
+        1u32..=4,
         proptest::collection::vec(fault(), 0..MAX_FAULTS),
     );
     let mut runner = TestRunner::new(config());
     runner
-        .run(&schedule, |(size, salt, faults)| {
+        .run(&schedule, |(size, salt, ranges, faults)| {
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .start_paused(true)
                 .build()
                 .expect("runtime");
-            let (model, outcome) = runtime.block_on(run_schedule(size, salt, faults))?;
+            let (model, outcome) = runtime.block_on(run_schedule(size, salt, ranges, faults))?;
             check(size, salt, &model, &outcome)
         })
         .expect("every fault schedule reaches the right end state");

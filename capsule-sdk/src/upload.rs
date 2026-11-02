@@ -1386,6 +1386,9 @@ enum Settled {
     /// between a typed source change and one re-created session. Carries the refusal, which
     /// ends the transfer when neither applies.
     HashMismatch(UploadError),
+    /// The session went away (`404`) before it reached finalization: re-create it, as for
+    /// `session_not_found`.
+    Lost,
 }
 
 /// What opening a session for a blob found.
@@ -2288,6 +2291,17 @@ impl UploadClient {
                     cursor.committed = held;
                     cursor.state = None;
                 }
+                Settled::Lost => {
+                    recovery.charge("session re-create")?;
+                    cursor.step.cause(0, size);
+                    cursor.step.recreate = true;
+                    if let StepTaken::Merged(asset_ref) = self
+                        .take_step(&mut cursor, request, strategy, recovery)
+                        .await?
+                    {
+                        return Ok(self.merged(request, asset_ref));
+                    }
+                }
                 Settled::HashMismatch(refusal) => {
                     if let Err(changed) = data.check_unchanged() {
                         tracing::warn!(%session_id, reason = %changed.reason, "finalization refused the hash and the source changed");
@@ -2782,9 +2796,16 @@ impl UploadClient {
         let mut wait = FINALIZE_POLL_FIRST;
         let mut waited = Duration::ZERO;
         let mut polls: u32 = 0;
+        // Whether the session is known to have reached finalization: a session that goes away
+        // before that is one to re-create, after it a failure.
+        let mut finalizing = matches!(state, Some(STATUS_WAITING | STATUS_FAILED));
         loop {
             polls += 1;
             let Some(info) = self.head_waiting(session_id, recovery).await? else {
+                if !finalizing {
+                    tracing::info!(%session_id, polls, "the session went away before it finalized; re-creating");
+                    return Ok(Settled::Lost);
+                }
                 tracing::warn!(%session_id, polls, "the session went away while it finalized");
                 return Err(UploadError::Rejected {
                     status: 404,
@@ -2817,7 +2838,7 @@ impl UploadClient {
                     }
                     return Err(refusal);
                 }
-                STATUS_WAITING => {}
+                STATUS_WAITING => finalizing = true,
                 // Full and not yet claimed: this `HEAD` started its finalization, and the next
                 // one reads how it went. Short of full, the transfer re-plans from what it holds.
                 _ => {
@@ -2828,6 +2849,7 @@ impl UploadClient {
                     if !held.covers(size) {
                         return Ok(Settled::Resume(held));
                     }
+                    finalizing = true;
                 }
             }
             if waited >= FINALIZE_POLL_DEADLINE {
