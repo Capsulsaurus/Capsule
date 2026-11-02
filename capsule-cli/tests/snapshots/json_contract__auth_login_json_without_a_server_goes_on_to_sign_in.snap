@@ -1,0 +1,11 @@
+---
+source: capsule-cli/tests/json_contract.rs
+expression: "run(&scratch,\n&[\"auth\", \"login\", \"--email\", \"me@example.test\", \"--password-stdin\",\n\"--json\"])"
+---
+status: 1
+--- stdout ---
+
+--- stderr ---
+Logging in to Capsule…
+Error: 
+   0: Login failed: network transport error: error sending request for url (http://127.0.0.1:9/v1/auth/login)

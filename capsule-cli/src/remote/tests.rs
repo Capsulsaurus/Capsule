@@ -3121,3 +3121,100 @@ async fn a_push_sends_a_purged_assets_held_records_from_its_tombstone() {
     );
     assert_eq!(posted_ops(&seen), 2, "nothing sent again");
 }
+
+// ── The password switch in server-info ────────────────────────────────
+
+/// A `server-info` record with `password_disabled` set to `flag`, or left out as a server that
+/// predates the switch leaves it out.
+fn server_info_record(password_disabled: Option<bool>) -> String {
+    let mut auth = serde_json::json!({
+        "login": "/v1/auth/login",
+        "refresh": "/v1/auth/refresh",
+        "logout": "/v1/auth/logout",
+        "oidc": {
+            "authorize": "/v1/auth/oidc/authorize",
+            "callback": "/v1/auth/oidc/callback",
+        },
+    });
+    if let Some(flag) = password_disabled {
+        auth["password_disabled"] = serde_json::Value::Bool(flag);
+    }
+    serde_json::json!({
+        "server_id": "https://capsule.example.test",
+        "api_base_url": "https://capsule.example.test/v1",
+        "auth": auth,
+        "protocol_version": { "min": "2025-01-01", "max": "2026-01-01" },
+        "signing_key": "AAAA",
+        "signing_algorithm": "Ed25519",
+        "deprecations": [],
+    })
+    .to_string()
+}
+
+/// A server answering its `server-info` record with `body` after `delay`, and `404` elsewhere.
+async fn serve_server_info(body: String, delay: std::time::Duration) -> RemoteConfig {
+    let origin = serve_wire_mock(move |request: &WireRequest| {
+        if request.line == "GET /.well-known/capsule/server-info" {
+            WireAnswer {
+                status: 200,
+                headers: vec![("content-type", "application/json".to_owned())],
+                body: body.clone(),
+                delay,
+            }
+        } else {
+            WireAnswer {
+                status: 404,
+                headers: Vec::new(),
+                body: String::new(),
+                delay: std::time::Duration::ZERO,
+            }
+        }
+    })
+    .await;
+    remote_at(&origin).0
+}
+
+/// Only a published `true` refuses the password; `false` and a record without the field (an
+/// older server) let the prompt through.
+#[tokio::test]
+async fn only_a_published_true_refuses_the_password_sign_in() {
+    for (published, expected) in [(Some(true), true), (Some(false), false), (None, false)] {
+        let remote =
+            serve_server_info(server_info_record(published), std::time::Duration::ZERO).await;
+        assert_eq!(
+            password_sign_in_disabled(&remote).await,
+            expected,
+            "published {published:?}"
+        );
+        let options = sign_in_options(&remote).await.expect("the record reads");
+        assert_eq!(
+            options.password_disabled, expected,
+            "published {published:?}"
+        );
+        assert!(options.oidc);
+    }
+}
+
+/// A server that cannot be reached, has no readable record, or does not answer within the bound
+/// is read as accepting passwords: the switch is advice, and the server's own `403` stays the
+/// authority.
+#[tokio::test]
+async fn an_unreadable_or_slow_record_lets_the_password_sign_in_through() {
+    let (unreachable, _) = remote_at("http://127.0.0.1:1");
+    assert!(!password_sign_in_disabled(&unreachable).await);
+    assert!(sign_in_options(&unreachable).await.is_err());
+
+    let garbled = serve_server_info("not a record".to_owned(), std::time::Duration::ZERO).await;
+    assert!(!password_sign_in_disabled(&garbled).await);
+    assert!(sign_in_options(&garbled).await.is_err());
+
+    let slow = serve_server_info(
+        server_info_record(Some(true)),
+        std::time::Duration::from_secs(5),
+    )
+    .await;
+    assert!(
+        !password_sign_in_disabled_within(&slow, std::time::Duration::from_millis(50)).await,
+        "a record that arrives after the bound is not waited for"
+    );
+}

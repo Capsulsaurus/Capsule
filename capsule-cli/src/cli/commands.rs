@@ -301,6 +301,14 @@ pub(crate) enum Commands {
     },
     /// Show current status
     Status,
+    /// Show how the server signs people in: its identity provider, and whether it accepts
+    /// passwords, from its public server-info record
+    ServerInfo {
+        /// Print the record as one JSON document on stdout: the server's id, whether it has an
+        /// identity provider (`oidc`) and whether it refuses passwords (`password_disabled`)
+        #[arg(long)]
+        json: bool,
+    },
     /// List the assets the sync feed has delivered
     List {
         /// Include assets the server has tombstoned (deleted) as well as live ones.

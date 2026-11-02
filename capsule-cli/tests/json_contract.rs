@@ -1,7 +1,8 @@
 //! The CLI's machine contract, snapshotted (testing plan, `capsule-cli` row: "Every
 //! subcommand's `--json` output and exit code are a stable contract").
 //!
-//! Each case spawns the real `capsule` binary in a scratch home, with no server and no network,
+//! Each case spawns the real `capsule` binary in a scratch home, with no server and no network
+//! (the `server-info` cases excepted: they talk to a loopback double serving one record),
 //! and snapshots one rendering of the run: its exit status, its stdout and its stderr. A change
 //! to any of the three is a snapshot diff a reviewer accepts (`cargo insta review`, or
 //! `INSTA_UPDATE=always` on the test run) or refuses; CI never writes one. Scratch paths are
@@ -11,8 +12,8 @@
 //! The `--json` subcommands today are `import`, `push`, `restore`, `verify`, `cache budget`,
 //! `cache sweep`, `sync`, `sync reannounce`, `share create`, `share revoke`, `auth login`,
 //! `auth logout`, `auth status`, `label add`, `label remove`, `region add`, `region delete`,
-//! `edit capture-time`, `edit location`, `show`, `library list`, `camera import` and
-//! `camera identity`; each has its offline cases
+//! `edit capture-time`, `edit location`, `show`, `library list`, `camera import`,
+//! `camera identity` and `server-info`; each has its offline cases
 //! here, and every `--json`
 //! subcommand that lands joins this file the same way.
 //! What needs a live server (a push or restore that reaches its assets) is the end-to-end
@@ -63,6 +64,23 @@
 //!   reason on stderr.
 //! - `auth_login_oidc_device_json_without_a_server_prints_nothing_on_stdout` — the same for
 //!   `--oidc --device --json`.
+//! - `server_info_json_without_a_server_prints_nothing_on_stdout` — the record cannot be read:
+//!   non-zero exit, empty stdout, the reason on stderr.
+//! - `server_info_json_reports_a_server_that_refuses_passwords`,
+//!   `server_info_json_reports_a_server_that_accepts_passwords` and
+//!   `server_info_json_reads_a_record_without_the_switch_as_accepting_passwords` — against a
+//!   loopback double serving only the `server-info` record: exit 0, one JSON document with
+//!   `password_disabled` `true`, `false`, and `false` for an older server's record without it.
+//! - `auth_login_json_on_a_server_refusing_passwords_asks_for_nothing` and
+//!   `auth_register_on_a_server_refusing_passwords_asks_for_nothing` — the record says the
+//!   server refuses passwords: non-zero exit before the password is read, the
+//!   `error.auth.password_disabled` message and `--oidc` on stderr.
+//! - `auth_login_json_on_a_server_accepting_passwords_goes_on_to_sign_in`,
+//!   `auth_login_json_on_an_older_server_goes_on_to_sign_in` and
+//!   `auth_login_json_without_a_server_goes_on_to_sign_in` — a record saying `false`, one
+//!   without the switch, and no record at all each let the password sign-in go on to the login
+//!   request: the double signs it in (exit 0, the `LoginReport` with `password_disabled:
+//!   false`), and with no server the login itself fails.
 //! - `share_create_json_over_an_empty_scope_prints_nothing_on_stdout` — a local refusal before
 //!   any request: non-zero exit, empty stdout, the reason on stderr.
 //! - `share_revoke_json_with_a_malformed_id_prints_nothing_on_stdout` — a local refusal before
@@ -186,6 +204,13 @@ fn strip_ansi(text: &str) -> String {
 /// Run `capsule` with `args` in `scratch`'s home under the `rust_log` filter, the passphrase on
 /// stdin, and return what it exited with and printed.
 fn spawn(scratch: &Scratch, args: &[&str], rust_log: &str) -> Output {
+    // No server is listening here: a case that reached for the network would fail fast
+    // rather than reach a real one.
+    spawn_at(scratch, args, rust_log, "http://127.0.0.1:9")
+}
+
+/// [`spawn`] against the server at `endpoint`.
+fn spawn_at(scratch: &Scratch, args: &[&str], rust_log: &str, endpoint: &str) -> Output {
     let home = scratch.home();
     let mut child = Command::new(env!("CARGO_BIN_EXE_capsule"))
         .args(args)
@@ -197,9 +222,7 @@ fn spawn(scratch: &Scratch, args: &[&str], rust_log: &str) -> Output {
         .env("XDG_CONFIG_HOME", home.join("config"))
         .env("XDG_DATA_HOME", home.join("data"))
         .env("XDG_CACHE_HOME", home.join("cache"))
-        // No server is listening here: a case that reached for the network would fail fast
-        // rather than reach a real one.
-        .env("CAPSULE_ENDPOINT", "http://127.0.0.1:9")
+        .env("CAPSULE_ENDPOINT", endpoint)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -224,7 +247,17 @@ fn spawn(scratch: &Scratch, args: &[&str], rust_log: &str) -> Output {
 
 /// Run `capsule` with `args` and logging off, and render the run as the snapshot sees it.
 fn run(scratch: &Scratch, args: &[&str]) -> String {
-    let out = spawn(scratch, args, "off");
+    render(scratch, &spawn(scratch, args, "off"))
+}
+
+/// [`run`] against the server at `endpoint`, with the endpoint redacted from what it printed.
+fn run_at(scratch: &Scratch, args: &[&str], endpoint: &str) -> String {
+    render(scratch, &spawn_at(scratch, args, "off", endpoint)).replace(endpoint, "[SERVER]")
+}
+
+/// A finished run as the snapshot sees it: its exit status, stdout and stderr, scratch paths
+/// redacted and stderr cut at color-eyre's `Location:` section.
+fn render(scratch: &Scratch, out: &Output) -> String {
     let redact = |text: &[u8]| {
         strip_ansi(&String::from_utf8_lossy(text)).replace(path(&scratch.0), "[SCRATCH]")
     };
@@ -636,6 +669,201 @@ fn auth_login_oidc_device_json_without_a_server_prints_nothing_on_stdout() {
     insta::assert_snapshot!(run(
         &scratch,
         &["auth", "login", "--oidc", "--device", "--json"]
+    ));
+}
+
+/// A server that answers its `server-info` record with `password_disabled` set to the given
+/// value — or, for `None`, left out as a server predating the switch leaves it out — signs in
+/// any password login it is sent (it does not refuse one itself, so a refusal in a snapshot is
+/// the CLI's), and answers `404` to everything else. It runs on a thread for the life of the test process; its origin is
+/// returned.
+fn serve_server_info(password_disabled: Option<bool>) -> String {
+    use std::io::{BufRead as _, BufReader};
+    let mut auth = serde_json::json!({
+        "login": "/v1/auth/login",
+        "refresh": "/v1/auth/refresh",
+        "logout": "/v1/auth/logout",
+        "oidc": {
+            "authorize": "/v1/auth/oidc/authorize",
+            "callback": "/v1/auth/oidc/callback",
+        },
+    });
+    if let Some(flag) = password_disabled {
+        auth["password_disabled"] = Value::Bool(flag);
+    }
+    let record = serde_json::json!({
+        "server_id": "https://capsule.example.test",
+        "api_base_url": "https://capsule.example.test/v1",
+        "auth": auth,
+        "protocol_version": { "min": "2025-01-01", "max": "2026-01-01" },
+        "signing_key": "AAAA",
+        "signing_algorithm": "Ed25519",
+        "deprecations": [],
+    })
+    .to_string();
+    // A password sign-in that reaches the double is signed in: a token pair good for an hour.
+    let token = serde_json::json!({
+        "access_token": "access",
+        "refresh_token": "refresh",
+        "token_type": "Bearer",
+        "expires_by": jiff::Timestamp::now().as_second() + 3600,
+    })
+    .to_string();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback port");
+    let origin = format!("http://{}", listener.local_addr().expect("an address"));
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            let mut reader = BufReader::new(stream.try_clone().expect("a second handle"));
+            let mut request_line = String::new();
+            if reader.read_line(&mut request_line).is_err() {
+                continue;
+            }
+            // Drain the head and the body, so closing the connection resets nothing unread.
+            let mut length = 0;
+            let mut line = String::new();
+            while reader.read_line(&mut line).is_ok_and(|n| n > 2) {
+                if let Some((name, value)) = line.split_once(':')
+                    && name.eq_ignore_ascii_case("content-length")
+                {
+                    length = value.trim().parse().unwrap_or(0);
+                }
+                line.clear();
+            }
+            let mut body = vec![0; length];
+            if std::io::Read::read_exact(&mut reader, &mut body).is_err() {
+                continue;
+            }
+            let (status, body) =
+                if request_line.starts_with("GET /.well-known/capsule/server-info ") {
+                    ("200 OK", record.as_str())
+                } else if request_line.starts_with("POST /v1/auth/login ") {
+                    ("200 OK", token.as_str())
+                } else {
+                    ("404 Not Found", "")
+                };
+            let _ = write!(
+                stream,
+                "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\
+                 connection: close\r\n\r\n{body}",
+                body.len()
+            );
+        }
+    });
+    origin
+}
+
+#[test]
+fn server_info_json_without_a_server_prints_nothing_on_stdout() {
+    let scratch = Scratch::new();
+    insta::assert_snapshot!(run(&scratch, &["server-info", "--json"]));
+}
+
+#[test]
+fn server_info_json_reports_a_server_that_refuses_passwords() {
+    let scratch = Scratch::new();
+    let server = serve_server_info(Some(true));
+    insta::assert_snapshot!(run_at(&scratch, &["server-info", "--json"], &server));
+}
+
+#[test]
+fn server_info_json_reports_a_server_that_accepts_passwords() {
+    let scratch = Scratch::new();
+    let server = serve_server_info(Some(false));
+    insta::assert_snapshot!(run_at(&scratch, &["server-info", "--json"], &server));
+}
+
+#[test]
+fn server_info_json_reads_a_record_without_the_switch_as_accepting_passwords() {
+    let scratch = Scratch::new();
+    let server = serve_server_info(None);
+    insta::assert_snapshot!(run_at(&scratch, &["server-info", "--json"], &server));
+}
+
+#[test]
+fn auth_login_json_on_a_server_refusing_passwords_asks_for_nothing() {
+    let scratch = Scratch::new();
+    let server = serve_server_info(Some(true));
+    insta::assert_snapshot!(run_at(
+        &scratch,
+        &[
+            "auth",
+            "login",
+            "--email",
+            "me@example.test",
+            "--password-stdin",
+            "--json"
+        ],
+        &server
+    ));
+}
+
+#[test]
+fn auth_register_on_a_server_refusing_passwords_asks_for_nothing() {
+    let scratch = Scratch::new();
+    let server = serve_server_info(Some(true));
+    insta::assert_snapshot!(run_at(
+        &scratch,
+        &[
+            "auth",
+            "register",
+            "--email",
+            "me@example.test",
+            "--password-stdin"
+        ],
+        &server
+    ));
+}
+
+#[test]
+fn auth_login_json_on_a_server_accepting_passwords_goes_on_to_sign_in() {
+    let scratch = Scratch::new();
+    let server = serve_server_info(Some(false));
+    insta::assert_snapshot!(run_at(
+        &scratch,
+        &[
+            "auth",
+            "login",
+            "--email",
+            "me@example.test",
+            "--password-stdin",
+            "--json"
+        ],
+        &server
+    ));
+}
+
+#[test]
+fn auth_login_json_on_an_older_server_goes_on_to_sign_in() {
+    let scratch = Scratch::new();
+    let server = serve_server_info(None);
+    insta::assert_snapshot!(run_at(
+        &scratch,
+        &[
+            "auth",
+            "login",
+            "--email",
+            "me@example.test",
+            "--password-stdin",
+            "--json"
+        ],
+        &server
+    ));
+}
+
+#[test]
+fn auth_login_json_without_a_server_goes_on_to_sign_in() {
+    let scratch = Scratch::new();
+    insta::assert_snapshot!(run(
+        &scratch,
+        &[
+            "auth",
+            "login",
+            "--email",
+            "me@example.test",
+            "--password-stdin",
+            "--json"
+        ]
     ));
 }
 

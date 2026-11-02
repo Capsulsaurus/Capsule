@@ -22,7 +22,7 @@ use capsule_library::library::{
 };
 use capsule_library::lifecycle::{LifecycleError, ResealRefusal, Workspace};
 use capsule_sdk::albums::{AlbumClient, AlbumTransport, LifecycleOpError};
-use capsule_sdk::auth::{AuthClient, AuthError, LoginOutcome, Session};
+use capsule_sdk::auth::{AuthClient, AuthError, LoginOutcome, Session, SignInOptions};
 use capsule_sdk::client::AuthenticatedClient;
 use capsule_sdk::directory::{DirectoryClient, DirectoryError};
 use capsule_sdk::events::TransferEvents;
@@ -220,6 +220,57 @@ impl RemoteError {
             Self::Recovery(error) => error.error_code(),
             Self::Directory(error) => error.error_code(),
             _ => None,
+        }
+    }
+}
+
+/// Read how the server signs people in from its `server-info` record (`capsule server-info`).
+#[instrument(skip_all)]
+pub async fn sign_in_options(remote: &RemoteConfig) -> Result<SignInOptions, RemoteError> {
+    let client = AuthClient::new(&remote.auth_endpoint)?;
+    Ok(client.sign_in_options().await?)
+}
+
+/// How long a password sign-in waits for the `server-info` record before asking for the
+/// password anyway.
+pub const SIGN_IN_OPTIONS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Whether the server said it refuses passwords, so a password sign-in or registration is
+/// refused before the password is asked for.
+///
+/// Advisory, and only a `true` the server published counts: a record that omits the field (an
+/// older server), cannot be read, or does not answer within [`SIGN_IN_OPTIONS_TIMEOUT`] reads
+/// `false`, and the sign-in goes on to ask for the password as it always did. The server still
+/// refuses with `403 error.auth.password_disabled`, so a stale or missing answer here can cost a
+/// prompt, never a sign-in.
+pub async fn password_sign_in_disabled(remote: &RemoteConfig) -> bool {
+    password_sign_in_disabled_within(remote, SIGN_IN_OPTIONS_TIMEOUT).await
+}
+
+/// [`password_sign_in_disabled`], waiting at most `bound` for the record.
+async fn password_sign_in_disabled_within(
+    remote: &RemoteConfig,
+    bound: std::time::Duration,
+) -> bool {
+    match tokio::time::timeout(bound, sign_in_options(remote)).await {
+        Ok(Ok(options)) => {
+            tracing::info!(
+                password_disabled = options.password_disabled,
+                oidc = options.oidc,
+                "read the server's sign-in options"
+            );
+            options.password_disabled
+        }
+        Ok(Err(error)) => {
+            tracing::warn!(%error, "server-info unreadable; offering the password sign-in");
+            false
+        }
+        Err(_) => {
+            tracing::warn!(
+                timeout_ms = u64::try_from(bound.as_millis()).unwrap_or(u64::MAX),
+                "server-info did not answer in time; offering the password sign-in"
+            );
+            false
         }
     }
 }

@@ -2162,6 +2162,21 @@
       "name": "restore"
     },
     {
+      "about": "Show how the server signs people in: its identity provider, and whether it accepts passwords, from its public server-info record",
+      "args": [
+        {
+          "help": "Print the record as one JSON document on stdout: the server's id, whether it has an identity provider (`oidc`) and whether it refuses passwords (`password_disabled`)",
+          "id": "json",
+          "long": "json",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "takes_value": false
+        }
+      ],
+      "name": "server-info"
+    },
+    {
       "about": "Issue and revoke view-only share links on the server",
       "name": "share",
       "subcommands": [

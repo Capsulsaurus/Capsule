@@ -1227,6 +1227,152 @@ fn the_server_root_is_the_auth_base_without_its_suffix() {
     assert_eq!(bare.server_root, "http://127.0.0.1:4242");
 }
 
+// ── Sign-in options (server-info) ─────────────────────────────────
+
+/// A `server-info` record as the server renders it, with `password_disabled` set to `flag` or,
+/// for `None`, left out the way a server that predates the switch leaves it out.
+fn server_info_record(password_disabled: Option<bool>, oidc: bool) -> String {
+    let mut auth = serde_json::json!({
+        "login": "/v1/auth/login",
+        "refresh": "/v1/auth/refresh",
+        "logout": "/v1/auth/logout",
+        "oidc": if oidc {
+            serde_json::json!({
+                "authorize": "/v1/auth/oidc/authorize",
+                "callback": "/v1/auth/oidc/callback",
+            })
+        } else {
+            serde_json::Value::Null
+        },
+    });
+    if let Some(flag) = password_disabled {
+        auth["password_disabled"] = serde_json::Value::Bool(flag);
+    }
+    serde_json::json!({
+        "server_id": "https://capsule.example.test",
+        "api_base_url": "https://capsule.example.test/v1",
+        "auth": auth,
+        "protocol_version": { "min": "2025-01-01", "max": "2026-01-01" },
+        "signing_key": "AAAA",
+        "signing_algorithm": "Ed25519",
+        "deprecations": [],
+    })
+    .to_string()
+}
+
+/// A server answering only its `server-info` record, with `body`.
+fn server_info_handler(body: String) -> Handler {
+    Arc::new(move |req: MockRequest| {
+        let body = body.clone();
+        Box::pin(async move {
+            match req.path.as_str() {
+                "/.well-known/capsule/server-info" => MockResponse::json(200, body),
+                _ => MockResponse::json(404, r#"{"error":"x"}"#),
+            }
+        })
+    })
+}
+
+/// `password_disabled` reads through as published, and a record without it — an older server's
+/// — reads `false`; `oidc` is whether the record names the provider's endpoints.
+#[tokio::test]
+async fn sign_in_options_read_the_password_switch_and_default_a_missing_one_to_false() {
+    for (published, oidc, expected) in [
+        (Some(true), true, true),
+        (Some(false), true, false),
+        (None, false, false),
+    ] {
+        let server = start_mock(server_info_handler(server_info_record(published, oidc))).await;
+        // The CLI's shape: the auth base under `/v1/auth`, the record at the server root.
+        let client = AuthClient::new(&format!("{}/v1/auth", server.base_url)).unwrap();
+        let options = client.sign_in_options().await.unwrap();
+        assert_eq!(
+            options,
+            SignInOptions {
+                server_id: "https://capsule.example.test".to_owned(),
+                oidc,
+                password_disabled: expected,
+            },
+            "published {published:?}"
+        );
+    }
+}
+
+/// A server with no record, a body that is not one, and no server at all are each an error the
+/// caller reads as "unknown" — never a silent `false` or `true` invented here.
+#[tokio::test]
+async fn sign_in_options_without_a_record_are_an_error() {
+    let missing = start_mock(Arc::new(|_req: MockRequest| {
+        Box::pin(async { MockResponse::json(404, r#"{"error":"x"}"#) }) as BoxFut
+    }))
+    .await;
+    let error = AuthClient::new(&missing.base_url)
+        .unwrap()
+        .sign_in_options()
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            AuthError::Unexpected {
+                status: 404,
+                endpoint: "server-info",
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+
+    let garbled = start_mock(server_info_handler(r#"{"server_id":7}"#.to_owned())).await;
+    let error = AuthClient::new(&garbled.base_url)
+        .unwrap()
+        .sign_in_options()
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            AuthError::MalformedResponse {
+                endpoint: "server-info",
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+
+    let error = AuthClient::new("http://127.0.0.1:1/v1/auth")
+        .unwrap()
+        .sign_in_options()
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            AuthError::Network {
+                endpoint: "server-info",
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+}
+
+/// The authority stays the server's: a password login it refuses answers the coded `403`, and
+/// the code reaches the caller to localize.
+#[tokio::test]
+async fn a_refused_password_login_keeps_the_password_disabled_code() {
+    let server = start_mock(Arc::new(|_req: MockRequest| {
+        Box::pin(async { problem(403, error_codes::AUTH_PASSWORD_DISABLED) }) as BoxFut
+    }))
+    .await;
+    let client = AuthClient::new(&server.base_url).unwrap();
+    let error = expect_login_err(client.login("a@example.com", "pw").await);
+    assert_eq!(
+        error.error_code(),
+        Some(error_codes::AUTH_PASSWORD_DISABLED)
+    );
+}
+
 #[test]
 fn rejects_invalid_base_url() {
     assert!(matches!(
