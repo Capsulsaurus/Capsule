@@ -25,6 +25,11 @@
 //!   `capsule-server peer …` acts on it, a block's cascade over the issued grants included.
 //! - [`pull`] — the egress pull worker's engine: each job's schedule, the lease that keeps two
 //!   replicas off one job, the per-peer circuit, and the failure policy that drives them.
+//! - [`rejected_hashes`] — [`RejectedHashes`](rejected_hashes::RejectedHashes), the bounded
+//!   soft-fail table: the hash of every federated event a pull refused, so this server's view
+//!   does not silently diverge from a peer that accepted it.
+//! - [`breadcrumbs`] — [`BreadcrumbIndex`](breadcrumbs::BreadcrumbIndex), the lightweight
+//!   per-asset breadcrumb of each pulled album, read from the entries a pull committed.
 //! - [`subscriptions`] — [`SubscriptionStore`], the receiving half's record of which album this
 //!   server pulls from which peer for which local member, under the capability that member's
 //!   client posted; and [`SubscriptionJobs`], the pull worker's production job source.
@@ -41,12 +46,14 @@
 use std::fmt;
 use std::sync::Arc;
 
+pub mod breadcrumbs;
 pub mod capability;
 pub mod conformance;
 pub mod memory;
 pub mod peers;
 pub mod postgres;
 pub mod pull;
+pub mod rejected_hashes;
 pub mod report;
 pub mod scheme;
 pub mod store;

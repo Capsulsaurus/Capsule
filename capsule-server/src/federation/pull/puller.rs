@@ -17,6 +17,9 @@
 //!    [`Rules::page_size`] entries. Each page is screened ([`screen_page`]), then the metadata
 //!    blobs it commits to are fetched and checked ([`check_metadata_blob`]), then the page is
 //!    committed as one act. A page that fails writes nothing; pages before it stay written.
+//!    A page refused for a stale revival — a manifest the album already moved past, served
+//!    again — has the revived record's hash remembered in the [`RejectedHashes`] table
+//!    (design/federation.md, Soft-Fail Semantics) before the failure is returned.
 //! 4. **The report.** The time spent validating — screening, blob checks, the successor's
 //!    verification — is what [`PullReport::validation`] carries, so the worker charges the
 //!    peer's CPU budget for exactly the work its input cost.
@@ -44,9 +47,10 @@ use super::pulled::{Committed, PulledAlbums};
 use super::remote::{PeerClient, RemoteError, origin_of, rest};
 use super::signer::RequestSigner;
 use super::validate::{
-    Context, Refused, Rules, check_metadata_blob, metadata_read_limit, screen_page,
+    Context, Refused, Revived, Rules, check_metadata_blob, metadata_read_limit, screen_page,
 };
 use super::{JobKey, PullFailure, PullReport, Puller};
+use crate::federation::rejected_hashes::{RejectedHashes, Rejection};
 use crate::federation::subscriptions::{
     CapabilityToken, MAX_CAPABILITY_BYTES, Subscription, SubscriptionStore,
 };
@@ -72,6 +76,8 @@ pub struct RemotePullerParts {
     pub peers: Arc<dyn PeerStore>,
     /// Where what verifies is written.
     pub pulled: Arc<dyn PulledAlbums>,
+    /// Where the hash of a refused stale revival is remembered.
+    pub rejected: Arc<dyn RejectedHashes>,
     /// This server's operational key, which signs every presentation.
     pub signer: Arc<dyn RequestSigner>,
     /// What executes a request: the reqwest backend over
@@ -186,7 +192,12 @@ impl RemotePuller {
             *validation += screening.elapsed();
             let screened = match screened {
                 Ok(screened) => screened,
-                Err(Refused::Invalid(invalid)) => return Err(invalid_input(invalid.to_string())),
+                Err(Refused::Invalid(invalid)) => {
+                    if let Some(revived) = &invalid.revived {
+                        self.remember(job, revived, invalid.rule).await;
+                    }
+                    return Err(invalid_input(invalid.to_string()));
+                }
                 Err(newer @ Refused::Newer { .. }) => return Err(transport(newer.to_string())),
             };
 
@@ -244,6 +255,40 @@ impl RemotePuller {
             }
         }
         Ok(pages)
+    }
+
+    /// Remember the revived record's hash in the rejected-hash table.
+    ///
+    /// Best effort: the refusal stands whether or not the table could be written, because the
+    /// asset's superseded heads, not the table, are what refuse a revival. A failure is logged
+    /// and the pull's failure is returned as it would have been.
+    async fn remember(&self, job: &JobKey, revived: &Revived, rule: &str) {
+        let rejection = Rejection {
+            hash: revived.head,
+            peer: job.peer.clone(),
+            album: job.album.clone(),
+            asset_id: revived.asset_id.clone(),
+            rule: rule.to_owned(),
+        };
+        match self
+            .parts
+            .rejected
+            .record(rejection, self.parts.clock.now())
+            .await
+        {
+            Ok(()) => tracing::info!(
+                asset = %revived.asset_id,
+                hash = %revived.head.to_hex(),
+                rule,
+                "a stale revival was refused and its hash remembered"
+            ),
+            Err(error) => tracing::warn!(
+                %error,
+                asset = %revived.asset_id,
+                hash = %revived.head.to_hex(),
+                "a stale revival was refused, but its hash could not be remembered"
+            ),
+        }
     }
 
     /// The subscription whose capability this pull presents, refreshed when it is near its end.

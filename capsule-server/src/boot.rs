@@ -92,6 +92,10 @@ use crate::federation::pull::{
     Ed25519RequestSigner, InMemoryPullJobs, InMemoryPulledAlbums, PullJobs, PullWorker,
     PullWorkerParts, PulledAlbums, RemotePuller, RemotePullerParts, SystemJitter,
 };
+use crate::federation::rejected_hashes::postgres::PostgresRejectedHashes;
+use crate::federation::rejected_hashes::{
+    InMemoryRejectedHashes, RejectedHashBounds, RejectedHashes,
+};
 use crate::federation::subscriptions::postgres::PostgresSubscriptions;
 use crate::federation::{
     CapabilityCodec, CapabilityStore, FederationCollaborators, FederationContext,
@@ -331,6 +335,7 @@ struct PullCollaborators {
     subscriptions: Arc<dyn SubscriptionStore>,
     peers: Arc<dyn PeerStore>,
     pulled: Arc<dyn PulledAlbums>,
+    rejected: Arc<dyn RejectedHashes>,
     counters: CounterContext,
     clock: Arc<dyn Clock>,
     policy: UploadPolicy,
@@ -357,6 +362,7 @@ fn pull_worker(
         subscriptions: parts.subscriptions.clone(),
         peers: parts.peers.clone(),
         pulled: parts.pulled,
+        rejected: parts.rejected,
         signer: Arc::new(signer),
         backend: Arc::new(rest::ReqwestBackend::new(http)),
         clock: parts.clock.clone(),
@@ -592,6 +598,9 @@ struct Stores {
     /// blobs (#1124). Here rather than in [`Ports`] because the durable adapter keeps its blobs
     /// in [`Stores::blobs`].
     pulled: Arc<dyn PulledAlbums>,
+    /// The bounded soft-fail table the pull worker remembers each refused stale revival in
+    /// (#1157): durable, so Postgres on the durable arm.
+    rejected: Arc<dyn RejectedHashes>,
     /// The moderation store: written by report intake, read by `capsule-server moderation …`.
     moderation: Arc<dyn ModerationStore>,
     /// The account activity log: durable, so Postgres on the durable arm (design/activity-log.md).
@@ -738,6 +747,8 @@ struct Base {
     ledger: Arc<FilesystemLedger>,
     /// What one source peer's pulled albums may hold for one local account.
     pulled_budget: PeerCachingBudget,
+    /// How much the rejected-hash table holds, and for how long.
+    rejected_bounds: RejectedHashBounds,
 }
 
 impl Base {
@@ -759,6 +770,7 @@ impl Base {
                 InMemoryPulledAlbums::new().with_budget(subscriptions.clone(), self.pulled_budget),
             ),
             subscriptions,
+            rejected: Arc::new(InMemoryRejectedHashes::new(self.rejected_bounds)),
             moderation: Arc::new(InMemoryModeration::new()),
             activity: Arc::new(InMemoryActivity::new()),
             root: self.root,
@@ -786,6 +798,10 @@ impl Base {
                 PostgresPulledAlbums::new(connection.clone(), self.blobs.clone())
                     .with_charge(Arc::new(PeerBudgetCharge::new(self.pulled_budget))),
             ),
+            rejected: Arc::new(PostgresRejectedHashes::new(
+                connection.clone(),
+                self.rejected_bounds,
+            )),
             moderation: Arc::new(PostgresModeration::new(connection.clone())),
             activity: Arc::new(PostgresActivity::new(connection.clone())),
             root: self.root,
@@ -840,12 +856,19 @@ async fn base(config: &Config, clock: Arc<dyn Clock>) -> Result<Base, BootError>
         bytes = pulled_budget.limit(),
         "the per-peer caching budget on pulled albums"
     );
+    let rejected_bounds = config.rejected_hash_bounds;
+    tracing::debug!(
+        capacity = rejected_bounds.capacity(),
+        ttl_hours = rejected_bounds.ttl().as_hours(),
+        "the bounds of the federation rejected-hash table"
+    );
     Ok(Base {
         root,
         clock,
         blobs,
         ledger,
         pulled_budget,
+        rejected_bounds,
     })
 }
 
@@ -1100,6 +1123,7 @@ fn compose(
                 subscriptions: subscriptions.clone(),
                 peers: peers.clone(),
                 pulled: stores.pulled.clone(),
+                rejected: stores.rejected.clone(),
                 counters: counters.clone(),
                 clock: clock.clone(),
                 policy: policy.clone(),

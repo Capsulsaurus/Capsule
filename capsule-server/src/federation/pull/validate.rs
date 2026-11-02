@@ -140,6 +140,18 @@ pub struct Invalid {
     pub rule: &'static str,
     /// What was wrong.
     pub detail: String,
+    /// The manifest a stale revival served, when that is the rule broken: what the puller
+    /// remembers in the [rejected-hash table](crate::federation::rejected_hashes).
+    pub revived: Option<Revived>,
+}
+
+/// A manifest the album had already moved past, served again (invariant 17).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Revived {
+    /// The asset it names.
+    pub asset_id: String,
+    /// Its record hash: one of the asset's superseded heads.
+    pub head: Hash32,
 }
 
 impl Invalid {
@@ -147,6 +159,21 @@ impl Invalid {
         Self {
             rule,
             detail: detail.into(),
+            revived: None,
+        }
+    }
+
+    /// The stale revival of `asset_id`'s superseded head `head`.
+    fn revived(asset_id: &str, head: Hash32) -> Self {
+        Self {
+            revived: Some(Revived {
+                asset_id: asset_id.to_owned(),
+                head,
+            }),
+            ..Self::new(
+                "invariant 17",
+                "a manifest this album already moved past was served again",
+            )
         }
     }
 }
@@ -433,11 +460,7 @@ fn screen_entry(
     // 17: the stale-revival defense.
     if let Some(held) = held {
         if held.superseded.contains(&head) {
-            return Err(Invalid::new(
-                "invariant 17",
-                "a manifest this album already moved past was served again",
-            )
-            .into());
+            return Err(Invalid::revived(&asset_id, head).into());
         }
         if core.action.is_create() && held.head != head {
             return Err(
