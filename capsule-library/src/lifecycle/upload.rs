@@ -389,7 +389,11 @@ impl Workspace {
     /// [`LifecycleError::CreateMetadataSuperseded`] when neither answers `bound`: an edit made
     /// before the library kept the create's blob replaced it, and it is gone.
     /// [`LifecycleError::Io`] when the kept copy exists and cannot be read.
-    fn create_metadata_blob(&self, asset: &AssetState, bound: Option<Hash32>) -> Result<Vec<u8>> {
+    pub(super) fn create_metadata_blob(
+        &self,
+        asset: &AssetState,
+        bound: Option<Hash32>,
+    ) -> Result<Vec<u8>> {
         let Some(bound) = bound else {
             return Ok(asset.metadata_blob.clone());
         };
