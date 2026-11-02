@@ -801,6 +801,8 @@ fn every_upload_answer_waits_recovers_or_ends_the_transfer() {
         (429, None, Retryable),
         (408, None, Retryable),
         (425, None, Retryable),
+        // A write refused as TLS early data: re-sent after the handshake, by its status.
+        (425, Some(error_codes::REQUEST_TOO_EARLY), Retryable),
         // Recovers: the matrix's own actions, whatever the status.
         (409, Some(error_codes::UPLOAD_OFFSET_MISMATCH), Recover),
         (404, Some(error_codes::UPLOAD_SESSION_NOT_FOUND), Recover),

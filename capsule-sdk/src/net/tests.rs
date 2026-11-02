@@ -405,6 +405,7 @@ fn errors_are_classified_before_any_retry() {
         (408, false, Retryable),
         (408, true, Retryable),
         (425, false, Retryable),
+        (425, true, Retryable),
         (429, false, Retryable),
         (429, true, Retryable),
         (500, false, Retryable),
