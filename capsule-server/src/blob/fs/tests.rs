@@ -63,10 +63,10 @@ macro_rules! conformance_cases {
 }
 
 conformance_cases! {
-    staging_appends_only_at_the_end_and_tracks_its_length,
-    an_append_at_the_wrong_offset_is_refused_and_names_the_resume_point,
-    truncating_a_stage_cuts_it_back_and_never_grows_it,
-    appending_to_an_upload_that_was_never_begun_is_not_staged,
+    staging_writes_positionally_and_tracks_its_length,
+    ranges_written_out_of_order_read_back_in_place,
+    a_rewritten_range_overwrites_what_a_failed_write_left,
+    writing_to_an_upload_that_was_never_begun_is_not_staged,
     abandoning_removes_the_staged_bytes_and_says_whether_there_were_any,
     the_staged_listing_is_ordered_and_holds_only_open_uploads,
     an_upload_id_that_cannot_name_a_file_is_refused_by_every_operation,
@@ -100,40 +100,36 @@ fn address(hex: &str) -> ContentAddress {
     ContentAddress::parse(&hex).expect("a fixture address")
 }
 
-/// A disk that fills mid-append leaves the stage where it was, and the retry lands.
+/// A disk that fills mid-write is `StorageFull`, and the retry of the same range lands over
+/// whatever part of it reached the disk.
 ///
-/// The wedge #694 reports: the short write used to stay on disk, so the stage ended past the
-/// session's offset and every later chunk met an offset mismatch until the session expired.
+/// The wedge #694 reported for the append-only stage cannot recur: a write is positional, so
+/// bytes a failed write left behind are overwritten rather than standing in the next one's way.
 #[tokio::test]
-async fn a_short_write_on_a_full_disk_is_cut_back_and_the_retry_lands() {
+async fn a_short_write_on_a_full_disk_is_overwritten_by_the_retry() {
     let temp = TempStore::open().await;
     let upload = UploadId::new("short-write");
     temp.store.begin(&upload).await.expect("begin");
     temp.store
-        .append(&upload, 0, b"0123")
+        .write_staged(&upload, 0, b"0123")
         .await
-        .expect("the first append lands");
+        .expect("the first write lands");
 
     *temp
         .store
         .short_write
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(3);
-    match temp.store.append(&upload, 4, b"456789").await {
+    match temp.store.write_staged(&upload, 4, b"456789").await {
         Err(BlobError::StorageFull { .. }) => {}
         other => panic!("a full disk is StorageFull, not {other:?}"),
     }
-    assert_eq!(
-        temp.store.staged_len(&upload).await.expect("staged_len"),
-        Some(4),
-        "the three bytes that did reach the disk were cut away again"
-    );
 
     assert_eq!(
         temp.store
-            .append(&upload, 4, b"456789")
+            .write_staged(&upload, 4, b"456789")
             .await
-            .expect("the retry at the same offset lands"),
+            .expect("the retry of the same range lands"),
         10
     );
     assert_eq!(
@@ -192,7 +188,10 @@ async fn a_committed_blob_lives_at_its_sharded_address_and_never_at_a_flat_one()
     let bytes = b"opaque ciphertext".to_vec();
 
     temp.store.begin(&upload).await.expect("begin");
-    temp.store.append(&upload, 0, &bytes).await.expect("append");
+    temp.store
+        .write_staged(&upload, 0, &bytes)
+        .await
+        .expect("write_staged");
     temp.store.commit(&upload, &address).await.expect("commit");
 
     let sharded = temp

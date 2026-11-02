@@ -17,7 +17,8 @@ fn session(created: i64, progressed: i64, status: UploadSessionStatus) -> Upload
         blob_role: BlobRole::Original,
         intent_id: None,
         manifest_envelope: "{}".to_owned(),
-        received_bytes: 0,
+        committed: crate::store::CommittedSet::default(),
+        in_flight_cap: ADVISED_RANGES,
         total_size: 8192,
         status,
         failure_code: None,
@@ -32,17 +33,35 @@ fn at(second: i64) -> Timestamp {
 
 #[test]
 fn advice_renders_as_a_structured_field_dictionary_of_integers() {
+    let mut record = session(0, 0, UploadSessionStatus::Pending);
+    record.total_size = 1;
     assert_eq!(
-        Advice::for_size(1).to_string(),
+        Advice::for_session(&record).to_string(),
         "chunk=262144, sessions=4, ranges=1, ttl=300"
     );
 }
 
 #[test]
 fn the_chunk_member_is_the_suggested_chunk_size_for_the_declared_size() {
+    let mut record = session(0, 0, UploadSessionStatus::Pending);
     for size in [1, 10 * 1024 * 1024, 100 * 1024 * 1024] {
-        assert_eq!(Advice::for_size(size).chunk, suggested_chunk_size(size));
+        record.total_size = size;
+        assert_eq!(
+            Advice::for_session(&record).chunk,
+            suggested_chunk_size(size)
+        );
     }
+}
+
+#[test]
+fn the_ranges_member_is_the_session_s_own_in_flight_cap() {
+    let mut record = session(0, 0, UploadSessionStatus::Pending);
+    record.in_flight_cap = 7;
+    assert_eq!(
+        Advice::for_session(&record).ranges,
+        7,
+        "a session keeps the cap it was created with, whatever new sessions are given"
+    );
 }
 
 #[test]

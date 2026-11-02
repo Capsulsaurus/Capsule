@@ -1935,6 +1935,7 @@
     <string name="error_upload_missing_offset">Der Upload-Anfrage fehlte ihre Positionsmarkierung.</string>
     <string name="error_upload_offset_mismatch">Der Upload ist aus dem Takt geraten und richtet sich neu aus.</string>
     <string name="error_upload_owner_not_permitted">Sie können nicht im Namen dieses Benutzers hochladen.</string>
+    <string name="error_upload_range_conflict">Ein Teil dieses Uploads ist bereits unterwegs. Wird fortgesetzt…</string>
     <string name="error_upload_rate_limited">Das Hochladen ist kurz pausiert. Es wird automatisch fortgesetzt.</string>
     <string name="error_upload_receipt_not_available">Der Upload ist nicht abgeschlossen, daher ist seine Speicherquittung noch nicht verfügbar.</string>
     <string name="error_upload_replace_incomplete">Capsule empfängt noch die neue Version dieses Fotos. Das wird automatisch abgeschlossen.</string>
@@ -1946,6 +1947,8 @@
     <string name="error_upload_storage_full">Der Server hat keinen Speicherplatz mehr. Das Hochladen wird fortgesetzt, sobald Speicherplatz frei ist.</string>
     <string name="error_upload_storage_inconsistent">Auf dem Server ist ein Speicherproblem aufgetreten. Bitte versuchen Sie es erneut.</string>
     <string name="error_upload_timestamp_out_of_range">Die Uhr Ihres Geräts scheint falsch zu sein. Überprüfen Sie Datum und Uhrzeit.</string>
+    <string name="error_upload_too_fragmented">Dieser Upload hat zu viele Lücken. Sie werden gefüllt…</string>
+    <string name="error_upload_too_many_in_flight">Zu viele Teile dieses Uploads werden gleichzeitig gesendet. Wird verlangsamt…</string>
     <string name="error_upload_unavailable">Der Upload konnte nicht abgeschlossen werden. Bitte versuche es erneut.</string>
     <string name="error_upload_unknown_crypto_suite">Diese App-Version verwendet eine Verschlüsselungs-Suite, die der Server nicht erkennt.</string>
     <string name="error_upload_unknown_derivative_format">Diese Miniatur oder Vorschau hat ein nicht unterstütztes Format.</string>

@@ -24,9 +24,10 @@
 //! - **It never touches the filesystem.** Staging, appending, verifying and committing all go
 //!   through the blob port, which is why finalization reads the stage back through
 //!   [`crate::blob::BlobStore::read_staged_at`] rather than opening a file.
-//! - **It never splits chunk accounting.** Accepting a chunk is one call —
-//!   [`crate::store::UploadSessionStore::record_progress`] — because the byte counter, the progress clock and the replay entry describe one event.
-//!   The Salvo server issued three writes and a crash between them left all three disagreeing.
+//! - **It never splits chunk accounting.** Committing a range is one call —
+//!   [`crate::store::UploadSessionStore::record_range`] — because the committed set, the progress
+//!   clock and the status describe one event. The Salvo server issued three writes and a crash
+//!   between them left all three disagreeing.
 //!
 //! # The asset id comes from the manifest, not from here
 //!

@@ -168,7 +168,7 @@ async fn stage_and_commit(
 ) -> Placement {
     let store = harness.store();
     ok(store.begin(upload).await, "begin");
-    ok(store.append(upload, 0, bytes).await, "append");
+    ok(store.write_staged(upload, 0, bytes).await, "write_staged");
     ok(store.commit(upload, address).await, "commit")
 }
 
@@ -176,10 +176,10 @@ async fn stage_and_commit(
 // Staging
 // ===========================================================================================
 
-/// A staged file grows only at its end, and its length is readable at every step.
-pub async fn staging_appends_only_at_the_end_and_tracks_its_length(h: &dyn Harness) {
+/// A staged file takes writes at their offsets, and its length is readable at every step.
+pub async fn staging_writes_positionally_and_tracks_its_length(h: &dyn Harness) {
     let store = h.store();
-    let upload = upload("staging-appends", "a");
+    let upload = upload("staging-writes", "a");
 
     assert_eq!(
         ok(store.staged_len(&upload).await, "staged_len"),
@@ -194,109 +194,115 @@ pub async fn staging_appends_only_at_the_end_and_tracks_its_length(h: &dyn Harne
         "an opened stage is empty, not absent"
     );
 
-    assert_eq!(ok(store.append(&upload, 0, b"hello ").await, "append"), 6);
-    assert_eq!(ok(store.append(&upload, 6, b"world").await, "append"), 11);
+    assert_eq!(
+        ok(
+            store.write_staged(&upload, 0, b"hello ").await,
+            "write_staged"
+        ),
+        6
+    );
+    assert_eq!(
+        ok(
+            store.write_staged(&upload, 6, b"world").await,
+            "write_staged"
+        ),
+        11
+    );
     assert_eq!(
         ok(store.staged_len(&upload).await, "staged_len"),
         Some(11),
-        "the staged length is the truth a session's counter caches"
+        "the stage is as long as the furthest byte written"
     );
 
     ok(store.begin(&upload).await, "begin");
     assert_eq!(
         ok(store.staged_len(&upload).await, "staged_len"),
         Some(0),
-        "re-opening a stage starts it over rather than appending to the last attempt"
+        "re-opening a stage starts it over rather than keeping the last attempt"
     );
 }
 
-/// An append anywhere but the end writes nothing and names the offset to resume from.
-pub async fn an_append_at_the_wrong_offset_is_refused_and_names_the_resume_point(h: &dyn Harness) {
+/// Ranges written in any order land at their offsets, and a range past the end leaves a hole
+/// a later write fills.
+pub async fn ranges_written_out_of_order_read_back_in_place(h: &dyn Harness) {
     let store = h.store();
-    let upload = upload("wrong-offset", "a");
+    let upload = upload("out-of-order", "a");
     ok(store.begin(&upload).await, "begin");
-    ok(store.append(&upload, 0, b"0123456789").await, "append");
-
-    for offset in [0_u64, 5, 11, 4096] {
-        match store.append(&upload, offset, b"xxx").await {
-            Err(BlobError::OffsetMismatch {
-                offset: refused,
-                actual,
-                ..
-            }) => {
-                assert_eq!(refused, offset);
-                assert_eq!(actual, 10, "the refusal carries the offset to resume from");
-            }
-            Err(other) => panic!("an out-of-order append is an offset mismatch, not {other}"),
-            Ok(_) => panic!("an append at {offset} must be refused; the file is append-only"),
-        }
-    }
 
     assert_eq!(
-        ok(store.staged_len(&upload).await, "staged_len"),
-        Some(10),
-        "a refused append writes nothing"
+        ok(store.write_staged(&upload, 8, b"89").await, "write_staged"),
+        10,
+        "a write past the end grows the stage to its own end"
+    );
+    ok(
+        store.write_staged(&upload, 4, b"4567").await,
+        "write_staged",
     );
     assert_eq!(
-        ok(store.append(&upload, 10, b"ab").await, "append"),
-        12,
-        "and the stage still accepts the append that belongs at the end"
-    );
-}
-
-/// A stage cut back to its session's offset accepts the append that belongs there.
-///
-/// The repair for a stage that ran ahead of its session (transfer/upload.md, Hostile Clients):
-/// it shrinks, it never grows, and the bytes it keeps are the ones that were there.
-pub async fn truncating_a_stage_cuts_it_back_and_never_grows_it(h: &dyn Harness) {
-    let store = h.store();
-    let upload = upload("truncate-stage", "a");
-
-    assert_eq!(
-        ok(store.truncate_staged(&upload, 0).await, "truncate_staged"),
-        None,
-        "nothing is staged, so there is nothing to cut"
-    );
-
-    ok(store.begin(&upload).await, "begin");
-    ok(store.append(&upload, 0, b"0123456789").await, "append");
-
-    assert_eq!(
-        ok(store.truncate_staged(&upload, 64).await, "truncate_staged"),
-        Some(10),
-        "a cut past the end leaves the stage as it was"
-    );
-    assert_eq!(
-        ok(store.truncate_staged(&upload, 4).await, "truncate_staged"),
-        Some(4)
-    );
-    assert_eq!(
-        ok(store.staged_len(&upload).await, "staged_len"),
-        Some(4),
-        "the cut is what the stage now reports"
-    );
-    assert_eq!(
-        ok(store.append(&upload, 4, b"abc").await, "append"),
-        7,
-        "the append at the cut lands"
+        ok(
+            store.write_staged(&upload, 0, b"0123").await,
+            "write_staged"
+        ),
+        10,
+        "a write inside the stage does not grow it"
     );
     assert_eq!(
         ok(store.read_staged_at(&upload, 0, 64).await, "read_staged_at"),
-        Some(b"0123abc".to_vec()),
-        "and the bytes before the cut are the ones that were there"
+        Some(b"0123456789".to_vec()),
+        "every range reads back where it was written"
     );
 }
 
-/// Appending to an upload nothing opened is absence, named as such.
-pub async fn appending_to_an_upload_that_was_never_begun_is_not_staged(h: &dyn Harness) {
+/// A range written again replaces what an earlier write of it left — the retry after a failed
+/// write, or a write the session never recorded.
+pub async fn a_rewritten_range_overwrites_what_a_failed_write_left(h: &dyn Harness) {
+    let store = h.store();
+    let upload = upload("rewrite-range", "a");
+    ok(store.begin(&upload).await, "begin");
+    ok(
+        store.write_staged(&upload, 0, b"0123xxxxxx").await,
+        "write_staged",
+    );
+
+    assert_eq!(
+        ok(
+            store.write_staged(&upload, 4, b"456789").await,
+            "write_staged"
+        ),
+        10
+    );
+    assert_eq!(
+        ok(store.read_staged_at(&upload, 0, 64).await, "read_staged_at"),
+        Some(b"0123456789".to_vec()),
+        "the rewrite replaces the earlier bytes of its range and nothing else"
+    );
+}
+
+/// Writing to an upload nothing opened is absence, named as such, and opens nothing.
+pub async fn writing_to_an_upload_that_was_never_begun_is_not_staged(h: &dyn Harness) {
     let store = h.store();
     let upload = upload("never-begun", "a");
 
-    match store.append(&upload, 0, b"bytes").await {
+    match store.write_staged(&upload, 0, b"bytes").await {
         Err(BlobError::NotStaged { upload: named }) => assert_eq!(named, upload),
         Err(other) => panic!("an unopened stage is NotStaged, not {other}"),
-        Ok(_) => panic!("there is nothing to append to"),
+        Ok(_) => panic!("there is nothing to write to"),
     }
+    assert_eq!(
+        ok(store.staged_len(&upload).await, "staged_len"),
+        None,
+        "a refused write never creates the stage"
+    );
+
+    ok(store.begin(&upload).await, "begin");
+    ok(store.abandon(&upload).await, "abandon");
+    assert!(
+        matches!(
+            store.write_staged(&upload, 0, b"late").await,
+            Err(BlobError::NotStaged { .. })
+        ),
+        "a write that arrives after its stage was abandoned does not resurrect it"
+    );
     assert_eq!(ok(store.staged_len(&upload).await, "staged_len"), None);
 }
 
@@ -311,7 +317,10 @@ pub async fn abandoning_removes_the_staged_bytes_and_says_whether_there_were_any
     );
 
     ok(store.begin(&upload).await, "begin");
-    ok(store.append(&upload, 0, b"partial upload").await, "append");
+    ok(
+        store.write_staged(&upload, 0, b"partial upload").await,
+        "write_staged",
+    );
     assert!(ok(store.abandon(&upload).await, "abandon"));
 
     assert_eq!(ok(store.staged_len(&upload).await, "staged_len"), None);
@@ -365,10 +374,9 @@ pub async fn an_upload_id_that_cannot_name_a_file_is_refused_by_every_operation(
         let upload = UploadId::new(hostile);
         for (operation, result) in [
             ("begin", store.begin(&upload).await),
-            ("append", store.append(&upload, 0, b"x").await.map(|_| ())),
             (
-                "truncate_staged",
-                store.truncate_staged(&upload, 0).await.map(|_| ()),
+                "write_staged",
+                store.write_staged(&upload, 0, b"x").await.map(|_| ()),
             ),
             ("staged_len", store.staged_len(&upload).await.map(|_| ())),
             (
@@ -402,8 +410,14 @@ pub async fn committing_places_the_staged_bytes_at_their_content_address(h: &dyn
     let bytes = b"ciphertext the server cannot read".to_vec();
 
     ok(store.begin(&upload).await, "begin");
-    ok(store.append(&upload, 0, &bytes[..10]).await, "append");
-    ok(store.append(&upload, 10, &bytes[10..]).await, "append");
+    ok(
+        store.write_staged(&upload, 0, &bytes[..10]).await,
+        "write_staged",
+    );
+    ok(
+        store.write_staged(&upload, 10, &bytes[10..]).await,
+        "write_staged",
+    );
 
     assert_eq!(
         ok(store.commit(&upload, &address).await, "commit"),
@@ -484,7 +498,10 @@ pub async fn staged_bytes_are_not_a_blob_until_they_are_committed(h: &dyn Harnes
     let address = address(case, 1);
 
     ok(store.begin(&upload).await, "begin");
-    ok(store.append(&upload, 0, b"most of a blob").await, "append");
+    ok(
+        store.write_staged(&upload, 0, b"most of a blob").await,
+        "write_staged",
+    );
 
     assert_eq!(
         ok(store.stat(&address).await, "stat"),
@@ -605,7 +622,7 @@ pub async fn a_staged_upload_reads_back_in_windows(h: &dyn Harness) {
     );
 
     ok(store.begin(&id).await, "begin");
-    ok(store.append(&id, 0, &bytes).await, "append");
+    ok(store.write_staged(&id, 0, &bytes).await, "write_staged");
 
     let read = |offset: u64, len: usize| store.read_staged_at(&id, offset, len);
     assert_eq!(
@@ -934,10 +951,10 @@ pub async fn quarantining_an_absent_address_holds_nothing(h: &dyn Harness) {
 /// adapter should prefer calling the cases individually, one test each, so a failure names the
 /// property that broke rather than the suite.
 pub async fn run_all(h: &dyn Harness) {
-    staging_appends_only_at_the_end_and_tracks_its_length(h).await;
-    an_append_at_the_wrong_offset_is_refused_and_names_the_resume_point(h).await;
-    truncating_a_stage_cuts_it_back_and_never_grows_it(h).await;
-    appending_to_an_upload_that_was_never_begun_is_not_staged(h).await;
+    staging_writes_positionally_and_tracks_its_length(h).await;
+    ranges_written_out_of_order_read_back_in_place(h).await;
+    a_rewritten_range_overwrites_what_a_failed_write_left(h).await;
+    writing_to_an_upload_that_was_never_begun_is_not_staged(h).await;
     abandoning_removes_the_staged_bytes_and_says_whether_there_were_any(h).await;
     the_staged_listing_is_ordered_and_holds_only_open_uploads(h).await;
     an_upload_id_that_cannot_name_a_file_is_refused_by_every_operation(h).await;

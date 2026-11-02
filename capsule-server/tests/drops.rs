@@ -1886,32 +1886,28 @@ async fn assert_one_drop(fixture: &Fixture, bearer: &str, bytes: &[u8]) {
 /// Record `last` at `offset` the way the completing request does, and then lose the request
 /// before it claims the deposit: the bytes staged and counted, the session full and unclaimed.
 async fn record_without_depositing(fixture: &Fixture, upload_id: &str, offset: u64, last: &[u8]) {
-    use capsule_server::store::{AcceptedChunk, Clock as _, UploadId, UploadSessionStore as _};
+    use capsule_server::store::{Clock as _, CommittedRange, UploadId, UploadSessionStore as _};
 
     let upload = UploadId::new(upload_id);
     fixture
         .blobs
-        .append(&upload, offset, last)
+        .write_staged(&upload, offset, last)
         .await
-        .expect("the stage appends");
+        .expect("the stage takes the range");
     let recorded = fixture
         .uploads
-        .record_progress(
+        .record_range(
             &upload,
-            AcceptedChunk {
-                offset,
-                chunk_hash: checksum(last),
-                next_offset: offset + last.len() as u64,
+            CommittedRange {
+                start: offset,
+                end: offset + last.len() as u64,
                 accepted_at: fixture.clock.now(),
             },
         )
         .await
-        .expect("the store records progress")
+        .expect("the store records the range")
         .expect("the session is live");
-    assert_eq!(
-        recorded.received_bytes, recorded.total_size,
-        "the session is full"
-    );
+    assert!(recorded.is_full(), "the session is full");
     assert_eq!(
         recorded.status.as_str(),
         "uploading",

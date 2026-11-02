@@ -53,7 +53,7 @@ const _: () = assert!(
 /// The finalized store, sharded two levels deep on the address's own hex prefix.
 pub const BLOBS_DIR: &str = "blobs";
 
-/// Live uploads: one append-only `{upload_id}.bin` per session. Flat — see the module docs on
+/// Live uploads: one positionally written `{upload_id}.bin` per session. Flat — see the module docs on
 /// [`super`].
 pub const INCOMING_DIR: &str = "incoming";
 

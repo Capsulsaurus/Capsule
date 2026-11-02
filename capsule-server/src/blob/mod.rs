@@ -40,7 +40,7 @@
 //! There are two write paths, and neither writes `blobs/{hash}.tmp`.
 //!
 //! - **The upload path has no temp file at all.** `incoming/{upload_id}.bin` *is* the staging
-//!   file — that is what the append-only upload protocol already builds — and finalization
+//!   file — the upload protocol writes each range into it at its offset — and finalization
 //!   renames it straight to its content address. The whole tree is on one filesystem
 //!   (design/filesystem/server.md; the requirement is recorded in `self-hosting.md`), so that
 //!   rename is atomic.
@@ -155,27 +155,13 @@ pub enum BlobError {
         upload: UploadId,
     },
 
-    /// An append arrived somewhere other than the end of the staged file.
-    ///
-    /// A value, not a surprise: the upload protocol answers a resuming client with the offset it
-    /// should send from, and this carries it. Nothing was written.
-    #[error("upload {upload} is {actual} bytes long, so an append at {offset} was refused")]
-    OffsetMismatch {
-        /// The upload that was addressed.
-        upload: UploadId,
-        /// Where the caller tried to write.
-        offset: u64,
-        /// Where the staged file actually ends — the offset to resume from.
-        actual: u64,
-    },
-
     /// The backend has no room left for `operation` (`ENOSPC`).
     ///
     /// A variant of its own rather than a [`Self::Backend`] detail, because it is the one
     /// storage failure a client can do something about: wait. The upload surface answers it
-    /// `507 error.upload.storage_full` rather than the `503` an outage gets, and an append that
-    /// meets it has already been truncated back to where it started, so the client's retry at
-    /// the same offset succeeds once space is freed.
+    /// `507 error.upload.storage_full` rather than the `503` an outage gets; a staged write that
+    /// meets it committed nothing, so the client's retry of the same range succeeds once space
+    /// is freed.
     #[error("the blob store has no space left to {operation}")]
     StorageFull {
         /// What was being attempted, for the log line.
@@ -274,46 +260,31 @@ pub struct QuarantinedBlob {
 pub trait BlobStore: fmt::Debug + Send + Sync {
     // ── Staging ───────────────────────────────────────────────────────────────────────────
 
-    /// Open an append-only staging file for `upload`, replacing any bytes already staged under
-    /// that identifier.
+    /// Open an empty staging file for `upload`, replacing any bytes already staged under that
+    /// identifier.
     ///
     /// Replacing rather than refusing is what makes a re-created session start from zero: the
     /// upload store mints a fresh identifier per session, so a collision is a restart.
     fn begin<'a>(&'a self, upload: &'a UploadId) -> BlobFuture<'a, ()>;
 
-    /// Durably append `bytes` at `offset`, returning the staged file's new length.
+    /// Durably write `bytes` at `offset` of `upload`'s staged file, returning the file's length
+    /// afterwards.
     ///
-    /// `offset` must be the current length: the file is append-only, and a mismatch is
-    /// [`BlobError::OffsetMismatch`] carrying the offset to resume from, with nothing written.
-    /// The append is durable before this returns, which is what makes [`Self::staged_len`] the
-    /// truth the session's cached counter is reconciled *up* to
-    /// ([`UploadSessionStore::reconcile_received_bytes`](crate::store::UploadSessionStore::reconcile_received_bytes)).
-    ///
-    /// **A failed append leaves the stage at `offset`.** Whatever part of `bytes` reached the
-    /// backend before the failure — a short write on a full disk, an I/O error mid-flush — is cut
-    /// away again before the error is returned, so the stage never ends somewhere no session
-    /// offset names and the caller's retry at the same `offset` is an ordinary append
-    /// (transfer/upload.md, Hostile Clients: "a session never wedges"). A full backend is
-    /// [`BlobError::StorageFull`].
-    fn append<'a>(
+    /// Positional, in any order: the stage is a file sized by the ranges written into it, and a
+    /// write past its end leaves a hole the write that covers it fills later. The write is
+    /// durable before this returns. It never decides what the stage *means* — the session's
+    /// committed set does (transfer upload design doc, Staging) — so bytes it writes outside that
+    /// set are garbage the next write of their range overwrites, and a failed write needs no
+    /// repair: whatever part of `bytes` reached the backend is outside the committed set, and the
+    /// caller's retry of the same range lands over it. A full backend is
+    /// [`BlobError::StorageFull`]; a stage that was never begun, or has been abandoned, is
+    /// [`BlobError::NotStaged`], and nothing is created.
+    fn write_staged<'a>(
         &'a self,
         upload: &'a UploadId,
         offset: u64,
         bytes: &'a [u8],
     ) -> BlobFuture<'a, u64>;
-
-    /// Cut `upload`'s staged file back to `len` bytes, returning its length afterwards.
-    ///
-    /// Shrinks only: a stage already at or below `len` is left exactly as it is, because bytes
-    /// the stage does not hold cannot be invented. `None` when nothing is staged.
-    ///
-    /// The repair for a stage that has run **ahead** of its session's acknowledged offset — an
-    /// append that landed durably and then lost the session write that records it, or one a
-    /// crash interrupted. Those bytes were never acknowledged, so the client will send them
-    /// again at the session's offset; cutting them away is what lets that append land rather
-    /// than meet [`BlobError::OffsetMismatch`] on every retry until the session expires.
-    fn truncate_staged<'a>(&'a self, upload: &'a UploadId, len: u64)
-    -> BlobFuture<'a, Option<u64>>;
 
     /// The staged file's length, or `None` when nothing is staged.
     fn staged_len<'a>(&'a self, upload: &'a UploadId) -> BlobFuture<'a, Option<u64>>;
@@ -343,8 +314,7 @@ pub trait BlobStore: fmt::Debug + Send + Sync {
 
     /// Every upload with bytes currently staged, in ascending identifier order.
     ///
-    /// The startup scrub's input: a staged file whose session no longer exists is an orphan to
-    /// abandon, and one whose length diverges from its session's counter is a reconcile.
+    /// The scrub's input: a staged file whose session no longer exists is an orphan.
     fn staged(&self) -> BlobFuture<'_, Vec<UploadId>>;
 
     /// Atomically place `upload`'s staged bytes at `address`, clearing the stage either way.
@@ -366,7 +336,7 @@ pub trait BlobStore: fmt::Debug + Send + Sync {
     ///
     /// For a blob the server already holds whole — a signed manifest envelope object, a
     /// federation pull that has been buffered, a test fixture. The streaming path is
-    /// [`Self::begin`] / [`Self::append`] / [`Self::commit`]; this one materialises its argument
+    /// [`Self::begin`] / [`Self::write_staged`] / [`Self::commit`]; this one materialises its argument
     /// by definition, so it is not the path a multi-gigabyte original takes.
     fn put<'a>(&'a self, address: &'a ContentAddress, bytes: &'a [u8])
     -> BlobFuture<'a, Placement>;

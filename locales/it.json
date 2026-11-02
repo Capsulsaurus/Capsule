@@ -7779,6 +7779,10 @@
     "message": "Non puoi caricare per conto di questo utente.",
     "origin": "machine"
   },
+  "error.upload.range_conflict": {
+    "message": "Parte di questo caricamento è già in corso. Ripresa in corso…",
+    "origin": "machine"
+  },
   "error.upload.rate_limited": {
     "message": "Il caricamento è in pausa per un momento. Riprenderà automaticamente.",
     "origin": "machine"
@@ -7821,6 +7825,14 @@
   },
   "error.upload.timestamp_out_of_range": {
     "message": "L'orologio del tuo dispositivo sembra errato. Controlla data e ora.",
+    "origin": "machine"
+  },
+  "error.upload.too_fragmented": {
+    "message": "Questo caricamento ha troppe lacune. Completamento in corso…",
+    "origin": "machine"
+  },
+  "error.upload.too_many_in_flight": {
+    "message": "Troppe parti di questo caricamento vengono inviate contemporaneamente. Rallentamento…",
     "origin": "machine"
   },
   "error.upload.unavailable": {
