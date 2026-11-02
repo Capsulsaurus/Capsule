@@ -1896,6 +1896,7 @@
   "error.request.not_found": "Capsule не удалось это найти.",
   "error.request.not_implemented": "Capsule не удалось обработать этот запрос.",
   "error.request.range_not_satisfiable": "Capsule не удалось отправить эту часть файла.",
+  "error.request.too_early": "Этот запрос отправлен слишком рано. Повторите попытку.",
   "error.request.too_large": "Этот запрос слишком велик.",
   "error.request.unauthenticated": "Войдите снова.",
   "error.request.unprocessable": "Часть этого запроса некорректна.",

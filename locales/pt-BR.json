@@ -7587,6 +7587,10 @@
     "message": "O Capsule não conseguiu enviar essa parte do arquivo.",
     "origin": "machine"
   },
+  "error.request.too_early": {
+    "message": "Essa solicitação foi enviada cedo demais. Tente novamente.",
+    "origin": "machine"
+  },
   "error.request.too_large": {
     "message": "Essa solicitação era grande demais para ser aceita.",
     "origin": "machine"

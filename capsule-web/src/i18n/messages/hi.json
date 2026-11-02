@@ -1896,6 +1896,7 @@
   "error.request.not_found": "Capsule उसे ढूँढ नहीं सका।",
   "error.request.not_implemented": "Capsule उस अनुरोध को संभाल नहीं सका।",
   "error.request.range_not_satisfiable": "Capsule फ़ाइल का वह हिस्सा नहीं भेज सका।",
+  "error.request.too_early": "वह अनुरोध बहुत जल्दी भेजा गया था। कृपया फिर से प्रयास करें।",
   "error.request.too_large": "वह अनुरोध स्वीकार करने के लिए बहुत बड़ा था।",
   "error.request.unauthenticated": "कृपया फिर से साइन इन करें।",
   "error.request.unprocessable": "उस अनुरोध का कुछ हिस्सा समझ में नहीं आया।",

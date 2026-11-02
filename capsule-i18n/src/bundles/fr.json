@@ -1896,6 +1896,7 @@
   "error.request.not_found": "Capsule n'a pas trouvé cet élément.",
   "error.request.not_implemented": "Capsule n'a pas pu traiter cette requête.",
   "error.request.range_not_satisfiable": "Capsule n'a pas pu envoyer cette partie du fichier.",
+  "error.request.too_early": "Cette requête a été envoyée trop tôt. Veuillez réessayer.",
   "error.request.too_large": "Cette requête était trop volumineuse pour être acceptée.",
   "error.request.unauthenticated": "Veuillez vous reconnecter.",
   "error.request.unprocessable": "Une partie de cette requête est incohérente.",

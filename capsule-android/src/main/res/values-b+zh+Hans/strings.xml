@@ -1887,6 +1887,7 @@
     <string name="error_request_not_found">Capsule 找不到该内容。</string>
     <string name="error_request_not_implemented">Capsule 无法处理该请求。</string>
     <string name="error_request_range_not_satisfiable">Capsule 无法发送文件的该部分。</string>
+    <string name="error_request_too_early">该请求发送得过早，请重试。</string>
     <string name="error_request_too_large">该请求过大，无法接受。</string>
     <string name="error_request_unauthenticated">请重新登录。</string>
     <string name="error_request_unprocessable">该请求的部分内容无法识别。</string>

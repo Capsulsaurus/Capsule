@@ -1887,6 +1887,7 @@
     <string name="error_request_not_found">Capsule n\'a pas trouvé cet élément.</string>
     <string name="error_request_not_implemented">Capsule n\'a pas pu traiter cette requête.</string>
     <string name="error_request_range_not_satisfiable">Capsule n\'a pas pu envoyer cette partie du fichier.</string>
+    <string name="error_request_too_early">Cette requête a été envoyée trop tôt. Veuillez réessayer.</string>
     <string name="error_request_too_large">Cette requête était trop volumineuse pour être acceptée.</string>
     <string name="error_request_unauthenticated">Veuillez vous reconnecter.</string>
     <string name="error_request_unprocessable">Une partie de cette requête est incohérente.</string>
