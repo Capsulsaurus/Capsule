@@ -55,13 +55,15 @@ use crate::events::TransferEvents;
 use crate::fetch::{FetchError, HttpBlobSource, RangedFetcher};
 use crate::net::ConnectionClass;
 use crate::net::path::{GenerationPool, PathMonitor, PathSample};
-use crate::push::{AssetPushReport, PushError, PushedBlob};
+use crate::push::{
+    AssetPushReport, LaneBundle, LanePush, PUSH_BYTE_BUDGET, PushError, PushedBlob, push_lanes,
+};
 use crate::recovery::{EscrowStored, RecoveryClient, RecoveryError};
 use crate::staged::{TierSessionOutcome, run_under_path};
 use crate::sync::{
     BlobManifest, BlobRef, ChangeKind, FeedEntry, SyncConsumer, SyncCursor, SyncError, SyncPage,
 };
-use crate::upload::queue::LaneWindows;
+use crate::upload::queue::{LaneWindows, ServerKey};
 use crate::upload::{
     BlobRole, CreateUploadRequest, HeadInfo, ManifestEnvelope, UploadClient, UploadError,
     UploadOutcome, UploadTransport,
@@ -1264,6 +1266,11 @@ impl FfiSession {
     }
 
     /// Drive one bundle's ladder. The workspace lock is not held: the bundle is owned.
+    ///
+    /// The bundle runs as the one job of this server's lane in
+    /// [`push_lanes`](crate::push::push_lanes), so its ranges reserve against the push byte
+    /// budget, the server's advice narrows its ranges window, and its retries spend from the
+    /// lane's budget, exactly as a lane of many bundles does.
     async fn push_bundle(&self, bundle: &UploadBundle) -> Result<AssetPushReport, PushError> {
         tracing::info!(
             asset_id = %bundle.asset_id,
@@ -1278,7 +1285,28 @@ impl FfiSession {
         let pushed = run_under_path(&self.path, UploadPolicy::Full, false, |scheduler| {
             let client = self.upload_client();
             let held = &held;
-            async move { crate::push::push_bundle(&client, &scheduler, bundle, held, false).await }
+            async move {
+                let lanes = [LanePush {
+                    server: ServerKey::new(self.upload_base_url.clone()),
+                    client: &client,
+                    bundles: vec![LaneBundle { bundle, held }],
+                    // The server publishes no live-session cap, and one bundle opens one session
+                    // at a time.
+                    session_cap: None,
+                }];
+                push_lanes(
+                    &scheduler,
+                    &lanes,
+                    false,
+                    PUSH_BYTE_BUDGET,
+                    LaneWindows::default(),
+                )
+                .await
+                .into_iter()
+                .flatten()
+                .next()
+                .expect("push_lanes returns one result per queued bundle")
+            }
         })
         .await;
         // Only an outcome on the path the push started on: if the path changed under it, the

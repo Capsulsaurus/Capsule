@@ -693,7 +693,16 @@ pub struct LanePush<'a, H> {
     pub client: &'a UploadClient,
     /// The bundles queued on the lane, in the order they were planned.
     pub bundles: Vec<LaneBundle<'a, H>>,
+    /// The account's live-session cap on the server, where the caller knows it: the lane's W
+    /// never exceeds it ([`UploadQueue::set_session_cap`]). `None` leaves W at the run's window
+    /// and the server's advice.
+    pub session_cap: Option<u32>,
 }
+
+/// The device-wide byte budget a push run's ranges reserve against when the caller has no
+/// narrower one: four of the protocol's largest chunks in flight at once, however many sessions
+/// and servers the run drives.
+pub const PUSH_BYTE_BUDGET: u64 = 4 * crate::upload::PROTOCOL_MAX_CHUNK;
 
 /// What every lane of a run shares: the device's one upload queue, and the signal a released
 /// reservation or a finished session sends to the ranges waiting on the budget.
@@ -772,7 +781,7 @@ impl TransferGate for QueueGate<'_> {
 ///
 /// Each bundle is one job on its server's lane, queued at its lowest planned tier. The queue
 /// admits up to `windows.sessions` bundles per lane at once, lowered by the advice each server
-/// sends, serving lanes round-robin; a bundle drives its own blobs one session at a time in
+/// sends and by the lane's [`session_cap`](LanePush::session_cap), serving lanes round-robin; a bundle drives its own blobs one session at a time in
 /// ladder order, exactly as [`push_bundle`] does, so W bundles in flight are W sessions, each on
 /// its own HTTP/1.1 connection. Every range any of them sends reserves its length against the
 /// one `budget` before its bytes are read, and waits while the budget is full. Each lane's
@@ -799,6 +808,9 @@ pub async fn push_lanes<H: std::hash::BuildHasher + Sync>(
                 .clone()
                 .with_lane_retries(queue.lane_retries(&lane.server)),
         );
+        if let Some(cap) = lane.session_cap {
+            queue.set_session_cap(&lane.server, cap);
+        }
         for (bundle_at, queued) in lane.bundles.iter().enumerate() {
             let tier = plan(scheduler, queued.bundle, queued.held, force)
                 .blobs
