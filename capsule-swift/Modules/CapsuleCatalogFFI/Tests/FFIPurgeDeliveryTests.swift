@@ -14,7 +14,7 @@ private let assetB = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5c"
 private final class ScriptedVerbs: FFIPurgeDeliveryVerbs, @unchecked Sendable {
     struct Delivery: Equatable {
         let assetID: String
-        let serverHead: Data?
+        let serverHeadHash: Data?
     }
 
     private let lock = NSLock()
@@ -23,15 +23,18 @@ private final class ScriptedVerbs: FFIPurgeDeliveryVerbs, @unchecked Sendable {
     private var delivered: [Delivery] = []
     private let outcomes: [String: FfiLifecycleOpOutcome]
     private let purged: [String]
+    private let keptHeads: [String: Data]
 
     init(
         pages: [Result<FfiSyncPage, any Error>],
         outcomes: [String: FfiLifecycleOpOutcome] = [:],
-        purged: [String] = []
+        purged: [String] = [],
+        keptHeads: [String: Data] = [:]
     ) {
         self.pages = pages
         self.outcomes = outcomes
         self.purged = purged
+        self.keptHeads = keptHeads
     }
 
     var cursors: [Data] {
@@ -55,11 +58,15 @@ private final class ScriptedVerbs: FFIPurgeDeliveryVerbs, @unchecked Sendable {
         }
     }
 
-    func deliverPurge(assetId: String, serverHead: Data?) -> FfiLifecycleOpOutcome {
+    func deliverPurge(assetId: String, serverHeadHash: Data?) -> FfiLifecycleOpOutcome {
         lock.withLock {
-            delivered.append(Delivery(assetID: assetId, serverHead: serverHead))
+            delivered.append(Delivery(assetID: assetId, serverHeadHash: serverHeadHash))
             return outcomes[assetId] ?? .notIndexed
         }
+    }
+
+    func purgedRecord(assetId: String) -> Data? {
+        keptHeads[assetId]
     }
 
     func purgedAssetIds() -> [String] {
@@ -82,6 +89,11 @@ private func entry(_ asset: String, head: Data, seq: UInt64 = 1) -> FfiFeedEntry
         originalHeld: true,
         changedAt: "2026-01-01T00:00:00Z"
     )
+}
+
+/// The record hash the delivery keeps and sends for a listed head of `bytes`.
+private func hashed(_ bytes: UInt8...) -> Data {
+    FFIPurgeDelivery.headHash(Data(bytes))
 }
 
 private func page(_ entries: [FfiFeedEntry], next: Data, more: Bool = false) -> FfiSyncPage {
@@ -136,7 +148,7 @@ struct FFIPurgeDeliveryTests {
         _ = try await FFIPurgeDelivery(verbs: verbs).deliverPurge(assetID: assetA)
 
         #expect(verbs.cursors == [Data(), Data([1]), Data([2])])
-        #expect(verbs.deliveries == [.init(assetID: assetA, serverHead: Data([0x03]))])
+        #expect(verbs.deliveries == [.init(assetID: assetA, serverHeadHash: hashed(0x03))])
     }
 
     @Test("an asset the feed does not list is sent with no head, so the session holds it")
@@ -146,7 +158,7 @@ struct FFIPurgeDeliveryTests {
         let delivery = try await FFIPurgeDelivery(verbs: verbs).deliverPurge(assetID: assetA)
 
         #expect(delivery == .held)
-        #expect(verbs.deliveries == [.init(assetID: assetA, serverHead: nil)])
+        #expect(verbs.deliveries == [.init(assetID: assetA, serverHeadHash: nil)])
     }
 
     @Test("a listed entry that carries no record is sent as an empty head, not as unlisted")
@@ -155,7 +167,43 @@ struct FFIPurgeDeliveryTests {
 
         _ = try await FFIPurgeDelivery(verbs: verbs).deliverPurge(assetID: assetA)
 
-        #expect(verbs.deliveries == [.init(assetID: assetA, serverHead: Data())])
+        #expect(verbs.deliveries == [.init(assetID: assetA, serverHeadHash: Data())])
+    }
+
+    @Test("a purge whose kept head the feed already lists is delivered without a send")
+    func levelPurgeSendsNothing() async throws {
+        let kept = Data([0x09, 0x0A])
+        let verbs = ScriptedVerbs(
+            pages: [.success(page([entry(assetA, head: kept), entry(assetB, head: Data([0x01]))], next: Data([1])))],
+            outcomes: [assetB: applied],
+            keptHeads: [assetA: kept, assetB: Data([0x02])]
+        )
+        let delivery = FFIPurgeDelivery(verbs: verbs)
+
+        #expect(try await delivery.deliverPurge(assetID: assetA) == .delivered)
+        #expect(try await delivery.deliverPurge(assetID: assetB) == .delivered)
+
+        // The server holds A's kept head, so only B, whose head it lacks, is sent.
+        #expect(verbs.deliveries == [.init(assetID: assetB, serverHeadHash: hashed(0x01))])
+    }
+
+    @Test("a listed entry that carries no record is never taken as level")
+    func emptyHeadIsNotLevel() async throws {
+        let verbs = ScriptedVerbs(
+            pages: [.success(page([entry(assetA, head: Data())], next: Data([1])))],
+            keptHeads: [assetA: Data()]
+        )
+
+        _ = try await FFIPurgeDelivery(verbs: verbs).deliverPurge(assetID: assetA)
+
+        #expect(verbs.deliveries == [.init(assetID: assetA, serverHeadHash: Data())])
+    }
+
+    @Test("a head's hash is the SHA-256 of its bytes, 32 bytes whatever the record's size")
+    func headHashIsSHA256() {
+        let hex = FFIPurgeDelivery.headHash(Data("abc".utf8)).map { String(format: "%02x", $0) }.joined()
+        #expect(hex == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+        #expect(FFIPurgeDelivery.headHash(Data(repeating: 7, count: 4096)).count == 32)
     }
 
     @Test("a feed id in another case names the same asset; one that is not a UUID is ignored")
@@ -167,7 +215,7 @@ struct FFIPurgeDeliveryTests {
 
         _ = try await FFIPurgeDelivery(verbs: verbs).deliverPurge(assetID: assetA)
 
-        #expect(verbs.deliveries == [.init(assetID: assetA, serverHead: Data([0x07]))])
+        #expect(verbs.deliveries == [.init(assetID: assetA, serverHeadHash: hashed(0x07))])
         #expect(FFIPurgeDelivery.feedKey("not-a-uuid") == nil)
     }
 
@@ -184,7 +232,7 @@ struct FFIPurgeDeliveryTests {
         _ = try await delivery.deliverPurge(assetID: assetA)
 
         #expect(verbs.cursors == [Data(), Data([1])])
-        #expect(verbs.deliveries.map(\.serverHead) == [Data([0x01]), Data([0x05])])
+        #expect(verbs.deliveries.map(\.serverHeadHash) == [hashed(0x01), hashed(0x05)])
     }
 
     @Test("a feed read that fails sends nothing, and the next drain starts where the last good one ended")
@@ -203,7 +251,7 @@ struct FFIPurgeDeliveryTests {
 
         // The first page's head was read in the drain that failed, so it is not trusted.
         #expect(verbs.cursors == [Data(), Data([1]), Data()])
-        #expect(verbs.deliveries == [.init(assetID: assetA, serverHead: nil)])
+        #expect(verbs.deliveries == [.init(assetID: assetA, serverHeadHash: nil)])
     }
 
     @Test("a page that claims more without advancing the cursor stops the drain")

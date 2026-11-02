@@ -310,8 +310,9 @@ public actor ManagedProvider: AssetProvider, TrashProvider, AssetOwning {
 
     /// Send every purge the workspace kept whose delivery failed or was held:
     /// the retry a relaunch, a sign-in or a sync that lists new assets runs. A
-    /// purge the server already applied answers as a replay, so sending it
-    /// again is safe. A purge the server refused for good since this provider
+    /// purge whose head the server already holds sends nothing (the port
+    /// answers it delivered off the feed), so the walk's network cost is the
+    /// port's feed read plus the purges still undelivered. A purge the server refused for good since this provider
     /// started is skipped: sending it again could only be refused again. With
     /// no delivery port this does nothing.
     public func redeliverPurges() async {

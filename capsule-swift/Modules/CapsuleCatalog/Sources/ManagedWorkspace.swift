@@ -71,9 +71,10 @@ public struct ManagedPurgeOutcome: Sendable, Equatable {
 /// without depending on the provider's module.
 ///
 /// On the FFI lane a conformer reads the asset's head off the sync feed and
-/// calls `FfiSession.deliverPurge`, which sends what the server lacks of the
-/// chain the workspace kept: an early purge's re-issued `delete` together with
-/// any `delete` it chains onto. Everything is read from the workspace, so a
+/// calls `FfiSession.deliverPurgeAtHash`, which sends what the server lacks of
+/// the chain the workspace kept: an early purge's re-issued `delete` together
+/// with any `delete` it chains onto. A purge whose kept head the feed already
+/// lists is answered delivered without a send. Everything is read from the workspace, so a
 /// delivery that failed is retried by calling it again, also after a relaunch.
 public protocol PurgeDelivering: Sendable {
     /// Deliver the purged asset `assetID`'s `delete`. Throws only when the

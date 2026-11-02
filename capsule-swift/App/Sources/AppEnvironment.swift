@@ -376,7 +376,10 @@ struct AppEnvironment {
     /// the retry a relaunch and a sign-in run: each rebuilds the world with
     /// the session. It runs detached, because a launch never waits on the
     /// network; the provider logs each purge's fate, and a purge left
-    /// undelivered stays on the kept chain for the next walk. With no
+    /// undelivered stays on the kept chain for the next walk. The walk lists
+    /// every purge the workspace ever kept, but one whose head the feed
+    /// already lists sends nothing, so its cost is one feed drain plus the
+    /// purges the server still lacks. With no
     /// delivery (signed out, the mock lane) there is nothing to send.
     private static func redeliverKeptPurges(_ provider: ManagedProvider, deliveringTo delivery: (any PurgeDelivering)?) {
         guard delivery != nil else { return }
