@@ -41,6 +41,11 @@
 //! [`OidcDevicePoll`] — keep polling, slow down, or the [`LoginOutcome`] a password login gives.
 //! The wait between polls is the caller's; these send one request each.
 //!
+//! [`AuthClient::sign_in_options`] reads which sign-ins the server offers from its `server-info`
+//! record, also through the generated client, so a client can leave out a password form the
+//! server would refuse (`auth.password_disabled`, issue #1004). It is advice: the server's own
+//! `403 error.auth.password_disabled` stays the authority.
+//!
 //! ## Testing
 //!
 //! The wire flows (login/refresh/logout, `401` recovery, error mapping) are proven
@@ -297,6 +302,7 @@ enum Endpoint {
     OidcCallback,
     OidcDevice,
     OidcDevicePoll,
+    ServerInfo,
 }
 
 impl Endpoint {
@@ -311,6 +317,7 @@ impl Endpoint {
             Self::OidcCallback => "oidc/callback",
             Self::OidcDevice => "oidc/device",
             Self::OidcDevicePoll => "oidc/device/poll",
+            Self::ServerInfo => "server-info",
         }
     }
 
@@ -332,7 +339,9 @@ impl Endpoint {
             // The poll's remaining `401`s — a refused exchange, a refused token — are the
             // callback's and mean the same; its denial and expiry are matched by code first.
             Self::OidcCallback | Self::OidcDevicePoll => AuthError::OidcRejected { code },
-            Self::OidcAuthorize | Self::OidcDevice => AuthError::Unexpected {
+            // The record is unauthenticated, so a `401` from it is a server this client does not
+            // model either.
+            Self::OidcAuthorize | Self::OidcDevice | Self::ServerInfo => AuthError::Unexpected {
                 status: 401,
                 endpoint: self.name(),
                 detail: String::new(),
@@ -614,6 +623,23 @@ fn oidc_binding_challenge(binding: &SecretString) -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest)
 }
 
+/// How a server signs people in, as its `.well-known/capsule/server-info` record publishes it.
+///
+/// Advisory, by contract: the server refuses a password it does not accept with
+/// `403 error.auth.password_disabled` whatever a client read here, so this decides only what a
+/// client offers — never whether a request is safe to send.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignInOptions {
+    /// The server's canonical origin.
+    pub server_id: String,
+    /// Whether the server has an identity provider (`auth.oidc` is not `null`).
+    pub oidc: bool,
+    /// Whether the server refuses password registration and sign-in
+    /// (`auth.password_disabled`). A server that predates the switch omits the field, and a
+    /// missing field reads `false`: that server accepts passwords.
+    pub password_disabled: bool,
+}
+
 /// What a password login answered with.
 ///
 /// Two variants because the server has two outcomes and says so with a status: `200` with a
@@ -773,6 +799,43 @@ impl AuthClient {
         let outcome = self.read_login_outcome(Endpoint::Login, response).await?;
         tracing::info!("login answered");
         Ok(outcome)
+    }
+
+    /// Read how this server signs people in from its unauthenticated
+    /// `.well-known/capsule/server-info` record (one generated call, nothing sent but the
+    /// handshake).
+    ///
+    /// # Errors
+    ///
+    /// [`AuthError::Network`] when the server cannot be reached, [`AuthError::Unexpected`] for a
+    /// status the record does not answer with, and [`AuthError::MalformedResponse`] for a body
+    /// that is not the record. A caller treats every one as "unknown" rather than as a refusal:
+    /// the record is advisory.
+    #[instrument(skip_all)]
+    pub async fn sign_in_options(&self) -> Result<SignInOptions, AuthError> {
+        let info = self
+            .rest
+            .server_info()
+            .await
+            .map_err(|error| {
+                map_rest_error(
+                    Endpoint::ServerInfo,
+                    error,
+                    |rest::ServerInfoError(problem)| Some(problem),
+                )
+            })?
+            .into_inner();
+        let options = SignInOptions {
+            server_id: info.server_id,
+            oidc: info.auth.oidc.is_some(),
+            password_disabled: info.auth.password_disabled.unwrap_or(false),
+        };
+        tracing::debug!(
+            oidc = options.oidc,
+            password_disabled = options.password_disabled,
+            "read the server's sign-in options"
+        );
+        Ok(options)
     }
 
     /// Begin a sign-in through the server's identity provider.
