@@ -42,6 +42,7 @@ use std::sync::Arc;
 use capsule_core::crypto::hash::Sha256Hasher;
 
 use crate::blob::{BlobStore, ContentAddress};
+use crate::gc::HeldBlobs;
 use crate::index::{AssetIndex, AssetState};
 use crate::ledger::manifest::ManifestFault;
 use crate::ledger::replay::{self, LedgerKeys, Resolution};
@@ -283,6 +284,8 @@ pub struct ScrubContext {
     clock: Arc<dyn Clock>,
     /// The owner ledgers and the keys they verify under, for check 6. `None` skips the check.
     ledger: Option<(Arc<dyn OwnerLedger>, LedgerKeys)>,
+    /// The pulled albums' claims on metadata blobs (#1141). `None` counts none as a reference.
+    held: Option<Arc<dyn HeldBlobs>>,
 }
 
 impl ScrubContext {
@@ -304,7 +307,16 @@ impl ScrubContext {
             shares,
             clock,
             ledger: None,
+            held: None,
         }
+    }
+
+    /// Count every claim `held` answers for as a reference, as the collector does (#1141), so a
+    /// pulled metadata blob the collector keeps is not one the scrub reports as an orphan.
+    #[must_use]
+    pub fn with_held_blobs(mut self, held: Arc<dyn HeldBlobs>) -> Self {
+        self.held = Some(held);
+        self
     }
 
     /// Also run check 6 over `ledger`, verifying under `keys`.
@@ -690,10 +702,12 @@ async fn blobs_are_referenced(
             .await
             .map_err(blob_failure)?;
         for entry in &page.entries {
-            // The collector's own two questions, in its order (`gc::visit`): a live share link
-            // is a reference too, and is asked only when no asset holds the blob.
+            // The collector's own three questions, in its order (`gc::visit`): a live share
+            // link and a pulled album's claim are references too, each asked only when nothing
+            // before it holds the blob.
             if context.index.reference_count(&entry.address).await? == 0
                 && !context.shares.names_live(&entry.address, now).await?
+                && !crate::gc::held_by(context.held.as_ref(), &entry.address).await?
             {
                 report.findings.push(Finding::Orphan {
                     address: entry.address.clone(),

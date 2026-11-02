@@ -19,7 +19,9 @@
 //! The blob store is not in the transaction, so the order is what keeps the two consistent. A
 //! blob is durable at its content address before any row names it, so a crash or a rollback
 //! after the put leaves an unreferenced blob — the orphan the collector reclaims — and never a
-//! row naming bytes that are not there. A blob already present is not written again
+//! row naming bytes that are not there. Once the rows commit, the blob is a reference the
+//! collector honours ([`HeldBlobs`], #1141): no asset row names it, so without that the collector
+//! would sweep it once the grace window passed. A blob already present is not written again
 //! ([`Placement::AlreadyPresent`]): its address is its content. The port hands over bytes the
 //! puller already checked against their address, and the blob store's contract is that its
 //! caller has; neither re-hashes them.
@@ -88,6 +90,7 @@ use crate::federation::breadcrumbs::{
     Breadcrumb, BreadcrumbIndex, MAX_BREADCRUMB_PAGE, breadcrumb, leaves_a_breadcrumb,
 };
 use crate::federation::pull::JobKey;
+use crate::gc::HeldBlobs;
 use crate::postgres::error::Port;
 use crate::postgres::time::{from_micros, to_micros};
 use crate::store::{StoreError, StoreFuture};
@@ -901,6 +904,31 @@ impl BreadcrumbIndex for PostgresPulledAlbums {
                 }
             }
             Ok(breadcrumbs)
+        })
+    }
+}
+
+/// A blob is held while any job's `federation_pulled_metadata_blobs` row names it (#1141).
+///
+/// One `EXISTS` along `idx_federation_pulled_metadata_blobs_address`, across every job: the
+/// collector asks about an address, not a job. Forgetting a job deletes its row, which cascades
+/// to its claims, and that is what releases them.
+impl HeldBlobs for PostgresPulledAlbums {
+    fn holds<'a>(&'a self, address: &'a ContentAddress) -> StoreFuture<'a, bool> {
+        Box::pin(async move {
+            let doing = "asking whether a pulled album holds a blob";
+            let rows = self
+                .select(
+                    "SELECT EXISTS (SELECT 1 FROM federation_pulled_metadata_blobs \
+                     WHERE address = $1) AS held",
+                    vec![Value::from(address.as_str().to_owned())],
+                    doing,
+                )
+                .await?;
+            let row = rows
+                .first()
+                .ok_or_else(|| PORT.undecodable("an EXISTS query answered no row"))?;
+            row.try_get("", "held").map_err(PORT.failing(doing))
         })
     }
 }
