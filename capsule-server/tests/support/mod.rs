@@ -4365,6 +4365,9 @@ pub(crate) struct Fixture {
     /// Whether the server federates — the *same* switch it reads, so a case can turn the whole
     /// federation surface off for the requests it is about.
     pub(crate) federation: Arc<SwitchableFederation>,
+    /// What every verified pull hint is handed to, in place of the pull worker: the *same*
+    /// double the server holds, so a case reads which jobs it was hinted and sets the answer.
+    pub(crate) hints: Arc<capsule_server::federation::RecordingHints>,
     /// Whether the server refuses password sign-in — the *same* switch it reads.
     pub(crate) passwords: Arc<SwitchablePasswords>,
     /// The capability codec the server mints with — the *same* one, over the *same* key as
@@ -4511,6 +4514,7 @@ impl Fixture {
         let peers = Arc::new(InMemoryPeers::new());
         let subscriptions = Arc::new(SwitchableSubscriptions::new());
         let federation = Arc::new(SwitchableFederation::new(federating));
+        let hints = Arc::new(capsule_server::federation::RecordingHints::new());
         let passwords = Arc::new(SwitchablePasswords::new(passwords_disabled));
         let chunk_pace = Arc::new(SwitchableChunkPace::new(ChunkPace::default()));
         let challenges = Arc::new(SwitchableChallenges::new(clock.clone()));
@@ -4612,7 +4616,8 @@ impl Fixture {
                 subscriptions: subscriptions.clone(),
                 clock: clock.clone(),
                 enabled: federation.clone(),
-            }),
+            })
+            .with_hints(hints.clone()),
             enrollment: EnrollmentContext::new(
                 enrollments.clone(),
                 channels.clone(),
@@ -4665,6 +4670,7 @@ impl Fixture {
             peers,
             subscriptions,
             federation,
+            hints,
             passwords,
             codec,
             challenges,
@@ -5046,6 +5052,44 @@ pub(crate) fn sign_report(
         "album_id": claim.album_id,
         "reason": claim.reason,
         "reported_at": claim.reported_at,
+        "signature": base64::engine::general_purpose::STANDARD.encode(signature.as_ref()),
+    })
+}
+
+/// A pull hint body, signed by `pair` exactly as a home server signs one, with a fresh nonce.
+///
+/// Built through [`HintClaim::signing_bytes`](capsule_server::federation::HintClaim::signing_bytes)
+/// for the reason [`signed_report`] is built through the report's.
+pub(crate) fn signed_hint(
+    pair: &ring::signature::Ed25519KeyPair,
+    home_server: &str,
+    album_id: &str,
+    sent_at: &str,
+) -> serde_json::Value {
+    sign_hint(
+        pair,
+        &capsule_server::federation::HintClaim {
+            home_server: home_server.to_owned(),
+            recipient_server: SERVER_ORIGIN.to_owned(),
+            nonce: uuid::Uuid::now_v7().to_string(),
+            album_id: album_id.to_owned(),
+            sent_at: sent_at.to_owned(),
+        },
+    )
+}
+
+/// `claim` as the body a home server sends, signed by `pair`.
+pub(crate) fn sign_hint(
+    pair: &ring::signature::Ed25519KeyPair,
+    claim: &capsule_server::federation::HintClaim,
+) -> serde_json::Value {
+    let signature = pair.sign(&claim.signing_bytes().expect("a claim encodes"));
+    serde_json::json!({
+        "home_server": claim.home_server,
+        "recipient_server": claim.recipient_server,
+        "nonce": claim.nonce,
+        "album_id": claim.album_id,
+        "sent_at": claim.sent_at,
         "signature": base64::engine::general_purpose::STANDARD.encode(signature.as_ref()),
     })
 }

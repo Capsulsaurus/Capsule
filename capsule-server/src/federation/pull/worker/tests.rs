@@ -631,6 +631,68 @@ async fn a_hint_brings_an_established_peers_pull_earlier_but_not_inside_a_minute
 }
 
 #[tokio::test]
+async fn a_hint_never_shortens_a_failing_jobs_back_off() {
+    let rig = Rig::new();
+    rig.established().await;
+    let mut failed_at = rig.now();
+    let mut next = failed_at;
+    for _ in 0..4 {
+        rig.advance_to(next);
+        failed_at = rig.now();
+        rig.puller.then(transport());
+        let JobOutcome::Failed { next: due, .. } = rig.round().await else {
+            panic!("a transport failure fails the pull");
+        };
+        next = due;
+    }
+    assert!(
+        next > plus(failed_at, HINT_FLOOR),
+        "the back-off is past the floor"
+    );
+
+    rig.advance_to(plus(failed_at, HINT_FLOOR));
+    assert_eq!(
+        rig.worker.hint(&rig.job).await,
+        HintOutcome::Unchanged,
+        "the failing peer cannot hint its job out of back-off"
+    );
+    assert_eq!(
+        rig.jobs
+            .claim(&rig.job, "probe", rig.now(), PULL_LEASE)
+            .await
+            .expect("claim answered"),
+        None,
+        "the job is still not due"
+    );
+}
+
+#[tokio::test]
+async fn a_hint_naming_a_job_this_server_does_not_hold_changes_nothing() {
+    // What the hint route hands over for an album nobody here subscribes to, or another
+    // server's album: the answer is the one an already-due job gets, and no job moves.
+    let rig = Rig::new();
+    rig.established().await;
+    rig.puller.then(ok(1));
+    rig.round().await;
+    rig.advance_to(plus(start(), HINT_FLOOR));
+
+    let stranger = JobKey::new(rig.job.peer.clone(), AlbumId::new("album-nobody-pulls"));
+    assert_eq!(rig.worker.hint(&stranger).await, HintOutcome::Unchanged);
+    let elsewhere = JobKey::new(PeerId::new("third.test"), rig.job.album.clone());
+    assert_eq!(rig.worker.hint(&elsewhere).await, HintOutcome::Ignored);
+    assert_eq!(
+        rig.round().await,
+        JobOutcome::NotDue,
+        "the job this server does hold kept its schedule"
+    );
+    assert_eq!(
+        rig.puller.calls().len(),
+        1,
+        "and nothing was pulled for the hint"
+    );
+}
+
+#[tokio::test]
 async fn a_hint_from_a_peer_on_probation_is_ignored() {
     let rig = Rig::new();
     rig.peers

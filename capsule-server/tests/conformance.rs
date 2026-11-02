@@ -41,6 +41,9 @@ fn oversized() -> u64 {
 /// pinned.
 const REPORTING_PEER: &str = "reporter.test";
 
+/// The home server the walk's pull hints come from.
+const HOME_PEER: &str = "home.test";
+
 /// A bearer for the peer `other.test`, over a capability this server minted and recorded for
 /// an album nobody provisioned — enough to reach the route's admission and nothing past it.
 ///
@@ -184,6 +187,7 @@ async fn every_declared_response_is_exercised() {
         ("DELETE", "/v1/albums/anything/capabilities/anything"),
         ("POST", "/v1/federation/capabilities/refresh"),
         ("POST", "/v1/federation/reports"),
+        ("POST", "/v1/federation/hints"),
         ("POST", "/v1/federation/subscriptions"),
         ("GET", "/v1/federation/subscriptions"),
         ("DELETE", "/v1/federation/subscriptions/anything/anything"),
@@ -1443,6 +1447,7 @@ async fn every_declared_response_is_exercised() {
             kynos::http::Method::POST,
             "/v1/federation/reports".to_owned(),
         ),
+        (kynos::http::Method::POST, "/v1/federation/hints".to_owned()),
         (
             kynos::http::Method::POST,
             "/v1/federation/subscriptions".to_owned(),
@@ -1871,6 +1876,92 @@ async fn every_declared_response_is_exercised() {
             .expect("the counter answers");
     }
     report(signed(Some("csam")))
+        .send()
+        .await
+        .assert_status(StatusCode::TOO_MANY_REQUESTS);
+
+    // ── POST /v1/federation/hints ────────────────────────────────────────────────
+    // Signed like a report, so the same walk: 415 and 422 are the extractor's, 400 the surface's
+    // floor, 403 a home server nobody pinned, 401 a key that is not the pinned one, 202 a hint
+    // received, 500 a receiver whose store could not answer, 429 a spent hint budget.
+    let hint = |body: serde_json::Value| {
+        client
+            .post("/v1/federation/hints")
+            .header("x-capsule-protocol", PROTOCOL_VERSION)
+            .json(&body)
+    };
+    let (home_signer, home_public) = support::peer_keypair();
+    let signed_hint =
+        || support::signed_hint(&home_signer, HOME_PEER, "album", support::REPORTED_AT);
+    client
+        .post("/v1/federation/hints")
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .body("text/plain", "{}")
+        .send()
+        .await
+        .assert_status(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    hint(json!({ "home_server": 42 }))
+        .send()
+        .await
+        .assert_status(StatusCode::UNPROCESSABLE_ENTITY);
+    let mut malformed = signed_hint();
+    malformed["sent_at"] = json!("yesterday");
+    hint(malformed)
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    hint(signed_hint())
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    {
+        use capsule_server::federation::PeerStore as _;
+        fixture
+            .peers
+            .pin(
+                &capsule_server::federation::PeerId::new(HOME_PEER),
+                home_public,
+                fixture.clock.now(),
+            )
+            .await
+            .expect("the operator pins");
+    }
+    let (impostor, _) = support::peer_keypair();
+    hint(support::signed_hint(
+        &impostor,
+        HOME_PEER,
+        "album",
+        support::REPORTED_AT,
+    ))
+    .send()
+    .await
+    .assert_status(StatusCode::UNAUTHORIZED);
+    hint(signed_hint())
+        .send()
+        .await
+        .assert_status(StatusCode::ACCEPTED);
+    fixture
+        .hints
+        .answer(capsule_server::federation::pull::HintOutcome::Unavailable);
+    hint(signed_hint())
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    fixture
+        .hints
+        .answer(capsule_server::federation::pull::HintOutcome::Unchanged);
+    for _ in 0..capsule_server::counter::budgets::FEDERATED_HINTS.limit {
+        fixture
+            .counters
+            .hit(
+                &capsule_server::counter::CounterKey::FederatedHints(HOME_PEER.to_owned()),
+                capsule_server::counter::budgets::FEDERATED_HINTS,
+                fixture.clock.now(),
+            )
+            .await
+            .expect("the counter answers");
+    }
+    hint(signed_hint())
         .send()
         .await
         .assert_status(StatusCode::TOO_MANY_REQUESTS);

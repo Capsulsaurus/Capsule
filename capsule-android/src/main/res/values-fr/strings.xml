@@ -1858,6 +1858,10 @@
     <string name="error_federation_capability_malformed">Cette demande de partage n\'est pas valide.</string>
     <string name="error_federation_capability_revoked">L\'accès à cet album partagé a été révoqué.</string>
     <string name="error_federation_circuit_open">Cette source est temporairement mise en attente après des erreurs répétées.</string>
+    <string name="error_federation_hint_at_capacity">Ce serveur traite trop d\'avis de mise à jour en ce moment. Veuillez patienter et réessayer.</string>
+    <string name="error_federation_hint_malformed">Cet avis de mise à jour n\'est pas valide.</string>
+    <string name="error_federation_hint_rate_limited">Trop d\'avis de mise à jour provenant de ce serveur. Veuillez patienter et réessayer.</string>
+    <string name="error_federation_hint_unsigned">L\'avis de mise à jour n\'a pas pu être vérifié.</string>
     <string name="error_federation_member_not_on_roster">Cette personne ne figure pas dans la liste des membres de cet album.</string>
     <string name="error_federation_mint_at_capacity">Ce serveur gère trop d\'autorisations d\'accès en ce moment. Veuillez réessayer sous peu.</string>
     <string name="error_federation_not_configured">Ce serveur ne partage pas d\'albums avec d\'autres serveurs.</string>

@@ -61,9 +61,12 @@ return 1",
 );
 
 // KEYS: job. ARGV: now (µs), floor (µs). Returns the new due (µs) when it moved, else ''.
+// A job with failures is backing off, and a hint never shortens a back-off.
 static HINT: Lua = Lua::new(
     "local due = redis.call('HGET', KEYS[1], 'next_due')
 if not due then return '' end
+local failures = redis.call('HGET', KEYS[1], 'failures')
+if failures and tonumber(failures) > 0 then return '' end
 local candidate = tonumber(ARGV[1])
 local last = redis.call('HGET', KEYS[1], 'last_pull')
 if last then

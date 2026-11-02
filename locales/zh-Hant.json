@@ -7471,6 +7471,22 @@
     "message": "此來源在多次出錯後暫時被退避處理。",
     "origin": "machine"
   },
+  "error.federation.hint_at_capacity": {
+    "message": "此伺服器目前正在處理的更新通知過多。請稍候再試。",
+    "origin": "machine"
+  },
+  "error.federation.hint_malformed": {
+    "message": "該更新通知無效。",
+    "origin": "machine"
+  },
+  "error.federation.hint_rate_limited": {
+    "message": "來自此伺服器的更新通知過多。請稍候再試。",
+    "origin": "machine"
+  },
+  "error.federation.hint_unsigned": {
+    "message": "無法驗證該更新通知。",
+    "origin": "machine"
+  },
   "error.federation.member_not_on_roster": {
     "message": "此人不在這本相簿的成員名單中。",
     "origin": "machine"

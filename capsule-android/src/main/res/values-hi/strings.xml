@@ -1858,6 +1858,10 @@
     <string name="error_federation_capability_malformed">वह साझाकरण अनुरोध मान्य नहीं है।</string>
     <string name="error_federation_capability_revoked">इस साझा एल्बम की पहुँच रद्द कर दी गई है।</string>
     <string name="error_federation_circuit_open">बार-बार त्रुटियों के बाद इस स्रोत को अस्थायी रूप से रोक दिया गया है।</string>
+    <string name="error_federation_hint_at_capacity">यह सर्वर अभी बहुत अधिक अपडेट सूचनाएँ संभाल रहा है। कृपया प्रतीक्षा करें और फिर से प्रयास करें।</string>
+    <string name="error_federation_hint_malformed">वह अपडेट सूचना मान्य नहीं है।</string>
+    <string name="error_federation_hint_rate_limited">इस सर्वर से बहुत अधिक अपडेट सूचनाएँ। कृपया प्रतीक्षा करें और फिर से प्रयास करें।</string>
+    <string name="error_federation_hint_unsigned">अपडेट सूचना सत्यापित नहीं की जा सकी।</string>
     <string name="error_federation_member_not_on_roster">वह व्यक्ति इस एल्बम की सदस्य सूची में नहीं है।</string>
     <string name="error_federation_mint_at_capacity">यह सर्वर अभी बहुत अधिक पहुँच अनुमतियाँ संभाल रहा है। कृपया थोड़ी देर बाद फिर से प्रयास करें।</string>
     <string name="error_federation_not_configured">यह सर्वर दूसरे सर्वरों के साथ एल्बम साझा नहीं करता।</string>
