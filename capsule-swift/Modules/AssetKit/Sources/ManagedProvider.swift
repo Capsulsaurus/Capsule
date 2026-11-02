@@ -26,6 +26,9 @@ public actor ManagedProvider: AssetProvider, TrashProvider, AssetOwning {
     private var observers: [UUID: AsyncStream<AssetChange>.Continuation] = [:]
     /// The last queued mutation of each asset; see ``serializingMutation(of:_:)``.
     private var mutationTails: [String: Task<Void, Never>] = [:]
+    /// Purges the server refused for good since this provider started, which
+    /// ``redeliverPurges()`` skips; see ``PurgeDelivery/failed(permanent:)``.
+    private var refusedPurges: Set<String> = []
 
     /// - Parameter authGate: the SR1 fresh-local-auth adapter used to open the
     ///   Recently Deleted view. Defaults to the real `LAContext` gate; tests and
@@ -308,7 +311,9 @@ public actor ManagedProvider: AssetProvider, TrashProvider, AssetOwning {
     /// Send every purge the workspace kept whose delivery failed or was held:
     /// the retry a relaunch, a sign-in or a sync that lists new assets runs. A
     /// purge the server already applied answers as a replay, so sending it
-    /// again is safe. With no delivery port this does nothing.
+    /// again is safe. A purge the server refused for good since this provider
+    /// started is skipped: sending it again could only be refused again. With
+    /// no delivery port this does nothing.
     public func redeliverPurges() async {
         guard let purgeDelivery else { return }
         let ids: [String]
@@ -320,8 +325,11 @@ public actor ManagedProvider: AssetProvider, TrashProvider, AssetOwning {
             )
             return
         }
-        CapsuleLog.assetKit.info("redelivering \(ids.count) kept purges")
-        for uuid in ids {
+        let pending = ids.filter { !refusedPurges.contains($0) }
+        CapsuleLog.assetKit.info(
+            "redelivering \(pending.count) kept purges, skipping \(ids.count - pending.count) refused for good"
+        )
+        for uuid in pending {
             await deliverPurge(of: uuid)
         }
     }
@@ -340,6 +348,7 @@ public actor ManagedProvider: AssetProvider, TrashProvider, AssetOwning {
                     "purge of \(uuid, privacy: .private) held: the server has not indexed the asset"
                 )
             case let .failed(permanent):
+                if permanent { refusedPurges.insert(uuid) }
                 CapsuleLog.assetKit.error(
                     "purge of \(uuid, privacy: .private) not delivered, permanent=\(permanent, privacy: .public)"
                 )
@@ -431,6 +440,9 @@ public enum PurgeDelivery: Sendable, Equatable {
     /// never sees a `delete` for an asset it has not indexed.
     case held
     /// The server refused it or could not be reached. A `permanent` failure is
-    /// never resent as it is.
+    /// one the server judged final, so ``ManagedProvider/redeliverPurges()``
+    /// does not send it again for the rest of the provider's life. The refusal
+    /// is not persisted: the first walk after a relaunch sends it once more,
+    /// and the server refuses it again without applying anything.
     case failed(permanent: Bool)
 }
