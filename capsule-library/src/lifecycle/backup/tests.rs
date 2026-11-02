@@ -1166,7 +1166,7 @@ fn restoring_a_create_blob_keeps_an_answering_copy_and_replaces_a_bad_one() {
     let good = fs::read(&kept).unwrap();
     let state = &a.assets[&asset];
 
-    a.restore_create_metadata_blob(state, &[]).unwrap();
+    a.restore_create_metadata_blob(state, &[], None).unwrap();
     assert_eq!(
         fs::read(&kept).unwrap(),
         good,
@@ -1174,9 +1174,68 @@ fn restoring_a_create_blob_keeps_an_answering_copy_and_replaces_a_bad_one() {
     );
 
     fs::write(&kept, b"stray").unwrap();
-    a.restore_create_metadata_blob(state, &good).unwrap();
+    a.restore_create_metadata_blob(state, &good, None).unwrap();
     assert_eq!(fs::read(&kept).unwrap(), good, "a bad copy is replaced");
 
-    a.restore_create_metadata_blob(state, &good).unwrap();
+    a.restore_create_metadata_blob(state, &good, None).unwrap();
     assert_eq!(fs::read(&kept).unwrap(), good);
+}
+
+/// A forward peer update of a held, never-edited asset that carries no create blob (the peer
+/// edited it without keeping one: an older build, or an edit made before the blob was kept)
+/// keeps the held current blob, the last copy that answers the create, before the peer's head
+/// overwrites it, so this device still uploads the create, across a reopen.
+#[test]
+fn a_forward_peer_update_without_a_create_blob_keeps_the_held_one() {
+    let (lib_a, lib_b, src) = (
+        TempDir::new().unwrap(),
+        TempDir::new().unwrap(),
+        TempDir::new().unwrap(),
+    );
+    let (mut a, mut b, _) = paired(lib_a.path(), lib_b.path(), src.path(), 1);
+    let held = *b.assets.keys().next().unwrap();
+    let expected = b.assets[&held].metadata_blob.clone();
+    assert_eq!(blob_ciphertext_hash(&expected), create_binding(&b, &held));
+    assert!(!b.create_metadata_blob_path(&held).unwrap().exists());
+
+    a.tag_add(&held, "keeper").unwrap();
+    fs::remove_file(a.create_metadata_blob_path(&held).unwrap()).unwrap();
+    let restored = restored_from(&a, src.path());
+    assert!(restored[&held].create_metadata_blob.is_empty());
+    b.apply_peer_restored(&restored[&held]).unwrap();
+
+    assert_eq!(b.assets[&held].metadata_blob, a.assets[&held].metadata_blob);
+    assert_eq!(b.upload_bundle(&held).unwrap().metadata_blob, expected);
+    drop(b);
+    let b = Workspace::open(lib_b.path(), b"device b", FAST_PARAMS).unwrap();
+    assert_eq!(b.upload_bundle(&held).unwrap().metadata_blob, expected);
+}
+
+/// With nothing carried, a held current blob is kept only when it answers the create and the
+/// restored head replaces it.
+#[test]
+fn restoring_keeps_a_held_blob_only_when_it_answers_the_create_and_is_replaced() {
+    let (lib, src) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let mut a = fast_workspace(lib.path());
+    let asset = import_originals(&mut a, src.path(), 1, 64)[0];
+    let kept = a.create_metadata_blob_path(&asset).unwrap();
+    let current = a.assets[&asset].metadata_blob.clone();
+
+    a.restore_create_metadata_blob(&a.assets[&asset], &[], Some(&current))
+        .unwrap();
+    assert!(!kept.exists(), "the head still is the create's blob");
+
+    // The restored head: the same create, a peer's blob in place of the held one.
+    a.assets.get_mut(&asset).unwrap().metadata_blob = b"the peer's head".to_vec();
+    let replaced = &a.assets[&asset];
+    a.restore_create_metadata_blob(replaced, &[], Some(b"not the create's"))
+        .unwrap();
+    assert!(
+        !kept.exists(),
+        "a held blob that does not answer is not kept"
+    );
+
+    a.restore_create_metadata_blob(replaced, &[], Some(&current))
+        .unwrap();
+    assert_eq!(fs::read(&kept).unwrap(), current);
 }

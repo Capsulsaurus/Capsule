@@ -631,8 +631,14 @@ impl Workspace {
             &restored.attestations,
         )?;
         // The create's superseded metadata blob, for the same reason and in the same place: an
-        // upload of the create needs these bytes, and the chain must not land without them.
-        self.restore_create_metadata_blob(&asset, &restored.create_metadata_blob)?;
+        // upload of the create needs these bytes, and the chain must not land without them. A
+        // held asset's current blob is offered too: `write_asset_files` is about to overwrite
+        // it, and it may be the last copy that answers the create.
+        self.restore_create_metadata_blob(
+            &asset,
+            &restored.create_metadata_blob,
+            held.map(|h| h.metadata_blob.as_slice()),
+        )?;
         self.write_asset_files(&asset, &restored.plaintext)?;
         self.index_asset_row(&asset)?;
         self.index_original_representation(&asset, restored.plaintext.len())?;
@@ -640,17 +646,51 @@ impl Workspace {
         Ok(())
     }
 
-    /// Keep the create's metadata blob a restore carried at
-    /// [`create_metadata_blob_path`](Self::create_metadata_blob_path). `blob` already answers
-    /// the create's `metadata_blob_hash` ([`backup::RestoredAsset::create_metadata_blob`]).
+    /// Keep the create's metadata blob at
+    /// [`create_metadata_blob_path`](Self::create_metadata_blob_path) before a restore writes
+    /// `asset` over whatever this workspace held. `carried` is the blob the artifact carried,
+    /// which already answers the create's `metadata_blob_hash`
+    /// ([`backup::RestoredAsset::create_metadata_blob`]); `held_current` is the current blob of
+    /// the asset this workspace already holds, if any.
     ///
-    /// Nothing is written when the artifact carried none (an older artifact, or a create that
-    /// binds the current blob). A copy already on disk that answers the same hash holds the same
-    /// bytes and is left alone; one that does not is replaced.
-    fn restore_create_metadata_blob(&self, asset: &AssetState, blob: &[u8]) -> Result<()> {
-        if blob.is_empty() {
-            return Ok(());
-        }
+    /// When the artifact carried none, the held current blob is kept instead if it answers the
+    /// create and the restored head replaces it: a never-edited asset updated by a peer that
+    /// edited it without keeping the create's blob (an older build, or an edit made before the
+    /// blob was kept) would otherwise lose the last copy that uploads its create. Nothing is
+    /// written when neither applies. A copy already on disk that answers the same hash holds the
+    /// same bytes and is left alone; one that does not is replaced.
+    fn restore_create_metadata_blob(
+        &self,
+        asset: &AssetState,
+        carried: &[u8],
+        held_current: Option<&[u8]>,
+    ) -> Result<()> {
+        let blob = if carried.is_empty() {
+            let bound = asset
+                .chain
+                .records()
+                .first()
+                .expect("provenance chain is never empty")
+                .manifest
+                .core
+                .metadata_blob_hash;
+            match (bound, held_current) {
+                (Some(bound), Some(current))
+                    if !current.is_empty()
+                        && current != asset.metadata_blob.as_slice()
+                        && blob_ciphertext_hash(current) == bound =>
+                {
+                    tracing::debug!(
+                        asset_id = %asset.asset_id,
+                        "backup: keeping the held blob the create binds before the restore replaces it"
+                    );
+                    current
+                }
+                _ => return Ok(()),
+            }
+        } else {
+            carried
+        };
         let held = fs::read(self.create_metadata_blob_path_of(asset)).ok();
         if held.is_some_and(|held| blob_ciphertext_hash(&held) == blob_ciphertext_hash(blob)) {
             tracing::debug!(
