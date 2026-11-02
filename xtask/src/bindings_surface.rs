@@ -83,8 +83,9 @@ const NAMESPACE: &str = "capsule_sdk";
 /// - Client and session: the networked user flows (login, upload, status, sync).
 /// - Workspace verbs: enroll (including hardware-signer parity), album, seal and import, the
 ///   seal-to-upload bridge, verify, sync-apply, escrow, and the device directory.
-/// - Purge delivery: the feed read that names the server's head, the session verb that sends a
-///   purged asset's kept chain, its outcome, and the list of kept purges a relaunch walks.
+/// - Purge delivery: the feed read that names the server's head, the session verbs that send a
+///   purged asset's kept chain (from the listed head or its hash), its outcome, the kept chain's
+///   head a delivery compares with the feed, and the list of kept purges a relaunch walks.
 /// - Alerts: the shared predicate and the per-class pre-arm deadlines a client schedules its
 ///   alarms from. The arm call must not go missing: without it a client can only ask "what is
 ///   true now?", which is the question pre-arming exists to stop it having to ask.
@@ -124,6 +125,8 @@ pub(crate) const REQUIRED: &[(&str, &str)] = &[
     ("verifyAsset", "verifyAsset"),
     ("syncPull", "syncPull"),
     ("deliverPurge", "deliverPurge"),
+    ("deliverPurgeAtHash", "deliverPurgeAtHash"),
+    ("purgedRecord", "purgedRecord"),
     ("purgedAssetIds", "purgedAssetIds"),
     ("FfiLifecycleOpOutcome", "FfiLifecycleOpOutcome"),
 ];
