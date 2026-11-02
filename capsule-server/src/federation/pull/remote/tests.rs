@@ -346,6 +346,21 @@ async fn a_refresh_is_signed_over_its_own_path() {
 }
 
 #[tokio::test]
+async fn a_refresh_refused_as_early_data_is_a_refusal_not_malformed() {
+    let code = capsule_i18n::error_codes::REQUEST_TOO_EARLY;
+    let peer = Scripted::new(Canned::json(425, &problem(425, code)));
+    let client = client_over(&peer, signer());
+    let error = client.refresh(TOKEN, 4096).await.expect_err("refused");
+    assert_eq!(
+        error,
+        RemoteError::Refused {
+            status: 425,
+            code: Some(code.into()),
+        }
+    );
+}
+
+#[tokio::test]
 async fn a_request_off_the_origin_is_never_executed() {
     let peer = Scripted::new(Canned::json(200, &page()));
     let transport = PeerTransport::new(

@@ -467,6 +467,9 @@ impl PeerClient {
                     E::Status404(problem) => (404, Some(problem.code.clone())),
                     E::Status409(problem) => (409, Some(problem.code.clone())),
                     E::Status413(problem) => (413, Some(problem.code.clone())),
+                    // Refused as TLS early data: a retryable refusal, as 429 is, so the pull
+                    // backs off and keeps its current capability.
+                    E::Status425(problem) => (425, Some(problem.code.clone())),
                     E::Status426(problem) => (426, Some(problem.code.clone())),
                     E::Status429(problem) => (429, Some(problem.code.clone())),
                     E::Status500(problem) => (500, Some(problem.code.clone())),
