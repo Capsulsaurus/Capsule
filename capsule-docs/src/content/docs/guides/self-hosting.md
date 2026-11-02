@@ -149,6 +149,13 @@ owner's writes until you have investigated and run `capsule-server rebuild --app
 on the host so it verifies the ledgers' signatures. See
 [Rebuild](/design/filesystem/server/#rebuild).
 
+A server that applied lifecycle ops (delete, restore, metadata update, derivative, replace)
+before it recorded their blobs' sizes holds those references at size 0. Run
+`capsule-server repair-sizes` once to list them, then `capsule-server repair-sizes --apply` to
+fill each size in from the blob store; it is safe beside a running `serve`, and each repaired
+asset is sent to clients again. It exits non-zero when a blob is missing or empty, and leaves
+that reference as it was.
+
 ## Backups
 
 Durable state is PostgreSQL plus `BLOB_ROOT` (blobs and `ledger/`); back up both, together. Valkey holds only sessions and
