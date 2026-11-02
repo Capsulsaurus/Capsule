@@ -400,7 +400,8 @@ impl Model {
         let mut told = vec![false; self.size];
         for part in committed.split(',').filter(|p| !p.is_empty()) {
             let (start, last) = part.split_once('-').expect("a range");
-            let (start, last): (usize, usize) = (start.parse().unwrap(), last.parse().unwrap());
+            let start: usize = start.parse().expect("a first byte");
+            let last: usize = last.parse().expect("a last byte");
             told[start..=last].fill(true);
         }
         if req.method == "PATCH" {

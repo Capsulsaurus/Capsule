@@ -953,19 +953,19 @@ impl UploadError {
     /// A failed read of the source: [`Self::SourceChanged`] when the source said so through
     /// the [`SourceChanged`] it carried, [`Self::Io`] otherwise.
     fn of_read(error: std::io::Error) -> Self {
-        if !error
-            .get_ref()
-            .is_some_and(|inner| inner.is::<SourceChanged>())
-        {
+        let carries_change = match error.get_ref() {
+            Some(inner) => inner.is::<SourceChanged>(),
+            None => false,
+        };
+        if !carries_change {
             return Self::Io(error);
         }
         let kind = error.kind();
-        match error
-            .into_inner()
-            .map(|inner| inner.downcast::<SourceChanged>())
-        {
-            Some(Ok(changed)) => Self::SourceChanged(*changed),
-            Some(Err(inner)) => Self::Io(std::io::Error::new(kind, inner)),
+        match error.into_inner() {
+            Some(inner) => match inner.downcast::<SourceChanged>() {
+                Ok(changed) => Self::SourceChanged(*changed),
+                Err(inner) => Self::Io(std::io::Error::new(kind, inner)),
+            },
             None => Self::Io(kind.into()),
         }
     }
