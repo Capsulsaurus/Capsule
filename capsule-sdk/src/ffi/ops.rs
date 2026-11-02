@@ -12,6 +12,13 @@
 //! chain head are exactly the bytes the device signed. Only the actions that move no bytes and
 //! bind no metadata blob are accepted: a `delete` or a `trash-restore`.
 //!
+//! The server cannot verify a record's signatures, so a mis-signed record it accepted would
+//! become the asset's chain head and fail every reader's `verify_asset`. The bytes are therefore
+//! also judged against the workspace ([`judge_own_record`](crate::ffi::ops::judge_own_record)):
+//! the record's device signature verifies under the workspace's device directory, and it is a
+//! record of the chain the workspace holds for its asset. A delivery verifies every record of
+//! the stretch it sends the same way.
+//!
 //! # A delete is held until its create is indexed
 //!
 //! The server never sees a `delete` for an asset it has not indexed (Organization — Deletion
@@ -33,11 +40,15 @@
 use std::sync::Arc;
 
 use capsule_core::crypto::hash::{Hash32, hash_bytes};
-use capsule_core::crypto::provenance::{Action, ManifestCore, ProvenanceRecord};
+use capsule_core::crypto::provenance::{Action, ProvenanceRecord};
+use capsule_core::crypto::verify_asset::verify_device_signature;
+use capsule_library::lifecycle::Workspace;
 
 use super::workspace::{parse_uuid, trash_error};
 use super::{FfiError, FfiSession, FfiWorkspace};
-use crate::albums::{AlbumClient, AlbumTransport, AppliedOp, LifecycleOpError};
+use crate::albums::{
+    AlbumClient, AlbumTransport, AppliedOp, LifecycleOpError, op_envelope, stretch_after,
+};
 
 /// The largest record [`FfiSession::apply_lifecycle_op`] decodes. A lifecycle record is one
 /// signed manifest with its chain position, a few kilobytes even under hybrid signatures; this
@@ -167,6 +178,40 @@ pub(super) fn decode_op_record(bytes: &[u8]) -> Result<ProvenanceRecord, FfiErro
     Ok(record)
 }
 
+/// Judge `record` against `ws`: its device signature verifies under the workspace's device
+/// directory ([`verify_device_signature`]), and it is a record of the chain the workspace holds
+/// for its asset, live, trashed or kept by a purge. The server cannot verify signatures, so
+/// this is the last place a mis-signed or foreign record is stopped before it would become the
+/// asset's chain head on the server.
+///
+/// # Errors
+///
+/// The first rule the record breaks, as an English detail.
+pub(super) fn judge_own_record(ws: &Workspace, record: &ProvenanceRecord) -> Result<(), String> {
+    let core = &record.manifest.core;
+    verify_device_signature(&record.manifest, ws.device_directory()).map_err(|reason| {
+        format!(
+            "record: its device signature does not verify under this workspace's device \
+             directory ({reason:?})"
+        )
+    })?;
+    let hash = record.record_hash();
+    let own = ws
+        .asset(&core.file_id)
+        .map(|asset| asset.chain.records())
+        .into_iter()
+        .chain(ws.purged_chain(&core.file_id))
+        .flatten()
+        .any(|held| held.record_hash() == hash);
+    if !own {
+        return Err(format!(
+            "record: not a record of this workspace's chain for asset {}",
+            core.file_id
+        ));
+    }
+    Ok(())
+}
+
 /// The generated request for `record`, whose canonical bytes are `canonical`: the server-visible
 /// projection of its manifest, every field verbatim, naming the original's ciphertext and no
 /// derivative, and no metadata blob.
@@ -179,60 +224,10 @@ fn op_request(record: &ProvenanceRecord, canonical: &[u8]) -> crate::rest::types
     }
 }
 
-/// The server-visible projection of a lifecycle manifest, as the CLI's lifecycle ops send it.
-fn op_envelope(core: &ManifestCore) -> crate::rest::types::ManifestEnvelope {
-    let wire = |value: serde_json::Result<serde_json::Value>| {
-        value
-            .ok()
-            .and_then(|v| v.as_str().map(str::to_owned))
-            .unwrap_or_default()
-    };
-    crate::rest::types::ManifestEnvelope {
-        crypto_suite_id: i64::from(core.crypto_suite_id),
-        protocol_version: core.protocol_version.clone(),
-        album_id: Some(core.album_id.to_string()),
-        file_id: core.file_id.to_string(),
-        amk_version: i64::from(core.amk_version.0),
-        ciphertext_hash: core.ciphertext_hash.to_hex(),
-        plaintext_size: i64::try_from(core.plaintext_size).unwrap_or(i64::MAX),
-        chunk_size: i64::from(core.chunk_size),
-        key_mode: wire(serde_json::to_value(core.key_mode)),
-        metadata_blob_hash: core.metadata_blob_hash.map(|h| h.to_hex()),
-        original_blob_hash: None,
-        derivative_role: None,
-        derivative_format: None,
-        created_by_user: core.created_by_user.to_string(),
-        created_by_device: core.created_by_device.to_string(),
-        client_version: core.client_version.clone(),
-        timestamp: core.timestamp.clone(),
-        action: wire(serde_json::to_value(core.action)),
-        prior_provenance_hash: core.prior_provenance_hash.map(|h| h.to_hex()),
-        retention_until: core.retention_until.clone(),
-    }
-}
-
 /// The hash of the head the feed lists for an asset: `None` for an entry that carries no
 /// record, which names no position in any chain.
 fn listed_head(server_head: &[u8]) -> Option<Hash32> {
     (!server_head.is_empty()).then(|| hash_bytes(server_head))
-}
-
-/// The records of `records` (a chain, oldest first) the server lacks when it holds `head`:
-/// those after it. Where `head` already is the last record, the last record alone, which the
-/// server answers as a replay; where `head` is unknown or not in the chain, the last record
-/// alone too, which the server judges (a stale chain is refused, never applied).
-///
-/// The same rule as the CLI's held delivery, so a purge sent from either client sends the same
-/// stretch.
-pub(super) fn stretch_after(
-    records: &[ProvenanceRecord],
-    head: Option<Hash32>,
-) -> &[ProvenanceRecord] {
-    let last = records.len().saturating_sub(1);
-    let start = head
-        .and_then(|head| records.iter().position(|r| r.record_hash() == head))
-        .map_or(last, |at| (at + 1).min(last));
-    records.get(start..).unwrap_or_default()
 }
 
 #[uniffi::export]
@@ -254,6 +249,12 @@ impl FfiSession {
     /// [`FfiWorkspace::purged_record`] carry — to its album's ops surface on `api_base_url`
     /// (`http[s]://host:port`, the root `sync_pull` takes).
     ///
+    /// The record must be one `workspace` holds: its device signature verifies under the
+    /// workspace's device directory, and it is a record of the workspace's chain for its asset
+    /// (live, trashed, or kept by a purge). The server cannot verify signatures, so a record
+    /// that is not this workspace's own is refused here rather than becoming the asset's chain
+    /// head there.
+    ///
     /// `server_head` is the sync feed's evidence for the asset: the `manifest_cbor` of the
     /// latest entry listing it (empty for an entry that carries none), or `None` when the feed
     /// does not list it. With `None` nothing is sent and the answer is
@@ -267,16 +268,24 @@ impl FfiSession {
     /// # Errors
     ///
     /// [`FfiError::InvalidArgument`] for bytes that are not a lifecycle op record (over the
-    /// bound, not canonical, or not a `delete` or `trash-restore`) or an `api_base_url` that
-    /// is not an http(s) URL, before anything is sent;
+    /// bound, not canonical, not a `delete` or `trash-restore`, not signed by a device of the
+    /// workspace's directory, or not on the workspace's chain for its asset) or an
+    /// `api_base_url` that is not an http(s) URL, before anything is sent;
     /// [`FfiError::Auth`] for a refused session.
     pub async fn apply_lifecycle_op(
         &self,
         api_base_url: String,
+        workspace: Arc<FfiWorkspace>,
         record: Vec<u8>,
         server_head: Option<Vec<u8>>,
     ) -> Result<FfiLifecycleOpOutcome, FfiError> {
         let decoded = decode_op_record(&record)?;
+        workspace.with(|ws| {
+            judge_own_record(ws, &decoded).map_err(|detail| {
+                tracing::warn!(asset_id = %decoded.manifest.core.file_id, %detail, "ffi: a lifecycle op record was refused");
+                FfiError::InvalidArgument { detail }
+            })
+        })?;
         let client = self.album_client(&api_base_url)?;
         let core = &decoded.manifest.core;
         tracing::info!(
@@ -301,7 +310,9 @@ impl FfiSession {
     /// Everything is read from the workspace's kept chain, so a delivery that failed or was
     /// held is retried by calling this again, also after the workspace was reopened
     /// ([`FfiWorkspace::purged_asset_ids`] lists what to walk). The workspace lock is held only
-    /// while the chain is read, never across the network.
+    /// while the chain is read, never across the network. Every record of the stretch is
+    /// judged as [`apply_lifecycle_op`](Self::apply_lifecycle_op) judges a foreign one before
+    /// any is sent, so a kept chain whose records no longer verify sends nothing.
     ///
     /// `server_head` is as [`apply_lifecycle_op`](Self::apply_lifecycle_op) takes it: `None`
     /// sends nothing and answers [`FfiLifecycleOpOutcome::NotIndexed`]. The answer is the last
@@ -312,7 +323,9 @@ impl FfiSession {
     ///
     /// [`FfiError::Trash`] with [`FfiTrashRefusal::NotFound`](super::FfiTrashRefusal::NotFound)
     /// for an asset this workspace has not purged; [`FfiError::InvalidArgument`] for a malformed
-    /// `asset_id` or `api_base_url`; [`FfiError::Auth`] for a refused session.
+    /// `asset_id` or `api_base_url`; [`FfiError::Workspace`] for a kept chain whose records do
+    /// not verify under the workspace's device directory; [`FfiError::Auth`] for a refused
+    /// session.
     pub async fn deliver_purge(
         &self,
         api_base_url: String,
@@ -332,6 +345,12 @@ impl FfiSession {
             stretch_after(chain, head.flatten())
                 .iter()
                 .map(|record| {
+                    judge_own_record(ws, record).map_err(|detail| {
+                        tracing::error!(%asset, %detail, "ffi: a kept chain record does not verify; nothing is sent");
+                        FfiError::Workspace {
+                            detail: format!("the kept chain of {asset}: {detail}"),
+                        }
+                    })?;
                     let bytes = capsule_core::cbor::to_canonical_vec(record).map_err(|e| {
                         FfiError::Workspace {
                             detail: format!("encoding the kept chain of {asset}: {e}"),

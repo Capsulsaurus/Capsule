@@ -205,38 +205,102 @@ fn a_non_canonical_encoding_of_a_record_is_refused() {
     assert!(invalid(decode_op_record(&other)).contains("canonical"));
 }
 
-#[test]
-fn the_stretch_after_the_servers_head_is_the_rest_of_the_chain() {
+/// Copy the library at `from` to `to`, file by file: a second library of the same account and
+/// device, whose chains diverge from the first from here on.
+fn copy_library(from: &std::path::Path, to: &std::path::Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for entry in std::fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let target = to.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_library(&entry.path(), &target);
+        } else {
+            std::fs::copy(entry.path(), target).unwrap();
+        }
+    }
+}
+
+fn refused(result: Result<FfiLifecycleOpOutcome, FfiError>) -> String {
+    match result {
+        Err(FfiError::InvalidArgument { detail }) => detail,
+        other => panic!("expected InvalidArgument, got {other:?}"),
+    }
+}
+
+/// A record whose device signature does not verify is refused before it is sent, though it
+/// is canonical, a delete, and otherwise the workspace's own: the server cannot verify it, and
+/// once it were the chain head every reader's `verify_asset` would fail.
+#[tokio::test]
+async fn a_mis_signed_record_is_refused_before_it_is_sent() {
+    let (server, seen) = ops_server(|req| applied(req, 1)).await;
+    let session = login(&server).await;
     let root = tempfile::TempDir::new().unwrap();
     let (workspace, asset) = sealed(root.path());
+    let create = create_head(&workspace, &asset);
     workspace.delete_asset(asset.clone(), 30).unwrap();
-    workspace.purge_asset(asset.clone()).unwrap();
-    let id = uuid::Uuid::parse_str(&asset).unwrap();
-    workspace
-        .with(|ws| {
-            let chain = ws.purged_chain(&id).unwrap();
-            assert_eq!(chain.len(), 3, "create, delete, re-issued delete");
-            let hash = |at: usize| Some(chain[at].record_hash());
-            assert_eq!(stretch_after(chain, hash(0)), &chain[1..]);
-            assert_eq!(stretch_after(chain, hash(1)), &chain[2..]);
-            assert_eq!(
-                stretch_after(chain, hash(2)),
-                &chain[2..],
-                "level: a replay"
-            );
-            assert_eq!(
-                stretch_after(chain, None),
-                &chain[2..],
-                "unknown: the head alone"
-            );
-            assert_eq!(
-                stretch_after(chain, Some(hash_bytes(b"elsewhere"))),
-                &chain[2..]
-            );
-            assert!(stretch_after(&[], None).is_empty());
-            Ok(())
-        })
-        .unwrap();
+    let mut record: ProvenanceRecord =
+        capsule_core::cbor::from_slice(&workspace.provenance_head(asset).unwrap()).unwrap();
+    record.manifest.device_sig = record.manifest.write_sig.clone();
+    let forged = capsule_core::cbor::to_canonical_vec(&record).unwrap();
+    decode_op_record(&forged).expect("the bytes alone are a well-formed lifecycle op");
+
+    let detail = refused(
+        session
+            .apply_lifecycle_op(server.base_url(), workspace.clone(), forged, Some(create))
+            .await,
+    );
+    assert!(detail.contains("device signature"), "{detail}");
+    assert!(
+        seen.lock().unwrap().is_empty(),
+        "nothing reached the server"
+    );
+}
+
+/// A validly signed record that is not on this workspace's chain is refused: one of another
+/// account, and one this device signed into a diverged copy of the library.
+#[tokio::test]
+async fn a_record_not_on_the_workspaces_chain_is_refused() {
+    let (server, seen) = ops_server(|req| applied(req, 1)).await;
+    let session = login(&server).await;
+    let root = tempfile::TempDir::new().unwrap();
+    let (own, copied) = (root.path().join("own"), root.path().join("copy"));
+    let (workspace, asset) = sealed(&own);
+    let create = create_head(&workspace, &asset);
+
+    let (other, other_asset) = sealed(&root.path().join("other"));
+    other.delete_asset(other_asset.clone(), 30).unwrap();
+    let foreign = other.provenance_head(other_asset).unwrap();
+    let detail = refused(
+        session
+            .apply_lifecycle_op(
+                server.base_url(),
+                workspace.clone(),
+                foreign,
+                Some(Vec::new()),
+            )
+            .await,
+    );
+    assert!(detail.contains("device signature"), "{detail}");
+
+    drop(workspace);
+    copy_library(&own, &copied);
+    let workspace = reopen(&own);
+    let copy = reopen(&copied);
+    copy.delete_asset(asset.clone(), 30).unwrap();
+    let diverged = copy.provenance_head(asset).unwrap();
+    let detail = refused(
+        session
+            .apply_lifecycle_op(server.base_url(), workspace.clone(), diverged, Some(create))
+            .await,
+    );
+    assert!(
+        detail.contains("not a record of this workspace's chain"),
+        "{detail}"
+    );
+    assert!(
+        seen.lock().unwrap().is_empty(),
+        "nothing reached the server"
+    );
 }
 
 // ─── The session verbs ───────────────────────────────────────────────────────
@@ -252,7 +316,7 @@ async fn an_op_for_an_asset_the_feed_does_not_list_is_held() {
     let delete = workspace.provenance_head(asset.clone()).unwrap();
 
     let outcome = session
-        .apply_lifecycle_op(server.base_url(), delete.clone(), None)
+        .apply_lifecycle_op(server.base_url(), workspace.clone(), delete.clone(), None)
         .await
         .unwrap();
     assert_eq!(outcome, FfiLifecycleOpOutcome::NotIndexed);
@@ -279,6 +343,7 @@ async fn an_op_for_an_indexed_asset_reaches_its_albums_ops_route() {
     let outcome = session
         .apply_lifecycle_op(
             format!("{}/", server.base_url()),
+            workspace.clone(),
             delete.clone(),
             Some(create),
         )
@@ -410,7 +475,12 @@ async fn a_failed_delivery_is_retried_from_the_kept_chain_after_a_reopen() {
     );
     // The single-record verb sends the same bytes from `purged_record`.
     let resent = session
-        .apply_lifecycle_op(server.base_url(), reissue.clone(), Some(Vec::new()))
+        .apply_lifecycle_op(
+            server.base_url(),
+            reopened.clone(),
+            reissue.clone(),
+            Some(Vec::new()),
+        )
         .await
         .unwrap();
     assert!(matches!(resent, FfiLifecycleOpOutcome::Applied { .. }));
@@ -475,7 +545,12 @@ async fn refusals_are_typed() {
     let session = login(&server).await;
     let record = workspace.purged_record(asset).unwrap().unwrap();
     match session
-        .apply_lifecycle_op(server.base_url(), record, Some(Vec::new()))
+        .apply_lifecycle_op(
+            server.base_url(),
+            workspace.clone(),
+            record,
+            Some(Vec::new()),
+        )
         .await
     {
         Err(FfiError::Auth { .. }) => {}
@@ -523,7 +598,12 @@ async fn bad_arguments_are_refused_before_anything_is_sent() {
     }
     let create = create_head(&workspace, &asset);
     let result = session
-        .apply_lifecycle_op(server.base_url(), create.clone(), Some(create))
+        .apply_lifecycle_op(
+            server.base_url(),
+            workspace.clone(),
+            create.clone(),
+            Some(create),
+        )
         .await;
     assert!(matches!(result, Err(FfiError::InvalidArgument { .. })));
     assert!(seen.lock().unwrap().is_empty());
