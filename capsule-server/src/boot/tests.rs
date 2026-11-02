@@ -811,6 +811,48 @@ async fn the_assembled_maintenance_workers_see_the_links_the_application_issues(
 }
 
 #[tokio::test]
+async fn the_assembled_collector_sweeps_the_activity_the_application_records() {
+    // #1112: the sweep rides the collection context, so an assembly that dropped
+    // `with_activity_sweep` would keep every unit test green and leave expired rows forever.
+    // Only a case over the assembled `Maintenance` and the application's own store sees it.
+    use crate::activity::{ActivityEvent, ActivityKind};
+
+    let root = tempfile::tempdir().expect("a scratch directory");
+    let assembled = assemble(&memory_config(root.path()))
+        .await
+        .expect("it assembles");
+    let store = assembled.app.activity().store();
+    store
+        .record(
+            ActivityEvent {
+                event_id: "expired-1".to_owned(),
+                user_id: crate::store::UserId::new("gone-quiet"),
+                kind: ActivityKind::SignOut,
+                at: jiff::Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_hours(24),
+                request_id: None,
+                session_id: None,
+                subject: None,
+            },
+            jiff::Timestamp::MIN,
+        )
+        .await
+        .expect("a record");
+    let horizon = crate::activity::horizon(jiff::Timestamp::now());
+
+    let dry = crate::gc::collect(&assembled.maintenance.collection, crate::gc::Mode::DryRun)
+        .await
+        .expect("a dry run");
+    assert_eq!(dry.expired_activity, 1, "the assembled pass counts it");
+    assert_eq!(store.count_expired(horizon).await.expect("a count"), 1);
+
+    let applied = crate::gc::collect(&assembled.maintenance.collection, crate::gc::Mode::Apply)
+        .await
+        .expect("an applied pass");
+    assert_eq!(applied.expired_activity, 1, "the assembled pass deletes it");
+    assert_eq!(store.count_expired(horizon).await.expect("a count"), 0);
+}
+
+#[tokio::test]
 async fn a_locked_account_recovers_through_the_login_route_once_the_window_passes() {
     // Asserted through the **route** rather than against the adapter, because that is where
     // the property actually has to hold: `login` asks the directory first and answers `423`

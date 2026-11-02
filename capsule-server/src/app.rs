@@ -169,6 +169,13 @@ impl App {
         &self.counters
     }
 
+    /// The account activity log's collaborators, for the assembly tests that must see the very
+    /// store the application records into.
+    #[cfg(test)]
+    pub(crate) fn activity(&self) -> &ActivityContext {
+        &self.activity
+    }
+
     /// Assembles the application from its modules.
     pub fn new(modules: Modules) -> Self {
         let Modules {
