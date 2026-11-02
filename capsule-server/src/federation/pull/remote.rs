@@ -602,19 +602,20 @@ impl PeerClient {
 /// The whole reason a connection to the peer failed, when `error` is a connect-time failure.
 ///
 /// reqwest reports every failure to open a connection - a refused port, a name that does not
-/// resolve, a TLS handshake whose certificate does not verify, a connect that outlasts
-/// [`CONNECT_TIMEOUT`] - as its request class, and spargen sorts that class into
-/// [`rest::Error::RequestConstruction`]. None of them is the peer's input failing validation, so
-/// the pull backs off rather than charging the peer's error budget. Every other cause there (a
-/// response hyper could not parse, a request the generated code could not assemble) stays
-/// [`RemoteError::Malformed`].
+/// resolve, a TLS handshake whose certificate does not verify - as its request class, and
+/// spargen sorts that class into [`rest::Error::RequestConstruction`]. None of them is the
+/// peer's input failing validation, so the pull backs off rather than charging the peer's error
+/// budget. Every other cause there (a response hyper could not parse, a request the generated
+/// code could not assemble) stays [`RemoteError::Malformed`]. A connect that outlasts
+/// [`CONNECT_TIMEOUT`] never arrives here: spargen checks for a timeout first and reports it as
+/// [`rest::Error::Timeout`], which is [`RemoteError::Unreachable`] without this function.
 ///
 /// The reason is the whole source chain, so a certificate the handshake refused is logged with
 /// the verifier's own words. Nothing here relaxes verification: the connection was never made.
 fn connect_failure(error: &rest::RequestError) -> Option<String> {
     let source = std::error::Error::source(error)?;
     let reqwest = source.downcast_ref::<reqwest::Error>()?;
-    if !(reqwest.is_connect() || reqwest.is_timeout()) {
+    if !reqwest.is_connect() {
         return None;
     }
     let mut reason = reqwest.to_string();
