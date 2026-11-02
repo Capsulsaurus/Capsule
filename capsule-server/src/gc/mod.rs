@@ -331,10 +331,10 @@ impl CollectionContext {
 
     /// The same collector, counting every claim `held` answers for as a reference (#1141).
     ///
-    /// A builder rather than a constructor argument, as the other reference sources beside the
-    /// index are not: the pulled-album store is federation's, and a collector over a store no
-    /// puller writes has no claims to ask about. Every assembly whose blob store a puller writes
-    /// must call it, which `boot` does on both arms.
+    /// A builder rather than a constructor argument, unlike the share links: the pulled-album
+    /// store is federation's, and a collector over a blob store no puller writes has no claims to
+    /// ask about. Every assembly whose blob store a puller writes must call it, which `boot` does
+    /// on both arms (`serve` and `gc` alike).
     #[must_use]
     pub fn with_held_blobs(mut self, held: Arc<dyn HeldBlobs>) -> Self {
         self.held = Some(held);
