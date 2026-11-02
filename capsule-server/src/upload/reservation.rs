@@ -425,7 +425,7 @@ pub async fn discard_under_pressure(
     tracing::info!(
         uploader = %record.upload_user_id,
         size = record.total_size,
-        received = record.received_bytes,
+        received = record.committed.covered(),
         released = ?released,
         "discarded an upload session under storage pressure"
     );
