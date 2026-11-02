@@ -631,6 +631,42 @@ async fn a_hint_brings_an_established_peers_pull_earlier_but_not_inside_a_minute
 }
 
 #[tokio::test]
+async fn a_hint_never_shortens_a_failing_jobs_back_off() {
+    let rig = Rig::new();
+    rig.established().await;
+    let mut failed_at = rig.now();
+    let mut next = failed_at;
+    for _ in 0..4 {
+        rig.advance_to(next);
+        failed_at = rig.now();
+        rig.puller.then(transport());
+        let JobOutcome::Failed { next: due, .. } = rig.round().await else {
+            panic!("a transport failure fails the pull");
+        };
+        next = due;
+    }
+    assert!(
+        next > plus(failed_at, HINT_FLOOR),
+        "the back-off is past the floor"
+    );
+
+    rig.advance_to(plus(failed_at, HINT_FLOOR));
+    assert_eq!(
+        rig.worker.hint(&rig.job).await,
+        HintOutcome::Unchanged,
+        "the failing peer cannot hint its job out of back-off"
+    );
+    assert_eq!(
+        rig.jobs
+            .claim(&rig.job, "probe", rig.now(), PULL_LEASE)
+            .await
+            .expect("claim answered"),
+        None,
+        "the job is still not due"
+    );
+}
+
+#[tokio::test]
 async fn a_hint_naming_a_job_this_server_does_not_hold_changes_nothing() {
     // What the hint route hands over for an album nobody here subscribes to, or another
     // server's album: the answer is the one an already-due job gets, and no job moves.

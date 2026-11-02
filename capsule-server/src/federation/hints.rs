@@ -14,9 +14,10 @@
 //! server's album is a hint about a job that does not exist. It carries no data, no cursor and
 //! no claim about what changed, so there is nothing in it for validation to read. All it can do
 //! is make a job this server already holds due sooner, never sooner than
-//! [`HINT_FLOOR`](super::pull::HINT_FLOOR) after the job's last pull, and never for a peer on
-//! probation or blocked. It cannot add a job, change what is pulled or from where, or reach past
-//! a peer's back-off or open circuit: the worker decides what runs exactly as it would have.
+//! [`HINT_FLOOR`](super::pull::HINT_FLOOR) after the job's last pull, never for a job backing
+//! off after a failed pull, and never for a peer on probation or blocked. It cannot add a job,
+//! change what is pulled or from where, or reach past a job's back-off or its peer's open
+//! circuit: the worker decides what runs exactly as it would have.
 //!
 //! # Signed like a report, for the same reason
 //!

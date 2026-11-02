@@ -176,8 +176,8 @@ impl HintRejection {
 ///
 /// A verified hint brings the job pulling `album_id` from `home_server` forward: no sooner than
 /// one minute after that job's last pull, never for a peer on probation, and never past the
-/// peer's back-off or open circuit, which the pull worker applies to the job exactly as it would
-/// have. A hint adds no job, changes nothing about what is pulled or where from, and carries
+/// job's back-off after a failed pull or the peer's open circuit, which the pull worker applies
+/// to the job exactly as it would have. A hint adds no job, changes nothing about what is pulled or where from, and carries
 /// nothing that reaches validation. The album is pulled on its own interval whether or not a
 /// hint ever arrives, so a refused hint costs at most that interval.
 ///
