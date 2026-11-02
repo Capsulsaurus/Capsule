@@ -1,10 +1,4 @@
 use super::*;
-use crate::federation::PeerId;
-use crate::store::AlbumId;
-
-fn job() -> JobKey {
-    JobKey::new(PeerId::new("home.test"), AlbumId::new("album"))
-}
 
 fn hash(byte: u8) -> Hash32 {
     Hash32([byte; 32])
@@ -21,67 +15,9 @@ fn at(head: Hash32, deleted: bool) -> AssetHead {
     }
 }
 
-fn page(high_water: u64) -> ValidatedPage {
-    ValidatedPage {
-        entries: Vec::new(),
-        metadata_blobs: BTreeMap::from([(hash(9), b"meta".to_vec())]),
-        state: PulledAlbum {
-            cursor: Some(format!("c{high_water}")),
-            high_water: Some(high_water),
-            ..PulledAlbum::default()
-        },
-    }
-}
-
 #[tokio::test]
-async fn an_album_never_pulled_reads_as_the_start() {
-    let store = InMemoryPulledAlbums::new();
-    assert_eq!(
-        store.read(&job()).await.expect("read"),
-        PulledAlbum::default()
-    );
-}
-
-#[tokio::test]
-async fn a_commit_lands_only_from_the_position_it_was_validated_at() {
-    let store = InMemoryPulledAlbums::new();
-    assert!(store.commit(&job(), None, page(3)).await.expect("commit"));
-    assert_eq!(store.read(&job()).await.expect("read").high_water, Some(3));
-    assert_eq!(
-        store.metadata_blob(&job(), &hash(9)),
-        Some(b"meta".to_vec())
-    );
-
-    // Validated from the start, but the album has moved to 3 since.
-    assert!(!store.commit(&job(), None, page(5)).await.expect("commit"));
-    assert_eq!(store.read(&job()).await.expect("read").high_water, Some(3));
-
-    assert!(
-        store
-            .commit(&job(), Some(3), page(5))
-            .await
-            .expect("commit")
-    );
-    assert_eq!(store.read(&job()).await.expect("read").high_water, Some(5));
-}
-
-#[tokio::test]
-async fn a_restart_forgets_the_position_and_keeps_the_heads() {
-    let store = InMemoryPulledAlbums::new();
-    let mut first = page(4);
-    first
-        .state
-        .assets
-        .insert("asset".into(), at(hash(1), false));
-    first.state.amk_version = Some(2);
-    assert!(store.commit(&job(), None, first).await.expect("commit"));
-
-    store.restart(&job()).await.expect("restart");
-    let state = store.read(&job()).await.expect("read");
-    assert_eq!(state.cursor, None);
-    assert_eq!(state.high_water, None);
-    assert_eq!(state.amk_version, Some(2));
-    assert_eq!(state.assets["asset"].head, hash(1));
+async fn the_in_memory_store_conforms() {
+    conformance::run_all(&InMemoryPulledAlbums::new()).await;
 }
 
 #[test]

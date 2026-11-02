@@ -17,10 +17,15 @@
 //!
 //! # What lives where
 //!
-//! This file holds the port, its records and [`InMemoryPulledAlbums`], the deterministic double
-//! the puller's tests drive. The durable adapter — rows beside the subscriptions, the metadata
-//! blobs in the blob store charged to the receiving members' quota — is follow-up work, as is
-//! the breadcrumb index that reads these entries.
+//! - This file — the port, its records and [`InMemoryPulledAlbums`], the deterministic double
+//!   the puller's tests drive.
+//! - [`postgres`] — [`PostgresPulledAlbums`](postgres::PostgresPulledAlbums), the durable
+//!   adapter: rows beside the subscriptions, the metadata blobs in the blob store, and a hook
+//!   ([`PulledBlobCharge`](postgres::PulledBlobCharge)) that charges what a commit newly holds
+//!   inside the commit's own transaction.
+//! - [`conformance`] — the suite both adapters pass.
+//!
+//! The breadcrumb index that reads these entries is follow-up work.
 
 use std::collections::BTreeMap;
 use std::sync::{Mutex, PoisonError};
@@ -30,6 +35,9 @@ use jiff::Timestamp;
 
 use super::JobKey;
 use crate::store::StoreFuture;
+
+pub mod conformance;
+pub mod postgres;
 
 /// How many superseded heads are kept per asset for the stale-revival check.
 ///
@@ -254,6 +262,20 @@ impl PulledAlbums for InMemoryPulledAlbums {
             }
             Ok(())
         })
+    }
+}
+
+impl conformance::Inspect for InMemoryPulledAlbums {
+    fn written_entries<'a>(&'a self, job: &'a JobKey) -> StoreFuture<'a, Vec<AcceptedEntry>> {
+        Box::pin(async move { Ok(self.entries(job)) })
+    }
+
+    fn held_metadata_blob<'a>(
+        &'a self,
+        job: &'a JobKey,
+        hash: &'a Hash32,
+    ) -> StoreFuture<'a, Option<Vec<u8>>> {
+        Box::pin(async move { Ok(self.metadata_blob(job, hash)) })
     }
 }
 
