@@ -28,12 +28,17 @@ required-features = ["ffi-bindgen"]
 # additionally pulls uniffi's CLI so the `uniffi-bindgen` bin can emit the bindings.
 ffi = ["dep:uniffi"]
 ffi-bindgen = ["ffi", "uniffi/cli"]
-# `http3` makes the opportunistic HTTP/3 policy (`net::h3::H3Policy::for_build`) capable, so it
-# may answer a race at dial. Off by default, and deliberately not forwarding `reqwest/http3`:
-# reqwest 0.12 refuses that feature without `RUSTFLAGS="--cfg reqwest_unstable"`, which would
-# break every `--all-features` build. Until a stable HTTP/3 transport exists, nothing consumes the
-# choice and every transport stays pinned to HTTP/1.1, so enabling it changes no request.
-http3 = []
+# `http3` compiles the HTTP/3 transport adapter (`net::h3::transport`, over quinn + h3 +
+# h3-quinn on the `ring` rustls provider) and makes the opportunistic HTTP/3 policy
+# (`net::h3::H3Policy::for_build`) capable, so it may answer a race at dial. Off by default, so
+# default builds link none of it. It deliberately does not forward `reqwest/http3`: reqwest 0.12
+# refuses that feature without `RUSTFLAGS="--cfg reqwest_unstable"`, which would break every
+# `--all-features` build.
+http3 = ["dep:quinn", "dep:h3", "dep:h3-quinn", "dep:webpki-roots", "tokio/rt"]
+# Compiles the netem acceptance harness (`net::h3::transport::tests::netem`), which reshapes the
+# host's loopback traffic with `tc` and so needs `CAP_NET_ADMIN`. Never enabled by default CI; the
+# harness is also `#[ignore]`d, so even `--all-features` runs skip it unless asked by name.
+http3-netem = ["http3"]
 
 [dependencies]
 # capsule-i18n gives the SDK the canonical `error.*` code constants it switches
@@ -98,6 +103,20 @@ rcgen = { version = "0.13", default-features = false, features = ["ring", "crypt
 # more: the sync feed is `GET /v1/sync` and rides the generated REST client like every
 # other operation, so `tonic`, `tonic-prost` and `prost` are gone with it.
 bytes = { workspace = true }
+
+# ── HTTP/3 (optional; `http3` feature) ────────────────────────────────────
+# The QUIC transport (quinn), the HTTP/3 framing over it (h3) and the adapter between the two
+# (h3-quinn), adopted directly because reqwest 0.12's HTTP/3 needs `--cfg reqwest_unstable`. The
+# `ring` rustls provider is pinned, as for LAN peering, and quinn's default `platform-verifier`,
+# `log` and `bloom` are off: trust anchors are the same webpki roots reqwest's `rustls-tls` uses.
+# See the HTTP/3 row in design/dependencies.md.
+quinn = { version = "0.11.9", default-features = false, features = [
+    "runtime-tokio",
+    "rustls-ring",
+], optional = true }
+h3 = { version = "0.0.8", optional = true }
+h3-quinn = { version = "0.0.10", optional = true }
+webpki-roots = { version = "1.0.10", optional = true }
 
 # ── FFI (optional; `ffi` feature) ──────────────────────────────────────────
 # uniffi proc-macro bindings for Swift/Kotlin/Linux over the SDK's user-flow
