@@ -89,6 +89,31 @@
 //! the row still being an expired reservation, so a settle or an extension that lands first
 //! wins and a second sweep releases nothing.
 //!
+//! # Pulled blobs count against every receiver, once each (#1162)
+//!
+//! A metadata blob a federation pull holds (`crate::federation::pull::pulled`) is charged to
+//! each local account subscribed to an album that holds it, live or lapsed, **in full** and
+//! **once per account** however many of its albums, on however many peers, hold it. That is
+//! a second rule beside the global one above, and it is per receiver on purpose: a pulled album
+//! is shared by its subscribers, so no subscriber is "first", and charging only one of them
+//! would let the others hold the bytes free.
+//!
+//! The pulled charge is **derived, never stored**: [`StoredUsage::used`] is the ledger's
+//! attributions plus the distinct pulled blobs [`PulledHoldings`] says the account holds now.
+//! So the charge lands with the pulled page that holds the blob (the rows are written in the
+//! page's own commit) and is released by whatever ends the holding — an unsubscribe, or the
+//! job's rows being forgotten — with no second write that could run twice, run never, or credit
+//! below zero. A blob the account itself is attributed in the ledger (an upload, a reservation)
+//! is counted there and not again as pulled; one another account is attributed is still charged
+//! to the receiver, because dropping it would make `GET /v1/quota` say that somebody on this
+//! server uploaded those bytes — the cross-tenant answer [`ChargeOutcome::AlreadyAttributed`]
+//! refuses to give.
+//!
+//! Pulled growth is never refused here — it is bounded by the per-peer caching budget
+//! ([`crate::federation::pull::pulled::PeerCachingBudget`]), which caps the same bytes rather
+//! than adding to them — so it is one of the ways an account becomes
+//! [`QuotaState::HardExceeded`], and unsubscribing is always the way back.
+//!
 //! # A self-hosted server has no quota, and that is the default
 //!
 //! [`QuotaLimits::unlimited`] is what a deployment with no billing runs, and it is what the
@@ -196,7 +221,8 @@ pub enum WriteClass {
 /// What the store holds for one user.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct StoredUsage {
-    /// Bytes attributed to them.
+    /// Bytes charged to them: their ledger attributions, plus every distinct pulled metadata
+    /// blob they hold and are not themselves attributed.
     pub used: u64,
     /// When they first crossed the hard limit and have not been under it since, if ever.
     ///
@@ -416,12 +442,70 @@ pub fn admits(
     }
 }
 
+/// The pulled metadata blobs an account holds, which the in-memory ledger counts in its usage.
+///
+/// The durable ledger reads the same fact from the federation tables in its usage statement; the
+/// in-memory one is handed it, because its pulled albums are a separate double.
+pub trait PulledHoldings: std::fmt::Debug + Send + Sync {
+    /// Every distinct pulled metadata blob `user` holds through an album it subscribes to, live
+    /// or lapsed, with its size.
+    fn held_by<'a>(&'a self, user: &'a UserId) -> StoreFuture<'a, BTreeMap<ContentAddress, u64>>;
+}
+
+/// A deterministic [`PulledHoldings`]: which albums each account holds which blobs through.
+#[derive(Debug, Default)]
+pub struct InMemoryPulledHoldings {
+    held: Mutex<BTreeMap<(UserId, String), BTreeMap<ContentAddress, u64>>>,
+}
+
+impl InMemoryPulledHoldings {
+    /// No account holds anything.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// `user` holds `address`, of `size` bytes, through `album`.
+    pub fn hold(&self, user: &UserId, album: &str, address: &ContentAddress, size: u64) {
+        lock(&self.held)
+            .entry((user.clone(), album.to_owned()))
+            .or_default()
+            .insert(address.clone(), size);
+    }
+
+    /// `user` no longer subscribes to `album`.
+    pub fn unsubscribe(&self, user: &UserId, album: &str) {
+        lock(&self.held).remove(&(user.clone(), album.to_owned()));
+    }
+}
+
+impl PulledHoldings for InMemoryPulledHoldings {
+    fn held_by<'a>(&'a self, user: &'a UserId) -> StoreFuture<'a, BTreeMap<ContentAddress, u64>> {
+        Box::pin(async move {
+            let held = lock(&self.held);
+            let mut blobs = BTreeMap::new();
+            for ((holder, _), album) in held.iter() {
+                if holder == user {
+                    for (address, size) in album {
+                        let entry = blobs.entry(address.clone()).or_insert(0);
+                        *entry = (*entry).max(*size);
+                    }
+                }
+            }
+            Ok(blobs)
+        })
+    }
+}
+
 /// A deterministic in-memory adapter.
 ///
 /// One mutex over both maps, which is what makes [`Self::charge`]'s check-and-debit atomic.
+/// Pulled holdings ([`Self::with_pulled`]) are read before that lock is taken, so a pulled page
+/// committed during a charge may be missed by it; the durable ledger reads them in the charge's
+/// own statement.
 #[derive(Debug, Default)]
 pub struct InMemoryQuota {
     inner: Mutex<Inner>,
+    pulled: Option<Arc<dyn PulledHoldings>>,
 }
 
 #[derive(Debug, Default)]
@@ -456,6 +540,7 @@ impl Inner {
         at: Timestamp,
         reserved_until: Option<Timestamp>,
         limits: QuotaLimits,
+        pulled: &BTreeMap<ContentAddress, u64>,
     ) -> ChargeOutcome {
         if self.attributed.contains_key(address) {
             return ChargeOutcome::AlreadyAttributed;
@@ -468,15 +553,33 @@ impl Inner {
                 reserved_until,
             },
         );
+        // Totalled after the insert, so a pulled blob this charge now attributes to the account
+        // is counted once, here, rather than once here and once as pulled.
+        let pulled = self.pulled_total(user, pulled);
         let entry = self.usage.entry(user.clone()).or_default();
         entry.used = entry.used.saturating_add(size);
+        let used = entry.used.saturating_add(pulled);
         // The moment they crossed, recorded on the crossing rather than on every write, so
         // the grace window measures from when it started.
-        if entry.used >= limits.hard_limit && entry.over_since.is_none() {
+        if used >= limits.hard_limit && entry.over_since.is_none() {
             entry.over_since = Some(at);
-            tracing::info!(%user, used = entry.used, "an account crossed its hard quota limit");
+            tracing::info!(%user, used, pulled, "an account crossed its hard quota limit");
         }
-        ChargeOutcome::Charged { used: entry.used }
+        ChargeOutcome::Charged { used }
+    }
+
+    /// What `pulled`, the blobs `user` holds through its subscriptions, adds to its usage: every
+    /// one the ledger does not already attribute to `user`.
+    fn pulled_total(&self, user: &UserId, pulled: &BTreeMap<ContentAddress, u64>) -> u64 {
+        pulled
+            .iter()
+            .filter(|(address, _)| {
+                self.attributed
+                    .get(*address)
+                    .is_none_or(|row| &row.user != user)
+            })
+            .map(|(_, size)| *size)
+            .fold(0_u64, u64::saturating_add)
     }
 
     /// Give `size` bytes back to `user`.
@@ -499,6 +602,24 @@ impl InMemoryQuota {
     pub fn new() -> Self {
         Self::default()
     }
+
+    /// This ledger, counting the pulled blobs `pulled` says each account holds.
+    #[must_use]
+    pub fn with_pulled(mut self, pulled: Arc<dyn PulledHoldings>) -> Self {
+        self.pulled = Some(pulled);
+        self
+    }
+
+    /// The pulled blobs `user` holds, or none when the ledger was assembled without them.
+    async fn pulled_of(
+        &self,
+        user: &UserId,
+    ) -> Result<BTreeMap<ContentAddress, u64>, crate::store::StoreError> {
+        match &self.pulled {
+            Some(pulled) => pulled.held_by(user).await,
+            None => Ok(BTreeMap::new()),
+        }
+    }
 }
 
 /// Take the lock, recovering from a poisoned mutex.
@@ -511,11 +632,11 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 impl QuotaStore for InMemoryQuota {
     fn usage<'a>(&'a self, user: &'a UserId) -> StoreFuture<'a, StoredUsage> {
         Box::pin(async move {
-            Ok(lock(&self.inner)
-                .usage
-                .get(user)
-                .copied()
-                .unwrap_or_default())
+            let pulled = self.pulled_of(user).await?;
+            let inner = lock(&self.inner);
+            let mut usage = inner.usage.get(user).copied().unwrap_or_default();
+            usage.used = usage.used.saturating_add(inner.pulled_total(user, &pulled));
+            Ok(usage)
         })
     }
 
@@ -527,9 +648,10 @@ impl QuotaStore for InMemoryQuota {
         at: Timestamp,
         limits: QuotaLimits,
     ) -> StoreFuture<'a, ChargeOutcome> {
-        Box::pin(
-            async move { Ok(lock(&self.inner).attribute(user, address, size, at, None, limits)) },
-        )
+        Box::pin(async move {
+            let pulled = self.pulled_of(user).await?;
+            Ok(lock(&self.inner).attribute(user, address, size, at, None, limits, &pulled))
+        })
     }
 
     fn reserve<'a>(
@@ -542,7 +664,8 @@ impl QuotaStore for InMemoryQuota {
         limits: QuotaLimits,
     ) -> StoreFuture<'a, ChargeOutcome> {
         Box::pin(async move {
-            Ok(lock(&self.inner).attribute(user, address, size, at, Some(until), limits))
+            let pulled = self.pulled_of(user).await?;
+            Ok(lock(&self.inner).attribute(user, address, size, at, Some(until), limits, &pulled))
         })
     }
 

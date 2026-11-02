@@ -28,7 +28,7 @@ use jiff::{SignedDuration, Timestamp};
 
 use super::{ChargeOutcome, ExpiredReservation, QuotaLimits, QuotaStore};
 use crate::blob::ContentAddress;
-use crate::store::{StoreError, UserId};
+use crate::store::{StoreError, StoreFuture, UserId};
 
 /// The ledger under test.
 ///
@@ -40,6 +40,21 @@ use crate::store::{StoreError, UserId};
 pub trait Harness: Send + Sync {
     /// The ledger under test.
     fn quotas(&self) -> &dyn QuotaStore;
+
+    /// Make `user` a subscriber of the pulled album `album` and have that album hold `address`,
+    /// of `size` bytes: what a committed pulled page leaves behind for the ledger to count.
+    ///
+    /// Setup rather than a port operation: the ledger never writes a pulled holding, it reads it.
+    fn hold_pulled<'a>(
+        &'a self,
+        user: &'a UserId,
+        album: &'a str,
+        address: &'a ContentAddress,
+        size: u64,
+    ) -> StoreFuture<'a, ()>;
+
+    /// End `user`'s subscription to the pulled album `album`.
+    fn unsubscribe<'a>(&'a self, user: &'a UserId, album: &'a str) -> StoreFuture<'a, ()>;
 }
 
 /// Unwrap a ledger result, failing with the operation that was expected to work.
@@ -802,6 +817,168 @@ pub async fn expired_reservations_are_listed_earliest_first_and_bounded(h: &dyn 
 }
 
 // ===========================================================================================
+// Pulled blobs
+// ===========================================================================================
+
+/// The usage of `owner`, as the ledger reports it.
+async fn used(h: &dyn Harness, owner: &UserId) -> u64 {
+    ok(h.quotas().usage(owner).await, "read usage").used
+}
+
+/// A pulled blob is charged in full to every subscriber of the album holding it, and the
+/// charge ends with the subscription.
+///
+/// A pulled album is shared by its subscribers, so none of them is "first": each one holds the
+/// bytes and each one pays for them. Unsubscribing is what releases them, and releases one
+/// subscriber without touching the other.
+pub async fn a_pulled_blob_counts_in_full_against_each_subscriber(h: &dyn Harness) {
+    let first = user("pulledshared", 1);
+    let second = user("pulledshared", 2);
+    let blob = address("pulledshared", 1);
+    for subscriber in [&first, &second] {
+        ok(
+            h.hold_pulled(subscriber, "pulledshared-album", &blob, 40)
+                .await,
+            "hold a pulled blob",
+        );
+    }
+    assert_eq!(used(h, &first).await, 40);
+    assert_eq!(used(h, &second).await, 40, "charged in full, never split");
+
+    ok(
+        h.unsubscribe(&first, "pulledshared-album").await,
+        "unsubscribe",
+    );
+    assert_eq!(used(h, &first).await, 0, "the unsubscribe released it");
+    assert_eq!(
+        used(h, &second).await,
+        40,
+        "and released it for that subscriber only"
+    );
+}
+
+/// A blob two of a subscriber's albums hold is charged once, and stays charged until the last
+/// of them is gone; the usage never goes below what is held.
+pub async fn a_pulled_blob_counts_once_across_a_subscribers_albums(h: &dyn Harness) {
+    let owner = user("pulledonce", 1);
+    let blob = address("pulledonce", 1);
+    let other = address("pulledonce", 2);
+    ok(
+        h.hold_pulled(&owner, "pulledonce-a", &blob, 30).await,
+        "hold a pulled blob",
+    );
+    ok(
+        h.hold_pulled(&owner, "pulledonce-b", &blob, 30).await,
+        "hold the same blob through a second album",
+    );
+    ok(
+        h.hold_pulled(&owner, "pulledonce-b", &other, 5).await,
+        "hold a second blob",
+    );
+    assert_eq!(used(h, &owner).await, 35, "the shared blob counts once");
+
+    ok(h.unsubscribe(&owner, "pulledonce-a").await, "unsubscribe");
+    assert_eq!(
+        used(h, &owner).await,
+        35,
+        "still held through the other album, so still charged"
+    );
+    ok(h.unsubscribe(&owner, "pulledonce-b").await, "unsubscribe");
+    assert_eq!(used(h, &owner).await, 0);
+    ok(
+        h.unsubscribe(&owner, "pulledonce-b").await,
+        "unsubscribe twice",
+    );
+    assert_eq!(used(h, &owner).await, 0, "a second release credits nothing");
+}
+
+/// A blob the subscriber is itself attributed in the ledger counts once, and the collector's
+/// release of that attribution leaves it charged as pulled rather than crediting it.
+pub async fn a_pulled_blob_the_subscriber_uploaded_counts_once(h: &dyn Harness) {
+    let owner = user("pulledmine", 1);
+    let blob = address("pulledmine", 1);
+    ok(
+        h.quotas().charge(&owner, &blob, 50, day(0), limits()).await,
+        "charge an address",
+    );
+    ok(
+        h.hold_pulled(&owner, "pulledmine-album", &blob, 50).await,
+        "hold the same blob pulled",
+    );
+    assert_eq!(
+        used(h, &owner).await,
+        50,
+        "attributed and pulled is one copy"
+    );
+
+    assert_eq!(
+        ok(
+            h.quotas().release_attribution(&blob).await,
+            "release by address"
+        ),
+        Some((owner.clone(), 50)),
+    );
+    assert_eq!(
+        used(h, &owner).await,
+        50,
+        "the bytes are still held through the album, so they are still charged"
+    );
+    ok(
+        h.unsubscribe(&owner, "pulledmine-album").await,
+        "unsubscribe",
+    );
+    assert_eq!(used(h, &owner).await, 0);
+}
+
+/// A blob another account is attributed is still charged to the receiver, so the receiver's
+/// usage says nothing about who else on the server holds those bytes.
+pub async fn a_pulled_blob_another_account_uploaded_still_counts_for_the_receiver(h: &dyn Harness) {
+    let uploader = user("pulledtheirs", 1);
+    let receiver = user("pulledtheirs", 2);
+    let blob = address("pulledtheirs", 1);
+    ok(
+        h.quotas()
+            .charge(&uploader, &blob, 25, day(0), limits())
+            .await,
+        "charge an address",
+    );
+    ok(
+        h.hold_pulled(&receiver, "pulledtheirs-album", &blob, 25)
+            .await,
+        "hold the same blob pulled",
+    );
+    assert_eq!(used(h, &receiver).await, 25);
+    assert_eq!(
+        used(h, &uploader).await,
+        25,
+        "the uploader's charge is its own"
+    );
+}
+
+/// Pulled bytes count toward the hard limit a charge is measured against: the total a charge
+/// reports includes them, and a charge that crosses because of them stamps the crossing.
+pub async fn pulled_bytes_count_toward_the_hard_limit(h: &dyn Harness) {
+    let owner = user("pulledlimit", 1);
+    ok(
+        h.hold_pulled(&owner, "pulledlimit-album", &address("pulledlimit", 1), 150)
+            .await,
+        "hold a pulled blob",
+    );
+    assert_eq!(
+        ok(
+            h.quotas()
+                .charge(&owner, &address("pulledlimit", 2), 60, day(3), limits())
+                .await,
+            "charge an address",
+        ),
+        ChargeOutcome::Charged { used: 210 },
+    );
+    let usage = ok(h.quotas().usage(&owner).await, "read usage");
+    assert_eq!(usage.used, 210);
+    assert_eq!(usage.over_since, Some(day(3)));
+}
+
+// ===========================================================================================
 // The whole suite
 // ===========================================================================================
 
@@ -829,6 +1006,12 @@ pub async fn run_all(h: &dyn Harness) {
     a_settled_reservation_is_never_released_as_expired(h).await;
     an_extension_moves_the_deadline_and_never_shortens_it(h).await;
     expired_reservations_are_listed_earliest_first_and_bounded(h).await;
+
+    a_pulled_blob_counts_in_full_against_each_subscriber(h).await;
+    a_pulled_blob_counts_once_across_a_subscribers_albums(h).await;
+    a_pulled_blob_the_subscriber_uploaded_counts_once(h).await;
+    a_pulled_blob_another_account_uploaded_still_counts_for_the_receiver(h).await;
+    pulled_bytes_count_toward_the_hard_limit(h).await;
 }
 
 #[cfg(test)]
