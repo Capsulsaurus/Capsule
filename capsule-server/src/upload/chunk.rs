@@ -18,6 +18,7 @@
 //! | The range is… | Answer |
 //! | --- | --- |
 //! | wholly inside the committed set | a duplicate: the session's state, nothing written |
+//! | exactly a range in flight | waits up to [`SAME_RANGE_WAIT`] for it, then is decided again |
 //! | overlapping a range in flight | `range_conflict`, with `Retry-After` |
 //! | partly committed | `range_conflict` |
 //! | one more than the session's in-flight cap | `too_many_in_flight` |
@@ -61,6 +62,18 @@ pub const MAX_IN_FLIGHT_RANGES: u8 = 16;
 ///
 /// Protocol surface: it bounds `X-Capsule-Committed`, and lowering it is a protocol change.
 pub const MAX_FRAGMENTS: usize = 64;
+
+/// The longest a re-send of exactly a range still in flight waits for that range's first
+/// attempt to finish before it is refused as a `range_conflict`.
+///
+/// A client that lost the answer to a range — a transport reset, an unanswered chunk — re-sends
+/// the same bytes at the same offset, and may do so while the server is still writing the first
+/// attempt. Waiting it out lets the re-send be answered as what it is once the first attempt
+/// ends: a duplicate when it committed, a fresh claim when it did not. Bounded so a re-send
+/// cannot hold a connection open behind a write that is stuck; past it the re-send gets the
+/// `range_conflict` with `Retry-After` any other overlap does. Not protocol surface: it only
+/// decides how long the server tries before giving the answer the contract already allows.
+pub const SAME_RANGE_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// The media type a chunk body must declare.
 ///
@@ -148,6 +161,9 @@ pub enum Admission {
     /// Wholly inside the committed set: answer the session's state and write nothing. Bytes are
     /// not compared; the finalize re-hash is what admits bytes to a content address.
     Duplicate,
+    /// Exactly a range still in flight: a re-send of a range whose first attempt has not
+    /// returned. Nothing is written; the caller may wait for that attempt and decide again.
+    SameRangeInFlight,
     /// Overlaps a range in flight (`in_flight`), or is partly committed. Nothing is written.
     RangeConflict {
         /// Whether the overlap is with a range still in flight, which a `Retry-After` covers.
@@ -180,6 +196,9 @@ pub fn admit(
 ) -> Admission {
     if committed.contains(start, end) {
         return Admission::Duplicate;
+    }
+    if in_flight.contains(&(start, end)) {
+        return Admission::SameRangeInFlight;
     }
     if in_flight.iter().any(|&(a, b)| a < end && start < b) {
         return Admission::RangeConflict { in_flight: true };
@@ -274,6 +293,8 @@ struct SessionState {
     turn: Arc<tokio::sync::Mutex<()>>,
     /// The ranges claimed and not yet released, half-open.
     in_flight: Mutex<Vec<(u64, u64)>>,
+    /// Signalled every time a claim is released, for a re-send waiting on its first attempt.
+    released: tokio::sync::Notify,
 }
 
 /// The in-flight claims of every session with a range being admitted or written, in this
@@ -320,6 +341,8 @@ impl Drop for RangeClaim {
         if let Some(at) = in_flight.iter().position(|range| *range == self.range) {
             in_flight.swap_remove(at);
         }
+        drop(in_flight);
+        self.state.released.notify_waiters();
     }
 }
 
@@ -406,6 +429,14 @@ pub async fn admission_turn(upload: &UploadId) -> AdmissionTurn {
 /// range's out-of-date view. Only the identifier is taken from it. The turn ends once the range
 /// is claimed, so admitted ranges of one session are written concurrently.
 ///
+/// # A re-send of a range in flight waits for its first attempt
+///
+/// A range that is exactly one still in flight gives up its turn and waits, up to
+/// [`SAME_RANGE_WAIT`] in all, for a claim of the session to be released, then is admitted
+/// again from a fresh read: a duplicate if the first attempt committed, a claim of its own if it
+/// did not. Only past the wait is it a [`Accepted::RangeConflict`] in flight. Any other overlap
+/// is refused at once.
+///
 /// # The claim outlives the request
 ///
 /// The claim is released only when this function returns, after the write and the record both
@@ -429,19 +460,38 @@ pub async fn write_range(
     let length = bytes.len() as u64;
     let end = offset.saturating_add(length);
 
-    let claim = {
+    let deadline = tokio::time::Instant::now() + SAME_RANGE_WAIT;
+    let claim = loop {
         let turn = admission_turn(id).await;
+        // Enabled before the in-flight ranges are read, so a release between that read and the
+        // wait below is not missed.
+        let state = Arc::clone(&turn.state);
+        let released = state.released.notified();
+        tokio::pin!(released);
+        released.as_mut().enable();
+
         let Some(record) = sessions.read(id).await? else {
             return Ok(Accepted::SessionGone);
         };
         let in_flight = turn.in_flight();
-        let admission = admit(
+        let admission = match admit(
             &record.committed,
             &in_flight,
             record.in_flight_cap,
             offset,
             end,
-        );
+        ) {
+            Admission::SameRangeInFlight if tokio::time::Instant::now() < deadline => {
+                tracing::debug!(upload_id = %id, offset, end, "a range was sent again while its first attempt is in flight; waiting for it");
+                drop(turn);
+                if tokio::time::timeout_at(deadline, released).await.is_err() {
+                    tracing::debug!(upload_id = %id, offset, end, "the first attempt of a re-sent range outlasted the wait");
+                }
+                continue;
+            }
+            Admission::SameRangeInFlight => Admission::RangeConflict { in_flight: true },
+            other => other,
+        };
 
         // A duplicate first, so a re-send of the range that completed the session is still
         // answered as the duplicate it is; the other refusals before the status check, because
@@ -466,7 +516,10 @@ pub async fn write_range(
                     in_flight,
                 });
             }
-            Admission::Claim | Admission::TooManyInFlight | Admission::TooFragmented { .. } => {}
+            Admission::Claim
+            | Admission::SameRangeInFlight
+            | Admission::TooManyInFlight
+            | Admission::TooFragmented { .. } => {}
         }
 
         // Before any write, so nothing lands on a stage finalization has claimed.
@@ -498,7 +551,7 @@ pub async fn write_range(
             _ => {}
         }
         tracing::trace!(upload_id = %id, offset, end, in_flight = in_flight.len(), "admitted a range");
-        turn.claim((offset, end))
+        break turn.claim((offset, end));
     };
 
     // Durable before the record: the record is the commit point.

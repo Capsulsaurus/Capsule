@@ -76,6 +76,7 @@ A session's bytes sit on a **4 KiB grid**, a protocol constant. A chunk is a con
 | --- | --- |
 | disjoint from every committed and in-flight range | claimed in flight, written, fsynced, recorded as committed, then `204` |
 | wholly inside the committed set | `204` with the session's current state; nothing is written |
+| exactly an in-flight range (same offset and length) | waits a bounded time for that range's attempt to end, then is decided again as above: a duplicate if it committed, a claim if it did not |
 | overlapping an in-flight range | `409 error.upload.range_conflict` with `X-Capsule-Committed` and `Retry-After`; nothing is written |
 | partly committed and partly not | `409 error.upload.range_conflict` with `X-Capsule-Committed`; nothing is written |
 
@@ -178,7 +179,7 @@ The server can verify only ciphertext. The client verifies plaintext on download
 
 - **Duplicate create** keyed by `(owner_id, hash, album_id)`: an active session is returned (`200` + its state); an already-finalized hash is `409 error.upload.duplicate_blob` naming the existing asset. A `create` for a different asset first adopts the blob ([Deduplication and Merge](#deduplication-and-merge)).
 - **Resume** is `HEAD`-driven. A sequential client reads the committed prefix; one that sends out of order reads the committed set, a comma-separated list of inclusive byte ranges such as `0-1048575,2097152-4194303`, never longer than the fragment bound. The client re-plans from the committed set it reads and never from its own record of what it sent. Interrupted transfers are normal; arbitrary pauses within the lifetime are tolerated.
-- **Lost chunk ACK.** After a transport error the client re-sends the same bytes or reads the session state before it sends anything else. A re-send of a range that did commit, whole or resized within it, is a duplicate; a re-send while the first attempt is still in flight is a `range_conflict` with `Retry-After`. Neither fails the blob.
+- **Lost chunk ACK.** After a transport error the client re-sends the same bytes or reads the session state before it sends anything else. A re-send of a range that did commit, whole or resized within it, is a duplicate; a re-send of exactly the same range while the first attempt is still in flight waits for that attempt and is then answered as a duplicate or written, and is a `range_conflict` with `Retry-After` only if the attempt outlasts the server's bounded wait. None of them fails the blob.
 - **Lost finalization ACK**: `HEAD` (or the session list) shows the terminal outcome.
 - Every step is logged with the upload id.
 

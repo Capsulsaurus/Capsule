@@ -126,6 +126,33 @@ fn a_range_wholly_inside_the_committed_set_is_a_duplicate() {
 }
 
 #[test]
+fn exactly_a_range_in_flight_is_a_re_send_of_it() {
+    let committed = blocks(&[0]);
+    assert_eq!(
+        admit(
+            &committed,
+            &[(4 * BLOCK, 6 * BLOCK)],
+            4,
+            4 * BLOCK,
+            6 * BLOCK
+        ),
+        Admission::SameRangeInFlight,
+        "the same offset and length as a range in flight is a re-send of it"
+    );
+    assert_eq!(
+        admit(
+            &committed,
+            &[(4 * BLOCK, 6 * BLOCK)],
+            4,
+            4 * BLOCK,
+            5 * BLOCK
+        ),
+        Admission::RangeConflict { in_flight: true },
+        "a different length at the same offset is an overlap, not a re-send"
+    );
+}
+
+#[test]
 fn an_overlap_is_a_conflict_and_says_whether_it_is_in_flight() {
     let committed = blocks(&[0, 1]);
     assert_eq!(
@@ -400,6 +427,139 @@ async fn disjoint_ranges_in_flight_together_all_commit() {
     expected.extend(&b2);
     expected.extend(&b3);
     assert_eq!(blobs.staged_bytes(&stale.upload_id), Some(expected));
+}
+
+/// Hold `range` of `upload` in flight, as a first attempt still being written would.
+async fn first_attempt(upload: &UploadId, range: (u64, u64)) -> RangeClaim {
+    admission_turn(upload).await.claim(range)
+}
+
+/// A re-send of a range whose first attempt is still in flight waits for it, and is the
+/// duplicate it is once that attempt commits — the answer the session-locked server gave.
+#[tokio::test(start_paused = true)]
+async fn a_re_send_waits_out_its_first_attempt_and_is_a_duplicate_when_it_commits() {
+    use crate::store::{Clock as _, UploadSessionStore as _};
+
+    let (sessions, blobs, clock, stale) = opened_session("resend-committed", 2 * BLOCK, 4).await;
+    let claim = first_attempt(&stale.upload_id, (0, BLOCK)).await;
+    let bytes = vec![1u8; BLOCK as usize];
+
+    let (answer, ()) = tokio::join!(
+        write_range(&sessions, &blobs, &clock, &stale, 0, &bytes),
+        async {
+            tokio::time::sleep(SAME_RANGE_WAIT / 2).await;
+            sessions
+                .record_range(
+                    &stale.upload_id,
+                    CommittedRange {
+                        start: 0,
+                        end: BLOCK,
+                        accepted_at: clock.now(),
+                    },
+                )
+                .await
+                .expect("the first attempt records");
+            drop(claim);
+        }
+    );
+    assert_eq!(
+        answer.expect("the re-send is answered"),
+        Accepted::Duplicate {
+            committed: blocks(&[0]),
+            unfinished: false
+        }
+    );
+    assert_eq!(
+        blobs.staged_bytes(&stale.upload_id),
+        Some(Vec::new()),
+        "the re-send wrote nothing over the first attempt"
+    );
+}
+
+/// A re-send whose first attempt ends without committing is written in its place.
+#[tokio::test(start_paused = true)]
+async fn a_re_send_whose_first_attempt_failed_is_written() {
+    let (sessions, blobs, clock, stale) = opened_session("resend-failed", 2 * BLOCK, 4).await;
+    let claim = first_attempt(&stale.upload_id, (0, BLOCK)).await;
+    let bytes = vec![1u8; BLOCK as usize];
+
+    let (answer, ()) = tokio::join!(
+        write_range(&sessions, &blobs, &clock, &stale, 0, &bytes),
+        async {
+            tokio::time::sleep(SAME_RANGE_WAIT / 2).await;
+            drop(claim);
+        }
+    );
+    assert_eq!(
+        answer.expect("the re-send is answered"),
+        Accepted::Committed {
+            committed: blocks(&[0]),
+            complete: false
+        }
+    );
+    assert_eq!(blobs.staged_bytes(&stale.upload_id), Some(bytes));
+}
+
+/// A first attempt that outlasts the wait leaves the re-send a conflict in flight, writing
+/// nothing; a different range is never made to wait.
+#[tokio::test(start_paused = true)]
+async fn a_re_send_past_the_wait_is_a_conflict_in_flight() {
+    let (sessions, blobs, clock, stale) = opened_session("resend-stuck", 2 * BLOCK, 4).await;
+    let claim = first_attempt(&stale.upload_id, (0, 2 * BLOCK)).await;
+
+    let started = tokio::time::Instant::now();
+    let answer = write_range(
+        &sessions,
+        &blobs,
+        &clock,
+        &stale,
+        0,
+        &vec![1u8; 2 * BLOCK as usize],
+    )
+    .await
+    .expect("the re-send is answered");
+    assert_eq!(
+        answer,
+        Accepted::RangeConflict {
+            committed: CommittedSet::default(),
+            in_flight: true
+        }
+    );
+    assert_eq!(
+        started.elapsed(),
+        SAME_RANGE_WAIT,
+        "it waited the bound, no longer"
+    );
+
+    let started = tokio::time::Instant::now();
+    let overlap = write_range(
+        &sessions,
+        &blobs,
+        &clock,
+        &stale,
+        0,
+        &vec![1u8; BLOCK as usize],
+    )
+    .await
+    .expect("the overlap is answered");
+    assert_eq!(
+        overlap,
+        Accepted::RangeConflict {
+            committed: CommittedSet::default(),
+            in_flight: true
+        }
+    );
+    assert_eq!(
+        started.elapsed(),
+        std::time::Duration::ZERO,
+        "a non-identical overlap is refused at once"
+    );
+    drop(claim);
+    assert_eq!(
+        blobs.staged_bytes(&stale.upload_id),
+        Some(Vec::new()),
+        "neither wrote a byte"
+    );
 }
 
 /// A duplicate writes nothing — not even a re-send carrying different bytes — and a partial
