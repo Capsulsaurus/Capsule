@@ -2088,11 +2088,11 @@ impl UploadSource for ChangingSource {
         self.bytes.read_at(offset, len)
     }
 
-    fn check_unchanged(&self) -> Result<(), SourceChanged> {
+    fn check_unchanged(&self) -> Result<SourceIdentity, SourceChanged> {
         let n = self.checks.fetch_add(1, Ordering::SeqCst) + 1;
         match self.changes_at {
             Some(at) if n >= at => Err(SourceChanged::new("the file's modification time moved")),
-            _ => Ok(()),
+            _ => Ok(SourceIdentity::Affirmed),
         }
     }
 }
@@ -2168,6 +2168,106 @@ async fn a_refused_hash_of_a_changed_source_is_the_typed_source_change() {
     );
     assert_eq!(error.error_code(), Some(error_codes::UPLOAD_SOURCE_CHANGED));
     assert_eq!(creates.load(Ordering::SeqCst), 1, "nothing re-created");
+}
+
+/// **`content_hash_mismatch`, identity not affirmable.** A source that finds no change but
+/// cannot affirm there was none (every original re-derived from a file on disk, today) gets the
+/// refusal: re-sending would seal bytes that may differ under the nonces already spent, so
+/// nothing is re-created and nothing sent again.
+#[tokio::test]
+async fn a_refused_hash_of_a_source_that_cannot_affirm_its_identity_sends_nothing_again() {
+    let creates = Arc::new(AtomicUsize::new(0));
+    let patches = Arc::new(AtomicUsize::new(0));
+    let (c, p) = (creates.clone(), patches.clone());
+    let (inner, heads) = finalizing_server(vec![(
+        "failed_processing",
+        Some(error_codes::UPLOAD_CONTENT_HASH_MISMATCH),
+    )]);
+    let server = MockServer::start(move |req: &MockRequest| {
+        match req.method.as_str() {
+            "POST" => c.fetch_add(1, Ordering::SeqCst),
+            "PATCH" => p.fetch_add(1, Ordering::SeqCst),
+            _ => 0,
+        };
+        inner(req)
+    })
+    .await;
+
+    // `Zeroes` keeps the default identity check: no change found, none affirmed.
+    let data = Zeroes(8192);
+    assert_eq!(data.check_unchanged(), Ok(SourceIdentity::Unknown));
+    let error = server
+        .client(PROTOCOL)
+        .upload(&request(8192), &data)
+        .await
+        .expect_err("the refusal ends the upload");
+
+    assert_eq!(
+        error.error_code(),
+        Some(error_codes::UPLOAD_CONTENT_HASH_MISMATCH)
+    );
+    assert_eq!(creates.load(Ordering::SeqCst), 1, "nothing re-created");
+    assert_eq!(patches.load(Ordering::SeqCst), 1, "nothing sent again");
+    assert_eq!(heads.load(Ordering::SeqCst), 1, "the outcome read once");
+}
+
+/// Bytes held in memory cannot change, so they affirm their identity.
+#[test]
+fn in_memory_sources_affirm_their_identity() {
+    let bytes = vec![1u8; 4];
+    assert_eq!(bytes.check_unchanged(), Ok(SourceIdentity::Affirmed));
+    assert_eq!(
+        bytes.as_slice().check_unchanged(),
+        Ok(SourceIdentity::Affirmed)
+    );
+    assert_eq!([0u8; 3].check_unchanged(), Ok(SourceIdentity::Affirmed));
+    // A borrowed source answers for what it borrows.
+    fn through<S: UploadSource>(source: S) -> Result<SourceIdentity, SourceChanged> {
+        source.check_unchanged()
+    }
+    assert_eq!(through(&bytes), Ok(SourceIdentity::Affirmed));
+    assert_eq!(through::<&Zeroes>(&Zeroes(1)), Ok(SourceIdentity::Unknown));
+}
+
+/// **A server that keeps losing a range it acknowledged.** Every answer covers the blob, but
+/// every `HEAD` says the server holds nothing: each resume is charged to the recovery budget,
+/// so the transfer ends exhausted instead of re-sending forever.
+#[tokio::test]
+async fn a_server_that_keeps_losing_ranges_exhausts_the_recovery_budget() {
+    let patches = Arc::new(AtomicUsize::new(0));
+    let p = patches.clone();
+    let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+        ("POST", "/") => created("sess-lose", CHUNK_SIZE_256KB),
+        ("PATCH", "/sess-lose") => {
+            p.fetch_add(1, Ordering::SeqCst);
+            MockResponse::new(204, "No Content")
+                .header("X-Capsule-Offset", ack_offset(req).to_string())
+                .header("X-Capsule-Upload-Status", "uploading")
+        }
+        ("HEAD", "/sess-lose") => MockResponse::new(200, "OK")
+            .header("X-Capsule-Offset", "0")
+            .header("X-Capsule-Content-Length", "8192")
+            .header("X-Capsule-Upload-Status", "uploading"),
+        other => panic!("unexpected {other:?}"),
+    })
+    .await;
+
+    let data = vec![3u8; 8192];
+    let error = server
+        .client(PROTOCOL)
+        .upload(&request(8192), &data)
+        .await
+        .expect_err("a server that never keeps the blob ends the upload");
+
+    assert!(
+        matches!(error, UploadError::RetriesExhausted(_)),
+        "{error:?}"
+    );
+    let sent = patches.load(Ordering::SeqCst);
+    assert!(
+        sent >= 2 && sent <= MAX_RECOVERIES as usize + 1,
+        "re-sent within the budget, not forever: {sent}"
+    );
 }
 
 /// **A source that changes mid-upload.** The identity check before a window's read finds the

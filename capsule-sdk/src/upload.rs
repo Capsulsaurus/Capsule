@@ -24,7 +24,8 @@
 //!   (success carrying the existing asset ref); `426` → abort-with-upgrade;
 //!   `checksum_mismatch` → re-send the chunk; `chunk_timeout` → re-send at the
 //!   same offset, shorter; `content_hash_mismatch` at finalization → a typed
-//!   [`UploadError::SourceChanged`] when the source changed, else one re-created session;
+//!   [`UploadError::SourceChanged`] when the source changed, one re-created session when it
+//!   affirms it is unchanged, else the refusal;
 //!   `rate_limited`, `unavailable`, `storage_full` and every
 //!   other answer the retry classification marks retryable (any `5xx`, `408`, `425`)
 //!   → wait out `Retry-After` (else the retry engine's backoff), then resume from
@@ -1006,17 +1007,32 @@ pub trait UploadSource: Sync {
     /// error carrying [`SourceChanged`], which ends the transfer typed.
     fn read_at(&self, offset: u64, len: usize) -> std::io::Result<Cow<'_, [u8]>>;
 
-    /// The cheap, best-effort check that the source is still what the bundle was built from
-    /// (its size, modification time and file id), run before every window is read and when
-    /// finalization refuses the blob's hash. Bytes held in memory cannot change, so the default
-    /// finds nothing.
+    /// The cheap check that the source is still what the bundle was built from (its size,
+    /// modification time and file id), run before every window is read and when finalization
+    /// refuses the blob's hash.
+    ///
+    /// [`SourceIdentity::Affirmed`] is a positive claim that every byte the source returns is
+    /// the byte it returned before; only then does a refused hash re-create the session and send
+    /// the blob again. A source that cannot say — the default — answers
+    /// [`SourceIdentity::Unknown`], and a refused hash ends its transfer: re-sending ranges that
+    /// may now seal to different ciphertexts under the same nonces would hand the server two
+    /// ciphertexts per nonce. Bytes held in memory cannot change, so they affirm.
     ///
     /// # Errors
     ///
     /// [`SourceChanged`] naming what differs.
-    fn check_unchanged(&self) -> Result<(), SourceChanged> {
-        Ok(())
+    fn check_unchanged(&self) -> Result<SourceIdentity, SourceChanged> {
+        Ok(SourceIdentity::Unknown)
     }
+}
+
+/// What [`UploadSource::check_unchanged`] can say about a source it found no change in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceIdentity {
+    /// The source positively affirms it returns the same bytes it did before.
+    Affirmed,
+    /// The source found no change but cannot affirm there was none.
+    Unknown,
 }
 
 impl UploadSource for [u8] {
@@ -1032,17 +1048,29 @@ impl UploadSource for [u8] {
                 )
             })
     }
+
+    fn check_unchanged(&self) -> Result<SourceIdentity, SourceChanged> {
+        Ok(SourceIdentity::Affirmed)
+    }
 }
 
 impl UploadSource for Vec<u8> {
     fn read_at(&self, offset: u64, len: usize) -> std::io::Result<Cow<'_, [u8]>> {
         self.as_slice().read_at(offset, len)
     }
+
+    fn check_unchanged(&self) -> Result<SourceIdentity, SourceChanged> {
+        Ok(SourceIdentity::Affirmed)
+    }
 }
 
 impl<const N: usize> UploadSource for [u8; N] {
     fn read_at(&self, offset: u64, len: usize) -> std::io::Result<Cow<'_, [u8]>> {
         self.as_slice().read_at(offset, len)
+    }
+
+    fn check_unchanged(&self) -> Result<SourceIdentity, SourceChanged> {
+        Ok(SourceIdentity::Affirmed)
     }
 }
 
@@ -1051,7 +1079,7 @@ impl<T: UploadSource + ?Sized> UploadSource for &T {
         (**self).read_at(offset, len)
     }
 
-    fn check_unchanged(&self) -> Result<(), SourceChanged> {
+    fn check_unchanged(&self) -> Result<SourceIdentity, SourceChanged> {
         (**self).check_unchanged()
     }
 }
@@ -1384,7 +1412,8 @@ enum Settled {
     Resume(CommittedSet),
     /// Finalization refused the blob's hash (`content_hash_mismatch`): the source decides
     /// between a typed source change and one re-created session. Carries the refusal, which
-    /// ends the transfer when neither applies.
+    /// ends the transfer when neither applies — and whenever the source cannot affirm its
+    /// identity.
     HashMismatch(UploadError),
     /// The session went away (`404`) before it reached finalization: re-create it, as for
     /// `session_not_found`.
@@ -2256,8 +2285,10 @@ impl UploadClient {
     /// `session_id` starting from `start`.
     ///
     /// Finalization refusing the blob's hash (`content_hash_mismatch`) is the source's to
-    /// explain: a changed source ends the transfer with [`UploadError::SourceChanged`]; an
-    /// unchanged one gets one re-created session, and a second refusal ends the transfer.
+    /// explain: a changed source ends the transfer with [`UploadError::SourceChanged`]; one that
+    /// affirms it is unchanged ([`SourceIdentity::Affirmed`]) gets one re-created session, and a
+    /// second refusal ends the transfer. One that cannot affirm it ends the transfer with the
+    /// refusal, sending nothing again.
     async fn drive<S: UploadSource + ?Sized>(
         &self,
         session_id: String,
@@ -2290,6 +2321,9 @@ impl UploadClient {
             {
                 Settled::Done(outcome) => return Ok(outcome),
                 Settled::Resume(held) => {
+                    // A server that keeps losing a range it acknowledged would otherwise loop
+                    // here forever: each resume is a recovery like any other.
+                    recovery.charge("resume after a lost range record")?;
                     tracing::info!(%session_id, committed = %held.to_header(), size, "the server holds fewer bytes than declared; resuming");
                     cursor.committed = held;
                     cursor.state = None;
@@ -2306,9 +2340,18 @@ impl UploadClient {
                     }
                 }
                 Settled::HashMismatch(refusal) => {
-                    if let Err(changed) = data.check_unchanged() {
-                        tracing::warn!(%session_id, reason = %changed.reason, "finalization refused the hash and the source changed");
-                        return Err(changed.into());
+                    match data.check_unchanged() {
+                        Err(changed) => {
+                            tracing::warn!(%session_id, reason = %changed.reason, "finalization refused the hash and the source changed");
+                            return Err(changed.into());
+                        }
+                        Ok(SourceIdentity::Unknown) => {
+                            // Sending the blob again could seal changed bytes under the nonces
+                            // already used: only a source that affirms its identity is re-sent.
+                            tracing::warn!(%session_id, "finalization refused the hash of a source that cannot affirm it is unchanged; not re-sending");
+                            return Err(refusal);
+                        }
+                        Ok(SourceIdentity::Affirmed) => {}
                     }
                     if recreated_after_mismatch {
                         tracing::warn!(%session_id, "finalization refused the hash of a re-created session too");

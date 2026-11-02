@@ -79,8 +79,8 @@ use crate::upload::queue::{
     GrantId, LaneWindows, QueuedJob, RangeId, RangeRefused, ServerKey, UploadQueue,
 };
 use crate::upload::{
-    BlobRole, CreateUploadRequest, ManifestEnvelope, TransferGate, UploadClient, UploadError,
-    UploadOutcome, UploadSource,
+    BlobRole, CreateUploadRequest, ManifestEnvelope, SourceChanged, SourceIdentity, TransferGate,
+    UploadClient, UploadError, UploadOutcome, UploadSource,
 };
 use crate::verify::{AssetQuery, StorageVerifyClient, VerifyError};
 
@@ -159,6 +159,15 @@ impl UploadSource for BlobBytes<'_> {
                 let window = original.read_at(offset, len)?;
                 Ok(Cow::Owned(window))
             }
+        }
+    }
+
+    /// Inline bytes cannot change and affirm it; an original re-derived from a file on disk
+    /// cannot yet affirm its identity, so a refused hash ends its transfer.
+    fn check_unchanged(&self) -> Result<SourceIdentity, SourceChanged> {
+        match self {
+            Self::Inline(bytes) => bytes.check_unchanged(),
+            Self::Original(_) => Ok(SourceIdentity::Unknown),
         }
     }
 }

@@ -190,7 +190,7 @@ Client recovery matrix (`capsule-sdk::upload`):
 | `error.upload.range_conflict` | Re-plan from the committed set the refusal carries (or `HEAD`), after its `Retry-After` when it names one |
 | `error.upload.too_fragmented` | Let its own in-flight ranges finish and wait its `Retry-After` when it names one, then re-plan to fill the lowest gap first |
 | `error.upload.too_many_in_flight` | Wait its `Retry-After`, narrow the session's window to the advertised `ranges` and to the ranges it still had in flight, then continue |
-| `error.upload.content_hash_mismatch` (on `HEAD`) | Check the source identity: changed → fail the blob with the client's own `error.upload.source_changed` and cancel the session; unchanged → re-create the session once |
+| `error.upload.content_hash_mismatch` (on `HEAD`) | Check the source identity: changed → fail the blob with the client's own `error.upload.source_changed` and cancel the session; affirmed unchanged → re-create the session once; identity not affirmable → fail the blob with the refusal and send nothing again, since re-sealed bytes that differ would reuse the original's STREAM nonces |
 | a lost answer (reset, or no response within the response wait) | Read `HEAD` before anything is sent again, then re-plan from its committed set |
 | a session gone (`404` on `HEAD`) before it reached finalization | Re-create the session, restart the blob |
 | `error.upload.checksum_mismatch` | Re-send the same chunk |
