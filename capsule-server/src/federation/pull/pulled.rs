@@ -6,7 +6,7 @@
 //! once every entry of it has passed [`validate`](super::validate). So the port never holds an
 //! entry that failed, and it holds the facts invariant 20 is re-applied against: the feed
 //! position (`cursor`, the `sync_seq` high-water mark), each asset's chain head and the heads it
-//! superseded (17), and the album's AMK high-water mark (18).
+//! superseded (17), its AMK epoch (18) and the metadata blob its records carry (25).
 //!
 //! # A commit is conditional
 //!
@@ -48,26 +48,30 @@ pub struct AssetHead {
     pub superseded: Vec<Hash32>,
     /// Whether the last accepted record is a `delete`.
     pub deleted: bool,
+    /// The AMK epoch the last accepted record carries: the floor its successors are held to
+    /// (invariant 18, along the asset's own chain).
+    pub amk_version: u32,
+    /// The metadata blob the asset's live record set carries: the one the last binding record
+    /// committed to, which a record binding none (`derivative-*`, `trash-restore`, `delete`)
+    /// keeps (invariant 25).
+    pub metadata_blob: Option<Hash32>,
 }
 
 impl AssetHead {
-    /// The asset after `next` is accepted on top of this head.
-    pub fn advanced(&self, next: Hash32, deleted: bool) -> Self {
-        if next == self.head {
+    /// The asset after `next` is accepted on top of this head: `next`'s position, with this
+    /// head's history behind it.
+    pub fn advanced(&self, next: Self) -> Self {
+        if next.head == self.head {
             return Self {
-                deleted,
-                ..self.clone()
+                superseded: self.superseded.clone(),
+                ..next
             };
         }
         let mut superseded = self.superseded.clone();
         superseded.push(self.head);
         let excess = superseded.len().saturating_sub(MAX_SUPERSEDED_HEADS);
         superseded.drain(..excess);
-        Self {
-            head: next,
-            superseded,
-            deleted,
-        }
+        Self { superseded, ..next }
     }
 }
 
@@ -78,7 +82,9 @@ pub struct PulledAlbum {
     pub cursor: Option<String>,
     /// The highest `sync_seq` accepted. Every later entry must be above it.
     pub high_water: Option<u64>,
-    /// The highest `amk_version` an accepted manifest carried.
+    /// The highest `amk_version` an accepted manifest carried. A record, not a floor: the feed
+    /// re-mints positions and replays from zero, so invariant 18 is held per asset
+    /// ([`AssetHead::amk_version`]).
     pub amk_version: Option<u32>,
     /// Every asset an accepted entry named, by its id.
     pub assets: BTreeMap<String, AssetHead>,
@@ -121,7 +127,8 @@ pub struct AcceptedEntry {
     pub manifest: Option<Vec<u8>>,
     /// The record's hash, the asset's chain head after this entry.
     pub head: Option<Hash32>,
-    /// The metadata blob the manifest commits to, whose bytes the page carries.
+    /// The metadata blob the entry names, whose bytes the page carries: the one the manifest
+    /// commits to, or, under a record that binds none, the one the asset's chain last bound.
     pub metadata_blob: Option<Hash32>,
     /// The asset's blobs, by address. Their bytes are fetched when a member views them.
     pub blobs: Vec<PulledBlob>,

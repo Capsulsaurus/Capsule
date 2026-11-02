@@ -625,13 +625,20 @@ fn a_successor_past_heads_this_server_never_saw_is_accepted() {
 }
 
 #[test]
-fn the_album_epoch_never_regresses() {
-    let state = holding(1, &record(core(asset(1), Action::Create, None, 3)));
-    let older = record(core(asset(2), Action::Create, None, 2));
+fn an_assets_epoch_never_regresses_along_its_chain() {
+    let first = record(core(asset(1), Action::Create, None, 3));
+    let state = holding(1, &first);
+    assert_eq!(state.assets[&asset(1).to_string()].amk_version, 3);
+    let older = record(core(
+        asset(1),
+        Action::MetadataUpdate,
+        Some(hash_bytes(&first)),
+        2,
+    ));
     assert_eq!(
         refused_at(screen(
             page(
-                vec![entry(asset(2), 2, "created", Some(&older))],
+                vec![entry(asset(1), 2, "updated", Some(&older))],
                 "c",
                 false
             ),
@@ -639,6 +646,209 @@ fn the_album_epoch_never_regresses() {
             &established()
         )),
         "invariant 18"
+    );
+}
+
+#[test]
+fn a_position_re_minted_past_a_newer_epoch_is_accepted() {
+    // The home server's index re-mints `sync_seq` when a late blob lands on a visible row, with
+    // no new record: asset 1's epoch-1 create is served again after asset 2's epoch-2 create.
+    let one = record(core(asset(1), Action::Create, None, 1));
+    let two = record(core(asset(2), Action::Create, None, 2));
+    let screened = screen(
+        page(
+            vec![
+                entry(asset(1), 1, "created", Some(&one)),
+                entry(asset(2), 2, "created", Some(&two)),
+                entry(asset(1), 3, "created", Some(&one)),
+            ],
+            "c3",
+            false,
+        ),
+        &PulledAlbum::default(),
+        &established(),
+    )
+    .expect("a re-minted position is accepted");
+    let state = &screened.page.state;
+    assert_eq!(state.amk_version, Some(2));
+    assert_eq!(state.assets[&asset(1).to_string()].amk_version, 1);
+    assert!(state.assets[&asset(1).to_string()].superseded.is_empty());
+
+    // A pull that starts after the re-mint sees asset 1 only at its new position.
+    screen(
+        page(
+            vec![
+                entry(asset(2), 2, "created", Some(&two)),
+                entry(asset(1), 3, "created", Some(&one)),
+            ],
+            "c3",
+            false,
+        ),
+        &PulledAlbum::default(),
+        &established(),
+    )
+    .expect("an older epoch's asset at a later position is accepted");
+}
+
+#[test]
+fn a_restart_after_a_key_rotation_replays_the_older_epoch() {
+    let one = record(core(asset(1), Action::Create, None, 1));
+    let two = record(core(asset(2), Action::Create, None, 2));
+    let served = || {
+        page(
+            vec![
+                entry(asset(1), 1, "created", Some(&one)),
+                entry(asset(2), 2, "created", Some(&two)),
+            ],
+            "c2",
+            false,
+        )
+    };
+    let mut state = screen(served(), &PulledAlbum::default(), &established())
+        .expect("the first pull is accepted")
+        .page
+        .state;
+    // `409 error.sync.cursor_stale`: the position is forgotten, the heads and epoch kept.
+    state.cursor = None;
+    state.high_water = None;
+    assert_eq!(state.amk_version, Some(2));
+    screen(served(), &state, &established()).expect("the replay from zero is accepted");
+}
+
+/// Asset 1's create, then `action` directly on top of it at `sync_seq` 2, naming `metadata`.
+fn binding_none(action: Action, metadata: &[u8]) -> (PulledAlbum, Result<Screened, Refused>) {
+    let first = create(1);
+    let state = holding(1, &first);
+    let next = record(core(asset(1), action, Some(hash_bytes(&first)), 1));
+    let mut served = entry(asset(1), 2, "updated", Some(&next));
+    served["metadata_blob"] = serde_json::json!(hash_bytes(metadata).to_hex());
+    let screened = screen(page(vec![served], "c2", false), &state, &established());
+    (state, screened)
+}
+
+#[test]
+fn a_head_binding_no_metadata_blob_is_served_with_the_one_its_asset_holds() {
+    // What `GET /v1/sync` serves after a thumbnail lands: the derivative-add record as the head,
+    // and the metadata blob the create bound, which the index keeps.
+    for action in [Action::DerivativeAdd, Action::DerivativeReplace] {
+        let (_, screened) = binding_none(action, METADATA);
+        let screened = screened.unwrap_or_else(|refused| panic!("{action:?}: {refused}"));
+        let accepted = &screened.page.entries[0];
+        assert_eq!(accepted.metadata_blob, Some(hash_bytes(METADATA)));
+        assert_eq!(
+            screened.needed,
+            vec![MetadataNeed {
+                hash: hash_bytes(METADATA),
+                size: Some(METADATA.len() as u64),
+            }],
+            "the blob is still fetched and checked against its address"
+        );
+        let held = &screened.page.state.assets[&asset(1).to_string()];
+        assert_eq!(held.metadata_blob, Some(hash_bytes(METADATA)));
+    }
+
+    // The first pull of such an asset: the binding record is one the compacted feed no longer
+    // serves.
+    let unseen = hash_bytes(b"a create this server never pulled");
+    let head = record(core(asset(1), Action::DerivativeAdd, Some(unseen), 1));
+    screen(
+        page(
+            vec![entry(asset(1), 4, "created", Some(&head))],
+            "c4",
+            false,
+        ),
+        &PulledAlbum::default(),
+        &established(),
+    )
+    .expect("a derivative-add head never pulled before is accepted");
+}
+
+#[test]
+fn a_head_binding_no_metadata_blob_cannot_swap_the_one_its_asset_holds() {
+    for action in [Action::DerivativeAdd, Action::DerivativeReplace] {
+        let (_, screened) = binding_none(action, b"another metadata blob");
+        assert_eq!(refused_at(screened), "invariant 25", "{action:?}");
+    }
+
+    // The held derivative-add head, served again at a re-minted position, may not swap it either.
+    let first = create(1);
+    let state = holding(1, &first);
+    let head = record(core(
+        asset(1),
+        Action::DerivativeAdd,
+        Some(hash_bytes(&first)),
+        1,
+    ));
+    let state = screen(
+        page(
+            vec![entry(asset(1), 2, "updated", Some(&head))],
+            "c2",
+            false,
+        ),
+        &state,
+        &established(),
+    )
+    .expect("the derivative-add is accepted")
+    .page
+    .state;
+    let mut again = entry(asset(1), 3, "updated", Some(&head));
+    again["metadata_blob"] = serde_json::json!(hash_bytes(b"another").to_hex());
+    assert_eq!(
+        refused_at(screen(
+            page(vec![again], "c3", false),
+            &state,
+            &established()
+        )),
+        "invariant 25"
+    );
+}
+
+#[test]
+fn a_restore_brings_back_the_metadata_blob_the_delete_kept() {
+    let first = create(1);
+    let state = holding(1, &first);
+    let delete = record(core(asset(1), Action::Delete, Some(hash_bytes(&first)), 1));
+    let state = screen(
+        page(
+            vec![entry(asset(1), 2, "deleted", Some(&delete))],
+            "c2",
+            false,
+        ),
+        &state,
+        &established(),
+    )
+    .expect("the delete is accepted")
+    .page
+    .state;
+    assert_eq!(
+        state.assets[&asset(1).to_string()].metadata_blob,
+        Some(hash_bytes(METADATA)),
+        "a delete names no blob, and the asset keeps the one it bound"
+    );
+
+    let restore = record(core(
+        asset(1),
+        Action::TrashRestore,
+        Some(hash_bytes(&delete)),
+        1,
+    ));
+    let served = entry(asset(1), 3, "updated", Some(&restore));
+    screen(
+        page(vec![served.clone()], "c3", false),
+        &state,
+        &established(),
+    )
+    .expect("the restore is accepted with the held blob");
+
+    let mut swapped = served;
+    swapped["metadata_blob"] = serde_json::json!(hash_bytes(b"another").to_hex());
+    assert_eq!(
+        refused_at(screen(
+            page(vec![swapped], "c3", false),
+            &state,
+            &established()
+        )),
+        "invariant 25"
     );
 }
 
