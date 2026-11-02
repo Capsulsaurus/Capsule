@@ -33,6 +33,7 @@ use capsule_sdk::push::{self, PushError};
 use capsule_sdk::recovery::{MintedSecret, RecoveryClient, RecoveryError};
 use capsule_sdk::staged::{StagedScheduler, TierSessionOutcome, held_from_feed};
 use capsule_sdk::sync::{FeedEntry, SyncConsumer, SyncCursor, SyncError, SyncState};
+use capsule_sdk::upload::queue::{LaneWindows, MAX_SESSIONS_WINDOW, ServerKey};
 use capsule_sdk::upload::{UploadClient, UploadError, UploadTransport};
 use capsule_sdk::verify::{
     AssetQuery, HeldRelease, ReleaseCoordinator, StorageVerifyClient, VerifiedAttestation,
@@ -1738,6 +1739,12 @@ async fn restore_with(
 /// accepts only an extension of it, and a history that drops or replaces a pinned key fails
 /// the run with [`RemoteError::AttestationKeyPin`] before anything is sent.
 ///
+/// **Several assets are in flight at once.** The run's bundles go through the server's lane of
+/// `capsule_sdk::push::push_lanes`: up to W assets' sessions open at once, each on its own
+/// connection, every range reserving against one byte budget, and every outcome still
+/// reported per asset in the run's order. The assets are taken in batches, so a library of any
+/// size holds only one batch's bundles in memory.
+///
 /// **One asset's failure is that asset's.** An asset whose bundle, album, transfer, custody
 /// check or receipt write fails is recorded as `Failed` with its error, and the run moves on to
 /// the next one; the caller reports every failure and exits non-zero. What fails the whole run
@@ -1848,7 +1855,33 @@ async fn push_with(
     workspace: &mut Workspace,
     session: Session,
     options: PushOptions,
+    run: PushRun<'_>,
+) -> Result<PushSummary, RemoteError> {
+    push_in_windows(
+        remote,
+        workspace,
+        session,
+        options,
+        run,
+        LaneWindows::default(),
+    )
+    .await
+}
+
+/// The most assets a run holds upload bundles for at once. The run pushes its assets in
+/// batches of this many, every batch's bundles through one lane of
+/// [`push_lanes`](push::push_lanes): enough to keep the widest sessions window full for most of
+/// a batch, while a library of any size holds at most this many bundles' derivatives in memory.
+const PUSH_BATCH: usize = 4 * MAX_SESSIONS_WINDOW as usize;
+
+/// [`push_with`], with the server's lane holding up to `windows` sessions and ranges in flight.
+async fn push_in_windows(
+    remote: &RemoteConfig,
+    workspace: &mut Workspace,
+    session: Session,
+    options: PushOptions,
     mut run: PushRun<'_>,
+    windows: LaneWindows,
 ) -> Result<PushSummary, RemoteError> {
     // A purged asset has nothing to upload, but its kept chain may still hold a `delete` (and an
     // early purge's re-issue) the server never saw: another device may upload its create later,
@@ -1986,6 +2019,10 @@ async fn push_with(
 
     let mut pusher = AssetPusher {
         workspace,
+        server: ServerKey::new(
+            server_origin(&remote.upload_endpoint)
+                .unwrap_or_else(|_| remote.upload_endpoint.clone()),
+        ),
         upload,
         albums,
         verify,
@@ -1995,27 +2032,12 @@ async fn push_with(
         held,
         indexed,
         force: options.force,
+        windows,
         provisioned: HashSet::new(),
         uncovered,
     };
-    for asset_id in asset_ids {
-        if run.delegated.contains(&asset_id) {
-            let outcome = delegated(asset_id);
-            run.tell(|| AssetProgress::Finished(outcome.clone()));
-            summary.record(outcome);
-            continue;
-        }
-        let mut outcome = AssetPushOutcome::new(asset_id, AssetPushStatus::Verified);
-        if let Err(error) = pusher
-            .push(asset_id, &mut outcome, &mut summary, &mut run)
-            .await
-        {
-            tracing::warn!(%asset_id, %error, "push: asset failed; continuing with the next");
-            outcome.status = AssetPushStatus::Failed;
-            outcome.error = Some(error.failure());
-        }
-        run.tell(|| AssetProgress::Finished(outcome.clone()));
-        summary.record(outcome);
+    for batch in asset_ids.chunks(PUSH_BATCH) {
+        pusher.push_batch(batch, &mut summary, &mut run).await;
     }
     summary.live_records =
         deliver_live_records(remote, &session, pusher.workspace, &later_records).await;
@@ -2178,6 +2200,8 @@ fn delegated(asset_id: Uuid) -> AssetPushOutcome {
 /// Everything a run shares across its assets.
 struct AssetPusher<'a> {
     workspace: &'a mut Workspace,
+    /// The upload server's lane key: its canonical origin.
+    server: ServerKey,
     upload: UploadClient,
     albums: AlbumClient,
     verify: StorageVerifyClient,
@@ -2189,6 +2213,8 @@ struct AssetPusher<'a> {
     /// Assets whose create the server already holds ([`creates_on_server`]).
     indexed: HashSet<Uuid>,
     force: bool,
+    /// The lane's own in-flight caps: W bundles' sessions at once, P ranges per session.
+    windows: LaneWindows,
     /// Albums registered this run. Provisioning is idempotent server-side, so this only saves
     /// making the same request once per asset; an album whose registration failed is not in
     /// it, so the next asset in that album tries again.
@@ -2197,22 +2223,129 @@ struct AssetPusher<'a> {
     uncovered: HashSet<Uuid>,
 }
 
+/// One asset of a batch, as the batch moves it from its bundle to its outcome.
+struct BatchSlot {
+    outcome: AssetPushOutcome,
+    /// The bundle to send, once built; `None` for an asset that sends nothing (delegated,
+    /// indexed, or failed before its transfer).
+    bundle: Option<capsule_library::lifecycle::UploadBundle>,
+    /// How its transfer ended, once it ran.
+    pushed: Option<Result<push::AssetPushReport, PushError>>,
+}
+
+impl BatchSlot {
+    fn new(outcome: AssetPushOutcome) -> Self {
+        Self {
+            outcome,
+            bundle: None,
+            pushed: None,
+        }
+    }
+
+    /// Fail the asset with `error`, before or at its transfer: nothing more of it is sent.
+    fn fail(&mut self, error: &AssetError) {
+        self.bundle = None;
+        fail(&mut self.outcome, error);
+    }
+}
+
+/// Record `error` as the asset's failure; the run carries on with the others.
+fn fail(outcome: &mut AssetPushOutcome, error: &AssetError) {
+    tracing::warn!(asset_id = %outcome.asset_id, %error, "push: asset failed; continuing with the others");
+    outcome.status = AssetPushStatus::Failed;
+    outcome.error = Some(error.failure());
+}
+
 impl AssetPusher<'_> {
-    /// Push one asset, confirm custody, and persist its receipts, filling `outcome` once each
-    /// step completes. A transfer that fails partway leaves `uploaded`, `merged` and `bytes` at
-    /// zero for the asset even when some of its blobs landed, because [`push::push_bundle`]
-    /// returns only its error; a re-run derives the remaining work from server truth.
+    /// Push one batch of assets, confirm each one's custody and persist its receipts, then
+    /// record every outcome in the batch's order.
+    ///
+    /// Three passes. Each asset is prepared in order (its bundle built, its album provisioned),
+    /// because that needs the library and provisions an album once. Every prepared bundle is
+    /// then transferred through the server's lane ([`push::push_lanes`]), up to W at once; a
+    /// create the server refused is re-sealed and the re-sealed bundles go through the lane once
+    /// more. Last, each asset's custody is checked and its receipts stored, in order.
+    ///
+    /// One asset's failure is its own. A transfer that fails partway leaves `uploaded`, `merged`
+    /// and `bytes` at zero for the asset even when some of its blobs landed, because the
+    /// transfer returns only its error; a re-run derives the remaining work from server truth.
+    #[instrument(skip_all, fields(assets = batch.len()))]
+    async fn push_batch(
+        &mut self,
+        batch: &[Uuid],
+        summary: &mut PushSummary,
+        run: &mut PushRun<'_>,
+    ) {
+        let mut slots = Vec::with_capacity(batch.len());
+        for &asset_id in batch {
+            if run.delegated.contains(&asset_id) {
+                slots.push(BatchSlot::new(delegated(asset_id)));
+                continue;
+            }
+            let mut slot =
+                BatchSlot::new(AssetPushOutcome::new(asset_id, AssetPushStatus::Verified));
+            match self
+                .prepare(asset_id, &mut slot.outcome, summary, run)
+                .await
+            {
+                Ok(bundle) => slot.bundle = bundle,
+                Err(error) => slot.fail(&error),
+            }
+            slots.push(slot);
+        }
+
+        let sent: Vec<usize> = (0..slots.len())
+            .filter(|&at| slots[at].bundle.is_some())
+            .collect();
+        let results = self.transfer(&slots, &sent).await;
+        let mut resealed = Vec::new();
+        for (at, result) in sent.into_iter().zip(results) {
+            match result {
+                // Issue #822: the album's epoch moved past the one this create is sealed under,
+                // so the server refused it for good. Re-seal it at the album's current epoch and
+                // push it once more; a second refusal fails the asset like any other.
+                Err(PushError::CreateRefused { source, .. }) => {
+                    if self.reseal(&mut slots[at], *source, run) {
+                        resealed.push(at);
+                    }
+                }
+                other => slots[at].pushed = Some(other),
+            }
+        }
+        let results = self.transfer(&slots, &resealed).await;
+        for (at, result) in resealed.into_iter().zip(results) {
+            slots[at].pushed = Some(result);
+        }
+
+        for slot in slots {
+            let BatchSlot {
+                mut outcome,
+                bundle,
+                pushed,
+            } = slot;
+            if let (Some(bundle), Some(pushed)) = (bundle, pushed)
+                && let Err(error) = self.settle(&bundle, pushed, &mut outcome).await
+            {
+                fail(&mut outcome, &error);
+            }
+            run.tell(|| AssetProgress::Finished(outcome.clone()));
+            summary.record(outcome);
+        }
+    }
+
+    /// Build `asset_id`'s bundle and provision its album, so it is ready to send. `None` is an
+    /// asset with nothing of its create to upload ([`create_bundle`]).
     #[instrument(skip(self, outcome, summary, run), fields(%asset_id))]
-    async fn push(
+    async fn prepare(
         &mut self,
         asset_id: Uuid,
         outcome: &mut AssetPushOutcome,
         summary: &mut PushSummary,
         run: &mut PushRun<'_>,
-    ) -> Result<(), AssetError> {
+    ) -> Result<Option<capsule_library::lifecycle::UploadBundle>, AssetError> {
         let Some(bundle) = create_bundle(self.workspace, &self.indexed, asset_id)? else {
             outcome.status = AssetPushStatus::Indexed;
-            return Ok(());
+            return Ok(None);
         };
         run.tell(|| started(&bundle));
         if self.uncovered.contains(&bundle.album_id) {
@@ -2232,37 +2365,106 @@ impl AssetPusher<'_> {
             }
         }
 
-        let (bundle, report) = match self.push_bundle(&bundle).await {
-            Ok(report) => (bundle, report),
-            // Issue #822: the album's epoch moved past the one this create is sealed under, so
-            // the server refused it for good. Re-seal it at the album's current epoch and push
-            // it once more; a second refusal fails the asset like any other.
-            Err(PushError::CreateRefused { source, .. }) => {
-                tracing::warn!(
-                    amk_version = bundle.amk_version,
-                    "push: the server refused this create; re-sealing it at the album's \
-                     current epoch"
-                );
-                let resealed = self.workspace.reseal_create(&asset_id).map_err(|error| {
-                    AssetError::Reseal {
-                        refused: *source,
-                        error,
-                    }
-                })?;
-                outcome.resealed = true;
-                tracing::info!(
-                    from_epoch = resealed.from_epoch,
-                    to_epoch = resealed.to_epoch,
-                    derivatives = resealed.derivatives,
-                    "push: create re-sealed; pushing it again"
-                );
-                let bundle = self.workspace.upload_bundle(&asset_id)?;
-                run.tell(|| started(&bundle));
-                let report = self.push_bundle(&bundle).await?;
-                (bundle, report)
-            }
-            Err(error) => return Err(error.into()),
+        Ok(Some(bundle))
+    }
+
+    /// Re-seal the create the server refused (`refused`) at its album's current epoch, and put
+    /// the re-sealed bundle in `slot` to be sent again. Returns whether it is to be sent; an
+    /// asset that could not be re-sealed fails in `slot`.
+    #[instrument(skip_all, fields(asset_id = %slot.outcome.asset_id))]
+    fn reseal(
+        &mut self,
+        slot: &mut BatchSlot,
+        refused: UploadError,
+        run: &mut PushRun<'_>,
+    ) -> bool {
+        let Some((asset_id, amk_version)) = slot
+            .bundle
+            .as_ref()
+            .map(|bundle| (bundle.asset_id, bundle.amk_version))
+        else {
+            slot.fail(&AssetError::Push(PushError::Upload(refused)));
+            return false;
         };
+        tracing::warn!(
+            amk_version,
+            "push: the server refused this create; re-sealing it at the album's current epoch"
+        );
+        let resealed = match self.workspace.reseal_create(&asset_id) {
+            Ok(resealed) => resealed,
+            Err(error) => {
+                slot.fail(&AssetError::Reseal { refused, error });
+                return false;
+            }
+        };
+        slot.outcome.resealed = true;
+        tracing::info!(
+            from_epoch = resealed.from_epoch,
+            to_epoch = resealed.to_epoch,
+            derivatives = resealed.derivatives,
+            "push: create re-sealed; pushing it again"
+        );
+        match self.workspace.upload_bundle(&asset_id) {
+            Ok(bundle) => {
+                run.tell(|| started(&bundle));
+                slot.bundle = Some(bundle);
+                true
+            }
+            Err(error) => {
+                slot.fail(&AssetError::Bundle(error));
+                false
+            }
+        }
+    }
+
+    /// Send the bundles of `slots` at `which` through the server's lane, up to W at once, and
+    /// return how each transfer ended, in the order of `which`.
+    async fn transfer(
+        &self,
+        slots: &[BatchSlot],
+        which: &[usize],
+    ) -> Vec<Result<push::AssetPushReport, PushError>> {
+        if which.is_empty() {
+            return Vec::new();
+        }
+        let bundles = which
+            .iter()
+            .filter_map(|&at| slots[at].bundle.as_ref())
+            .map(|bundle| push::LaneBundle {
+                bundle,
+                held: &self.held,
+            })
+            .collect();
+        let lanes = [push::LanePush {
+            server: self.server.clone(),
+            client: &self.upload,
+            bundles,
+            // The server publishes no live-session cap; its advice narrows W instead.
+            session_cap: None,
+        }];
+        push::push_lanes(
+            &self.scheduler,
+            &lanes,
+            self.force,
+            push::PUSH_BYTE_BUDGET,
+            self.windows,
+        )
+        .await
+        .into_iter()
+        .flatten()
+        .collect()
+    }
+
+    /// Fold `pushed`, the transfer of `bundle`, into `outcome`, then confirm custody and persist
+    /// the receipts.
+    #[instrument(skip_all, fields(asset_id = %bundle.asset_id))]
+    async fn settle(
+        &mut self,
+        bundle: &capsule_library::lifecycle::UploadBundle,
+        pushed: Result<push::AssetPushReport, PushError>,
+        outcome: &mut AssetPushOutcome,
+    ) -> Result<(), AssetError> {
+        let report = pushed?;
         outcome.already_held = report.already_held;
         outcome.deferred = report.deferred;
         outcome.bytes = report.bytes;
@@ -2276,7 +2478,7 @@ impl AssetPusher<'_> {
         let custody = push::verify_custody_with_events(
             &self.verify,
             &self.attestation_keys,
-            &bundle,
+            bundle,
             &report,
             jiff::Timestamp::now().as_second(),
             &self.events,
@@ -2286,7 +2488,7 @@ impl AssetPusher<'_> {
         // The receipt log lives beside the provenance chain, in the same capture-month shard.
         let capture_utc = self
             .workspace
-            .asset(&asset_id)
+            .asset(&bundle.asset_id)
             .map(|asset| asset.capture_utc);
         for receipt in &custody.receipts {
             capsule_library::library::append_receipt(self.workspace.root(), capture_utc, receipt)?;
@@ -2298,21 +2500,6 @@ impl AssetPusher<'_> {
             "push: custody verified and receipts persisted"
         );
         Ok(())
-    }
-
-    /// Drive one bundle's ladder against server truth.
-    async fn push_bundle(
-        &self,
-        bundle: &capsule_library::lifecycle::UploadBundle,
-    ) -> Result<push::AssetPushReport, PushError> {
-        push::push_bundle(
-            &self.upload,
-            &self.scheduler,
-            bundle,
-            &self.held,
-            self.force,
-        )
-        .await
     }
 }
 
