@@ -1739,6 +1739,12 @@ async fn restore_with(
 /// accepts only an extension of it, and a history that drops or replaces a pinned key fails
 /// the run with [`RemoteError::AttestationKeyPin`] before anything is sent.
 ///
+/// **Several assets are in flight at once.** The run's bundles go through the server's lane of
+/// `capsule_sdk::push::push_lanes`: up to W assets' sessions open at once, each on its own
+/// connection, every range reserving against one byte budget, and every outcome still
+/// reported per asset in the run's order. The assets are taken in batches, so a library of any
+/// size holds only one batch's bundles in memory.
+///
 /// **One asset's failure is that asset's.** An asset whose bundle, album, transfer, custody
 /// check or receipt write fails is recorded as `Failed` with its error, and the run moves on to
 /// the next one; the caller reports every failure and exits non-zero. What fails the whole run
