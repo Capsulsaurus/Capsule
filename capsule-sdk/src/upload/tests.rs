@@ -2942,3 +2942,530 @@ async fn a_refused_range_gives_its_reservation_back() {
         Some(&GateEvent::Released)
     );
 }
+
+// ─── The range scheduler on the block grid ───────────────────────────────────
+
+/// What a [`Grid`] script may do with one `PATCH`: answer it, and change what the server holds
+/// first.
+type Script = dyn Fn(usize, (u64, u64), &mut CommittedSet) -> Option<MockResponse> + Send + Sync;
+
+/// A block-grid server for one session `sess-grid`: it commits each range it is sent and answers
+/// `204` with the committed prefix, the committed set and the session's state, after `delay`.
+/// `script(n, range, held)` may answer the `n`th `PATCH` (1-based) instead, and may change what
+/// the server holds. `HEAD` reports the committed set, `completed` once it is full.
+struct Grid {
+    size: u64,
+    advice: &'static str,
+    delay: Duration,
+    held: Mutex<CommittedSet>,
+    /// Every `PATCH` as (offset, length, when it arrived).
+    patches: Mutex<Vec<(u64, u64, std::time::Instant)>>,
+    /// Every request's method, in arrival order.
+    methods: Mutex<Vec<&'static str>>,
+    script: Box<Script>,
+}
+
+impl Grid {
+    fn new(size: u64, advice: &'static str, delay: Duration, script: Box<Script>) -> Arc<Self> {
+        Arc::new(Self {
+            size,
+            advice,
+            delay,
+            held: Mutex::new(CommittedSet::empty()),
+            patches: Mutex::new(Vec::new()),
+            methods: Mutex::new(Vec::new()),
+            script,
+        })
+    }
+
+    fn progress(&self, response: MockResponse, held: &CommittedSet) -> MockResponse {
+        let status = if held.covers(self.size) {
+            "waiting_for_processing"
+        } else {
+            "uploading"
+        };
+        response
+            .header("X-Capsule-Offset", held.prefix_end().to_string())
+            .header("X-Capsule-Committed", held.to_header())
+            .header("X-Capsule-Upload-Status", status)
+    }
+
+    fn answer(&self, req: &MockRequest) -> MockResponse {
+        match (req.method.as_str(), req.path.as_str()) {
+            ("POST", "/") => {
+                self.methods.lock().unwrap().push("POST");
+                created_without_advice("sess-grid", CHUNK_SIZE_256KB)
+                    .header("X-Capsule-Advice", self.advice)
+            }
+            ("HEAD", "/sess-grid") => {
+                self.methods.lock().unwrap().push("HEAD");
+                let held = self.held.lock().unwrap();
+                let status = if held.covers(self.size) {
+                    "completed"
+                } else {
+                    "uploading"
+                };
+                MockResponse::new(200, "OK")
+                    .header("X-Capsule-Offset", held.prefix_end().to_string())
+                    .header("X-Capsule-Committed", held.to_header())
+                    .header("X-Capsule-Content-Length", self.size.to_string())
+                    .header("X-Capsule-Upload-Status", status)
+                    .header("X-Capsule-Advice", self.advice)
+            }
+            ("PATCH", "/sess-grid") => {
+                self.methods.lock().unwrap().push("PATCH");
+                let end = ack_offset(req);
+                let offset = end - req.body.len() as u64;
+                let n = {
+                    let mut patches = self.patches.lock().unwrap();
+                    patches.push((offset, end - offset, std::time::Instant::now()));
+                    patches.len()
+                };
+                let mut held = self.held.lock().unwrap();
+                if let Some(answer) = (self.script)(n, (offset, end), &mut held) {
+                    return answer;
+                }
+                assert!(
+                    !held.contains(offset, end) || held.is_empty(),
+                    "the client re-sent [{offset}, {end}), which it was told is committed"
+                );
+                held.insert(offset, end);
+                self.progress(MockResponse::new(204, "No Content"), &held)
+                    .after(self.delay)
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    fn offsets(&self) -> Vec<u64> {
+        self.patches.lock().unwrap().iter().map(|p| p.0).collect()
+    }
+
+    fn heads(&self) -> usize {
+        self.methods
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|m| **m == "HEAD")
+            .count()
+    }
+}
+
+async fn grid_server(grid: &Arc<Grid>) -> MockServer {
+    let grid = grid.clone();
+    MockServer::start(move |req: &MockRequest| grid.answer(req)).await
+}
+
+const C: u64 = CHUNK_SIZE_256KB;
+
+/// **P ranges at once, lowest gap first.** With a window of four, the first four ranges are in
+/// flight together — the four lowest — and every byte lands.
+#[tokio::test]
+async fn a_window_of_four_sends_the_four_lowest_ranges_at_once() {
+    let size = 8 * C;
+    let grid = Grid::new(
+        size,
+        "chunk=262144, sessions=4, ranges=4, ttl=300",
+        Duration::from_millis(300),
+        Box::new(|_, _, _| None),
+    );
+    let server = grid_server(&grid).await;
+    let data = vec![1u8; size as usize];
+    let outcome = server
+        .client(PROTOCOL)
+        .with_ranges_window(4)
+        .upload(&request(size), &data)
+        .await
+        .unwrap();
+
+    assert!(matches!(outcome, UploadOutcome::Completed { .. }));
+    let patches = grid.patches.lock().unwrap().clone();
+    assert_eq!(patches.len(), 8, "every range once: {patches:?}");
+    let mut first: Vec<u64> = patches[..4].iter().map(|p| p.0).collect();
+    first.sort_unstable();
+    assert_eq!(
+        first,
+        vec![0, C, 2 * C, 3 * C],
+        "the four lowest gaps first"
+    );
+    assert!(
+        patches[3].2 - patches[0].2 < Duration::from_millis(250),
+        "the first four were in flight together"
+    );
+    assert!(grid.held.lock().unwrap().covers(size));
+}
+
+/// The session's advertised `ranges` narrows the client's own window.
+#[tokio::test]
+async fn the_sessions_advertised_ranges_narrow_the_window() {
+    let size = 4 * C;
+    let grid = Grid::new(
+        size,
+        "chunk=262144, sessions=4, ranges=2, ttl=300",
+        Duration::from_millis(300),
+        Box::new(|_, _, _| None),
+    );
+    let server = grid_server(&grid).await;
+    let data = vec![1u8; size as usize];
+    server
+        .client(PROTOCOL)
+        .with_ranges_window(4)
+        .upload(&request(size), &data)
+        .await
+        .unwrap();
+
+    let patches = grid.patches.lock().unwrap().clone();
+    assert_eq!(patches.len(), 4);
+    assert!(
+        patches[2].2 - patches[0].2 >= Duration::from_millis(250),
+        "the third range waited for one of the first two: {patches:?}"
+    );
+}
+
+/// The window is clamped into the protocol's bounds.
+#[test]
+fn the_client_window_is_clamped_into_the_protocol_bounds() {
+    let transport = UploadTransport::with_static_token(
+        reqwest::Client::new(),
+        "http://localhost",
+        PROTOCOL,
+        StaticToken("t".into()),
+    );
+    let client = UploadClient::new(transport);
+    assert_eq!(client.ranges_window(), DEFAULT_CLIENT_RANGES);
+    assert_eq!(client.clone().with_ranges_window(0).ranges_window(), 1);
+    assert_eq!(
+        client.with_ranges_window(99).ranges_window(),
+        MAX_RANGES_WINDOW
+    );
+}
+
+/// **`range_conflict` carrying the committed set.** The server already held the first range (a
+/// lost answer from an earlier attempt), so the client re-plans from the set the refusal
+/// carries: nothing it names is sent again, and no `HEAD` is needed.
+#[tokio::test]
+async fn a_range_conflict_carrying_the_committed_set_replans_without_head() {
+    let size = 3 * C;
+    let grid = Grid::new(
+        size,
+        "chunk=262144, ranges=1",
+        Duration::ZERO,
+        Box::new(|n, _, held| {
+            (n == 1).then(|| {
+                held.insert(0, C);
+                MockResponse::api_error(
+                    409,
+                    "Conflict",
+                    error_codes::UPLOAD_RANGE_CONFLICT,
+                    "overlap",
+                )
+                .header("X-Capsule-Committed", held.to_header())
+            })
+        }),
+    );
+    let server = grid_server(&grid).await;
+    let data = vec![2u8; size as usize];
+    server
+        .client(PROTOCOL)
+        .upload(&request(size), &data)
+        .await
+        .unwrap();
+
+    assert_eq!(grid.offsets(), vec![0, C, 2 * C]);
+    assert_eq!(grid.heads(), 1, "only the finalization poll");
+}
+
+/// **`range_conflict` without a committed set** re-plans from `HEAD`.
+#[tokio::test]
+async fn a_range_conflict_without_a_committed_set_replans_from_head() {
+    let size = 3 * C;
+    let grid = Grid::new(
+        size,
+        "chunk=262144, ranges=1",
+        Duration::ZERO,
+        Box::new(|n, _, held| {
+            (n == 1).then(|| {
+                held.insert(0, C);
+                MockResponse::api_error(
+                    409,
+                    "Conflict",
+                    error_codes::UPLOAD_RANGE_CONFLICT,
+                    "overlap",
+                )
+            })
+        }),
+    );
+    let server = grid_server(&grid).await;
+    let data = vec![2u8; size as usize];
+    server
+        .client(PROTOCOL)
+        .upload(&request(size), &data)
+        .await
+        .unwrap();
+
+    assert_eq!(grid.offsets(), vec![0, C, 2 * C]);
+    assert_eq!(
+        grid.methods.lock().unwrap()[..3],
+        ["POST", "PATCH", "HEAD"],
+        "the refusal is followed by a HEAD"
+    );
+}
+
+/// **`range_conflict` with `Retry-After`**: the overlap is with a range still in flight, so the
+/// client waits it out before it re-plans.
+#[tokio::test]
+async fn a_range_conflict_with_retry_after_is_waited_out() {
+    let size = C;
+    let grid = Grid::new(
+        size,
+        "chunk=262144, ranges=1",
+        Duration::ZERO,
+        Box::new(|n, _, held| {
+            (n == 1).then(|| {
+                MockResponse::api_error(
+                    409,
+                    "Conflict",
+                    error_codes::UPLOAD_RANGE_CONFLICT,
+                    "in flight",
+                )
+                .header("X-Capsule-Committed", held.to_header())
+                .header("Retry-After", "1")
+            })
+        }),
+    );
+    let server = grid_server(&grid).await;
+    let data = vec![2u8; size as usize];
+    server
+        .client(PROTOCOL)
+        .upload(&request(size), &data)
+        .await
+        .unwrap();
+
+    let patches = grid.patches.lock().unwrap().clone();
+    assert_eq!(patches.len(), 2);
+    assert_eq!(
+        (patches[0].0, patches[1].0),
+        (0, 0),
+        "the same range, re-sent"
+    );
+    assert!(patches[1].2 - patches[0].2 >= Duration::from_secs(1));
+}
+
+/// **`too_fragmented`**: the ranges in flight finish first, then the refused range is re-planned.
+#[tokio::test]
+async fn too_fragmented_lets_the_ranges_in_flight_finish_then_replans() {
+    let size = 4 * C;
+    let grid = Grid::new(
+        size,
+        "chunk=262144, ranges=4",
+        Duration::from_millis(300),
+        Box::new(|n, _, _| {
+            (n == 2).then(|| {
+                MockResponse::api_error(
+                    409,
+                    "Conflict",
+                    error_codes::UPLOAD_TOO_FRAGMENTED,
+                    "fragments",
+                )
+                .header("Retry-After", "0")
+            })
+        }),
+    );
+    let server = grid_server(&grid).await;
+    let data = vec![3u8; size as usize];
+    server
+        .client(PROTOCOL)
+        .with_ranges_window(2)
+        .upload(&request(size), &data)
+        .await
+        .unwrap();
+
+    let patches = grid.patches.lock().unwrap().clone();
+    assert_eq!(patches.len(), 5, "the refused range once more: {patches:?}");
+    assert!(
+        patches[2].2 - patches[0].2 >= Duration::from_millis(250),
+        "nothing is sent until the range in flight returned: {patches:?}"
+    );
+    assert!(grid.held.lock().unwrap().covers(size));
+}
+
+/// **`too_many_in_flight`**: the client waits, then narrows its window to the ranges it still
+/// had in flight, so it never asks for more than the server is holding.
+#[tokio::test]
+async fn too_many_in_flight_narrows_the_window() {
+    let size = 6 * C;
+    let grid = Grid::new(
+        size,
+        "chunk=262144, ranges=4",
+        Duration::from_millis(300),
+        Box::new(|n, _, _| {
+            (n == 2).then(|| {
+                MockResponse::api_error(
+                    409,
+                    "Conflict",
+                    error_codes::UPLOAD_TOO_MANY_IN_FLIGHT,
+                    "window",
+                )
+                .header("Retry-After", "0")
+            })
+        }),
+    );
+    let server = grid_server(&grid).await;
+    let data = vec![4u8; size as usize];
+    server
+        .client(PROTOCOL)
+        .with_ranges_window(2)
+        .upload(&request(size), &data)
+        .await
+        .unwrap();
+
+    let patches = grid.patches.lock().unwrap().clone();
+    assert_eq!(patches.len(), 7);
+    for pair in patches[2..].windows(2) {
+        assert!(
+            pair[1].2 - pair[0].2 >= Duration::from_millis(250),
+            "one range at a time after the refusal: {patches:?}"
+        );
+    }
+}
+
+/// **A lost ACK.** The server committed the range, then the connection dropped before its
+/// answer. The client reads `HEAD` before it sends anything else, so the committed range is not
+/// sent again.
+#[tokio::test]
+async fn a_lost_answer_reads_head_and_sends_nothing_already_committed() {
+    let size = 3 * C;
+    let grid = Grid::new(
+        size,
+        "chunk=262144, ranges=1",
+        Duration::ZERO,
+        Box::new(|n, (offset, end), held| {
+            (n == 1).then(|| {
+                held.insert(offset, end);
+                MockResponse::drop_connection()
+            })
+        }),
+    );
+    let server = grid_server(&grid).await;
+    let data = vec![5u8; size as usize];
+    server
+        .client(PROTOCOL)
+        .upload(&request(size), &data)
+        .await
+        .unwrap();
+
+    assert_eq!(grid.offsets(), vec![0, C, 2 * C], "nothing re-sent");
+    assert_eq!(
+        grid.methods.lock().unwrap()[..3],
+        ["POST", "PATCH", "HEAD"],
+        "the reset is followed by a HEAD"
+    );
+}
+
+/// **The committed set on a `204`.** The answer says the server also holds a later range (an
+/// earlier attempt's), so the client plans around it.
+#[tokio::test]
+async fn the_committed_set_a_chunk_answer_carries_is_planned_from() {
+    let size = 3 * C;
+    let grid = Grid::new(
+        size,
+        "chunk=262144, ranges=1",
+        Duration::ZERO,
+        Box::new(|n, _, held| {
+            if n == 1 {
+                held.insert(2 * C, 3 * C);
+            }
+            None
+        }),
+    );
+    let server = grid_server(&grid).await;
+    let data = vec![6u8; size as usize];
+    server
+        .client(PROTOCOL)
+        .upload(&request(size), &data)
+        .await
+        .unwrap();
+
+    assert_eq!(grid.offsets(), vec![0, C], "the held range is never sent");
+}
+
+/// **A record the server lost.** Every range was answered, but the last answer says the session
+/// is still `uploading`: the client polls `HEAD`, re-sends what the server no longer holds, and
+/// only then is the upload complete.
+#[tokio::test]
+async fn a_range_the_server_lost_is_sent_again_before_completion() {
+    let size = 2 * C;
+    let grid = Grid::new(
+        size,
+        "chunk=262144, ranges=1",
+        Duration::ZERO,
+        Box::new(|n, (offset, end), held| {
+            (n == 2).then(|| {
+                // The record of the first range is lost as the second commits.
+                *held = CommittedSet::empty();
+                held.insert(offset, end);
+                MockResponse::new(204, "No Content")
+                    .header("X-Capsule-Offset", "0")
+                    .header("X-Capsule-Committed", held.to_header())
+                    .header("X-Capsule-Upload-Status", "uploading")
+            })
+        }),
+    );
+    let server = grid_server(&grid).await;
+    let data = vec![7u8; size as usize];
+    let outcome = server
+        .client(PROTOCOL)
+        .upload(&request(size), &data)
+        .await
+        .unwrap();
+
+    assert!(matches!(outcome, UploadOutcome::Completed { .. }));
+    assert_eq!(
+        grid.offsets(),
+        vec![0, C, 0],
+        "the lost range is sent again"
+    );
+    assert!(grid.held.lock().unwrap().covers(size));
+}
+
+/// A `duplicate_blob` names the existing asset in its structured `existing_asset` member, which
+/// wins over anything the English detail says.
+#[tokio::test]
+async fn a_duplicate_blob_is_merged_onto_its_structured_existing_asset() {
+    let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+        ("POST", "/") => MockResponse::new(409, "Conflict").json_body(format!(
+            r#"{{"error":"This content is already stored as asset from-detail","code":{:?},"existing_asset":"from-member"}}"#,
+            error_codes::UPLOAD_DUPLICATE_BLOB
+        )),
+        other => panic!("unexpected {other:?}"),
+    })
+    .await;
+    let outcome = server
+        .client(PROTOCOL)
+        .upload(&request(4096), &[0u8; 4096])
+        .await
+        .unwrap();
+    match outcome {
+        UploadOutcome::AlreadyStored { asset_ref } => assert_eq!(asset_ref, "from-member"),
+        other @ UploadOutcome::Completed { .. } => panic!("expected a merge, got {other:?}"),
+    }
+    assert_eq!(duplicate_asset_ref(Some("  "), "as asset x"), "x");
+    assert_eq!(duplicate_asset_ref(None, "no id here"), "no id here");
+}
+
+/// A session's state never moves backwards when answers return out of order, and an answer
+/// with no state (an older server) leaves none.
+#[test]
+fn the_session_state_only_moves_forward() {
+    let s = |v: &str| Some(v.to_owned());
+    assert_eq!(
+        later_state(s(STATUS_WAITING), s("uploading")),
+        s(STATUS_WAITING)
+    );
+    assert_eq!(
+        later_state(s("uploading"), s(STATUS_WAITING)),
+        s(STATUS_WAITING)
+    );
+    assert_eq!(later_state(s(STATUS_WAITING), None), None);
+    assert_eq!(later_state(None, s("uploading")), s("uploading"));
+}

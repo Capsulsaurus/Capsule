@@ -1451,6 +1451,9 @@ struct PendingStep {
     realign: bool,
     /// Or re-create the session.
     recreate: bool,
+    /// Narrow the ranges window: the server refused a range for its in-flight cap. Taken as
+    /// soon as the refusal lands, not with the step.
+    narrow: bool,
     /// The range (offset, length) whose answer first asked for the step, for the events it
     /// publishes.
     range: (u64, u64),
@@ -2393,6 +2396,18 @@ impl UploadClient {
                 }
                 return Err(error);
             }
+            if std::mem::take(&mut cursor.step.narrow) {
+                // The server held its cap of claims while this client had `flying` ranges
+                // besides the refused one: the cap is no more than those, and no more than the
+                // session's advertised `ranges`.
+                let in_flight = u32::try_from(flying.len()).unwrap_or(u32::MAX).max(1);
+                let narrowed = cursor
+                    .window
+                    .min(self.window_for(&cursor.advice))
+                    .min(in_flight);
+                tracing::info!(session_id = %cursor.session_id, from = cursor.window, to = narrowed, "ranges window narrowed after too_many_in_flight");
+                cursor.window = narrowed;
+            }
         }
     }
 
@@ -2544,9 +2559,8 @@ impl UploadClient {
                 recovery.charge("too many ranges in flight")?;
                 cursor.step.cause(offset, len);
                 cursor.step.quiesce = true;
-                let narrowed = cursor.window.min(self.window_for(&cursor.advice));
-                tracing::info!(%session_id, offset, len, ?after, from = cursor.window, to = narrowed, "the session's ranges window was full — narrowing to its advertised cap");
-                cursor.window = narrowed;
+                cursor.step.narrow = true;
+                tracing::info!(%session_id, offset, len, ?after, "the session's ranges window was full — narrowing it");
                 if let Some(after) = after {
                     self.wait_asked(cursor, request, (offset, len), after);
                 }
