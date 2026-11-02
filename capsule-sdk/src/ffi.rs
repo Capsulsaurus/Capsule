@@ -9,6 +9,7 @@
 //! return an [`FfiSession`] **handle** — an opaque object that owns the token store
 //! internally. Every subsequent call ([`upload`](crate::ffi::FfiSession::upload),
 //! [`push_asset`](crate::ffi::FfiSession::push_asset),
+//! [`push_assets`](crate::ffi::FfiSession::push_assets),
 //! [`upload_status`](crate::ffi::FfiSession::upload_status),
 //! [`fetch_blob_to_path`](crate::ffi::FfiSession::fetch_blob_to_path),
 //! [`sync_pull`](crate::ffi::FfiSession::sync_pull),
