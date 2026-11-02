@@ -734,6 +734,40 @@ async fn a_purge_is_delivered_from_the_listed_heads_hash() {
     let sent: Vec<ProvenanceRecord> = seen.lock().unwrap().iter().map(sent_record).collect();
     assert_eq!(sent.len(), 2, "the held delete, then the re-issue");
     let head: ProvenanceRecord =
-        capsule_core::cbor::from_slice(&workspace.purged_record(asset).unwrap().unwrap()).unwrap();
+        capsule_core::cbor::from_slice(&workspace.purged_record(asset.clone()).unwrap().unwrap())
+            .unwrap();
     assert_eq!(sent[1], head);
+
+    // A listed entry that carries no record (empty hash bytes) is accepted, and sends the same
+    // stretch `deliver_purge` sends for an empty head.
+    seen.lock().unwrap().clear();
+    let outcome = session
+        .deliver_purge_at_hash(
+            server.base_url(),
+            workspace.clone(),
+            asset.clone(),
+            Some(Vec::new()),
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(outcome, FfiLifecycleOpOutcome::Applied { .. }),
+        "{outcome:?}"
+    );
+    let at_empty: Vec<ProvenanceRecord> = seen.lock().unwrap().iter().map(sent_record).collect();
+    assert!(!at_empty.is_empty(), "the kept chain was sent");
+    assert_eq!(at_empty.last().unwrap(), &head, "the kept head is sent");
+
+    seen.lock().unwrap().clear();
+    session
+        .deliver_purge(
+            server.base_url(),
+            workspace.clone(),
+            asset.clone(),
+            Some(Vec::new()),
+        )
+        .await
+        .unwrap();
+    let by_purge: Vec<ProvenanceRecord> = seen.lock().unwrap().iter().map(sent_record).collect();
+    assert_eq!(at_empty, by_purge, "both verbs send the same stretch");
 }
