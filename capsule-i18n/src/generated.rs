@@ -332,6 +332,9 @@ pub mod error_codes {
     /// `error.federation.scope_insufficient`
     pub const FEDERATION_SCOPE_INSUFFICIENT: &str = "error.federation.scope_insufficient";
 
+    /// `error.federation.subscription_limit`
+    pub const FEDERATION_SUBSCRIPTION_LIMIT: &str = "error.federation.subscription_limit";
+
     /// `error.federation.unavailable`
     pub const FEDERATION_UNAVAILABLE: &str = "error.federation.unavailable";
 

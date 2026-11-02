@@ -7499,6 +7499,10 @@
     "message": "이 접근 권한은 요청한 콘텐츠를 포함하지 않습니다.",
     "origin": "machine"
   },
+  "error.federation.subscription_limit": {
+    "message": "다른 서버에서 팔로우할 수 있는 공유 앨범 수의 한도에 도달했습니다. 다른 앨범을 추가하려면 하나를 삭제하세요.",
+    "origin": "machine"
+  },
   "error.federation.unavailable": {
     "message": "Capsule이 연동 기록에 접근하지 못했습니다. 다시 시도해 주세요.",
     "origin": "machine"

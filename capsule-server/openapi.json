@@ -25378,7 +25378,7 @@
           "federation"
         ],
         "summary": "Subscribe to a federated album with the capability its home server minted for this server.",
-        "description": "The capability is verified against the issuer's pinned key before anything is recorded, and\nmust name this server as its recipient. Posting one for an album already subscribed keeps\nwhichever capability lives longer, so a replayed invite never undoes a renewal.\n\nAnswers `404 error.federation.not_configured` when this deployment does not federate —\n`FEDERATION_ENABLED` is off, which is the default — before the credential is read or a store\nis touched.",
+        "description": "The capability is verified against the issuer's pinned key before anything is recorded, and\nmust name this server as its recipient. Posting one for an album already subscribed keeps\nwhichever capability lives longer, so a replayed invite never undoes a renewal. An account\nholds at most 1,000 subscriptions; one more is refused `403\nerror.federation.subscription_limit` until the caller unsubscribes from another.\n\nAnswers `404 error.federation.not_configured` when this deployment does not federate —\n`FEDERATION_ENABLED` is off, which is the default — before the credential is read or a store\nis touched.",
         "operationId": "subscribe_album",
         "parameters": [
           {

@@ -11,5 +11,6 @@ mod postgres_conformance {
         };
         let store = PostgresSubscriptions::new(database.connection().clone());
         conformance::run_all(&store).await;
+        conformance::racing_capped_puts_record_one(std::sync::Arc::new(store)).await;
     }
 }

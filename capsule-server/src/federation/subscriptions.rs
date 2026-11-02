@@ -28,6 +28,15 @@
 //! asked for them; [`SubscriptionStore::live_jobs`] answers the distinct keys, and
 //! [`SubscriptionStore::of_job`] the subscriptions a pull may present.
 //!
+//! # An account holds a bounded number
+//!
+//! A subscription is a job the worker pulls every fifteen minutes, so nothing but a capability
+//! from a pinned peer would otherwise bound how much pulling one account can make this server do.
+//! Intake records a new key through [`SubscriptionStore::put_within`], which refuses it once the
+//! subscriber holds [`MAX_SUBSCRIPTIONS_PER_ACCOUNT`]; a post for a key already held is a renewal
+//! and is never refused. The puller's refresh goes through [`SubscriptionStore::put`], which is
+//! not capped: it only ever renews.
+//!
 //! # A lapsed token is kept, not pulled
 //!
 //! A token is honoured for at most 24 hours, and only a refresh by the puller, or a fresh invite,
@@ -65,6 +74,14 @@ pub use self::memory::InMemorySubscriptions;
 /// A token is nine short claims under an Ed25519 signature, well under a kibibyte; four is room
 /// for any issuer's spelling of them and no room for a megabyte stored per row.
 pub const MAX_CAPABILITY_BYTES: usize = 4096;
+
+/// The most subscriptions one account may hold, live or lapsed.
+///
+/// A thousand: far more albums than a member is shared into across peers, and few enough that
+/// one account cannot make the pull worker's round, which visits every job, the size of a peer's
+/// catalogue. A lapsed subscription counts, because it is still a row its subscriber can revive
+/// with a fresh invite; unsubscribing frees its place.
+pub const MAX_SUBSCRIPTIONS_PER_ACCOUNT: u32 = 1_000;
 
 /// A capability token as a subscription holds it.
 ///
@@ -170,6 +187,18 @@ pub trait SubscriptionStore: fmt::Debug + Send + Sync {
     /// Atomic: with a subscription already under the key, its token is replaced only when the
     /// posted one's `expires_at` is later, and its `subscribed_at` is kept either way.
     fn put(&self, subscription: Subscription) -> StoreFuture<'_, PutOutcome>;
+
+    /// [`put`](Self::put), unless it would create a key while the subscriber already holds
+    /// `limit` subscriptions: then nothing is written and the answer is `None`.
+    ///
+    /// Atomic with every other write: two concurrent posts of new keys by one subscriber at
+    /// `limit - 1` record one of them, never both. A key already held is put whatever the count,
+    /// so a renewal is never refused.
+    fn put_within(
+        &self,
+        subscription: Subscription,
+        limit: u32,
+    ) -> StoreFuture<'_, Option<PutOutcome>>;
 
     /// Every subscription of `subscriber`, live or lapsed, ordered by peer and then album.
     fn of_subscriber<'a>(&'a self, subscriber: &'a UserId) -> StoreFuture<'a, Vec<Subscription>>;

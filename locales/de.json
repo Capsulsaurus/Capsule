@@ -7499,6 +7499,10 @@
     "message": "Diese Zugriffsberechtigung deckt den angeforderten Inhalt nicht ab.",
     "origin": "machine"
   },
+  "error.federation.subscription_limit": {
+    "message": "Du hast die maximale Anzahl geteilter Alben von anderen Servern erreicht, denen du folgen kannst. Entferne eines, um ein weiteres hinzuzufügen.",
+    "origin": "machine"
+  },
   "error.federation.unavailable": {
     "message": "Capsule konnte die Föderationsdaten nicht erreichen. Bitte versuche es erneut.",
     "origin": "machine"

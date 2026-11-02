@@ -8167,6 +8167,10 @@
     "message": "This access grant does not cover the requested content.",
     "context": "HTTP 403 on a federation blob fetch (threat-model invariant 19): a read-derivative-only capability tried to fetch a blob whose server-visible role is 'original'. Scope is enforced structurally against each blob's role."
   },
+  "error.federation.subscription_limit": {
+    "message": "You've reached the limit of shared albums you can follow from other servers. Remove one to add another.",
+    "context": "HTTP 403 on POST /v1/federation/subscriptions: the capability verified, but the caller's account already holds as many subscriptions to federated albums as an account may (1,000, live or lapsed), so a new one is not recorded. Waiting does not clear it, unlike error.federation.rate_budget_exceeded; unsubscribing from an album (DELETE /v1/federation/subscriptions/{peer}/{album_id}) frees a place. Re-posting an invite for an album already subscribed is a renewal and never meets this."
+  },
   "error.federation.unavailable": {
     "message": "Capsule couldn't reach the federation records. Please try again.",
     "context": "HTTP 500 on the federation surface: the capability store, the peer store or the per-peer counter could not answer, so nothing was decided — never a refusal and never an admission. A limiter that cannot be reached is an outage, not a limit."

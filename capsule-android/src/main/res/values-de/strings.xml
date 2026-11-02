@@ -1865,6 +1865,7 @@
     <string name="error_federation_rate_budget_exceeded">Diese Quelle hat ihr Anfragelimit erreicht. Bitte warten Sie und versuchen Sie es erneut.</string>
     <string name="error_federation_revocations_unavailable">Capsule konnte die Widerrufsliste nicht lesen. Bitte versuche es erneut.</string>
     <string name="error_federation_scope_insufficient">Diese Zugriffsberechtigung deckt den angeforderten Inhalt nicht ab.</string>
+    <string name="error_federation_subscription_limit">Du hast die maximale Anzahl geteilter Alben von anderen Servern erreicht, denen du folgen kannst. Entferne eines, um ein weiteres hinzuzufügen.</string>
     <string name="error_federation_unavailable">Capsule konnte die Föderationsdaten nicht erreichen. Bitte versuche es erneut.</string>
     <string name="error_moderation_account_suspended">Ihr Konto ist gesperrt. Sie können nichts hochladen oder teilen, bis es wiederhergestellt ist.</string>
     <string name="error_moderation_report_at_capacity">Dieser Server verarbeitet gerade zu viele Meldungen. Bitte warten Sie und versuchen Sie es erneut.</string>

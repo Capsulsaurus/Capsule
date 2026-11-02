@@ -1874,6 +1874,7 @@
   "error.federation.rate_budget_exceeded": "Esta fuente ha alcanzado su límite de solicitudes. Espera e inténtalo de nuevo.",
   "error.federation.revocations_unavailable": "Capsule no pudo leer la lista de revocaciones. Inténtalo de nuevo.",
   "error.federation.scope_insufficient": "Esta concesión de acceso no cubre el contenido solicitado.",
+  "error.federation.subscription_limit": "Has alcanzado el límite de álbumes compartidos de otros servidores que puedes seguir. Quita uno para añadir otro.",
   "error.federation.unavailable": "Capsule no pudo acceder a los registros de federación. Inténtalo de nuevo.",
   "error.moderation.account_suspended": "Tu cuenta está suspendida. No puedes subir ni compartir hasta que se restablezca.",
   "error.moderation.report_at_capacity": "Este servidor está gestionando demasiados informes en este momento. Espera e inténtalo de nuevo.",

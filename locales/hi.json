@@ -7499,6 +7499,10 @@
     "message": "यह पहुँच अनुमति अनुरोधित सामग्री को कवर नहीं करती।",
     "origin": "machine"
   },
+  "error.federation.subscription_limit": {
+    "message": "आप अन्य सर्वरों के जितने साझा एल्बम फ़ॉलो कर सकते हैं, उस सीमा तक पहुँच गए हैं। दूसरा जोड़ने के लिए एक हटाएँ।",
+    "origin": "machine"
+  },
   "error.federation.unavailable": {
     "message": "Capsule फ़ेडरेशन रिकॉर्ड तक नहीं पहुँच सका। कृपया फिर से प्रयास करें।",
     "origin": "machine"

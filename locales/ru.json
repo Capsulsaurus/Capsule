@@ -7499,6 +7499,10 @@
     "message": "Это разрешение на доступ не распространяется на запрошенный контент.",
     "origin": "machine"
   },
+  "error.federation.subscription_limit": {
+    "message": "Вы достигли предела общих альбомов с других серверов, на которые можно подписаться. Удалите один, чтобы добавить другой.",
+    "origin": "machine"
+  },
   "error.federation.unavailable": {
     "message": "Capsule не удалось получить данные федерации. Повторите попытку.",
     "origin": "machine"

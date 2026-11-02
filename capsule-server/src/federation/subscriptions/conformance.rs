@@ -74,6 +74,124 @@ pub async fn run_all(store: &dyn SubscriptionStore) {
     remove_forgets_exactly_one_key(store).await;
     live_jobs_are_distinct_ordered_and_live(store).await;
     of_job_lists_every_subscriber_of_one_album(store).await;
+    a_capped_put_refuses_a_new_key_at_the_limit(store).await;
+    a_capped_put_renews_a_held_key_at_the_limit(store).await;
+    a_removal_frees_a_place_under_the_cap(store).await;
+}
+
+/// Concurrent capped puts of new keys by one subscriber one place short of the limit record
+/// exactly one. Not in [`run_all`]: it needs the store shared across tasks.
+pub async fn racing_capped_puts_record_one(store: std::sync::Arc<dyn SubscriptionStore>) {
+    let seed = subscription("race", "u", "home", "seed", 0, 6);
+    ok(store.put(seed).await, "seeding one subscription");
+    let posts = (0..8).map(|index| {
+        let store = store.clone();
+        let posted = subscription("race", "u", "home", &format!("a{index}"), 0, 6);
+        tokio::spawn(async move { store.put_within(posted, 2).await })
+    });
+    let mut created = 0;
+    let mut refused = 0;
+    for post in posts {
+        match ok(
+            post.await.expect("the post task ran"),
+            "a racing capped put",
+        ) {
+            Some(PutOutcome::Created(_)) => created += 1,
+            None => refused += 1,
+            Some(other) => panic!("a new key is created or refused, never {other:?}"),
+        }
+    }
+    assert_eq!((created, refused), (1, 7), "one place, one post admitted");
+    let held = ok(store.of_subscriber(&UserId::new("race-u")).await, "listing");
+    assert_eq!(held.len(), 2, "the cap holds under concurrency");
+}
+
+async fn a_capped_put_refuses_a_new_key_at_the_limit(store: &dyn SubscriptionStore) {
+    let first = subscription("cap", "u", "home", "a", 0, 6);
+    let second = subscription("cap", "u", "home", "b", 0, 6);
+    let third = subscription("cap", "u", "away", "c", 0, 6);
+    let theirs = subscription("cap", "v", "home", "a", 0, 6);
+    assert_eq!(
+        ok(store.put_within(first.clone(), 2).await, "a capped put"),
+        Some(PutOutcome::Created(first.clone()))
+    );
+    assert_eq!(
+        ok(store.put_within(second.clone(), 2).await, "a capped put"),
+        Some(PutOutcome::Created(second.clone()))
+    );
+    assert_eq!(
+        ok(
+            store.put_within(third, 2).await,
+            "a capped put past the limit"
+        ),
+        None,
+        "a third key is refused at a limit of two"
+    );
+    assert_eq!(
+        ok(store.of_subscriber(&first.subscriber).await, "listing"),
+        vec![first, second],
+        "a refusal writes nothing"
+    );
+    assert_eq!(
+        ok(
+            store.put_within(theirs.clone(), 2).await,
+            "another account's put"
+        ),
+        Some(PutOutcome::Created(theirs)),
+        "the limit is per account"
+    );
+}
+
+async fn a_capped_put_renews_a_held_key_at_the_limit(store: &dyn SubscriptionStore) {
+    let held = subscription("renew", "u", "home", "a", 0, 6);
+    ok(store.put(held.clone()).await, "a first put");
+    let fresher = subscription("renew", "u", "home", "a", 3, 9);
+    let expected = Subscription {
+        subscribed_at: held.subscribed_at,
+        ..fresher.clone()
+    };
+    assert_eq!(
+        ok(store.put_within(fresher, 1).await, "a renewal at the limit"),
+        Some(PutOutcome::Replaced(expected)),
+        "a key already held is never refused"
+    );
+    let replayed = subscription("renew", "u", "home", "a", 0, 6);
+    assert!(
+        matches!(
+            ok(
+                store.put_within(replayed, 0).await,
+                "a replay under a zero limit"
+            ),
+            Some(PutOutcome::Kept(_))
+        ),
+        "a held key is put whatever the limit"
+    );
+}
+
+async fn a_removal_frees_a_place_under_the_cap(store: &dyn SubscriptionStore) {
+    let gone = subscription("free", "u", "home", "a", 0, 6);
+    let next = subscription("free", "u", "home", "b", 0, 6);
+    ok(store.put(gone.clone()).await, "a first put");
+    assert_eq!(
+        ok(
+            store.put_within(next.clone(), 1).await,
+            "a put at the limit"
+        ),
+        None
+    );
+    ok(
+        store
+            .remove(&gone.subscriber, &gone.peer, &gone.album)
+            .await,
+        "a removal",
+    );
+    assert_eq!(
+        ok(
+            store.put_within(next.clone(), 1).await,
+            "a put after the removal"
+        ),
+        Some(PutOutcome::Created(next))
+    );
 }
 
 async fn a_first_put_creates_and_reads_back(store: &dyn SubscriptionStore) {

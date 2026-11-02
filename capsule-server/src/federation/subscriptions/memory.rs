@@ -1,7 +1,9 @@
 //! [`InMemorySubscriptions`]: the deterministic [`SubscriptionStore`] double.
 //!
 //! One mutex, so [`SubscriptionStore::put`]'s read-decide-write is one critical section, as the
-//! Postgres adapter's single upsert statement is.
+//! Postgres adapter's single upsert statement is, and [`SubscriptionStore::put_within`]'s count
+//! is taken in the same section as the write it admits, as the Postgres adapter's table lock
+//! makes it.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
@@ -35,31 +37,57 @@ impl InMemorySubscriptions {
     }
 }
 
+/// The key `subscription` is held under.
+fn key_of(subscription: &Subscription) -> Key {
+    (
+        subscription.subscriber.clone(),
+        subscription.peer.clone(),
+        subscription.album.clone(),
+    )
+}
+
+/// [`SubscriptionStore::put`]'s decision, inside the caller's critical section.
+fn put_locked(rows: &mut BTreeMap<Key, Subscription>, subscription: Subscription) -> PutOutcome {
+    let key = key_of(&subscription);
+    match rows.get_mut(&key) {
+        None => {
+            rows.insert(key, subscription.clone());
+            PutOutcome::Created(subscription)
+        }
+        Some(held) if held.expires_at < subscription.expires_at => {
+            let replaced = Subscription {
+                subscribed_at: held.subscribed_at,
+                ..subscription
+            };
+            *held = replaced.clone();
+            PutOutcome::Replaced(replaced)
+        }
+        Some(held) => PutOutcome::Kept(held.clone()),
+    }
+}
+
 impl SubscriptionStore for InMemorySubscriptions {
     fn put(&self, subscription: Subscription) -> StoreFuture<'_, PutOutcome> {
+        Box::pin(async move { Ok(put_locked(&mut self.rows(), subscription)) })
+    }
+
+    fn put_within(
+        &self,
+        subscription: Subscription,
+        limit: u32,
+    ) -> StoreFuture<'_, Option<PutOutcome>> {
         Box::pin(async move {
-            let key = (
-                subscription.subscriber.clone(),
-                subscription.peer.clone(),
-                subscription.album.clone(),
-            );
             let mut rows = self.rows();
-            let outcome = match rows.get_mut(&key) {
-                None => {
-                    rows.insert(key, subscription.clone());
-                    PutOutcome::Created(subscription)
+            if !rows.contains_key(&key_of(&subscription)) {
+                let held = rows
+                    .keys()
+                    .filter(|(subscriber, _, _)| *subscriber == subscription.subscriber)
+                    .count();
+                if held >= usize::try_from(limit).unwrap_or(usize::MAX) {
+                    return Ok(None);
                 }
-                Some(held) if held.expires_at < subscription.expires_at => {
-                    let replaced = Subscription {
-                        subscribed_at: held.subscribed_at,
-                        ..subscription
-                    };
-                    *held = replaced.clone();
-                    PutOutcome::Replaced(replaced)
-                }
-                Some(held) => PutOutcome::Kept(held.clone()),
-            };
-            Ok(outcome)
+            }
+            Ok(Some(put_locked(&mut rows, subscription)))
         })
     }
 

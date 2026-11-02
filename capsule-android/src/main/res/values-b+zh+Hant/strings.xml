@@ -1865,6 +1865,7 @@
     <string name="error_federation_rate_budget_exceeded">此來源已達其請求上限。請稍候再試。</string>
     <string name="error_federation_revocations_unavailable">Capsule 無法讀取撤銷清單，請再試一次。</string>
     <string name="error_federation_scope_insufficient">此存取授權不涵蓋所請求的內容。</string>
+    <string name="error_federation_subscription_limit">你追蹤的其他伺服器共享相簿已達上限。請移除一個後再新增。</string>
     <string name="error_federation_unavailable">Capsule 無法存取聯邦記錄，請再試一次。</string>
     <string name="error_moderation_account_suspended">您的帳戶已被停用。在恢復之前，您無法上傳或分享。</string>
     <string name="error_moderation_report_at_capacity">此伺服器目前處理的檢舉過多，請稍候再試。</string>

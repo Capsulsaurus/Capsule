@@ -10,6 +10,11 @@ async fn the_in_memory_store_conforms() {
     conformance::run_all(&InMemorySubscriptions::new()).await;
 }
 
+#[tokio::test]
+async fn the_in_memory_store_holds_the_cap_under_racing_puts() {
+    conformance::racing_capped_puts_record_one(Arc::new(InMemorySubscriptions::new())).await;
+}
+
 fn subscription(subscriber: &str, album: &str, expires_at: Timestamp) -> Subscription {
     Subscription {
         subscriber: UserId::new(subscriber),

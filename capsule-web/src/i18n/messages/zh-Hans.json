@@ -1874,6 +1874,7 @@
   "error.federation.rate_budget_exceeded": "此来源已达到其请求上限。请稍候再试。",
   "error.federation.revocations_unavailable": "Capsule 无法读取撤销列表，请重试。",
   "error.federation.scope_insufficient": "此访问授权不涵盖所请求的内容。",
+  "error.federation.subscription_limit": "你关注的其他服务器共享相册已达上限。请移除一个后再添加。",
   "error.federation.unavailable": "Capsule 无法访问联合记录，请重试。",
   "error.moderation.account_suspended": "您的账户已被停用。在恢复之前，您无法上传或分享。",
   "error.moderation.report_at_capacity": "此服务器当前正在处理过多举报。请稍候再试。",

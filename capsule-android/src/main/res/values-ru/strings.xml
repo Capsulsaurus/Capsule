@@ -1865,6 +1865,7 @@
     <string name="error_federation_rate_budget_exceeded">Этот источник достиг лимита запросов. Подождите и повторите попытку.</string>
     <string name="error_federation_revocations_unavailable">Capsule не удалось прочитать список отзывов. Повторите попытку.</string>
     <string name="error_federation_scope_insufficient">Это разрешение на доступ не распространяется на запрошенный контент.</string>
+    <string name="error_federation_subscription_limit">Вы достигли предела общих альбомов с других серверов, на которые можно подписаться. Удалите один, чтобы добавить другой.</string>
     <string name="error_federation_unavailable">Capsule не удалось получить данные федерации. Повторите попытку.</string>
     <string name="error_moderation_account_suspended">Ваша учётная запись приостановлена. Вы не можете загружать или делиться, пока она не будет восстановлена.</string>
     <string name="error_moderation_report_at_capacity">Сейчас этот сервер обрабатывает слишком много жалоб. Подождите и повторите попытку.</string>

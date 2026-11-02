@@ -1865,6 +1865,7 @@
     <string name="error_federation_rate_budget_exceeded">Questa fonte ha raggiunto il limite di richieste. Attendi e riprova.</string>
     <string name="error_federation_revocations_unavailable">Capsule non è riuscito a leggere l\'elenco delle revoche. Riprova.</string>
     <string name="error_federation_scope_insufficient">Questa autorizzazione di accesso non copre il contenuto richiesto.</string>
+    <string name="error_federation_subscription_limit">Hai raggiunto il limite di album condivisi da altri server che puoi seguire. Rimuovine uno per aggiungerne un altro.</string>
     <string name="error_federation_unavailable">Capsule non è riuscito a raggiungere i dati di federazione. Riprova.</string>
     <string name="error_moderation_account_suspended">Il tuo account è sospeso. Non puoi caricare né condividere finché non viene ripristinato.</string>
     <string name="error_moderation_report_at_capacity">Al momento questo server sta gestendo troppe segnalazioni. Attendi e riprova.</string>

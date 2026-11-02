@@ -1865,6 +1865,7 @@
     <string name="error_federation_rate_budget_exceeded">بلغ هذا المصدر حدّ الطلبات. يُرجى الانتظار ثم المحاولة مرة أخرى.</string>
     <string name="error_federation_revocations_unavailable">تعذّر على Capsule قراءة قائمة الإلغاء. يُرجى المحاولة مرة أخرى.</string>
     <string name="error_federation_scope_insufficient">لا يشمل منح الوصول هذا المحتوى المطلوب.</string>
+    <string name="error_federation_subscription_limit">لقد بلغت الحد الأقصى للألبومات المشتركة التي يمكنك متابعتها من خوادم أخرى. أزل ألبومًا لإضافة آخر.</string>
     <string name="error_federation_unavailable">تعذّر على Capsule الوصول إلى سجلات الاتحاد. يُرجى المحاولة مرة أخرى.</string>
     <string name="error_moderation_account_suspended">حسابك موقوف. لا يمكنك الرفع أو المشاركة حتى تتم إعادته.</string>
     <string name="error_moderation_report_at_capacity">يتعامل هذا الخادم مع عدد كبير جدًا من البلاغات حاليًا. يُرجى الانتظار ثم المحاولة مرة أخرى.</string>

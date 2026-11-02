@@ -7499,6 +7499,10 @@
     "message": "لا يشمل منح الوصول هذا المحتوى المطلوب.",
     "origin": "machine"
   },
+  "error.federation.subscription_limit": {
+    "message": "لقد بلغت الحد الأقصى للألبومات المشتركة التي يمكنك متابعتها من خوادم أخرى. أزل ألبومًا لإضافة آخر.",
+    "origin": "machine"
+  },
   "error.federation.unavailable": {
     "message": "تعذّر على Capsule الوصول إلى سجلات الاتحاد. يُرجى المحاولة مرة أخرى.",
     "origin": "machine"
