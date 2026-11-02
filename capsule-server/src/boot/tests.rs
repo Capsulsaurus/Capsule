@@ -617,6 +617,97 @@ async fn federation_url_is_published_only_when_federation_is_switched_on() {
 }
 
 #[tokio::test]
+async fn a_pull_worker_is_assembled_and_started_only_when_federation_is_switched_on() {
+    let root = tempfile::tempdir().expect("a scratch directory");
+    let off = assemble(&memory_config_with(
+        root.path(),
+        &[("FEDERATION_URL", "https://capsule.example/v1")],
+    ))
+    .await
+    .expect("it assembles");
+    assert!(off.pull_worker.is_none(), "a URL alone federates nothing");
+    assert!(off.spawn_pull_worker().is_none(), "and nothing is pulled");
+
+    let on = assemble(&memory_config_with(
+        root.path(),
+        &[
+            ("FEDERATION_URL", "https://capsule.example/v1"),
+            ("FEDERATION_ENABLED", "true"),
+        ],
+    ))
+    .await
+    .expect("it assembles");
+    assert!(on.pull_worker.is_some());
+    let running = on
+        .spawn_pull_worker()
+        .expect("a federating server starts its worker");
+    assert!(
+        !running.is_finished(),
+        "the loop runs until the process stops"
+    );
+    running.abort();
+}
+
+#[tokio::test]
+async fn the_pull_worker_reads_the_subscriptions_and_peers_the_application_writes() {
+    use kynos::di::Provides as _;
+
+    use crate::federation::pull::{JobKey, JobOutcome};
+    use crate::federation::{CapabilityToken, FederationContext, PeerId, Scope, Subscription};
+    use crate::store::{AlbumId, UserId};
+
+    let root = tempfile::tempdir().expect("a scratch directory");
+    let assembled = assemble(&memory_config_with(
+        root.path(),
+        &[
+            ("FEDERATION_URL", "https://capsule.example/v1"),
+            ("FEDERATION_ENABLED", "true"),
+        ],
+    ))
+    .await
+    .expect("it assembles");
+    let federation: FederationContext = assembled.app.provide();
+    let now = federation.clock().now();
+    let peer = PeerId::new("home.test");
+    let album = AlbumId::new("album");
+    federation
+        .subscriptions()
+        .put(Subscription {
+            subscriber: UserId::new("member"),
+            peer: peer.clone(),
+            album: album.clone(),
+            scope: Scope::Read,
+            jti: "jti".to_owned(),
+            token: CapabilityToken::new("header.payload.signature"),
+            issued_at: now,
+            expires_at: jiff::Timestamp::MAX,
+            min_protocol_version: capsule_core::crypto::primitives::PROTOCOL_VERSION.to_owned(),
+            subscribed_at: now,
+            updated_at: now,
+        })
+        .await
+        .expect("the subscription is recorded");
+    // Blocked through the application's own peer store, so the round reaches the job and stops
+    // before any request leaves the process.
+    federation
+        .peers()
+        .block(&peer, now, None)
+        .await
+        .expect("the peer is blocked");
+
+    let worker = assembled
+        .pull_worker
+        .expect("a federating server has a worker");
+    let report = worker.tick().await;
+    assert_eq!(
+        report.outcomes,
+        vec![(JobKey::new(peer, album), JobOutcome::PeerBlocked)],
+        "the subscription the application recorded is the worker's job, and the block the \
+         application recorded is the worker's"
+    );
+}
+
+#[tokio::test]
 async fn the_published_protocol_window_is_the_configured_one() {
     let root = tempfile::tempdir().expect("a scratch directory");
     let config = memory_config(root.path());

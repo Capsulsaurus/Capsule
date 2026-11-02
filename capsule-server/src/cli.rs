@@ -584,6 +584,8 @@ async fn serve(config: &Config) -> Result<ExitCode> {
     let assembled = assemble(config).await?;
     // Before the listener binds, so every claim listed belongs to a process that is gone.
     recover_stranded_claims(&assembled.app).await;
+    // Detached, like the recovery: only a federating deployment has a worker to start (#1117).
+    let _pull_worker = assembled.spawn_pull_worker();
     // The router is built here rather than through `Assembled::service` because the trusted-proxy
     // policy is a property of the listener's deployment, not of the assembled stores (#704).
     tracing::info!(
