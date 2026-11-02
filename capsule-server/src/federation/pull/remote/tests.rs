@@ -392,3 +392,96 @@ async fn a_request_off_the_origin_is_never_executed() {
 fn the_egress_client_builds() {
     egress_client().expect("a rustls client");
 }
+
+/// A client over the production egress stack, pinned to `https://127.0.0.1:{port}/`.
+fn egress_client_to(port: u16) -> PeerClient {
+    let origin = Url::parse(&format!("https://127.0.0.1:{port}/")).expect("an origin");
+    let http = egress_client().expect("a rustls client");
+    PeerClient::new(
+        Arc::new(rest::ReqwestBackend::new(http)),
+        origin,
+        signer(),
+        Arc::new(SystemClock),
+    )
+}
+
+#[tokio::test]
+async fn a_refused_connection_is_unreachable() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("loopback binds");
+    let port = listener.local_addr().expect("a bound address").port();
+    drop(listener);
+    let error = egress_client_to(port)
+        .sync_page(TOKEN, &album(), None, 10, 4096)
+        .await
+        .expect_err("nothing listens");
+    assert!(matches!(error, RemoteError::Unreachable(_)), "{error:?}");
+}
+
+/// A TLS front on loopback presenting a self-signed leaf for `127.0.0.1` that no root trusts.
+///
+/// It serves one connection, and its task answers the handshake's outcome on the front's side:
+/// `None` when a handshake completed.
+async fn untrusted_front() -> (u16, tokio::task::JoinHandle<Option<String>>) {
+    let key = rcgen::KeyPair::generate().expect("a key");
+    let leaf = rcgen::CertificateParams::new(vec!["127.0.0.1".to_owned()])
+        .expect("params")
+        .self_signed(&key)
+        .expect("a self-signed leaf");
+    let config = rustls::ServerConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .expect("protocol versions")
+    .with_no_client_auth()
+    .with_single_cert(
+        vec![leaf.der().clone()],
+        rustls::pki_types::PrivateKeyDer::Pkcs8(key.serialize_der().into()),
+    )
+    .expect("a server config");
+    let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(config));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("loopback binds");
+    let port = listener.local_addr().expect("a bound address").port();
+    let front = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.ok()?;
+        acceptor
+            .accept(stream)
+            .await
+            .err()
+            .map(|error| error.to_string())
+    });
+    (port, front)
+}
+
+#[tokio::test]
+async fn an_untrusted_certificate_is_unreachable_and_never_accepted() {
+    let (port, front) = untrusted_front().await;
+    let error = egress_client_to(port)
+        .sync_page(TOKEN, &album(), None, 10, 4096)
+        .await
+        .expect_err("the certificate does not verify");
+    let RemoteError::Unreachable(reason) = &error else {
+        panic!("not unreachable: {error:?}");
+    };
+    // The verifier's own reason survives into what is logged and kept.
+    assert!(
+        reason.to_lowercase().contains("certificate"),
+        "no TLS reason in {reason}"
+    );
+    // The front's side of the handshake failed too: no request was carried over it.
+    let refused = front.await.expect("the front ran");
+    assert!(refused.is_some(), "the front completed a handshake");
+}
+
+#[test]
+fn a_request_that_could_not_be_built_is_not_a_connect_failure() {
+    let rest::Error::<std::convert::Infallible>::RequestConstruction(error) =
+        rest::Error::request_message("no such parameter")
+    else {
+        panic!("a request-construction error");
+    };
+    assert_eq!(connect_failure(&error), None);
+}

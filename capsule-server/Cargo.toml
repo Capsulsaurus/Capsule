@@ -28,6 +28,14 @@ publish.workspace = true
 [lib]
 doctest = false
 
+[features]
+# The federation pull's loopback seam (`federation::pull::remote::test_egress`): a test routes a
+# peer host to the TLS front it bound and trusts that front's private CA, so a pull dials
+# `https://{peer}/` over a real handshake. Off by default and never on in a served build:
+# `capsule-e2e` enables it from its dev-dependencies, so resolver 3 compiles it only into test
+# targets. With nothing registered the client it builds is the production one.
+test-egress = []
+
 [dependencies]
 # The framework. Pinned to a rev in the root manifest; see design/dependencies.md for why a rev
 # and not a version, and for the repin-on-publish exit.

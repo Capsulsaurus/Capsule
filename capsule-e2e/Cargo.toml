@@ -33,10 +33,20 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tempfile = "3"
 tokio = { workspace = true }
+# Case 4's TLS front (`src/federation.rs`): a private CA and a leaf for a peer's host name
+# (`rcgen`), terminated by `tokio-rustls` over the `ring` provider. The versions and features
+# `capsule-server`'s mock identity provider pins, so nothing new enters the lock file.
+rcgen = { version = "0.13", default-features = false, features = ["ring", "crypto"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
 tracing = { workspace = true }
 uuid = { workspace = true, features = ["v7"] }
 
 [dev-dependencies]
+# The same `capsule-server`, with `test-egress` on: case 4's pull dials `https://{peer}/`, and the
+# seam routes that host to the case's TLS front and trusts its private CA. A dev-dependency for
+# the reason `capsule-library`'s `test-support` is one below: resolver 3 then keeps the feature
+# out of every build that is not a test target.
+capsule-server = { path = "../capsule-server", features = ["test-egress"] }
 # The same `capsule-library` (and through it `capsule-core`), with `test-support` on: case 6
 # exports its backup at an explicit fast Argon2id cost, and the entry point that takes one is
 # compiled out of a production build on purpose (a weak cost is a brute-forceable artifact).

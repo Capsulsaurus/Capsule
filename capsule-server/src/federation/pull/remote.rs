@@ -92,13 +92,78 @@ pub fn origin_of(peer: &PeerId) -> Result<Url, String> {
 ///
 /// Whatever reqwest reports when it cannot build a TLS stack.
 pub fn egress_client() -> Result<reqwest::Client, reqwest::Error> {
-    reqwest::Client::builder()
+    let builder = reqwest::Client::builder()
         .https_only(true)
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(CONNECT_TIMEOUT)
         .timeout(REQUEST_TIMEOUT)
-        .user_agent(concat!("capsule-server/", env!("CARGO_PKG_VERSION")))
-        .build()
+        .user_agent(concat!("capsule-server/", env!("CARGO_PKG_VERSION")));
+    #[cfg(feature = "test-egress")]
+    let builder = test_egress::apply(builder)?;
+    builder.build()
+}
+
+/// Where a test's peers answer, and the private CA their TLS fronts present: the one seam
+/// between a pull and a peer on loopback. Compiled only with the off-by-default `test-egress`
+/// feature, which `capsule-e2e` turns on for its test targets alone.
+///
+/// A peer id is a bare host name and every pull dials `https://{peer}/` ([`origin_of`]), so a
+/// peer standing on `127.0.0.1` behind an ephemeral port cannot be reached as a deployment
+/// reaches one. This seam changes the two facts a test cannot supply through DNS and the public
+/// roots, and nothing else:
+///
+/// - **Name resolution.** [`route`](test_egress::route) resolves one host to one socket address
+///   (`reqwest::ClientBuilder::resolve`), so `https://alice.test/` connects to the TLS front a
+///   case bound. The URL, its scheme and its host are unchanged, so [`PeerTransport`]'s origin
+///   pin reads the same values production does.
+/// - **Trust anchors.** [`trust_root`](test_egress::trust_root) adds a DER certificate to the roots the client already
+///   trusts. The handshake still verifies the front's chain and its name against that host.
+///
+/// HTTPS-only, no redirects and the time bounds stay as [`egress_client`] sets them. Nothing is
+/// registered unless a test registers it, so a build with the feature on and an empty registry
+/// builds exactly the production client. The registry is process-wide because the client is
+/// built inside [`crate::boot::assemble`], which takes no test collaborator; register before
+/// assembling the server that should dial the route.
+#[cfg(feature = "test-egress")]
+pub mod test_egress {
+    use std::net::SocketAddr;
+    use std::sync::{Mutex, PoisonError};
+
+    /// Host → address overrides, in registration order.
+    static ROUTES: Mutex<Vec<(String, SocketAddr)>> = Mutex::new(Vec::new());
+    /// DER certificates trusted beside the client's built-in roots.
+    static ROOTS: Mutex<Vec<Vec<u8>>> = Mutex::new(Vec::new());
+
+    /// Resolve `host` to `to` in every egress client built after this call.
+    pub fn route(host: &str, to: SocketAddr) {
+        tracing::warn!(host, %to, "test egress: a peer host is routed to a fixed address");
+        ROUTES
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push((host.to_owned(), to));
+    }
+
+    /// Trust the DER certificate `der` as a root in every egress client built after this call.
+    pub fn trust_root(der: Vec<u8>) {
+        tracing::warn!(bytes = der.len(), "test egress: a private root is trusted");
+        ROOTS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(der);
+    }
+
+    /// `builder` with every registered route and root applied.
+    pub(super) fn apply(
+        mut builder: reqwest::ClientBuilder,
+    ) -> Result<reqwest::ClientBuilder, reqwest::Error> {
+        for (host, to) in ROUTES.lock().unwrap_or_else(PoisonError::into_inner).iter() {
+            builder = builder.resolve(host, *to);
+        }
+        for der in ROOTS.lock().unwrap_or_else(PoisonError::into_inner).iter() {
+            builder = builder.add_root_certificate(reqwest::Certificate::from_der(der)?);
+        }
+        Ok(builder)
+    }
 }
 
 /// What [`PeerTransport`] refused, and why.
@@ -514,9 +579,17 @@ impl PeerClient {
             rest::Error::Redirect(error) => {
                 RemoteError::Malformed(format!("the peer redirected: {error}"))
             }
-            rest::Error::RequestConstruction(error) => {
-                RemoteError::Malformed(format!("the request could not be built: {error}"))
-            }
+            rest::Error::RequestConstruction(error) => match connect_failure(&error) {
+                Some(reason) => {
+                    tracing::warn!(
+                        %reason,
+                        base = %self.base,
+                        "the peer could not be connected to"
+                    );
+                    RemoteError::Unreachable(reason)
+                }
+                None => RemoteError::Malformed(format!("the request could not be built: {error}")),
+            },
             rest::Error::Transport(error) | rest::Error::InterruptedBody(error) => {
                 RemoteError::Unreachable(error.to_string())
             }
@@ -524,6 +597,34 @@ impl PeerClient {
             rest::Error::Protocol(error) => RemoteError::Unreachable(error.to_string()),
         }
     }
+}
+
+/// The whole reason a connection to the peer failed, when `error` is a connect-time failure.
+///
+/// reqwest reports every failure to open a connection - a refused port, a name that does not
+/// resolve, a TLS handshake whose certificate does not verify, a connect that outlasts
+/// [`CONNECT_TIMEOUT`] - as its request class, and spargen sorts that class into
+/// [`rest::Error::RequestConstruction`]. None of them is the peer's input failing validation, so
+/// the pull backs off rather than charging the peer's error budget. Every other cause there (a
+/// response hyper could not parse, a request the generated code could not assemble) stays
+/// [`RemoteError::Malformed`].
+///
+/// The reason is the whole source chain, so a certificate the handshake refused is logged with
+/// the verifier's own words. Nothing here relaxes verification: the connection was never made.
+fn connect_failure(error: &rest::RequestError) -> Option<String> {
+    let source = std::error::Error::source(error)?;
+    let reqwest = source.downcast_ref::<reqwest::Error>()?;
+    if !(reqwest.is_connect() || reqwest.is_timeout()) {
+        return None;
+    }
+    let mut reason = reqwest.to_string();
+    let mut next = std::error::Error::source(reqwest);
+    while let Some(cause) = next {
+        reason.push_str(": ");
+        reason.push_str(&cause.to_string());
+        next = cause.source();
+    }
+    Some(reason)
 }
 
 #[cfg(test)]

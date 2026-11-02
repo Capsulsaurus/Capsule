@@ -31,6 +31,7 @@
 //! Every test that uses this crate names its case — `E2E case N` — so `rg "E2E case N"` finds
 //! it, per the module map's contract.
 
+pub mod federation;
 pub mod fixtures;
 pub mod killpoints;
 pub mod processes;
@@ -143,6 +144,31 @@ impl Server {
         Self::serve(blob_root, env, &overrides).await
     }
 
+    /// Boot the memory profile as a **federating** deployment named `domain`, signing with the
+    /// PKCS#8 Ed25519 key `der_base64`.
+    ///
+    /// `SERVER_DOMAIN` is the identity every capability names and `server-info` publishes;
+    /// `FEDERATION_ENABLED` and `FEDERATION_URL` (`https://{domain}`) are what assemble the pull
+    /// worker. Nothing spawns its loop: a case drives it a round at a time through
+    /// `assembled.pull_worker`, so no case waits on the tick.
+    pub async fn boot_federating(domain: &str, der_base64: &str) -> Self {
+        let blob_root = tempfile::tempdir().expect("a temp blob root");
+        let env: BTreeMap<String, String> = [
+            ("SERVER_DOMAIN", domain.to_owned()),
+            ("FEDERATION_ENABLED", "true".to_owned()),
+            ("FEDERATION_URL", format!("https://{domain}")),
+            ("JWT_ED25519_DER", der_base64.to_owned()),
+        ]
+        .into_iter()
+        .map(|(key, value)| (key.to_owned(), value))
+        .collect();
+        let overrides = Overrides {
+            memory: true,
+            ..Overrides::default()
+        };
+        Self::serve(blob_root, env, &overrides).await
+    }
+
     /// Boot the **durable** profile, the one a deployment runs, over `blob_root` and the
     /// Postgres and Valkey `backends` name.
     ///
@@ -171,7 +197,8 @@ impl Server {
             "BLOB_ROOT".to_owned(),
             blob_root.path().display().to_string(),
         );
-        env.insert("JWT_ED25519_DER".to_owned(), JWT_ED25519_DER.to_owned());
+        env.entry("JWT_ED25519_DER".to_owned())
+            .or_insert_with(|| JWT_ED25519_DER.to_owned());
         let config = Config::load(&env, overrides, Demands::Serve)
             .expect("the configuration loads from the variables the harness sets");
         let assembled = boot::assemble(&config)
@@ -204,6 +231,19 @@ impl Server {
     #[must_use]
     pub fn base_url(&self) -> &str {
         &self.base_url
+    }
+
+    /// The plain listener's socket address: what a TLS front forwards to.
+    ///
+    /// # Panics
+    ///
+    /// Never for a server this harness bound: its base URL is `http://` and an address.
+    #[must_use]
+    pub fn address(&self) -> std::net::SocketAddr {
+        self.base_url
+            .trim_start_matches("http://")
+            .parse()
+            .expect("the base URL names a socket address")
     }
 
     /// `{root}/v1`: what the verify transport and the blob source take.
