@@ -1,11 +1,13 @@
 //! Lifecycle ops from an app: one signed `delete` or `trash-restore` record, as the opaque
 //! canonical CBOR the workspace hands out, sent to its album's ops surface
-//! (`POST /v1/albums/{album_id}/ops`) through [`AlbumClient::apply_op`].
+//! (`POST /v1/albums/{album_id}/ops`) through
+//! [`AlbumClient::apply_op`](crate::albums::AlbumClient::apply_op).
 //!
 //! # What crosses the boundary
 //!
 //! The record bytes come from foreign code, so they are judged before anything is sent
-//! ([`decode_op_record`]): bounded in size, decoded as a [`ProvenanceRecord`], and refused
+//! ([`decode_op_record`](crate::ffi::ops::decode_op_record)): bounded in size, decoded as a
+//! [`ProvenanceRecord`](capsule_core::crypto::provenance::ProvenanceRecord), and refused
 //! unless they are that record's own canonical encoding, so the bytes the server hashes as the
 //! chain head are exactly the bytes the device signed. Only the actions that move no bytes and
 //! bind no metadata blob are accepted: a `delete` or a `trash-restore`.
@@ -264,8 +266,9 @@ impl FfiSession {
     ///
     /// # Errors
     ///
-    /// [`FfiError::InvalidArgument`] for bytes [`decode_op_record`] refuses or an
-    /// `api_base_url` that is not an http(s) URL, before anything is sent;
+    /// [`FfiError::InvalidArgument`] for bytes that are not a lifecycle op record (over the
+    /// bound, not canonical, or not a `delete` or `trash-restore`) or an `api_base_url` that
+    /// is not an http(s) URL, before anything is sent;
     /// [`FfiError::Auth`] for a refused session.
     pub async fn apply_lifecycle_op(
         &self,
