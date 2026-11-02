@@ -23,9 +23,9 @@
 //!   `HEAD` in TLS 1.3 early data, and this build takes none of it.
 //! - **Windows cover the bandwidth-delay product** within a fixed memory budget ([`size_window`]).
 //!
-//! Default builds never race: [`H3Policy::for_build`] is capable only with the off-by-default
-//! `http3` cargo feature, and even then no transport adapter consumes the choice yet, because the
-//! SDK's `reqwest` 0.12 exposes HTTP/3 only under `--cfg reqwest_unstable`. Every transport stays
+//! No build races: [`H3Policy::for_build`] is incapable in every build, with or without the
+//! off-by-default `http3` cargo feature, because no HTTP/3 transport adapter exists yet (the SDK's
+//! `reqwest` 0.12 exposes HTTP/3 only under `--cfg reqwest_unstable`). Every transport stays
 //! pinned to HTTP/1.1 ([`super::http_builder`]).
 
 use std::collections::HashMap;
@@ -248,9 +248,10 @@ impl<C: MonotonicClock> H3Policy<C> {
         }
     }
 
-    /// A policy capable exactly when the build enables the `http3` cargo feature.
+    /// The policy for this build: incapable in every build until an HTTP/3 transport lands, so
+    /// [`H3Policy::choose`] can never answer a race that nothing could dial.
     pub fn for_build(clock: C) -> Self {
-        Self::new(clock, cfg!(feature = "http3"))
+        Self::new(clock, false)
     }
 
     fn state(&self) -> std::sync::MutexGuard<'_, State> {
