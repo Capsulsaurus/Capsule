@@ -1363,6 +1363,7 @@ dependencies = [
  "hex",
  "jiff",
  "kynos",
+ "rcgen",
  "reqwest",
  "sea-orm",
  "serde",
@@ -1371,6 +1372,7 @@ dependencies = [
  "testcontainers",
  "testcontainers-modules",
  "tokio",
+ "tokio-rustls",
  "tracing",
  "uuid",
 ]
