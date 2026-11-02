@@ -1265,15 +1265,18 @@ pub enum AssetPushStatus {
 /// Why an asset failed, in the shape `--json` reports it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AssetPushFailure {
-    /// A stable name for where the asset stopped: `bundle`, `album`, `upload`, `create_refused`,
-    /// `reseal`, `unknown_blob`, `verify_unavailable`, `not_durable`, `receipt_missing`,
-    /// `receipt_rejected`, `receipt_store` or `album_keys_not_escrowed`.
+    /// A stable name for where the asset stopped: `bundle`, `album`, `upload`, `source_changed`,
+    /// `create_refused`, `reseal`, `unknown_blob`, `verify_unavailable`, `not_durable`,
+    /// `receipt_missing`, `receipt_rejected`, `receipt_store` or `album_keys_not_escrowed`.
+    /// `source_changed` is a file that changed on disk while its original was uploading: its
+    /// session was cancelled and nothing more of it was sent.
     pub kind: &'static str,
     /// The server's stable `error.*` code, when it supplied one. For a blob the server refused
     /// at finalization — `error.upload.content_hash_mismatch`, `envelope_rejected`,
     /// `replace_incomplete`, `stale_revival` — it is the code the session's terminal
     /// `failed_processing` state carried (`X-Capsule-Upload-Error`), which the transfer reads
-    /// from `HEAD` once the server has finished finalizing.
+    /// from `HEAD` once the server has finished finalizing. A `source_changed` failure carries
+    /// the client's own `error.upload.source_changed`.
     pub code: Option<String>,
     /// The English detail.
     pub message: String,
