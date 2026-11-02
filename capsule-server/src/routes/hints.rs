@@ -203,8 +203,10 @@ impl HintRejection {
 /// A verified, admitted hint is answered `202` with the instant it was received, whatever became
 /// of it: it moved a job, the job was already due, this server pulls no such album, or the
 /// peer is on probation. Telling them apart would let a pinned peer walk album ids and read off
-/// which ones this server's members subscribe to. Each of those does the same work — one peer
-/// read and one schedule operation — so the answer's timing does not tell them apart either.
+/// which ones this server's members subscribe to. A held job and one that is not cost the same
+/// work — one peer read and one schedule operation — so the answer's timing does not tell them
+/// apart either; a peer on probation is answered after the peer read alone, which tells it only
+/// its own standing.
 /// Only a store that could not answer is different: `500 error.federation.unavailable`, which
 /// says nothing about any album.
 #[kynos::post(

@@ -44,8 +44,10 @@
 //!
 //! Whether this server holds the job a hint names is never said: a verified hint is answered the
 //! same `202` whether it moved a job, found it already due, named a job this server does not
-//! hold, or came from a peer on probation. The receiver does the same work for each — one peer
-//! read and one schedule operation — so the answer's timing does not say either.
+//! hold, or came from a peer on probation. A held job and one that is not cost the receiver the
+//! same work — one peer read and one schedule operation — so the answer's timing does not say
+//! which either. (A peer on probation is answered after the peer read alone, which tells it
+//! only its own standing.)
 
 use std::future::Future;
 use std::pin::Pin;
