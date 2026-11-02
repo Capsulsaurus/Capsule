@@ -217,6 +217,20 @@
               "signature": "func uploadStatus(sessionId: String) async throws -> FfiUploadStatus?",
               "doc": "Query an upload session's progress (`HEAD /upload/{id}`). `None` means the\nsession is gone (discarded/expired/never-existent).",
               "members": []
+            },
+            {
+              "kind": "func",
+              "name": "applyLifecycleOp",
+              "signature": "func applyLifecycleOp(apiBaseUrl: String, record: Data, serverHead: Data?) async throws -> FfiLifecycleOpOutcome",
+              "doc": "Apply one signed lifecycle op `record` — a `delete` or a `trash-restore`, as the opaque\ncanonical CBOR [`FfiWorkspace::provenance_head`],\n[`FfiPurgeOutcome::reissue_record`](super::FfiPurgeOutcome::reissue_record) and\n[`FfiWorkspace::purged_record`] carry — to its album's ops surface on `api_base_url`\n(`http[s]://host:port`, the root `sync_pull` takes).\n\n`server_head` is the sync feed's evidence for the asset: the `manifest_cbor` of the\nlatest entry listing it (empty for an entry that carries none), or `None` when the feed\ndoes not list it. With `None` nothing is sent and the answer is\n[`FfiLifecycleOpOutcome::NotIndexed`]: the server never sees a lifecycle op for an asset\nit has not indexed.\n\nIdempotent: a record the server already applied answers `Applied` with `replayed` set.\nA refusal, or a server that could not be reached, is [`FfiLifecycleOpOutcome::Failed`];\na session the server did not accept is [`FfiError::Auth`].\n\n# Errors\n\n[`FfiError::InvalidArgument`] for bytes [`decode_op_record`] refuses or an\n`api_base_url` that is not an http(s) URL, before anything is sent;\n[`FfiError::Auth`] for a refused session.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "deliverPurge",
+              "signature": "func deliverPurge(apiBaseUrl: String, workspace: FfiWorkspace, assetId: String, serverHead: Data?) async throws -> FfiLifecycleOpOutcome",
+              "doc": "Deliver a purged asset's `delete` to its album's ops surface: every record of the chain\nthe purge kept after the head the server holds, in chain order, each once the one\nbefore it was applied. After an early purge that is the shorter-retention re-issue\n([`FfiPurgeOutcome::reissue_record`](super::FfiPurgeOutcome::reissue_record)) together\nwith any `delete` it chains onto that the server never saw.\n\nEverything is read from the workspace's kept chain, so a delivery that failed or was\nheld is retried by calling this again, also after the workspace was reopened\n([`FfiWorkspace::purged_asset_ids`] lists what to walk). The workspace lock is held only\nwhile the chain is read, never across the network.\n\n`server_head` is as [`apply_lifecycle_op`](Self::apply_lifecycle_op) takes it: `None`\nsends nothing and answers [`FfiLifecycleOpOutcome::NotIndexed`]. The answer is the last\nrecord's `Applied` — the purge reached the server — or the first record that was not\napplied, whose `Failed` stops the stretch.\n\n# Errors\n\n[`FfiError::Trash`] with [`FfiTrashRefusal::NotFound`](super::FfiTrashRefusal::NotFound)\nfor an asset this workspace has not purged; [`FfiError::InvalidArgument`] for a malformed\n`asset_id` or `api_base_url`; [`FfiError::Auth`] for a refused session.",
+              "members": []
             }
           ]
         },
@@ -323,6 +337,13 @@
               "name": "stackMemberships",
               "signature": "func stackMemberships() throws -> [FfiStackMember]",
               "doc": "Every managed, non-trashed asset that belongs to a stack, with its stack, whether it is\nthe cover and its member index, sorted by asset id. An asset in no stack is absent, so a\ncull pass reads it as a lone asset; a trashed member is absent too, matching the members\n[`flag_stack`](Self::flag_stack) writes.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "purgedAssetIds",
+              "signature": "func purgedAssetIds() throws -> [String]",
+              "doc": "Every asset this workspace has purged (UUID strings), whose kept chain\n[`purged_record`](Self::purged_record) reads: the list a relaunch walks to deliver the\npurges whose delivery failed or was held, with [`FfiSession::deliver_purge`]. A purge\nthe server already applied answers as a replay, so walking it again is safe.",
               "members": []
             },
             {
@@ -455,7 +476,7 @@
               "kind": "func",
               "name": "purgedRecord",
               "signature": "func purgedRecord(assetId: String) throws -> Data?",
-              "doc": "The signed `delete` that ended a purged asset, the head of its kept provenance chain, as\nthe opaque canonical CBOR record [`FfiPurgeOutcome::reissue_record`] carries. After an\nearly purge it is that same re-issue, so a delivery to the album's ops surface that\nfailed can be resent from here, also after a reopen. `None` for an asset this workspace\nhas not purged.",
+              "doc": "The signed `delete` that ended a purged asset, the head of its kept provenance chain, as\nthe opaque canonical CBOR record [`FfiPurgeOutcome::reissue_record`] carries. After an\nearly purge it is that same re-issue, so a delivery to the album's ops surface that\nfailed can be resent from here, also after a reopen\n([`FfiSession::apply_lifecycle_op`](super::FfiSession::apply_lifecycle_op), or\n[`FfiSession::deliver_purge`](super::FfiSession::deliver_purge) for the whole stretch).\n`None` for an asset this workspace has not purged.",
               "members": []
             },
             {
@@ -1347,7 +1368,7 @@
               "kind": "field",
               "name": "reissueRecord",
               "signature": "public var reissueRecord: Data?",
-              "doc": "The signed shorter-retention `delete` an early purge appended, as the opaque canonical\nCBOR provenance record [`FfiWorkspace::provenance_head`] would have returned. Send it to\nthe album's ops surface so the server may purge too; when that delivery fails,\n[`FfiWorkspace::purged_record`] hands the same record back from the kept chain. `None`\nwhen the window had closed.",
+              "doc": "The signed shorter-retention `delete` an early purge appended, as the opaque canonical\nCBOR provenance record [`FfiWorkspace::provenance_head`] would have returned. It goes to\nthe album's ops surface so the server may purge too, through\n[`FfiSession::deliver_purge`](super::FfiSession::deliver_purge), which sends it with any\n`delete` it chains onto that the server never saw; when that delivery fails,\n[`FfiWorkspace::purged_record`] hands the same record back from the kept chain. `None`\nwhen the window had closed.",
               "members": []
             }
           ]
@@ -2276,6 +2297,35 @@
               "name": "album",
               "signature": "case album",
               "doc": "A container album (UUID string).",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum",
+          "name": "FfiLifecycleOpOutcome",
+          "signature": "public enum FfiLifecycleOpOutcome: Equatable, Hashable",
+          "doc": "What became of one lifecycle op.",
+          "members": [
+            {
+              "kind": "case",
+              "name": "applied",
+              "signature": "case applied",
+              "doc": "The server applied the op, or had applied it already (`replayed`).",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "notIndexed",
+              "signature": "case notIndexed",
+              "doc": "Nothing was sent: the feed does not list the asset, so its create is not indexed on the\nserver, and the server never sees a `delete` for an asset it has not indexed. The record\nstays on the asset's chain; deliver it once a sync lists the asset.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "failed",
+              "signature": "case failed",
+              "doc": "The server refused the op, or could not be reached. `permanent` says whether sending\nthe same bytes again can only be refused again.",
               "members": []
             }
           ]
@@ -3216,6 +3266,20 @@
               "signature": "suspend fun uploadStatus(sessionId: kotlin.String): FfiUploadStatus?",
               "doc": "Query an upload session's progress (`HEAD /upload/{id}`). `None` means the\nsession is gone (discarded/expired/never-existent).",
               "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "applyLifecycleOp",
+              "signature": "suspend fun applyLifecycleOp(apiBaseUrl: kotlin.String, record: kotlin.ByteArray, serverHead: kotlin.ByteArray?): FfiLifecycleOpOutcome",
+              "doc": "Apply one signed lifecycle op `record` — a `delete` or a `trash-restore`, as the opaque\ncanonical CBOR [`FfiWorkspace::provenance_head`],\n[`FfiPurgeOutcome::reissue_record`](super::FfiPurgeOutcome::reissue_record) and\n[`FfiWorkspace::purged_record`] carry — to its album's ops surface on `api_base_url`\n(`http[s]://host:port`, the root `sync_pull` takes).\n\n`server_head` is the sync feed's evidence for the asset: the `manifest_cbor` of the\nlatest entry listing it (empty for an entry that carries none), or `None` when the feed\ndoes not list it. With `None` nothing is sent and the answer is\n[`FfiLifecycleOpOutcome::NotIndexed`]: the server never sees a lifecycle op for an asset\nit has not indexed.\n\nIdempotent: a record the server already applied answers `Applied` with `replayed` set.\nA refusal, or a server that could not be reached, is [`FfiLifecycleOpOutcome::Failed`];\na session the server did not accept is [`FfiError::Auth`].\n\n# Errors\n\n[`FfiError::InvalidArgument`] for bytes [`decode_op_record`] refuses or an\n`api_base_url` that is not an http(s) URL, before anything is sent;\n[`FfiError::Auth`] for a refused session.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "deliverPurge",
+              "signature": "suspend fun deliverPurge(apiBaseUrl: kotlin.String, workspace: FfiWorkspace, assetId: kotlin.String, serverHead: kotlin.ByteArray?): FfiLifecycleOpOutcome",
+              "doc": "Deliver a purged asset's `delete` to its album's ops surface: every record of the chain\nthe purge kept after the head the server holds, in chain order, each once the one\nbefore it was applied. After an early purge that is the shorter-retention re-issue\n([`FfiPurgeOutcome::reissue_record`](super::FfiPurgeOutcome::reissue_record)) together\nwith any `delete` it chains onto that the server never saw.\n\nEverything is read from the workspace's kept chain, so a delivery that failed or was\nheld is retried by calling this again, also after the workspace was reopened\n([`FfiWorkspace::purged_asset_ids`] lists what to walk). The workspace lock is held only\nwhile the chain is read, never across the network.\n\n`server_head` is as [`apply_lifecycle_op`](Self::apply_lifecycle_op) takes it: `None`\nsends nothing and answers [`FfiLifecycleOpOutcome::NotIndexed`]. The answer is the last\nrecord's `Applied` — the purge reached the server — or the first record that was not\napplied, whose `Failed` stops the stretch.\n\n# Errors\n\n[`FfiError::Trash`] with [`FfiTrashRefusal::NotFound`](super::FfiTrashRefusal::NotFound)\nfor an asset this workspace has not purged; [`FfiError::InvalidArgument`] for a malformed\n`asset_id` or `api_base_url`; [`FfiError::Auth`] for a refused session.",
+              "members": []
             }
           ]
         },
@@ -3322,6 +3386,13 @@
               "name": "stackMemberships",
               "signature": "fun stackMemberships(): List<FfiStackMember>",
               "doc": "Every managed, non-trashed asset that belongs to a stack, with its stack, whether it is\nthe cover and its member index, sorted by asset id. An asset in no stack is absent, so a\ncull pass reads it as a lone asset; a trashed member is absent too, matching the members\n[`flag_stack`](Self::flag_stack) writes.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "purgedAssetIds",
+              "signature": "fun purgedAssetIds(): List<kotlin.String>",
+              "doc": "Every asset this workspace has purged (UUID strings), whose kept chain\n[`purged_record`](Self::purged_record) reads: the list a relaunch walks to deliver the\npurges whose delivery failed or was held, with [`FfiSession::deliver_purge`]. A purge\nthe server already applied answers as a replay, so walking it again is safe.",
               "members": []
             },
             {
@@ -3454,7 +3525,7 @@
               "kind": "fun",
               "name": "purgedRecord",
               "signature": "fun purgedRecord(assetId: kotlin.String): kotlin.ByteArray?",
-              "doc": "The signed `delete` that ended a purged asset, the head of its kept provenance chain, as\nthe opaque canonical CBOR record [`FfiPurgeOutcome::reissue_record`] carries. After an\nearly purge it is that same re-issue, so a delivery to the album's ops surface that\nfailed can be resent from here, also after a reopen. `None` for an asset this workspace\nhas not purged.",
+              "doc": "The signed `delete` that ended a purged asset, the head of its kept provenance chain, as\nthe opaque canonical CBOR record [`FfiPurgeOutcome::reissue_record`] carries. After an\nearly purge it is that same re-issue, so a delivery to the album's ops surface that\nfailed can be resent from here, also after a reopen\n([`FfiSession::apply_lifecycle_op`](super::FfiSession::apply_lifecycle_op), or\n[`FfiSession::deliver_purge`](super::FfiSession::deliver_purge) for the whole stretch).\n`None` for an asset this workspace has not purged.",
               "members": []
             },
             {
@@ -4346,7 +4417,7 @@
               "kind": "field",
               "name": "reissueRecord",
               "signature": "var reissueRecord: kotlin.ByteArray?",
-              "doc": "The signed shorter-retention `delete` an early purge appended, as the opaque canonical\nCBOR provenance record [`FfiWorkspace::provenance_head`] would have returned. Send it to\nthe album's ops surface so the server may purge too; when that delivery fails,\n[`FfiWorkspace::purged_record`] hands the same record back from the kept chain. `None`\nwhen the window had closed.",
+              "doc": "The signed shorter-retention `delete` an early purge appended, as the opaque canonical\nCBOR provenance record [`FfiWorkspace::provenance_head`] would have returned. It goes to\nthe album's ops surface so the server may purge too, through\n[`FfiSession::deliver_purge`](super::FfiSession::deliver_purge), which sends it with any\n`delete` it chains onto that the server never saw; when that delivery fails,\n[`FfiWorkspace::purged_record`] hands the same record back from the kept chain. `None`\nwhen the window had closed.",
               "members": []
             }
           ]
@@ -5275,6 +5346,35 @@
               "name": "Album",
               "signature": "data class Album",
               "doc": "A container album (UUID string).",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "sealed class",
+          "name": "FfiLifecycleOpOutcome",
+          "signature": "sealed class FfiLifecycleOpOutcome",
+          "doc": "What became of one lifecycle op.",
+          "members": [
+            {
+              "kind": "variant",
+              "name": "Applied",
+              "signature": "data class Applied",
+              "doc": "The server applied the op, or had applied it already (`replayed`).",
+              "members": []
+            },
+            {
+              "kind": "variant",
+              "name": "NotIndexed",
+              "signature": "object NotIndexed : FfiLifecycleOpOutcome()",
+              "doc": "Nothing was sent: the feed does not list the asset, so its create is not indexed on the\nserver, and the server never sees a `delete` for an asset it has not indexed. The record\nstays on the asset's chain; deliver it once a sync lists the asset.",
+              "members": []
+            },
+            {
+              "kind": "variant",
+              "name": "Failed",
+              "signature": "data class Failed",
+              "doc": "The server refused the op, or could not be reached. `permanent` says whether sending\nthe same bytes again can only be refused again.",
               "members": []
             }
           ]
