@@ -21,6 +21,7 @@ use std::time::{Duration, Instant};
 use capsule_library::import::UploadTier;
 use tracing::instrument;
 
+pub mod h3;
 pub mod negotiation;
 pub mod path;
 
