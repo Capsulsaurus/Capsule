@@ -352,10 +352,11 @@ pub fn router() -> Router<App, Propagate, ServerInterceptors, impl Sized> {
         // its holder asked to close (#527). Opening one (`login`, `register`) stays gated. All
         // thirteen still carry the response headers, because `Negotiation` is the router's.
         //
-        // Body-size cap only, with no negotiation gate: the cap is per-group, and these thirteen
-        // are still covered by one each. The eleven that are not drop deposits take the bounded
-        // cap — reads, the drop's status probe among them, and two session-upkeep writes
-        // carrying a token. The two drop deposits keep the backstop, because a guest's drop chunk
+        // No negotiation gate: the cap is per-group, and these thirteen are still covered by one
+        // each. The nine reads, the drop's status probe among them, take the bounded cap alone. The
+        // two session-upkeep writes (refresh, logout) and the two drop deposits also carry
+        // [`problem::TooEarly`], since a write must not be replayed from TLS early data. The two
+        // drop deposits keep the backstop cap, because a guest's drop chunk
         // is as large as an upload chunk, and sit in two groups: `create_drop` alone, and
         // `append_drop_chunk` alone with the length-less chunk deadline (#717), as the album
         // chunk route is above.
