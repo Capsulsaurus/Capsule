@@ -13,7 +13,7 @@ use crate::federation::capability::{CapabilityCodec, MintRequest, Scope};
 use crate::federation::pull::fixtures::{
     METADATA, PIN, album, asset, core, entry, now, page_json, record,
 };
-use crate::federation::pull::pulled::{InMemoryPulledAlbums, PulledAlbum};
+use crate::federation::pull::pulled::{InMemoryPulledAlbums, PeerCachingBudget, PulledAlbum};
 use crate::federation::pull::signer::Ed25519RequestSigner;
 use crate::federation::scheme::{REQUEST_SIGNATURE_HEADER, RequestClaim, RequestSignature};
 use crate::federation::{InMemoryPeers, InMemorySubscriptions};
@@ -205,6 +205,11 @@ fn pkcs8() -> Vec<u8> {
 impl Harness {
     /// A member of this server subscribed to the album with a capability that lives a day.
     async fn new() -> Self {
+        Self::budgeted(PeerCachingBudget::unlimited()).await
+    }
+
+    /// [`Self::new`], with the member's caching budget on the home server at `budget`.
+    async fn budgeted(budget: PeerCachingBudget) -> Self {
         let clock = Arc::new(ManualClock::new(now()));
         let issuer = CapabilityCodec::from_pkcs8(&pkcs8(), HOME, clock.clone()).expect("a codec");
         let peers = Arc::new(InMemoryPeers::new());
@@ -214,7 +219,8 @@ impl Harness {
             .await
             .expect("pinned");
         let subscriptions = Arc::new(InMemorySubscriptions::new());
-        let pulled = Arc::new(InMemoryPulledAlbums::new());
+        let pulled =
+            Arc::new(InMemoryPulledAlbums::new().with_budget(subscriptions.clone(), budget));
         let signer = Arc::new(Ed25519RequestSigner::from_pkcs8(&pkcs8()).expect("a signer"));
         let home = Arc::new(HomeServer::default());
         let puller = RemotePuller::new(RemotePullerParts {
@@ -411,6 +417,43 @@ async fn a_page_that_fails_validation_writes_nothing_and_spends_the_error_budget
     // The first page verified and stays written; nothing of the second is.
     assert_eq!(harness.pulled.entries(&job()).len(), 1);
     assert_eq!(harness.state().await.high_water, Some(1));
+}
+
+#[tokio::test]
+async fn a_page_past_the_members_caching_budget_writes_nothing_and_is_not_the_peers_fault() {
+    // Room for the one metadata blob the first page holds, and nothing more.
+    let budget = u64::try_from(METADATA.len()).expect("a size");
+    let harness = Harness::budgeted(PeerCachingBudget::bytes(budget)).await;
+    let (one, two) = (create(1), create(2));
+    harness.home.serve_page(a_page(
+        vec![entry(asset(1), 1, "created", Some(&one))],
+        "c1",
+        true,
+    ));
+    harness.home.serve_page(a_page(
+        vec![entry(asset(2), 2, "created", Some(&two))],
+        "c2",
+        false,
+    ));
+    harness.home.serve_blob(METADATA);
+    let report = harness.pull(PeerTier::Established).await;
+    assert_eq!(report.result, Ok(()), "a page within the budget is written");
+
+    let over = Harness::budgeted(PeerCachingBudget::bytes(budget - 1)).await;
+    over.home.serve_page(a_page(
+        vec![entry(asset(1), 1, "created", Some(&one))],
+        "c1",
+        false,
+    ));
+    over.home.serve_blob(METADATA);
+    let report = over.pull(PeerTier::Established).await;
+    assert_eq!(
+        failure(&report),
+        "budget",
+        "a refusal for the member's budget is neither the peer's transport nor its input"
+    );
+    assert!(over.pulled.entries(&job()).is_empty());
+    assert_eq!(over.state().await, PulledAlbum::default());
 }
 
 #[tokio::test]

@@ -18,6 +18,69 @@ fn at(head: Hash32, deleted: bool) -> AssetHead {
 #[tokio::test]
 async fn the_in_memory_store_conforms() {
     conformance::run_all(&InMemoryPulledAlbums::new()).await;
+
+    let subscriptions = Arc::new(crate::federation::subscriptions::InMemorySubscriptions::new());
+    let budgeted = InMemoryPulledAlbums::new().with_budget(
+        subscriptions.clone(),
+        PeerCachingBudget::bytes(conformance::BUDGET),
+    );
+    conformance::run_all(&budgeted).await;
+    conformance::run_budget(&budgeted, subscriptions.as_ref()).await;
+}
+
+#[test]
+fn a_budget_is_its_share_of_the_hard_limit() {
+    assert_eq!(PeerCachingBudget::of_hard_limit(1_000, 25).limit(), 250);
+    assert_eq!(
+        PeerCachingBudget::of_hard_limit(999, 25).limit(),
+        249,
+        "rounded down"
+    );
+    assert_eq!(PeerCachingBudget::of_hard_limit(1_000, 0).limit(), 0);
+    assert_eq!(
+        PeerCachingBudget::of_hard_limit(1_000, 250).limit(),
+        1_000,
+        "past the whole is the whole"
+    );
+    assert_eq!(
+        PeerCachingBudget::of_hard_limit(u64::MAX, 100).limit(),
+        u64::MAX,
+        "no overflow on an unlimited deployment"
+    );
+    assert_eq!(
+        PeerCachingBudget::of_hard_limit(u64::MAX, DEFAULT_PEER_BUDGET_PERCENT).limit(),
+        u64::MAX / 4
+    );
+    assert_eq!(PeerCachingBudget::default(), PeerCachingBudget::unlimited());
+}
+
+#[test]
+fn only_growth_past_the_budget_is_refused() {
+    let budget = PeerCachingBudget::bytes(100);
+    let (user, peer) = (UserId::new("u"), PeerId::new("home.test"));
+    assert_eq!(
+        budget.refusal(&user, &peer, 100, 100),
+        None,
+        "at the budget"
+    );
+    assert_eq!(
+        budget.refusal(&user, &peer, 101, 1),
+        Some(OverBudget {
+            subscriber: user.clone(),
+            peer: peer.clone(),
+            used: 101,
+            budget: 100,
+        })
+    );
+    assert_eq!(
+        budget.refusal(&user, &peer, 1_000, 0),
+        None,
+        "a commit adding nothing is never refused, however far past the budget"
+    );
+    assert_eq!(
+        PeerCachingBudget::unlimited().refusal(&user, &peer, u64::MAX, u64::MAX),
+        None
+    );
 }
 
 #[test]

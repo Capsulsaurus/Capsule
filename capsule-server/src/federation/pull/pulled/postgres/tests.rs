@@ -74,14 +74,17 @@ mod postgres_conformance {
     use capsule_core::crypto::hash::hash_bytes;
     use sea_orm::DatabaseTransaction;
 
-    use super::super::{HeldBlob, PostgresPulledAlbums, PulledBlobCharge};
+    use super::super::{HeldBlob, PeerBudgetCharge, PostgresPulledAlbums, PulledBlobCharge};
     use crate::blob::{BlobStore, InMemoryBlobStore};
     use crate::federation::PeerId;
     use crate::federation::pull::JobKey;
     use crate::federation::pull::pulled::conformance::{self, Inspect as _};
-    use crate::federation::pull::pulled::{PulledAlbum, PulledAlbums as _, ValidatedPage};
+    use crate::federation::pull::pulled::{
+        Committed, OverBudget, PeerCachingBudget, PulledAlbum, PulledAlbums as _, ValidatedPage,
+    };
+    use crate::federation::subscriptions::postgres::PostgresSubscriptions;
     use crate::postgres::testing;
-    use crate::store::{AlbumId, StoreError, StoreFuture};
+    use crate::store::{AlbumId, StoreFuture, UserId};
 
     /// Records every charge, and refuses them all once told to.
     #[derive(Debug, Default)]
@@ -109,20 +112,27 @@ mod postgres_conformance {
             _transaction: &'a DatabaseTransaction,
             job: &'a JobKey,
             held: &'a [HeldBlob],
-        ) -> StoreFuture<'a, ()> {
+        ) -> StoreFuture<'a, Option<OverBudget>> {
             Box::pin(async move {
                 if *self.refuse.lock().unwrap_or_else(PoisonError::into_inner) {
-                    return Err(StoreError::Rejected {
-                        store: "quota",
-                        detail: "over the pulled-storage cap".to_owned(),
-                    });
+                    return Ok(Some(refusal(job)));
                 }
                 self.charged
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner)
                     .push((job.clone(), held.to_vec()));
-                Ok(())
+                Ok(None)
             })
+        }
+    }
+
+    /// What [`Recording`] refuses with.
+    fn refusal(job: &JobKey) -> OverBudget {
+        OverBudget {
+            subscriber: UserId::new("someone"),
+            peer: job.peer.clone(),
+            used: 2,
+            budget: 1,
         }
     }
 
@@ -146,24 +156,16 @@ mod postgres_conformance {
         let job = JobKey::new(PeerId::new("home.charge.test"), AlbumId::new("charge-a"));
         let first: &[u8] = b"the first metadata blob";
         let second: &[u8] = b"the second metadata blob";
-        assert!(
-            store
-                .commit(&job, None, page(1, &[first]))
-                .await
-                .expect("commit")
-        );
-        assert!(
-            store
-                .commit(&job, Some(1), page(2, &[first, second]))
-                .await
-                .expect("commit")
-        );
-        assert!(
-            store
-                .commit(&job, Some(2), page(3, &[]))
-                .await
-                .expect("commit")
-        );
+        for (from, next) in [
+            (None, page(1, &[first])),
+            (Some(1), page(2, &[first, second])),
+            (Some(2), page(3, &[])),
+        ] {
+            assert_eq!(
+                store.commit(&job, from, next).await.expect("commit"),
+                Committed::Written
+            );
+        }
         assert_eq!(
             hook.charged(),
             vec![
@@ -198,13 +200,13 @@ mod postgres_conformance {
                 metadata_blob: Some(hash_bytes(third)),
             },
         );
-        let error = store
-            .commit(&job, Some(3), refused)
-            .await
-            .expect_err("the charge refuses");
-        assert!(
-            matches!(error, StoreError::Rejected { store: "quota", .. }),
-            "{error:?}"
+        assert_eq!(
+            store
+                .commit(&job, Some(3), refused)
+                .await
+                .expect("the charge refuses"),
+            Committed::OverBudget(refusal(&job)),
+            "the hook's refusal is the commit's answer"
         );
         let state = store.read(&job).await.expect("read");
         assert_eq!(state.high_water, Some(3), "the refused page moved nothing");
@@ -237,5 +239,12 @@ mod postgres_conformance {
         let charged = PostgresPulledAlbums::new(database.connection().clone(), blobs.clone())
             .with_charge(hook.clone());
         charging(&charged, &blobs, &hook).await;
+
+        let subscriptions = PostgresSubscriptions::new(database.connection().clone());
+        let budgeted = PostgresPulledAlbums::new(database.connection().clone(), blobs.clone())
+            .with_charge(Arc::new(PeerBudgetCharge::new(PeerCachingBudget::bytes(
+                conformance::BUDGET,
+            ))));
+        conformance::run_budget(&budgeted, &subscriptions).await;
     }
 }

@@ -13,10 +13,17 @@
 //! - **A job is its peer and its album.** One album id under two peers is two jobs, and nothing
 //!   one holds is visible through the other — a held metadata blob included.
 //!
+//! - **A commit is bounded by every subscriber's caching budget** ([`run_budget`]). A page that
+//!   would leave a subscriber of its job past [`BUDGET`] on the peer, by holding a blob that
+//!   subscriber does not already hold, writes nothing; a blob counts once per subscriber across
+//!   all its albums on a peer, each peer is its own budget, and every subscriber of a shared job
+//!   is held to its own.
+//!
 //! # Reusing a harness
 //!
 //! Every case scopes its jobs by a case name, so cases may share one store and [`run_all`]
-//! does.
+//! does. [`run_budget`] needs a store assembled with a budget of [`BUDGET`] over the
+//! subscription store it is handed.
 
 use std::collections::BTreeMap;
 
@@ -24,11 +31,14 @@ use capsule_core::crypto::hash::{Hash32, hash_bytes};
 use jiff::Timestamp;
 
 use super::{
-    AcceptedEntry, AssetHead, Change, PulledAlbum, PulledAlbums, PulledBlob, ValidatedPage,
+    AcceptedEntry, AssetHead, Change, Committed, OverBudget, PulledAlbum, PulledAlbums, PulledBlob,
+    ValidatedPage,
 };
 use crate::federation::PeerId;
+use crate::federation::capability::Scope;
 use crate::federation::pull::JobKey;
-use crate::store::{AlbumId, StoreError, StoreFuture};
+use crate::federation::subscriptions::{CapabilityToken, Subscription, SubscriptionStore};
+use crate::store::{AlbumId, StoreError, StoreFuture, UserId};
 
 /// What the suite reads besides the port: what a commit wrote that the port's own reads do not
 /// answer.
@@ -50,6 +60,18 @@ fn ok<T>(result: Result<T, StoreError>, doing: &str) -> T {
     match result {
         Ok(value) => value,
         Err(error) => panic!("a conforming pulled-album store must succeed at {doing}: {error}"),
+    }
+}
+
+/// Whether a commit wrote, failing on an error or a budget refusal.
+#[track_caller]
+fn wrote(result: Result<Committed, StoreError>, doing: &str) -> bool {
+    match ok(result, doing) {
+        Committed::Written => true,
+        Committed::Stale => false,
+        Committed::OverBudget(over) => {
+            panic!("a conforming pulled-album store refused {doing} for a budget: {over:?}")
+        }
     }
 }
 
@@ -215,7 +237,7 @@ async fn a_page_reads_back_exactly(store: &dyn Inspect) {
         ]),
         state: state.clone(),
     };
-    assert!(ok(
+    assert!(wrote(
         store.commit(&job, None, written.clone()).await,
         "a first commit"
     ));
@@ -255,7 +277,7 @@ async fn a_page_reads_back_exactly(store: &dyn Inspect) {
 
 async fn a_commit_lands_only_from_the_position_it_was_validated_at(store: &dyn Inspect) {
     let job = job("conditional", "home", "a");
-    assert!(ok(
+    assert!(wrote(
         store.commit(&job, None, page(3, vec![entry("a", 3)])).await,
         "a first commit"
     ));
@@ -267,11 +289,11 @@ async fn a_commit_lands_only_from_the_position_it_was_validated_at(store: &dyn I
     stale.metadata_blobs.insert(stale_hash, stale_metadata);
     stale.state.assets.insert("b".to_owned(), head(hash(5)));
     assert!(
-        !ok(store.commit(&job, None, stale).await, "a stale commit"),
+        !wrote(store.commit(&job, None, stale).await, "a stale commit"),
         "a page validated against a position the album has left is refused"
     );
     // And from a position the album has not reached.
-    assert!(!ok(
+    assert!(!wrote(
         store.commit(&job, Some(4), page(5, Vec::new())).await,
         "a commit from ahead"
     ));
@@ -297,7 +319,7 @@ async fn a_commit_lands_only_from_the_position_it_was_validated_at(store: &dyn I
         "the refused page's metadata blobs are not held"
     );
 
-    assert!(ok(
+    assert!(wrote(
         store
             .commit(&job, Some(3), page(5, vec![entry("b", 5)]))
             .await,
@@ -308,13 +330,13 @@ async fn a_commit_lands_only_from_the_position_it_was_validated_at(store: &dyn I
 
 async fn entries_accumulate_in_the_order_written(store: &dyn Inspect) {
     let job = job("order", "home", "a");
-    assert!(ok(
+    assert!(wrote(
         store
             .commit(&job, None, page(2, vec![entry("a", 1), entry("b", 2)]))
             .await,
         "a first commit"
     ));
-    assert!(ok(
+    assert!(wrote(
         store
             .commit(&job, Some(2), page(4, vec![entry("a", 4)]))
             .await,
@@ -322,7 +344,7 @@ async fn entries_accumulate_in_the_order_written(store: &dyn Inspect) {
     ));
     ok(store.restart(&job).await, "a restart");
     // The feed restarted from zero: the same positions arrive again, after the ones held.
-    assert!(ok(
+    assert!(wrote(
         store.commit(&job, None, page(1, vec![entry("a", 1)])).await,
         "a commit after a restart"
     ));
@@ -348,7 +370,7 @@ async fn a_restart_forgets_the_position_and_keeps_the_heads(store: &dyn Inspect)
     );
     first.state.amk_version = Some(2);
     first.metadata_blobs.insert(metadata_hash, metadata.clone());
-    assert!(ok(
+    assert!(wrote(
         store.commit(&job, None, first.clone()).await,
         "a commit"
     ));
@@ -375,7 +397,7 @@ async fn a_restart_forgets_the_position_and_keeps_the_heads(store: &dyn Inspect)
 
     // The next pull starts from the start, and a page carrying no blob keeps the held one.
     assert!(
-        !ok(
+        !wrote(
             store.commit(&job, Some(4), page(5, Vec::new())).await,
             "a commit from the forgotten position"
         ),
@@ -384,7 +406,7 @@ async fn a_restart_forgets_the_position_and_keeps_the_heads(store: &dyn Inspect)
     let mut replay = page(1, Vec::new());
     replay.state.assets = first.state.assets.clone();
     replay.state.amk_version = Some(2);
-    assert!(ok(
+    assert!(wrote(
         store.commit(&job, None, replay).await,
         "a commit from the start"
     ));
@@ -408,7 +430,7 @@ async fn a_later_state_replaces_the_earlier_one(store: &dyn Inspect) {
         .assets
         .insert("dropped".to_owned(), head(hash(3)));
     first.state.amk_version = Some(1);
-    assert!(ok(
+    assert!(wrote(
         store.commit(&job, None, first.clone()).await,
         "a commit"
     ));
@@ -430,7 +452,7 @@ async fn a_later_state_replaces_the_earlier_one(store: &dyn Inspect) {
         }),
     );
     second.state.assets.insert("new".to_owned(), head(hash(5)));
-    assert!(ok(
+    assert!(wrote(
         store.commit(&job, Some(1), second.clone()).await,
         "a second commit"
     ));
@@ -455,8 +477,8 @@ async fn jobs_are_kept_apart(store: &dyn Inspect) {
         .assets
         .insert("asset".to_owned(), head(hash(6)));
     written.metadata_blobs.insert(metadata_hash, metadata);
-    assert!(ok(store.commit(&mine, None, written).await, "a commit"));
-    assert!(ok(
+    assert!(wrote(store.commit(&mine, None, written).await, "a commit"));
+    assert!(wrote(
         store.commit(&other_album, None, page(9, Vec::new())).await,
         "another album's commit"
     ));
@@ -494,5 +516,285 @@ async fn jobs_are_kept_apart(store: &dyn Inspect) {
         ok(store.read(&mine).await, "a read").high_water,
         Some(6),
         "another job's restart moves only its own position"
+    );
+}
+
+/// The caching budget, in bytes, a store handed to [`run_budget`] is assembled with.
+pub const BUDGET: u64 = 100;
+
+/// Run every caching-budget case against `store`, which charges the subscribers
+/// `subscriptions` holds against [`BUDGET`].
+pub async fn run_budget(store: &dyn Inspect, subscriptions: &dyn SubscriptionStore) {
+    a_page_past_a_subscribers_budget_writes_nothing(store, subscriptions).await;
+    a_blob_counts_once_across_a_subscribers_albums_on_a_peer(store, subscriptions).await;
+    each_peer_is_its_own_budget(store, subscriptions).await;
+    every_subscriber_of_a_shared_job_is_held_to_its_own_budget(store, subscriptions).await;
+    a_page_adding_nothing_new_is_written_past_the_budget(store, subscriptions).await;
+}
+
+/// `case`'s `user` subscribed to `job`.
+async fn subscribe(subscriptions: &dyn SubscriptionStore, case: &str, user: &str, job: &JobKey) {
+    ok(
+        subscriptions
+            .put(Subscription {
+                subscriber: subscriber(case, user),
+                peer: job.peer.clone(),
+                album: job.album.clone(),
+                scope: Scope::Read,
+                jti: format!("{case}-{user}-{job}"),
+                token: CapabilityToken::new(format!("token-{case}-{user}-{job}")),
+                issued_at: at(0),
+                expires_at: at(86_400),
+                min_protocol_version: "2026-06-01".to_owned(),
+                subscribed_at: at(0),
+                updated_at: at(0),
+            })
+            .await,
+        "subscribing",
+    );
+}
+
+fn subscriber(case: &str, user: &str) -> UserId {
+    UserId::new(format!("{case}-{user}"))
+}
+
+/// A metadata blob of `size` bytes, distinct per `tag`.
+fn blob(tag: u8, size: usize) -> (Hash32, Vec<u8>) {
+    let bytes = vec![tag; size];
+    (hash_bytes(&bytes), bytes)
+}
+
+/// A page moving the album to `high_water`, holding `blobs`.
+fn holding(high_water: u64, blobs: &[&(Hash32, Vec<u8>)]) -> ValidatedPage {
+    let mut page = page(high_water, vec![entry("a", high_water)]);
+    page.metadata_blobs = blobs
+        .iter()
+        .map(|(hash, bytes)| (*hash, bytes.clone()))
+        .collect();
+    page
+}
+
+async fn a_page_past_a_subscribers_budget_writes_nothing(
+    store: &dyn Inspect,
+    subscriptions: &dyn SubscriptionStore,
+) {
+    let case = "over";
+    let job = job(case, "home", "a");
+    subscribe(subscriptions, case, "u", &job).await;
+    let first = blob(1, 60);
+    let second = blob(2, 50);
+    let third = blob(3, 40);
+    assert!(wrote(
+        store.commit(&job, None, holding(1, &[&first])).await,
+        "a commit within the budget"
+    ));
+
+    let mut refused = holding(2, &[&first, &second]);
+    refused.state.assets.insert("a".to_owned(), head(hash(7)));
+    assert_eq!(
+        ok(
+            store.commit(&job, Some(1), refused).await,
+            "a commit past the budget"
+        ),
+        Committed::OverBudget(OverBudget {
+            subscriber: subscriber(case, "u"),
+            peer: job.peer.clone(),
+            used: 110,
+            budget: BUDGET,
+        }),
+        "the page names whom it would take past the budget, and by how much"
+    );
+    let state = ok(store.read(&job).await, "a read");
+    assert_eq!(state.high_water, Some(1), "the refused page moved nothing");
+    assert!(state.assets.is_empty(), "the refused page wrote no head");
+    assert_eq!(
+        ok(store.written_entries(&job).await, "listing entries").len(),
+        1,
+        "the refused page wrote no entry, and the held one stays"
+    );
+    assert_eq!(
+        ok(
+            store.held_metadata_blob(&job, &second.0).await,
+            "reading a refused blob"
+        ),
+        None,
+        "the refused page's blob is not held"
+    );
+    assert_eq!(
+        ok(
+            store.held_metadata_blob(&job, &first.0).await,
+            "reading a held blob"
+        ),
+        Some(first.1.clone()),
+        "what was held before the refusal is still held"
+    );
+
+    // Exactly at the budget is within it, and a page holding nothing new is never refused.
+    assert!(wrote(
+        store
+            .commit(&job, Some(1), holding(2, &[&first, &third]))
+            .await,
+        "a commit to exactly the budget"
+    ));
+    assert!(wrote(
+        store
+            .commit(&job, Some(2), holding(3, &[&first, &third]))
+            .await,
+        "a commit holding nothing new"
+    ));
+}
+
+async fn a_blob_counts_once_across_a_subscribers_albums_on_a_peer(
+    store: &dyn Inspect,
+    subscriptions: &dyn SubscriptionStore,
+) {
+    let case = "dedup";
+    let (one, two) = (job(case, "home", "a"), job(case, "home", "b"));
+    subscribe(subscriptions, case, "u", &one).await;
+    subscribe(subscriptions, case, "u", &two).await;
+    let shared = blob(4, 70);
+    let more = blob(5, 40);
+    assert!(wrote(
+        store.commit(&one, None, holding(1, &[&shared])).await,
+        "the first album's commit"
+    ));
+    assert!(
+        wrote(
+            store.commit(&two, None, holding(1, &[&shared])).await,
+            "the second album's commit of the same blob"
+        ),
+        "a blob the subscriber already holds on the peer adds nothing to its usage"
+    );
+    assert_eq!(
+        ok(
+            store.commit(&two, Some(1), holding(2, &[&more])).await,
+            "a commit past the budget"
+        ),
+        Committed::OverBudget(OverBudget {
+            subscriber: subscriber(case, "u"),
+            peer: two.peer.clone(),
+            used: 110,
+            budget: BUDGET,
+        }),
+        "the shared blob is counted once, not once per album"
+    );
+}
+
+async fn each_peer_is_its_own_budget(store: &dyn Inspect, subscriptions: &dyn SubscriptionStore) {
+    let case = "peers";
+    let (home, other) = (job(case, "home", "a"), job(case, "other", "a"));
+    subscribe(subscriptions, case, "u", &home).await;
+    subscribe(subscriptions, case, "u", &other).await;
+    assert!(wrote(
+        store.commit(&home, None, holding(1, &[&blob(6, 90)])).await,
+        "one peer's commit"
+    ));
+    assert!(
+        wrote(
+            store
+                .commit(&other, None, holding(1, &[&blob(7, 90)]))
+                .await,
+            "another peer's commit"
+        ),
+        "what one peer holds for a subscriber is not charged to its budget on another"
+    );
+}
+
+async fn every_subscriber_of_a_shared_job_is_held_to_its_own_budget(
+    store: &dyn Inspect,
+    subscriptions: &dyn SubscriptionStore,
+) {
+    let case = "shared";
+    let (shared, own) = (job(case, "home", "shared"), job(case, "home", "own"));
+    subscribe(subscriptions, case, "u", &shared).await;
+    subscribe(subscriptions, case, "v", &shared).await;
+    subscribe(subscriptions, case, "v", &own).await;
+    assert!(wrote(
+        store.commit(&own, None, holding(1, &[&blob(8, 80)])).await,
+        "the second subscriber's own album"
+    ));
+    assert_eq!(
+        ok(
+            store
+                .commit(&shared, None, holding(1, &[&blob(9, 30)]))
+                .await,
+            "a shared album's commit"
+        ),
+        Committed::OverBudget(OverBudget {
+            subscriber: subscriber(case, "v"),
+            peer: shared.peer.clone(),
+            used: 110,
+            budget: BUDGET,
+        }),
+        "a blob held for a shared job is charged in full to each subscriber, and one past its \
+         budget refuses the page however much room another has"
+    );
+    assert!(
+        wrote(
+            store
+                .commit(&shared, None, holding(1, &[&blob(10, 20)]))
+                .await,
+            "a shared album's smaller commit"
+        ),
+        "within every subscriber's budget, the shared page is written"
+    );
+}
+
+async fn a_page_adding_nothing_new_is_written_past_the_budget(
+    store: &dyn Inspect,
+    subscriptions: &dyn SubscriptionStore,
+) {
+    let case = "past";
+    let (first, second, fresh) = (
+        job(case, "home", "first"),
+        job(case, "home", "second"),
+        job(case, "home", "fresh"),
+    );
+    subscribe(subscriptions, case, "p", &first).await;
+    subscribe(subscriptions, case, "q", &second).await;
+    let held = blob(11, 60);
+    let other = blob(12, 60);
+    assert!(wrote(
+        store.commit(&first, None, holding(1, &[&held])).await,
+        "one subscriber's album"
+    ));
+    assert!(wrote(
+        store.commit(&second, None, holding(1, &[&other])).await,
+        "another subscriber's album"
+    ));
+
+    // Subscribed after the fact to both albums, the subscriber already uses 120 of its 100.
+    subscribe(subscriptions, case, "u", &first).await;
+    subscribe(subscriptions, case, "u", &second).await;
+    subscribe(subscriptions, case, "u", &fresh).await;
+    assert!(
+        wrote(
+            store.commit(&fresh, None, holding(1, &[&held])).await,
+            "a page whose only new blob the subscriber holds through another album"
+        ),
+        "a page new to its job but adding nothing to a subscriber past its budget is written"
+    );
+    assert_eq!(
+        ok(
+            store.held_metadata_blob(&fresh, &held.0).await,
+            "reading the admitted blob"
+        ),
+        Some(held.1.clone()),
+        "the admitted page's blob is held for its job"
+    );
+    assert_eq!(
+        ok(
+            store
+                .commit(&fresh, Some(1), holding(2, &[&held, &blob(13, 1)]))
+                .await,
+            "a page adding one byte past the budget"
+        ),
+        Committed::OverBudget(OverBudget {
+            subscriber: subscriber(case, "u"),
+            peer: fresh.peer.clone(),
+            used: 121,
+            budget: BUDGET,
+        }),
+        "past the budget, any growth is still refused"
     );
 }

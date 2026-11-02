@@ -84,7 +84,8 @@ use crate::enrollment::EnrollmentContext;
 use crate::escrow::postgres::PostgresEscrow;
 use crate::escrow::{EscrowContext, EscrowStore, InMemoryEscrow};
 use crate::federation::postgres::{PostgresCapabilities, PostgresPeers};
-use crate::federation::pull::pulled::postgres::PostgresPulledAlbums;
+use crate::federation::pull::pulled::PeerCachingBudget;
+use crate::federation::pull::pulled::postgres::{PeerBudgetCharge, PostgresPulledAlbums};
 use crate::federation::pull::remote::{egress_client, rest};
 use crate::federation::pull::valkey::ValkeyPullJobs;
 use crate::federation::pull::{
@@ -735,6 +736,8 @@ struct Base {
     clock: Arc<dyn Clock>,
     blobs: Arc<FilesystemBlobStore>,
     ledger: Arc<FilesystemLedger>,
+    /// What one source peer's pulled albums may hold for one local account.
+    pulled_budget: PeerCachingBudget,
 }
 
 impl Base {
@@ -743,6 +746,7 @@ impl Base {
     /// The index appends finalization's custody receipts to `receipts` under its own lock
     /// (#693), so the attestation context must be built over the same log.
     fn in_memory(self, receipts: Arc<InMemoryReceipts>) -> Stores {
+        let subscriptions = Arc::new(InMemorySubscriptions::new());
         Stores {
             index: Arc::new(InMemoryAssetIndex::with_receipts(receipts)),
             uploads: Arc::new(InMemoryUploadSessions::with_default_ttl(self.clock.clone())),
@@ -751,8 +755,10 @@ impl Base {
             shares: Arc::new(InMemoryShares::new()),
             capabilities: Arc::new(InMemoryCapabilities::new(self.clock.clone())),
             peers: Arc::new(InMemoryPeers::new()),
-            subscriptions: Arc::new(InMemorySubscriptions::new()),
-            pulled: Arc::new(InMemoryPulledAlbums::new()),
+            pulled: Arc::new(
+                InMemoryPulledAlbums::new().with_budget(subscriptions.clone(), self.pulled_budget),
+            ),
+            subscriptions,
             moderation: Arc::new(InMemoryModeration::new()),
             activity: Arc::new(InMemoryActivity::new()),
             root: self.root,
@@ -776,10 +782,10 @@ impl Base {
             )),
             peers: Arc::new(PostgresPeers::new(connection.clone())),
             subscriptions: Arc::new(PostgresSubscriptions::new(connection.clone())),
-            pulled: Arc::new(PostgresPulledAlbums::new(
-                connection.clone(),
-                self.blobs.clone(),
-            )),
+            pulled: Arc::new(
+                PostgresPulledAlbums::new(connection.clone(), self.blobs.clone())
+                    .with_charge(Arc::new(PeerBudgetCharge::new(self.pulled_budget))),
+            ),
             moderation: Arc::new(PostgresModeration::new(connection.clone())),
             activity: Arc::new(PostgresActivity::new(connection.clone())),
             root: self.root,
@@ -822,11 +828,24 @@ async fn base(config: &Config, clock: Arc<dyn Clock>) -> Result<Base, BootError>
                     detail: error.to_string(),
                 })?,
         );
+    // Every deployment runs `QuotaLimits::unlimited()` until limits are configurable, as the
+    // quota contexts below do, so the budget is the configured share of that same hard limit:
+    // a figure nothing reaches today, on the same predicate a limited deployment runs.
+    let pulled_budget = PeerCachingBudget::of_hard_limit(
+        QuotaLimits::unlimited().hard_limit,
+        config.peer_budget_percent,
+    );
+    tracing::debug!(
+        percent = config.peer_budget_percent,
+        bytes = pulled_budget.limit(),
+        "the per-peer caching budget on pulled albums"
+    );
     Ok(Base {
         root,
         clock,
         blobs,
         ledger,
+        pulled_budget,
     })
 }
 

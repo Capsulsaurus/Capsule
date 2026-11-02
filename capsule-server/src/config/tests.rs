@@ -477,6 +477,36 @@ fn the_lockout_threshold_is_configurable_and_may_not_be_zero() {
 }
 
 #[test]
+fn the_peer_caching_budget_defaults_to_a_quarter_and_may_not_pass_the_whole() {
+    let config = Config::load(&serveable(), &memory(), Demands::Serve).expect("it loads");
+    assert_eq!(config.peer_budget_percent, 25);
+
+    let mut environment = serveable();
+    environment.insert("FEDERATION_PEER_BUDGET_PERCENT".to_owned(), "0".to_owned());
+    let config = Config::load(&environment, &memory(), Demands::Serve).expect("it loads");
+    assert_eq!(
+        config.peer_budget_percent, 0,
+        "zero caches nothing and is allowed"
+    );
+
+    environment.insert(
+        "FEDERATION_PEER_BUDGET_PERCENT".to_owned(),
+        "100".to_owned(),
+    );
+    let config = Config::load(&environment, &memory(), Demands::Serve).expect("it loads");
+    assert_eq!(config.peer_budget_percent, 100);
+
+    for refused in ["101", "-1", "a quarter"] {
+        environment.insert(
+            "FEDERATION_PEER_BUDGET_PERCENT".to_owned(),
+            refused.to_owned(),
+        );
+        let error = Config::load(&environment, &memory(), Demands::Serve).expect_err(refused);
+        assert!(error.names("FEDERATION_PEER_BUDGET_PERCENT"), "{error}");
+    }
+}
+
+#[test]
 fn the_lockout_window_defaults_to_fifteen_minutes_and_is_configurable() {
     // It has to decay at all: no route resets a lockout — every one of them refuses on
     // `Locked` before it verifies anything — so a permanent lockout is a lost account.

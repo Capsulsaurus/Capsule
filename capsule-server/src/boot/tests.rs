@@ -330,6 +330,35 @@ mod postgres_conformance {
         assembled.service().expect("the router builds");
     }
 
+    /// The durable arm's pulled albums are assembled with the configured caching budget, so
+    /// `serve` on Postgres charges [`PeerBudgetCharge`](crate::federation::pull::pulled::postgres::PeerBudgetCharge)
+    /// rather than the uncharged default.
+    #[tokio::test]
+    async fn the_durable_pulled_albums_charge_the_configured_peer_budget() {
+        let Some(database) = testing::start("the durable pulled-album budget").await else {
+            return;
+        };
+        let Some((valkey_url, _valkey)) = valkey("the durable pulled-album budget").await else {
+            return;
+        };
+        let root = tempfile::tempdir().expect("a scratch directory");
+        let mut environment: BTreeMap<String, String> = durable_environment(root.path());
+        environment.insert("DATABASE_URL".to_owned(), database.url().to_owned());
+        environment.insert("VALKEY_URL".to_owned(), valkey_url);
+        environment.insert("FEDERATION_PEER_BUDGET_PERCENT".to_owned(), "0".to_owned());
+        let config = Config::load(&environment, &Overrides::default(), Demands::Serve)
+            .expect("it is well-formed");
+        let base = super::super::base(&config, std::sync::Arc::new(super::super::SystemClock))
+            .await
+            .expect("the base opens");
+        let connection = super::super::open_durable_database(&config)
+            .await
+            .expect("the database opens");
+        let valkey = super::super::valkey(&config).await.expect("Valkey answers");
+        let stores = base.durable(&connection, &valkey);
+        super::a_new_pulled_blob_is_refused_at_a_zero_budget(&stores).await;
+    }
+
     /// A durable `gc` keeps its marks between processes, so a later pass can sweep.
     ///
     /// The reason the maintenance arm exists: the collector marks a blob on one pass and
@@ -646,6 +675,81 @@ async fn a_pull_worker_is_assembled_and_started_only_when_federation_is_switched
         "the loop runs until the process stops"
     );
     running.abort();
+}
+
+/// Assert `stores` refuses a pulled page holding a blob new to its one subscriber, as the
+/// budget of `FEDERATION_PEER_BUDGET_PERCENT=0` must and a store assembled without the
+/// configured budget never does.
+async fn a_new_pulled_blob_is_refused_at_a_zero_budget(stores: &super::Stores) {
+    use crate::federation::pull::JobKey;
+    use crate::federation::pull::pulled::{Committed, PulledAlbum, ValidatedPage};
+    use crate::federation::{CapabilityToken, PeerId, Scope, Subscription};
+    use crate::store::{AlbumId, UserId};
+
+    let job = JobKey::new(PeerId::new("home.test"), AlbumId::new("budgeted"));
+    let subscriber = UserId::new("budgeted-member");
+    let now = jiff::Timestamp::from_second(1_767_225_600).expect("a representable instant");
+    stores
+        .subscriptions
+        .put(Subscription {
+            subscriber: subscriber.clone(),
+            peer: job.peer.clone(),
+            album: job.album.clone(),
+            scope: Scope::Read,
+            jti: "budgeted-jti".to_owned(),
+            token: CapabilityToken::new("header.payload.signature"),
+            issued_at: now,
+            expires_at: jiff::Timestamp::MAX,
+            min_protocol_version: capsule_core::crypto::primitives::PROTOCOL_VERSION.to_owned(),
+            subscribed_at: now,
+            updated_at: now,
+        })
+        .await
+        .expect("the subscription is recorded");
+    let bytes = b"a metadata blob new to everyone".to_vec();
+    let size = u64::try_from(bytes.len()).expect("a small blob");
+    let page = ValidatedPage {
+        entries: Vec::new(),
+        metadata_blobs: BTreeMap::from([(capsule_core::crypto::hash::hash_bytes(&bytes), bytes)]),
+        state: PulledAlbum {
+            cursor: Some("c1".to_owned()),
+            high_water: Some(1),
+            ..PulledAlbum::default()
+        },
+    };
+    match stores
+        .pulled
+        .commit(&job, None, page)
+        .await
+        .expect("the commit is answered")
+    {
+        Committed::OverBudget(over) => {
+            assert_eq!(over.subscriber, subscriber);
+            assert_eq!(
+                over.budget, 0,
+                "the configured percentage of the hard limit"
+            );
+            assert_eq!(over.used, size);
+        }
+        other => panic!("a zero budget must refuse a page holding a new blob, got {other:?}"),
+    }
+    assert_eq!(
+        stores.pulled.read(&job).await.expect("a read"),
+        PulledAlbum::default(),
+        "the refused page moved nothing"
+    );
+}
+
+/// The in-memory arm's pulled albums are assembled with the configured caching budget.
+#[tokio::test]
+async fn the_in_memory_pulled_albums_charge_the_configured_peer_budget() {
+    let root = tempfile::tempdir().expect("a scratch directory");
+    let config = memory_config_with(root.path(), &[("FEDERATION_PEER_BUDGET_PERCENT", "0")]);
+    let stores = super::base(&config, std::sync::Arc::new(super::SystemClock))
+        .await
+        .expect("the base opens")
+        .in_memory(std::sync::Arc::new(super::InMemoryReceipts::new()));
+    a_new_pulled_blob_is_refused_at_a_zero_budget(&stores).await;
 }
 
 #[tokio::test]

@@ -27,7 +27,9 @@
 //! [`PullFailure::Transport`]: it backs off and costs the peer nothing. A peer whose answer broke
 //! the contract or a rule — a body that does not decode or exceeds its bound, a redirect, an
 //! entry that fails re-validation, a successor that does not verify — is a
-//! [`PullFailure::Validation`], which spends its error budget.
+//! [`PullFailure::Validation`], which spends its error budget. A page refused because it would
+//! take a subscriber past its caching budget on the peer is a [`PullFailure::OverBudget`]: the
+//! peer did nothing wrong, so it is deferred rather than failed.
 //!
 //! Every URL is built from the job's peer id ([`origin_of`]); no value a peer sends chooses a
 //! URL, a local path, or a local account.
@@ -38,7 +40,7 @@ use std::time::{Duration, Instant};
 use jiff::SignedDuration;
 use tracing::instrument;
 
-use super::pulled::PulledAlbums;
+use super::pulled::{Committed, PulledAlbums};
 use super::remote::{PeerClient, RemoteError, origin_of, rest};
 use super::signer::RequestSigner;
 use super::validate::{
@@ -208,11 +210,20 @@ impl RemotePuller {
             let accepted = page.entries.len();
             let next = page.state.clone();
             match parts.pulled.commit(job, state.high_water, page).await {
-                Ok(true) => {}
-                Ok(false) => {
+                Ok(Committed::Written) => {}
+                Ok(Committed::Stale) => {
                     return Err(transport(
                         "the album moved while this page was validated; nothing was written",
                     ));
+                }
+                Ok(Committed::OverBudget(over)) => {
+                    return Err(PullFailure::OverBudget {
+                        detail: format!(
+                            "the page would take {} to {} bytes held from {}, past its budget of \
+                             {}; nothing was written",
+                            over.subscriber, over.used, over.peer, over.budget
+                        ),
+                    });
                 }
                 Err(error) => {
                     return Err(transport(format!("the page could not be written: {error}")));
