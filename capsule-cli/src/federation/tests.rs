@@ -256,3 +256,29 @@ async fn empty_arguments_are_refused_before_any_request() {
         ));
     }
 }
+
+/// `capsule federation subscribe --json` prints exactly these keys: the document is a contract.
+#[test]
+fn the_subscribe_document_keeps_its_keys() {
+    let json = serde_json::to_value(Subscribed {
+        created: true,
+        subscription: entry(),
+    })
+    .expect("serializes");
+    assert_eq!(
+        json,
+        serde_json::json!({
+            "created": true,
+            "subscription": {
+                "peer": "home.test",
+                "album_id": "album-1",
+                "scope": "read",
+                "jti": "jti-1",
+                "issued_at": "2026-11-02T00:00:00Z",
+                "expires_at": "2026-11-03T00:00:00Z",
+                "subscribed_at": "2026-11-02T00:00:00Z",
+                "live": true,
+            },
+        })
+    );
+}

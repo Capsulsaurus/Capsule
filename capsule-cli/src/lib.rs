@@ -3450,3 +3450,6 @@ mod client_build_wiring_tests;
 
 #[cfg(test)]
 mod server_info_tests;
+
+#[cfg(test)]
+mod federation_report_tests;
