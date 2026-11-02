@@ -36,8 +36,11 @@ use crate::store::{AlbumId, deadline};
 
 pub mod conformance;
 pub mod jobs;
+pub mod pulled;
+pub mod puller;
 pub mod remote;
 pub mod signer;
+pub mod validate;
 pub mod valkey;
 pub mod worker;
 
