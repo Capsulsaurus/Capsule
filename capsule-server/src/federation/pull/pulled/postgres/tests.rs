@@ -234,6 +234,7 @@ mod postgres_conformance {
         let blobs = Arc::new(InMemoryBlobStore::new());
         let store = PostgresPulledAlbums::new(database.connection().clone(), blobs.clone());
         conformance::run_all(&store).await;
+        crate::federation::breadcrumbs::conformance::run_all(&store).await;
 
         let hook = Arc::new(Recording::default());
         let charged = PostgresPulledAlbums::new(database.connection().clone(), blobs.clone())

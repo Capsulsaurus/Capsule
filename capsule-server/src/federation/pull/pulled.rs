@@ -40,7 +40,9 @@
 //!   the one that enforces [`PeerCachingBudget`].
 //! - [`conformance`] — the suite both adapters pass.
 //!
-//! The breadcrumb index that reads these entries is follow-up work.
+//! Both adapters are also the [`BreadcrumbIndex`] over the entries they hold
+//! ([`crate::federation::breadcrumbs`]): an asset's breadcrumb is read from its latest written
+//! entry, so the index stores nothing of its own.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -50,6 +52,9 @@ use jiff::Timestamp;
 
 use super::JobKey;
 use crate::federation::PeerId;
+use crate::federation::breadcrumbs::{
+    Breadcrumb, BreadcrumbIndex, MAX_BREADCRUMB_PAGE, breadcrumb, leaves_a_breadcrumb,
+};
 use crate::federation::subscriptions::SubscriptionStore;
 use crate::store::{StoreFuture, UserId};
 
@@ -470,6 +475,40 @@ impl PulledAlbums for InMemoryPulledAlbums {
                 held.state.high_water = None;
             }
             Ok(())
+        })
+    }
+}
+
+impl BreadcrumbIndex for InMemoryPulledAlbums {
+    fn breadcrumbs<'a>(
+        &'a self,
+        job: &'a JobKey,
+        after: Option<&'a str>,
+        limit: usize,
+    ) -> StoreFuture<'a, Vec<Breadcrumb>> {
+        Box::pin(async move {
+            let latest: Vec<AcceptedEntry> = {
+                let albums = self.lock();
+                let Some(held) = albums.get(job) else {
+                    return Ok(Vec::new());
+                };
+                let mut latest: BTreeMap<&str, &AcceptedEntry> = BTreeMap::new();
+                for entry in &held.entries {
+                    latest.insert(entry.asset_id.as_str(), entry);
+                }
+                latest
+                    .into_iter()
+                    .filter(|(asset, _)| after.is_none_or(|after| *asset > after))
+                    .map(|(_, entry)| entry)
+                    .filter(|entry| leaves_a_breadcrumb(entry))
+                    .take(limit.min(MAX_BREADCRUMB_PAGE))
+                    .cloned()
+                    .collect()
+            };
+            latest
+                .iter()
+                .filter_map(|entry| breadcrumb(job, entry).transpose())
+                .collect()
         })
     }
 }

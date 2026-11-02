@@ -49,6 +49,13 @@
 //! The commit reads the held heads under the lock, writes the ones that differ, and deletes the
 //! ones the state no longer names, so a page costs what it changed rather than the album's size.
 //!
+//! # The breadcrumbs are the latest entry per asset
+//!
+//! [`BreadcrumbIndex::breadcrumbs`] is one statement: `DISTINCT ON (asset_id)` over the job's
+//! entries, newest position first, read along `idx_federation_accepted_entries_asset`, then the
+//! same predicate [`leaves_a_breadcrumb`] states, ordered and compared `COLLATE "C"` so the page
+//! is in byte order as the double's is, whatever the database's collation.
+//!
 //! # Encodings
 //!
 //! Heads are `BYTEA` of 32 bytes; an asset's superseded heads are their concatenation, oldest
@@ -72,6 +79,9 @@ use super::{
     PulledAlbums, PulledBlob, ValidatedPage,
 };
 use crate::blob::{BlobError, BlobStore, ContentAddress, Placement};
+use crate::federation::breadcrumbs::{
+    Breadcrumb, BreadcrumbIndex, MAX_BREADCRUMB_PAGE, breadcrumb, leaves_a_breadcrumb,
+};
 use crate::federation::pull::JobKey;
 use crate::postgres::error::Port;
 use crate::postgres::time::{from_micros, to_micros};
@@ -817,6 +827,75 @@ impl PulledAlbums for PostgresPulledAlbums {
                 .map_err(PORT.failing("restarting a pulled album"))?;
             tracing::info!(%job, held = result.rows_affected() > 0, "a pulled album restarts from the start of its feed");
             Ok(())
+        })
+    }
+}
+
+impl BreadcrumbIndex for PostgresPulledAlbums {
+    fn breadcrumbs<'a>(
+        &'a self,
+        job: &'a JobKey,
+        after: Option<&'a str>,
+        limit: usize,
+    ) -> StoreFuture<'a, Vec<Breadcrumb>> {
+        Box::pin(async move {
+            let doing = "reading a pulled album's breadcrumbs";
+            let failed = PORT.failing(doing);
+            let limit = limit.min(MAX_BREADCRUMB_PAGE);
+            if limit == 0 {
+                return Ok(Vec::new());
+            }
+            let mut values = job_values(job);
+            values.push(Value::from(after.map(str::to_owned)));
+            values.push(Value::from(to_column(
+                u64::try_from(limit).unwrap_or(u64::MAX),
+            )?));
+            let rows = self
+                .select(
+                    "SELECT asset_id, sync_seq, change, changed_at, manifest, head, purged FROM (\
+                     SELECT DISTINCT ON (asset_id) asset_id, sync_seq, change, changed_at, \
+                     manifest, head, purged FROM federation_accepted_entries \
+                     WHERE peer_id = $1 AND album_id = $2 \
+                     AND ($3::text IS NULL OR asset_id COLLATE \"C\" > $3::text COLLATE \"C\") \
+                     ORDER BY asset_id, position DESC) latest \
+                     WHERE change <> 'deleted' AND NOT purged \
+                     AND manifest IS NOT NULL AND head IS NOT NULL \
+                     ORDER BY asset_id COLLATE \"C\" LIMIT $4",
+                    values,
+                    doing,
+                )
+                .await?;
+            let mut breadcrumbs = Vec::with_capacity(rows.len());
+            for row in &rows {
+                let change: String = row.try_get("", "change").map_err(&failed)?;
+                let sync_seq: i64 = row.try_get("", "sync_seq").map_err(&failed)?;
+                let changed_at: i64 = row.try_get("", "changed_at").map_err(&failed)?;
+                let head: Option<Vec<u8>> = row.try_get("", "head").map_err(&failed)?;
+                let entry = AcceptedEntry {
+                    asset_id: row.try_get("", "asset_id").map_err(&failed)?,
+                    sync_seq: count_from(sync_seq, "feed position")?,
+                    change: change_from(&change)?,
+                    changed_at: from_micros(changed_at).ok_or_else(|| {
+                        PORT.undecodable(format!("{changed_at}µs is not a representable instant"))
+                    })?,
+                    manifest: row.try_get("", "manifest").map_err(&failed)?,
+                    head: head.as_deref().map(hash_from_bytes).transpose()?,
+                    metadata_blob: None,
+                    blobs: Vec::new(),
+                    derivative_manifests: Vec::new(),
+                    original_held: false,
+                    purged: row.try_get("", "purged").map_err(&failed)?,
+                };
+                if !leaves_a_breadcrumb(&entry) {
+                    return Err(PORT.undecodable(
+                        "the breadcrumb query answered an entry that leaves no breadcrumb",
+                    ));
+                }
+                if let Some(crumb) = breadcrumb(job, &entry)? {
+                    breadcrumbs.push(crumb);
+                }
+            }
+            Ok(breadcrumbs)
         })
     }
 }

@@ -168,6 +168,10 @@ pub const EXPECTED_MIGRATIONS: &[ExpectedMigration] = &[
         name: "m20260902_000028_federation_pulled_albums",
         checksum: "08d856e544a5eae810f9224f9ddbdc35e7efcfbedddf77d105a628eb70ed14bf",
     },
+    ExpectedMigration {
+        name: "m20260902_000029_federation_rejected_hashes",
+        checksum: "ce98bf2d6e32b9bfcec8d6afba5afe50bc668c50bbd6cf675d2c1c00ed0962f4",
+    },
 ];
 
 /// The command an operator runs to apply them.

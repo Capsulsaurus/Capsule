@@ -32,6 +32,9 @@
 //!   releases it.
 //! - `000028` (#1124): `federation_pulled_albums` and its children, the federation pull's
 //!   accepted entries, asset heads and held metadata blobs, per job.
+//! - `000029` (#1157): `federation_rejected_hashes`, the bounded soft-fail table, and an index
+//!   on `federation_accepted_entries (peer_id, album_id, asset_id, position)` for the breadcrumb
+//!   index's latest-entry-per-asset read.
 //!
 //! # Every instant is a `BIGINT` of microseconds since the Unix epoch
 //!
@@ -123,6 +126,7 @@ migrations![
     m20260902_000026_activity_events_at_index,
     m20260902_000027_upload_reservations,
     m20260902_000028_federation_pulled_albums,
+    m20260902_000029_federation_rejected_hashes,
 ];
 
 /// The content checksum of one migration's source: lowercase hex SHA-256.
