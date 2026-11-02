@@ -144,10 +144,14 @@ pub fn router() -> Router<App, Propagate, ServerInterceptors, impl Sized> {
         // group carrying the cap its own operations need — because Kynos refuses two `413`
         // producers on one route, so a router-wide cap would leave no group room for a tighter
         // one (#478). Every operation is still covered by exactly one, including the thirteen the
-        // protocol gate exempts, which get groups holding nothing but the cap. The group's cap
-        // comes before every interceptor that reads anything — only the early-data refusal and
-        // the federation gate, neither of which reads a body, sit ahead of it — so an oversized
-        // body is refused before the gate reads anything. See [`limits`].
+        // protocol gate exempts, whose groups hold the cap and, on the writes, [`problem::TooEarly`]
+        // ahead of it, and no gate. The cap comes before the gate, so an oversized body is refused
+        // before the gate reads anything. Three things sit ahead of the cap: the early-data
+        // refusal and the federation gate, neither of which reads a body, and
+        // [`upload::body::LengthlessChunkDeadline`] on the two chunk groups, which does read a
+        // length-less body, under the chunk read pace, because the cap would otherwise read it
+        // whole with no clock (#717). A body that declares its length is not read by the
+        // deadline and meets the cap first. See [`limits`].
         // The protocol gate is two `Group`s, not a router interceptor, for two reasons the type
         // system makes concrete. First, the design exempts thirteen operations, and a group is how
         // Kynos spells "these and not those": an operation mounted inside declares the handshake
