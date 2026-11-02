@@ -47,7 +47,7 @@ pub struct ActivityEventView {
     /// The session that acted, when one did. Absent for a sign-in and for a revoke-all.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
-    /// What the event is about: a session, a share link or a drop link, by its id.
+    /// What the event is about: a session, a share link, a drop link or a peer server, by its id.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subject: Option<String>,
 }

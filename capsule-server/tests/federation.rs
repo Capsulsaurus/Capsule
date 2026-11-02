@@ -13,6 +13,7 @@
 mod support;
 
 use capsule_core::crypto::keys::HybridSigningKey;
+use capsule_server::activity::ActivityStore as _;
 use capsule_server::blob::{BlobStore, ContentAddress};
 use capsule_server::counter::{CounterKey, CounterStore as _, budgets};
 use capsule_server::federation::scheme::REQUEST_FRESHNESS;
@@ -1036,6 +1037,82 @@ async fn a_peer_fetches_the_albums_blobs_and_a_derivative_only_grant_is_refused_
     fetch(&fixture, &thumbs, &derivative)
         .await
         .assert_status(StatusCode::OK);
+}
+
+/// The owner's `peer.served` events, newest first, read past the HTTP surface.
+async fn peer_served(fixture: &Fixture) -> Vec<capsule_server::activity::ActivityEvent> {
+    fixture.activity_settled().await;
+    fixture
+        .activity
+        .recent(&support::user(), Timestamp::MIN, 1_000)
+        .await
+        .expect("the in-memory log reads")
+        .into_iter()
+        .filter(|event| event.kind == capsule_server::activity::ActivityKind::PeerServed)
+        .collect()
+}
+
+#[tokio::test]
+async fn a_peers_fetches_land_in_the_owners_log_once_per_window_naming_the_peer_only() {
+    let (fixture, _) = shared().await;
+    let (original, derivative) = two_roles(&fixture, "served", &album()).await;
+
+    // The owner's own fetches are not an event about the account.
+    let owner_bearer = fixture.bearer().await;
+    fetch(&fixture, &owner_bearer, &original)
+        .await
+        .assert_status(StatusCode::OK);
+    assert!(peer_served(&fixture).await.is_empty());
+
+    // A refused fetch serves nothing and records nothing.
+    let (thumbs, _) = capability(&fixture, PEER, Scope::ReadDerivativeOnly, 1).await;
+    fetch(&fixture, &thumbs, &original)
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    assert!(peer_served(&fixture).await.is_empty());
+
+    let (bearer, _) = capability(&fixture, PEER, Scope::Read, 1).await;
+    for address in [&original, &derivative, &original] {
+        fetch(&fixture, &bearer, address)
+            .await
+            .assert_status(StatusCode::OK);
+    }
+    let events = peer_served(&fixture).await;
+    assert_eq!(events.len(), 1, "three blobs in one window are one event");
+    assert_eq!(events[0].subject.as_deref(), Some(PEER));
+    assert_eq!(events[0].session_id, None);
+    for address in [&original, &derivative] {
+        assert!(
+            !format!("{:?}", events[0]).contains(address.as_str()),
+            "the event carries no content address"
+        );
+    }
+
+    // Another peer is its own window, and the next window writes the first again.
+    let (other, _) = capability(&fixture, "third.test", Scope::Read, 1).await;
+    fetch(&fixture, &other, &original)
+        .await
+        .assert_status(StatusCode::OK);
+    fixture
+        .clock
+        .advance(capsule_server::activity::DETACHED_COALESCE_WINDOW);
+    let (bearer, _) = capability(&fixture, PEER, Scope::Read, 1).await;
+    fetch(&fixture, &bearer, &original)
+        .await
+        .assert_status(StatusCode::OK);
+    let subjects: Vec<Option<String>> = peer_served(&fixture)
+        .await
+        .into_iter()
+        .map(|event| event.subject)
+        .collect();
+    assert_eq!(
+        subjects,
+        [
+            Some(PEER.to_owned()),
+            Some("third.test".to_owned()),
+            Some(PEER.to_owned()),
+        ]
+    );
 }
 
 #[tokio::test]

@@ -361,7 +361,7 @@ pub struct ActivityEntry {
     /// The session that acted, when one did.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
-    /// What the event is about: a session, a share link or a drop link.
+    /// What the event is about: a session, a share link, a drop link or a peer server.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subject: Option<String>,
 }

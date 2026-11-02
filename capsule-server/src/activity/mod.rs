@@ -18,6 +18,11 @@
 //! - **Recording never discloses an account.** A refused or locked sign-in is recorded only for
 //!   an address that has an account, so its write must not lengthen that response:
 //!   [`ActivityContext::record_detached`] takes it off the response path.
+//! - **Serving is aggregated.** A blob served through a share link or to a federated peer is
+//!   recorded by [`ActivityContext::record_served`]: one event per account and link or peer per
+//!   [`DETACHED_COALESCE_WINDOW`], naming the link or peer and never a content address, kept in
+//!   a bounded in-process accumulator so no blob request makes a store write of its own. At most
+//!   [`MAX_NAMED_SERVED_PER_ACCOUNT`] links and peers are named per account per window.
 //! - **Tied to the request log.** Each event carries the request id
 //!   [`crate::request_span`] minted for the request that caused it, which names that request's
 //!   log lines — the detailed, short-lived half of the same story.
@@ -44,14 +49,45 @@ pub const RETENTION: SignedDuration = SignedDuration::from_hours(90 * 24);
 pub const MAX_EVENTS_PER_ACCOUNT: usize = 1_000;
 
 /// The window inside which [`ActivityContext::record_detached`] records one event of a kind per
-/// account, and coalesces every later one into it.
+/// account, and [`ActivityContext::record_served`] one per account and link or peer, and
+/// coalesces every later one into it.
 ///
 /// A refused or locked sign-in can be caused by anyone who knows an address, and the login route
 /// charges no budget, so without this bound a scripted loop would push the account's whole log
 /// out through [`MAX_EVENTS_PER_ACCOUNT`] in minutes. With it, the two detached kinds add at
 /// most two events an hour to one account's log, and a flood needs weeks of uninterrupted
 /// attempts to displace the rest. Every attempt is still in the request log.
+///
+/// A blob served through a share link or to a peer is one request per blob, so a viewer paging
+/// an album would write one event per thumbnail; the same window makes it one event per link or
+/// peer per hour, whatever the library's size.
 pub const DETACHED_COALESCE_WINDOW: SignedDuration = SignedDuration::from_hours(1);
+
+/// The most coalescing windows held open at once in each of the two sets: the sign-in windows
+/// [`ActivityContext::record_detached`] keeps, and the serving windows
+/// [`ActivityContext::record_served`] keeps.
+///
+/// What keeps the accumulator bounded whatever is served. The sets are separate so serving can
+/// never crowd a sign-in event out: links are cheap to mint, and sign-in windows are not theirs
+/// to spend. A serving window is opened only by a request a live link or an admitted peer made,
+/// and one account opens at most [`MAX_NAMED_SERVED_PER_ACCOUNT`] named ones plus one unnamed
+/// one per served kind in a window, so the serving bound is met only by thousands of accounts
+/// serving inside one window. Closed windows are swept as a set grows, but never before the
+/// first window in it can have closed, so a full set refuses in constant time rather than
+/// rescanning itself on every request. An event that would open a window past the bound is
+/// dropped and logged whole at `error`, as one past [`MAX_DETACHED_IN_FLIGHT`] is.
+pub const MAX_OPEN_WINDOWS: usize = 65_536;
+
+/// The most links and peers one account's serving events name in one
+/// [`DETACHED_COALESCE_WINDOW`], across both served kinds.
+///
+/// A link is cheap to mint and its serving is caused by whoever holds it, so without this bound
+/// an account whose links are viewed would write one event per link per hour and push its
+/// sign-in events out through [`MAX_EVENTS_PER_ACCOUNT`] within a day. Past it, each served kind
+/// opens one window with no subject that absorbs every further link or peer for the rest of the
+/// account's window, so serving adds at most this many plus two events an hour to an account's
+/// log.
+pub const MAX_NAMED_SERVED_PER_ACCOUNT: usize = 8;
 
 /// The most detached writes in flight at once, across every account.
 ///
@@ -68,9 +104,32 @@ pub enum Detached {
     /// An event of the same kind for the same account was recorded inside
     /// [`DETACHED_COALESCE_WINDOW`]; this one is counted into it and not written.
     Coalesced,
-    /// [`MAX_DETACHED_IN_FLIGHT`] writes were already running; the event is logged at `error`
-    /// and not written.
+    /// [`MAX_DETACHED_IN_FLIGHT`] writes were already running, or [`MAX_OPEN_WINDOWS`] windows
+    /// were open; the event is logged at `error` and not written.
     Dropped,
+}
+
+/// Who served an account's blobs to somebody other than the account, for
+/// [`ActivityContext::record_served`].
+///
+/// The subject is the identifier the server already holds for the reader, and nothing about
+/// what was read: no content address, no album, nothing a client encrypted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Served<'a> {
+    /// A share link, by its opaque id.
+    ShareLink(&'a str),
+    /// A federated peer server, by its peer id.
+    Peer(&'a str),
+}
+
+impl<'a> Served<'a> {
+    /// The kind recorded, and the subject it names.
+    fn event(self) -> (ActivityKind, &'a str) {
+        match self {
+            Self::ShareLink(opaque_id) => (ActivityKind::ShareLinkServed, opaque_id),
+            Self::Peer(peer_id) => (ActivityKind::PeerServed, peer_id),
+        }
+    }
 }
 
 /// Every event the activity log records. The set is closed: nothing else is written.
@@ -115,11 +174,18 @@ pub enum ActivityKind {
     DropLinkCreated,
     /// A guest-upload link was revoked.
     DropLinkRevoked,
+    /// A share link served blobs; one event per link per [`DETACHED_COALESCE_WINDOW`], and one
+    /// with no subject for the links past [`MAX_NAMED_SERVED_PER_ACCOUNT`].
+    ShareLinkServed,
+    /// A federated peer served blobs under a capability; one event per peer per
+    /// [`DETACHED_COALESCE_WINDOW`], and one with no subject for the peers past
+    /// [`MAX_NAMED_SERVED_PER_ACCOUNT`].
+    PeerServed,
 }
 
 impl ActivityKind {
     /// Every kind, in the order design/activity-log.md lists them.
-    pub const ALL: [Self; 19] = [
+    pub const ALL: [Self; 21] = [
         Self::AccountRegistered,
         Self::SignInPassword,
         Self::SignInPasswordRefused,
@@ -139,6 +205,8 @@ impl ActivityKind {
         Self::ShareLinkRevoked,
         Self::DropLinkCreated,
         Self::DropLinkRevoked,
+        Self::ShareLinkServed,
+        Self::PeerServed,
     ];
 
     /// The name this kind travels under, on the wire, in its column and in a log field.
@@ -163,6 +231,8 @@ impl ActivityKind {
             Self::ShareLinkRevoked => "share_link.revoked",
             Self::DropLinkCreated => "drop_link.created",
             Self::DropLinkRevoked => "drop_link.revoked",
+            Self::ShareLinkServed => "share_link.served",
+            Self::PeerServed => "peer.served",
         }
     }
 
@@ -188,7 +258,7 @@ pub struct ActivityEvent {
     /// The session that acted, when one did. Absent for an unauthenticated act — a sign-in, a
     /// revoke-all redeemed with master-key proof.
     pub session_id: Option<SessionId>,
-    /// The identifier the event is about: a session, a share link, a drop link.
+    /// The identifier the event is about: a session, a share link, a drop link, a peer server.
     pub subject: Option<String>,
 }
 
@@ -285,21 +355,74 @@ pub struct ActivityContext {
     clock: Arc<dyn Clock>,
     /// Writes [`Self::record_detached`] started and nobody has awaited, shared by every clone.
     detached: Arc<Mutex<tokio::task::JoinSet<()>>>,
-    /// The open coalescing window of each account and detached kind, shared by every clone.
-    windows: Arc<Mutex<Windows>>,
+    /// The open coalescing window of each account and sign-in kind, shared by every clone.
+    sign_in_windows: Arc<Mutex<Windows>>,
+    /// The open coalescing window of each account, served kind and link or peer, shared by every
+    /// clone; apart from [`Self::sign_in_windows`] so serving cannot fill them.
+    served_windows: Arc<Mutex<Windows>>,
 }
 
-/// The coalescing windows [`ActivityContext::record_detached`] keeps.
+/// What a window is kept for: an account, a kind, and the link or peer a served kind names.
+type WindowKey = (UserId, ActivityKind, Option<String>);
+
+/// What [`Windows::admit`] decided about one event.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Admission {
+    /// The event opened a window, and so must be written naming `subject`: the one it was
+    /// admitted with, or none once its account has named [`MAX_NAMED_SERVED_PER_ACCOUNT`].
+    Opened {
+        /// The subject the written event names.
+        subject: Option<String>,
+    },
+    /// The event fell inside its open window and was counted into it.
+    Coalesced,
+    /// [`MAX_OPEN_WINDOWS`] windows are open even after a sweep; nothing was opened.
+    Full,
+}
+
+/// The coalescing windows [`ActivityContext::record_detached`] and
+/// [`ActivityContext::record_served`] keep.
 #[derive(Debug, Default)]
 struct Windows {
-    /// When each account's window for a kind opened, and how many events it has absorbed.
-    open: std::collections::HashMap<(UserId, ActivityKind), Window>,
+    /// When each window opened, and how many events it has absorbed.
+    open: std::collections::HashMap<WindowKey, Window>,
     /// The size past which the next opening sweeps out closed windows; doubles with the live
     /// set, so the sweep's cost stays amortized constant per opening.
     sweep_at: usize,
+    /// No later than the first instant a window in the set closes; no sweep runs before it,
+    /// since one could free nothing. `None` while the set is empty.
+    first_close: Option<Timestamp>,
+    /// How many links and peers each account's serving windows have named in its current
+    /// [`DETACHED_COALESCE_WINDOW`].
+    named: std::collections::HashMap<UserId, Named>,
+    /// The sweeps run so far, for the log and the tests.
+    sweeps: u64,
 }
 
-/// One account's coalescing window for one kind.
+/// One account's count of named serving windows, for [`MAX_NAMED_SERVED_PER_ACCOUNT`].
+#[derive(Debug, Clone, Copy)]
+struct Named {
+    /// When the account's current count started.
+    since: Timestamp,
+    /// The named windows opened since then.
+    count: usize,
+}
+
+impl Named {
+    /// Whether the count that started at `since` still applies at `now`.
+    fn holds(&self, now: Timestamp) -> bool {
+        now.duration_since(self.since) < DETACHED_COALESCE_WINDOW
+    }
+}
+
+/// The instant a window opened at `opened` closes.
+fn closes(opened: Timestamp) -> Timestamp {
+    opened
+        .checked_add(DETACHED_COALESCE_WINDOW)
+        .unwrap_or(Timestamp::MAX)
+}
+
+/// One account's coalescing window for one kind and subject.
 #[derive(Debug, Clone, Copy)]
 struct Window {
     /// The instant of the event that opened it, the one that was written.
@@ -308,72 +431,162 @@ struct Window {
     coalesced: u64,
 }
 
-impl Window {
-    /// Whether an event at `now` falls inside this window. A clock that stepped back is inside.
-    fn holds(&self, now: Timestamp) -> bool {
-        now.duration_since(self.opened) < DETACHED_COALESCE_WINDOW
-    }
-}
-
 /// The fewest open windows that trigger a sweep.
 const MIN_SWEEP_AT: usize = 1_024;
 
 impl Windows {
-    /// Count `user`'s `kind` at `now` into its open window, or open one.
+    /// Count `user`'s `kind` about `subject` at `now` into its open window, or open one.
     ///
-    /// Returns `true` when the event opened a window and so must be written.
-    fn admit(&mut self, user: &UserId, kind: ActivityKind, now: Timestamp) -> bool {
-        let key = (user.clone(), kind);
-        if let Some(window) = self.open.get_mut(&key)
-            && window.holds(now)
-        {
-            window.coalesced += 1;
+    /// A `subject` past the account's [`MAX_NAMED_SERVED_PER_ACCOUNT`] is counted into, or
+    /// opens, the account's window for `kind` with no subject.
+    fn admit(
+        &mut self,
+        user: &UserId,
+        kind: ActivityKind,
+        subject: Option<&str>,
+        now: Timestamp,
+    ) -> Admission {
+        let mut key = (user.clone(), kind, subject.map(str::to_owned));
+        if self.coalesce(&key, now) {
+            return Admission::Coalesced;
+        }
+        if key.2.is_some() && !self.may_name(user, now) {
             tracing::debug!(
                 user_id = %user,
                 kind = kind.as_str(),
-                coalesced = window.coalesced,
-                opened = %window.opened,
-                "coalesced an account activity event into its open window"
+                subject,
+                "the account's serving has named its bound of links and peers; counted unnamed"
             );
-            return false;
+            key.2 = None;
+            if self.coalesce(&key, now) {
+                return Admission::Coalesced;
+            }
         }
+        let fresh = !self.open.contains_key(&key);
+        if fresh
+            && self.open.len() >= self.sweep_at.max(MIN_SWEEP_AT)
+            && self.first_close.is_none_or(|first| now >= first)
+        {
+            self.sweep(now);
+        }
+        if fresh && self.open.len() >= MAX_OPEN_WINDOWS {
+            return Admission::Full;
+        }
+        if key.2.is_some() {
+            let named = self.named.entry(user.clone()).or_insert(Named {
+                since: now,
+                count: 0,
+            });
+            if !named.holds(now) {
+                *named = Named {
+                    since: now,
+                    count: 0,
+                };
+            }
+            named.count += 1;
+        }
+        self.first_close = Some(
+            self.first_close
+                .map_or(closes(now), |first| first.min(closes(now))),
+        );
+        let subject = key.2.clone();
         if let Some(closed) = self.open.insert(
             key,
             Window {
                 opened: now,
                 coalesced: 0,
             },
-        ) && closed.coalesced > 0
-        {
+        ) {
+            closed.report(user, kind, subject.as_deref());
+        }
+        Admission::Opened { subject }
+    }
+
+    /// Count an event into `key`'s window, when that window is open at `now`.
+    fn coalesce(&mut self, key: &WindowKey, now: Timestamp) -> bool {
+        let Some(window) = self.open.get_mut(key) else {
+            return false;
+        };
+        if !window.holds(now) {
+            return false;
+        }
+        window.coalesced += 1;
+        tracing::debug!(
+            user_id = %key.0,
+            kind = key.1.as_str(),
+            subject = key.2.as_deref(),
+            coalesced = window.coalesced,
+            opened = %window.opened,
+            "coalesced an account activity event into its open window"
+        );
+        true
+    }
+
+    /// Whether `user` may open another named serving window at `now`.
+    fn may_name(&self, user: &UserId, now: Timestamp) -> bool {
+        self.named
+            .get(user)
+            .is_none_or(|named| !named.holds(now) || named.count < MAX_NAMED_SERVED_PER_ACCOUNT)
+    }
+
+    /// Close the window [`Self::admit`] just opened for an event that was not written, so the
+    /// next attempt opens it again, and give back the name it took.
+    fn withdraw(&mut self, user: &UserId, kind: ActivityKind, subject: Option<String>) {
+        let was_named = subject.is_some();
+        self.open.remove(&(user.clone(), kind, subject));
+        if was_named && let Some(named) = self.named.get_mut(user) {
+            named.count = named.count.saturating_sub(1);
+        }
+    }
+
+    /// Drop every window that no longer holds `now`, reporting what each absorbed.
+    fn sweep(&mut self, now: Timestamp) {
+        let mut first_close: Option<Timestamp> = None;
+        self.open.retain(|(user, kind, subject), window| {
+            let open = window.holds(now);
+            if open {
+                let closing = closes(window.opened);
+                first_close = Some(first_close.map_or(closing, |first| first.min(closing)));
+            } else {
+                window.report(user, *kind, subject.as_deref());
+            }
+            open
+        });
+        self.named.retain(|_, named| named.holds(now));
+        // Never past the bound, so a full set is swept again before it refuses: the windows
+        // that filled it close, and a refusal must last only as long as they stay open. Never
+        // before `first_close` either, so a full set whose windows all still hold refuses in
+        // constant time instead of rescanning itself on every opening it refuses.
+        self.first_close = first_close;
+        self.sweep_at = (self.open.len() * 2).min(MAX_OPEN_WINDOWS);
+        self.sweeps += 1;
+        tracing::debug!(
+            open = self.open.len(),
+            sweeps = self.sweeps,
+            first_close = ?self.first_close,
+            "swept closed account activity windows"
+        );
+    }
+}
+
+impl Window {
+    /// Whether an event at `now` falls inside this window. A clock that stepped back is inside.
+    fn holds(&self, now: Timestamp) -> bool {
+        now.duration_since(self.opened) < DETACHED_COALESCE_WINDOW
+    }
+
+    /// Log the count of a window that has closed, when it absorbed anything.
+    fn report(&self, user: &UserId, kind: ActivityKind, subject: Option<&str>) {
+        if self.coalesced > 0 {
             tracing::info!(
                 user_id = %user,
                 kind = kind.as_str(),
-                coalesced = closed.coalesced,
-                opened = %closed.opened,
+                subject,
+                coalesced = self.coalesced,
+                opened = %self.opened,
                 "an account activity window closed with events coalesced into it"
             );
         }
-        if self.open.len() > self.sweep_at.max(MIN_SWEEP_AT) {
-            self.open.retain(|(user, kind), window| {
-                let open = window.holds(now);
-                if !open && window.coalesced > 0 {
-                    tracing::info!(
-                        user_id = %user,
-                        kind = kind.as_str(),
-                        coalesced = window.coalesced,
-                        opened = %window.opened,
-                        "an account activity window closed with events coalesced into it"
-                    );
-                }
-                open
-            });
-            self.sweep_at = self.open.len() * 2;
-            tracing::debug!(
-                open = self.open.len(),
-                "swept closed account activity windows"
-            );
-        }
-        true
     }
 }
 
@@ -384,7 +597,8 @@ impl ActivityContext {
             store,
             clock,
             detached: Arc::default(),
-            windows: Arc::default(),
+            sign_in_windows: Arc::default(),
+            served_windows: Arc::default(),
         }
     }
 
@@ -436,6 +650,32 @@ impl ActivityContext {
     /// - **Drained, not durable, at exit.** A write still in flight when the process stops is
     ///   lost unless the shutdown awaits [`Self::settled`]; `serve` does, for a bounded time.
     pub fn record_detached(&self, user: &UserId, kind: ActivityKind) -> Detached {
+        self.detach(user, kind, None)
+    }
+
+    /// Record that `owner`'s blobs were served to somebody other than `owner`, aggregated.
+    ///
+    /// Called by the share-link and federated blob routes once a delivery that carries bytes is
+    /// decided — never for the owner's own fetches, which are not an event about the account.
+    /// One request serves one blob, so recording each would grow with the library and record an
+    /// access pattern over content addresses. Instead this keeps the guarantees
+    /// [`Self::record_detached`] states, keyed by the link or peer as well as the account: the
+    /// first blob a link or peer serves in a [`DETACHED_COALESCE_WINDOW`] writes one event
+    /// naming it, every later one is counted into that window, and the count goes to the
+    /// operator's log once the window closes. The event carries the link or peer and nothing
+    /// about what was read. No write is awaited on the serving path, and none is made per blob.
+    ///
+    /// An account's serving names at most [`MAX_NAMED_SERVED_PER_ACCOUNT`] links and peers per
+    /// window; every further one is counted into one event per kind with no subject, so viewing
+    /// many links cannot push the account's sign-in events out of its log. The windows are kept
+    /// apart from the sign-in windows, so serving never fills those.
+    pub fn record_served(&self, owner: &UserId, served: Served<'_>) -> Detached {
+        let (kind, subject) = served.event();
+        self.detach(owner, kind, Some(subject))
+    }
+
+    /// Coalesce, bound and start the write of one detached event.
+    fn detach(&self, user: &UserId, kind: ActivityKind, subject: Option<&str>) -> Detached {
         use tracing::Instrument as _;
 
         let mut detached = lock(&self.detached);
@@ -445,22 +685,38 @@ impl ActivityContext {
                 tracing::error!(%error, "a detached activity write did not finish");
             }
         }
-        let event = self.stamp(user, kind, None, None);
-        let mut windows = lock(&self.windows);
-        if !windows.admit(user, kind, event.at) {
-            return Detached::Coalesced;
-        }
-        if detached.len() >= MAX_DETACHED_IN_FLIGHT {
-            // Nothing was written for this window, so the next attempt opens it again.
-            windows.open.remove(&(user.clone(), kind));
+        let mut event = self.stamp(user, kind, None, subject);
+        // Served events have their own set, so serving cannot crowd a sign-in event out.
+        let mut windows = lock(if subject.is_some() {
+            &self.served_windows
+        } else {
+            &self.sign_in_windows
+        });
+        let refusal = match windows.admit(user, kind, subject, event.at) {
+            Admission::Coalesced => return Detached::Coalesced,
+            Admission::Full => Some("too many coalescing windows open"),
+            Admission::Opened { subject } if detached.len() >= MAX_DETACHED_IN_FLIGHT => {
+                // Nothing was written for this window, so the next attempt opens it again.
+                windows.withdraw(user, kind, subject);
+                Some("too many detached writes in flight")
+            }
+            Admission::Opened { subject } => {
+                event.subject = subject;
+                None
+            }
+        };
+        if let Some(reason) = refusal {
             tracing::error!(
                 user_id = %event.user_id,
                 kind = kind.as_str(),
                 event_id = event.event_id,
                 at = %event.at,
                 request_id = ?event.request_id,
+                subject = event.subject,
                 in_flight = detached.len(),
-                "an account activity event was dropped: too many detached writes in flight"
+                open_windows = windows.open.len(),
+                reason,
+                "an account activity event was dropped"
             );
             return Detached::Dropped;
         }
@@ -472,6 +728,7 @@ impl ActivityContext {
         tracing::trace!(
             user_id = %user,
             kind = kind.as_str(),
+            subject,
             in_flight = detached.len(),
             "detached an account activity write"
         );

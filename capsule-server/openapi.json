@@ -30119,7 +30119,7 @@
           "shares"
         ],
         "summary": "Ciphertext for one of the link's blobs, ranged.",
-        "description": "The membership check is the security property: a link serves the addresses its record\nenumerates and nothing else, so it cannot be walked sideways into the album's unstripped\nmetadata. A blob the link does not name is the same `404` as a link that does not exist.",
+        "description": "The membership check is the security property: a link serves the addresses its record\nenumerates and nothing else, so it cannot be walked sideways into the album's unstripped\nmetadata. A blob the link does not name is the same `404` as a link that does not exist.\n\nA delivery that carries bytes is recorded in the owner's activity log, aggregated: one\n`share_link.served` per link per window, naming the link and never the blob, and written\noff the response path so it neither slows nor refuses the serve.",
         "operationId": "share_blob",
         "parameters": [
           {
@@ -34988,7 +34988,7 @@
               "string",
               "null"
             ],
-            "description": "What the event is about: a session, a share link or a drop link, by its id."
+            "description": "What the event is about: a session, a share link, a drop link or a peer server, by its id."
           }
         },
         "type": "object",
