@@ -29,7 +29,19 @@
 //! The per-`(receiving_user, source_peer)` cap on pulled storage (design/quota.md) is decided by
 //! whoever assembles the adapter. [`PulledBlobCharge::charge`] is handed the commit's own
 //! transaction and only the blobs the job did not hold before, so a refusal rolls the whole page
-//! back and a blob is charged to a job once. [`Uncharged`] is the default until the cap exists.
+//! back and a blob is charged to a job once. [`PeerBudgetCharge`] is the one `serve` assembles:
+//! it enforces a [`PeerCachingBudget`] as the [port's docs](super) count it. [`Uncharged`], the
+//! default of [`PostgresPulledAlbums::new`], charges nothing.
+//!
+//! # The budget is read under the job's lock
+//!
+//! [`PeerBudgetCharge`] reads each subscriber's usage in one statement inside the commit's
+//! transaction, after the job's new blob rows are inserted, so the rows it sums already include
+//! the page and are never added a second time. Two jobs on one peer sharing a subscriber are two
+//! row locks, so their commits may each read the other's usage before it commits: a subscriber
+//! can pass its budget by at most what its other albums on that peer commit concurrently, one
+//! page each. Taking a lock per subscriber would close that and serialise every album it holds
+//! on the peer; a budget sized in gigabytes does not need it.
 //!
 //! # The heads are written as a difference
 //!
@@ -56,7 +68,8 @@ use sea_orm::{
 
 use super::conformance::Inspect;
 use super::{
-    AcceptedEntry, AssetHead, Change, PulledAlbum, PulledAlbums, PulledBlob, ValidatedPage,
+    AcceptedEntry, AssetHead, Change, Committed, OverBudget, PeerCachingBudget, PulledAlbum,
+    PulledAlbums, PulledBlob, ValidatedPage,
 };
 use crate::blob::{BlobError, BlobStore, ContentAddress, Placement};
 use crate::federation::pull::JobKey;
@@ -90,19 +103,20 @@ pub struct HeldBlob {
 /// stored and the job's new `federation_pulled_metadata_blobs` rows are inserted in that same
 /// transaction, so usage read back from that table already includes `held`: an implementation
 /// must not count those rows again. The asset heads, entries and position are not yet written.
-/// An error rolls the whole commit back and is the commit's error. Anything it writes through
-/// `transaction` lands or rolls back with the page.
+/// A refusal ([`OverBudget`]) rolls the whole commit back and is the commit's
+/// [`Committed::OverBudget`]; an error rolls it back and is the commit's error. Anything it
+/// writes through `transaction` lands or rolls back with the page.
 pub trait PulledBlobCharge: fmt::Debug + Send + Sync {
-    /// Charge `held`, the blobs `job` holds for the first time, or refuse.
+    /// Charge `held`, the blobs `job` holds for the first time: `None` admits them.
     fn charge<'a>(
         &'a self,
         transaction: &'a DatabaseTransaction,
         job: &'a JobKey,
         held: &'a [HeldBlob],
-    ) -> StoreFuture<'a, ()>;
+    ) -> StoreFuture<'a, Option<OverBudget>>;
 }
 
-/// The [`PulledBlobCharge`] that charges nothing: the default until the cap is enforced.
+/// The [`PulledBlobCharge`] that charges nothing.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Uncharged;
 
@@ -112,10 +126,113 @@ impl PulledBlobCharge for Uncharged {
         _transaction: &'a DatabaseTransaction,
         job: &'a JobKey,
         held: &'a [HeldBlob],
-    ) -> StoreFuture<'a, ()> {
+    ) -> StoreFuture<'a, Option<OverBudget>> {
         Box::pin(async move {
             tracing::trace!(%job, blobs = held.len(), "pulled metadata blobs held uncharged");
-            Ok(())
+            Ok(None)
+        })
+    }
+}
+
+/// Every subscriber of the job `$1`/`$2` with its usage on the peer `$1` and the part of it
+/// that the addresses `$3…` add, which are the ones the job holds for the first time.
+///
+/// A subscriber's usage is the distinct blobs held by every job it subscribes to on the peer;
+/// what the commit adds to it is the held addresses no other of those jobs holds. Both read the
+/// rows this transaction inserted, so `held` is counted exactly once.
+const SUBSCRIBER_USAGE: &str = "\
+    SELECT s.subscriber_id, \
+           COALESCE(SUM(u.size), 0)::BIGINT AS used, \
+           COALESCE(SUM(u.size) FILTER (WHERE u.added), 0)::BIGINT AS added \
+    FROM federation_subscriptions s \
+    LEFT JOIN LATERAL ( \
+        SELECT b.address, MAX(b.size) AS size, \
+               bool_and(b.album_id = $2) AND b.address IN ({held}) AS added \
+        FROM federation_pulled_metadata_blobs b \
+        JOIN federation_subscriptions mine \
+          ON mine.peer_id = b.peer_id AND mine.album_id = b.album_id \
+        WHERE mine.subscriber_id = s.subscriber_id AND b.peer_id = $1 \
+        GROUP BY b.address \
+    ) u ON TRUE \
+    WHERE s.peer_id = $1 AND s.album_id = $2 \
+    GROUP BY s.subscriber_id \
+    ORDER BY s.subscriber_id COLLATE \"C\"";
+
+/// The [`PulledBlobCharge`] that enforces a [`PeerCachingBudget`] on every subscriber of the
+/// job, live or lapsed.
+#[derive(Debug, Clone, Copy)]
+pub struct PeerBudgetCharge {
+    budget: PeerCachingBudget,
+}
+
+impl PeerBudgetCharge {
+    /// A charge refusing growth past `budget`.
+    pub fn new(budget: PeerCachingBudget) -> Self {
+        Self { budget }
+    }
+}
+
+impl PulledBlobCharge for PeerBudgetCharge {
+    fn charge<'a>(
+        &'a self,
+        transaction: &'a DatabaseTransaction,
+        job: &'a JobKey,
+        held: &'a [HeldBlob],
+    ) -> StoreFuture<'a, Option<OverBudget>> {
+        Box::pin(async move {
+            let doing = "reading the subscribers' caching budgets";
+            let failed = PORT.failing(doing);
+            let mut refusal = None;
+            let mut subscribers = 0_usize;
+            // A page holds at most a few hundred new blobs; chunked anyway, so the bind bound
+            // holds whatever a caller passes. A subscriber past its budget on any chunk is past
+            // it, since every chunk reads the same `used`.
+            for chunk in held.chunks(MAX_PARAMETERS) {
+                let placeholders: Vec<String> = (0..chunk.len())
+                    .map(|index| format!("${}", index + 3))
+                    .collect();
+                let mut values = job_values(job);
+                for blob in chunk {
+                    values.push(Value::from(address_of(&blob.hash)?.as_str().to_owned()));
+                }
+                let rows = transaction
+                    .query_all_raw(Statement::from_sql_and_values(
+                        DbBackend::Postgres,
+                        SUBSCRIBER_USAGE.replace("{held}", &placeholders.join(", ")),
+                        values,
+                    ))
+                    .await
+                    .map_err(&failed)?;
+                subscribers = rows.len();
+                for row in rows {
+                    let subscriber: String = row.try_get("", "subscriber_id").map_err(&failed)?;
+                    let used: i64 = row.try_get("", "used").map_err(&failed)?;
+                    let added: i64 = row.try_get("", "added").map_err(&failed)?;
+                    let subscriber = crate::store::UserId::new(subscriber);
+                    let used: u64 = count_from(used, "byte count")?;
+                    let added: u64 = count_from(added, "byte count")?;
+                    tracing::trace!(%job, %subscriber, used, added, budget = self.budget.limit(), "a subscriber's caching budget on the peer");
+                    if refusal.is_none() {
+                        refusal = self.budget.refusal(&subscriber, &job.peer, used, added);
+                    }
+                }
+                if refusal.is_some() {
+                    break;
+                }
+            }
+            match &refusal {
+                Some(over) => tracing::info!(
+                    %job,
+                    subscriber = %over.subscriber,
+                    used = over.used,
+                    budget = over.budget,
+                    "a pulled page would pass a subscriber's caching budget; it is rolled back"
+                ),
+                None => {
+                    tracing::debug!(%job, blobs = held.len(), subscribers, "pulled metadata blobs charged within every subscriber's budget");
+                }
+            }
+            Ok(refusal)
         })
     }
 }
@@ -169,7 +286,7 @@ impl PostgresPulledAlbums {
         job: &JobKey,
         from: Option<u64>,
         page: ValidatedPage,
-    ) -> Result<bool, StoreError> {
+    ) -> Result<Committed, StoreError> {
         let key = job_values(job);
         transaction
             .execute_raw(Statement::from_sql_and_values(
@@ -202,15 +319,17 @@ impl PostgresPulledAlbums {
             .transpose()?;
         if held_high_water != from {
             tracing::debug!(%job, ?from, current = ?held_high_water, "a pulled page was validated against a stale position");
-            return Ok(false);
+            return Ok(Committed::Stale);
         }
         let entries_written: i64 = row.try_get("", "entries_written").map_err(&failed)?;
 
         let newly_held = self
             .hold_metadata_blobs(transaction, job, &page.metadata_blobs)
             .await?;
-        if !newly_held.is_empty() {
-            self.charge.charge(transaction, job, &newly_held).await?;
+        if !newly_held.is_empty()
+            && let Some(refusal) = self.charge.charge(transaction, job, &newly_held).await?
+        {
+            return Ok(Committed::OverBudget(refusal));
         }
         let assets = write_heads(transaction, job, &page.state.assets).await?;
         let written = write_entries(transaction, job, entries_written, &page.entries).await?;
@@ -243,7 +362,7 @@ impl PostgresPulledAlbums {
             assets_written = assets,
             "a pulled page is ready to commit"
         );
-        Ok(true)
+        Ok(Committed::Written)
     }
 
     /// Put every blob of `blobs` in the blob store and record that `job` holds it, answering the
@@ -662,7 +781,7 @@ impl PulledAlbums for PostgresPulledAlbums {
         job: &'a JobKey,
         from: Option<u64>,
         page: ValidatedPage,
-    ) -> StoreFuture<'a, bool> {
+    ) -> StoreFuture<'a, Committed> {
         Box::pin(async move {
             let transaction = self
                 .connection
@@ -671,15 +790,16 @@ impl PulledAlbums for PostgresPulledAlbums {
                 .map_err(PORT.failing("opening a transaction"))?;
             // A refusal or an error returns before the commit; dropping the transaction rolls
             // it back.
-            if !self.commit_in(&transaction, job, from, page).await? {
-                return Ok(false);
+            let committed = self.commit_in(&transaction, job, from, page).await?;
+            if committed != Committed::Written {
+                return Ok(committed);
             }
             transaction
                 .commit()
                 .await
                 .map_err(PORT.failing("committing a pulled page"))?;
             tracing::debug!(%job, "a pulled page was committed");
-            Ok(true)
+            Ok(Committed::Written)
         })
     }
 

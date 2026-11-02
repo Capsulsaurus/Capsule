@@ -15,6 +15,20 @@
 //! album has moved since, so a page validated against stale state is never written over a
 //! fresher one.
 //!
+//! # A commit is bounded by every subscriber's caching budget on the peer
+//!
+//! What a pull holds is charged to the local accounts it is held for (design/quota.md). A job is
+//! one album on one peer, shared by every local subscription to it, live or lapsed, so a
+//! metadata blob a job holds is charged **in full to each of its subscribers**, never split
+//! between them, and **once per subscriber** however many of that subscriber's albums on the
+//! same peer hold it: a subscriber's usage on a peer is the size of the distinct blobs held by
+//! the jobs it subscribes to there. [`PeerCachingBudget`] caps that usage per
+//! `(receiving_user, source_peer)`. A commit that holds a blob new to some subscriber and leaves
+//! that subscriber's usage past the budget is refused whole ([`Committed::OverBudget`]) and
+//! writes nothing; a commit that holds nothing new to anyone, or only blobs a subscriber already
+//! holds through another album, is never refused, so a lowered budget stalls growth and never
+//! removes or blocks what is already held.
+//!
 //! # What lives where
 //!
 //! - This file — the port, its records and [`InMemoryPulledAlbums`], the deterministic double
@@ -22,19 +36,22 @@
 //! - [`postgres`] — [`PostgresPulledAlbums`](postgres::PostgresPulledAlbums), the durable
 //!   adapter: rows beside the subscriptions, the metadata blobs in the blob store, and a hook
 //!   ([`PulledBlobCharge`](postgres::PulledBlobCharge)) that charges what a commit newly holds
-//!   inside the commit's own transaction.
+//!   inside the commit's own transaction; [`PeerBudgetCharge`](postgres::PeerBudgetCharge) is
+//!   the one that enforces [`PeerCachingBudget`].
 //! - [`conformance`] — the suite both adapters pass.
 //!
 //! The breadcrumb index that reads these entries is follow-up work.
 
-use std::collections::BTreeMap;
-use std::sync::{Mutex, PoisonError};
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use capsule_core::crypto::hash::Hash32;
 use jiff::Timestamp;
 
 use super::JobKey;
-use crate::store::StoreFuture;
+use crate::federation::PeerId;
+use crate::federation::subscriptions::SubscriptionStore;
+use crate::store::{StoreFuture, UserId};
 
 pub mod conformance;
 pub mod postgres;
@@ -160,21 +177,113 @@ pub struct ValidatedPage {
     pub state: PulledAlbum,
 }
 
+/// The default per-`(receiving_user, source_peer)` caching budget, in percent of the
+/// receiver's hard quota limit.
+pub const DEFAULT_PEER_BUDGET_PERCENT: u8 = 25;
+
+/// How many bytes of pulled data one local account may hold from one source peer.
+///
+/// Usage is counted as the [module docs](self) say: every metadata blob the account's albums on
+/// the peer hold, each distinct blob once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PeerCachingBudget {
+    bytes: u64,
+}
+
+impl PeerCachingBudget {
+    /// A budget of exactly `bytes`.
+    pub const fn bytes(bytes: u64) -> Self {
+        Self { bytes }
+    }
+
+    /// The budget that never refuses: what a store assembled without one runs.
+    pub const fn unlimited() -> Self {
+        Self::bytes(u64::MAX)
+    }
+
+    /// `percent` of `hard_limit`, rounded down, with `percent` past 100 read as 100.
+    ///
+    /// An unlimited deployment (`hard_limit = u64::MAX`) gets a budget nothing reaches, which
+    /// runs the same predicate a limited one does.
+    pub fn of_hard_limit(hard_limit: u64, percent: u8) -> Self {
+        let percent = u128::from(percent.min(100));
+        let bytes = u128::from(hard_limit) * percent / 100;
+        Self::bytes(u64::try_from(bytes).unwrap_or(u64::MAX))
+    }
+
+    /// The budget in bytes.
+    pub const fn limit(self) -> u64 {
+        self.bytes
+    }
+
+    /// Whether a commit that leaves `subscriber` using `used` bytes on `peer`, `added` of them
+    /// new to it, is refused, and if so the refusal.
+    ///
+    /// Only growth is refused: a commit that adds nothing to the subscriber is admitted however
+    /// far past the budget the subscriber already is.
+    pub fn refusal(
+        self,
+        subscriber: &UserId,
+        peer: &PeerId,
+        used: u64,
+        added: u64,
+    ) -> Option<OverBudget> {
+        (added > 0 && used > self.bytes).then(|| OverBudget {
+            subscriber: subscriber.clone(),
+            peer: peer.clone(),
+            used,
+            budget: self.bytes,
+        })
+    }
+}
+
+impl Default for PeerCachingBudget {
+    fn default() -> Self {
+        Self::unlimited()
+    }
+}
+
+/// Why a commit was refused for a caching budget: the first subscriber it would take past one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OverBudget {
+    /// The local account whose budget the page would exceed.
+    pub subscriber: UserId,
+    /// The source peer the budget is on.
+    pub peer: PeerId,
+    /// The bytes the subscriber would use on the peer had the page been written.
+    pub used: u64,
+    /// The budget it may not pass.
+    pub budget: u64,
+}
+
+/// What [`PulledAlbums::commit`] did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Committed {
+    /// The page is written.
+    Written,
+    /// The album moved since the page was validated; nothing was written.
+    Stale,
+    /// The page would take a subscriber past its caching budget on the peer; nothing was
+    /// written.
+    OverBudget(OverBudget),
+}
+
 /// Where pulled albums are kept.
 pub trait PulledAlbums: std::fmt::Debug + Send + Sync {
     /// `job`'s state; the default (nothing pulled yet) when there is none.
     fn read<'a>(&'a self, job: &'a JobKey) -> StoreFuture<'a, PulledAlbum>;
 
-    /// Write `page` for `job`, if the album's high-water mark is still `from`.
+    /// Write `page` for `job`, if the album's high-water mark is still `from` and the page takes
+    /// none of the job's subscribers past its caching budget on the peer.
     ///
-    /// Atomic: the entries, the blobs and the new state land together or not at all. Answers
-    /// whether it was written; `false` means the album moved since `from` was read.
+    /// Atomic: the entries, the blobs and the new state land together or not at all. A refusal,
+    /// [`Committed::Stale`] or [`Committed::OverBudget`], writes nothing and removes nothing.
     fn commit<'a>(
         &'a self,
         job: &'a JobKey,
         from: Option<u64>,
         page: ValidatedPage,
-    ) -> StoreFuture<'a, bool>;
+    ) -> StoreFuture<'a, Committed>;
 
     /// Forget `job`'s cursor and high-water mark, keeping every asset head it holds.
     ///
@@ -185,9 +294,14 @@ pub trait PulledAlbums: std::fmt::Debug + Send + Sync {
 }
 
 /// The deterministic double of [`PulledAlbums`].
+///
+/// Charges nothing unless assembled [`with_budget`](Self::with_budget). Its subscriptions are
+/// read before its lock is taken, so a subscription made during a commit may be missed by it;
+/// the durable adapter reads them inside the commit's transaction.
 #[derive(Debug, Default)]
 pub struct InMemoryPulledAlbums {
     albums: Mutex<BTreeMap<JobKey, Held>>,
+    budget: Option<(Arc<dyn SubscriptionStore>, PeerCachingBudget)>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -201,6 +315,18 @@ impl InMemoryPulledAlbums {
     /// An empty store.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// This store, refusing a commit that takes a subscriber `subscriptions` names past
+    /// `budget` on the job's peer.
+    #[must_use]
+    pub fn with_budget(
+        mut self,
+        subscriptions: Arc<dyn SubscriptionStore>,
+        budget: PeerCachingBudget,
+    ) -> Self {
+        self.budget = Some((subscriptions, budget));
+        self
     }
 
     /// Every entry written for `job`, in the order written.
@@ -221,6 +347,78 @@ impl InMemoryPulledAlbums {
     fn lock(&self) -> std::sync::MutexGuard<'_, BTreeMap<JobKey, Held>> {
         self.albums.lock().unwrap_or_else(PoisonError::into_inner)
     }
+
+    /// Every subscriber of `job`, each with the other jobs it subscribes to on `job`'s peer.
+    async fn subscribers(
+        subscriptions: &dyn SubscriptionStore,
+        job: &JobKey,
+    ) -> Result<Vec<(UserId, Vec<JobKey>)>, crate::store::StoreError> {
+        let mut subscribers = Vec::new();
+        for subscription in subscriptions.of_job(job).await? {
+            let others = subscriptions
+                .of_subscriber(&subscription.subscriber)
+                .await?
+                .into_iter()
+                .map(|held| held.job())
+                .filter(|other| other.peer == job.peer && other != job)
+                .collect();
+            subscribers.push((subscription.subscriber, others));
+        }
+        Ok(subscribers)
+    }
+}
+
+/// The first of `subscribers` that holding `page` for `job` takes past `budget`, counted as
+/// [`PulledAlbums::commit`] documents.
+fn over_budget(
+    albums: &BTreeMap<JobKey, Held>,
+    job: &JobKey,
+    page: &ValidatedPage,
+    subscribers: &[(UserId, Vec<JobKey>)],
+    budget: PeerCachingBudget,
+) -> Option<OverBudget> {
+    let held = albums.get(job).map(|held| &held.metadata_blobs);
+    let newly: Vec<&Hash32> = page
+        .metadata_blobs
+        .keys()
+        .filter(|hash| held.is_none_or(|held| !held.contains_key(*hash)))
+        .collect();
+    if newly.is_empty() {
+        return None;
+    }
+    let size = |bytes: &Vec<u8>| u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+    for (subscriber, others) in subscribers {
+        let mut blobs: BTreeMap<&Hash32, u64> = BTreeMap::new();
+        for other in others {
+            if let Some(other) = albums.get(other) {
+                blobs.extend(
+                    other
+                        .metadata_blobs
+                        .iter()
+                        .map(|(hash, bytes)| (hash, size(bytes))),
+                );
+            }
+        }
+        let elsewhere: BTreeSet<&Hash32> = blobs.keys().copied().collect();
+        if let Some(held) = held {
+            blobs.extend(held.iter().map(|(hash, bytes)| (hash, size(bytes))));
+        }
+        blobs.extend(
+            page.metadata_blobs
+                .iter()
+                .map(|(hash, bytes)| (hash, size(bytes))),
+        );
+        let added = newly
+            .iter()
+            .filter(|hash| !elsewhere.contains(**hash))
+            .map(|hash| blobs.get(*hash).copied().unwrap_or(0))
+            .fold(0_u64, u64::saturating_add);
+        let used = blobs.values().copied().fold(0_u64, u64::saturating_add);
+        if let Some(refusal) = budget.refusal(subscriber, &job.peer, used, added) {
+            return Some(refusal);
+        }
+    }
+    None
 }
 
 impl PulledAlbums for InMemoryPulledAlbums {
@@ -239,18 +437,29 @@ impl PulledAlbums for InMemoryPulledAlbums {
         job: &'a JobKey,
         from: Option<u64>,
         page: ValidatedPage,
-    ) -> StoreFuture<'a, bool> {
+    ) -> StoreFuture<'a, Committed> {
         Box::pin(async move {
+            let subscribers = match &self.budget {
+                Some((subscriptions, _)) => Self::subscribers(subscriptions.as_ref(), job).await?,
+                None => Vec::new(),
+            };
             let mut albums = self.lock();
-            let held = albums.entry(job.clone()).or_default();
-            if held.state.high_water != from {
-                tracing::debug!(%job, ?from, current = ?held.state.high_water, "a pulled page was validated against a stale position");
-                return Ok(false);
+            let current = albums.get(job).and_then(|held| held.state.high_water);
+            if current != from {
+                tracing::debug!(%job, ?from, ?current, "a pulled page was validated against a stale position");
+                return Ok(Committed::Stale);
             }
+            if let Some((_, budget)) = &self.budget
+                && let Some(refusal) = over_budget(&albums, job, &page, &subscribers, *budget)
+            {
+                tracing::info!(%job, subscriber = %refusal.subscriber, used = refusal.used, budget = refusal.budget, "a pulled page would pass a subscriber's caching budget; nothing was written");
+                return Ok(Committed::OverBudget(refusal));
+            }
+            let held = albums.entry(job.clone()).or_default();
             held.state = page.state;
             held.entries.extend(page.entries);
             held.metadata_blobs.extend(page.metadata_blobs);
-            Ok(true)
+            Ok(Committed::Written)
         })
     }
 

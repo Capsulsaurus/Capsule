@@ -305,6 +305,73 @@ async fn an_unknown_peer_is_pulled_on_probation() {
     assert_eq!(rig.puller.calls()[0].1, PeerTier::Probation);
 }
 
+fn over_budget() -> PullReport {
+    PullReport {
+        result: Err(PullFailure::OverBudget {
+            detail: "a member's caching budget on the peer".to_owned(),
+        }),
+        validation: Duration::ZERO,
+    }
+}
+
+#[tokio::test]
+async fn a_page_past_a_caching_budget_defers_the_job_and_costs_the_peer_nothing() {
+    let rig = Rig::new();
+    let interval_ceiling = SignedDuration::from_mins(18);
+    // One real failure first, so the deferral is seen to leave the count alone.
+    rig.puller.then(transport());
+    let failed_at = rig.now();
+    assert!(matches!(
+        rig.round().await,
+        JobOutcome::Failed { failures: 1, .. }
+    ));
+    rig.advance_to(plus(failed_at, backoff(1)));
+
+    for _ in 0..3 {
+        rig.puller.then(over_budget());
+        let at = rig.now();
+        assert_eq!(
+            rig.round().await,
+            JobOutcome::Deferred {
+                until: plus(at, interval_ceiling)
+            },
+            "deferred on the pull interval, never backed off"
+        );
+        rig.advance_to(plus(at, interval_ceiling));
+    }
+    let errors = CounterKey::PeerPullErrors(PEER.to_owned());
+    assert_eq!(
+        rig.counters
+            .peek(&errors, budgets::PEER_PULL_ERRORS_PROBATION, rig.now())
+            .await
+            .expect("peeked"),
+        Verdict::Admitted {
+            remaining: budgets::PEER_PULL_ERRORS_PROBATION.limit
+        },
+        "the peer did nothing wrong"
+    );
+    assert_eq!(
+        rig.jobs
+            .circuit(&rig.job.peer, rig.now())
+            .await
+            .expect("read"),
+        None
+    );
+
+    // The failure count the deferrals left alone still drives the next real failure.
+    rig.puller.then(transport());
+    let at = rig.now();
+    assert_eq!(
+        rig.round().await,
+        JobOutcome::Failed {
+            kind: "transport",
+            failures: 2,
+            next: plus(at, backoff(2)),
+            circuit: None,
+        }
+    );
+}
+
 #[tokio::test]
 async fn a_transport_failure_backs_off_and_spends_no_error_budget() {
     let rig = Rig::new();

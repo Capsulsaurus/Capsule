@@ -21,6 +21,14 @@
 //!    peer's error budget, and a spent budget opens the peer's circuit for the back-off it
 //!    earned. Nothing a failed pull fetched is written: that is the [`Puller`]'s contract, and
 //!    nothing here asks it to undo anything.
+//! 8. **The caching budget.** A pull whose page would take a local subscriber past its caching
+//!    budget on the peer ([`PullFailure::OverBudget`]) is deferred, not failed: the peer did
+//!    nothing wrong, so its error budget is untouched and the job's failure count neither grows
+//!    nor resets. The job is next due on the jittered interval, as after a success, so a
+//!    subscriber who frees space (by unsubscribing from another of the peer's albums) is caught
+//!    up within one interval, and a refused job costs the peer no more than a steady pull. The
+//!    pages committed before the refusal stay written; the refused page and everything after
+//!    it are re-fetched next time.
 //!
 //! # Fails closed
 //!
@@ -71,6 +79,13 @@ pub enum PullFailure {
         /// The invariant it failed, for the log.
         detail: String,
     },
+    /// What the peer sent verified, and a page of it would take a local subscriber past its
+    /// caching budget on the peer, so it was not written. Defers the job; costs the peer
+    /// nothing.
+    OverBudget {
+        /// Whose budget, and by how much, for the log.
+        detail: String,
+    },
 }
 
 impl PullFailure {
@@ -79,12 +94,15 @@ impl PullFailure {
         match self {
             Self::Transport { .. } => "transport",
             Self::Validation { .. } => "validation",
+            Self::OverBudget { .. } => "budget",
         }
     }
 
     fn detail(&self) -> &str {
         match self {
-            Self::Transport { detail } | Self::Validation { detail } => detail,
+            Self::Transport { detail }
+            | Self::Validation { detail }
+            | Self::OverBudget { detail } => detail,
         }
     }
 }
@@ -124,7 +142,8 @@ pub enum JobOutcome {
         /// When the circuit closes.
         until: Timestamp,
     },
-    /// Its peer's CPU budget is spent; the job is queued to the instant named.
+    /// Its peer's CPU budget is spent, or a subscriber's caching budget on the peer refused a
+    /// page; the job is queued to the instant named.
     Deferred {
         /// When it is next due.
         until: Timestamp,
@@ -369,6 +388,24 @@ impl PullWorker {
                 .await;
                 JobOutcome::Pulled { next }
             }
+            Err(PullFailure::OverBudget { detail }) => {
+                let mut until = next_after_success(ended, self.jitter.as_ref());
+                if let Some(queued) = cpu_queue {
+                    until = until.max(queued);
+                }
+                tracing::info!(%until, detail, "a subscriber's caching budget refused a page; the job is deferred");
+                self.finish(
+                    job,
+                    JobState {
+                        next_due: until,
+                        last_pull: Some(now),
+                        failures: state.failures,
+                    },
+                    ended,
+                )
+                .await;
+                JobOutcome::Deferred { until }
+            }
             Err(failure) => {
                 self.failed(job, tier, state, now, ended, failure, cpu_queue)
                     .await
@@ -463,7 +500,9 @@ impl PullWorker {
             next = next.max(until);
         }
         let circuit = match &failure {
-            PullFailure::Transport { .. } => None,
+            // `run_job` defers an over-budget pull before it reaches here; it never costs the
+            // peer its error budget either way.
+            PullFailure::Transport { .. } | PullFailure::OverBudget { .. } => None,
             PullFailure::Validation { .. } => {
                 self.spend_error_budget(job, tier, ended, failures).await
             }

@@ -353,6 +353,11 @@ pub struct Config {
     /// a deployment has to ask for it. Turning it on demands `FEDERATION_URL` on `serve`; a URL
     /// without the switch is a deployment that does not federate, and says so at startup.
     pub federation_enabled: bool,
+    /// How much of a local account's hard quota limit one source peer's pulled albums may hold
+    /// for it, in percent (`FEDERATION_PEER_BUDGET_PERCENT`, 0 to 100). Defaults to
+    /// [`DEFAULT_PEER_BUDGET_PERCENT`](crate::federation::pull::pulled::DEFAULT_PEER_BUDGET_PERCENT),
+    /// 25 (design/quota.md).
+    pub peer_budget_percent: u8,
     /// The filesystem tree ciphertext blobs are written to. There is no object store.
     pub blob_root: Option<PathBuf>,
     /// The Postgres URL, once an adapter reads it (#402).
@@ -561,6 +566,7 @@ impl fmt::Debug for Config {
             api_base_url,
             federation_url,
             federation_enabled,
+            peer_budget_percent,
             blob_root,
             database_url,
             valkey_url,
@@ -591,6 +597,7 @@ impl fmt::Debug for Config {
             .field("api_base_url", api_base_url)
             .field("federation_url", federation_url)
             .field("federation_enabled", federation_enabled)
+            .field("peer_budget_percent", peer_budget_percent)
             .field("blob_root", blob_root)
             .field("database_url", &database_url.as_deref().map(redacted_url))
             .field("valkey_url", &valkey_url.as_deref().map(redacted_url))
@@ -710,6 +717,22 @@ impl Config {
             "FEDERATION_ENABLED",
             &mut faults,
         );
+        // A share of a whole, so past 100 is refused rather than clamped: an operator who typed
+        // 250 meant something, and a budget larger than the hard limit is not it.
+        let peer_budget_percent =
+            parse_number::<u8>(env, "FEDERATION_PEER_BUDGET_PERCENT", &mut faults)
+                .and_then(|percent| {
+                    if percent > 100 {
+                        faults.push(ConfigFault::Invalid {
+                            key: "FEDERATION_PEER_BUDGET_PERCENT",
+                            detail: format!("{percent} is not a percentage of a whole"),
+                        });
+                        None
+                    } else {
+                        Some(percent)
+                    }
+                })
+                .unwrap_or(crate::federation::pull::pulled::DEFAULT_PEER_BUDGET_PERCENT);
 
         // ── Storage ─────────────────────────────────────────────────────────────────────
         // `UPLOAD_DIR` is the name the retired deployment used, accepted so an operator's
@@ -1061,6 +1084,7 @@ impl Config {
                 api_base_url,
                 federation_url,
                 federation_enabled,
+                peer_budget_percent,
                 blob_root,
                 database_url,
                 valkey_url,
