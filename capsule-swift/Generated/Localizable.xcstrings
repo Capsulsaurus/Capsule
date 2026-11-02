@@ -157223,6 +157223,88 @@
         }
       }
     },
+    "error.federation.subscription_limit": {
+      "localizations": {
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "لقد بلغت الحد الأقصى للألبومات المشتركة التي يمكنك متابعتها من خوادم أخرى. أزل ألبومًا لإضافة آخر."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Du hast die maximale Anzahl geteilter Alben von anderen Servern erreicht, denen du folgen kannst. Entferne eines, um ein weiteres hinzuzufügen."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You've reached the limit of shared albums you can follow from other servers. Remove one to add another."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Has alcanzado el límite de álbumes compartidos de otros servidores que puedes seguir. Quita uno para añadir otro."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vous avez atteint la limite d'albums partagés d'autres serveurs que vous pouvez suivre. Retirez-en un pour en ajouter un autre."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "आप अन्य सर्वरों के जितने साझा एल्बम फ़ॉलो कर सकते हैं, उस सीमा तक पहुँच गए हैं। दूसरा जोड़ने के लिए एक हटाएँ।"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hai raggiunto il limite di album condivisi da altri server che puoi seguire. Rimuovine uno per aggiungerne un altro."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "他のサーバーからフォローできる共有アルバムの上限に達しました。別のアルバムを追加するには、いずれかを削除してください。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "다른 서버에서 팔로우할 수 있는 공유 앨범 수의 한도에 도달했습니다. 다른 앨범을 추가하려면 하나를 삭제하세요."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Você atingiu o limite de álbuns compartilhados de outros servidores que pode seguir. Remova um para adicionar outro."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Вы достигли предела общих альбомов с других серверов, на которые можно подписаться. Удалите один, чтобы добавить другой."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "你关注的其他服务器共享相册已达上限。请移除一个后再添加。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "你追蹤的其他伺服器共享相簿已達上限。請移除一個後再新增。"
+          }
+        }
+      }
+    },
     "error.federation.unavailable": {
       "localizations": {
         "ar": {

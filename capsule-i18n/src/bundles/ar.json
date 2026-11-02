@@ -1874,6 +1874,7 @@
   "error.federation.rate_budget_exceeded": "بلغ هذا المصدر حدّ الطلبات. يُرجى الانتظار ثم المحاولة مرة أخرى.",
   "error.federation.revocations_unavailable": "تعذّر على Capsule قراءة قائمة الإلغاء. يُرجى المحاولة مرة أخرى.",
   "error.federation.scope_insufficient": "لا يشمل منح الوصول هذا المحتوى المطلوب.",
+  "error.federation.subscription_limit": "لقد بلغت الحد الأقصى للألبومات المشتركة التي يمكنك متابعتها من خوادم أخرى. أزل ألبومًا لإضافة آخر.",
   "error.federation.unavailable": "تعذّر على Capsule الوصول إلى سجلات الاتحاد. يُرجى المحاولة مرة أخرى.",
   "error.moderation.account_suspended": "حسابك موقوف. لا يمكنك الرفع أو المشاركة حتى تتم إعادته.",
   "error.moderation.report_at_capacity": "يتعامل هذا الخادم مع عدد كبير جدًا من البلاغات حاليًا. يُرجى الانتظار ثم المحاولة مرة أخرى.",

@@ -7499,6 +7499,10 @@
     "message": "このアクセス許可は要求されたコンテンツを対象としていません。",
     "origin": "machine"
   },
+  "error.federation.subscription_limit": {
+    "message": "他のサーバーからフォローできる共有アルバムの上限に達しました。別のアルバムを追加するには、いずれかを削除してください。",
+    "origin": "machine"
+  },
   "error.federation.unavailable": {
     "message": "Capsule は連合の記録にアクセスできませんでした。もう一度お試しください。",
     "origin": "machine"

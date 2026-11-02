@@ -7,9 +7,10 @@
 mod support;
 
 use capsule_server::federation::pull::{JobKey, JobSource as _};
+use capsule_server::federation::subscriptions::MAX_SUBSCRIPTIONS_PER_ACCOUNT;
 use capsule_server::federation::{
-    CapabilityCodec, MintRequest, PeerId, PeerStore as _, Scope, SubscriptionJobs,
-    SubscriptionStore as _,
+    CapabilityCodec, CapabilityToken, MintRequest, PeerId, PeerStore as _, Scope, Subscription,
+    SubscriptionJobs, SubscriptionStore as _,
 };
 use capsule_server::store::{AlbumId, UserId};
 use jiff::SignedDuration;
@@ -353,6 +354,69 @@ async fn members_subscribe_and_unsubscribe_apart() {
         .await
         .expect("the store answers");
     assert_eq!(held.len(), 1);
+}
+
+#[tokio::test]
+async fn an_account_at_its_limit_is_refused_a_new_album_but_renews_a_held_one() {
+    let fixture = Fixture::working();
+    let member = fixture.other_bearer(OTHER_MEMBER).await;
+    let codec = home(&fixture, HOME);
+    pin(&fixture, &codec).await;
+    let now = fixture.now();
+    for index in 0..MAX_SUBSCRIPTIONS_PER_ACCOUNT {
+        fixture
+            .subscriptions
+            .put(Subscription {
+                subscriber: UserId::new(OTHER_MEMBER),
+                peer: PeerId::new(HOME),
+                album: AlbumId::new(format!("held-{index:04}")),
+                scope: Scope::Read,
+                jti: format!("held-{index:04}"),
+                token: CapabilityToken::new("header.payload.signature"),
+                issued_at: now,
+                expires_at: jiff::Timestamp::MAX,
+                min_protocol_version: PROTOCOL_VERSION.to_owned(),
+                subscribed_at: now,
+                updated_at: now,
+            })
+            .await
+            .expect("the store records");
+    }
+
+    assert_eq!(
+        code(
+            subscribe(&fixture, &member, HOME, &invite(&codec, SERVER_ORIGIN, 6)).await,
+            StatusCode::FORBIDDEN
+        ),
+        "error.federation.subscription_limit"
+    );
+    assert_eq!(
+        listed(&fixture, &member).await.len(),
+        MAX_SUBSCRIPTIONS_PER_ACCOUNT as usize,
+        "a refusal records nothing"
+    );
+
+    // Unsubscribing frees a place, and the album it takes is then renewed at the limit.
+    fixture
+        .client
+        .delete("/v1/federation/subscriptions/home.peer.test/held-0000")
+        .header("authorization", &member)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    subscribe(&fixture, &member, HOME, &invite(&codec, SERVER_ORIGIN, 1))
+        .await
+        .assert_status(StatusCode::CREATED);
+    subscribe(&fixture, &member, HOME, &invite(&codec, SERVER_ORIGIN, 6))
+        .await
+        .assert_status(StatusCode::OK);
+
+    // Another account's limit is its own.
+    let bearer = fixture.bearer().await;
+    subscribe(&fixture, &bearer, HOME, &invite(&codec, SERVER_ORIGIN, 6))
+        .await
+        .assert_status(StatusCode::CREATED);
 }
 
 #[tokio::test]

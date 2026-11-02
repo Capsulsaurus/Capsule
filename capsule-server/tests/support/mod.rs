@@ -1842,6 +1842,24 @@ impl SubscriptionStore for SwitchableSubscriptions {
         self.inner.put(subscription)
     }
 
+    fn put_within(
+        &self,
+        subscription: Subscription,
+        limit: u32,
+    ) -> StoreFuture<'_, Option<PutOutcome>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.put_within(subscription, limit)
+    }
+
+    fn renew(&self, subscription: Subscription) -> StoreFuture<'_, Option<PutOutcome>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.renew(subscription)
+    }
+
     fn of_subscriber<'a>(&'a self, subscriber: &'a UserId) -> StoreFuture<'a, Vec<Subscription>> {
         if self.is_down() {
             return Box::pin(async { Self::refuse() });

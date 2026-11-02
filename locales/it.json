@@ -7499,6 +7499,10 @@
     "message": "Questa autorizzazione di accesso non copre il contenuto richiesto.",
     "origin": "machine"
   },
+  "error.federation.subscription_limit": {
+    "message": "Hai raggiunto il limite di album condivisi da altri server che puoi seguire. Rimuovine uno per aggiungerne un altro.",
+    "origin": "machine"
+  },
   "error.federation.unavailable": {
     "message": "Capsule non è riuscito a raggiungere i dati di federazione. Riprova.",
     "origin": "machine"

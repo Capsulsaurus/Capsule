@@ -1,0 +1,10 @@
+---
+source: capsule-cli/tests/json_contract.rs
+expression: "run(&scratch,\n&[\"federation\", \"unsubscribe\", \"home.test\", \"album-1\", \"--json\"])"
+---
+status: 1
+--- stdout ---
+
+--- stderr ---
+Error: 
+   0: Not unsubscribed: not authenticated

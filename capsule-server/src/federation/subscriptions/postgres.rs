@@ -8,6 +8,25 @@
 //! insert from an update. No returned row is the `WHERE` declining, and the held row is read
 //! back to answer [`PutOutcome::Kept`].
 //!
+//! # A capped put counts under the subscriber's lock
+//!
+//! [`SubscriptionStore::put_within`] runs in a transaction that first takes
+//! `pg_advisory_xact_lock(hashtext('federation_subscriptions:' || subscriber))`, then counts the
+//! subscriber's rows and runs the same upsert, as the album key escrows bound an account. Two
+//! capped puts by one subscriber are serialized, and the second's count, a fresh statement under
+//! read committed, sees the first's committed row; capped puts by different subscribers never
+//! wait on each other, and nothing else does either. The capped put is the only write that
+//! records a key in production, so it is the only one that takes the lock:
+//! [`SubscriptionStore::remove`] only lowers the count, and [`SubscriptionStore::renew`] never
+//! records a key. Two subscribers whose names collide under `hashtext` share a lock, which costs
+//! a wait and nothing else.
+//!
+//! # A renewal is one `UPDATE`
+//!
+//! [`SubscriptionStore::renew`] is `UPDATE … WHERE key AND expires_at < posted RETURNING`, so a
+//! row removed before it runs is not re-created. No returned row is read back: a held row is
+//! [`PutOutcome::Kept`], and none is the key no longer held.
+//!
 //! # Byte order, not the database's collation
 //!
 //! Every `ORDER BY` names `COLLATE "C"`, so the rows come back in the byte order the in-memory
@@ -15,7 +34,10 @@
 //! under.
 
 use jiff::Timestamp;
-use sea_orm::{ConnectionTrait, DatabaseConnection, DbBackend, QueryResult, Statement, Value};
+use sea_orm::{
+    ConnectionTrait, DatabaseConnection, DatabaseTransaction, DbBackend, QueryResult, Statement,
+    TransactionTrait as _, Value,
+};
 
 use super::{CapabilityToken, PutOutcome, Subscription, SubscriptionStore};
 use crate::federation::PeerId;
@@ -91,36 +113,200 @@ impl PostgresSubscriptions {
         values: Vec<Value>,
         doing: &'static str,
     ) -> Result<Vec<Subscription>, StoreError> {
-        let rows = self
-            .connection
-            .query_all_raw(Statement::from_sql_and_values(
-                DbBackend::Postgres,
-                sql,
-                values,
-            ))
-            .await
-            .map_err(SUBSCRIPTIONS.failing(doing))?;
-        rows.iter().map(subscription_from).collect()
+        select_on(&self.connection, sql, values, doing).await
     }
+}
+
+/// Every row `sql` selects with `values` on `connection`, decoded.
+async fn select_on<C: ConnectionTrait>(
+    connection: &C,
+    sql: String,
+    values: Vec<Value>,
+    doing: &'static str,
+) -> Result<Vec<Subscription>, StoreError> {
+    let rows = connection
+        .query_all_raw(Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            sql,
+            values,
+        ))
+        .await
+        .map_err(SUBSCRIPTIONS.failing(doing))?;
+    rows.iter().map(subscription_from).collect()
+}
+
+/// Whether `subscriber` may record a new key under `limit`: the count, read on `transaction`
+/// after the subscriber's lock is taken, so no concurrent capped put moves it before the caller's
+/// own.
+async fn admits_new_key(
+    transaction: &DatabaseTransaction,
+    subscription: &Subscription,
+    limit: u32,
+) -> Result<bool, StoreError> {
+    let doing = "counting an account's subscriptions";
+    // The account's critical section starts here and ends with the transaction, so the count
+    // below is read and the row written as one step against every concurrent capped put by the
+    // same subscriber.
+    transaction
+        .execute_raw(Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            "SELECT pg_advisory_xact_lock(hashtext('federation_subscriptions:' || $1))",
+            [Value::from(subscription.subscriber.as_str().to_owned())],
+        ))
+        .await
+        .map_err(SUBSCRIPTIONS.failing("locking an account's subscriptions"))?;
+    let row = transaction
+        .query_one_raw(Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            "SELECT \
+             EXISTS (SELECT 1 FROM federation_subscriptions \
+                     WHERE subscriber_id = $1 AND peer_id = $2 AND album_id = $3) AS held, \
+             (SELECT COUNT(*) FROM federation_subscriptions WHERE subscriber_id = $1) AS count",
+            [
+                Value::from(subscription.subscriber.as_str().to_owned()),
+                Value::from(subscription.peer.as_str().to_owned()),
+                Value::from(subscription.album.as_str().to_owned()),
+            ],
+        ))
+        .await
+        .map_err(SUBSCRIPTIONS.failing(doing))?
+        .ok_or_else(|| SUBSCRIPTIONS.undecodable("the count answered no row".to_owned()))?;
+    let held: bool = row
+        .try_get("", "held")
+        .map_err(SUBSCRIPTIONS.failing(doing))?;
+    let count: i64 = row
+        .try_get("", "count")
+        .map_err(SUBSCRIPTIONS.failing(doing))?;
+    Ok(held || count < i64::from(limit))
+}
+
+/// [`SubscriptionStore::put`] on `connection`: the pool, or [`put_within`]'s transaction.
+///
+/// [`put_within`]: SubscriptionStore::put_within
+async fn put_on<C: ConnectionTrait>(
+    connection: &C,
+    subscription: Subscription,
+) -> Result<PutOutcome, StoreError> {
+    let row = connection
+        .query_one_raw(Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            format!(
+                "INSERT INTO federation_subscriptions ({COLUMNS}) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
+                 ON CONFLICT (subscriber_id, peer_id, album_id) DO UPDATE SET \
+                 scope = EXCLUDED.scope, jti = EXCLUDED.jti, token = EXCLUDED.token, \
+                 issued_at = EXCLUDED.issued_at, expires_at = EXCLUDED.expires_at, \
+                 min_protocol_version = EXCLUDED.min_protocol_version, \
+                 updated_at = EXCLUDED.updated_at \
+                 WHERE federation_subscriptions.expires_at < EXCLUDED.expires_at \
+                 RETURNING (xmax = 0) AS inserted, {COLUMNS}"
+            ),
+            [
+                Value::from(subscription.subscriber.as_str().to_owned()),
+                Value::from(subscription.peer.as_str().to_owned()),
+                Value::from(subscription.album.as_str().to_owned()),
+                Value::from(subscription.scope.as_str().to_owned()),
+                Value::from(subscription.jti.clone()),
+                Value::from(subscription.token.expose().to_owned()),
+                Value::from(to_micros(subscription.issued_at)),
+                Value::from(to_micros(subscription.expires_at)),
+                Value::from(subscription.min_protocol_version.clone()),
+                Value::from(to_micros(subscription.subscribed_at)),
+                Value::from(to_micros(subscription.updated_at)),
+            ],
+        ))
+        .await
+        .map_err(SUBSCRIPTIONS.failing("recording a subscription"))?;
+    if let Some(row) = row {
+        let inserted: bool = row
+            .try_get("", "inserted")
+            .map_err(SUBSCRIPTIONS.failing("recording a subscription"))?;
+        let stored = subscription_from(&row)?;
+        return Ok(if inserted {
+            PutOutcome::Created(stored)
+        } else {
+            PutOutcome::Replaced(stored)
+        });
+    }
+    // The upsert declined because a row held the key, so the row is there unless a removal
+    // raced in between: the outcome is then unknown, and saying so is the honest answer.
+    held_on(connection, &subscription)
+        .await?
+        .map(PutOutcome::Kept)
+        .ok_or_else(|| StoreError::Rejected {
+            store: SUBSCRIPTIONS.store,
+            detail: "the subscription was removed while it was being recorded".to_owned(),
+        })
+}
+
+/// The row under `subscription`'s key on `connection`, if one is held.
+async fn held_on<C: ConnectionTrait>(
+    connection: &C,
+    subscription: &Subscription,
+) -> Result<Option<Subscription>, StoreError> {
+    let held = select_on(
+        connection,
+        format!(
+            "SELECT {COLUMNS} FROM federation_subscriptions \
+             WHERE subscriber_id = $1 AND peer_id = $2 AND album_id = $3"
+        ),
+        vec![
+            Value::from(subscription.subscriber.as_str().to_owned()),
+            Value::from(subscription.peer.as_str().to_owned()),
+            Value::from(subscription.album.as_str().to_owned()),
+        ],
+        "reading a kept subscription",
+    )
+    .await?;
+    Ok(held.into_iter().next())
 }
 
 impl SubscriptionStore for PostgresSubscriptions {
     fn put(&self, subscription: Subscription) -> StoreFuture<'_, PutOutcome> {
+        Box::pin(async move { put_on(&self.connection, subscription).await })
+    }
+
+    fn put_within(
+        &self,
+        subscription: Subscription,
+        limit: u32,
+    ) -> StoreFuture<'_, Option<PutOutcome>> {
         Box::pin(async move {
+            let transaction = self
+                .connection
+                .begin()
+                .await
+                .map_err(SUBSCRIPTIONS.failing("opening a capped subscription write"))?;
+            if !admits_new_key(&transaction, &subscription, limit).await? {
+                transaction
+                    .rollback()
+                    .await
+                    .map_err(SUBSCRIPTIONS.failing("closing a refused subscription write"))?;
+                return Ok(None);
+            }
+            let outcome = put_on(&transaction, subscription).await?;
+            transaction
+                .commit()
+                .await
+                .map_err(SUBSCRIPTIONS.failing("committing a subscription"))?;
+            Ok(Some(outcome))
+        })
+    }
+
+    fn renew(&self, subscription: Subscription) -> StoreFuture<'_, Option<PutOutcome>> {
+        Box::pin(async move {
+            let doing = "renewing a subscription";
             let row = self
                 .connection
                 .query_one_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     format!(
-                        "INSERT INTO federation_subscriptions ({COLUMNS}) \
-                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
-                         ON CONFLICT (subscriber_id, peer_id, album_id) DO UPDATE SET \
-                         scope = EXCLUDED.scope, jti = EXCLUDED.jti, token = EXCLUDED.token, \
-                         issued_at = EXCLUDED.issued_at, expires_at = EXCLUDED.expires_at, \
-                         min_protocol_version = EXCLUDED.min_protocol_version, \
-                         updated_at = EXCLUDED.updated_at \
-                         WHERE federation_subscriptions.expires_at < EXCLUDED.expires_at \
-                         RETURNING (xmax = 0) AS inserted, {COLUMNS}"
+                        "UPDATE federation_subscriptions SET \
+                         scope = $4, jti = $5, token = $6, issued_at = $7, expires_at = $8, \
+                         min_protocol_version = $9, updated_at = $10 \
+                         WHERE subscriber_id = $1 AND peer_id = $2 AND album_id = $3 \
+                         AND expires_at < $8 \
+                         RETURNING {COLUMNS}"
                     ),
                     [
                         Value::from(subscription.subscriber.as_str().to_owned()),
@@ -132,47 +318,17 @@ impl SubscriptionStore for PostgresSubscriptions {
                         Value::from(to_micros(subscription.issued_at)),
                         Value::from(to_micros(subscription.expires_at)),
                         Value::from(subscription.min_protocol_version.clone()),
-                        Value::from(to_micros(subscription.subscribed_at)),
                         Value::from(to_micros(subscription.updated_at)),
                     ],
                 ))
                 .await
-                .map_err(SUBSCRIPTIONS.failing("recording a subscription"))?;
+                .map_err(SUBSCRIPTIONS.failing(doing))?;
             if let Some(row) = row {
-                let inserted: bool = row
-                    .try_get("", "inserted")
-                    .map_err(SUBSCRIPTIONS.failing("recording a subscription"))?;
-                let stored = subscription_from(&row)?;
-                return Ok(if inserted {
-                    PutOutcome::Created(stored)
-                } else {
-                    PutOutcome::Replaced(stored)
-                });
+                return Ok(Some(PutOutcome::Replaced(subscription_from(&row)?)));
             }
-            let held = self
-                .select(
-                    format!(
-                        "SELECT {COLUMNS} FROM federation_subscriptions \
-                         WHERE subscriber_id = $1 AND peer_id = $2 AND album_id = $3"
-                    ),
-                    vec![
-                        Value::from(subscription.subscriber.as_str().to_owned()),
-                        Value::from(subscription.peer.as_str().to_owned()),
-                        Value::from(subscription.album.as_str().to_owned()),
-                    ],
-                    "reading a kept subscription",
-                )
-                .await?;
-            // The upsert declined because a row held the key, so the row is there unless a
-            // removal raced in between: the outcome is then unknown, and saying so is the
-            // honest answer.
-            held.into_iter()
-                .next()
-                .map(PutOutcome::Kept)
-                .ok_or_else(|| StoreError::Rejected {
-                    store: SUBSCRIPTIONS.store,
-                    detail: "the subscription was removed while it was being recorded".to_owned(),
-                })
+            Ok(held_on(&self.connection, &subscription)
+                .await?
+                .map(PutOutcome::Kept))
         })
     }
 

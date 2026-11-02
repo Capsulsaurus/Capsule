@@ -260,6 +260,12 @@ pub(crate) enum Commands {
         #[command(subcommand)]
         command: ShareCommands,
     },
+    /// Follow albums whose home is another server: subscribe with the capability a share
+    /// invite carried, list what this account follows, and unsubscribe
+    Federation {
+        #[command(subcommand)]
+        command: FederationCommands,
+    },
     /// Hand uploads to another device of this account, or upload ones handed to this device
     Peer {
         #[command(subcommand)]
@@ -824,6 +830,41 @@ pub(crate) enum EditCommands {
         clear: bool,
         #[command(flatten)]
         library: EditLibraryArgs,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum FederationCommands {
+    /// Subscribe to an album on another server, so this account's server pulls it. The
+    /// capability token from the share invite is read from stdin as one line, never from the
+    /// command line. Posting one for an album already subscribed renews it
+    Subscribe {
+        /// The album's home server, which minted the capability (e.g. home.example)
+        #[arg(long, value_name = "HOST")]
+        issuer: String,
+        /// Print the subscription as one JSON document on stdout: whether it was created, and
+        /// its peer, album, scope, jti, issue, expiry and subscription instants and liveness
+        #[arg(long)]
+        json: bool,
+    },
+    /// List this account's subscriptions to albums on other servers, live or lapsed
+    List {
+        /// Print the subscriptions as one JSON document on stdout
+        #[arg(long)]
+        json: bool,
+    },
+    /// Stop pulling one album from another server for this account. Succeeds whether or not
+    /// the album was subscribed
+    Unsubscribe {
+        /// The album's home server
+        #[arg(value_name = "PEER")]
+        peer: String,
+        /// The album, as its home server names it
+        #[arg(value_name = "ALBUM_ID")]
+        album_id: String,
+        /// Print the outcome as one JSON document on stdout
+        #[arg(long)]
+        json: bool,
     },
 }
 

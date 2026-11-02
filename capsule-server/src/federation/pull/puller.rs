@@ -9,8 +9,9 @@
 //! 2. **The refresh.** A capability with less than [`REFRESH_AHEAD`] left is exchanged for its
 //!    successor (`POST /v1/federation/capabilities/refresh`). The successor is a peer's value
 //!    like any other: it is verified against the issuer's pinned key, for this server and this
-//!    album, before it is kept, and it is kept through [`SubscriptionStore::put`], where the
-//!    longer-lived token wins — so a replayed answer is harmless. A refusal while the current
+//!    album, before it is kept, and it is kept through [`SubscriptionStore::renew`], where the
+//!    longer-lived token wins — so a replayed answer is harmless — and a subscription its member
+//!    removed during the pull is not re-created. A refusal while the current
 //!    token is still live is logged and the pull goes on with it.
 //! 3. **The pages.** From the album's last cursor, at most [`Rules::max_pages`] pages of at most
 //!    [`Rules::page_size`] entries. Each page is screened ([`screen_page`]), then the metadata
@@ -312,8 +313,18 @@ impl RemotePuller {
             subscribed_at: live.subscribed_at,
             updated_at: now,
         };
-        match parts.subscriptions.put(successor.clone()).await {
-            Ok(outcome) => {
+        match parts.subscriptions.renew(successor.clone()).await {
+            Ok(None) => {
+                // The member unsubscribed while this pull was in flight. Their removal stands:
+                // the successor is not kept, and this pull, already under way, finishes with it.
+                tracing::info!(
+                    jti = %successor.jti,
+                    replayed = refreshed.replayed,
+                    "the subscription was removed during the pull; the refreshed capability is not kept"
+                );
+                Ok(successor)
+            }
+            Ok(Some(outcome)) => {
                 tracing::info!(
                     outcome = outcome.as_str(),
                     jti = %outcome.subscription().jti,

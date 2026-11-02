@@ -7499,6 +7499,10 @@
     "message": "Esta concessão de acesso não cobre o conteúdo solicitado.",
     "origin": "machine"
   },
+  "error.federation.subscription_limit": {
+    "message": "Você atingiu o limite de álbuns compartilhados de outros servidores que pode seguir. Remova um para adicionar outro.",
+    "origin": "machine"
+  },
   "error.federation.unavailable": {
     "message": "O Capsule não conseguiu acessar os registros de federação. Tente novamente.",
     "origin": "machine"

@@ -13,7 +13,8 @@
 //! `cache sweep`, `sync`, `sync reannounce`, `share create`, `share revoke`, `auth login`,
 //! `auth logout`, `auth status`, `label add`, `label remove`, `region add`, `region delete`,
 //! `edit capture-time`, `edit location`, `show`, `library list`, `camera import`,
-//! `camera identity` and `server-info`; each has its offline cases
+//! `camera identity`, `federation subscribe`, `federation list`, `federation unsubscribe` and
+//! `server-info`; each has its offline cases
 //! here, and every `--json`
 //! subcommand that lands joins this file the same way.
 //! What needs a live server (a push or restore that reaches its assets) is the end-to-end
@@ -133,6 +134,16 @@
 //!   `camera_discovery`'s unit tests, against a scripted mDNS responder.
 //! - `camera_discover_json_with_an_unbounded_timeout_is_a_usage_error` — the parser's exit
 //!   status 2 for a window of 0 s or over 60 s, before the network is browsed.
+//! - `federation_subscribe_json_without_a_session_prints_nothing_on_stdout` — the token is read
+//!   from stdin, then the run fails without a session: non-zero exit, empty stdout, the reason
+//!   on stderr.
+//! - `federation_subscribe_json_without_an_issuer_is_a_usage_error` — the parser's exit
+//!   status 2.
+//! - `federation_list_json_without_a_session_prints_nothing_on_stdout` — a run-level failure.
+//! - `federation_unsubscribe_json_without_a_session_prints_nothing_on_stdout` — a run-level
+//!   failure.
+//! - `federation_unsubscribe_json_without_an_album_is_a_usage_error` — the parser's exit
+//!   status 2.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -890,6 +901,51 @@ fn share_create_json_over_an_empty_scope_prints_nothing_on_stdout() {
 fn share_revoke_json_with_a_malformed_id_prints_nothing_on_stdout() {
     let scratch = Scratch::new();
     insta::assert_snapshot!(run(&scratch, &["share", "revoke", "not-an-id", "--json"]));
+}
+
+#[test]
+fn federation_subscribe_json_without_a_session_prints_nothing_on_stdout() {
+    let scratch = Scratch::new();
+    insta::assert_snapshot!(run(
+        &scratch,
+        &["federation", "subscribe", "--issuer", "home.test", "--json"]
+    ));
+}
+
+#[test]
+fn federation_subscribe_json_without_an_issuer_is_a_usage_error() {
+    let scratch = Scratch::new();
+    insta::assert_snapshot!(run(&scratch, &["federation", "subscribe", "--json"]));
+}
+
+#[test]
+fn federation_list_json_without_a_session_prints_nothing_on_stdout() {
+    let scratch = Scratch::new();
+    insta::assert_snapshot!(run(&scratch, &["federation", "list", "--json"]));
+}
+
+#[test]
+fn federation_unsubscribe_json_without_a_session_prints_nothing_on_stdout() {
+    let scratch = Scratch::new();
+    insta::assert_snapshot!(run(
+        &scratch,
+        &[
+            "federation",
+            "unsubscribe",
+            "home.test",
+            "album-1",
+            "--json"
+        ]
+    ));
+}
+
+#[test]
+fn federation_unsubscribe_json_without_an_album_is_a_usage_error() {
+    let scratch = Scratch::new();
+    insta::assert_snapshot!(run(
+        &scratch,
+        &["federation", "unsubscribe", "home.test", "--json"]
+    ));
 }
 
 /// The one asset `library(scratch, 1)` imported. Opening the workspace here holds its lock

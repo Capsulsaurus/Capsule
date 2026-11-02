@@ -7499,6 +7499,10 @@
     "message": "Cette autorisation d'accès ne couvre pas le contenu demandé.",
     "origin": "machine"
   },
+  "error.federation.subscription_limit": {
+    "message": "Vous avez atteint la limite d'albums partagés d'autres serveurs que vous pouvez suivre. Retirez-en un pour en ajouter un autre.",
+    "origin": "machine"
+  },
   "error.federation.unavailable": {
     "message": "Capsule n'a pas pu accéder aux données de fédération. Veuillez réessayer.",
     "origin": "machine"

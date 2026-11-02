@@ -2036,6 +2036,7 @@
   "error.federation.rate_budget_exceeded": "This source has reached its request limit. Please wait and try again.",
   "error.federation.revocations_unavailable": "Capsule couldn't read the revocation list. Please try again.",
   "error.federation.scope_insufficient": "This access grant does not cover the requested content.",
+  "error.federation.subscription_limit": "You've reached the limit of shared albums you can follow from other servers. Remove one to add another.",
   "error.federation.unavailable": "Capsule couldn't reach the federation records. Please try again.",
   "error.moderation.account_suspended": "Your account is suspended. You can't upload or share until it's reinstated.",
   "error.moderation.report_at_capacity": "This server is handling too many reports right now. Please wait and try again.",

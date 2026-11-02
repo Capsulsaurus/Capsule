@@ -714,6 +714,91 @@
       ]
     },
     {
+      "about": "Follow albums whose home is another server: subscribe with the capability a share invite carried, list what this account follows, and unsubscribe",
+      "name": "federation",
+      "subcommands": [
+        {
+          "about": "List this account's subscriptions to albums on other servers, live or lapsed",
+          "args": [
+            {
+              "help": "Print the subscriptions as one JSON document on stdout",
+              "id": "json",
+              "long": "json",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            }
+          ],
+          "name": "list"
+        },
+        {
+          "about": "Subscribe to an album on another server, so this account's server pulls it. The capability token from the share invite is read from stdin as one line, never from the command line. Posting one for an album already subscribed renews it",
+          "args": [
+            {
+              "help": "The album's home server, which minted the capability (e.g. home.example)",
+              "id": "issuer",
+              "long": "issuer",
+              "positional": false,
+              "repeatable": false,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "HOST"
+              ]
+            },
+            {
+              "help": "Print the subscription as one JSON document on stdout: whether it was created, and its peer, album, scope, jti, issue, expiry and subscription instants and liveness",
+              "id": "json",
+              "long": "json",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            }
+          ],
+          "name": "subscribe"
+        },
+        {
+          "about": "Stop pulling one album from another server for this account. Succeeds whether or not the album was subscribed",
+          "args": [
+            {
+              "help": "The album's home server",
+              "id": "peer",
+              "positional": true,
+              "repeatable": false,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "PEER"
+              ]
+            },
+            {
+              "help": "The album, as its home server names it",
+              "id": "album_id",
+              "positional": true,
+              "repeatable": false,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "ALBUM_ID"
+              ]
+            },
+            {
+              "help": "Print the outcome as one JSON document on stdout",
+              "id": "json",
+              "long": "json",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            }
+          ],
+          "name": "unsubscribe"
+        }
+      ]
+    },
+    {
       "about": "Import files into a local Capsule library",
       "args": [
         {

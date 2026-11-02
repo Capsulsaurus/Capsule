@@ -66,6 +66,8 @@ struct HomeServer {
     pages: Mutex<VecDeque<Canned>>,
     blobs: Mutex<BTreeMap<String, Vec<u8>>>,
     refresh: Mutex<Option<Canned>>,
+    /// A store whose every subscription the member removes while the refresh is answered.
+    unsubscribe_on_refresh: Mutex<Option<Arc<InMemorySubscriptions>>>,
     seen: Mutex<Vec<Seen>>,
 }
 
@@ -148,7 +150,23 @@ impl rest::HttpBackend for HomeServer {
             signature: header(REQUEST_SIGNATURE_HEADER),
         });
         let canned = self.answer(&request);
+        let unsubscribing = (request.url().path() == "/v1/federation/capabilities/refresh")
+            .then(|| {
+                self.unsubscribe_on_refresh
+                    .lock()
+                    .expect("unpoisoned")
+                    .clone()
+            })
+            .flatten();
         Box::pin(async move {
+            if let Some(store) = unsubscribing {
+                for held in store.of_job(&job()).await.expect("read") {
+                    store
+                        .remove(&held.subscriber, &held.peer, &held.album)
+                        .await
+                        .expect("unsubscribed");
+                }
+            }
             let mut response = http::Response::new(canned.body);
             *response.status_mut() =
                 reqwest::StatusCode::from_u16(canned.status).expect("a status");
@@ -559,6 +577,30 @@ async fn a_capability_near_its_end_is_refreshed_verified_kept_and_presented() {
     assert_eq!(refresh.len(), 1);
     assert_eq!(refresh[0].method, "POST");
     assert_ne!(refresh[0].bearer.as_deref(), Some(successor.as_str()));
+    let sync = harness.home.seen_at("/v1/sync");
+    assert_eq!(sync[0].bearer.as_deref(), Some(successor.as_str()));
+}
+
+#[tokio::test]
+async fn an_unsubscribe_during_the_refresh_stays_removed() {
+    let harness = Harness::new().await;
+    harness.clock.advance(SignedDuration::from_hours(19));
+    let successor = harness.mint(SignedDuration::from_hours(24));
+    *harness.home.refresh.lock().expect("unpoisoned") =
+        Some(refreshed(&harness.issuer, &successor));
+    *harness
+        .home
+        .unsubscribe_on_refresh
+        .lock()
+        .expect("unpoisoned") = Some(harness.subscriptions.clone());
+    harness.home.serve_page(a_page(Vec::new(), "c0", false));
+
+    let report = harness.pull(PeerTier::Established).await;
+    assert_eq!(report.result, Ok(()), "the pull under way finishes");
+    assert!(
+        harness.tokens().await.is_empty(),
+        "the refresh does not re-create the removed subscription"
+    );
     let sync = harness.home.seen_at("/v1/sync");
     assert_eq!(sync[0].bearer.as_deref(), Some(successor.as_str()));
 }
