@@ -23,6 +23,15 @@
 //! cancels nothing: the outcome lands on this screen's state whichever screen is on top.
 //! Quitting drops the wait, and the server expires the ceremony on its own. The device code and
 //! the authorization address travel as [`Secret`]s, so neither reaches `tui.log`.
+//!
+//! # A server that refuses passwords
+//!
+//! Opening the password form also asks the server's `server-info` record whether it refuses
+//! passwords ([`AuthEffect::CheckPasswordSignIn`]). A `true` closes the form, drops anything
+//! typed, and says to sign in through the identity provider instead; from then on the form does
+//! not open. Anything else — `false`, an older server's record without the switch, no answer —
+//! leaves the form as it was, and the server's own `403 error.auth.password_disabled` stays the
+//! authority.
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -116,6 +125,9 @@ pub enum AuthAction {
     SecondFactorFinished(Result<(), String>),
     /// [`AuthEffect::Logout`] finished: whether a session was signed out.
     SignOutFinished(Result<bool, String>),
+    /// [`AuthEffect::CheckPasswordSignIn`] finished: whether the server said it refuses
+    /// passwords. `false` covers every answer that is not a published `true`.
+    PasswordSignInChecked(bool),
 }
 
 /// The work the account screen asks the ports for.
@@ -156,6 +168,9 @@ pub enum AuthEffect {
         /// The attempt to stop.
         attempt: u64,
     },
+    /// Ask the server whether it refuses passwords; answered by
+    /// [`AuthAction::PasswordSignInChecked`].
+    CheckPasswordSignIn,
 }
 
 impl AuthEffect {
@@ -175,6 +190,8 @@ impl AuthEffect {
                 result: Err(reason),
             },
             Self::CancelProvider { attempt } => AuthAction::ProviderCancelled { attempt },
+            // The check is advice: one that could not run refuses nothing.
+            Self::CheckPasswordSignIn => AuthAction::PasswordSignInChecked(false),
         }
     }
 }
@@ -203,6 +220,16 @@ fn code_form() -> Form {
     Form::new(vec![Field::secret("Authenticator code")])
 }
 
+/// What the screen says when the server refuses passwords: the English catalog message for
+/// `error.auth.password_disabled`, and the keys that sign in through the identity provider.
+#[must_use]
+pub fn password_disabled_line() -> String {
+    format!(
+        "{} Press w to sign in with a browser here, or d on another device.",
+        crate::i18n::error_message(crate::i18n::error_codes::AUTH_PASSWORD_DISABLED)
+    )
+}
+
 /// The account screen's state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthScreen {
@@ -216,6 +243,8 @@ pub struct AuthScreen {
     provider: Option<ProviderWait>,
     /// The last attempt number handed out.
     attempts: u64,
+    /// Whether the server said it refuses passwords, so the password form stays closed.
+    password_disabled: bool,
 }
 
 /// The identity-provider sign-in in flight.
@@ -239,6 +268,7 @@ impl Default for AuthScreen {
             status: Status::Idle,
             provider: None,
             attempts: 0,
+            password_disabled: false,
         }
     }
 }
@@ -278,6 +308,25 @@ impl AuthScreen {
     #[must_use]
     pub fn provider(&self) -> Option<&ProviderWait> {
         self.provider.as_ref()
+    }
+
+    /// Whether the server said it refuses passwords.
+    #[must_use]
+    pub fn password_disabled(&self) -> bool {
+        self.password_disabled
+    }
+
+    /// Apply the server's answer on passwords. A `true` closes a password form still being
+    /// typed into, dropping what was typed; a sign-in already sent is left to the server.
+    fn password_sign_in_checked(&mut self, disabled: bool) -> Vec<Effect> {
+        tracing::debug!(target: "capsule_cli::tui", disabled, "password sign-in checked");
+        self.password_disabled = disabled;
+        if disabled && self.editing && matches!(self.stage, Stage::Credentials) {
+            self.form = credentials_form();
+            self.editing = false;
+            self.status = Status::Failed(password_disabled_line());
+        }
+        Vec::new()
     }
 
     /// Whether `attempt` is the identity-provider sign-in being waited on.
@@ -400,21 +449,28 @@ impl AuthScreen {
                 tracing::debug!(target: "capsule_cli::tui", attempt, "identity-provider sign-in cancelled");
                 Vec::new()
             }
+            AuthAction::PasswordSignInChecked(disabled) => self.password_sign_in_checked(disabled),
             AuthAction::BeginSignIn => {
-                if !self.status.is_working() && !self.confirming {
-                    // The email typed last time stays; it is not a secret. A pending challenge
-                    // is dropped: this starts the sign-in over.
-                    let email = match self.stage {
-                        Stage::Credentials => self.form.value(EMAIL).to_owned(),
-                        Stage::SecondFactor { .. } => String::new(),
-                    };
-                    self.stage = Stage::Credentials;
-                    self.form = credentials_form();
-                    self.form.set(EMAIL, &email);
-                    self.editing = true;
-                    self.status = Status::Idle;
+                if self.status.is_working() || self.confirming {
+                    return Vec::new();
                 }
-                Vec::new()
+                if self.password_disabled {
+                    self.status = Status::Failed(password_disabled_line());
+                    return Vec::new();
+                }
+                // The email typed last time stays; it is not a secret. A pending challenge is
+                // dropped: this starts the sign-in over.
+                let email = match self.stage {
+                    Stage::Credentials => self.form.value(EMAIL).to_owned(),
+                    Stage::SecondFactor { .. } => String::new(),
+                };
+                self.stage = Stage::Credentials;
+                self.form = credentials_form();
+                self.form.set(EMAIL, &email);
+                self.editing = true;
+                self.status = Status::Idle;
+                // The form opens at once; the server's answer closes it if passwords are refused.
+                vec![Effect::Auth(AuthEffect::CheckPasswordSignIn)]
             }
             AuthAction::SignOut => {
                 if self.status.is_working() || self.confirming {

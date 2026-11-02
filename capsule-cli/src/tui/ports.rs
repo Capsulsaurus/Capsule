@@ -67,6 +67,13 @@ pub trait Ports: Send + Sync + 'static {
         async { Err(NOT_OFFERED.to_owned()) }
     }
 
+    /// Whether the server's `server-info` record says it refuses passwords, as `capsule auth
+    /// login` reads it before asking for one ([`remote::password_sign_in_disabled`]). Only a
+    /// published `true` is `true`; the default, like an unreadable record, is `false`.
+    fn password_sign_in_disabled(&self) -> impl Future<Output = bool> + Send {
+        async { false }
+    }
+
     /// Answer a second-factor challenge with an authenticator code, storing the session.
     fn verify_second_factor(
         &self,
@@ -266,6 +273,9 @@ pub async fn perform<P: Ports>(ports: &P, effect: Effect) -> Action {
             ports.cancel_provider(attempt).await;
             Action::Auth(AuthAction::ProviderCancelled { attempt })
         }
+        Effect::Auth(AuthEffect::CheckPasswordSignIn) => Action::Auth(
+            AuthAction::PasswordSignInChecked(ports.password_sign_in_disabled().await),
+        ),
         Effect::Sync(SyncEffect::Run { from_start }) => {
             Action::Sync(SyncAction::Finished(ports.sync(from_start).await))
         }
@@ -765,6 +775,15 @@ impl Ports for LocalPorts {
             }
         })
         .await
+    }
+
+    async fn password_sign_in_disabled(&self) -> bool {
+        let remote = self.remote.clone();
+        // Off the input loop like every network call here; a task that did not finish refuses
+        // nothing, as an unreadable record does not.
+        off_loop(move || async move { Ok(remote::password_sign_in_disabled(&remote).await) })
+            .await
+            .unwrap_or(false)
     }
 
     async fn verify_second_factor(&self, mfa_token: Secret, code: Secret) -> Result<(), String> {

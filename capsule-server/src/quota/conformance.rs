@@ -26,7 +26,7 @@
 
 use jiff::{SignedDuration, Timestamp};
 
-use super::{ChargeOutcome, QuotaLimits, QuotaStore};
+use super::{ChargeOutcome, ExpiredReservation, QuotaLimits, QuotaStore};
 use crate::blob::ContentAddress;
 use crate::store::{StoreError, UserId};
 
@@ -601,6 +601,207 @@ pub async fn a_suspension_is_independent_of_the_usage(h: &dyn Harness) {
 }
 
 // ===========================================================================================
+// Reservations (#1059)
+// ===========================================================================================
+
+/// `case`'s own expired reservations as of `now`: the listing, narrowed to `case`'s accounts so
+/// cases sharing one ledger do not see each other's.
+async fn expired_of(h: &dyn Harness, case: &str, now: Timestamp) -> Vec<ExpiredReservation> {
+    ok(
+        h.quotas().expired_reservations(now, usize::MAX).await,
+        "list expired reservations",
+    )
+    .into_iter()
+    .filter(|reservation| reservation.user.as_str().starts_with(case))
+    .collect()
+}
+
+/// A reservation is charged like any attribution, listed only once its deadline has passed, and
+/// released as expired only by its own account, once.
+pub async fn a_reservation_lapses_only_past_its_deadline(h: &dyn Harness) {
+    let owner = user("lapse", 1);
+    let other = user("lapse", 2);
+    let held = address("lapse", 1);
+    assert_eq!(
+        ok(
+            h.quotas()
+                .reserve(&owner, &held, 64, day(0), day(1), limits())
+                .await,
+            "reserve an address",
+        ),
+        ChargeOutcome::Charged { used: 64 },
+    );
+    assert_eq!(
+        ok(
+            h.quotas()
+                .reserve(&other, &held, 64, day(0), day(1), limits())
+                .await,
+            "reserve an attributed address",
+        ),
+        ChargeOutcome::AlreadyAttributed,
+        "a reservation is an attribution, so the dedup rule holds for it"
+    );
+
+    assert!(expired_of(h, "lapse", day(0)).await.is_empty());
+    assert!(!ok(
+        h.quotas().release_expired(&owner, &held, day(0)).await,
+        "release a reservation inside its deadline",
+    ));
+    assert_eq!(
+        expired_of(h, "lapse", day(1)).await,
+        vec![ExpiredReservation {
+            user: owner.clone(),
+            address: held.clone(),
+            size: 64,
+            reserved_until: day(1),
+        }],
+    );
+
+    assert!(!ok(
+        h.quotas().release_expired(&other, &held, day(1)).await,
+        "release another account's reservation",
+    ));
+    assert!(ok(
+        h.quotas().release_expired(&owner, &held, day(1)).await,
+        "release an expired reservation",
+    ));
+    assert_eq!(ok(h.quotas().usage(&owner).await, "read usage").used, 0);
+    assert!(
+        !ok(
+            h.quotas().release_expired(&owner, &held, day(1)).await,
+            "release it again",
+        ),
+        "a second release must not credit the bytes twice"
+    );
+    assert!(expired_of(h, "lapse", day(9)).await.is_empty());
+}
+
+/// A settled reservation is an ordinary charge: never listed, never released as expired.
+///
+/// The property a completed upload's charge rests on.
+pub async fn a_settled_reservation_is_never_released_as_expired(h: &dyn Harness) {
+    let owner = user("settle", 1);
+    let held = address("settle", 1);
+    ok(
+        h.quotas()
+            .reserve(&owner, &held, 64, day(0), day(1), limits())
+            .await,
+        "reserve an address",
+    );
+
+    assert!(ok(h.quotas().settle(&held).await, "settle"));
+    assert!(expired_of(h, "settle", day(9)).await.is_empty());
+    assert!(!ok(
+        h.quotas().release_expired(&owner, &held, day(9)).await,
+        "release a settled charge as expired",
+    ));
+    assert_eq!(ok(h.quotas().usage(&owner).await, "read usage").used, 64);
+    assert!(
+        ok(h.quotas().settle(&held).await, "settle again"),
+        "a settled attribution is still attributed"
+    );
+    assert!(!ok(
+        h.quotas().extend_reservation(&held, day(9)).await,
+        "extend a settled charge",
+    ));
+
+    let unattributed = address("settle", 2);
+    assert!(
+        !ok(h.quotas().settle(&unattributed).await, "settle nothing"),
+        "an unattributed address is answered so the finalizer charges it"
+    );
+
+    // A plain charge pays for stored bytes, and is settled from the start.
+    let stored = address("settle", 3);
+    ok(
+        h.quotas()
+            .charge(&owner, &stored, 8, day(0), limits())
+            .await,
+        "charge an address",
+    );
+    assert!(expired_of(h, "settle", day(9)).await.is_empty());
+}
+
+/// An extension moves a reservation's deadline later, never earlier.
+pub async fn an_extension_moves_the_deadline_and_never_shortens_it(h: &dyn Harness) {
+    let owner = user("extend", 1);
+    let held = address("extend", 1);
+    ok(
+        h.quotas()
+            .reserve(&owner, &held, 64, day(0), day(1), limits())
+            .await,
+        "reserve an address",
+    );
+
+    assert!(ok(
+        h.quotas().extend_reservation(&held, day(3)).await,
+        "extend",
+    ));
+    assert!(expired_of(h, "extend", day(2)).await.is_empty());
+    ok(
+        h.quotas().extend_reservation(&held, day(2)).await,
+        "extend to an earlier deadline",
+    );
+    assert!(
+        expired_of(h, "extend", day(2)).await.is_empty(),
+        "an earlier deadline must not shorten the reservation"
+    );
+    assert!(!ok(
+        h.quotas().release_expired(&owner, &held, day(2)).await,
+        "release an extended reservation before its new deadline",
+    ));
+    assert_eq!(expired_of(h, "extend", day(3)).await.len(), 1);
+    assert!(!ok(
+        h.quotas()
+            .extend_reservation(&address("extend", 2), day(3))
+            .await,
+        "extend an unattributed address",
+    ));
+
+    assert!(ok(h.quotas().settle(&held).await, "settle"));
+}
+
+/// The listing is earliest deadline first, and bounded.
+pub async fn expired_reservations_are_listed_earliest_first_and_bounded(h: &dyn Harness) {
+    let owner = user("order", 1);
+    for (n, deadline) in [(1, 30), (2, 10), (3, 20)] {
+        ok(
+            h.quotas()
+                .reserve(
+                    &owner,
+                    &address("order", n),
+                    1,
+                    day(0),
+                    day(deadline),
+                    limits(),
+                )
+                .await,
+            "reserve an address",
+        );
+    }
+
+    let deadlines: Vec<Timestamp> = expired_of(h, "order", day(40))
+        .await
+        .into_iter()
+        .map(|reservation| reservation.reserved_until)
+        .collect();
+    assert_eq!(deadlines, vec![day(10), day(20), day(30)]);
+    let first = ok(
+        h.quotas().expired_reservations(day(25), 1).await,
+        "list one expired reservation",
+    );
+    assert_eq!(first.len(), 1, "the limit bounds the listing");
+    assert!(
+        first[0].reserved_until <= day(10),
+        "the earliest deadline comes first"
+    );
+
+    for n in 1..=3 {
+        ok(h.quotas().settle(&address("order", n)).await, "settle");
+    }
+}
+
+// ===========================================================================================
 // The whole suite
 // ===========================================================================================
 
@@ -623,6 +824,11 @@ pub async fn run_all(h: &dyn Harness) {
 
     a_suspension_is_recorded_once_and_lifted(h).await;
     a_suspension_is_independent_of_the_usage(h).await;
+
+    a_reservation_lapses_only_past_its_deadline(h).await;
+    a_settled_reservation_is_never_released_as_expired(h).await;
+    an_extension_moves_the_deadline_and_never_shortens_it(h).await;
+    expired_reservations_are_listed_earliest_first_and_bounded(h).await;
 }
 
 #[cfg(test)]

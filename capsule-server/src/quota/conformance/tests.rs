@@ -42,6 +42,10 @@ conformance_cases! {
     parallel_charges_cannot_overshoot_the_hard_limit,
     a_suspension_is_recorded_once_and_lifted,
     a_suspension_is_independent_of_the_usage,
+    a_reservation_lapses_only_past_its_deadline,
+    a_settled_reservation_is_never_released_as_expired,
+    an_extension_moves_the_deadline_and_never_shortens_it,
+    expired_reservations_are_listed_earliest_first_and_bounded,
 }
 
 /// The whole suite, in one pass on one ledger.
