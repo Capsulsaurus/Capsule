@@ -2,8 +2,9 @@
 //!
 //! One mutex, so [`SubscriptionStore::put`]'s read-decide-write is one critical section, as the
 //! Postgres adapter's single upsert statement is, and [`SubscriptionStore::put_within`]'s count
-//! is taken in the same section as the write it admits, as the Postgres adapter's table lock
-//! makes it.
+//! is taken in the same section as the write it admits, as the Postgres adapter's per-subscriber
+//! advisory lock makes it. [`SubscriptionStore::renew`]'s "is the key held" is read in the same
+//! section as the write, as the Postgres adapter's single `UPDATE` decides it.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
@@ -86,6 +87,16 @@ impl SubscriptionStore for InMemorySubscriptions {
                 if held >= usize::try_from(limit).unwrap_or(usize::MAX) {
                     return Ok(None);
                 }
+            }
+            Ok(Some(put_locked(&mut rows, subscription)))
+        })
+    }
+
+    fn renew(&self, subscription: Subscription) -> StoreFuture<'_, Option<PutOutcome>> {
+        Box::pin(async move {
+            let mut rows = self.rows();
+            if !rows.contains_key(&key_of(&subscription)) {
+                return Ok(None);
             }
             Ok(Some(put_locked(&mut rows, subscription)))
         })

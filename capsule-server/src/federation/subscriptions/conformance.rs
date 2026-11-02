@@ -5,6 +5,8 @@
 //! - **The longer-lived token wins.** A put under a held key replaces the token only when the
 //!   posted one expires later, and never moves `subscribed_at`; a replayed older invite changes
 //!   nothing.
+//! - **A renewal records no key.** The puller's refresh replaces a held token as a put does, and
+//!   a key its member removed stays removed.
 //! - **Jobs are distinct and live.** Two subscribers to one album are one job, and a job whose
 //!   every token has lapsed is not listed.
 //! - **Every read is ordered**, so the worker visits jobs in a stable order and a subscriber's
@@ -77,6 +79,8 @@ pub async fn run_all(store: &dyn SubscriptionStore) {
     a_capped_put_refuses_a_new_key_at_the_limit(store).await;
     a_capped_put_renews_a_held_key_at_the_limit(store).await;
     a_removal_frees_a_place_under_the_cap(store).await;
+    a_renewal_replaces_or_keeps_a_held_key(store).await;
+    a_renewal_never_recreates_a_removed_key(store).await;
 }
 
 /// Concurrent capped puts of new keys by one subscriber one place short of the limit record
@@ -191,6 +195,57 @@ async fn a_removal_frees_a_place_under_the_cap(store: &dyn SubscriptionStore) {
             "a put after the removal"
         ),
         Some(PutOutcome::Created(next))
+    );
+}
+
+async fn a_renewal_replaces_or_keeps_a_held_key(store: &dyn SubscriptionStore) {
+    let held = subscription("renewal", "u", "home", "a", 0, 6);
+    ok(store.put(held.clone()).await, "a first put");
+    let successor = subscription("renewal", "u", "home", "a", 3, 9);
+    let expected = Subscription {
+        subscribed_at: held.subscribed_at,
+        ..successor.clone()
+    };
+    assert_eq!(
+        ok(store.renew(successor.clone()).await, "a renewal"),
+        Some(PutOutcome::Replaced(expected.clone())),
+        "a longer-lived successor replaces the token and keeps the subscription's age"
+    );
+    assert_eq!(
+        ok(store.renew(successor).await, "a replayed renewal"),
+        Some(PutOutcome::Kept(expected.clone())),
+        "a successor that does not outlive the held token changes nothing"
+    );
+    assert_eq!(
+        ok(store.of_subscriber(&held.subscriber).await, "listing"),
+        vec![expected]
+    );
+}
+
+async fn a_renewal_never_recreates_a_removed_key(store: &dyn SubscriptionStore) {
+    // The member unsubscribes while a pull holding their capability is in flight; the pull's
+    // refresh then comes back with a successor.
+    let held = subscription("unsubscribed", "u", "home", "a", 0, 6);
+    ok(store.put(held.clone()).await, "a first put");
+    assert!(ok(
+        store
+            .remove(&held.subscriber, &held.peer, &held.album)
+            .await,
+        "the unsubscribe"
+    ));
+    let successor = subscription("unsubscribed", "u", "home", "a", 3, 9);
+    assert_eq!(
+        ok(store.renew(successor).await, "a renewal of a removed key"),
+        None,
+        "a renewal records no key"
+    );
+    assert!(
+        ok(store.of_subscriber(&held.subscriber).await, "listing").is_empty(),
+        "the unsubscribe stays"
+    );
+    assert!(
+        ok(store.of_job(&held.job()).await, "listing the job").is_empty(),
+        "and the album is no job"
     );
 }
 

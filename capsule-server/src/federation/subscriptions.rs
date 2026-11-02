@@ -34,8 +34,9 @@
 //! from a pinned peer would otherwise bound how much pulling one account can make this server do.
 //! Intake records a new key through [`SubscriptionStore::put_within`], which refuses it once the
 //! subscriber holds [`MAX_SUBSCRIPTIONS_PER_ACCOUNT`]; a post for a key already held is a renewal
-//! and is never refused. The puller's refresh goes through [`SubscriptionStore::put`], which is
-//! not capped: it only ever renews.
+//! and is never refused. The puller's refresh goes through [`SubscriptionStore::renew`], which
+//! is not capped because it never records a key: a subscription its member removed while a pull
+//! was in flight stays removed, and the successor that pull holds is not kept.
 //!
 //! # A lapsed token is kept, not pulled
 //!
@@ -199,6 +200,14 @@ pub trait SubscriptionStore: fmt::Debug + Send + Sync {
         subscription: Subscription,
         limit: u32,
     ) -> StoreFuture<'_, Option<PutOutcome>>;
+
+    /// [`put`](Self::put) for a key already held, and nothing for one that is not: the answer
+    /// is then `None` and nothing is written.
+    ///
+    /// The puller's refresh: it renews the subscription it pulled under, and atomically never
+    /// re-creates one its member removed while the pull was in flight. Never
+    /// [`PutOutcome::Created`].
+    fn renew(&self, subscription: Subscription) -> StoreFuture<'_, Option<PutOutcome>>;
 
     /// Every subscription of `subscriber`, live or lapsed, ordered by peer and then album.
     fn of_subscriber<'a>(&'a self, subscriber: &'a UserId) -> StoreFuture<'a, Vec<Subscription>>;

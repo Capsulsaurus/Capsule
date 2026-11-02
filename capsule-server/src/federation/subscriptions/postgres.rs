@@ -8,15 +8,24 @@
 //! insert from an update. No returned row is the `WHERE` declining, and the held row is read
 //! back to answer [`PutOutcome::Kept`].
 //!
-//! # A capped put counts under a table lock
+//! # A capped put counts under the subscriber's lock
 //!
 //! [`SubscriptionStore::put_within`] runs in a transaction that first takes
-//! `LOCK TABLE federation_subscriptions IN SHARE ROW EXCLUSIVE MODE`, then counts the
-//! subscriber's rows and runs the same upsert. The mode conflicts with itself and with every
-//! write, so no concurrent post can add a row between the count and the insert; plain reads are
-//! not blocked. A table lock rather than `pg_advisory_xact_lock(hashtext(..))` for the reason
-//! the receipt log gives: it is scoped to exactly the object it protects. Intake is rare, so
-//! serializing it costs nothing a member can see.
+//! `pg_advisory_xact_lock(hashtext('federation_subscriptions:' || subscriber))`, then counts the
+//! subscriber's rows and runs the same upsert, as the album key escrows bound an account. Two
+//! capped puts by one subscriber are serialized, and the second's count, a fresh statement under
+//! read committed, sees the first's committed row; capped puts by different subscribers never
+//! wait on each other, and nothing else does either. The capped put is the only write that
+//! records a key in production, so it is the only one that takes the lock:
+//! [`SubscriptionStore::remove`] only lowers the count, and [`SubscriptionStore::renew`] never
+//! records a key. Two subscribers whose names collide under `hashtext` share a lock, which costs
+//! a wait and nothing else.
+//!
+//! # A renewal is one `UPDATE`
+//!
+//! [`SubscriptionStore::renew`] is `UPDATE … WHERE key AND expires_at < posted RETURNING`, so a
+//! row removed before it runs is not re-created. No returned row is read back: a held row is
+//! [`PutOutcome::Kept`], and none is the key no longer held.
 //!
 //! # Byte order, not the database's collation
 //!
@@ -127,17 +136,25 @@ async fn select_on<C: ConnectionTrait>(
 }
 
 /// Whether `subscriber` may record a new key under `limit`: the count, read on `transaction`
-/// after the table lock is taken, so no concurrent write moves it before the caller's own.
+/// after the subscriber's lock is taken, so no concurrent capped put moves it before the caller's
+/// own.
 async fn admits_new_key(
     transaction: &DatabaseTransaction,
     subscription: &Subscription,
     limit: u32,
 ) -> Result<bool, StoreError> {
     let doing = "counting an account's subscriptions";
+    // The account's critical section starts here and ends with the transaction, so the count
+    // below is read and the row written as one step against every concurrent capped put by the
+    // same subscriber.
     transaction
-        .execute_unprepared("LOCK TABLE federation_subscriptions IN SHARE ROW EXCLUSIVE MODE")
+        .execute_raw(Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            "SELECT pg_advisory_xact_lock(hashtext('federation_subscriptions:' || $1))",
+            [Value::from(subscription.subscriber.as_str().to_owned())],
+        ))
         .await
-        .map_err(SUBSCRIPTIONS.failing("locking the subscriptions"))?;
+        .map_err(SUBSCRIPTIONS.failing("locking an account's subscriptions"))?;
     let row = transaction
         .query_one_raw(Statement::from_sql_and_values(
             DbBackend::Postgres,
@@ -211,6 +228,22 @@ async fn put_on<C: ConnectionTrait>(
             PutOutcome::Replaced(stored)
         });
     }
+    // The upsert declined because a row held the key, so the row is there unless a removal
+    // raced in between: the outcome is then unknown, and saying so is the honest answer.
+    held_on(connection, &subscription)
+        .await?
+        .map(PutOutcome::Kept)
+        .ok_or_else(|| StoreError::Rejected {
+            store: SUBSCRIPTIONS.store,
+            detail: "the subscription was removed while it was being recorded".to_owned(),
+        })
+}
+
+/// The row under `subscription`'s key on `connection`, if one is held.
+async fn held_on<C: ConnectionTrait>(
+    connection: &C,
+    subscription: &Subscription,
+) -> Result<Option<Subscription>, StoreError> {
     let held = select_on(
         connection,
         format!(
@@ -225,15 +258,7 @@ async fn put_on<C: ConnectionTrait>(
         "reading a kept subscription",
     )
     .await?;
-    // The upsert declined because a row held the key, so the row is there unless a removal
-    // raced in between: the outcome is then unknown, and saying so is the honest answer.
-    held.into_iter()
-        .next()
-        .map(PutOutcome::Kept)
-        .ok_or_else(|| StoreError::Rejected {
-            store: SUBSCRIPTIONS.store,
-            detail: "the subscription was removed while it was being recorded".to_owned(),
-        })
+    Ok(held.into_iter().next())
 }
 
 impl SubscriptionStore for PostgresSubscriptions {
@@ -265,6 +290,45 @@ impl SubscriptionStore for PostgresSubscriptions {
                 .await
                 .map_err(SUBSCRIPTIONS.failing("committing a subscription"))?;
             Ok(Some(outcome))
+        })
+    }
+
+    fn renew(&self, subscription: Subscription) -> StoreFuture<'_, Option<PutOutcome>> {
+        Box::pin(async move {
+            let doing = "renewing a subscription";
+            let row = self
+                .connection
+                .query_one_raw(Statement::from_sql_and_values(
+                    DbBackend::Postgres,
+                    format!(
+                        "UPDATE federation_subscriptions SET \
+                         scope = $4, jti = $5, token = $6, issued_at = $7, expires_at = $8, \
+                         min_protocol_version = $9, updated_at = $10 \
+                         WHERE subscriber_id = $1 AND peer_id = $2 AND album_id = $3 \
+                         AND expires_at < $8 \
+                         RETURNING {COLUMNS}"
+                    ),
+                    [
+                        Value::from(subscription.subscriber.as_str().to_owned()),
+                        Value::from(subscription.peer.as_str().to_owned()),
+                        Value::from(subscription.album.as_str().to_owned()),
+                        Value::from(subscription.scope.as_str().to_owned()),
+                        Value::from(subscription.jti.clone()),
+                        Value::from(subscription.token.expose().to_owned()),
+                        Value::from(to_micros(subscription.issued_at)),
+                        Value::from(to_micros(subscription.expires_at)),
+                        Value::from(subscription.min_protocol_version.clone()),
+                        Value::from(to_micros(subscription.updated_at)),
+                    ],
+                ))
+                .await
+                .map_err(SUBSCRIPTIONS.failing(doing))?;
+            if let Some(row) = row {
+                return Ok(Some(PutOutcome::Replaced(subscription_from(&row)?)));
+            }
+            Ok(held_on(&self.connection, &subscription)
+                .await?
+                .map(PutOutcome::Kept))
         })
     }
 
