@@ -351,8 +351,14 @@ struct AppEnvironment {
             ?? ManagedLibrary(layout: layout, fileStore: fileStore, catalog: InMemoryAssetCatalog())
         let importService = ImportService(library: library, fileStore: fileStore, hasher: CryptoKitHasher())
         let trashGate = SecondaryTrashGate()
-        let provider = ManagedProvider(library: library, authGate: trashGate, uploads: uploads)
+        let provider = ManagedProvider(
+            library: library,
+            authGate: trashGate,
+            uploads: uploads,
+            purgeDelivery: library.purgeDelivery
+        )
         CapsuleLog.app.debug("managed lane composed at \(root.path, privacy: .private)")
+        redeliverKeptPurges(provider, deliveringTo: library.purgeDelivery)
         return ManagedLane(
             provider: provider,
             importer: LibraryImporter(importService: importService, managedProvider: provider),
@@ -361,6 +367,21 @@ struct AppEnvironment {
             renderLadder: renderLadder,
             embeddedPreviews: embeddedPreviews
         )
+    }
+
+    /// Send the purges the workspace kept whose delivery failed or was held,
+    /// once a lane is composed with somewhere to send them.
+    ///
+    /// A lane composed with a purge delivery is a signed-in one, so this is
+    /// the retry a relaunch and a sign-in run: each rebuilds the world with
+    /// the session. It runs detached, because a launch never waits on the
+    /// network; the provider logs each purge's fate, and a purge left
+    /// undelivered stays on the kept chain for the next walk. With no
+    /// delivery (signed out, the mock lane) there is nothing to send.
+    private static func redeliverKeptPurges(_ provider: ManagedProvider, deliveringTo delivery: (any PurgeDelivering)?) {
+        guard delivery != nil else { return }
+        CapsuleLog.app.info("redelivering kept purges for the signed-in lane")
+        Task { await provider.redeliverPurges() }
     }
 
     /// Recently Deleted over both stores: the composite timeline's `delete`

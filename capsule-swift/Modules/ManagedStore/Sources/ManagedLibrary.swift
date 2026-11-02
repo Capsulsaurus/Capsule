@@ -26,23 +26,32 @@ public actor ManagedLibrary {
     /// The library's writes: sealing an import and every trash transition.
     public nonisolated let workspace: any ManagedWorkspace
 
+    /// Where a purge's `delete` goes to reach the server: the FFI lane's
+    /// session over ``workspace``, once signed in. `nil` signed out and on the
+    /// mock lane, where a purge stays local and its records wait on the
+    /// workspace's kept chain.
+    public nonisolated let purgeDelivery: (any PurgeDelivering)?
+
     private let fileStore: any FileStore
     private let catalogOpener: any CatalogOpening
     private var openedCatalog: (any AssetCatalog)?
 
     /// A library whose catalog is opened lazily by `catalogOpener` and whose
     /// writes go through `workspace` — the FFI lane, where both sit over the
-    /// same root.
+    /// same root — and whose purges reach the server through `purgeDelivery`
+    /// when there is a session to send them on.
     public init(
         layout: ManagedLibraryLayout,
         fileStore: any FileStore = SystemFileStore(),
         catalogOpener: any CatalogOpening,
-        workspace: any ManagedWorkspace
+        workspace: any ManagedWorkspace,
+        purgeDelivery: (any PurgeDelivering)? = nil
     ) {
         self.layout = layout
         self.fileStore = fileStore
         self.catalogOpener = catalogOpener
         self.workspace = workspace
+        self.purgeDelivery = purgeDelivery
     }
 
     /// A library over an in-memory catalog, written through a
@@ -61,6 +70,7 @@ public actor ManagedLibrary {
         self.fileStore = fileStore
         catalogOpener = PreopenedCatalogOpener(catalog: catalog)
         openedCatalog = catalog
+        purgeDelivery = nil
         workspace = LocalManagedWorkspace(
             layout: layout,
             fileStore: fileStore,
@@ -84,6 +94,7 @@ public actor ManagedLibrary {
         catalogOpener = PreopenedCatalogOpener(catalog: catalog)
         openedCatalog = catalog
         self.workspace = workspace
+        purgeDelivery = nil
     }
 
     /// The catalog, opening it (and creating the directory skeleton) on first

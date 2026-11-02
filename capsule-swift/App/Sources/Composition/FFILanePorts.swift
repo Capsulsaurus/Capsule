@@ -1,4 +1,5 @@
 #if CAPSULE_FFI
+    import CapsuleCatalog
     import CapsuleCatalogFFI
     import CapsuleDomain
     import CapsuleFoundation
@@ -25,19 +26,37 @@
         /// The managed store's writes are the workspace's verbs, and its
         /// catalog is the workspace's own index under the same root, so
         /// `workspace` must have been opened at the managed library's root.
-        static func ffi(workspace: FfiWorkspace, session: FfiSession?) -> LanePorts {
+        ///
+        /// A purge reaches the server only with a session and the API root it
+        /// signed in against (`apiBaseURL`, `http[s]://host:port`): the
+        /// session delivers it to the album's ops surface there. Without
+        /// either, a purge stays local and its records wait on the
+        /// workspace's kept chain until a signed-in launch delivers them.
+        static func ffi(workspace: FfiWorkspace, session: FfiSession?, apiBaseURL: String? = nil) -> LanePorts {
             let transferEvents: any TransferEventPort = if let session {
                 FFITransferEventFeed(session: session)
             } else {
                 IdleTransferEventFeed()
             }
-            CapsuleLog.app.info("ffi lane ports composed, session=\(session != nil, privacy: .public)")
+            let purgeDelivery: (any PurgeDelivering)? = if let session, let apiBaseURL {
+                FFIPurgeDelivery(session: session, workspace: workspace, apiBaseURL: apiBaseURL)
+            } else {
+                nil
+            }
+            CapsuleLog.app.info(
+                "ffi lane ports composed, session=\(session != nil, privacy: .public) purgeDelivery=\(purgeDelivery != nil, privacy: .public)"
+            )
             let managedWorkspace = FFIManagedWorkspace(workspace: workspace)
             return LanePorts(
                 labels: FFILabelPort(workspace: workspace),
                 transferEvents: transferEvents,
                 openManagedLibrary: { layout in
-                    ManagedLibrary(layout: layout, catalogOpener: FFICatalogOpener(), workspace: managedWorkspace)
+                    ManagedLibrary(
+                        layout: layout,
+                        catalogOpener: FFICatalogOpener(),
+                        workspace: managedWorkspace,
+                        purgeDelivery: purgeDelivery
+                    )
                 },
                 renderLadder: .ffi,
                 embeddedPreviews: FFIEmbeddedPreviewReader(),
@@ -49,9 +68,9 @@
     extension AppEnvironment {
         /// The FFI lane's world: the mock world for every port no Rust-backed
         /// adapter exists for yet, and the workspace's and session's adapters
-        /// for the rest.
-        init(mock: MockEnvironment, workspace: FfiWorkspace, session: FfiSession?) {
-            self.init(mock: mock, lane: .ffi(workspace: workspace, session: session))
+        /// for the rest. `apiBaseURL` is the root `session` signed in against.
+        init(mock: MockEnvironment, workspace: FfiWorkspace, session: FfiSession?, apiBaseURL: String? = nil) {
+            self.init(mock: mock, lane: .ffi(workspace: workspace, session: session, apiBaseURL: apiBaseURL))
         }
     }
 
