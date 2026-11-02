@@ -680,3 +680,60 @@ async fn bad_arguments_are_refused_before_anything_is_sent() {
     assert!(matches!(result, Err(FfiError::InvalidArgument { .. })));
     assert!(seen.lock().unwrap().is_empty());
 }
+
+/// The hash-taking verb reads the head the feed lists by its record hash: the stretch after a
+/// listed create is the held delete and the re-issue, as `deliver_purge` sends it from the
+/// create's bytes, and a hash that is neither empty nor 32 bytes sends nothing.
+#[tokio::test]
+async fn a_purge_is_delivered_from_the_listed_heads_hash() {
+    let (server, seen) = ops_server(|req| applied(req, 12)).await;
+    let session = login(&server).await;
+    let root = tempfile::TempDir::new().unwrap();
+    let (workspace, asset) = sealed(root.path());
+    let create = create_head(&workspace, &asset);
+    workspace.delete_asset(asset.clone(), 30).unwrap();
+    workspace.purge_asset(asset.clone()).unwrap();
+
+    for bad in [vec![0u8; 31], vec![0u8; 33]] {
+        let result = session
+            .deliver_purge_at_hash(
+                server.base_url(),
+                workspace.clone(),
+                asset.clone(),
+                Some(bad),
+            )
+            .await;
+        assert!(
+            matches!(result, Err(FfiError::InvalidArgument { .. })),
+            "{result:?}"
+        );
+    }
+    let held = session
+        .deliver_purge_at_hash(server.base_url(), workspace.clone(), asset.clone(), None)
+        .await
+        .unwrap();
+    assert_eq!(held, FfiLifecycleOpOutcome::NotIndexed);
+    assert!(
+        seen.lock().unwrap().is_empty(),
+        "nothing reached the server"
+    );
+
+    let outcome = session
+        .deliver_purge_at_hash(
+            server.base_url(),
+            workspace.clone(),
+            asset.clone(),
+            Some(hash_bytes(&create).as_bytes().to_vec()),
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(outcome, FfiLifecycleOpOutcome::Applied { sync_seq: 12, .. }),
+        "{outcome:?}"
+    );
+    let sent: Vec<ProvenanceRecord> = seen.lock().unwrap().iter().map(sent_record).collect();
+    assert_eq!(sent.len(), 2, "the held delete, then the re-issue");
+    let head: ProvenanceRecord =
+        capsule_core::cbor::from_slice(&workspace.purged_record(asset).unwrap().unwrap()).unwrap();
+    assert_eq!(sent[1], head);
+}

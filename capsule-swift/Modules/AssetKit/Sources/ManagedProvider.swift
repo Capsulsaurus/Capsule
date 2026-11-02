@@ -310,8 +310,9 @@ public actor ManagedProvider: AssetProvider, TrashProvider, AssetOwning {
 
     /// Send every purge the workspace kept whose delivery failed or was held:
     /// the retry a relaunch, a sign-in or a sync that lists new assets runs. A
-    /// purge the server already applied answers as a replay, so sending it
-    /// again is safe. A purge the server refused for good since this provider
+    /// purge whose head the server already holds sends nothing (the port
+    /// answers it delivered off the feed), so the walk's network cost is the
+    /// port's feed read plus the purges still undelivered. A purge the server refused for good since this provider
     /// started is skipped: sending it again could only be refused again. With
     /// no delivery port this does nothing.
     public func redeliverPurges() async {
@@ -413,36 +414,4 @@ public actor ManagedProvider: AssetProvider, TrashProvider, AssetOwning {
             continuation.yield(.reload(snapshot))
         }
     }
-}
-
-/// Delivers a purged managed asset's `delete` to its album's ops surface.
-///
-/// On the FFI lane a conformer reads the asset's head off the sync feed and
-/// calls `FfiSession.deliverPurge`, which sends what the server lacks of the
-/// chain the workspace kept: an early purge's re-issued `delete` together with
-/// any `delete` it chains onto. Everything is read from the workspace, so a
-/// delivery that failed is retried by calling it again, also after a relaunch.
-public protocol PurgeDelivering: Sendable {
-    /// Deliver the purged asset `assetID`'s `delete`. Throws only when the
-    /// delivery could not be attempted (a refused session, a bad argument).
-    func deliverPurge(assetID: String) async throws -> PurgeDelivery
-
-    /// Every asset the workspace has purged (`FfiWorkspace.purgedAssetIds`):
-    /// what ``ManagedProvider/redeliverPurges()`` walks.
-    func purgedAssetIDs() async throws -> [String]
-}
-
-/// What became of one ``PurgeDelivering/deliverPurge(assetID:)``.
-public enum PurgeDelivery: Sendable, Equatable {
-    /// The server applied the purge's `delete`, or had already.
-    case delivered
-    /// Nothing was sent: the server has not indexed the asset's create, and it
-    /// never sees a `delete` for an asset it has not indexed.
-    case held
-    /// The server refused it or could not be reached. A `permanent` failure is
-    /// one the server judged final, so ``ManagedProvider/redeliverPurges()``
-    /// does not send it again for the rest of the provider's life. The refusal
-    /// is not persisted: the first walk after a relaunch sends it once more,
-    /// and the server refuses it again without applying anything.
-    case failed(permanent: Bool)
 }

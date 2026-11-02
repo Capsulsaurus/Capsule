@@ -30,10 +30,15 @@ struct ManagedProviderPurgeTests {
         return asset
     }
 
-    private func makeProvider(catalog: MockCatalog, fileStore: MockFileStore) -> ManagedProvider {
+    private func makeProvider(
+        catalog: MockCatalog,
+        fileStore: MockFileStore,
+        purgeDelivery: (any PurgeDelivering)? = nil
+    ) -> ManagedProvider {
         ManagedProvider(
             library: ManagedLibrary(layout: layout, fileStore: fileStore, catalog: catalog),
-            authGate: MockLocalAuthGate()
+            authGate: MockLocalAuthGate(),
+            purgeDelivery: purgeDelivery
         )
     }
 
@@ -93,6 +98,156 @@ struct ManagedProviderPurgeTests {
             .purge(.photoKit(localIdentifier: "PK/L0/001"))
 
         #expect(try await catalog.asset(id: "asset-1") != nil)
+    }
+
+    // MARK: Delivery to the server
+
+    /// A provider over trashed rows `ids`, delivering through `delivery`.
+    private func makeDeliveringProvider(
+        trashed ids: [String],
+        delivery: ScriptedPurgeDelivery
+    ) async throws -> ManagedProvider {
+        let catalog = MockCatalog()
+        for id in ids {
+            try await catalog.insertAsset(makeAsset(id: id))
+        }
+        return makeProvider(catalog: catalog, fileStore: MockFileStore(), purgeDelivery: delivery)
+    }
+
+    @Test("a purge produces exactly one delivery of its asset")
+    func purgeDeliversOnce() async throws {
+        let delivery = ScriptedPurgeDelivery(outcomes: ["asset-1": [.delivered]])
+        let provider = try await makeDeliveringProvider(trashed: ["asset-1"], delivery: delivery)
+
+        try await provider.purge(.managed(uuid: "asset-1"))
+
+        #expect(await delivery.delivered == ["asset-1"])
+    }
+
+    @Test("a purge that did not happen delivers nothing: a file left behind, an asset already gone, a foreign id")
+    func noPurgeNoDelivery() async throws {
+        let delivery = ScriptedPurgeDelivery()
+        let catalog = MockCatalog()
+        let fileStore = MockFileStore()
+        let media = layout.mediaFile(uuid: "asset-1", fileExtension: "heic", captureDate: captureDate)
+        try await catalog.insertAsset(makeAsset(id: "asset-1"))
+        try await fileStore.write(Data("bytes".utf8), to: media)
+        await fileStore.injectFailure(on: .remove)
+        let provider = makeProvider(catalog: catalog, fileStore: fileStore, purgeDelivery: delivery)
+
+        await #expect(throws: (any Error).self) { try await provider.purge(.managed(uuid: "asset-1")) }
+        try await provider.purge(.managed(uuid: "never-existed"))
+        try await provider.purge(.photoKit(localIdentifier: "PK/L0/001"))
+
+        #expect(await delivery.delivered.isEmpty)
+    }
+
+    @Test("a delivery that cannot be attempted leaves the purge standing")
+    func throwingDeliveryKeepsThePurge() async throws {
+        let delivery = ScriptedPurgeDelivery(deliveryFailure: ScriptedFailure())
+        let catalog = MockCatalog()
+        try await catalog.insertAsset(makeAsset(id: "asset-1"))
+        let provider = makeProvider(catalog: catalog, fileStore: MockFileStore(), purgeDelivery: delivery)
+
+        try await provider.purge(.managed(uuid: "asset-1"))
+
+        #expect(try await catalog.asset(id: "asset-1") == nil)
+        #expect(await delivery.delivered == ["asset-1"])
+    }
+
+    @Test("a held or failed delivery goes out again on the next redelivery")
+    func heldAndFailedAreRedelivered() async throws {
+        let delivery = ScriptedPurgeDelivery(
+            outcomes: ["asset-1": [.held, .delivered], "asset-2": [.failed(permanent: false), .delivered]],
+            purged: ["asset-1", "asset-2"]
+        )
+        let provider = try await makeDeliveringProvider(trashed: ["asset-1", "asset-2"], delivery: delivery)
+
+        try await provider.purge(.managed(uuid: "asset-1"))
+        try await provider.purge(.managed(uuid: "asset-2"))
+        await provider.redeliverPurges()
+
+        #expect(await delivery.delivered == ["asset-1", "asset-2", "asset-1", "asset-2"])
+    }
+
+    @Test("a purge the server refused for good is skipped on redelivery; a transient failure is not")
+    func permanentRefusalIsSkipped() async throws {
+        let delivery = ScriptedPurgeDelivery(
+            outcomes: [
+                "asset-1": [.failed(permanent: true)],
+                "asset-2": [.failed(permanent: false), .failed(permanent: false), .failed(permanent: false)],
+            ],
+            purged: ["asset-1", "asset-2"]
+        )
+        let provider = try await makeDeliveringProvider(trashed: ["asset-1", "asset-2"], delivery: delivery)
+
+        try await provider.purge(.managed(uuid: "asset-1"))
+        try await provider.purge(.managed(uuid: "asset-2"))
+        await provider.redeliverPurges()
+        await provider.redeliverPurges()
+
+        #expect(await delivery.delivered == ["asset-1", "asset-2", "asset-2", "asset-2"])
+    }
+
+    @Test("a redelivery walks every kept purge, also those from before this provider started")
+    func redeliveryWalksKeptPurges() async throws {
+        let delivery = ScriptedPurgeDelivery(purged: ["kept-1", "kept-2"])
+        let provider = try await makeDeliveringProvider(trashed: [], delivery: delivery)
+
+        await provider.redeliverPurges()
+
+        #expect(await delivery.delivered == ["kept-1", "kept-2"])
+    }
+
+    @Test("a redelivery whose purge list cannot be read sends nothing; with no port there is nothing to send")
+    func unreadableListSendsNothing() async throws {
+        let delivery = ScriptedPurgeDelivery(purged: ["kept-1"], listFailure: ScriptedFailure())
+        let provider = try await makeDeliveringProvider(trashed: [], delivery: delivery)
+
+        await provider.redeliverPurges()
+        await makeProvider(catalog: MockCatalog(), fileStore: MockFileStore()).redeliverPurges()
+
+        #expect(await delivery.delivered.isEmpty)
+    }
+}
+
+/// A failure a scripted port throws.
+private struct ScriptedFailure: Error {}
+
+/// A scripted ``PurgeDelivering``: answers each delivery of an asset with the
+/// next outcome scripted for it (``PurgeDelivery/held`` once they run out),
+/// lists `purged` as the workspace's kept purges, and records every delivery.
+private actor ScriptedPurgeDelivery: PurgeDelivering {
+    private(set) var delivered: [String] = []
+    private var outcomes: [String: [PurgeDelivery]]
+    private let purged: [String]
+    private let listFailure: (any Error)?
+    private let deliveryFailure: (any Error)?
+
+    init(
+        outcomes: [String: [PurgeDelivery]] = [:],
+        purged: [String] = [],
+        listFailure: (any Error)? = nil,
+        deliveryFailure: (any Error)? = nil
+    ) {
+        self.outcomes = outcomes
+        self.purged = purged
+        self.listFailure = listFailure
+        self.deliveryFailure = deliveryFailure
+    }
+
+    func deliverPurge(assetID: String) throws -> PurgeDelivery {
+        delivered.append(assetID)
+        if let deliveryFailure { throw deliveryFailure }
+        guard var queue = outcomes[assetID], !queue.isEmpty else { return .held }
+        let next = queue.removeFirst()
+        outcomes[assetID] = queue
+        return next
+    }
+
+    func purgedAssetIDs() throws -> [String] {
+        if let listFailure { throw listFailure }
+        return purged
     }
 }
 

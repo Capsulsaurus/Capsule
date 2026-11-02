@@ -230,6 +230,22 @@ fn listed_head(server_head: &[u8]) -> Option<Hash32> {
     (!server_head.is_empty()).then(|| hash_bytes(server_head))
 }
 
+/// The head hash a caller kept for a listed asset: empty for an entry that carries no record,
+/// otherwise the 32-byte record hash.
+fn listed_hash(server_head_hash: &[u8]) -> Result<Option<Hash32>, FfiError> {
+    if server_head_hash.is_empty() {
+        return Ok(None);
+    }
+    <[u8; 32]>::try_from(server_head_hash)
+        .map(|bytes| Some(Hash32::from_bytes(bytes)))
+        .map_err(|_| FfiError::InvalidArgument {
+            detail: format!(
+                "server_head_hash: {} bytes, not an empty head or a 32-byte record hash",
+                server_head_hash.len()
+            ),
+        })
+}
+
 #[uniffi::export]
 impl FfiWorkspace {
     /// Every asset this workspace has purged (UUID strings), whose kept chain
@@ -333,9 +349,47 @@ impl FfiSession {
         asset_id: String,
         server_head: Option<Vec<u8>>,
     ) -> Result<FfiLifecycleOpOutcome, FfiError> {
-        let asset = parse_uuid("asset_id", &asset_id)?;
-        let client = self.album_client(&api_base_url)?;
         let head = server_head.as_deref().map(listed_head);
+        self.deliver_kept_chain(&api_base_url, &workspace, &asset_id, head)
+            .await
+    }
+
+    /// [`deliver_purge`](Self::deliver_purge) with the head the feed lists given by its record
+    /// hash rather than its bytes: the SHA-256 of the latest entry's `manifest_cbor`, which is
+    /// the head record's hash, so a caller keeps 32 bytes per listed asset instead of the
+    /// record. `Some` of an empty vector is an entry that carries no record, and `None` an asset
+    /// the feed does not list, exactly as `deliver_purge` reads its `server_head`.
+    ///
+    /// # Errors
+    ///
+    /// As [`deliver_purge`](Self::deliver_purge), and [`FfiError::InvalidArgument`] for a
+    /// `server_head_hash` that is neither empty nor 32 bytes, before anything is sent.
+    pub async fn deliver_purge_at_hash(
+        &self,
+        api_base_url: String,
+        workspace: Arc<FfiWorkspace>,
+        asset_id: String,
+        server_head_hash: Option<Vec<u8>>,
+    ) -> Result<FfiLifecycleOpOutcome, FfiError> {
+        let head = server_head_hash.as_deref().map(listed_hash).transpose()?;
+        self.deliver_kept_chain(&api_base_url, &workspace, &asset_id, head)
+            .await
+    }
+}
+
+impl FfiSession {
+    /// The body of both purge delivery verbs, given what the feed lists for the asset: `None`
+    /// when it does not list it, otherwise the hash of the head it holds (`None` for an entry
+    /// that carries no record).
+    async fn deliver_kept_chain(
+        &self,
+        api_base_url: &str,
+        workspace: &FfiWorkspace,
+        asset_id: &str,
+        head: Option<Option<Hash32>>,
+    ) -> Result<FfiLifecycleOpOutcome, FfiError> {
+        let asset = parse_uuid("asset_id", asset_id)?;
+        let client = self.album_client(api_base_url)?;
         let stretch: Vec<(ProvenanceRecord, Vec<u8>)> = workspace.with(|ws| {
             let chain = ws.purged_chain(&asset).ok_or_else(|| {
                 trash_error(capsule_library::lifecycle::LifecycleError::NotFound(
