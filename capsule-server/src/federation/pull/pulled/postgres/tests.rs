@@ -69,13 +69,14 @@ fn a_hash_is_its_own_content_address() {
 /// The suite and the charging hook, against a real Postgres.
 mod postgres_conformance {
     use std::collections::BTreeMap;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex, PoisonError};
 
     use capsule_core::crypto::hash::hash_bytes;
     use sea_orm::DatabaseTransaction;
 
     use super::super::{HeldBlob, PeerBudgetCharge, PostgresPulledAlbums, PulledBlobCharge};
-    use crate::blob::{BlobStore, InMemoryBlobStore};
+    use crate::blob::{BlobStore, ContentAddress, InMemoryBlobStore};
     use crate::federation::PeerId;
     use crate::federation::capability::Scope;
     use crate::federation::pull::JobKey;
@@ -85,6 +86,7 @@ mod postgres_conformance {
     };
     use crate::federation::subscriptions::postgres::PostgresSubscriptions;
     use crate::federation::subscriptions::{CapabilityToken, Subscription, SubscriptionStore as _};
+    use crate::gc::HeldBlobs as _;
     use crate::postgres::testing;
     use crate::quota::QuotaStore as _;
     use crate::store::{AlbumId, StoreFuture, UserId};
@@ -255,6 +257,177 @@ mod postgres_conformance {
         charged_to_quota(&budgeted, &subscriptions, &quotas).await;
 
         held_blobs_outlive_the_durable_collector(&store, &blobs, database.connection()).await;
+
+        a_sweep_inside_a_commit_waits_for_its_claim(database.connection()).await;
+        a_commit_inside_a_sweep_puts_the_bytes_again(database.connection()).await;
+    }
+
+    /// Parks a commit after its puts and claim rows, before its transaction commits.
+    #[derive(Debug, Default)]
+    struct Parked {
+        reached: tokio::sync::Notify,
+        release: tokio::sync::Notify,
+    }
+
+    impl PulledBlobCharge for Parked {
+        fn charge<'a>(
+            &'a self,
+            _transaction: &'a DatabaseTransaction,
+            _job: &'a JobKey,
+            _held: &'a [HeldBlob],
+        ) -> StoreFuture<'a, Option<OverBudget>> {
+            Box::pin(async move {
+                self.reached.notify_one();
+                self.release.notified().await;
+                Ok(None)
+            })
+        }
+    }
+
+    /// Whether another transaction could take `address`'s lock right now. Takes and at once
+    /// releases it when it could.
+    async fn address_lock_is_free(
+        connection: &sea_orm::DatabaseConnection,
+        address: &ContentAddress,
+    ) -> bool {
+        use sea_orm::{ConnectionTrait as _, TransactionTrait as _};
+        let probe = connection.begin().await.expect("a transaction");
+        let row = probe
+            .query_one_raw(sea_orm::Statement::from_sql_and_values(
+                sea_orm::DbBackend::Postgres,
+                "SELECT pg_try_advisory_xact_lock(\
+                 hashtext('federation_pulled_metadata_blobs:' || $1)) AS free",
+                vec![address.as_str().to_owned().into()],
+            ))
+            .await
+            .expect("a probe")
+            .expect("a row");
+        let free: bool = row.try_get("", "free").expect("a flag");
+        probe.rollback().await.expect("a rollback");
+        free
+    }
+
+    fn address(bytes: &[u8]) -> ContentAddress {
+        ContentAddress::parse(&hash_bytes(bytes).to_hex()).expect("an address")
+    }
+
+    /// The race D1 of #1141 names, collector second: an orphan a refused page left is put again
+    /// by a retried commit, which then parks before its claim commits. The address is locked
+    /// from that put, so a sweep started now waits, and sees the claim rather than removing
+    /// the bytes it names.
+    async fn a_sweep_inside_a_commit_waits_for_its_claim(connection: &sea_orm::DatabaseConnection) {
+        let blobs = Arc::new(InMemoryBlobStore::new());
+        let parked = Arc::new(Parked::default());
+        let store = Arc::new(
+            PostgresPulledAlbums::new(connection.clone(), blobs.clone())
+                .with_charge(parked.clone()),
+        );
+        let bytes: &'static [u8] = b"race/an orphan a retried page carries again";
+        let address = address(bytes);
+        blobs.put(&address, bytes).await.expect("the orphan");
+
+        let job = JobKey::new(PeerId::new("home.race.test"), AlbumId::new("race-a"));
+        let committing = tokio::spawn({
+            let store = store.clone();
+            async move { store.commit(&job, None, page(1, &[bytes])).await }
+        });
+        parked.reached.notified().await;
+        assert!(
+            !address_lock_is_free(connection, &address).await,
+            "a commit holds the address from its put to its commit"
+        );
+
+        let removed = Arc::new(AtomicBool::new(false));
+        let sweeping = tokio::spawn({
+            let (store, blobs, address, removed) = (
+                store.clone(),
+                blobs.clone(),
+                address.clone(),
+                removed.clone(),
+            );
+            async move {
+                let removal: StoreFuture<'_, ()> = Box::pin(async {
+                    blobs.remove(&address).await.expect("a removal");
+                    removed.store(true, Ordering::SeqCst);
+                    Ok(())
+                });
+                store.sweep_unless_held(&address, removal).await
+            }
+        });
+        parked.release.notify_one();
+        assert_eq!(
+            committing
+                .await
+                .expect("the commit task")
+                .expect("a commit"),
+            Committed::Written
+        );
+        assert!(
+            sweeping.await.expect("the sweep task").expect("a sweep"),
+            "the sweep waited out the commit and saw its claim"
+        );
+        assert!(!removed.load(Ordering::SeqCst), "nothing was removed");
+        assert!(blobs.stat(&address).await.expect("stat").is_some());
+        assert!(
+            address_lock_is_free(connection, &address).await,
+            "both released it"
+        );
+    }
+
+    /// The same race, collector first: a commit started while a sweep is removing the bytes
+    /// waits for the removal, then puts them again, so its claim names bytes that are there.
+    async fn a_commit_inside_a_sweep_puts_the_bytes_again(
+        connection: &sea_orm::DatabaseConnection,
+    ) {
+        let blobs = Arc::new(InMemoryBlobStore::new());
+        let store = Arc::new(PostgresPulledAlbums::new(connection.clone(), blobs.clone()));
+        let bytes: &'static [u8] = b"race/an orphan swept as a page claims it";
+        let address = address(bytes);
+        blobs.put(&address, bytes).await.expect("the orphan");
+
+        let removing = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let sweeping = tokio::spawn({
+            let (store, blobs, address) = (store.clone(), blobs.clone(), address.clone());
+            let (removing, release) = (removing.clone(), release.clone());
+            async move {
+                let removal: StoreFuture<'_, ()> = Box::pin(async {
+                    removing.notify_one();
+                    release.notified().await;
+                    blobs.remove(&address).await.expect("a removal");
+                    Ok(())
+                });
+                store.sweep_unless_held(&address, removal).await
+            }
+        });
+        removing.notified().await;
+        assert!(
+            !address_lock_is_free(connection, &address).await,
+            "a sweep holds the address across its question and its removal"
+        );
+
+        let job = JobKey::new(PeerId::new("home.race.test"), AlbumId::new("race-b"));
+        let committing = tokio::spawn({
+            let store = store.clone();
+            async move { store.commit(&job, None, page(1, &[bytes])).await }
+        });
+        release.notify_one();
+        assert!(
+            !sweeping.await.expect("the sweep task").expect("a sweep"),
+            "nothing held the blob when the sweep asked"
+        );
+        assert_eq!(
+            committing
+                .await
+                .expect("the commit task")
+                .expect("a commit"),
+            Committed::Written
+        );
+        assert!(
+            blobs.stat(&address).await.expect("stat").is_some(),
+            "the commit put the bytes again after the removal"
+        );
+        assert!(store.holds(&address).await.expect("a lookup"));
     }
 
     /// The regression #1141 is, on the durable arm: a pulled page's metadata blob survives a

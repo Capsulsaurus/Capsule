@@ -21,7 +21,11 @@
 //! (`federation_pulled_metadata_blobs`), and neither the index nor a share link names them. A
 //! collector given the claims ([`CollectionContext::with_held_blobs`]) asks [`HeldBlobs::holds`]
 //! for a blob nothing else references, and treats a held blob as live: never marked, never
-//! swept, and unmarked if a mark is found on it. A claim that cannot be read fails the pass, so
+//! swept, and unmarked if a mark is found on it. The puller puts a blob before its claim
+//! commits, so the sweep itself goes through [`HeldBlobs::sweep_unless_held`], which asks again
+//! and removes under a per-address exclusion no such commit can be inside of: the removal lands
+//! wholly before the commit's put, which then stores the bytes again, or wholly after its
+//! claim is visible, which keeps them. A claim that cannot be read fails the pass, so
 //! "could not ask" is never read as "unreferenced". A job forgotten (its `federation_pulled_albums`
 //! row deleted, cascading to its claims) holds nothing, and its blobs fall back to the ordinary
 //! mark-then-sweep.
@@ -280,6 +284,24 @@ pub trait HeldBlobs: std::fmt::Debug + Send + Sync {
     /// A store failure, which the collector treats as fatal to the pass: a claim it could not
     /// read is not a claim it may assume absent.
     fn holds<'a>(&'a self, address: &'a ContentAddress) -> StoreFuture<'a, bool>;
+
+    /// Ask [`Self::holds`] again and, only if nothing holds `address`, run `sweep`, excluding
+    /// every commit that would claim `address` from the question until `sweep` has finished.
+    /// Answers whether the blob was held, in which case `sweep` never ran.
+    ///
+    /// The exclusion is what makes the sweep safe against a commit in flight: a puller writes a
+    /// metadata blob into the blob store *before* its claim commits, so without it a collector
+    /// could read "not held" between that put and that commit and remove bytes the commit is
+    /// about to name. Held for one address and one sweep, never across a pass.
+    ///
+    /// # Errors
+    ///
+    /// A store failure asking, which leaves `sweep` unrun, or the failure `sweep` returned.
+    fn sweep_unless_held<'a>(
+        &'a self,
+        address: &'a ContentAddress,
+        sweep: StoreFuture<'a, ()>,
+    ) -> StoreFuture<'a, bool>;
 }
 
 /// The collector's collaborators.
@@ -566,14 +588,35 @@ async fn visit(
     // fires when any of them disagrees.
     tracing::info!(%address, marked_since = %since, "sweeping an unreferenced blob");
     if mode.applies() {
-        context
-            .blobs
-            .remove(address)
-            .await
-            .map_err(|error| StoreError::Unavailable {
-                store: "blobs",
-                detail: error.to_string(),
-            })?;
+        let removal: StoreFuture<'_, ()> = Box::pin(async move {
+            context
+                .blobs
+                .remove(address)
+                .await
+                .map(drop)
+                .map_err(|error| StoreError::Unavailable {
+                    store: "blobs",
+                    detail: error.to_string(),
+                })
+        });
+        // A pulled album's commit puts its metadata blob before its claim commits, so the claim
+        // is asked once more under the exclusion that keeps such a commit out until the removal
+        // is done (#1141). A claim found there is a reference that appeared during the window.
+        let held = if let Some(held) = context.held.as_ref() {
+            held.sweep_unless_held(address, removal).await?
+        } else {
+            removal.await?;
+            false
+        };
+        if held {
+            tracing::info!(
+                %address,
+                "a mark was cancelled: a pulled album claimed the blob as it was swept"
+            );
+            context.marks.unmark(address).await?;
+            report.unmarked.push(address.clone());
+            return Ok(());
+        }
         context.marks.unmark(address).await?;
         // The credit belongs **here**, to the sweep, and after the removal.
         //

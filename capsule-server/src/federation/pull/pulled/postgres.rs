@@ -21,7 +21,13 @@
 //! after the put leaves an unreferenced blob — the orphan the collector reclaims — and never a
 //! row naming bytes that are not there. Once the rows commit, the blob is a reference the
 //! collector honours ([`HeldBlobs`], #1141): no asset row names it, so without that the collector
-//! would sweep it once the grace window passed. A blob already present is not written again
+//! would sweep it once the grace window passed. Between the put and the commit the blob is
+//! neither, and an orphan of an earlier refused page may already sit there marked past its
+//! window, so the commit takes a per-address advisory lock (`pg_advisory_xact_lock`, in address
+//! order) before each put and holds it to commit, and the collector's sweep takes the same lock
+//! across its last "is it held" and its removal ([`HeldBlobs::sweep_unless_held`]). A removal
+//! thus lands wholly before the put, which stores the bytes again, or wholly after the claim is
+//! visible, which keeps them. A blob already present is not written again
 //! ([`Placement::AlreadyPresent`]): its address is its content. The port hands over bytes the
 //! puller already checked against their address, and the blob store's contract is that its
 //! caller has; neither re-hashes them.
@@ -392,8 +398,11 @@ impl PostgresPulledAlbums {
         blobs: &BTreeMap<Hash32, Vec<u8>>,
     ) -> Result<Vec<HeldBlob>, StoreError> {
         let mut rows = Vec::with_capacity(blobs.len());
+        // `blobs` iterates in hash order, which is address order, so two commits sharing
+        // addresses take their locks in one order and never wait on each other in a cycle.
         for (hash, bytes) in blobs {
             let address = address_of(hash)?;
+            lock_held_blob(transaction, &address).await?;
             let placement = self
                 .blobs
                 .put(&address, bytes)
@@ -430,6 +439,33 @@ impl PostgresPulledAlbums {
             .collect()
     }
 }
+
+/// Take the per-address lock that keeps a commit claiming `address` and a collector sweeping it
+/// apart (#1141), held until `transaction` ends.
+///
+/// The commit takes it before it puts the blob and holds it through its claim's commit; the
+/// collector takes it before it asks whether the blob is held and holds it through the
+/// removal. So a sweep's "not held" is never read between a put and the claim that names it.
+async fn lock_held_blob(
+    transaction: &DatabaseTransaction,
+    address: &ContentAddress,
+) -> Result<(), StoreError> {
+    transaction
+        .execute_raw(Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            HELD_BLOB_LOCK,
+            vec![Value::from(address.as_str().to_owned())],
+        ))
+        .await
+        .map_err(PORT.failing("locking a pulled metadata blob's address"))?;
+    tracing::trace!(%address, "took a pulled metadata blob's address lock");
+    Ok(())
+}
+
+/// The statement [`lock_held_blob`] runs, namespaced like the repository's other per-key
+/// advisory locks.
+const HELD_BLOB_LOCK: &str =
+    "SELECT pg_advisory_xact_lock(hashtext('federation_pulled_metadata_blobs:' || $1))";
 
 /// A job's key as the first two bind parameters.
 fn job_values(job: &JobKey) -> Vec<Value> {
@@ -913,24 +949,63 @@ impl BreadcrumbIndex for PostgresPulledAlbums {
 /// One `EXISTS` along `idx_federation_pulled_metadata_blobs_address`, across every job: the
 /// collector asks about an address, not a job. Forgetting a job deletes its row, which cascades
 /// to its claims, and that is what releases them.
+///
+/// A sweep opens its own transaction, takes the address lock a commit takes, asks, runs the
+/// removal only on "not held", and commits, which releases the lock. A commit claiming the
+/// address either holds the lock already, and the sweep waits for its claim to be visible, or
+/// waits on it, and puts the bytes again after the removal.
 impl HeldBlobs for PostgresPulledAlbums {
     fn holds<'a>(&'a self, address: &'a ContentAddress) -> StoreFuture<'a, bool> {
+        Box::pin(async move { holds_in(&self.connection, address).await })
+    }
+
+    fn sweep_unless_held<'a>(
+        &'a self,
+        address: &'a ContentAddress,
+        sweep: StoreFuture<'a, ()>,
+    ) -> StoreFuture<'a, bool> {
         Box::pin(async move {
-            let doing = "asking whether a pulled album holds a blob";
-            let rows = self
-                .select(
-                    "SELECT EXISTS (SELECT 1 FROM federation_pulled_metadata_blobs \
-                     WHERE address = $1) AS held",
-                    vec![Value::from(address.as_str().to_owned())],
-                    doing,
-                )
-                .await?;
-            let row = rows
-                .first()
-                .ok_or_else(|| PORT.undecodable("an EXISTS query answered no row"))?;
-            row.try_get("", "held").map_err(PORT.failing(doing))
+            let transaction = self
+                .connection
+                .begin()
+                .await
+                .map_err(PORT.failing("opening a transaction"))?;
+            // An error returns before the commit; dropping the transaction rolls it back, which
+            // releases the lock.
+            lock_held_blob(&transaction, address).await?;
+            let held = holds_in(&transaction, address).await?;
+            if held {
+                tracing::debug!(%address, "a pulled album claimed the blob before its sweep");
+            } else {
+                sweep.await?;
+                tracing::trace!(%address, "swept a blob no pulled album holds, under its lock");
+            }
+            transaction
+                .commit()
+                .await
+                .map_err(PORT.failing("releasing a pulled metadata blob's address lock"))?;
+            Ok(held)
         })
     }
+}
+
+/// Whether any job's claim names `address`, read through `connection`.
+async fn holds_in(
+    connection: &impl ConnectionTrait,
+    address: &ContentAddress,
+) -> Result<bool, StoreError> {
+    let doing = "asking whether a pulled album holds a blob";
+    let row = connection
+        .query_one_raw(Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            "SELECT EXISTS (SELECT 1 FROM federation_pulled_metadata_blobs \
+             WHERE address = $1) AS held",
+            vec![Value::from(address.as_str().to_owned())],
+        ))
+        .await
+        .map_err(PORT.failing(doing))?
+        .ok_or_else(|| PORT.undecodable("an EXISTS query answered no row"))?;
+    row.try_get("", "held").map_err(PORT.failing(doing))
 }
 
 impl Inspect for PostgresPulledAlbums {

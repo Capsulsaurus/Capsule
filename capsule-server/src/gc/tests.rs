@@ -1862,6 +1862,9 @@ struct SwitchedClaims {
     holds: std::sync::atomic::AtomicBool,
     fails: std::sync::atomic::AtomicBool,
     asked: std::sync::atomic::AtomicUsize,
+    /// A claim that commits between the collector's first question and its sweep: only the
+    /// question asked under the sweep's exclusion sees it.
+    claimed_at_sweep: std::sync::atomic::AtomicBool,
 }
 
 impl HeldBlobs for SwitchedClaims {
@@ -1878,6 +1881,52 @@ impl HeldBlobs for SwitchedClaims {
             Ok(self.holds.load(Ordering::SeqCst))
         })
     }
+
+    fn sweep_unless_held<'a>(
+        &'a self,
+        address: &'a ContentAddress,
+        sweep: StoreFuture<'a, ()>,
+    ) -> StoreFuture<'a, bool> {
+        use std::sync::atomic::Ordering;
+        Box::pin(async move {
+            if self.holds(address).await? || self.claimed_at_sweep.load(Ordering::SeqCst) {
+                return Ok(true);
+            }
+            sweep.await?;
+            Ok(false)
+        })
+    }
+}
+
+/// A claim that becomes visible only under the sweep's exclusion — a pulled commit whose put
+/// preceded the collector's first question and whose claim committed before its sweep — keeps
+/// the blob: nothing is removed, nothing is credited, and the mark is cancelled.
+#[tokio::test]
+async fn a_claim_seen_only_at_the_sweep_keeps_the_blob_and_cancels_the_mark() {
+    use std::sync::atomic::Ordering;
+    let h = Harness::new();
+    let claims = Arc::new(SwitchedClaims::default());
+    let context = h.context.clone().with_held_blobs(claims.clone());
+    let address = h
+        .store(b"an orphan a pulled commit is about to claim")
+        .await;
+    let report = collect(&context, Mode::Apply).await.expect("a pass");
+    assert_eq!(report.marked, vec![address.clone()], "{report:?}");
+
+    claims.claimed_at_sweep.store(true, Ordering::SeqCst);
+    h.clock.advance(days(3));
+    let report = collect(&context, Mode::Apply).await.expect("a pass");
+    assert!(report.swept.is_empty(), "{report:?}");
+    assert!(report.credited.is_empty(), "{report:?}");
+    assert_eq!(report.unmarked, vec![address.clone()], "{report:?}");
+    assert!(
+        h.blobs.stat(&address).await.expect("stat").is_some(),
+        "a blob claimed under the sweep's exclusion is not removed"
+    );
+    assert_eq!(
+        h.marks.marked_since(&address).await.expect("a lookup"),
+        None
+    );
 }
 
 /// A claim that cannot be read is never read as "unreferenced": the pass fails, at the mark and

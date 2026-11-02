@@ -75,6 +75,24 @@ impl HeldBlobs for super::InMemoryPulledAlbums {
                 .any(|held| held.metadata_blobs.contains_key(&hash)))
         })
     }
+
+    /// No exclusion is needed, so none is taken: the double keeps a page's metadata blobs in
+    /// its own map and never puts them in the collector's blob store, and its commit lands
+    /// whole under its one mutex, so there is no put-before-claim window for a sweep to fall
+    /// into and nothing the collector removes can be bytes a commit names.
+    fn sweep_unless_held<'a>(
+        &'a self,
+        address: &'a ContentAddress,
+        sweep: StoreFuture<'a, ()>,
+    ) -> StoreFuture<'a, bool> {
+        Box::pin(async move {
+            if self.holds(address).await? {
+                return Ok(true);
+            }
+            sweep.await?;
+            Ok(false)
+        })
+    }
 }
 
 /// Unwrap a store result, failing with the operation that was expected to work.
