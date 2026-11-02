@@ -1268,7 +1268,7 @@ impl FfiSession {
     /// Drive one bundle's ladder. The workspace lock is not held: the bundle is owned.
     ///
     /// The bundle runs as the one job of this server's lane in
-    /// [`push_lanes`](crate::push::push_lanes), so its ranges reserve against the push byte
+    /// [`push_lanes`], so its ranges reserve against the push byte
     /// budget, the server's advice narrows its ranges window, and its retries spend from the
     /// lane's budget, exactly as a lane of many bundles does.
     async fn push_bundle(&self, bundle: &UploadBundle) -> Result<AssetPushReport, PushError> {
