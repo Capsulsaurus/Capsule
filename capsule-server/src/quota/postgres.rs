@@ -15,7 +15,7 @@
 //! # Pulled blobs are read, not charged (#1162)
 //!
 //! An account's pulled metadata blobs ([`super`], "Pulled blobs") are part of the same derived
-//! total: [`usage_of`] sums the distinct addresses the federation pull holds for the albums the
+//! total: the usage statement sums the distinct addresses the federation pull holds for the albums the
 //! account subscribes to (`federation_subscriptions` joined with
 //! `federation_pulled_metadata_blobs`, along both tables' primary keys), less the ones it is
 //! itself attributed here. No row of this ledger records them, so the charge is written by the

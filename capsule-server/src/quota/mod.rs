@@ -528,31 +528,25 @@ struct Attribution {
 }
 
 impl Inner {
-    /// Attribute `size` bytes at `address` to `user`, unless it is attributed already.
+    /// Attribute `row`'s bytes at `address` to its account, unless it is attributed already.
     ///
     /// The one body [`QuotaStore::charge`] and [`QuotaStore::reserve`] share; they differ only
-    /// in the deadline the row carries.
+    /// in the deadline the row carries. `pulled` is what the account holds through its
+    /// subscriptions ([`PulledHoldings`]).
     fn attribute(
         &mut self,
-        user: &UserId,
         address: &ContentAddress,
-        size: u64,
+        row: Attribution,
         at: Timestamp,
-        reserved_until: Option<Timestamp>,
         limits: QuotaLimits,
         pulled: &BTreeMap<ContentAddress, u64>,
     ) -> ChargeOutcome {
         if self.attributed.contains_key(address) {
             return ChargeOutcome::AlreadyAttributed;
         }
-        self.attributed.insert(
-            address.clone(),
-            Attribution {
-                user: user.clone(),
-                size,
-                reserved_until,
-            },
-        );
+        let (user, size) = (row.user.clone(), row.size);
+        let user = &user;
+        self.attributed.insert(address.clone(), row);
         // Totalled after the insert, so a pulled blob this charge now attributes to the account
         // is counted once, here, rather than once here and once as pulled.
         let pulled = self.pulled_total(user, pulled);
@@ -650,7 +644,12 @@ impl QuotaStore for InMemoryQuota {
     ) -> StoreFuture<'a, ChargeOutcome> {
         Box::pin(async move {
             let pulled = self.pulled_of(user).await?;
-            Ok(lock(&self.inner).attribute(user, address, size, at, None, limits, &pulled))
+            let row = Attribution {
+                user: user.clone(),
+                size,
+                reserved_until: None,
+            };
+            Ok(lock(&self.inner).attribute(address, row, at, limits, &pulled))
         })
     }
 
@@ -665,7 +664,12 @@ impl QuotaStore for InMemoryQuota {
     ) -> StoreFuture<'a, ChargeOutcome> {
         Box::pin(async move {
             let pulled = self.pulled_of(user).await?;
-            Ok(lock(&self.inner).attribute(user, address, size, at, Some(until), limits, &pulled))
+            let row = Attribution {
+                user: user.clone(),
+                size,
+                reserved_until: Some(until),
+            };
+            Ok(lock(&self.inner).attribute(address, row, at, limits, &pulled))
         })
     }
 
