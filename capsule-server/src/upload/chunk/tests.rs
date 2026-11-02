@@ -1,14 +1,6 @@
 use super::*;
 
 #[test]
-fn an_offset_is_at_the_head_behind_or_ahead() {
-    assert_eq!(classify_offset(0, 0), OffsetPosition::AtHead);
-    assert_eq!(classify_offset(4096, 4096), OffsetPosition::AtHead);
-    assert_eq!(classify_offset(0, 4096), OffsetPosition::Behind);
-    assert_eq!(classify_offset(8192, 4096), OffsetPosition::Ahead);
-}
-
-#[test]
 fn an_offset_header_is_read_strictly_or_not_at_all() {
     assert_eq!(parse_offset("0"), Some(0));
     assert_eq!(parse_offset("4096"), Some(4096));
@@ -41,19 +33,28 @@ fn a_checksum_header_is_a_bare_lowercase_sha256() {
 }
 
 #[test]
-fn every_chunk_but_the_last_is_aligned() {
-    // A 10 000-byte blob sent as 4096 + 4096 + 1808.
+fn every_range_sits_on_the_grid_and_only_the_last_may_be_short() {
+    // A 10 000-byte blob sent as 4096 + 4096 + 1808, in any order.
     assert!(alignment_ok(0, 4096, 10_000));
     assert!(alignment_ok(4096, 4096, 10_000));
     assert!(
         alignment_ok(8192, 1808, 10_000),
-        "the final chunk is exempt"
+        "the range that ends the blob may be short"
+    );
+    assert!(alignment_ok(0, 8192, 10_000), "a range spans whole blocks");
+
+    // A client whose arithmetic has drifted.
+    assert!(
+        !alignment_ok(0, 4000, 10_000),
+        "a short range not at the end"
+    );
+    assert!(!alignment_ok(100, 4096, 10_000), "an offset off the grid");
+    assert!(
+        !alignment_ok(8292, 1708, 10_000),
+        "an offset off the grid, even for the range that ends the blob"
     );
 
-    // The same blob sent as 4000 + … is a client whose arithmetic has drifted.
-    assert!(!alignment_ok(0, 4000, 10_000));
-
-    // A blob smaller than the alignment is one final chunk.
+    // A blob smaller than the grid is one range that ends it.
     assert!(alignment_ok(0, 10, 10));
 }
 
@@ -93,46 +94,181 @@ fn the_suggested_size_follows_the_deployment_tiers() {
     }
 }
 
+const BLOCK: u64 = CHUNK_ALIGNMENT;
+
+/// The committed set holding `blocks`, each one 4 KiB block by index.
+fn blocks(blocks: &[u64]) -> CommittedSet {
+    blocks.iter().fold(CommittedSet::default(), |set, &block| {
+        set.with_range(block * BLOCK, (block + 1) * BLOCK)
+    })
+}
+
+#[test]
+fn a_range_wholly_inside_the_committed_set_is_a_duplicate() {
+    let committed = blocks(&[0, 1, 2, 5]);
+    assert_eq!(admit(&committed, &[], 4, 0, BLOCK), Admission::Duplicate);
+    assert_eq!(
+        admit(&committed, &[], 4, BLOCK, 3 * BLOCK),
+        Admission::Duplicate,
+        "a re-send resized within what committed is still a duplicate"
+    );
+    assert_eq!(
+        admit(
+            &committed,
+            &[(3 * BLOCK, 4 * BLOCK)],
+            1,
+            5 * BLOCK,
+            6 * BLOCK
+        ),
+        Admission::Duplicate,
+        "a duplicate is answered whatever else is in flight"
+    );
+}
+
+#[test]
+fn an_overlap_is_a_conflict_and_says_whether_it_is_in_flight() {
+    let committed = blocks(&[0, 1]);
+    assert_eq!(
+        admit(
+            &committed,
+            &[(4 * BLOCK, 6 * BLOCK)],
+            4,
+            5 * BLOCK,
+            7 * BLOCK
+        ),
+        Admission::RangeConflict { in_flight: true },
+        "a range in flight is never written twice at once"
+    );
+    assert_eq!(
+        admit(&committed, &[], 4, BLOCK, 3 * BLOCK),
+        Admission::RangeConflict { in_flight: false },
+        "a range partly committed writes nothing"
+    );
+    assert_eq!(
+        admit(
+            &committed,
+            &[(2 * BLOCK, 3 * BLOCK)],
+            4,
+            3 * BLOCK,
+            4 * BLOCK
+        ),
+        Admission::Claim,
+        "touching a range in flight is not overlapping it"
+    );
+}
+
+#[test]
+fn the_in_flight_cap_bounds_a_session() {
+    let in_flight = [(0, BLOCK), (2 * BLOCK, 3 * BLOCK)];
+    assert_eq!(
+        admit(
+            &CommittedSet::default(),
+            &in_flight,
+            2,
+            4 * BLOCK,
+            5 * BLOCK
+        ),
+        Admission::TooManyInFlight
+    );
+    assert_eq!(
+        admit(
+            &CommittedSet::default(),
+            &in_flight,
+            3,
+            4 * BLOCK,
+            5 * BLOCK
+        ),
+        Admission::Claim
+    );
+}
+
+#[test]
+fn the_fragment_bound_counts_the_merge_and_every_other_range_in_flight() {
+    // 64 fragments: every even block of the first 128.
+    let even: Vec<u64> = (0..64).map(|index| index * 2).collect();
+    let full = blocks(&even);
+    assert_eq!(full.fragments(), MAX_FRAGMENTS);
+
+    assert_eq!(
+        admit(&full, &[], 16, BLOCK, 2 * BLOCK),
+        Admission::Claim,
+        "with nothing in flight, a gap fill is always admissible"
+    );
+    assert_eq!(
+        admit(&full, &[], 16, 200 * BLOCK, 201 * BLOCK),
+        Admission::TooFragmented { in_flight: false },
+        "a detached range would make 65"
+    );
+    assert_eq!(
+        admit(&full, &[(3 * BLOCK, 4 * BLOCK)], 16, BLOCK, 2 * BLOCK),
+        Admission::Claim,
+        "a gap fill leaves 63, and the other range in flight at most one more"
+    );
+
+    let sixty_three = blocks(&even[..63]);
+    assert_eq!(
+        admit(&sixty_three, &[], 16, 200 * BLOCK, 201 * BLOCK),
+        Admission::Claim,
+        "64 after the merge is within the bound"
+    );
+    assert_eq!(
+        admit(
+            &sixty_three,
+            &[(300 * BLOCK, 301 * BLOCK)],
+            16,
+            200 * BLOCK,
+            201 * BLOCK
+        ),
+        Admission::TooFragmented { in_flight: true },
+        "64 after the merge, and one more if the range in flight commits apart"
+    );
+}
+
 #[tokio::test]
-async fn one_session_appends_one_chunk_at_a_time_and_the_lock_map_forgets_it() {
+async fn one_session_takes_one_turn_at_a_time_and_the_claim_map_forgets_it() {
     use std::time::Duration;
 
-    use crate::store::UploadId;
-
-    let locks = SessionLocks::default();
+    let claims = SessionClaims::default();
     let first_session = UploadId::new("first");
     let second_session = UploadId::new("second");
 
-    let held = locks.acquire(&first_session).await;
-    let other = tokio::time::timeout(Duration::from_secs(5), locks.acquire(&second_session))
+    let held = claims.turn(&first_session).await;
+    let other = tokio::time::timeout(Duration::from_secs(5), claims.turn(&second_session))
         .await
-        .expect("another session's appends are not held up");
+        .expect("another session's admission is not held up");
     assert!(
-        tokio::time::timeout(Duration::from_millis(50), locks.acquire(&first_session))
+        tokio::time::timeout(Duration::from_millis(50), claims.turn(&first_session))
             .await
             .is_err(),
-        "a second append to the same session waits for the first"
+        "a second admission to the same session waits for the first"
     );
 
+    // A claim outlives the turn that took it, and is what the next turn sees.
+    let claim = held.claim((0, BLOCK));
     drop(held);
-    let next = tokio::time::timeout(Duration::from_secs(5), locks.acquire(&first_session))
+    let next = tokio::time::timeout(Duration::from_secs(5), claims.turn(&first_session))
         .await
         .expect("and takes its turn once the first is done");
-    assert_eq!(locks.tracked(), 2);
-
+    assert_eq!(next.in_flight(), vec![(0, BLOCK)]);
     drop(next);
+    drop(claim);
+    let after = claims.turn(&first_session).await;
+    assert!(after.in_flight().is_empty(), "a dropped claim is released");
+    assert_eq!(claims.tracked(), 2);
+
+    drop(after);
     drop(other);
-    let _sweep = locks.acquire(&UploadId::new("third")).await;
+    let _sweep = claims.turn(&UploadId::new("third")).await;
     assert_eq!(
-        locks.tracked(),
+        claims.tracked(),
         1,
         "a session with nothing in flight holds no entry"
     );
     assert_eq!(
-        locks
+        claims
             .held
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner)
             .len(),
         1,
         "and its dead entry is swept on the next acquisition"
@@ -144,6 +280,7 @@ async fn one_session_appends_one_chunk_at_a_time_and_the_lock_map_forgets_it() {
 async fn opened_session(
     name: &str,
     total_size: u64,
+    in_flight_cap: u8,
 ) -> (
     crate::store::memory::InMemoryUploadSessions,
     crate::blob::memory::InMemoryBlobStore,
@@ -171,7 +308,8 @@ async fn opened_session(
         blob_role: crate::store::upload::BlobRole::Original,
         intent_id: None,
         manifest_envelope: "{}".to_owned(),
-        received_bytes: 0,
+        committed: CommittedSet::default(),
+        in_flight_cap,
         total_size,
         status: crate::store::upload::UploadSessionStatus::Pending,
         failure_code: None,
@@ -189,26 +327,123 @@ async fn opened_session(
     (sessions, blobs, clock, record)
 }
 
-/// A concurrent chunk completed the session and finalization claimed it while this one waited
-/// its turn. Decided on the stale record, this chunk at the new head would read as
-/// `SizeExceeded` and the session would be abandoned under the finalizer; the post-lock
-/// re-read answers `NotActive`, and the stage is untouched.
+/// Ranges sent out of order commit where they lie and the session completes when the set is
+/// `[0, size)`, with the stage holding every byte in place.
 #[tokio::test]
-async fn a_chunk_behind_a_completing_one_finds_the_session_not_active() {
-    use crate::blob::BlobStore as _;
+async fn ranges_out_of_order_commit_where_they_lie_and_complete_the_session() {
+    let (sessions, blobs, clock, stale) = opened_session("out-of-order", 3 * BLOCK, 4).await;
+    let block = |fill: u8| vec![fill; BLOCK as usize];
+
+    let last = write_range(&sessions, &blobs, &clock, &stale, 2 * BLOCK, &block(3))
+        .await
+        .expect("the last block lands first");
+    assert_eq!(
+        last,
+        Accepted::Committed {
+            committed: blocks(&[2]),
+            complete: false
+        }
+    );
+    write_range(&sessions, &blobs, &clock, &stale, 0, &block(1))
+        .await
+        .expect("the first block lands");
+    let gap = write_range(&sessions, &blobs, &clock, &stale, BLOCK, &block(2))
+        .await
+        .expect("the gap fills");
+    assert_eq!(
+        gap,
+        Accepted::Committed {
+            committed: blocks(&[0, 1, 2]),
+            complete: true
+        },
+        "the set coalesces to [0, size) and completes the session"
+    );
+
+    let mut expected = block(1);
+    expected.extend(block(2));
+    expected.extend(block(3));
+    assert_eq!(
+        blobs.staged_bytes(&stale.upload_id),
+        Some(expected),
+        "every range sits at its own offset"
+    );
+}
+
+/// A duplicate writes nothing — not even a re-send carrying different bytes — and a partial
+/// overlap is refused with the set to re-plan from.
+#[tokio::test]
+async fn a_committed_range_is_never_written_again() {
+    let (sessions, blobs, clock, stale) = opened_session("never-twice", 4 * BLOCK, 4).await;
+    let original = vec![1u8; 2 * BLOCK as usize];
+    write_range(&sessions, &blobs, &clock, &stale, 0, &original)
+        .await
+        .expect("two blocks land");
+
+    let changed = vec![9u8; BLOCK as usize];
+    assert_eq!(
+        write_range(&sessions, &blobs, &clock, &stale, BLOCK, &changed)
+            .await
+            .expect("the re-send is answered"),
+        Accepted::Duplicate {
+            committed: blocks(&[0, 1]),
+            unfinished: false
+        },
+        "a resized re-send inside the committed set is a duplicate"
+    );
+    let straddle = vec![9u8; 2 * BLOCK as usize];
+    assert_eq!(
+        write_range(&sessions, &blobs, &clock, &stale, BLOCK, &straddle)
+            .await
+            .expect("the overlap is answered"),
+        Accepted::RangeConflict {
+            committed: blocks(&[0, 1]),
+            in_flight: false
+        }
+    );
+    assert_eq!(
+        blobs.staged_bytes(&stale.upload_id),
+        Some(original),
+        "no committed byte was touched"
+    );
+}
+
+/// A range off the grid, or past the declared size, is refused before anything is written.
+#[tokio::test]
+async fn a_range_off_the_grid_or_past_the_size_writes_nothing() {
+    let (sessions, blobs, clock, stale) = opened_session("off-grid", 2 * BLOCK, 4).await;
+    assert_eq!(
+        write_range(&sessions, &blobs, &clock, &stale, 100, &[1u8; 4096])
+            .await
+            .expect("answered"),
+        Accepted::NotAligned
+    );
+    assert_eq!(
+        write_range(&sessions, &blobs, &clock, &stale, BLOCK, &[1u8; 8192])
+            .await
+            .expect("answered"),
+        Accepted::SizeExceeded
+    );
+    assert_eq!(blobs.staged_bytes(&stale.upload_id), Some(Vec::new()));
+}
+
+/// A concurrent range completed the session and finalization claimed it before this one's turn
+/// came. Decided on the stale record, this range would be written onto a stage the finalizer is
+/// reading; the re-read under the turn answers `NotActive`, and the stage is untouched.
+#[tokio::test]
+async fn a_range_behind_a_completing_one_finds_the_session_not_active() {
     use crate::store::UploadSessionStore as _;
 
-    let (sessions, blobs, clock, stale) = opened_session("completed-while-waiting", 4096).await;
+    let (sessions, blobs, clock, stale) =
+        opened_session("completed-while-waiting", 2 * BLOCK, 4).await;
     let id = stale.upload_id.clone();
-    let bytes = [7u8; 4096];
 
-    let first = append(&sessions, &blobs, &clock, &stale, 0, &bytes, "a")
+    let first = write_range(&sessions, &blobs, &clock, &stale, 0, &[7u8; 8192])
         .await
-        .expect("the completing chunk lands");
+        .expect("the completing range lands");
     assert_eq!(
         first,
-        Accepted::Advanced {
-            next_offset: 4096,
+        Accepted::Committed {
+            committed: blocks(&[0, 1]),
             complete: true
         }
     );
@@ -217,55 +452,64 @@ async fn a_chunk_behind_a_completing_one_finds_the_session_not_active() {
         .await
         .expect("finalization claims the session");
 
-    let late = append(&sessions, &blobs, &clock, &stale, 4096, &bytes, "b")
-        .await
-        .expect("the late chunk is answered");
-    assert_eq!(late, Accepted::NotActive, "not SizeExceeded");
+    let mut stale_short = stale.clone();
+    stale_short.total_size = 3 * BLOCK;
+    let late = write_range(
+        &sessions,
+        &blobs,
+        &clock,
+        &stale_short,
+        2 * BLOCK,
+        &[8u8; 4096],
+    )
+    .await
+    .expect("the late range is answered");
+    assert_eq!(late, Accepted::NotActive);
     assert_eq!(
-        blobs.staged_len(&id).await.expect("the stage reads"),
-        Some(4096),
+        blobs.staged_bytes(&id).map(|bytes| bytes.len()),
+        Some(8192),
         "nothing landed on the claimed stage"
     );
 }
 
-/// A replay says whether the session it lands on is full and unclaimed — the one state in
-/// which the replay is the request left to finish it — and only then.
+/// A duplicate says whether the session it lands on is full and unclaimed — the one state in
+/// which the duplicate is the request left to finish it — and only then.
 #[tokio::test]
-async fn a_replay_names_a_full_session_nobody_has_finished() {
+async fn a_duplicate_names_a_full_session_nobody_has_finished() {
     use crate::store::UploadSessionStore as _;
 
-    let (sessions, blobs, clock, stale) = opened_session("replayed-when-full", 8192).await;
+    let (sessions, blobs, clock, stale) = opened_session("duplicate-when-full", 2 * BLOCK, 4).await;
     let id = stale.upload_id.clone();
     let first = [1u8; 4096];
     let last = [2u8; 4096];
 
-    append(&sessions, &blobs, &clock, &stale, 0, &first, "a")
+    write_range(&sessions, &blobs, &clock, &stale, 0, &first)
         .await
-        .expect("the first chunk lands");
+        .expect("the first range lands");
     assert_eq!(
-        append(&sessions, &blobs, &clock, &stale, 0, &first, "a")
+        write_range(&sessions, &blobs, &clock, &stale, 0, &first)
             .await
-            .expect("the replay is answered"),
-        Accepted::Replayed {
-            next_offset: 4096,
+            .expect("the duplicate is answered"),
+        Accepted::Duplicate {
+            committed: blocks(&[0]),
             unfinished: false
         },
         "a session still short of its size is not unfinished, merely in progress"
     );
 
-    append(&sessions, &blobs, &clock, &stale, 4096, &last, "b")
+    write_range(&sessions, &blobs, &clock, &stale, BLOCK, &last)
         .await
-        .expect("the completing chunk lands");
-    for (offset, bytes, hash, next_offset) in [(4096, &last, "b", 8192), (0, &first, "a", 4096)] {
+        .expect("the completing range lands");
+    for (offset, bytes) in [(BLOCK, &last), (0, &first)] {
         assert_eq!(
-            append(&sessions, &blobs, &clock, &stale, offset, bytes, hash)
+            write_range(&sessions, &blobs, &clock, &stale, offset, bytes)
                 .await
-                .expect("the replay is answered"),
-            Accepted::Replayed {
-                next_offset,
+                .expect("the duplicate is answered"),
+            Accepted::Duplicate {
+                committed: blocks(&[0, 1]),
                 unfinished: true
             },
-            "any replay on a full, unclaimed session names it unfinished"
+            "any duplicate on a full, unclaimed session names it unfinished"
         );
     }
 
@@ -274,38 +518,58 @@ async fn a_replay_names_a_full_session_nobody_has_finished() {
         .await
         .expect("finalization claims the session");
     assert_eq!(
-        append(&sessions, &blobs, &clock, &stale, 4096, &last, "b")
+        write_range(&sessions, &blobs, &clock, &stale, BLOCK, &last)
             .await
-            .expect("the replay is answered"),
-        Accepted::Replayed {
-            next_offset: 8192,
+            .expect("the duplicate is answered"),
+        Accepted::Duplicate {
+            committed: blocks(&[0, 1]),
             unfinished: false
         },
         "a claimed session has a finisher"
     );
 }
 
-/// Finalization claimed the session before this chunk's turn came, with the offset still at
-/// the head the caller read. Nothing may land on a stage the finalizer is reading.
+/// Finalization claimed the session before this range's turn came. Nothing may land on a stage
+/// the finalizer is reading.
 #[tokio::test]
-async fn a_chunk_at_the_head_of_a_claimed_session_lands_nothing() {
-    use crate::blob::BlobStore as _;
+async fn a_range_of_a_claimed_session_lands_nothing() {
     use crate::store::UploadSessionStore as _;
 
-    let (sessions, blobs, clock, stale) = opened_session("claimed-while-waiting", 8192).await;
+    let (sessions, blobs, clock, stale) =
+        opened_session("claimed-while-waiting", 2 * BLOCK, 4).await;
     let id = stale.upload_id.clone();
     sessions
         .claim_finalize(&id)
         .await
         .expect("finalization claims the session");
 
-    let answer = append(&sessions, &blobs, &clock, &stale, 0, &[7u8; 4096], "a")
+    let answer = write_range(&sessions, &blobs, &clock, &stale, 0, &[7u8; 4096])
         .await
-        .expect("the chunk is answered");
+        .expect("the range is answered");
     assert_eq!(answer, Accepted::NotActive);
     assert_eq!(
-        blobs.staged_len(&id).await.expect("the stage reads"),
-        Some(0),
+        blobs.staged_bytes(&id),
+        Some(Vec::new()),
         "the stage is untouched"
     );
+}
+
+/// A range written after its session was cancelled is never recorded, and recreates nothing.
+#[tokio::test]
+async fn a_range_against_a_removed_session_is_discarded() {
+    use crate::blob::BlobStore as _;
+    use crate::store::UploadSessionStore as _;
+
+    let (sessions, blobs, clock, stale) = opened_session("removed", 2 * BLOCK, 4).await;
+    let id = stale.upload_id.clone();
+    blobs.abandon(&id).await.expect("the stage goes");
+    sessions.discard(&id).await.expect("the session goes");
+
+    assert_eq!(
+        write_range(&sessions, &blobs, &clock, &stale, 0, &[7u8; 4096])
+            .await
+            .expect("answered"),
+        Accepted::SessionGone
+    );
+    assert_eq!(blobs.staged_bytes(&id), None, "no stage was recreated");
 }

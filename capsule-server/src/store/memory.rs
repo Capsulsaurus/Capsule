@@ -37,7 +37,7 @@ use super::ids::{
     UploadId, UserId,
 };
 use super::upload::{
-    AcceptedChunk, FinalizeClaim, LIFETIME_CAP, UnclaimedDiscard, UploadSessionRecord,
+    CommittedRange, FinalizeClaim, LIFETIME_CAP, UnclaimedDiscard, UploadSessionRecord,
     UploadSessionStatus, UploadSessionStore,
 };
 use super::{Clock, StoreError, StoreFuture, deadline};
@@ -371,21 +371,11 @@ pub struct InMemoryUploadSessions {
 #[derive(Debug, Default)]
 struct UploadState {
     sessions: BTreeMap<UploadId, Entry<UploadSessionRecord>>,
-    chunks: BTreeMap<UploadId, BTreeMap<u64, AcceptedChunk>>,
 }
 
 impl UploadState {
     fn purge(&mut self, now: Timestamp) {
-        let expired: Vec<UploadId> = self
-            .sessions
-            .iter()
-            .filter(|(_, entry)| !entry.is_live_at(now))
-            .map(|(id, _)| id.clone())
-            .collect();
-        for id in expired {
-            self.sessions.remove(&id);
-            self.chunks.remove(&id);
-        }
+        self.sessions.retain(|_, entry| entry.is_live_at(now));
     }
 
     /// A live, still-active session, or `None`.
@@ -473,74 +463,34 @@ impl UploadSessionStore for InMemoryUploadSessions {
         })
     }
 
-    fn record_progress<'a>(
+    fn record_range<'a>(
         &'a self,
         upload: &'a UploadId,
-        chunk: AcceptedChunk,
+        range: CommittedRange,
     ) -> StoreFuture<'a, Option<UploadSessionRecord>> {
         Box::pin(async move {
             let now = self.clock.now();
             let mut state = lock(&self.state);
             state.purge(now);
             let Some(record) = state.active_mut(upload) else {
-                tracing::debug!(%upload, "progress found no active session");
+                tracing::debug!(%upload, "a range found no active session to record against");
                 return Ok(None);
             };
-            record.received_bytes = chunk.next_offset;
-            record.last_progress_at = chunk.accepted_at;
+            record.committed = record.committed.with_range(range.start, range.end);
+            record.last_progress_at = range.accepted_at;
             if record.status == UploadSessionStatus::Pending {
                 record.status = UploadSessionStatus::Uploading;
             }
             let updated = record.clone();
-            state
-                .chunks
-                .entry(upload.clone())
-                .or_default()
-                .insert(chunk.offset, chunk);
             tracing::debug!(
                 %upload,
-                received_bytes = updated.received_bytes,
-                "accepted chunk"
+                start = range.start,
+                end = range.end,
+                fragments = updated.committed.fragments(),
+                prefix = updated.committed.prefix(),
+                "recorded a committed range"
             );
             Ok(Some(updated))
-        })
-    }
-
-    fn chunk_at<'a>(
-        &'a self,
-        upload: &'a UploadId,
-        offset: u64,
-    ) -> StoreFuture<'a, Option<AcceptedChunk>> {
-        Box::pin(async move {
-            let now = self.clock.now();
-            let mut state = lock(&self.state);
-            state.purge(now);
-            let found = state
-                .chunks
-                .get(upload)
-                .and_then(|chunks| chunks.get(&offset))
-                .cloned();
-            tracing::trace!(%upload, offset, hit = found.is_some(), "chunk replay lookup");
-            Ok(found)
-        })
-    }
-
-    fn reconcile_received_bytes<'a>(
-        &'a self,
-        upload: &'a UploadId,
-        on_disk: u64,
-    ) -> StoreFuture<'a, Option<UploadSessionRecord>> {
-        Box::pin(async move {
-            let now = self.clock.now();
-            let mut state = lock(&self.state);
-            state.purge(now);
-            let Some(entry) = state.sessions.get_mut(upload) else {
-                return Ok(None);
-            };
-            let was = entry.record.received_bytes;
-            entry.record.received_bytes = on_disk;
-            tracing::info!(%upload, was, now = on_disk, "reconciled received bytes to disk");
-            Ok(Some(entry.record.clone()))
         })
     }
 
@@ -634,7 +584,6 @@ impl UploadSessionStore for InMemoryUploadSessions {
             let now = self.clock.now();
             let mut state = lock(&self.state);
             state.purge(now);
-            state.chunks.remove(upload);
             let removed = state.sessions.remove(upload).map(|entry| entry.record);
             tracing::info!(%upload, hit = removed.is_some(), "discarded upload session");
             Ok(removed)
@@ -661,7 +610,6 @@ impl UploadSessionStore for InMemoryUploadSessions {
                 );
                 return Ok(UnclaimedDiscard::Claimed);
             }
-            state.chunks.remove(upload);
             let Some(removed) = state.sessions.remove(upload) else {
                 return Ok(UnclaimedDiscard::NotFound);
             };

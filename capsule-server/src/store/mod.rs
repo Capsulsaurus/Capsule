@@ -100,7 +100,7 @@ pub use self::ids::{
     OidcDeviceHandle, OidcNonce, OidcState, OwnerId, PkceVerifier, SessionId, UploadId, UserId,
 };
 pub use self::upload::{
-    AcceptedChunk, BlobRole, FinalizeClaim, UnclaimedDiscard, UploadSessionRecord,
+    BlobRole, CommittedRange, CommittedSet, FinalizeClaim, UnclaimedDiscard, UploadSessionRecord,
     UploadSessionStatus, UploadSessionStore,
 };
 

@@ -34,13 +34,20 @@ use crate::upload::chunk::suggested_chunk_size;
 /// busy without letting one device hold a large share of the live-session cap.
 pub const ADVISED_SESSIONS: u64 = 4;
 
-/// In-flight ranges per session the server advises.
+/// The in-flight cap a new session is created with, and so the `ranges` it is advertised.
 ///
-/// One: this server appends a session's bytes in order — a chunk at any offset but the
-/// committed one is `409 error.upload.offset_mismatch` — so a second range in flight could
-/// only be refused. The member is fixed for a session's life, which is what lets it rise once
-/// the server accepts ranges out of order.
-pub const ADVISED_RANGES: u64 = 1;
+/// The server admits ranges in any order up to a session's cap
+/// ([`crate::upload::chunk::admit`]), and the cap may be anything up to
+/// [`crate::upload::chunk::MAX_IN_FLIGHT_RANGES`]. It stays at one until the clients this server
+/// serves re-plan from the committed set: a client built against the append-only server reads
+/// `ranges` as a window it may fill, and resumes from the committed prefix, so a wider window
+/// would meet `range_conflict` — a code it does not know — on its first lost acknowledgement.
+/// Raising it is advice, not protocol; a session keeps the cap it was created with.
+pub const ADVISED_RANGES: u8 = 1;
+
+// The cap is never above the protocol's ceiling, nor zero, which would refuse every range.
+const _: () =
+    assert!(ADVISED_RANGES >= 1 && ADVISED_RANGES <= crate::upload::chunk::MAX_IN_FLIGHT_RANGES);
 
 /// How long, in seconds, a client may hold the advice before it reverts to its own defaults.
 pub const ADVICE_TTL_SECS: u64 = 300;
@@ -65,12 +72,13 @@ pub struct Advice {
 }
 
 impl Advice {
-    /// The advice for a session declaring `total_size` bytes.
-    pub fn for_size(total_size: u64) -> Self {
+    /// The advice for `record`'s session: its suggested chunk for the declared size, and its
+    /// own in-flight cap as `ranges` — fixed at creation, so it never moves under a session.
+    pub fn for_session(record: &UploadSessionRecord) -> Self {
         Self {
-            chunk: suggested_chunk_size(total_size),
+            chunk: suggested_chunk_size(record.total_size),
             sessions: ADVISED_SESSIONS,
-            ranges: ADVISED_RANGES,
+            ranges: u64::from(record.in_flight_cap),
             ttl: ADVICE_TTL_SECS,
         }
     }

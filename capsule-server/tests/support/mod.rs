@@ -108,13 +108,13 @@ use capsule_server::store::memory::{
     InMemoryOidcAuthorizations, InMemoryUploadSessions, ManualClock,
 };
 use capsule_server::store::{
-    AcceptedChunk, AlbumId, AssetId, AuthStateStore, ChallengeStore, ChallengeToken, ChannelId,
-    ChannelStore, Clock, CohortRecord, CohortStore, Direction, DrainOutcome, ENROLLMENT_CODE_TTL,
-    EnrollmentCode, EnrollmentStore, FinalizeClaim, OidcAuthorizationStore, OidcState, OwnerId,
-    PendingAuthorization, PendingEnrollment, RELAY_CHANNEL_TTL, RelayChannel, RelayOutcome,
-    RelayPayload, RevokeAllChallenge, SessionId, SessionRecord, StoreError, StoreFuture,
-    UnclaimedDiscard, UploadId, UploadSessionRecord, UploadSessionStatus, UploadSessionStore,
-    UserId,
+    AlbumId, AssetId, AuthStateStore, ChallengeStore, ChallengeToken, ChannelId, ChannelStore,
+    Clock, CohortRecord, CohortStore, CommittedRange, CommittedSet, Direction, DrainOutcome,
+    ENROLLMENT_CODE_TTL, EnrollmentCode, EnrollmentStore, FinalizeClaim, OidcAuthorizationStore,
+    OidcState, OwnerId, PendingAuthorization, PendingEnrollment, RELAY_CHANNEL_TTL, RelayChannel,
+    RelayOutcome, RelayPayload, RevokeAllChallenge, SessionId, SessionRecord, StoreError,
+    StoreFuture, UnclaimedDiscard, UploadId, UploadSessionRecord, UploadSessionStatus,
+    UploadSessionStore, UserId,
 };
 
 pub(crate) mod idp;
@@ -2440,7 +2440,8 @@ impl SwitchableUploads {
                     blob_role: capsule_server::store::BlobRole::Original,
                     intent_id: None,
                     manifest_envelope: "{}".to_owned(),
-                    received_bytes: 0,
+                    committed: CommittedSet::default(),
+                    in_flight_cap: 1,
                     total_size: 4096,
                     status: UploadSessionStatus::Pending,
                     failure_code: None,
@@ -2482,43 +2483,21 @@ impl UploadSessionStore for SwitchableUploads {
         self.inner.sessions_for_uploader(uploader)
     }
 
-    fn record_progress<'a>(
+    fn record_range<'a>(
         &'a self,
         upload: &'a UploadId,
-        chunk: AcceptedChunk,
+        range: CommittedRange,
     ) -> StoreFuture<'a, Option<UploadSessionRecord>> {
         if self.is_down() {
             return Box::pin(async { Self::refuse() });
         }
         Box::pin(async move {
-            let updated = self.inner.record_progress(upload, chunk).await?;
+            let updated = self.inner.record_range(upload, range).await?;
             if self.claim_after_progress.swap(false, Ordering::SeqCst) {
                 self.inner.claim_finalize(upload).await?;
             }
             Ok(updated)
         })
-    }
-
-    fn chunk_at<'a>(
-        &'a self,
-        upload: &'a UploadId,
-        offset: u64,
-    ) -> StoreFuture<'a, Option<AcceptedChunk>> {
-        if self.is_down() {
-            return Box::pin(async { Self::refuse() });
-        }
-        self.inner.chunk_at(upload, offset)
-    }
-
-    fn reconcile_received_bytes<'a>(
-        &'a self,
-        upload: &'a UploadId,
-        on_disk: u64,
-    ) -> StoreFuture<'a, Option<UploadSessionRecord>> {
-        if self.is_down() {
-            return Box::pin(async { Self::refuse() });
-        }
-        self.inner.reconcile_received_bytes(upload, on_disk)
     }
 
     fn set_status<'a>(
@@ -2614,15 +2593,13 @@ impl UploadSessionStore for SwitchableUploads {
 // Blob store double
 // ===========================================================================================
 
-/// The in-memory blob store, with one seam: it can **swallow** an append.
+/// The in-memory blob store, with one seam: it can **swallow** a staged write.
 ///
-/// The seam simulates the one failure the upload protocol's validation section calls out and
-/// that no in-process test could otherwise reach — a crash between a durable append and the
-/// counter that records it. With `swallow_next_append` armed, the store answers as though it
-/// wrote the bytes and writes nothing, so the session's counter runs ahead of the stage. The
-/// next append then meets the port's own offset cross-check and the divergence surfaces as
-/// `500 error.upload.storage_inconsistent` — which is exactly what it is: the server's
-/// inconsistency, never the client's fault.
+/// With `swallow_next_append` armed, the store answers as though it wrote the bytes and instead
+/// loses the whole stage, so the session records a range on a stage that no longer exists — the
+/// failure no in-process test could otherwise reach. The next write meets the missing stage of a
+/// live session and surfaces it as `500 error.upload.storage_inconsistent`, which is exactly what
+/// it is: the server's inconsistency, never the client's fault; a finalization meets it too.
 #[derive(Debug)]
 pub(crate) struct SwallowingBlobs {
     inner: InMemoryBlobStore,
@@ -2685,7 +2662,7 @@ impl SwallowingBlobs {
         hold
     }
 
-    /// Drop the next append on the floor while telling the caller it landed.
+    /// Lose the stage under the next staged write while telling the caller it landed.
     pub(crate) fn swallow_next_append(&self) {
         self.swallow.store(true, Ordering::SeqCst);
     }
@@ -2818,19 +2795,22 @@ impl BlobStore for SwallowingBlobs {
         self.inner.begin(upload)
     }
 
-    fn append<'a>(
+    fn write_staged<'a>(
         &'a self,
         upload: &'a UploadId,
         offset: u64,
         bytes: &'a [u8],
     ) -> BlobFuture<'a, u64> {
         if self.swallow.swap(false, Ordering::SeqCst) {
-            return Box::pin(async move { Ok(offset + bytes.len() as u64) });
+            return Box::pin(async move {
+                self.inner.abandon(upload).await?;
+                Ok(offset + bytes.len() as u64)
+            });
         }
         if self.full_next_append.swap(false, Ordering::SeqCst) {
             return Box::pin(async move {
                 Err(BlobError::StorageFull {
-                    operation: "append to a staging file",
+                    operation: "write to a staging file",
                 })
             });
         }
@@ -2848,16 +2828,8 @@ impl BlobStore for SwallowingBlobs {
                     .await
                     .expect("the hold is never closed");
             }
-            self.inner.append(upload, offset, bytes).await
+            self.inner.write_staged(upload, offset, bytes).await
         })
-    }
-
-    fn truncate_staged<'a>(
-        &'a self,
-        upload: &'a UploadId,
-        len: u64,
-    ) -> BlobFuture<'a, Option<u64>> {
-        self.inner.truncate_staged(upload, len)
     }
 
     fn staged_len<'a>(&'a self, upload: &'a UploadId) -> BlobFuture<'a, Option<u64>> {

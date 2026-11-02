@@ -750,9 +750,10 @@ async fn every_declared_response_is_exercised() {
         .patch(&session)
         .header("authorization", &bearer)
         .header("x-capsule-protocol", PROTOCOL_VERSION)
-        .header("x-capsule-offset", "8192")
-        .header("x-capsule-checksum", &checksum(&second))
-        .body("application/octet-stream", second.clone())
+        // Partly committed: the first 4 KiB already landed, so the range is a conflict.
+        .header("x-capsule-offset", "0")
+        .header("x-capsule-checksum", &checksum(&whole))
+        .body("application/octet-stream", whole.clone())
         .send()
         .await
         .assert_status(StatusCode::CONFLICT);

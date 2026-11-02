@@ -98,10 +98,10 @@ use crate::blob::{BlobError, ContentAddress};
 use crate::client_addr::ClientAddr;
 use crate::counter::{Budget, CounterContext, CounterKey, Verdict, budgets, unix_seconds};
 use crate::store::{
-    AlbumId, AssetId, BlobRole, Clock, OwnerId, StoreError, UploadId, UploadSessionRecord,
-    UploadSessionStatus, UserId,
+    AlbumId, AssetId, BlobRole, Clock, CommittedSet, OwnerId, StoreError, UploadId,
+    UploadSessionRecord, UploadSessionStatus, UserId,
 };
-use crate::upload::advice::{Advice, SessionExpiry};
+use crate::upload::advice::{ADVISED_RANGES, Advice, SessionExpiry};
 use crate::upload::body::ChunkBody;
 use crate::upload::chunk::{
     self, MAX_CHUNK_BYTES, parse_checksum, parse_offset, suggested_chunk_size,
@@ -271,9 +271,13 @@ pub struct CreateHeaders {
     /// pressure. Never more than `X-Capsule-Session-Expires-In`.
     #[header(rename = "X-Capsule-Session-Idle-Expires-In")]
     idle_expires_in: u64,
-    /// The authoritative offset, on a resumed session.
+    /// The committed prefix, on a resumed session.
     #[header(rename = "X-Capsule-Offset")]
     offset: Option<u64>,
+    /// The full committed set, on a resumed session: comma-separated inclusive byte ranges, as
+    /// on `HEAD`.
+    #[header(rename = "X-Capsule-Committed")]
+    committed: Option<String>,
     /// Where a resumed session is in its state machine — `waiting_for_processing` once a
     /// duplicate create has started the finalization of a full session nobody had claimed.
     #[header(rename = "X-Capsule-Upload-Status")]
@@ -281,16 +285,18 @@ pub struct CreateHeaders {
 }
 
 impl CreateHeaders {
-    /// The headers for `record`'s session, as of the context's clock.
-    fn of(upload: &UploadContext, record: &UploadSessionRecord, offset: Option<u64>) -> Self {
+    /// The headers for `record`'s session, as of the context's clock — with its progress when
+    /// `resumed`.
+    fn of(upload: &UploadContext, record: &UploadSessionRecord, resumed: bool) -> Self {
         let expiry = SessionExpiry::of(record, upload.sessions().ttl(), upload.clock().now());
         Self {
             location: Some(session_url(&record.upload_id)),
-            advice: Advice::for_size(record.total_size).to_string(),
+            advice: Advice::for_session(record).to_string(),
             expires_in: expiry.expires_in,
             idle_expires_in: expiry.idle_expires_in,
-            upload_status: offset.map(|_| record.status.as_str().to_owned()),
-            offset,
+            upload_status: resumed.then(|| record.status.as_str().to_owned()),
+            offset: resumed.then(|| record.committed.prefix()),
+            committed: resumed.then(|| record.committed.to_header()),
         }
     }
 }
@@ -314,9 +320,13 @@ pub struct ChunkHeaders {
 /// What a chunk's acknowledgement carries.
 #[derive(HeaderParams)]
 pub struct OffsetHeader {
-    /// The next byte the server expects.
+    /// The committed prefix: where a client sending in order continues.
     #[header(rename = "X-Capsule-Offset")]
     offset: u64,
+    /// The full committed set, as comma-separated inclusive byte ranges such as
+    /// `0-1048575,2097152-4194303`, never more than 64 of them; empty when nothing is committed.
+    #[header(rename = "X-Capsule-Committed")]
+    committed: String,
     /// Where the session stands: `uploading`, or `waiting_for_processing` once it holds every
     /// declared byte. The completing chunk is answered as soon as finalization is claimed, never
     /// once it finishes; the client reads the outcome from `HEAD`.
@@ -346,9 +356,15 @@ pub enum HeadReply {
 /// for a `failed_processing` session.
 #[derive(HeaderParams)]
 pub struct HeadHeaders {
-    /// The next byte the server expects.
+    /// The committed prefix: where a client sending in order resumes.
     #[header(rename = "X-Capsule-Offset")]
     offset: u64,
+    /// The full committed set, as comma-separated inclusive byte ranges such as
+    /// `0-1048575,2097152-4194303`, never more than 64 of them; empty when nothing is committed.
+    /// A client sending out of order re-plans from this, never from its own record of what it
+    /// sent.
+    #[header(rename = "X-Capsule-Committed")]
+    committed: String,
     /// The declared total, fixed at creation.
     #[header(rename = "X-Capsule-Content-Length")]
     content_length: u64,
@@ -593,25 +609,52 @@ pub enum ChunkRejection {
         code: &'static str,
     },
 
-    /// The offset is not the one the server is waiting for. Carries the authoritative offset.
+    /// The range overlaps a range of the session still in flight, or is partly committed.
+    /// Nothing was written.
     ///
-    /// As an extension member rather than the `X-Capsule-Offset` header the census names, for
-    /// the reason [`CreateRejection::ProtocolUnsupported`] records.
-    #[error("the session is at offset {offset}")]
-    #[problem(status = 409, title = "Offset mismatch")]
-    OffsetMismatch {
-        /// The offset to resume from.
+    /// Carries the committed set to re-plan from as an extension member, which
+    /// [`CommittedOnRefusal`] lifts onto `X-Capsule-Committed`, and a retry instant when the
+    /// overlap is with a range in flight — a claim that ends when its write returns.
+    #[error("the range overlaps one this session has committed or has in flight")]
+    #[problem(status = 409, title = "Range conflict")]
+    RangeConflict {
+        /// The session's committed set, as `X-Capsule-Committed` spells it.
         #[problem(extension)]
-        offset: u64,
+        committed: String,
+        /// When the caller may retry, as Unix seconds — only when the overlap is in flight.
+        #[problem(extension)]
+        retry_after: Option<u64>,
         /// The stable catalog code.
         #[problem(extension)]
         code: &'static str,
     },
 
-    /// The same offset arrived twice with different bytes — a client retrying with garbage.
-    #[error("a different chunk was already accepted at this offset")]
-    #[problem(status = 409, title = "Chunk conflict")]
-    ChunkConflict {
+    /// The session already has its in-flight cap of ranges being written. Nothing was written.
+    ///
+    /// A claim lives until its write returns, so one a client abandoned can still count; the
+    /// retry instant covers it.
+    #[error("this session already has its cap of ranges in flight")]
+    #[problem(status = 409, title = "Too many ranges in flight")]
+    TooManyInFlight {
+        /// When the caller may retry, as Unix seconds.
+        #[problem(extension)]
+        retry_after: u64,
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
+    /// Admitting the range could leave the committed set past its fragment bound. Nothing was
+    /// written.
+    ///
+    /// Carries a retry instant when other ranges of the session are in flight, because one of
+    /// them may be a claim the client cannot see — a request it abandoned.
+    #[error("this range would leave the session with too many committed fragments")]
+    #[problem(status = 409, title = "Too fragmented")]
+    TooFragmented {
+        /// When the caller may retry, as Unix seconds — only when other ranges are in flight.
+        #[problem(extension)]
+        retry_after: Option<u64>,
         /// The stable catalog code.
         #[problem(extension)]
         code: &'static str,
@@ -680,6 +723,70 @@ pub enum ChunkRejection {
         #[problem(extension)]
         retry_after: u64,
     },
+}
+
+/// The `X-Capsule-Committed` header a refused chunk carries.
+#[derive(HeaderParams)]
+pub struct RefusalCommittedHeader {
+    /// On a `409 error.upload.range_conflict`, the session's committed set to re-plan from, as
+    /// `HEAD` spells it. Absent on every other refusal.
+    #[header(rename = "X-Capsule-Committed")]
+    committed: Option<String>,
+}
+
+/// Lifts a refused chunk's `committed` member onto `X-Capsule-Committed`.
+///
+/// A Kynos `ApiError` has no seam for a response header, so [`ChunkRejection::RangeConflict`]
+/// says *what is committed* in its body, and this says it again where the protocol puts it —
+/// the way [`crate::problem::RetryAfter`] lifts a retry instant. Mounted on the chunk route's
+/// group alone, so it reads only the chunk's own problems; a success passes through untouched,
+/// its body never read.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CommittedOnRefusal;
+
+impl CommittedOnRefusal {
+    /// The interceptor.
+    #[must_use]
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl<C> kynos::middleware::Interceptor<C> for CommittedOnRefusal
+where
+    C: Sync + 'static,
+{
+    type Reads = ();
+    type Adds = RefusalCommittedHeader;
+    /// Never answers on its own.
+    type Short = std::convert::Infallible;
+
+    async fn intercept(
+        &self,
+        request: kynos::http::Request,
+        (): (),
+        _context: &C,
+        next: kynos::middleware::Next<'_, C>,
+    ) -> Result<kynos::middleware::Continued<RefusalCommittedHeader>, std::convert::Infallible>
+    {
+        let mut continued = next.run(request).await;
+        if !crate::problem::is_problem(continued.headers()) {
+            return Ok(continued.with_headers(RefusalCommittedHeader { committed: None }));
+        }
+        let status = continued.status().as_u16();
+        let bytes = match crate::problem::collect(continued.take_body()).await {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                tracing::error!(%error, status, "a chunk refusal could not be read for its committed set");
+                return Ok(continued.with_headers(RefusalCommittedHeader { committed: None }));
+            }
+        };
+        let committed = serde_json::from_slice::<serde_json::Value>(&bytes)
+            .ok()
+            .and_then(|problem| problem.get("committed")?.as_str().map(str::to_owned));
+        continued.set_body(kynos::http::body::Body::from_bytes(bytes));
+        Ok(continued.with_headers(RefusalCommittedHeader { committed }))
+    }
 }
 
 /// Why a request about an existing session was refused.
@@ -817,6 +924,12 @@ pub(crate) const UNAVAILABLE_RETRY: jiff::SignedDuration = jiff::SignedDuration:
 /// a connection recovers, and a client polling every few seconds would only fill the log. The
 /// guest drop path tells its guests the same.
 pub(crate) const STORAGE_FULL_RETRY: jiff::SignedDuration = jiff::SignedDuration::from_mins(5);
+
+/// How long a client refused because of a range in flight is told to wait.
+///
+/// One second: a range is claimed only once its body has arrived, so a claim lasts one write,
+/// one fsync and one record — whether or not the request that took it is still waiting.
+const IN_FLIGHT_RETRY: jiff::SignedDuration = jiff::SignedDuration::from_secs(1);
 
 /// How long a client at the live-session cap is told to wait.
 ///
@@ -1074,12 +1187,13 @@ pub async fn create_upload(
                 };
                 tracing::info!(
                     upload_id = %current.upload_id,
-                    received_bytes = current.received_bytes,
+                    prefix = current.committed.prefix(),
+                    fragments = current.committed.fragments(),
                     status = current.status.as_str(),
                     "returning the active session for a duplicate create"
                 );
                 let body = describe(&current.upload_id, current.total_size);
-                let headers = CreateHeaders::of(&upload, &current, Some(current.received_bytes));
+                let headers = CreateHeaders::of(&upload, &current, true);
                 return Ok(WithHeaders::new(CreateReply::Existing(body), headers));
             }
             // The claim could not be taken: the session is still full and unclaimed, and the
@@ -1283,7 +1397,9 @@ pub async fn create_upload(
             tracing::error!(%error, "the validated envelope could not be stored");
             CreateRejection::unavailable(upload.clock())
         })?,
-        received_bytes: 0,
+        committed: CommittedSet::default(),
+        // Fixed for the session's life, whatever later sessions are given.
+        in_flight_cap: ADVISED_RANGES,
         total_size: request.size,
         status: UploadSessionStatus::Pending,
         failure_code: None,
@@ -1291,7 +1407,7 @@ pub async fn create_upload(
         last_progress_at: now,
     };
 
-    let headers = CreateHeaders::of(&upload, &record, None);
+    let headers = CreateHeaders::of(&upload, &record, false);
     upload.sessions().open(record).await.map_err(|error| {
         store_unavailable(&error, "open an upload session");
         CreateRejection::unavailable(upload.clock())
@@ -1427,25 +1543,19 @@ pub async fn append_chunk(
     // The rules themselves live in `upload::chunk`, shared verbatim with the guest-drop path:
     // invariants 9–12 mean the same thing on both surfaces, and two copies would
     // drift on exactly the case a client hits after losing a connection. What stays here is
-    // what genuinely differs — who is allowed to append, and how a refusal is spelled on the
+    // what genuinely differs — who is allowed to write, and how a refusal is spelled on the
     // wire.
-    // The append and the finalize claim it leads to are one task, awaited here for the answer:
-    // a client that disconnects drops this future, and neither may stop with it, because an
-    // append whose record landed but whose claim was never taken leaves a full session nobody
-    // finishes (#801, #818). The finalization itself runs detached and is never awaited: the
-    // completing chunk is answered `waiting_for_processing` as soon as the claim is held, so the
-    // answer does not depend on how long a re-hash of the blob takes.
+    // The write and the finalize claim it leads to are one task, awaited here for the answer:
+    // a client that disconnects drops this future, and neither may stop with it — a range's
+    // claim is released only once its write has returned, so a retry can never be overwritten
+    // by an abandoned write, and a range whose record landed but whose claim was never taken
+    // leaves a full session nobody finishes (#801, #818). The finalization itself runs detached
+    // and is never awaited: the completing chunk is answered `waiting_for_processing` as soon as
+    // the claim is held, so the answer does not depend on how long a re-hash of the blob takes.
     let declared_size = record.total_size;
     let landed = tokio::spawn(
-        append_and_finish(
-            upload.clone(),
-            attestation.clone(),
-            record,
-            offset,
-            body,
-            received_hash,
-        )
-        .instrument(tracing::Span::current()),
+        append_and_finish(upload.clone(), attestation.clone(), record, offset, body)
+            .instrument(tracing::Span::current()),
     )
     .await
     .map_err(|join| {
@@ -1474,12 +1584,24 @@ pub async fn append_chunk(
         }
     }
 
-    let next_offset = match landed.accepted {
-        chunk::Accepted::Advanced { next_offset, .. }
-        | chunk::Accepted::Replayed { next_offset, .. } => next_offset,
-        chunk::Accepted::Conflict => return Err(ChunkRejection::chunk_conflict()),
-        chunk::Accepted::OffsetMismatch { expected } => {
-            return Err(ChunkRejection::offset_mismatch(expected));
+    let committed = match landed.accepted {
+        chunk::Accepted::Committed { committed, .. }
+        | chunk::Accepted::Duplicate { committed, .. } => committed,
+        chunk::Accepted::RangeConflict {
+            committed,
+            in_flight,
+        } => {
+            return Err(ChunkRejection::range_conflict(
+                &committed,
+                in_flight,
+                upload.clock(),
+            ));
+        }
+        chunk::Accepted::TooManyInFlight => {
+            return Err(ChunkRejection::too_many_in_flight(upload.clock()));
+        }
+        chunk::Accepted::TooFragmented { in_flight } => {
+            return Err(ChunkRejection::too_fragmented(in_flight, upload.clock()));
         }
         chunk::Accepted::NotAligned => return Err(ChunkRejection::chunk_not_aligned()),
         chunk::Accepted::SizeExceeded => {
@@ -1506,21 +1628,24 @@ pub async fn append_chunk(
 
     // A session holding every byte is claimed — by this chunk, or by the request that raced it
     // — and finalizing; anything short of that is still uploading.
-    let upload_status = if next_offset == declared_size {
+    let upload_status = if committed.is_full(declared_size) {
         UploadSessionStatus::WaitingForProcessing
     } else {
         UploadSessionStatus::Uploading
     };
     tracing::debug!(
         upload_id = %id,
-        next_offset,
+        offset,
+        prefix = committed.prefix(),
+        fragments = committed.fragments(),
         status = upload_status.as_str(),
         "acknowledged a chunk"
     );
     Ok(WithHeaders::new(
         NoContent,
         OffsetHeader {
-            offset: next_offset,
+            offset: committed.prefix(),
+            committed: committed.to_header(),
             upload_status: upload_status.as_str().to_owned(),
         },
     ))
@@ -1528,44 +1653,42 @@ pub async fn append_chunk(
 
 /// What one chunk did, with the finalization it started.
 struct Landed {
-    /// What the append did.
+    /// What the write did.
     accepted: chunk::Accepted,
-    /// The finalization the chunk started — present when it completed the session, or replayed
-    /// a chunk of a full session nobody had finished. Started, never awaited.
+    /// The finalization the chunk started — present when it completed the session, or
+    /// duplicated a range of a full session nobody had finished. Started, never awaited.
     finalized: Option<Result<finalize::Started, FinalizeFailure>>,
 }
 
-/// Append one chunk and, when the session then holds every byte and nobody has claimed its
+/// Write one range and, when the session then holds every byte and nobody has claimed its
 /// finish, take the claim and start finalization detached.
 ///
 /// Run as its own task by [`append_chunk`], so it reaches its end whether or not the request
-/// does. Starting finalization on a replay is what finishes a session the completing request
-/// left full and unclaimed — a request dropped while its progress write was in flight, or a
-/// process that died before claiming: the client's resend of its last chunk is one request left
-/// to finish it, and [`finalize::start`]'s claim makes a replay that races the original request
-/// stand down rather than finalize twice.
+/// does. Starting finalization on a duplicate is what finishes a session the completing request
+/// left full and unclaimed — a request dropped while its record was in flight, or a process
+/// that died before claiming: the client's re-send of any range is one request left to finish
+/// it, and [`finalize::start`]'s claim makes a duplicate that races the original request stand
+/// down rather than finalize twice.
 async fn append_and_finish(
     upload: UploadContext,
     attestation: crate::attestation::AttestationContext,
     record: UploadSessionRecord,
     offset: u64,
     body: ChunkBody,
-    received_hash: String,
 ) -> Result<Landed, StoreError> {
-    let accepted = chunk::append(
+    let accepted = chunk::write_range(
         upload.sessions(),
         upload.blobs(),
         upload.clock(),
         &record,
         offset,
         body.bytes(),
-        &received_hash,
     )
     .await?;
     let finishes = matches!(
         accepted,
-        chunk::Accepted::Advanced { complete: true, .. }
-            | chunk::Accepted::Replayed {
+        chunk::Accepted::Committed { complete: true, .. }
+            | chunk::Accepted::Duplicate {
                 unfinished: true,
                 ..
             }
@@ -1707,10 +1830,11 @@ pub async fn head_upload(
     Ok(WithHeaders::new(
         HeadReply::Progress,
         HeadHeaders {
-            offset: record.received_bytes,
+            offset: record.committed.prefix(),
+            committed: record.committed.to_header(),
             content_length: record.total_size,
             upload_status: record.status.as_str().to_owned(),
-            advice: Advice::for_size(record.total_size).to_string(),
+            advice: Advice::for_session(&record).to_string(),
             expires_in: expiry.expires_in,
             idle_expires_in: expiry.idle_expires_in,
             upload_error: failure_code_of(&record),
@@ -1739,6 +1863,10 @@ pub async fn cancel_upload(
     }
 
     let id = record.upload_id.clone();
+    // Under the session's admission turn, so no range is admitted against a session being
+    // cancelled. A range already in flight finds its stage or its session gone, and is never
+    // recorded.
+    let turn = chunk::admission_turn(&id).await;
     // The bytes first: a discarded record with a stage still on disk is an orphan the scrub has
     // to find, while a dropped stage with a live record is a session whose next chunk fails
     // loudly. Neither is good, and this order is the one the scrub already covers.
@@ -1749,6 +1877,7 @@ pub async fn cancel_upload(
         store_unavailable(&error, "discard a cancelled session");
         CancelRejection::unavailable(upload.clock())
     })?;
+    drop(turn);
 
     // The reservation goes back, unless the stored bytes or another of the uploader's sessions
     // still hold it. Best-effort and logged rather than fatal: the session is already gone, so
@@ -1926,6 +2055,9 @@ fn new_upload_id() -> UploadId {
 /// Drop a session's bytes, mark it failed and give its reservation back, for a chunk that
 /// broke the declaration.
 async fn abandon_failed(upload: &UploadContext, id: &UploadId) {
+    // Serialised with admission, as a cancellation is: no range is admitted against a session
+    // being failed, and one already in flight is never recorded.
+    let _turn = chunk::admission_turn(id).await;
     if let Err(error) = upload.blobs().abandon(id).await {
         tracing::error!(%error, upload_id = %id, "a failed upload's stage could not be dropped");
     }
@@ -2110,7 +2242,8 @@ impl ChunkRejection {
     fn chunk_not_aligned() -> Self {
         Self::invalid(
             error_codes::UPLOAD_CHUNK_NOT_ALIGNED,
-            "every chunk but the final one must be a multiple of 4 KiB",
+            "a chunk's offset must be a multiple of 4 KiB, and so must its length unless it ends \
+             at the declared size",
         )
     }
 
@@ -2121,16 +2254,25 @@ impl ChunkRejection {
         )
     }
 
-    fn offset_mismatch(offset: u64) -> Self {
-        Self::OffsetMismatch {
-            offset,
-            code: error_codes::UPLOAD_OFFSET_MISMATCH,
+    fn range_conflict(committed: &CommittedSet, in_flight: bool, clock: &dyn Clock) -> Self {
+        Self::RangeConflict {
+            committed: committed.to_header(),
+            retry_after: in_flight.then(|| retry_at(clock, IN_FLIGHT_RETRY)),
+            code: error_codes::UPLOAD_RANGE_CONFLICT,
         }
     }
 
-    fn chunk_conflict() -> Self {
-        Self::ChunkConflict {
-            code: error_codes::UPLOAD_CHUNK_CONFLICT,
+    fn too_many_in_flight(clock: &dyn Clock) -> Self {
+        Self::TooManyInFlight {
+            retry_after: retry_at(clock, IN_FLIGHT_RETRY),
+            code: error_codes::UPLOAD_TOO_MANY_IN_FLIGHT,
+        }
+    }
+
+    fn too_fragmented(in_flight: bool, clock: &dyn Clock) -> Self {
+        Self::TooFragmented {
+            retry_after: in_flight.then(|| retry_at(clock, IN_FLIGHT_RETRY)),
+            code: error_codes::UPLOAD_TOO_FRAGMENTED,
         }
     }
 

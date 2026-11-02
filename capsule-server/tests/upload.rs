@@ -89,7 +89,7 @@ async fn a_session_opens_and_says_where_to_send_bytes() {
         .await
         .expect("the session is in the store");
     assert_eq!(record.total_size, whole.len() as u64);
-    assert_eq!(record.received_bytes, 0);
+    assert!(record.committed.ranges().is_empty());
     assert_eq!(record.expected_hash, checksum(&whole));
     assert_eq!(record.album_id.as_ref(), Some(&album()));
     assert_eq!(record.owner_id, owner());
@@ -1193,16 +1193,32 @@ async fn every_chunk_rule_is_refused_with_its_status_and_code() {
         "error.upload.unsupported_media_type"
     );
 
-    // A gapped offset names the authoritative one.
+    // An offset off the 4 KiB grid, even for the range that ends the blob.
+    let response = fixture
+        .chunk(&id, 100, &second[100..], &bearer)
+        .send()
+        .await;
+    response.assert_status(StatusCode::BAD_REQUEST);
+    assert_eq!(
+        code(&response.json::<serde_json::Value>()),
+        "error.upload.chunk_not_aligned"
+    );
+
+    // A range past a gap commits where it lies: the prefix stays at zero, and the set says so.
     let response = fixture.chunk(&id, 4096, &second, &bearer).send().await;
-    response.assert_status(StatusCode::CONFLICT);
-    let body: serde_json::Value = response.json();
-    assert_eq!(code(&body), "error.upload.offset_mismatch");
-    assert_eq!(body["offset"], 0, "the offset to resume from");
+    response.assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(response.header("x-capsule-offset"), Some("0"));
+    assert_eq!(response.header("x-capsule-committed"), Some("4096-8191"));
+    assert_eq!(
+        response.header("x-capsule-upload-status"),
+        Some("uploading")
+    );
 }
 
+/// A committed range sent again is a duplicate whatever its bytes: nothing is written, nothing
+/// compared, and a committed byte is never touched (transfer/upload.md, admission).
 #[tokio::test]
-async fn the_same_offset_with_different_bytes_is_a_conflict() {
+async fn a_committed_range_sent_again_writes_nothing_whatever_its_bytes() {
     let fixture = Fixture::working();
     let bearer = fixture.bearer().await;
     let (first, second, whole) = blob();
@@ -1214,12 +1230,54 @@ async fn the_same_offset_with_different_bytes_is_a_conflict() {
         .await
         .assert_status(StatusCode::NO_CONTENT);
 
-    // Offset 0 again, with different bytes: a client retrying with garbage, not a replay.
+    // Offset 0 again, with different bytes: answered as the duplicate it is, and dropped.
     let response = fixture.chunk(&id, 0, &second, &bearer).send().await;
-    response.assert_status(StatusCode::CONFLICT);
+    response.assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(response.header("x-capsule-offset"), Some("4096"));
+    assert_eq!(response.header("x-capsule-committed"), Some("0-4095"));
+
+    // The rest lands, and the blob finalizes from the bytes that first committed.
+    fixture
+        .chunk(&id, 4096, &second, &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
     assert_eq!(
-        code(&response.json::<serde_json::Value>()),
-        "error.upload.chunk_conflict"
+        terminal_status(&fixture, &id).await,
+        "completed",
+        "the duplicate's bytes never reached the stage"
+    );
+}
+
+/// A range that is partly committed is refused with the set to re-plan from, on the body and on
+/// `X-Capsule-Committed`, and writes nothing; it carries no wait, because nothing is in flight.
+#[tokio::test]
+async fn a_partly_committed_range_is_a_range_conflict_carrying_the_committed_set() {
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (first, _, whole) = blob();
+    let id = fixture.open_session(&whole, "original", &bearer).await;
+
+    fixture
+        .chunk(&id, 0, &first, &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+
+    let response = fixture.chunk(&id, 0, &whole, &bearer).send().await;
+    response.assert_status(StatusCode::CONFLICT);
+    assert_eq!(response.header("x-capsule-committed"), Some("0-4095"));
+    assert!(
+        response.header("retry-after").is_none(),
+        "a conflict with committed bytes is not waited out"
+    );
+    let body: serde_json::Value = response.json();
+    assert_eq!(code(&body), "error.upload.range_conflict");
+    assert_eq!(body["committed"], "0-4095");
+    assert_eq!(
+        fixture.blobs.staged_len_for_test(&id).await,
+        Some(4096),
+        "nothing of the refused range was written"
     );
 }
 
@@ -1573,8 +1631,8 @@ async fn an_acknowledged_chunk_that_did_not_land_is_the_servers_inconsistency() 
     let (first, second, whole) = blob();
     let id = fixture.open_session(&whole, "original", &bearer).await;
 
-    // A crash between the durable append and the counter that records it: the acknowledgement
-    // stands, the bytes do not.
+    // The range is recorded and acknowledged, and the stage under it is lost: the committed set
+    // names bytes the server no longer holds, and no re-send can bring them back.
     fixture.blobs.swallow_next_append();
     fixture
         .chunk(&id, 0, &first, &bearer)
@@ -1584,9 +1642,18 @@ async fn an_acknowledged_chunk_that_did_not_land_is_the_servers_inconsistency() 
 
     let response = fixture.chunk(&id, 4096, &second, &bearer).send().await;
     response.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(
+        response.header("retry-after").is_none(),
+        "a failure a retry cannot repair is never told to wait"
+    );
     assert_eq!(
         code(&response.json::<serde_json::Value>()),
         "error.upload.storage_inconsistent"
+    );
+    assert_eq!(
+        fixture.blobs.staged_len_for_test(&id).await,
+        None,
+        "and the write recreated no stage"
     );
 }
 
@@ -1824,8 +1891,11 @@ async fn a_full_disk_at_creation_is_a_507_that_leaves_no_session() {
         .assert_status(StatusCode::CREATED);
 }
 
+/// A crash between a range's fsync and its record leaves bytes on the stage that the committed
+/// set does not cover. They are garbage: the client, never acknowledged, sends the range again,
+/// and it lands over them.
 #[tokio::test]
-async fn a_stage_left_ahead_of_its_session_is_cut_back_rather_than_wedging_it() {
+async fn a_range_written_but_never_recorded_is_simply_sent_again() {
     use capsule_server::blob::BlobStore as _;
 
     let fixture = Fixture::working();
@@ -1833,19 +1903,21 @@ async fn a_stage_left_ahead_of_its_session_is_cut_back_rather_than_wedging_it() 
     let (first, second, whole) = blob();
     let id = fixture.open_session(&whole, "original", &bearer).await;
 
-    // An append that landed and whose acknowledgement was lost before the session recorded it:
-    // the stage is a chunk ahead of the counter.
+    // Garbage where the first range belongs — a write that died mid-way, never recorded.
     fixture
         .blobs
-        .append(
+        .write_staged(
             &capsule_server::store::UploadId::new(id.as_str()),
             0,
-            &first,
+            &payload(b'z', 4096),
         )
         .await
         .expect("the stage takes the bytes");
+    let head = head(&fixture, &bearer, &id).await;
+    head.assert_header("x-capsule-offset", "0");
+    head.assert_header("x-capsule-committed", "");
 
-    // The client, never having been acknowledged, sends the chunk again at the counter.
+    // The client, never having been acknowledged, sends the range again.
     fixture
         .chunk(&id, 0, &first, &bearer)
         .send()
@@ -1867,29 +1939,24 @@ async fn a_stage_left_ahead_of_its_session_is_cut_back_rather_than_wedging_it() 
     );
 }
 
+/// Two requests for one range never write it at once: the second, arriving while the first is
+/// in flight, is a `range_conflict` with `Retry-After`, and writes nothing; once the first has
+/// landed, the same re-send is a duplicate.
 #[tokio::test]
-async fn concurrent_chunks_at_one_offset_land_exactly_once() {
+async fn a_range_sent_while_it_is_in_flight_is_a_conflict_to_wait_out() {
     let fixture = Fixture::working();
     let bearer = fixture.bearer().await;
     let (first, _, whole) = blob();
     let id = fixture.open_session(&whole, "original", &bearer).await;
 
-    // Park the first append inside the blob store, so the second request arrives while the
-    // first holds the session — the interleaving an un-serialised append raced on.
+    // Park the first write inside the blob store, so the second request arrives while the
+    // first holds its claim — the lost acknowledgement a client re-sends after.
     let hold = fixture.blobs.hold_appends();
     let racing = async {
         let one = fixture.chunk(&id, 0, &first, &bearer).send();
         let two = async {
             hold.entered.notified().await;
-            let second = fixture.chunk(&id, 0, &first, &bearer).send();
-            tokio::pin!(second);
-            // Give the second request every chance to reach the store before the first lands.
-            assert!(
-                tokio::time::timeout(std::time::Duration::from_millis(50), &mut second)
-                    .await
-                    .is_err(),
-                "the second chunk waits for the first rather than racing it"
-            );
+            let second = fixture.chunk(&id, 0, &first, &bearer).send().await;
             assert!(
                 tokio::time::timeout(
                     std::time::Duration::from_millis(50),
@@ -1897,24 +1964,90 @@ async fn concurrent_chunks_at_one_offset_land_exactly_once() {
                 )
                 .await
                 .is_err(),
-                "and it waits before the blob store, not inside it"
+                "the second request never reached the blob store"
             );
-            hold.release.add_permits(2);
-            second.await
+            hold.release.add_permits(1);
+            second
         };
         tokio::join!(one, two)
     };
     let (one, two) = racing.await;
     one.assert_status(StatusCode::NO_CONTENT);
     one.assert_header("x-capsule-offset", "4096");
-    two.assert_status(StatusCode::NO_CONTENT);
-    two.assert_header("x-capsule-offset", "4096");
+    two.assert_status(StatusCode::CONFLICT);
+    two.assert_header("x-capsule-committed", "");
+    assert!(
+        two.header("retry-after").is_some(),
+        "a conflict with a range in flight is waited out"
+    );
+    let body: serde_json::Value = two.json();
+    assert_eq!(code(&body), "error.upload.range_conflict");
 
+    let again = fixture.chunk(&id, 0, &first, &bearer).send().await;
+    again.assert_status(StatusCode::NO_CONTENT);
+    again.assert_header("x-capsule-committed", "0-4095");
     assert_eq!(
         fixture.blobs.staged_len_for_test(&id).await,
         Some(4096),
-        "the second chunk was answered as the replay it is, and wrote nothing"
+        "the range was written exactly once"
     );
+}
+
+/// A claim is released only once its write has returned, whether or not the request that took
+/// it is still there: a client that gives up on a slow write and retries is refused until that
+/// write lands, so the abandoned write can never overwrite the retry.
+#[tokio::test]
+async fn an_abandoned_write_keeps_its_claim_until_it_returns() {
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (first, second, whole) = blob();
+    let id = fixture.open_session(&whole, "original", &bearer).await;
+
+    let hold = fixture.blobs.hold_appends();
+    {
+        // The client's request reaches the blob store, and the client gives up on it.
+        let abandoned = fixture.chunk(&id, 0, &first, &bearer).send();
+        tokio::pin!(abandoned);
+        tokio::select! {
+            _ = &mut abandoned => panic!("the write is parked; the request cannot finish"),
+            () = hold.entered.notified() => {}
+        }
+    }
+
+    // Its retry, with the same range, finds the claim still held by the write nobody awaits.
+    let retry = fixture.chunk(&id, 0, &first, &bearer).send().await;
+    retry.assert_status(StatusCode::CONFLICT);
+    assert_eq!(code(&retry.json()), "error.upload.range_conflict");
+    assert!(retry.header("retry-after").is_some());
+
+    // The abandoned write returns, records, and releases its claim.
+    hold.release.add_permits(1);
+    let settled = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let record = fixture
+                .uploads
+                .read_for_test(&id)
+                .await
+                .expect("the session is live");
+            if record.committed.prefix() == 4096 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    assert!(settled.is_ok(), "the abandoned write ran to its record");
+
+    // From here the retry is the duplicate it is, and the session finishes normally.
+    hold.release.add_permits(8);
+    let again = fixture.chunk(&id, 0, &first, &bearer).send().await;
+    again.assert_status(StatusCode::NO_CONTENT);
+    fixture
+        .chunk(&id, 4096, &second, &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(terminal_status(&fixture, &id).await, "completed");
 }
 
 #[tokio::test]
@@ -2516,27 +2649,26 @@ async fn strand(fixture: &Fixture, id: &str, second: &[u8], whole: &[u8], commit
 /// the session is left full and unclaimed, as a request lost before its claim leaves it.
 async fn record_last_chunk(fixture: &Fixture, id: &str, second: &[u8]) {
     use capsule_server::blob::BlobStore as _;
-    use capsule_server::store::{AcceptedChunk, Clock as _, UploadId, UploadSessionStore as _};
+    use capsule_server::store::{Clock as _, CommittedRange, UploadId, UploadSessionStore as _};
 
     let upload = UploadId::new(id);
     fixture
         .blobs
-        .append(&upload, 4096, second)
+        .write_staged(&upload, 4096, second)
         .await
-        .expect("the stage appends");
+        .expect("the stage takes the range");
     fixture
         .uploads
-        .record_progress(
+        .record_range(
             &upload,
-            AcceptedChunk {
-                offset: 4096,
-                chunk_hash: checksum(second),
-                next_offset: 8192,
+            CommittedRange {
+                start: 4096,
+                end: 8192,
                 accepted_at: fixture.clock.now(),
             },
         )
         .await
-        .expect("the store records progress")
+        .expect("the store records the range")
         .expect("the session is live");
 }
 
@@ -2558,7 +2690,7 @@ async fn a_full_session_nobody_finalized_is_finalized_by_the_replay_of_its_last_
         .await
         .expect("the session is live");
     assert_eq!(
-        (stranded.received_bytes, stranded.status.as_str()),
+        (stranded.committed.prefix(), stranded.status.as_str()),
         (8192, "uploading"),
         "full, and nobody has claimed its finalization"
     );
@@ -2593,7 +2725,7 @@ async fn a_replay_on_a_session_still_short_of_its_size_finalizes_nothing() {
         .await
         .expect("the session is live");
     assert_eq!(
-        (record.received_bytes, record.status.as_str()),
+        (record.committed.prefix(), record.status.as_str()),
         (4096, "uploading"),
         "a replay mid-upload claims nothing"
     );
@@ -3703,7 +3835,7 @@ async fn a_chunk_body_that_stalls_is_refused_and_the_connection_closed() {
         .read_for_test(&id)
         .await
         .expect("the session survives");
-    assert_eq!(record.received_bytes, 0);
+    assert_eq!(record.committed.prefix(), 0);
     assert_eq!(fixture.blobs.staged_len_for_test(&id).await, Some(0));
 }
 
@@ -3755,7 +3887,8 @@ async fn a_chunk_body_that_trickles_below_the_minimum_rate_is_refused() {
         .await
         .expect("the session survives");
     assert_eq!(
-        record.received_bytes, 0,
+        record.committed.prefix(),
+        0,
         "nothing of a refused chunk is kept"
     );
 }
@@ -3812,7 +3945,8 @@ async fn a_length_less_chunk_body_that_stalls_is_refused() {
         .await
         .expect("the session survives");
     assert_eq!(
-        record.received_bytes, 0,
+        record.committed.prefix(),
+        0,
         "nothing of a refused chunk is kept"
     );
 }
@@ -3852,7 +3986,7 @@ async fn a_length_less_chunk_body_that_trickles_past_the_stall_bound_lands() {
         .read_for_test(&id)
         .await
         .expect("the session survives");
-    assert_eq!(record.received_bytes, 4096);
+    assert_eq!(record.committed.prefix(), 4096);
 }
 
 /// A chunk is never cut for its total duration: a slow but steady body, above the floor and
@@ -3887,5 +4021,5 @@ async fn a_slow_but_steady_chunk_body_past_the_stall_bound_lands() {
         .read_for_test(&id)
         .await
         .expect("the session survives");
-    assert_eq!(record.received_bytes, 4096);
+    assert_eq!(record.committed.prefix(), 4096);
 }
