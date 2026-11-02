@@ -1720,6 +1720,20 @@ impl ActivityStore for SwitchableActivity {
         }
         self.inner.recent(user, since, limit)
     }
+
+    fn count_expired(&self, before: Timestamp) -> StoreFuture<'_, u64> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.count_expired(before)
+    }
+
+    fn delete_expired(&self, before: Timestamp, limit: usize) -> StoreFuture<'_, u64> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.delete_expired(before, limit)
+    }
 }
 
 /// A moderation store that can be made to fail on demand.
