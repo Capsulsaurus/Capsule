@@ -369,6 +369,39 @@ async fn ranges_out_of_order_commit_where_they_lie_and_complete_the_session() {
     );
 }
 
+/// Disjoint ranges of one session within its cap are written concurrently and all commit.
+#[tokio::test]
+async fn disjoint_ranges_in_flight_together_all_commit() {
+    let (sessions, blobs, clock, stale) = opened_session("concurrent", 4 * BLOCK, 4).await;
+    let block = |fill: u8| vec![fill; BLOCK as usize];
+    let (b0, b1, b2, b3) = (block(1), block(2), block(3), block(4));
+
+    let answers = tokio::join!(
+        write_range(&sessions, &blobs, &clock, &stale, 3 * BLOCK, &b3),
+        write_range(&sessions, &blobs, &clock, &stale, BLOCK, &b1),
+        write_range(&sessions, &blobs, &clock, &stale, 0, &b0),
+        write_range(&sessions, &blobs, &clock, &stale, 2 * BLOCK, &b2),
+    );
+    let completed = [answers.0, answers.1, answers.2, answers.3]
+        .into_iter()
+        .map(|answer| answer.expect("every range is answered"))
+        .filter(|answer| {
+            assert!(
+                matches!(answer, Accepted::Committed { .. }),
+                "a disjoint range within the cap commits: {answer:?}"
+            );
+            matches!(answer, Accepted::Committed { complete: true, .. })
+        })
+        .count();
+    assert_eq!(completed, 1, "exactly one range completes the session");
+
+    let mut expected = b0.clone();
+    expected.extend(&b1);
+    expected.extend(&b2);
+    expected.extend(&b3);
+    assert_eq!(blobs.staged_bytes(&stale.upload_id), Some(expected));
+}
+
 /// A duplicate writes nothing — not even a re-send carrying different bytes — and a partial
 /// overlap is refused with the set to re-plan from.
 #[tokio::test]
