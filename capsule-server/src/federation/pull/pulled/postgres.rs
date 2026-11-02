@@ -85,10 +85,13 @@ pub struct HeldBlob {
 /// What a commit's newly held metadata blobs cost, decided inside the commit's transaction.
 ///
 /// The hook for the per-`(receiving_user, source_peer)` storage cap on pulled albums. It is
-/// called once per commit that holds at least one blob its job did not hold before, after the
-/// conditional check passed and before anything else is written; an error rolls the whole
-/// commit back and is the commit's error. Anything it writes through `transaction` lands or
-/// rolls back with the page.
+/// called once per commit that holds at least one blob its job did not hold before, inside the
+/// commit's transaction and after the conditional check passed. By then the blob bytes are
+/// stored and the job's new `federation_pulled_metadata_blobs` rows are inserted in that same
+/// transaction, so usage read back from that table already includes `held`: an implementation
+/// must not count those rows again. The asset heads, entries and position are not yet written.
+/// An error rolls the whole commit back and is the commit's error. Anything it writes through
+/// `transaction` lands or rolls back with the page.
 pub trait PulledBlobCharge: fmt::Debug + Send + Sync {
     /// Charge `held`, the blobs `job` holds for the first time, or refuse.
     fn charge<'a>(
