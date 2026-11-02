@@ -704,6 +704,12 @@ pub struct LanePush<'a, H> {
 /// and servers the run drives.
 pub const PUSH_BYTE_BUDGET: u64 = 4 * crate::upload::PROTOCOL_MAX_CHUNK;
 
+/// The most bundles a caller pushing a long list of assets should hold at once: it pushes them
+/// in batches of this many, each batch through one [`push_lanes`] run. Four times the widest
+/// sessions window keeps that window full for most of a batch, while a list of any length holds
+/// at most this many bundles' derivatives in memory.
+pub const PUSH_BATCH_BUNDLES: usize = 4 * crate::upload::queue::MAX_SESSIONS_WINDOW as usize;
+
 /// What every lane of a run shares: the device's one upload queue, and the signal a released
 /// reservation or a finished session sends to the ranges waiting on the budget.
 struct LaneShared {

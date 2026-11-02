@@ -173,7 +173,14 @@
               "kind": "func",
               "name": "pushAsset",
               "signature": "func pushAsset(workspace: FfiWorkspace, assetId: String) async throws -> FfiPushReport",
-              "doc": "**Push** one sealed asset of `workspace` — every blob of its bundle, in ladder order\n(provenance and metadata, then derivative manifests and derivatives, then the\noriginal) — driving `capsule_sdk::push::push_bundle` inside the SDK.\n\nThe original never crosses the boundary: its ciphertext is re-derived from the\nplaintext on disk one upload chunk window at a time, so memory is bounded by the\ntransfer window whatever the original's size. The workspace lock is held only while the\nbundle is built, never across the network.\n\nEvery blob the reported path admits is driven ([`set_path`](Self::set_path)); the tiers\nit holds back are counted in [`FfiPushReport::deferred`] and wait for the next push. A\nblob the server already holds answers `duplicate_blob` and comes back\n[`FfiUploadOutcome::AlreadyStored`], so pushing twice is safe. The album must already be\nprovisioned on the server.\n\n**A create the server refused is re-sealed and retried once** (issue #822). When the\nalbum's epoch moved past the one the asset was sealed under, the server refuses its\ncreate for good; if this device holds a newer epoch, the asset is re-sealed at it\n(`Workspace::reseal_create`) and pushed again, once. A second refusal fails the push.\nWhen this device holds no newer epoch the push fails with [`FfiError::Upload`] carrying\nthe server's code and a detail saying there is no newer epoch to re-seal at, and the\nasset stays local. That detail names no missing key: the refusal may have had nothing to\ndo with the epoch (a revoked device, withdrawn write access), or another device rotated\nthe album and its key has not reached this one yet.",
+              "doc": "**Push** one sealed asset of `workspace` — every blob of its bundle, in ladder order\n(provenance and metadata, then derivative manifests and derivatives, then the\noriginal) — driving `capsule_sdk::push::push_bundle` inside the SDK.\n\nThe original never crosses the boundary: its ciphertext is re-derived from the\nplaintext on disk one upload chunk window at a time, so memory is bounded by the\ntransfer window whatever the original's size. The workspace lock is held only while the\nbundle is built, never across the network.\n\nEvery blob the reported path admits is driven ([`set_path`](Self::set_path)); the tiers\nit holds back are counted in [`FfiPushReport::deferred`] and wait for the next push. A\nblob the server already holds answers `duplicate_blob` and comes back\n[`FfiUploadOutcome::AlreadyStored`], so pushing twice is safe. The album must already be\nprovisioned on the server.\n\n**A create the server refused is re-sealed and retried once** (issue #822). When the\nalbum's epoch moved past the one the asset was sealed under, the server refuses its\ncreate for good; if this device holds a newer epoch, the asset is re-sealed at it\n(`Workspace::reseal_create`) and pushed again, once. A second refusal fails the push.\nWhen this device holds no newer epoch the push fails with [`FfiError::Upload`] carrying\nthe server's code and a detail saying there is no newer epoch to re-seal at, and the\nasset stays local. That detail names no missing key: the refusal may have had nothing to\ndo with the epoch (a revoked device, withdrawn write access), or another device rotated\nthe album and its key has not reached this one yet.\n\nTo push several assets, use [`push_assets`](Self::push_assets): one call here is one\nbundle on the server's lane, so the lane never holds more than one session open.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "pushAssets",
+              "signature": "func pushAssets(workspace: FfiWorkspace, assetIds: [String]) async -> [FfiPushAssetResult]",
+              "doc": "**Push** several sealed assets of `workspace` in one call, returning one\n[`FfiPushAssetResult`] per id, in the order of `asset_ids`.\n\nEvery asset is pushed exactly as [`push_asset`](Self::push_asset) pushes one — its\noriginal streamed in bounded windows, the tiers the reported path holds back counted in\n[`FfiPushReport::deferred`], and a create the server refused re-sealed and retried once —\nbut the assets share one run of the server's lane: up to W of them have their sessions\nopen at once, every range any of them sends reserves against one device-wide byte\nbudget, and their retries spend from one lane budget. Calling `push_asset` concurrently\ninstead gives each call its own budget, so the budgets add up rather than being shared.\n\nThe ids are pushed in batches of a bounded size, so a list of any length holds only one\nbatch's bundles in memory at a time. One asset's failure is its own\n([`FfiPushAssetResult::Failed`], carrying the error `push_asset` would have returned for\nit): the others still push, and the call itself never fails. An id repeated in\n`asset_ids` pushes once, at its first occurrence; each later occurrence is\n[`FfiPushAssetResult::Failed`] with [`FfiError::InvalidArgument`].\n\nThe adverse-link detector hears each batch's outcomes when that batch's run ends, so a\nlink that degrades mid-batch re-plans the push from the next batch on.",
               "members": []
             },
             {
@@ -2449,6 +2456,28 @@
         },
         {
           "kind": "enum",
+          "name": "FfiPushAssetResult",
+          "signature": "public enum FfiPushAssetResult: Equatable, Hashable",
+          "doc": "How one asset of an [`FfiSession::push_assets`] call ended.",
+          "members": [
+            {
+              "kind": "case",
+              "name": "pushed",
+              "signature": "case pushed",
+              "doc": "The asset's admitted ladder ran: what [`FfiSession::push_asset`] would have returned.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "failed",
+              "signature": "case failed",
+              "doc": "The asset did not push: the error [`FfiSession::push_asset`] would have failed with.\nIt stays local, and pushing it again is safe.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum",
           "name": "FfiQuotaAdvisory",
           "signature": "public enum FfiQuotaAdvisory: Equatable, Hashable",
           "doc": "The quota state, as `GET /v1/quota` reports it.",
@@ -3143,7 +3172,14 @@
               "kind": "fun",
               "name": "pushAsset",
               "signature": "suspend fun pushAsset(workspace: FfiWorkspace, assetId: kotlin.String): FfiPushReport",
-              "doc": "**Push** one sealed asset of `workspace` — every blob of its bundle, in ladder order\n(provenance and metadata, then derivative manifests and derivatives, then the\noriginal) — driving `capsule_sdk::push::push_bundle` inside the SDK.\n\nThe original never crosses the boundary: its ciphertext is re-derived from the\nplaintext on disk one upload chunk window at a time, so memory is bounded by the\ntransfer window whatever the original's size. The workspace lock is held only while the\nbundle is built, never across the network.\n\nEvery blob the reported path admits is driven ([`set_path`](Self::set_path)); the tiers\nit holds back are counted in [`FfiPushReport::deferred`] and wait for the next push. A\nblob the server already holds answers `duplicate_blob` and comes back\n[`FfiUploadOutcome::AlreadyStored`], so pushing twice is safe. The album must already be\nprovisioned on the server.\n\n**A create the server refused is re-sealed and retried once** (issue #822). When the\nalbum's epoch moved past the one the asset was sealed under, the server refuses its\ncreate for good; if this device holds a newer epoch, the asset is re-sealed at it\n(`Workspace::reseal_create`) and pushed again, once. A second refusal fails the push.\nWhen this device holds no newer epoch the push fails with [`FfiError::Upload`] carrying\nthe server's code and a detail saying there is no newer epoch to re-seal at, and the\nasset stays local. That detail names no missing key: the refusal may have had nothing to\ndo with the epoch (a revoked device, withdrawn write access), or another device rotated\nthe album and its key has not reached this one yet.",
+              "doc": "**Push** one sealed asset of `workspace` — every blob of its bundle, in ladder order\n(provenance and metadata, then derivative manifests and derivatives, then the\noriginal) — driving `capsule_sdk::push::push_bundle` inside the SDK.\n\nThe original never crosses the boundary: its ciphertext is re-derived from the\nplaintext on disk one upload chunk window at a time, so memory is bounded by the\ntransfer window whatever the original's size. The workspace lock is held only while the\nbundle is built, never across the network.\n\nEvery blob the reported path admits is driven ([`set_path`](Self::set_path)); the tiers\nit holds back are counted in [`FfiPushReport::deferred`] and wait for the next push. A\nblob the server already holds answers `duplicate_blob` and comes back\n[`FfiUploadOutcome::AlreadyStored`], so pushing twice is safe. The album must already be\nprovisioned on the server.\n\n**A create the server refused is re-sealed and retried once** (issue #822). When the\nalbum's epoch moved past the one the asset was sealed under, the server refuses its\ncreate for good; if this device holds a newer epoch, the asset is re-sealed at it\n(`Workspace::reseal_create`) and pushed again, once. A second refusal fails the push.\nWhen this device holds no newer epoch the push fails with [`FfiError::Upload`] carrying\nthe server's code and a detail saying there is no newer epoch to re-seal at, and the\nasset stays local. That detail names no missing key: the refusal may have had nothing to\ndo with the epoch (a revoked device, withdrawn write access), or another device rotated\nthe album and its key has not reached this one yet.\n\nTo push several assets, use [`push_assets`](Self::push_assets): one call here is one\nbundle on the server's lane, so the lane never holds more than one session open.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "pushAssets",
+              "signature": "suspend fun pushAssets(workspace: FfiWorkspace, assetIds: List<kotlin.String>): List<FfiPushAssetResult>",
+              "doc": "**Push** several sealed assets of `workspace` in one call, returning one\n[`FfiPushAssetResult`] per id, in the order of `asset_ids`.\n\nEvery asset is pushed exactly as [`push_asset`](Self::push_asset) pushes one — its\noriginal streamed in bounded windows, the tiers the reported path holds back counted in\n[`FfiPushReport::deferred`], and a create the server refused re-sealed and retried once —\nbut the assets share one run of the server's lane: up to W of them have their sessions\nopen at once, every range any of them sends reserves against one device-wide byte\nbudget, and their retries spend from one lane budget. Calling `push_asset` concurrently\ninstead gives each call its own budget, so the budgets add up rather than being shared.\n\nThe ids are pushed in batches of a bounded size, so a list of any length holds only one\nbatch's bundles in memory at a time. One asset's failure is its own\n([`FfiPushAssetResult::Failed`], carrying the error `push_asset` would have returned for\nit): the others still push, and the call itself never fails. An id repeated in\n`asset_ids` pushes once, at its first occurrence; each later occurrence is\n[`FfiPushAssetResult::Failed`] with [`FfiError::InvalidArgument`].\n\nThe adverse-link detector hears each batch's outcomes when that batch's run ends, so a\nlink that degrades mid-batch re-plans the push from the next batch on.",
               "members": []
             },
             {
@@ -5413,6 +5449,28 @@
               "name": "LOW_POWER",
               "signature": "LOW_POWER;",
               "doc": "On battery with the OS low-power mode on.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "sealed class",
+          "name": "FfiPushAssetResult",
+          "signature": "sealed class FfiPushAssetResult",
+          "doc": "How one asset of an [`FfiSession::push_assets`] call ended.",
+          "members": [
+            {
+              "kind": "variant",
+              "name": "Pushed",
+              "signature": "data class Pushed",
+              "doc": "The asset's admitted ladder ran: what [`FfiSession::push_asset`] would have returned.",
+              "members": []
+            },
+            {
+              "kind": "variant",
+              "name": "Failed",
+              "signature": "data class Failed",
+              "doc": "The asset did not push: the error [`FfiSession::push_asset`] would have failed with.\nIt stays local, and pushing it again is safe.",
               "members": []
             }
           ]

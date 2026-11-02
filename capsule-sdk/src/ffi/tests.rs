@@ -1054,6 +1054,335 @@ async fn ffi_push_asset_refuses_an_unknown_asset() {
     );
 }
 
+// ─── Pushing several assets through one lane ────────────────────────────────
+
+/// One request the lane mock received: a session's create or one of its chunks, and the asset
+/// (`manifest_envelope.file_id`) the session is for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum LaneRequest {
+    Create(String),
+    Chunk(String),
+}
+
+/// An upload mock that opens a distinct session per create, acknowledges every chunk whole, and
+/// records each request in arrival order. Every create answers only after `create_delay`, so
+/// creates sent together all land before any of their sessions moves a byte. A blob of the
+/// asset `refuse` names is refused at finalization with `error.upload.envelope_rejected` — the
+/// answer a stale-epoch create meets.
+async fn lane_upload_server(
+    create_delay: std::time::Duration,
+    refuse: Option<String>,
+) -> (MockServer, Arc<std::sync::Mutex<Vec<LaneRequest>>>) {
+    let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen = log.clone();
+    let sessions: std::sync::Mutex<std::collections::HashMap<String, (String, u64)>> =
+        std::sync::Mutex::default();
+    let server = MockServer::start(move |req: &MockRequest| {
+        match (req.method.as_str(), req.path.as_str()) {
+            ("POST", "/auth/login") => MockResponse::new(200, "OK").json_body(token_json()),
+            ("POST", "/upload") => {
+                let body: serde_json::Value = serde_json::from_slice(&req.body).unwrap();
+                let asset = body["manifest_envelope"]["file_id"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned();
+                let size = body["size"].as_u64().unwrap();
+                let mut sessions = sessions.lock().unwrap();
+                let id = format!("sess-{}", sessions.len());
+                sessions.insert(id.clone(), (asset.clone(), size));
+                seen.lock().unwrap().push(LaneRequest::Create(asset));
+                MockResponse::new(201, "Created")
+                    .header("X-Capsule-Offset", "0")
+                    .json_body(
+                        serde_json::json!({
+                            "id": id,
+                            "upload_url": format!("/upload/{id}"),
+                            "suggested_chunk_size": 262_144,
+                        })
+                        .to_string(),
+                    )
+                    .after(create_delay)
+            }
+            ("PATCH", path) if path.starts_with("/upload/sess-") => {
+                let id = path.trim_start_matches("/upload/");
+                let (asset, size) = sessions.lock().unwrap()[id].clone();
+                seen.lock().unwrap().push(LaneRequest::Chunk(asset.clone()));
+                let offset: u64 = req
+                    .header("X-Capsule-Offset")
+                    .and_then(|o| o.parse().ok())
+                    .unwrap_or(0);
+                let next = offset + req.body.len() as u64;
+                if next == size && refuse.as_deref() == Some(asset.as_str()) {
+                    return MockResponse::api_error(
+                        400,
+                        "Bad Request",
+                        capsule_i18n::error_codes::UPLOAD_ENVELOPE_REJECTED,
+                        "the manifest envelope did not survive re-validation at finalization",
+                    );
+                }
+                MockResponse::new(204, "No Content").header("X-Capsule-Offset", next.to_string())
+            }
+            _ => MockResponse::new(404, "Not Found").json_body(r#"{"error":"no route"}"#),
+        }
+    })
+    .await;
+    (server, log)
+}
+
+/// Seal `count` small assets into `workspace`'s default album, returning their ids.
+fn seal_assets(workspace: &FfiWorkspace, count: usize) -> Vec<String> {
+    let album = workspace
+        .ensure_album(workspace.default_album_id().unwrap(), "Camera Roll".into())
+        .unwrap();
+    (0..count)
+        .map(|at| {
+            workspace
+                .seal_asset(
+                    album.clone(),
+                    format!("IMG_{at:04}.JPG"),
+                    original_plaintext(32 * 1024 + at),
+                )
+                .unwrap()
+        })
+        .collect()
+}
+
+/// **Several assets, one lane, W sessions at once** (issue #1126). `push_assets` drives every
+/// asset's bundle through one run of the server's lane: the creates of different assets reach
+/// the server before any session sends a byte, so more than one session is open at once, which
+/// a sequence of single-asset pushes never does. Each asset's result comes back in the order
+/// asked, and a malformed id fails only its own slot.
+#[tokio::test]
+async fn ffi_push_assets_runs_several_sessions_at_once_and_answers_in_order() {
+    let lib = tempfile::TempDir::new().unwrap();
+    let workspace = enroll(lib.path());
+    let sealed = seal_assets(&workspace, 3);
+    let (server, log) = lane_upload_server(std::time::Duration::from_millis(200), None).await;
+    let session = login(&server).await;
+
+    let asked = vec![
+        sealed[0].clone(),
+        "not-a-uuid".to_owned(),
+        sealed[1].clone(),
+        sealed[2].clone(),
+    ];
+    let results = session.push_assets(workspace, asked.clone()).await;
+
+    assert_eq!(results.len(), asked.len(), "one result per asset asked");
+    for (at, (asked, result)) in asked.iter().zip(&results).enumerate() {
+        match (at, result) {
+            (1, FfiPushAssetResult::Failed { asset_id, error }) => {
+                assert_eq!(asset_id, asked);
+                assert!(
+                    matches!(error, FfiError::InvalidArgument { .. }),
+                    "a malformed id is the caller's: {error:?}"
+                );
+            }
+            (_, FfiPushAssetResult::Pushed { report }) if at != 1 => {
+                assert_eq!(
+                    &report.asset_id, asked,
+                    "results come back in the order asked"
+                );
+                assert_eq!(
+                    report
+                        .pushed
+                        .iter()
+                        .map(|b| b.tier.as_str())
+                        .collect::<Vec<_>>(),
+                    vec!["index", "index", "original"],
+                    "each asset still drives its whole ladder"
+                );
+                assert_eq!(report.deferred, 0);
+            }
+            (at, FfiPushAssetResult::Failed { error, .. }) => {
+                panic!("asset {at} should have pushed: {error:?}")
+            }
+            (at, FfiPushAssetResult::Pushed { .. }) => panic!("asset {at} should have failed"),
+        }
+    }
+
+    let log = log.lock().unwrap().clone();
+    let opened_before_any_chunk: HashSet<&String> = log
+        .iter()
+        .take_while(|request| matches!(request, LaneRequest::Create(_)))
+        .map(|request| match request {
+            LaneRequest::Create(asset) | LaneRequest::Chunk(asset) => asset,
+        })
+        .collect();
+    assert!(
+        opened_before_any_chunk.len() > 1,
+        "more than one asset's session was open at once: {log:?}"
+    );
+    assert_eq!(
+        log.iter()
+            .filter(|request| matches!(request, LaneRequest::Create(_)))
+            .count(),
+        9,
+        "three blobs for each of the three sealed assets, and nothing for the malformed id"
+    );
+}
+
+/// **A refused create fails only its own asset** (issue #1126, keeping issue #822's
+/// handling). The server refuses one asset's create at finalization; this device holds no newer
+/// epoch to re-seal it at, so that asset fails with the server's code, exactly as `push_asset`
+/// would fail it, and the assets around it still push.
+#[tokio::test]
+async fn ffi_push_assets_fails_a_refused_create_in_its_own_slot() {
+    let lib = tempfile::TempDir::new().unwrap();
+    let workspace = enroll(lib.path());
+    let sealed = seal_assets(&workspace, 3);
+    let (server, log) =
+        lane_upload_server(std::time::Duration::ZERO, Some(sealed[1].clone())).await;
+    let session = login(&server).await;
+
+    let results = session.push_assets(workspace, sealed.clone()).await;
+
+    assert_eq!(results.len(), 3);
+    for (at, result) in results.iter().enumerate() {
+        match (at, result) {
+            (1, FfiPushAssetResult::Failed { asset_id, error }) => {
+                assert_eq!(asset_id, &sealed[1]);
+                match error {
+                    FfiError::Upload { code, detail } => {
+                        assert_eq!(code.as_deref(), Some("error.upload.envelope_rejected"));
+                        assert!(
+                            detail.contains("no newer epoch to re-seal it at"),
+                            "{detail}"
+                        );
+                    }
+                    other => panic!("expected the upload refusal, got {other:?}"),
+                }
+            }
+            (_, FfiPushAssetResult::Pushed { report }) if at != 1 => {
+                assert_eq!(report.asset_id, sealed[at]);
+            }
+            (at, _) => panic!("asset {at} ended the wrong way"),
+        }
+    }
+    let refused_creates = log
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|request| **request == LaneRequest::Create(sealed[1].clone()))
+        .count();
+    assert_eq!(
+        refused_creates, 1,
+        "the refused asset stopped at its provenance blob and was not pushed again"
+    );
+}
+
+/// No ids is no request and no result.
+#[tokio::test]
+async fn ffi_push_assets_of_nothing_sends_nothing() {
+    let lib = tempfile::TempDir::new().unwrap();
+    let workspace = enroll(lib.path());
+    let (server, log) = lane_upload_server(std::time::Duration::ZERO, None).await;
+    let session = login(&server).await;
+
+    assert!(session.push_assets(workspace, Vec::new()).await.is_empty());
+    assert!(log.lock().unwrap().is_empty(), "nothing reached the wire");
+}
+
+/// **A list longer than one batch** comes back with one result per id, in the order asked,
+/// across the batch boundaries: five assets in batches of two run three lane runs, and every
+/// asset's session opens in exactly one of them.
+#[tokio::test]
+async fn ffi_push_assets_answers_in_order_across_batches() {
+    let lib = tempfile::TempDir::new().unwrap();
+    let workspace = enroll(lib.path());
+    let sealed = seal_assets(&workspace, 5);
+    let (server, log) = lane_upload_server(std::time::Duration::ZERO, None).await;
+    let session = login(&server).await;
+
+    let results = session.push_assets_in(&workspace, &sealed, 2).await;
+
+    assert_eq!(results.len(), sealed.len(), "one result per asset asked");
+    for (asked, result) in sealed.iter().zip(&results) {
+        match result {
+            FfiPushAssetResult::Pushed { report } => assert_eq!(
+                &report.asset_id, asked,
+                "results come back in the order asked, across batches"
+            ),
+            FfiPushAssetResult::Failed { error, .. } => {
+                panic!("{asked} should have pushed: {error:?}")
+            }
+        }
+    }
+    let log = log.lock().unwrap().clone();
+    for asset in &sealed {
+        assert_eq!(
+            log.iter()
+                .filter(|request| **request == LaneRequest::Create(asset.clone()))
+                .count(),
+            3,
+            "each asset's three blobs were created once, in one batch: {log:?}"
+        );
+    }
+    // Batches run one after another: no session of a later batch opens before every create of
+    // an earlier batch has been sent.
+    let first_create = |asset: &String| {
+        log.iter()
+            .position(|request| *request == LaneRequest::Create(asset.clone()))
+            .unwrap()
+    };
+    let last_create = |asset: &String| {
+        log.iter()
+            .rposition(|request| *request == LaneRequest::Create(asset.clone()))
+            .unwrap()
+    };
+    for (earlier, later) in [(1, 2), (3, 4)] {
+        assert!(
+            last_create(&sealed[earlier]) < first_create(&sealed[later]),
+            "batch boundary between assets {earlier} and {later}: {log:?}"
+        );
+    }
+}
+
+/// **A repeated id pushes once.** Its first occurrence pushes as usual; each later occurrence
+/// fails its own slot with an invalid argument, so one asset never runs two sessions in one
+/// lane.
+#[tokio::test]
+async fn ffi_push_assets_refuses_a_repeated_id_in_its_own_slot() {
+    let lib = tempfile::TempDir::new().unwrap();
+    let workspace = enroll(lib.path());
+    let sealed = seal_assets(&workspace, 2);
+    let (server, log) = lane_upload_server(std::time::Duration::ZERO, None).await;
+    let session = login(&server).await;
+
+    let asked = vec![sealed[0].clone(), sealed[1].clone(), sealed[0].clone()];
+    let results = session.push_assets(workspace, asked.clone()).await;
+
+    assert_eq!(
+        results.len(),
+        3,
+        "one result per id asked, repeats included"
+    );
+    for (at, result) in results.iter().enumerate() {
+        match (at, result) {
+            (2, FfiPushAssetResult::Failed { asset_id, error }) => {
+                assert_eq!(asset_id, &sealed[0]);
+                assert!(
+                    matches!(error, FfiError::InvalidArgument { .. }),
+                    "a repeated id is the caller's: {error:?}"
+                );
+            }
+            (0 | 1, FfiPushAssetResult::Pushed { report }) => {
+                assert_eq!(report.asset_id, asked[at]);
+            }
+            (at, _) => panic!("slot {at} ended the wrong way"),
+        }
+    }
+    assert_eq!(
+        log.lock()
+            .unwrap()
+            .iter()
+            .filter(|request| **request == LaneRequest::Create(sealed[0].clone()))
+            .count(),
+        3,
+        "the repeated asset's three blobs were created once"
+    );
+}
+
 /// A blob mock serving `blob` at `/v1/blob/{hash}` by `Range`, recording each requested
 /// window's length (`None` for an open-ended range).
 async fn blob_server(
