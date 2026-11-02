@@ -28,6 +28,12 @@ required-features = ["ffi-bindgen"]
 # additionally pulls uniffi's CLI so the `uniffi-bindgen` bin can emit the bindings.
 ffi = ["dep:uniffi"]
 ffi-bindgen = ["ffi", "uniffi/cli"]
+# `http3` makes the opportunistic HTTP/3 policy (`net::h3::H3Policy::for_build`) capable, so it
+# may answer a race at dial. Off by default, and deliberately not forwarding `reqwest/http3`:
+# reqwest 0.12 refuses that feature without `RUSTFLAGS="--cfg reqwest_unstable"`, which would
+# break every `--all-features` build. Until a stable HTTP/3 transport exists, nothing consumes the
+# choice and every transport stays pinned to HTTP/1.1, so enabling it changes no request.
+http3 = []
 
 [dependencies]
 # capsule-i18n gives the SDK the canonical `error.*` code constants it switches
