@@ -26,7 +26,7 @@
 //! - [`pull`] — the egress pull worker's engine: each job's schedule, the lease that keeps two
 //!   replicas off one job, the per-peer circuit, and the failure policy that drives them.
 //! - [`hints`] — the pull hint a home server may push on the low-trust channel: its signed
-//!   claim, and [`HintReceiver`](hints::HintReceiver), the port the route hands a verified hint
+//!   claim, and [`HintReceiver`], the port the route hands a verified hint
 //!   to (the [`PullWorker`](pull::PullWorker) in production).
 //! - [`rejected_hashes`] — [`RejectedHashes`](rejected_hashes::RejectedHashes), the bounded
 //!   soft-fail table: the hash of every federated event a pull refused, so this server's view

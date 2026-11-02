@@ -355,12 +355,11 @@ pub async fn submit_pull_hint(
     // Taken before the hint is acted on, so the answer's shape cannot depend on what it did.
     let received_at = crate::postgres::time::stored(federation.clock().now());
     let job = JobKey::new(peer.clone(), AlbumId::new(&claim.album_id));
-    let outcome = match federation.hints() {
-        Some(receiver) => receiver.hint(&job).await,
-        None => {
-            tracing::debug!(%peer, "no pull worker is assembled; a verified hint acts on nothing");
-            HintOutcome::Unchanged
-        }
+    let outcome = if let Some(receiver) = federation.hints() {
+        receiver.hint(&job).await
+    } else {
+        tracing::debug!(%peer, "no pull worker is assembled; a verified hint acts on nothing");
+        HintOutcome::Unchanged
     };
     match outcome {
         HintOutcome::Moved(_) | HintOutcome::Unchanged | HintOutcome::Ignored => {

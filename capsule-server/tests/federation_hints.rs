@@ -8,8 +8,6 @@
 //! server pulls. What a hint does to a job is the pull worker's, and its own suite covers it;
 //! here the fixture's recording receiver stands in for the worker.
 
-#![allow(clippy::unwrap_used)]
-
 mod support;
 
 use capsule_server::counter::{CounterKey, CounterStore as _, Verdict, budgets};
