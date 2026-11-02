@@ -189,8 +189,10 @@ Client recovery matrix (`capsule-sdk::upload`):
 | --- | --- |
 | `error.upload.range_conflict` | Re-plan from the committed set the refusal carries (or `HEAD`), after its `Retry-After` when it names one |
 | `error.upload.too_fragmented` | Let its own in-flight ranges finish and wait its `Retry-After` when it names one, then re-plan to fill the lowest gap first |
-| `error.upload.too_many_in_flight` | Wait its `Retry-After`, narrow the session's window to the advertised `ranges`, then continue |
-| `error.upload.content_hash_mismatch` (on `HEAD`) | Check the source identity: changed → fail the blob with a typed source-changed error; unchanged → re-create the session once |
+| `error.upload.too_many_in_flight` | Wait its `Retry-After`, narrow the session's window to the advertised `ranges` and to the ranges it still had in flight, then continue |
+| `error.upload.content_hash_mismatch` (on `HEAD`) | Check the source identity: changed → fail the blob with the client's own `error.upload.source_changed` and cancel the session; unchanged → re-create the session once |
+| a lost answer (reset, or no response within the response wait) | Read `HEAD` before anything is sent again, then re-plan from its committed set |
+| a session gone (`404` on `HEAD`) before it reached finalization | Re-create the session, restart the blob |
 | `error.upload.checksum_mismatch` | Re-send the same chunk |
 | `error.upload.chunk_timeout` (`408`) | Re-send the same offset with a shorter range ([Adaptive Chunk Sizing](#adaptive-chunk-sizing)) |
 | `error.upload.session_not_found` | Re-create the session, restart the blob |
@@ -203,6 +205,8 @@ Client recovery matrix (`capsule-sdk::upload`):
 | `error.upload.rate_limited`, `unavailable`, `storage_full` | Back off per `Retry-After`, then resume from `HEAD` |
 | `error.upload.storage_inconsistent` (`500`), and any other `5xx`, `408` or `425`, coded or not | Back off per `Retry-After` (else the retry engine's backoff), then resume from `HEAD` |
 | other `4xx` | Fail the blob; never retry unchanged |
+
+With several ranges in flight, a row that waits, reads `HEAD` or re-creates the session is taken once every range in flight has returned, and ranges refused together share one wait. The source identity (size, modification time and file id recorded when the bundle was built) is also checked before every window is read; a change ends the blob as `error.upload.source_changed` with nothing more of it sent. Every answer the client folds in only grows what it believes is committed, until a `HEAD` restates it; a session whose answers all came back but whose last state is still `uploading` is read from `HEAD` before it is called complete, so a record the server lost is sent again.
 
 Every non-success answer to a create, a chunk or a `HEAD` is classified before anything is retried ([Retry Policy Classes](/design/networking/#retry-policy-classes)): a code with a row above takes that row's action whatever its status, and an answer whose code names no action is classified by its status. Each wait charges the transfer's recovery cap and its server lane's shared retry budget, so a server that never stops failing ends the transfer; the transfer gives up with the last answer's status and stable code, so a client still localizes what the server said. A chunk answered with a `5xx` may have been kept, so its wait always resumes from `HEAD`, never from the client's own offset: a completing chunk answered `500 storage_inconsistent` settles on the state `HEAD` reports — `completed` with no byte re-sent, `failed_processing` with its code, or the offset to resume from.
 
