@@ -2818,7 +2818,7 @@ fn encode_op(
         held.map(|blob| base64.encode(blob))
     });
     let request = capsule_sdk::rest::types::OpRequest {
-        manifest_envelope: op_envelope(core),
+        manifest_envelope: capsule_sdk::albums::op_envelope(core),
         manifest_cbor: base64.encode(&manifest),
         metadata_blob: blob,
     };
@@ -2842,41 +2842,6 @@ pub fn op_record_hash(op: &[u8]) -> Option<capsule_core::crypto::hash::Hash32> {
     let record: capsule_core::crypto::provenance::ProvenanceRecord =
         capsule_core::cbor::from_slice(&manifest).ok()?;
     Some(record.record_hash())
-}
-
-/// The server-visible projection of a lifecycle manifest: every field verbatim, naming the
-/// original's ciphertext, and no derivative (the server refuses the pair on a lifecycle write).
-fn op_envelope(
-    core: &capsule_core::crypto::provenance::ManifestCore,
-) -> capsule_sdk::rest::types::ManifestEnvelope {
-    let wire = |value: serde_json::Result<serde_json::Value>| {
-        value
-            .ok()
-            .and_then(|v| v.as_str().map(str::to_owned))
-            .unwrap_or_default()
-    };
-    capsule_sdk::rest::types::ManifestEnvelope {
-        crypto_suite_id: i64::from(core.crypto_suite_id),
-        protocol_version: core.protocol_version.clone(),
-        album_id: Some(core.album_id.to_string()),
-        file_id: core.file_id.to_string(),
-        amk_version: i64::from(core.amk_version.0),
-        ciphertext_hash: core.ciphertext_hash.to_hex(),
-        plaintext_size: i64::try_from(core.plaintext_size).unwrap_or(i64::MAX),
-        chunk_size: i64::from(core.chunk_size),
-        key_mode: wire(serde_json::to_value(core.key_mode)),
-        metadata_blob_hash: core.metadata_blob_hash.map(|h| h.to_hex()),
-        original_blob_hash: None,
-        derivative_role: None,
-        derivative_format: None,
-        created_by_user: core.created_by_user.to_string(),
-        created_by_device: core.created_by_device.to_string(),
-        client_version: core.client_version.clone(),
-        timestamp: core.timestamp.clone(),
-        action: wire(serde_json::to_value(core.action)),
-        prior_provenance_hash: core.prior_provenance_hash.map(|h| h.to_hex()),
-        retention_until: core.retention_until.clone(),
-    }
 }
 
 /// What the server did with one lifecycle op.

@@ -20,7 +20,8 @@
 //! `trash-restore` or other bytes-free lifecycle manifest to `POST /v1/albums/{album_id}/ops`
 //! and types the refusal ([`LifecycleOpError`]), so every client tells a closed retention window
 //! (`retention_elapsed`, final for the asset) from a stale chain or a transient fault the same
-//! way.
+//! way. The op's envelope ([`op_envelope`]) and which records of a chain go to the server
+//! ([`chain_after`], [`stretch_after`]) are defined here once, for every client that sends one.
 //!
 //! [Organization — The Default Album]: https://docs/design/organization/#the-default-album
 //! [invariant 6]: https://docs/design/threat-model/validation/#server-side-validation-invariants
@@ -28,6 +29,10 @@
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 use uuid::Uuid;
+
+mod op_wire;
+
+pub use op_wire::{chain_after, op_envelope, stretch_after};
 
 pub use crate::upload::StaticToken;
 
