@@ -1222,7 +1222,8 @@ pub async fn create_upload(
     // reservation, because a refused duplicate must not be charged; before the stage, because a
     // refusal must not leave bytes. The reserved-but-unpublished row a refusal leaves behind
     // publishes nothing and is the discard worker's, exactly as an abandoned session's is.
-    let charged = match crate::quota::charge_upload(&quota, &uploader, &address, request.size).await
+    let charged = match crate::quota::reserve_upload(&quota, &uploader, &address, request.size)
+        .await
     {
         Ok(
             charge @ (crate::quota::UploadCharge::Admitted
@@ -1615,7 +1616,7 @@ async fn recharge_after_open(
     address: &ContentAddress,
     size: u64,
 ) -> Result<(), CreateRejection> {
-    let rejection = match crate::quota::charge_upload(quota, uploader, address, size).await {
+    let rejection = match crate::quota::reserve_upload(quota, uploader, address, size).await {
         Ok(crate::quota::UploadCharge::AlreadyAttributed) => return Ok(()),
         Ok(crate::quota::UploadCharge::Admitted) => {
             tracing::info!(

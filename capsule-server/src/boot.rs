@@ -119,6 +119,7 @@ use crate::store::{
     OidcAuthorizationStore, OidcDeviceStore, PostgresCohorts, SystemClock, UploadSessionStore,
 };
 use crate::sync::{CursorCodec, SyncContext};
+use crate::upload::reservation::{ReservationSweep, UploadHousekeeping};
 use crate::upload::{UploadContext, UploadPolicy};
 use crate::verify::VerifyContext;
 
@@ -499,8 +500,18 @@ impl Stores {
             grace_window,
         )
         // The upload-progress view has no lifetime of its own, so `gc --apply` is what keeps
-        // it from growing with every abandoned upload (#519).
-        .with_progress_sweep(Arc::new(self.uploads.clone()));
+        // it from growing with every abandoned upload (#519). The same pass releases the quota
+        // reservations of sessions that expired without their bytes (#1059): expiry has no
+        // other observer. Re-charged under the limits the application charges under.
+        .with_progress_sweep(Arc::new(UploadHousekeeping::new(
+            self.uploads.clone(),
+            ReservationSweep::new(
+                self.quotas.clone(),
+                self.blobs.clone(),
+                self.uploads.clone(),
+                QuotaLimits::unlimited(),
+            ),
+        )));
         if let Some(attestation) = purge_signer {
             collection = collection.with_attestation(attestation);
         }
