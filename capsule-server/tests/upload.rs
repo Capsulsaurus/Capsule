@@ -1993,6 +1993,96 @@ async fn a_range_sent_while_it_is_in_flight_is_a_conflict_to_wait_out() {
     );
 }
 
+/// A session's in-flight cap is fixed at creation and advertised as `ranges`; one range more,
+/// even a disjoint one, is `too_many_in_flight` with `Retry-After`, and writes nothing.
+#[tokio::test]
+async fn a_range_past_the_in_flight_cap_is_refused_with_a_wait() {
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (first, second, whole) = blob();
+    let id = fixture.open_session(&whole, "original", &bearer).await;
+    let head = head(&fixture, &bearer, &id).await;
+    assert!(
+        head.header("x-capsule-advice")
+            .is_some_and(|advice| advice.contains("ranges=1")),
+        "a new session is advertised its cap of one"
+    );
+
+    let hold = fixture.blobs.hold_appends();
+    let racing = async {
+        let one = fixture.chunk(&id, 0, &first, &bearer).send();
+        let two = async {
+            hold.entered.notified().await;
+            let refused = fixture.chunk(&id, 4096, &second, &bearer).send().await;
+            hold.release.add_permits(1);
+            refused
+        };
+        tokio::join!(one, two)
+    };
+    let (one, two) = racing.await;
+    one.assert_status(StatusCode::NO_CONTENT);
+    two.assert_status(StatusCode::CONFLICT);
+    assert!(two.header("retry-after").is_some());
+    assert!(
+        two.header("x-capsule-committed").is_none(),
+        "only a range conflict carries the set"
+    );
+    assert_eq!(code(&two.json()), "error.upload.too_many_in_flight");
+
+    hold.release.add_permits(8);
+    fixture
+        .chunk(&id, 4096, &second, &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(terminal_status(&fixture, &id).await, "completed");
+}
+
+/// The committed set holds at most 64 fragments: a range that would make a 65th is
+/// `too_fragmented` and writes nothing, while a range that fills a gap is still admitted.
+#[tokio::test]
+async fn a_range_past_the_fragment_bound_is_refused_and_a_gap_fill_is_not() {
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let blocks = 130;
+    let whole = payload(b'f', blocks * CHUNK);
+    let block = |index: usize| &whole[index * CHUNK..(index + 1) * CHUNK];
+    let id = fixture.open_session(&whole, "original", &bearer).await;
+
+    // Every other block: 64 fragments, with a gap after each.
+    for index in (0..128).step_by(2) {
+        fixture
+            .chunk(&id, (index * CHUNK) as u64, block(index), &bearer)
+            .send()
+            .await
+            .assert_status(StatusCode::NO_CONTENT);
+    }
+    let refused = fixture
+        .chunk(&id, (129 * CHUNK) as u64, block(129), &bearer)
+        .send()
+        .await;
+    refused.assert_status(StatusCode::CONFLICT);
+    assert!(
+        refused.header("retry-after").is_none(),
+        "nothing is in flight, so there is nothing to wait out"
+    );
+    assert_eq!(code(&refused.json()), "error.upload.too_fragmented");
+
+    let filled = fixture
+        .chunk(&id, CHUNK as u64, block(1), &bearer)
+        .send()
+        .await;
+    filled.assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(filled.header("x-capsule-offset"), Some("12288"));
+    assert_eq!(
+        filled
+            .header("x-capsule-committed")
+            .map(|set| set.split(',').count()),
+        Some(63),
+        "a gap fill joins two fragments into one"
+    );
+}
+
 /// A claim is released only once its write has returned, whether or not the request that took
 /// it is still there: a client that gives up on a slow write and retries is refused until that
 /// write lands, so the abandoned write can never overwrite the retry.
