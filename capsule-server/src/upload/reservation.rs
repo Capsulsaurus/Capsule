@@ -339,52 +339,45 @@ pub async fn release_logged(context: &UploadContext, record: &UploadSessionRecor
 /// cost storage rather than save it, the reason a finalizing session is charged past the check
 /// when [`release`] restores a reservation.
 ///
-/// Best-effort, as [`release_logged`] is: the bytes are committed and the session completes
-/// either way. A settle that fails leaves the reservation to the sweep, which finds the blob
-/// and settles it then ([`ReservationSweep`]), so the failure costs a log line and never a
-/// charge.
-pub async fn settle(context: &UploadContext, record: &UploadSessionRecord) {
+/// # Errors
+///
+/// [`StoreError`] when the ledger could not settle, or could not charge bytes whose
+/// reservation was already swept. Either way the committed bytes may be attributed to nobody:
+/// a settle that fails cannot tell whether the sweep released the row first, and once the row
+/// is gone no sweep lists the address again. So the failure is the finalizer's, not a log
+/// line: it leaves the session claimed rather than `Completed`, and the claim is re-driven
+/// through this settle until the charge lands ([`super::finalize::recover`]).
+pub async fn settle(
+    context: &UploadContext,
+    record: &UploadSessionRecord,
+) -> Result<(), StoreError> {
     let upload_id = &record.upload_id;
     let Ok(address) = ContentAddress::parse(&record.expected_hash) else {
         tracing::warn!(%upload_id, "a completed session's hash is not a content address; nothing to settle");
-        return;
+        return Ok(());
     };
-    match context.quotas().settle(&address).await {
-        Ok(true) => tracing::debug!(%upload_id, "settled a completed session's reservation"),
-        Ok(false) => match context
-            .quotas()
-            .charge(
-                &record.upload_user_id,
-                &address,
-                record.total_size,
-                context.clock().now(),
-                context.quota_limits(),
-            )
-            .await
-        {
-            Ok(outcome) => tracing::warn!(
-                %upload_id,
-                uploader = %record.upload_user_id,
-                size = record.total_size,
-                charged = matches!(outcome, crate::quota::ChargeOutcome::Charged { .. }),
-                "a completed session's reservation had been swept; charged its committed bytes"
-            ),
-            Err(error) => tracing::error!(
-                %error,
-                %upload_id,
-                uploader = %record.upload_user_id,
-                size = record.total_size,
-                "a completed session's committed bytes could not be charged after their \
-                 reservation was swept"
-            ),
-        },
-        Err(error) => tracing::error!(
-            %error,
-            %upload_id,
-            "a completed session's reservation was not settled; the sweep settles it on finding \
-             the blob"
-        ),
+    if context.quotas().settle(&address).await? {
+        tracing::debug!(%upload_id, "settled a completed session's reservation");
+        return Ok(());
     }
+    let outcome = context
+        .quotas()
+        .charge(
+            &record.upload_user_id,
+            &address,
+            record.total_size,
+            context.clock().now(),
+            context.quota_limits(),
+        )
+        .await?;
+    tracing::warn!(
+        %upload_id,
+        uploader = %record.upload_user_id,
+        size = record.total_size,
+        charged = matches!(outcome, crate::quota::ChargeOutcome::Charged { .. }),
+        "a completed session's reservation had been swept; charged its committed bytes"
+    );
+    Ok(())
 }
 
 /// Discard `upload` under storage pressure, and give its reservation back.

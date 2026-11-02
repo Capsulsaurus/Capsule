@@ -48,13 +48,63 @@ impl WriteAuthority for Unasked {
     }
 }
 
-/// A ledger whose release lets a create open its session first: the session `arrival` holds
-/// becomes visible after the release's live-session check and before the ledger releases.
+/// What lands in the middle of the next release, after the releaser's checks.
+#[derive(Debug)]
+enum Arrival {
+    /// A create opens this session.
+    Session(Box<UploadSessionRecord>),
+    /// A finalizer commits [`BYTES`] at their address.
+    Blob,
+    /// Nothing lands, and every release and charge fails: a ledger that stopped answering.
+    Refusal,
+}
+
+/// A ledger whose release lets another writer go first: what `arrival` holds becomes visible
+/// after the releaser's checks and before the ledger releases.
 #[derive(Debug)]
 struct RacingQuota {
     inner: Arc<InMemoryQuota>,
     sessions: Arc<InMemoryUploadSessions>,
-    arrival: std::sync::Mutex<Option<UploadSessionRecord>>,
+    blobs: Arc<InMemoryBlobStore>,
+    arrival: std::sync::Mutex<Option<Arrival>>,
+}
+
+impl RacingQuota {
+    /// Whether the ledger refuses: an [`Arrival::Refusal`] stays, so it refuses every time.
+    fn refusing(&self) -> bool {
+        matches!(
+            *self
+                .arrival
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+            Some(Arrival::Refusal)
+        )
+    }
+
+    /// Let the arrival land, once, before a release goes through.
+    async fn arrive(&self, address: &ContentAddress) -> Result<(), crate::store::StoreError> {
+        if self.refusing() {
+            return Err(crate::store::StoreError::Unavailable {
+                store: "quota",
+                detail: "refused by the test".to_owned(),
+            });
+        }
+        let arrival = self
+            .arrival
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        match arrival {
+            Some(Arrival::Session(record)) => {
+                crate::store::UploadSessionStore::open(self.sessions.as_ref(), *record).await?;
+            }
+            Some(Arrival::Blob) => {
+                self.blobs.put(address, BYTES).await.expect("stored");
+            }
+            Some(Arrival::Refusal) | None => {}
+        }
+        Ok(())
+    }
 }
 
 impl crate::quota::QuotaStore for RacingQuota {
@@ -73,7 +123,15 @@ impl crate::quota::QuotaStore for RacingQuota {
         at: Timestamp,
         limits: QuotaLimits,
     ) -> crate::store::StoreFuture<'a, ChargeOutcome> {
-        self.inner.charge(user, address, size, at, limits)
+        Box::pin(async move {
+            if self.refusing() {
+                return Err(crate::store::StoreError::Unavailable {
+                    store: "quota",
+                    detail: "refused by the test".to_owned(),
+                });
+            }
+            self.inner.charge(user, address, size, at, limits).await
+        })
     }
 
     fn reserve<'a>(
@@ -114,15 +172,8 @@ impl crate::quota::QuotaStore for RacingQuota {
         address: &'a ContentAddress,
         now: Timestamp,
     ) -> crate::store::StoreFuture<'a, bool> {
-        let arrival = self
-            .arrival
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take();
         Box::pin(async move {
-            if let Some(arrival) = arrival {
-                crate::store::UploadSessionStore::open(self.sessions.as_ref(), arrival).await?;
-            }
+            self.arrive(address).await?;
             self.inner.release_expired(user, address, now).await
         })
     }
@@ -132,15 +183,8 @@ impl crate::quota::QuotaStore for RacingQuota {
         user: &'a UserId,
         address: &'a ContentAddress,
     ) -> crate::store::StoreFuture<'a, bool> {
-        let arrival = self
-            .arrival
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take();
         Box::pin(async move {
-            if let Some(arrival) = arrival {
-                crate::store::UploadSessionStore::open(self.sessions.as_ref(), arrival).await?;
-            }
+            self.arrive(address).await?;
             self.inner.release(user, address).await
         })
     }
@@ -165,8 +209,8 @@ impl crate::quota::QuotaStore for RacingQuota {
     }
 }
 
-/// A harness whose ledger opens `arrival` in the middle of the next release.
-fn racing_harness(arrival: UploadSessionRecord) -> Harness {
+/// A harness whose ledger lets `arrival` land in the middle of the next release.
+fn racing_harness(arrival: Arrival) -> Harness {
     let clock = Arc::new(ManualClock::new(
         Timestamp::from_second(1_800_000_000).expect("in range"),
     ));
@@ -176,6 +220,7 @@ fn racing_harness(arrival: UploadSessionRecord) -> Harness {
     let racing = Arc::new(RacingQuota {
         inner: quotas.clone(),
         sessions: sessions.clone(),
+        blobs: blobs.clone(),
         arrival: std::sync::Mutex::new(Some(arrival)),
     });
     let context = UploadContext::new(
@@ -397,7 +442,10 @@ async fn a_declared_hash_that_is_no_address_releases_nothing() {
 
 #[tokio::test]
 async fn a_session_that_opens_during_the_release_gets_the_reservation_back() {
-    let h = racing_harness(session("arrived", UploadSessionStatus::Pending));
+    let h = racing_harness(Arrival::Session(Box::new(session(
+        "arrived",
+        UploadSessionStatus::Pending,
+    ))));
     h.charge(&uploader()).await;
     let ended = session("cancelled", UploadSessionStatus::Pending);
 
@@ -725,7 +773,8 @@ async fn a_completed_uploads_charge_is_never_swept() {
         &h.context,
         &session("completed", UploadSessionStatus::Completed),
     )
-    .await;
+    .await
+    .expect("the ledger answers");
     h.clock.advance(past_the_cap());
 
     assert_eq!(
@@ -781,7 +830,7 @@ async fn a_session_opening_as_the_sweep_releases_gets_the_reservation_back() {
     let mut arrival = session("arrival", UploadSessionStatus::Pending);
     arrival.created_at = late;
     arrival.last_progress_at = late;
-    let h = racing_harness(arrival);
+    let h = racing_harness(Arrival::Session(Box::new(arrival)));
     h.reserve(&uploader()).await;
     h.clock.advance(past_the_cap());
 
@@ -806,7 +855,8 @@ async fn a_finalizer_whose_reservation_was_swept_charges_its_committed_bytes() {
         &h.context,
         &session("late-finalizer", UploadSessionStatus::WaitingForProcessing),
     )
-    .await;
+    .await
+    .expect("the ledger answers");
     assert_eq!(
         h.used(&uploader()).await,
         BYTES.len() as u64,
@@ -818,6 +868,83 @@ async fn a_finalizer_whose_reservation_was_swept_charges_its_committed_bytes() {
         SweepReport::default(),
         "and the charge is settled"
     );
+}
+
+#[tokio::test]
+async fn a_blob_landing_as_the_sweep_releases_is_charged_back() {
+    // Committed after the sweep's blob and live-session checks, before its release.
+    let h = racing_harness(Arrival::Blob);
+    h.reserve(&uploader()).await;
+    h.clock.advance(past_the_cap());
+
+    let report = h.swept().await;
+    assert_eq!(report.restored, vec![address()]);
+    assert!(report.released.is_empty(), "{report:?}");
+    assert_eq!(
+        h.used(&uploader()).await,
+        BYTES.len() as u64,
+        "the committed bytes stay charged to the uploader, never stored free"
+    );
+    h.clock.advance(past_the_cap());
+    assert_eq!(
+        h.swept().await,
+        SweepReport::default(),
+        "the charge put back is settled, so no later pass releases it"
+    );
+    assert_eq!(h.used(&uploader()).await, BYTES.len() as u64);
+}
+
+#[tokio::test]
+async fn a_failing_ledger_stops_the_sweep_rather_than_reading_the_row_again() {
+    let h = racing_harness(Arrival::Refusal);
+    let other = UserId::new("reservation-other".to_owned());
+    let theirs = ContentAddress::parse(&hash_bytes(b"other bytes").to_hex()).expect("address");
+    h.reserve(&uploader()).await;
+    crate::quota::reserve_upload(h.context.quota(), &other, &theirs, 7)
+        .await
+        .expect("the ledger answers");
+    h.clock.advance(past_the_cap());
+
+    // A full batch whose row stays expired: without the stop, the pass would list it forever.
+    let report = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        h.sweep()
+            .with_batch(1)
+            .sweep(crate::store::Clock::now(h.clock.as_ref())),
+    )
+    .await
+    .expect("the pass returns")
+    .expect("the listing answers");
+    assert_eq!(report.failed.len(), 1, "{report:?}");
+    assert!(
+        report.released.is_empty() && report.restored.is_empty(),
+        "{report:?}"
+    );
+    assert_eq!(h.used(&uploader()).await, BYTES.len() as u64);
+    assert_eq!(h.used(&other).await, 7, "the second batch was never read");
+}
+
+#[tokio::test]
+async fn a_settle_whose_charge_fails_after_a_sweep_is_surfaced() {
+    let h = racing_harness(Arrival::Refusal);
+    h.reserve(&uploader()).await;
+    // The sweep released before the commit: the address is attributed to nobody.
+    h.quotas
+        .release_attribution(&address())
+        .await
+        .expect("released");
+    h.blobs.put(&address(), BYTES).await.expect("stored");
+
+    assert!(
+        settle(
+            &h.context,
+            &session("late-finalizer", UploadSessionStatus::WaitingForProcessing),
+        )
+        .await
+        .is_err(),
+        "bytes nobody is charged for must not complete as if they were"
+    );
+    assert_eq!(h.used(&uploader()).await, 0);
 }
 
 #[tokio::test]

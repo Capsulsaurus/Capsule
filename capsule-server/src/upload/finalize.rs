@@ -1358,11 +1358,16 @@ async fn revalidate(
 ///
 /// The settle comes after the blob commit, so a reservation sweep racing it either finds the
 /// blob or is answered by the settle re-charging the bytes ([`super::reservation::settle`]).
+/// A settle the ledger cannot answer leaves the session claimed, as a status write that
+/// fails does: the bytes are committed, so the claim is re-driven ([`recover`]) rather than
+/// failed, and `Completed` is written only once the bytes are charged to somebody.
 async fn complete(
     context: &UploadContext,
     record: &UploadSessionRecord,
 ) -> Result<(), FinalizeFailure> {
-    super::reservation::settle(context, record).await;
+    super::reservation::settle(context, record)
+        .await
+        .map_err(unavailable("settle the quota reservation"))?;
     context
         .sessions()
         .set_status(&record.upload_id, UploadSessionStatus::Completed)
