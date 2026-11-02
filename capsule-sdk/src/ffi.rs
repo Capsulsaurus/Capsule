@@ -1098,45 +1098,19 @@ impl FfiSession {
     /// The ids are pushed in batches of a bounded size, so a list of any length holds only one
     /// batch's bundles in memory at a time. One asset's failure is its own
     /// ([`FfiPushAssetResult::Failed`], carrying the error `push_asset` would have returned for
-    /// it): the others still push, and the call itself never fails.
+    /// it): the others still push, and the call itself never fails. An id repeated in
+    /// `asset_ids` pushes once, at its first occurrence; each later occurrence is
+    /// [`FfiPushAssetResult::Failed`] with [`FfiError::InvalidArgument`].
+    ///
+    /// The adverse-link detector hears each batch's outcomes when that batch's run ends, so a
+    /// link that degrades mid-batch re-plans the push from the next batch on.
     pub async fn push_assets(
         &self,
         workspace: Arc<FfiWorkspace>,
         asset_ids: Vec<String>,
     ) -> Vec<FfiPushAssetResult> {
-        tracing::info!(
-            assets = asset_ids.len(),
-            batch = PUSH_BATCH_BUNDLES,
-            "ffi: pushing several sealed assets through one lane"
-        );
-        let mut results = Vec::with_capacity(asset_ids.len());
-        for batch in asset_ids.chunks(PUSH_BATCH_BUNDLES) {
-            let pushed = self.push_batch(&workspace, batch).await;
-            results.extend(
-                batch
-                    .iter()
-                    .zip(pushed)
-                    .map(|(asset_id, pushed)| match pushed {
-                        Ok(report) => FfiPushAssetResult::Pushed {
-                            report: report.into(),
-                        },
-                        Err(error) => FfiPushAssetResult::Failed {
-                            asset_id: asset_id.clone(),
-                            error,
-                        },
-                    }),
-            );
-        }
-        let failed = results
-            .iter()
-            .filter(|result| matches!(result, FfiPushAssetResult::Failed { .. }))
-            .count();
-        tracing::info!(
-            assets = results.len(),
-            failed,
-            "ffi: pushed several sealed assets"
-        );
-        results
+        self.push_assets_in(&workspace, &asset_ids, PUSH_BATCH_BUNDLES)
+            .await
     }
 
     /// **Fetch** the blob at content address `hash` (`size` bytes, as the sync feed's
@@ -1336,6 +1310,68 @@ impl FfiSession {
             .with_connection_class(self.path.plan().class)
     }
 
+    /// [`push_assets`](Self::push_assets) in batches of at most `batch_size` distinct ids, so
+    /// tests reach more than one batch without sealing [`PUSH_BATCH_BUNDLES`] assets.
+    async fn push_assets_in(
+        &self,
+        workspace: &FfiWorkspace,
+        asset_ids: &[String],
+        batch_size: usize,
+    ) -> Vec<FfiPushAssetResult> {
+        tracing::info!(
+            assets = asset_ids.len(),
+            batch = batch_size,
+            "ffi: pushing several sealed assets through one lane"
+        );
+        // A repeated id is refused in its own slot: pushing it twice would open two sessions
+        // for one asset in one lane. Its first occurrence pushes as usual.
+        let mut seen = HashSet::with_capacity(asset_ids.len());
+        let mut slots: Vec<Option<FfiPushAssetResult>> = Vec::with_capacity(asset_ids.len());
+        let mut distinct = Vec::with_capacity(asset_ids.len());
+        for (at, asset_id) in asset_ids.iter().enumerate() {
+            if seen.insert(asset_id.as_str()) {
+                distinct.push(at);
+                slots.push(None);
+            } else {
+                tracing::warn!(%asset_id, "ffi: the asset id is repeated; refusing the repeat");
+                slots.push(Some(FfiPushAssetResult::Failed {
+                    asset_id: asset_id.clone(),
+                    error: FfiError::InvalidArgument {
+                        detail: format!(
+                            "asset_ids: {asset_id:?} is repeated; it is pushed once, at its first occurrence"
+                        ),
+                    },
+                }));
+            }
+        }
+        for batch in distinct.chunks(batch_size.max(1)) {
+            let ids: Vec<String> = batch.iter().map(|&at| asset_ids[at].clone()).collect();
+            let pushed = self.push_batch(workspace, &ids).await;
+            for ((&at, asset_id), pushed) in batch.iter().zip(ids).zip(pushed) {
+                slots[at] = Some(match pushed {
+                    Ok(report) => FfiPushAssetResult::Pushed {
+                        report: report.into(),
+                    },
+                    Err(error) => FfiPushAssetResult::Failed { asset_id, error },
+                });
+            }
+        }
+        let results: Vec<FfiPushAssetResult> = slots
+            .into_iter()
+            .map(|slot| slot.expect("every requested id ended exactly once"))
+            .collect();
+        let failed = results
+            .iter()
+            .filter(|result| matches!(result, FfiPushAssetResult::Failed { .. }))
+            .count();
+        tracing::info!(
+            assets = results.len(),
+            failed,
+            "ffi: pushed several sealed assets"
+        );
+        results
+    }
+
     /// Push the assets `asset_ids` names — at most one batch — and return how each ended, in
     /// the order of `asset_ids`. The workspace lock is held only while a bundle is built or
     /// re-sealed, never across the network.
@@ -1370,7 +1406,9 @@ impl FfiSession {
         let pushed = self.push_bundles(&bundles).await;
         let mut resealed = Vec::new();
         let mut resealed_at = Vec::new();
-        for ((bundle, &at), pushed) in bundles.iter().zip(&bundled_at).zip(pushed) {
+        // The first run's bundles are consumed one by one, each dropped before its re-sealed
+        // replacement is built, so the batch never holds both at once.
+        for ((bundle, at), pushed) in bundles.into_iter().zip(bundled_at).zip(pushed) {
             let refused = match pushed {
                 Err(PushError::CreateRefused { source, .. }) => source,
                 other => {
@@ -1383,8 +1421,10 @@ impl FfiSession {
                 amk_version = bundle.amk_version,
                 "ffi: the server refused this create; re-sealing it at the album's current epoch"
             );
+            let asset_id = bundle.asset_id;
+            drop(bundle);
             match workspace
-                .reseal(&bundle.asset_id, &refused)
+                .reseal(&asset_id, &refused)
                 .and_then(|()| workspace.bundle(&asset_ids[at]))
             {
                 Ok(bundle) => {
@@ -1394,9 +1434,6 @@ impl FfiSession {
                 Err(error) => outcomes[at] = Some(Err(error)),
             }
         }
-        // The first run's bundles are done with: only the re-sealed ones stay in memory.
-        drop(bundles);
-
         if !resealed.is_empty() {
             tracing::info!(
                 resealed = resealed.len(),

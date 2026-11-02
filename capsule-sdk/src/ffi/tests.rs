@@ -1283,6 +1283,106 @@ async fn ffi_push_assets_of_nothing_sends_nothing() {
     assert!(log.lock().unwrap().is_empty(), "nothing reached the wire");
 }
 
+/// **A list longer than one batch** comes back with one result per id, in the order asked,
+/// across the batch boundaries: five assets in batches of two run three lane runs, and every
+/// asset's session opens in exactly one of them.
+#[tokio::test]
+async fn ffi_push_assets_answers_in_order_across_batches() {
+    let lib = tempfile::TempDir::new().unwrap();
+    let workspace = enroll(lib.path());
+    let sealed = seal_assets(&workspace, 5);
+    let (server, log) = lane_upload_server(std::time::Duration::ZERO, None).await;
+    let session = login(&server).await;
+
+    let results = session.push_assets_in(&workspace, &sealed, 2).await;
+
+    assert_eq!(results.len(), sealed.len(), "one result per asset asked");
+    for (asked, result) in sealed.iter().zip(&results) {
+        match result {
+            FfiPushAssetResult::Pushed { report } => assert_eq!(
+                &report.asset_id, asked,
+                "results come back in the order asked, across batches"
+            ),
+            FfiPushAssetResult::Failed { error, .. } => {
+                panic!("{asked} should have pushed: {error:?}")
+            }
+        }
+    }
+    let log = log.lock().unwrap().clone();
+    for asset in &sealed {
+        assert_eq!(
+            log.iter()
+                .filter(|request| **request == LaneRequest::Create(asset.clone()))
+                .count(),
+            3,
+            "each asset's three blobs were created once, in one batch: {log:?}"
+        );
+    }
+    // Batches run one after another: no session of a later batch opens before every create of
+    // an earlier batch has been sent.
+    let first_create = |asset: &String| {
+        log.iter()
+            .position(|request| *request == LaneRequest::Create(asset.clone()))
+            .unwrap()
+    };
+    let last_create = |asset: &String| {
+        log.iter()
+            .rposition(|request| *request == LaneRequest::Create(asset.clone()))
+            .unwrap()
+    };
+    for (earlier, later) in [(1, 2), (3, 4)] {
+        assert!(
+            last_create(&sealed[earlier]) < first_create(&sealed[later]),
+            "batch boundary between assets {earlier} and {later}: {log:?}"
+        );
+    }
+}
+
+/// **A repeated id pushes once.** Its first occurrence pushes as usual; each later occurrence
+/// fails its own slot with an invalid argument, so one asset never runs two sessions in one
+/// lane.
+#[tokio::test]
+async fn ffi_push_assets_refuses_a_repeated_id_in_its_own_slot() {
+    let lib = tempfile::TempDir::new().unwrap();
+    let workspace = enroll(lib.path());
+    let sealed = seal_assets(&workspace, 2);
+    let (server, log) = lane_upload_server(std::time::Duration::ZERO, None).await;
+    let session = login(&server).await;
+
+    let asked = vec![sealed[0].clone(), sealed[1].clone(), sealed[0].clone()];
+    let results = session.push_assets(workspace, asked.clone()).await;
+
+    assert_eq!(
+        results.len(),
+        3,
+        "one result per id asked, repeats included"
+    );
+    for (at, result) in results.iter().enumerate() {
+        match (at, result) {
+            (2, FfiPushAssetResult::Failed { asset_id, error }) => {
+                assert_eq!(asset_id, &sealed[0]);
+                assert!(
+                    matches!(error, FfiError::InvalidArgument { .. }),
+                    "a repeated id is the caller's: {error:?}"
+                );
+            }
+            (0 | 1, FfiPushAssetResult::Pushed { report }) => {
+                assert_eq!(report.asset_id, asked[at]);
+            }
+            (at, _) => panic!("slot {at} ended the wrong way"),
+        }
+    }
+    assert_eq!(
+        log.lock()
+            .unwrap()
+            .iter()
+            .filter(|request| **request == LaneRequest::Create(sealed[0].clone()))
+            .count(),
+        3,
+        "the repeated asset's three blobs were created once"
+    );
+}
+
 /// A blob mock serving `blob` at `/v1/blob/{hash}` by `Range`, recording each requested
 /// window's length (`None` for an open-ended range).
 async fn blob_server(
