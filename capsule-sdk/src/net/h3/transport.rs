@@ -209,6 +209,8 @@ pub fn observe_response<C: MonotonicClock>(
 /// [`NoHttpsRecords`]; a platform shell that can read them supplies its own.
 pub trait HttpsResolver: Send + Sync + 'static {
     /// The HTTPS records published for `host`; empty when there are none or the lookup failed.
+    /// Asked at every request whose origin has no live advertisement, so an implementation
+    /// answers from its cache within the records' TTL.
     fn https_records(&self, host: &str) -> impl Future<Output = Vec<HttpsRecord>> + Send;
 }
 
@@ -515,7 +517,8 @@ impl H3Connection {
     /// [`TransportError::PathStalled`] when the path stops making progress (or the connection
     /// idles out), [`TransportError::Cut`] when the request stalls on a live path, and
     /// [`TransportError::Exchange`] for any other failure.
-    #[instrument(level = "debug", skip_all, fields(method = %request.method(), uri = %request.uri()))]
+    // The URI is not logged: a path or query may carry a capability.
+    #[instrument(level = "debug", skip_all, fields(method = %request.method()))]
     pub async fn send(
         &self,
         request: http::Request<Bytes>,
@@ -845,7 +848,12 @@ where
     ///
     /// [`TransportError`]; [`TransportError::PathStalled`] has already recorded UDP unusable on
     /// `network`.
-    #[instrument(level = "debug", skip_all, fields(network = network.0, uri = %request.uri()))]
+    // Only the origin is logged: a path or query may carry a capability.
+    #[instrument(
+        level = "debug",
+        skip_all,
+        fields(network = network.0, origin = tracing::field::Empty, via)
+    )]
     pub async fn send(
         &self,
         network: PathGeneration,
@@ -854,6 +862,7 @@ where
     ) -> Result<Delivered, TransportError> {
         let origin = Origin::from_uri(request.uri())?;
         let key = origin.key();
+        tracing::Span::current().record("origin", key.as_str());
         let choice = if origin.is_secure() {
             self.choose(&origin, &key, network).await
         } else {
@@ -876,6 +885,7 @@ where
                 }
             },
         }?;
+        tracing::Span::current().record("via", tracing::field::debug(delivered.via));
         observe_response(&self.policy, &key, delivered.response.headers());
         Ok(delivered)
     }

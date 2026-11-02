@@ -899,13 +899,16 @@ async fn a_quic_path_that_stops_making_progress_finishes_the_transfer_over_tcp()
 
 // ─── netem acceptance harness ────────────────────────────────────────────────
 
-/// The issue's acceptance harness on a real kernel path: `tc netem` drops every UDP datagram
-/// to the server's QUIC port a fixed time into the transfer, and the transfer must finish over
-/// TCP with no duplicate or corrupt state. Needs `tc` and `CAP_NET_ADMIN` (it reshapes `lo`),
-/// so it compiles only with `--features http3-netem` and runs only when asked by name:
+/// The acceptance harness on a real kernel path: `tc netem` drops every UDP datagram to the
+/// server's QUIC port a fixed time into the transfer, and the transfer must finish over TCP with
+/// no duplicate or corrupt state. Needs `tc` and `CAP_NET_ADMIN` over `lo`, which it reshapes,
+/// so it compiles only with `--features http3-netem` and runs only when asked by name. An
+/// unprivileged user and network namespace gives it a private `lo` to reshape: build the test
+/// binary first, then run it inside one.
 ///
 /// ```text
-/// sudo -E cargo test -p capsule-sdk --features http3-netem -- --ignored netem
+/// cargo test -p capsule-sdk --features http3-netem --lib --no-run
+/// unshare -rn sh -c 'ip link set lo up && target/debug/deps/capsule_sdk-<hash> --ignored netem'
 /// ```
 #[cfg(feature = "http3-netem")]
 mod netem {

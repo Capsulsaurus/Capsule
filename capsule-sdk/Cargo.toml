@@ -31,7 +31,8 @@ ffi-bindgen = ["ffi", "uniffi/cli"]
 # `http3` compiles the HTTP/3 transport adapter (`net::h3::transport`, over quinn + h3 +
 # h3-quinn on the `ring` rustls provider) and makes the opportunistic HTTP/3 policy
 # (`net::h3::H3Policy::for_build`) capable, so it may answer a race at dial. Off by default, so
-# default builds link none of it. It deliberately does not forward `reqwest/http3`: reqwest 0.12
+# default builds link none of it; `tokio/rt` spawns each connection's HTTP/3 driver and the dial
+# that lost a race. It deliberately does not forward `reqwest/http3`: reqwest 0.12
 # refuses that feature without `RUSTFLAGS="--cfg reqwest_unstable"`, which would break every
 # `--all-features` build.
 http3 = ["dep:quinn", "dep:h3", "dep:h3-quinn", "dep:webpki-roots", "tokio/rt"]
