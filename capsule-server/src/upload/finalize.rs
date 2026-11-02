@@ -490,7 +490,7 @@ async fn drive(
     let upload = &record.upload_id;
     match run_claimed(context, attestation, upload, record).await {
         Ok((placement, minted)) => {
-            complete(context, upload).await?;
+            complete(context, record).await?;
             tracing::info!(
                 %upload,
                 asset_id = %record.asset_id,
@@ -1353,11 +1353,26 @@ async fn revalidate(
     Ok(envelope)
 }
 
-/// Step 8, the winning half.
-async fn complete(context: &UploadContext, upload: &UploadId) -> Result<(), FinalizeFailure> {
+/// Step 8, the winning half: the session's quota reservation is settled, then the session is
+/// `Completed`.
+///
+/// The settle comes after the blob commit, so a reservation sweep racing it either finds the
+/// blob or is answered by the settle re-charging the bytes ([`super::reservation::settle`]).
+/// A settle that found the reservation swept and could not charge the bytes leaves the
+/// session claimed, as a status write that fails does: the bytes are committed, so the claim
+/// is re-driven ([`recover`]) rather than failed, and `Completed` is written only once the
+/// bytes are charged to somebody. A settle the ledger cannot answer at all completes, because
+/// the reservation it left is the sweep's to settle.
+async fn complete(
+    context: &UploadContext,
+    record: &UploadSessionRecord,
+) -> Result<(), FinalizeFailure> {
+    super::reservation::settle(context, record)
+        .await
+        .map_err(unavailable("settle the quota reservation"))?;
     context
         .sessions()
-        .set_status(upload, UploadSessionStatus::Completed)
+        .set_status(&record.upload_id, UploadSessionStatus::Completed)
         .await
         .map_err(unavailable("complete the session"))?;
     Ok(())

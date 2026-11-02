@@ -34,7 +34,7 @@ use sea_orm::{
     TransactionTrait, Value,
 };
 
-use super::{ChargeOutcome, QuotaLimits, QuotaStore, StoredUsage};
+use super::{ChargeOutcome, ExpiredReservation, QuotaLimits, QuotaStore, StoredUsage};
 use crate::blob::ContentAddress;
 use crate::postgres::error::Port;
 use crate::postgres::time::{from_micros, to_micros};
@@ -152,6 +152,107 @@ async fn commit(transaction: DatabaseTransaction) -> Result<(), StoreError> {
         .map_err(PORT.failing("committing a transaction"))
 }
 
+impl PostgresQuota {
+    /// Attribute `size` bytes at `address` to `user`, unless the address is attributed already,
+    /// carrying `reserved_until` as the row's reservation deadline (`None` for a settled charge).
+    ///
+    /// The one body [`QuotaStore::charge`] and [`QuotaStore::reserve`] share.
+    async fn attribute(
+        &self,
+        user: &UserId,
+        address: &ContentAddress,
+        size: u64,
+        at: Timestamp,
+        reserved_until: Option<Timestamp>,
+        limits: QuotaLimits,
+    ) -> Result<ChargeOutcome, StoreError> {
+        let size = size_to_column(size)?;
+        let transaction = begin(&self.connection).await?;
+
+        // The primary key decides, and the row count is the answer. Two concurrent sessions
+        // for one address cannot both read "unattributed" and both debit, because neither
+        // reads: they both insert, and one of them affects no row.
+        let debited = transaction
+            .execute_raw(Statement::from_sql_and_values(
+                DbBackend::Postgres,
+                "INSERT INTO quota_attributions (address, user_id, size, charged_at, reserved_until) \
+                 VALUES ($1, $2, $3, $4, $5) ON CONFLICT (address) DO NOTHING",
+                [
+                    Value::from(address.as_str().to_owned()),
+                    Value::from(user.as_str().to_owned()),
+                    Value::from(size),
+                    Value::from(to_micros(at)),
+                    Value::from(reserved_until.map(to_micros)),
+                ],
+            ))
+            .await
+            .map_err(PORT.failing("charging an address"))?;
+        if debited.rows_affected() == 0 {
+            // Already attributed — to this account or to another, and the port answers one
+            // value for both so a quota endpoint cannot become a cross-tenant oracle.
+            return Ok(ChargeOutcome::AlreadyAttributed);
+        }
+
+        // The account's row in `quota_usage` exists from its first charge onwards, and holds
+        // nothing but the clock.
+        transaction
+            .execute_raw(Statement::from_sql_and_values(
+                DbBackend::Postgres,
+                "INSERT INTO quota_usage (user_id, over_since) VALUES ($1, NULL) \
+                 ON CONFLICT (user_id) DO NOTHING",
+                [Value::from(user.as_str().to_owned())],
+            ))
+            .await
+            .map_err(PORT.failing("opening an account's usage row"))?;
+
+        // Serialise this account's charges on its usage row (#513). Without the lock, two
+        // charges for different addresses each total the account in a snapshot that misses
+        // the other's uncommitted debit: both report a total under the limit, the upload
+        // path admits both, and neither stamps the crossing their sum made. Holding the row
+        // until commit means the total below is read only after every earlier charge for
+        // this account has committed — a READ COMMITTED statement takes its snapshot when it
+        // starts, which is after this lock is granted.
+        //
+        // Taken *after* the attribution insert, and that order is what keeps it free of
+        // deadlock: the insert can wait on another transaction's uncommitted attribution, but
+        // a transaction holding this lock waits on nothing further, so no cycle can form.
+        transaction
+            .execute_raw(Statement::from_sql_and_values(
+                DbBackend::Postgres,
+                "SELECT 1 FROM quota_usage WHERE user_id = $1 FOR UPDATE",
+                [Value::from(user.as_str().to_owned())],
+            ))
+            .await
+            .map_err(PORT.failing("locking an account's usage row"))?;
+        tracing::trace!(%user, "holding an account's usage row for a charge");
+
+        let used = usage_of(&transaction, user).await?.used;
+        if used >= limits.hard_limit {
+            // `WHERE over_since IS NULL` is what stamps the crossing **once**: a later charge
+            // while still over must not restamp it, or the grace window would never expire
+            // for an account that keeps trying to upload.
+            let stamped = transaction
+                .execute_raw(Statement::from_sql_and_values(
+                    DbBackend::Postgres,
+                    "UPDATE quota_usage SET over_since = $2 \
+                     WHERE user_id = $1 AND over_since IS NULL",
+                    [
+                        Value::from(user.as_str().to_owned()),
+                        Value::from(to_micros(at)),
+                    ],
+                ))
+                .await
+                .map_err(PORT.failing("stamping an account's hard-limit crossing"))?;
+            if stamped.rows_affected() == 1 {
+                tracing::info!(%user, used, "an account crossed its hard quota limit");
+            }
+        }
+
+        commit(transaction).await?;
+        Ok(ChargeOutcome::Charged { used })
+    }
+}
+
 impl QuotaStore for PostgresQuota {
     fn usage<'a>(&'a self, user: &'a UserId) -> StoreFuture<'a, StoredUsage> {
         Box::pin(async move { usage_of(&self.connection, user).await })
@@ -165,90 +266,149 @@ impl QuotaStore for PostgresQuota {
         at: Timestamp,
         limits: QuotaLimits,
     ) -> StoreFuture<'a, ChargeOutcome> {
-        Box::pin(async move {
-            let size = size_to_column(size)?;
-            let transaction = begin(&self.connection).await?;
+        Box::pin(self.attribute(user, address, size, at, None, limits))
+    }
 
-            // The primary key decides, and the row count is the answer. Two concurrent sessions
-            // for one address cannot both read "unattributed" and both debit, because neither
-            // reads: they both insert, and one of them affects no row.
-            let debited = transaction
+    fn reserve<'a>(
+        &'a self,
+        user: &'a UserId,
+        address: &'a ContentAddress,
+        size: u64,
+        at: Timestamp,
+        until: Timestamp,
+        limits: QuotaLimits,
+    ) -> StoreFuture<'a, ChargeOutcome> {
+        Box::pin(self.attribute(user, address, size, at, Some(until), limits))
+    }
+
+    fn settle<'a>(&'a self, address: &'a ContentAddress) -> StoreFuture<'a, bool> {
+        Box::pin(async move {
+            let address = Value::from(address.as_str().to_owned());
+            // Two statements, deliberately not one. The update waits on a sweep's delete of the
+            // same reservation and, once that commits, finds no row — but a read in the same
+            // statement would still see the row in the snapshot taken before the wait, and
+            // answer "attributed" for a charge that is gone. The read below is a new statement,
+            // so it sees every delete the update waited on.
+            let settled = self
+                .connection
                 .execute_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
-                    "INSERT INTO quota_attributions (address, user_id, size, charged_at) \
-                     VALUES ($1, $2, $3, $4) ON CONFLICT (address) DO NOTHING",
+                    "UPDATE quota_attributions SET reserved_until = NULL \
+                     WHERE address = $1 AND reserved_until IS NOT NULL",
+                    [address.clone()],
+                ))
+                .await
+                .map_err(PORT.failing("settling a reservation"))?;
+            if settled.rows_affected() == 1 {
+                return Ok(true);
+            }
+            // Nothing reserved: already settled, which no sweep releases, or not attributed.
+            let held = self
+                .connection
+                .query_one_raw(Statement::from_sql_and_values(
+                    DbBackend::Postgres,
+                    "SELECT 1 AS held FROM quota_attributions WHERE address = $1",
+                    [address],
+                ))
+                .await
+                .map_err(PORT.failing("reading a settled attribution"))?;
+            Ok(held.is_some())
+        })
+    }
+
+    fn expired_reservations(
+        &self,
+        now: Timestamp,
+        limit: usize,
+    ) -> StoreFuture<'_, Vec<ExpiredReservation>> {
+        Box::pin(async move {
+            // A limit past what a BIGINT holds is no limit at all.
+            let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+            let rows = self
+                .connection
+                .query_all_raw(Statement::from_sql_and_values(
+                    DbBackend::Postgres,
+                    "SELECT user_id, address, size, reserved_until FROM quota_attributions \
+                     WHERE reserved_until IS NOT NULL AND reserved_until <= $1 \
+                     ORDER BY reserved_until, address LIMIT $2",
+                    [Value::from(to_micros(now)), Value::from(limit)],
+                ))
+                .await
+                .map_err(PORT.failing("listing expired reservations"))?;
+            let failed = PORT.failing("reading an expired reservation");
+            rows.into_iter()
+                .map(|row| {
+                    let user: String = row.try_get("", "user_id").map_err(&failed)?;
+                    let address: String = row.try_get("", "address").map_err(&failed)?;
+                    let size: i64 = row.try_get("", "size").map_err(&failed)?;
+                    let until: i64 = row.try_get("", "reserved_until").map_err(&failed)?;
+                    Ok(ExpiredReservation {
+                        user: UserId::new(user),
+                        address: ContentAddress::parse(&address).map_err(|error| {
+                            PORT.undecodable(format!("{address} is not a content address: {error}"))
+                        })?,
+                        size: size_from(size)?,
+                        reserved_until: instant_from(until)?,
+                    })
+                })
+                .collect()
+        })
+    }
+
+    fn extend_reservation<'a>(
+        &'a self,
+        address: &'a ContentAddress,
+        until: Timestamp,
+    ) -> StoreFuture<'a, bool> {
+        Box::pin(async move {
+            let extended = self
+                .connection
+                .execute_raw(Statement::from_sql_and_values(
+                    DbBackend::Postgres,
+                    "UPDATE quota_attributions SET reserved_until = GREATEST(reserved_until, $2) \
+                     WHERE address = $1 AND reserved_until IS NOT NULL",
                     [
                         Value::from(address.as_str().to_owned()),
-                        Value::from(user.as_str().to_owned()),
-                        Value::from(size),
-                        Value::from(to_micros(at)),
+                        Value::from(to_micros(until)),
                     ],
                 ))
                 .await
-                .map_err(PORT.failing("charging an address"))?;
-            if debited.rows_affected() == 0 {
-                // Already attributed — to this account or to another, and the port answers one
-                // value for both so a quota endpoint cannot become a cross-tenant oracle.
-                return Ok(ChargeOutcome::AlreadyAttributed);
-            }
+                .map_err(PORT.failing("extending a reservation"))?;
+            Ok(extended.rows_affected() == 1)
+        })
+    }
 
-            // The account's row in `quota_usage` exists from its first charge onwards, and holds
-            // nothing but the clock.
-            transaction
+    fn release_expired<'a>(
+        &'a self,
+        user: &'a UserId,
+        address: &'a ContentAddress,
+        now: Timestamp,
+    ) -> StoreFuture<'a, bool> {
+        Box::pin(async move {
+            let transaction = begin(&self.connection).await?;
+            // The condition is the whole guard: a row a finalizer settled, or a sweep extended,
+            // no longer matches, and a row already released matches nothing. So the release is
+            // idempotent and never frees a charge a committed blob holds.
+            let released = transaction
                 .execute_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
-                    "INSERT INTO quota_usage (user_id, over_since) VALUES ($1, NULL) \
-                     ON CONFLICT (user_id) DO NOTHING",
-                    [Value::from(user.as_str().to_owned())],
+                    "DELETE FROM quota_attributions \
+                     WHERE address = $1 AND user_id = $2 \
+                       AND reserved_until IS NOT NULL AND reserved_until <= $3",
+                    [
+                        Value::from(address.as_str().to_owned()),
+                        Value::from(user.as_str().to_owned()),
+                        Value::from(to_micros(now)),
+                    ],
                 ))
                 .await
-                .map_err(PORT.failing("opening an account's usage row"))?;
-
-            // Serialise this account's charges on its usage row (#513). Without the lock, two
-            // charges for different addresses each total the account in a snapshot that misses
-            // the other's uncommitted debit: both report a total under the limit, the upload
-            // path admits both, and neither stamps the crossing their sum made. Holding the row
-            // until commit means the total below is read only after every earlier charge for
-            // this account has committed — a READ COMMITTED statement takes its snapshot when it
-            // starts, which is after this lock is granted.
-            //
-            // Taken *after* the attribution insert, and that order is what keeps it free of
-            // deadlock: the insert can wait on another transaction's uncommitted attribution, but
-            // a transaction holding this lock waits on nothing further, so no cycle can form.
-            transaction
-                .execute_raw(Statement::from_sql_and_values(
-                    DbBackend::Postgres,
-                    "SELECT 1 FROM quota_usage WHERE user_id = $1 FOR UPDATE",
-                    [Value::from(user.as_str().to_owned())],
-                ))
-                .await
-                .map_err(PORT.failing("locking an account's usage row"))?;
-            tracing::trace!(%user, "holding an account's usage row for a charge");
-
-            let used = usage_of(&transaction, user).await?.used;
-            if used >= limits.hard_limit {
-                // `WHERE over_since IS NULL` is what stamps the crossing **once**: a later charge
-                // while still over must not restamp it, or the grace window would never expire
-                // for an account that keeps trying to upload.
-                let stamped = transaction
-                    .execute_raw(Statement::from_sql_and_values(
-                        DbBackend::Postgres,
-                        "UPDATE quota_usage SET over_since = $2 \
-                         WHERE user_id = $1 AND over_since IS NULL",
-                        [
-                            Value::from(user.as_str().to_owned()),
-                            Value::from(to_micros(at)),
-                        ],
-                    ))
-                    .await
-                    .map_err(PORT.failing("stamping an account's hard-limit crossing"))?;
-                if stamped.rows_affected() == 1 {
-                    tracing::info!(%user, used, "an account crossed its hard quota limit");
-                }
+                .map_err(PORT.failing("releasing an expired reservation"))?;
+            if released.rows_affected() == 0 {
+                return Ok(false);
             }
-
+            stop_the_clock(&transaction, user).await?;
             commit(transaction).await?;
-            Ok(ChargeOutcome::Charged { used })
+            Ok(true)
         })
     }
 

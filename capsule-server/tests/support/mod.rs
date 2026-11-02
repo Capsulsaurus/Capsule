@@ -99,7 +99,8 @@ use capsule_server::moderation::{
     Standing,
 };
 use capsule_server::quota::{
-    ChargeOutcome, InMemoryQuota, QuotaContext, QuotaLimits, QuotaStore, StoredUsage,
+    ChargeOutcome, ExpiredReservation, InMemoryQuota, QuotaContext, QuotaLimits, QuotaStore,
+    StoredUsage,
 };
 use capsule_server::serve::ServeContext;
 use capsule_server::share::{InMemoryShares, IssueOutcome, ShareContext, ShareRecord, ShareStore};
@@ -3426,6 +3427,8 @@ pub(crate) struct SwitchableQuota {
     unavailable: AtomicBool,
     /// Fail [`QuotaStore::charge`] alone, so a caller that reads usage first gets past the read.
     charges_unavailable: AtomicBool,
+    /// Fail [`QuotaStore::settle`] alone: a ledger that stops answering at a completion.
+    settles_unavailable: AtomicBool,
     /// Release this account's attribution of the charged address once the next charge has
     /// answered: another session ending between a create's charge and its open.
     release_after_next_charge: std::sync::Mutex<Option<UserId>>,
@@ -3448,6 +3451,12 @@ impl SwitchableQuota {
             .store(unavailable, Ordering::SeqCst);
     }
 
+    /// Make every subsequent settle fail while the rest keeps answering, or stop.
+    pub(crate) fn set_settles_unavailable(&self, unavailable: bool) {
+        self.settles_unavailable
+            .store(unavailable, Ordering::SeqCst);
+    }
+
     /// Release `holder`'s attribution of whatever the next charge names, right after it
     /// answers — the window between a create's charge and its session becoming visible.
     pub(crate) fn release_after_next_charge(&self, holder: UserId) {
@@ -3467,6 +3476,40 @@ impl SwitchableQuota {
     fn is_down(&self) -> bool {
         self.unavailable.load(Ordering::SeqCst)
     }
+
+    /// A charge or a reservation, with the switches both obey.
+    fn attribute<'a>(
+        &'a self,
+        user: &'a UserId,
+        address: &'a ContentAddress,
+        size: u64,
+        at: Timestamp,
+        until: Option<Timestamp>,
+        limits: QuotaLimits,
+    ) -> StoreFuture<'a, ChargeOutcome> {
+        if self.is_down() || self.charges_unavailable.load(Ordering::SeqCst) {
+            return Box::pin(async { Self::refuse() });
+        }
+        let holder = self
+            .release_after_next_charge
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        Box::pin(async move {
+            let outcome = match until {
+                Some(until) => {
+                    self.inner
+                        .reserve(user, address, size, at, until, limits)
+                        .await?
+                }
+                None => self.inner.charge(user, address, size, at, limits).await?,
+            };
+            if let Some(holder) = holder {
+                self.inner.release(&holder, address).await?;
+            }
+            Ok(outcome)
+        })
+    }
 }
 
 impl QuotaStore for SwitchableQuota {
@@ -3485,21 +3528,60 @@ impl QuotaStore for SwitchableQuota {
         at: Timestamp,
         limits: QuotaLimits,
     ) -> StoreFuture<'a, ChargeOutcome> {
-        if self.is_down() || self.charges_unavailable.load(Ordering::SeqCst) {
+        self.attribute(user, address, size, at, None, limits)
+    }
+
+    fn reserve<'a>(
+        &'a self,
+        user: &'a UserId,
+        address: &'a ContentAddress,
+        size: u64,
+        at: Timestamp,
+        until: Timestamp,
+        limits: QuotaLimits,
+    ) -> StoreFuture<'a, ChargeOutcome> {
+        self.attribute(user, address, size, at, Some(until), limits)
+    }
+
+    fn settle<'a>(&'a self, address: &'a ContentAddress) -> StoreFuture<'a, bool> {
+        if self.is_down() || self.settles_unavailable.load(Ordering::SeqCst) {
             return Box::pin(async { Self::refuse() });
         }
-        let holder = self
-            .release_after_next_charge
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take();
-        Box::pin(async move {
-            let outcome = self.inner.charge(user, address, size, at, limits).await?;
-            if let Some(holder) = holder {
-                self.inner.release(&holder, address).await?;
-            }
-            Ok(outcome)
-        })
+        self.inner.settle(address)
+    }
+
+    fn expired_reservations(
+        &self,
+        now: Timestamp,
+        limit: usize,
+    ) -> StoreFuture<'_, Vec<ExpiredReservation>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.expired_reservations(now, limit)
+    }
+
+    fn extend_reservation<'a>(
+        &'a self,
+        address: &'a ContentAddress,
+        until: Timestamp,
+    ) -> StoreFuture<'a, bool> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.extend_reservation(address, until)
+    }
+
+    fn release_expired<'a>(
+        &'a self,
+        user: &'a UserId,
+        address: &'a ContentAddress,
+        now: Timestamp,
+    ) -> StoreFuture<'a, bool> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.release_expired(user, address, now)
     }
 
     fn release<'a>(
