@@ -267,7 +267,7 @@ fn udp_unusable_falls_back_to_tcp_at_the_next_request_until_expiry() {
             TransportChoice::Tcp(TcpReason::UdpUnusable),
             "{failure:?}"
         );
-        clock.advance(UDP_UNUSABLE_TTL - Duration::from_millis(1));
+        clock.advance(UDP_UNUSABLE_TTL.saturating_sub(Duration::from_millis(1)));
         assert_eq!(
             policy.choose(ORIGIN, NET),
             TransportChoice::Tcp(TcpReason::UdpUnusable)
