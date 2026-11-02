@@ -689,3 +689,24 @@ async fn a_pull_stops_at_its_page_budget() {
         Some(u64::from(rules.max_pages))
     );
 }
+
+#[tokio::test]
+async fn a_successor_longer_than_a_subscription_keeps_is_never_kept() {
+    let harness = Harness::new().await;
+    let before = harness.tokens().await;
+    harness.clock.advance(SignedDuration::from_hours(19));
+    *harness.home.refresh.lock().expect("unpoisoned") = Some(Canned::json(
+        200,
+        &serde_json::json!({
+            "token": "t".repeat(MAX_CAPABILITY_BYTES + 1),
+            "jti": "j",
+            "expires_at": "2026-06-02T00:00:00Z",
+            "not_after": "2026-06-02T00:00:00Z",
+            "replayed": false,
+        }),
+    ));
+
+    let report = harness.pull(PeerTier::Established).await;
+    assert_eq!(failure(&report), "validation");
+    assert_eq!(harness.tokens().await, before);
+}

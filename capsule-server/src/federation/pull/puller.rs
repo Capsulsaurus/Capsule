@@ -44,7 +44,9 @@ use super::validate::{
     Context, Refused, Rules, check_metadata_blob, metadata_read_limit, screen_page,
 };
 use super::{JobKey, PullFailure, PullReport, Puller};
-use crate::federation::subscriptions::{CapabilityToken, Subscription, SubscriptionStore};
+use crate::federation::subscriptions::{
+    CapabilityToken, MAX_CAPABILITY_BYTES, Subscription, SubscriptionStore,
+};
 use crate::federation::{PeerId, PeerStore, PeerTier, verify_received};
 use crate::store::Clock;
 use crate::upload::UploadPolicy;
@@ -282,6 +284,11 @@ impl RemotePuller {
             );
             return Ok(live);
         };
+        if refreshed.token.is_empty() || refreshed.token.len() > MAX_CAPABILITY_BYTES {
+            return Err(invalid_input(
+                "the refreshed capability is outside the bound a subscription keeps",
+            ));
+        }
         let verifying = Instant::now();
         let verified = verify_received(&refreshed.token, &job.peer, &key, &parts.server_id, now);
         *validation += verifying.elapsed();
