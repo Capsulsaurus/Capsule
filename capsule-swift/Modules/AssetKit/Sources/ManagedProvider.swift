@@ -414,35 +414,3 @@ public actor ManagedProvider: AssetProvider, TrashProvider, AssetOwning {
         }
     }
 }
-
-/// Delivers a purged managed asset's `delete` to its album's ops surface.
-///
-/// On the FFI lane a conformer reads the asset's head off the sync feed and
-/// calls `FfiSession.deliverPurge`, which sends what the server lacks of the
-/// chain the workspace kept: an early purge's re-issued `delete` together with
-/// any `delete` it chains onto. Everything is read from the workspace, so a
-/// delivery that failed is retried by calling it again, also after a relaunch.
-public protocol PurgeDelivering: Sendable {
-    /// Deliver the purged asset `assetID`'s `delete`. Throws only when the
-    /// delivery could not be attempted (a refused session, a bad argument).
-    func deliverPurge(assetID: String) async throws -> PurgeDelivery
-
-    /// Every asset the workspace has purged (`FfiWorkspace.purgedAssetIds`):
-    /// what ``ManagedProvider/redeliverPurges()`` walks.
-    func purgedAssetIDs() async throws -> [String]
-}
-
-/// What became of one ``PurgeDelivering/deliverPurge(assetID:)``.
-public enum PurgeDelivery: Sendable, Equatable {
-    /// The server applied the purge's `delete`, or had already.
-    case delivered
-    /// Nothing was sent: the server has not indexed the asset's create, and it
-    /// never sees a `delete` for an asset it has not indexed.
-    case held
-    /// The server refused it or could not be reached. A `permanent` failure is
-    /// one the server judged final, so ``ManagedProvider/redeliverPurges()``
-    /// does not send it again for the rest of the provider's life. The refusal
-    /// is not persisted: the first walk after a relaunch sends it once more,
-    /// and the server refuses it again without applying anything.
-    case failed(permanent: Bool)
-}
