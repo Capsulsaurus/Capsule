@@ -26,7 +26,9 @@
 //! Only a build with the off-by-default `http3` cargo feature races: it compiles the transport
 //! adapter that consumes this policy (`transport`, over quinn, h3 and h3-quinn), and
 //! [`H3Policy::for_build`] is capable there and incapable everywhere else. The SDK's `reqwest`
-//! clients stay pinned to HTTP/1.1 ([`super::http_builder`]) in every build.
+//! clients stay pinned to HTTP/1.1 ([`super::http_builder`]) in every build; under `http3` their
+//! requests are routed through the transport (`route`), whose TCP leg is that same client
+//! (`tcp_leg`).
 
 use std::collections::HashMap;
 use std::sync::{Mutex, PoisonError};
@@ -37,6 +39,10 @@ use tracing::instrument;
 use super::MonotonicClock;
 use super::path::PathGeneration;
 
+#[cfg(feature = "http3")]
+pub mod route;
+#[cfg(feature = "http3")]
+pub mod tcp_leg;
 #[cfg(feature = "http3")]
 pub mod transport;
 

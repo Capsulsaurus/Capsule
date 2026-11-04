@@ -688,6 +688,30 @@ async fn a_dialed_quic_connection_carries_requests_both_ways() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_quic_exchange_reports_to_the_progress_its_request_carries() {
+    let server = server().await;
+    let config = config(server.roots.clone(), STALL);
+    let conn = H3Dialer::new(&config)
+        .expect("dialer")
+        .dial(server.quic_addr, SERVER_NAME)
+        .await
+        .expect("dial");
+    let progress = ExchangeProgress::waiting();
+    let mut request = put(&server, 0, Bytes::from(vec![7; 2 * PACED_PIECE]));
+    request.extensions_mut().insert(progress.clone());
+
+    let response = conn.send(request, config.bounds).await.expect("put");
+
+    assert_eq!(response.status(), http::StatusCode::OK);
+    // The caller's own bounds read the same progress: the response came back on it.
+    assert!(
+        matches!(progress.phase(), crate::net::Phase::Receiving { .. }),
+        "{:?}",
+        progress.phase()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_certificate_the_roots_do_not_hold_fails_the_dial() {
     let server = server().await;
     let stranger = config(Arc::new(H3Config::default().roots.as_ref().clone()), STALL);

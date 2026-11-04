@@ -19,6 +19,8 @@
 //! - **Discovery.** Every response's `Alt-Svc` header, on either transport, feeds
 //!   [`H3Policy::observe_alt_svc`] ([`observe_response`]); an origin with no live advertisement
 //!   asks the [`HttpsResolver`] for HTTPS (SVCB) records first.
+//! - **Routing.** The SDK's requests reach [`H3Transport::send`] through `super::route`, and
+//!   its TCP leg is `super::tcp_leg::ReqwestLeg`, the SDK's own `reqwest` client.
 //! - **Windows.** The QUIC flow-control windows and the UDP socket buffers are sized by
 //!   [`size_window`] ([`Windows`]).
 //! - **No early data.** TLS 1.3 only, `enable_early_data` off, and a dial always waits for the
@@ -510,7 +512,9 @@ impl H3Connection {
         self.quic.close_reason().is_some()
     }
 
-    /// Carry `request` on its own stream under `bounds`, and read the whole response.
+    /// Carry `request` on its own stream under `bounds`, and read the whole response. Each step
+    /// is reported to the [`ExchangeProgress`] the request carries as an extension, or to one of
+    /// its own.
     ///
     /// # Errors
     ///
@@ -524,7 +528,13 @@ impl H3Connection {
         request: http::Request<Bytes>,
         bounds: RequestBounds,
     ) -> Result<http::Response<Bytes>, TransportError> {
-        let progress = ExchangeProgress::waiting();
+        // A caller that bounds the request itself hands its progress along, so its bounds see
+        // the bytes QUIC moves.
+        let progress = request
+            .extensions()
+            .get::<ExchangeProgress>()
+            .cloned()
+            .unwrap_or_else(ExchangeProgress::waiting);
         let exchange = within_bounds(
             bounds,
             &progress,
