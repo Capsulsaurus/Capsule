@@ -156,6 +156,22 @@ pub const EXPECTED_MIGRATIONS: &[ExpectedMigration] = &[
         name: "m20260902_000025_federation_subscriptions",
         checksum: "1e54bb2dd7acc24fa3b07ab3f56180a4fd30e790113c170aa86343634a341d33",
     },
+    ExpectedMigration {
+        name: "m20260902_000026_activity_events_at_index",
+        checksum: "9bae6d6933662825b0078f9c6a9b29a4f1db9214446d41c11958e2c27fd7a80a",
+    },
+    ExpectedMigration {
+        name: "m20260902_000027_upload_reservations",
+        checksum: "476e419f899a991cabe33db0f213c35208bbf2eb61d5113ce55c19670f939d1b",
+    },
+    ExpectedMigration {
+        name: "m20260902_000028_federation_pulled_albums",
+        checksum: "08d856e544a5eae810f9224f9ddbdc35e7efcfbedddf77d105a628eb70ed14bf",
+    },
+    ExpectedMigration {
+        name: "m20260902_000029_federation_rejected_hashes",
+        checksum: "ce98bf2d6e32b9bfcec8d6afba5afe50bc668c50bbd6cf675d2c1c00ed0962f4",
+    },
 ];
 
 /// The command an operator runs to apply them.

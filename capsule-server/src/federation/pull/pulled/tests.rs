@@ -1,10 +1,4 @@
 use super::*;
-use crate::federation::PeerId;
-use crate::store::AlbumId;
-
-fn job() -> JobKey {
-    JobKey::new(PeerId::new("home.test"), AlbumId::new("album"))
-}
 
 fn hash(byte: u8) -> Hash32 {
     Hash32([byte; 32])
@@ -21,67 +15,72 @@ fn at(head: Hash32, deleted: bool) -> AssetHead {
     }
 }
 
-fn page(high_water: u64) -> ValidatedPage {
-    ValidatedPage {
-        entries: Vec::new(),
-        metadata_blobs: BTreeMap::from([(hash(9), b"meta".to_vec())]),
-        state: PulledAlbum {
-            cursor: Some(format!("c{high_water}")),
-            high_water: Some(high_water),
-            ..PulledAlbum::default()
-        },
-    }
+#[tokio::test]
+async fn the_in_memory_store_conforms() {
+    conformance::run_all(&InMemoryPulledAlbums::new()).await;
+
+    let subscriptions = Arc::new(crate::federation::subscriptions::InMemorySubscriptions::new());
+    let budgeted = InMemoryPulledAlbums::new().with_budget(
+        subscriptions.clone(),
+        PeerCachingBudget::bytes(conformance::BUDGET),
+    );
+    conformance::run_all(&budgeted).await;
+    conformance::run_budget(&budgeted, subscriptions.as_ref()).await;
 }
 
-#[tokio::test]
-async fn an_album_never_pulled_reads_as_the_start() {
-    let store = InMemoryPulledAlbums::new();
+#[test]
+fn a_budget_is_its_share_of_the_hard_limit() {
+    assert_eq!(PeerCachingBudget::of_hard_limit(1_000, 25).limit(), 250);
     assert_eq!(
-        store.read(&job()).await.expect("read"),
-        PulledAlbum::default()
+        PeerCachingBudget::of_hard_limit(999, 25).limit(),
+        249,
+        "rounded down"
     );
-}
-
-#[tokio::test]
-async fn a_commit_lands_only_from_the_position_it_was_validated_at() {
-    let store = InMemoryPulledAlbums::new();
-    assert!(store.commit(&job(), None, page(3)).await.expect("commit"));
-    assert_eq!(store.read(&job()).await.expect("read").high_water, Some(3));
+    assert_eq!(PeerCachingBudget::of_hard_limit(1_000, 0).limit(), 0);
     assert_eq!(
-        store.metadata_blob(&job(), &hash(9)),
-        Some(b"meta".to_vec())
+        PeerCachingBudget::of_hard_limit(1_000, 250).limit(),
+        1_000,
+        "past the whole is the whole"
     );
-
-    // Validated from the start, but the album has moved to 3 since.
-    assert!(!store.commit(&job(), None, page(5)).await.expect("commit"));
-    assert_eq!(store.read(&job()).await.expect("read").high_water, Some(3));
-
-    assert!(
-        store
-            .commit(&job(), Some(3), page(5))
-            .await
-            .expect("commit")
+    assert_eq!(
+        PeerCachingBudget::of_hard_limit(u64::MAX, 100).limit(),
+        u64::MAX,
+        "no overflow on an unlimited deployment"
     );
-    assert_eq!(store.read(&job()).await.expect("read").high_water, Some(5));
+    assert_eq!(
+        PeerCachingBudget::of_hard_limit(u64::MAX, DEFAULT_PEER_BUDGET_PERCENT).limit(),
+        u64::MAX / 4
+    );
+    assert_eq!(PeerCachingBudget::default(), PeerCachingBudget::unlimited());
 }
 
-#[tokio::test]
-async fn a_restart_forgets_the_position_and_keeps_the_heads() {
-    let store = InMemoryPulledAlbums::new();
-    let mut first = page(4);
-    first
-        .state
-        .assets
-        .insert("asset".into(), at(hash(1), false));
-    first.state.amk_version = Some(2);
-    assert!(store.commit(&job(), None, first).await.expect("commit"));
-
-    store.restart(&job()).await.expect("restart");
-    let state = store.read(&job()).await.expect("read");
-    assert_eq!(state.cursor, None);
-    assert_eq!(state.high_water, None);
-    assert_eq!(state.amk_version, Some(2));
-    assert_eq!(state.assets["asset"].head, hash(1));
+#[test]
+fn only_growth_past_the_budget_is_refused() {
+    let budget = PeerCachingBudget::bytes(100);
+    let (user, peer) = (UserId::new("u"), PeerId::new("home.test"));
+    assert_eq!(
+        budget.refusal(&user, &peer, 100, 100),
+        None,
+        "at the budget"
+    );
+    assert_eq!(
+        budget.refusal(&user, &peer, 101, 1),
+        Some(OverBudget {
+            subscriber: user.clone(),
+            peer: peer.clone(),
+            used: 101,
+            budget: 100,
+        })
+    );
+    assert_eq!(
+        budget.refusal(&user, &peer, 1_000, 0),
+        None,
+        "a commit adding nothing is never refused, however far past the budget"
+    );
+    assert_eq!(
+        PeerCachingBudget::unlimited().refusal(&user, &peer, u64::MAX, u64::MAX),
+        None
+    );
 }
 
 #[test]

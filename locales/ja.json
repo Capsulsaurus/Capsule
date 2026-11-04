@@ -7471,6 +7471,22 @@
     "message": "この提供元は繰り返しエラーが発生したため一時的にバックオフされています。",
     "origin": "machine"
   },
+  "error.federation.hint_at_capacity": {
+    "message": "このサーバーは現在、処理中の更新通知が多すぎます。しばらくしてからもう一度お試しください。",
+    "origin": "machine"
+  },
+  "error.federation.hint_malformed": {
+    "message": "その更新通知は無効です。",
+    "origin": "machine"
+  },
+  "error.federation.hint_rate_limited": {
+    "message": "このサーバーからの更新通知が多すぎます。しばらくしてからもう一度お試しください。",
+    "origin": "machine"
+  },
+  "error.federation.hint_unsigned": {
+    "message": "更新通知を検証できませんでした。",
+    "origin": "machine"
+  },
   "error.federation.member_not_on_roster": {
     "message": "その人はこのアルバムのメンバー一覧に含まれていません。",
     "origin": "machine"
@@ -7497,6 +7513,10 @@
   },
   "error.federation.scope_insufficient": {
     "message": "このアクセス許可は要求されたコンテンツを対象としていません。",
+    "origin": "machine"
+  },
+  "error.federation.subscription_limit": {
+    "message": "他のサーバーからフォローできる共有アルバムの上限に達しました。別のアルバムを追加するには、いずれかを削除してください。",
     "origin": "machine"
   },
   "error.federation.unavailable": {

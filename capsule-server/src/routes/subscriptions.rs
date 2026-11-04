@@ -7,6 +7,7 @@
 //! 400 error.federation.capability_malformed
 //! 403 error.federation.peer_unknown | error.moderation.server_blocked
 //!     | error.federation.capability_invalid | error.federation.capability_expired
+//!     | error.federation.subscription_limit
 //! 404 error.federation.not_configured
 //! 500 error.federation.unavailable
 //!
@@ -42,6 +43,14 @@
 //! before the signature over it has verified. Both are bounded before anything else is looked at:
 //! the issuer by [`PeerId::parse`], the token by [`MAX_CAPABILITY_BYTES`].
 //!
+//! # Bounded per account
+//!
+//! An account holds at most [`MAX_SUBSCRIPTIONS_PER_ACCOUNT`] subscriptions, live or lapsed. A
+//! post that would create one more is refused `403 error.federation.subscription_limit` after
+//! the capability has verified, so the code is only ever news about the account, never about a
+//! token. Waiting does not clear it; unsubscribing does. A post for an album already subscribed
+//! is a renewal and is never refused.
+//!
 //! # Gated like the rest of federation
 //!
 //! Mounted behind [`FederationGate`](super::federation::FederationGate), the first interceptor
@@ -57,7 +66,7 @@ use serde::{Deserialize, Serialize};
 
 use super::federation::{FederationTag, WireScope};
 use crate::auth::AccessToken;
-use crate::federation::subscriptions::MAX_CAPABILITY_BYTES;
+use crate::federation::subscriptions::{MAX_CAPABILITY_BYTES, MAX_SUBSCRIPTIONS_PER_ACCOUNT};
 use crate::federation::{
     CapabilityError, CapabilityToken, FederationContext, PeerId, PutOutcome, Subscription,
     verify_received,
@@ -141,8 +150,9 @@ pub enum SubscribeRejection {
         code: &'static str,
     },
 
-    /// The issuer is unknown to this server or blocked by it, or the capability did not verify,
-    /// was issued to another server, or has expired. The code says which.
+    /// The issuer is unknown to this server or blocked by it, the capability did not verify,
+    /// was issued to another server, or has expired, or the caller already holds as many
+    /// subscriptions as an account may. The code says which.
     #[error("this capability cannot be used here")]
     #[problem(status = 403, title = "Forbidden")]
     Refused {
@@ -231,7 +241,9 @@ fn refusal_code(error: &CapabilityError) -> Option<&'static str> {
 ///
 /// The capability is verified against the issuer's pinned key before anything is recorded, and
 /// must name this server as its recipient. Posting one for an album already subscribed keeps
-/// whichever capability lives longer, so a replayed invite never undoes a renewal.
+/// whichever capability lives longer, so a replayed invite never undoes a renewal. An account
+/// holds at most 1,000 subscriptions; one more is refused `403
+/// error.federation.subscription_limit` until the caller unsubscribes from another.
 ///
 /// Answers `404 error.federation.not_configured` when this deployment does not federate —
 /// `FEDERATION_ENABLED` is off, which is the default — before the credential is read or a store
@@ -292,24 +304,38 @@ pub async fn subscribe_album(
 
     let outcome = federation
         .subscriptions()
-        .put(Subscription {
-            subscriber: subscriber.clone(),
-            peer: issuer.clone(),
-            album: grant.album,
-            scope: grant.scope,
-            jti: grant.jti,
-            token: CapabilityToken::new(request.token),
-            issued_at: grant.issued_at,
-            expires_at: grant.expires_at,
-            min_protocol_version: grant.min_protocol_version,
-            subscribed_at: now,
-            updated_at: now,
-        })
+        .put_within(
+            Subscription {
+                subscriber: subscriber.clone(),
+                peer: issuer.clone(),
+                album: grant.album,
+                scope: grant.scope,
+                jti: grant.jti,
+                token: CapabilityToken::new(request.token),
+                issued_at: grant.issued_at,
+                expires_at: grant.expires_at,
+                min_protocol_version: grant.min_protocol_version,
+                subscribed_at: now,
+                updated_at: now,
+            },
+            MAX_SUBSCRIPTIONS_PER_ACCOUNT,
+        )
         .await
         .map_err(|error| {
             tracing::error!(%error, %subscriber, %issuer, "a subscription could not be recorded");
             SubscribeRejection::unavailable()
         })?;
+    let Some(outcome) = outcome else {
+        tracing::info!(
+            %subscriber,
+            %issuer,
+            limit = MAX_SUBSCRIPTIONS_PER_ACCOUNT,
+            "a subscription was refused: the account holds as many as it may"
+        );
+        return Err(SubscribeRejection::refused(
+            error_codes::FEDERATION_SUBSCRIPTION_LIMIT,
+        ));
+    };
     let view = SubscriptionView::of(outcome.subscription(), now);
     tracing::info!(
         %subscriber,

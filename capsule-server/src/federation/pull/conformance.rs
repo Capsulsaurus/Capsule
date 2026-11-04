@@ -8,7 +8,8 @@
 //!   and is at it.
 //! - **A lost lease writes nothing.** A holder overtaken by another claimant cannot overwrite
 //!   the schedule the other records.
-//! - **A hint only ever brings a pull earlier**, and never inside the floor after the last one.
+//! - **A hint only ever brings a pull earlier**, never inside the floor after the last one, and
+//!   never for a job backing off after a failed pull.
 //! - **A circuit only ever opens wider** until it lapses.
 //!
 //! # Reusing a store
@@ -66,6 +67,7 @@ pub async fn run_all(store: &dyn PullJobs) {
     a_finish_round_trips_the_whole_schedule(store, &run).await;
     a_hint_brings_a_pull_earlier_but_not_inside_the_floor(store, &run).await;
     a_hint_never_moves_a_pull_later_or_creates_one(store, &run).await;
+    a_hint_never_shortens_a_back_off(store, &run).await;
     a_circuit_opens_widens_and_lapses(store, &run).await;
 }
 
@@ -261,13 +263,44 @@ pub async fn a_hint_never_moves_a_pull_later_or_creates_one(store: &dyn PullJobs
     let state = JobState {
         next_due: at(mins(2)),
         last_pull: Some(start()),
-        failures: 1,
+        failures: 0,
     };
     assert!(ok(store.finish(&soon, "a", state, start()).await, "finish"));
     assert_eq!(
         ok(store.hint(&soon, at(mins(3)), mins(1)).await, "hint"),
         None,
         "a pull already due sooner keeps its time"
+    );
+}
+
+/// A hint never shortens a back-off: a job whose last pull failed keeps its due however far
+/// out it is, so a failing peer cannot hint its own jobs back to the floor.
+pub async fn a_hint_never_shortens_a_back_off(store: &dyn PullJobs, run: &str) {
+    let job = job(run, "hint-backoff");
+    assert!(ok(store.claim(&job, "a", start(), mins(10)).await, "claim").is_some());
+    let state = JobState {
+        next_due: at(mins(360)),
+        last_pull: Some(start()),
+        failures: 9,
+    };
+    assert!(ok(store.finish(&job, "a", state, start()).await, "finish"));
+    assert_eq!(
+        ok(store.hint(&job, at(mins(5)), mins(1)).await, "hint"),
+        None,
+        "a failing job keeps its back-off"
+    );
+    assert_eq!(
+        ok(store.claim(&job, "b", at(mins(5)), mins(10)).await, "claim"),
+        None,
+        "the backed-off job is not claimable early"
+    );
+    assert_eq!(
+        ok(
+            store.claim(&job, "b", at(mins(360)), mins(10)).await,
+            "claim"
+        ),
+        Some(state),
+        "the backed-off job is claimable at its own due, schedule untouched"
     );
 }
 

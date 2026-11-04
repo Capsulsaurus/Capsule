@@ -477,6 +477,76 @@ fn the_lockout_threshold_is_configurable_and_may_not_be_zero() {
 }
 
 #[test]
+fn the_peer_caching_budget_defaults_to_a_quarter_and_may_not_pass_the_whole() {
+    let config = Config::load(&serveable(), &memory(), Demands::Serve).expect("it loads");
+    assert_eq!(config.peer_budget_percent, 25);
+
+    let mut environment = serveable();
+    environment.insert("FEDERATION_PEER_BUDGET_PERCENT".to_owned(), "0".to_owned());
+    let config = Config::load(&environment, &memory(), Demands::Serve).expect("it loads");
+    assert_eq!(
+        config.peer_budget_percent, 0,
+        "zero caches nothing and is allowed"
+    );
+
+    environment.insert(
+        "FEDERATION_PEER_BUDGET_PERCENT".to_owned(),
+        "100".to_owned(),
+    );
+    let config = Config::load(&environment, &memory(), Demands::Serve).expect("it loads");
+    assert_eq!(config.peer_budget_percent, 100);
+
+    for refused in ["101", "-1", "a quarter"] {
+        environment.insert(
+            "FEDERATION_PEER_BUDGET_PERCENT".to_owned(),
+            refused.to_owned(),
+        );
+        let error = Config::load(&environment, &memory(), Demands::Serve).expect_err(refused);
+        assert!(error.names("FEDERATION_PEER_BUDGET_PERCENT"), "{error}");
+    }
+}
+
+#[test]
+fn the_rejected_hash_bounds_default_to_the_design_and_refuse_zero() {
+    use std::num::NonZeroU32;
+
+    use crate::federation::rejected_hashes::RejectedHashBounds;
+
+    let config = Config::load(&serveable(), &memory(), Demands::Serve).expect("it loads");
+    assert_eq!(config.rejected_hash_bounds, RejectedHashBounds::default());
+
+    let mut environment = serveable();
+    environment.insert(
+        "FEDERATION_REJECTED_HASH_CAPACITY".to_owned(),
+        "500".to_owned(),
+    );
+    environment.insert(
+        "FEDERATION_REJECTED_HASH_TTL_DAYS".to_owned(),
+        "7".to_owned(),
+    );
+    let config = Config::load(&environment, &memory(), Demands::Serve).expect("it loads");
+    assert_eq!(
+        config.rejected_hash_bounds,
+        RejectedHashBounds::new(
+            NonZeroU32::new(500).expect("non-zero"),
+            NonZeroU32::new(7).expect("non-zero")
+        )
+    );
+
+    for key in [
+        "FEDERATION_REJECTED_HASH_CAPACITY",
+        "FEDERATION_REJECTED_HASH_TTL_DAYS",
+    ] {
+        for refused in ["0", "-1", "many"] {
+            let mut environment = serveable();
+            environment.insert(key.to_owned(), refused.to_owned());
+            let error = Config::load(&environment, &memory(), Demands::Serve).expect_err(refused);
+            assert!(error.names(key), "{error}");
+        }
+    }
+}
+
+#[test]
 fn the_lockout_window_defaults_to_fifteen_minutes_and_is_configurable() {
     // It has to decay at all: no route resets a lockout — every one of them refuses on
     // `Locked` before it verifies anything — so a permanent lockout is a lost account.

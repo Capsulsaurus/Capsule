@@ -490,7 +490,7 @@ async fn drive(
     let upload = &record.upload_id;
     match run_claimed(context, attestation, upload, record).await {
         Ok((placement, minted)) => {
-            complete(context, upload).await?;
+            complete(context, record).await?;
             tracing::info!(
                 %upload,
                 asset_id = %record.asset_id,
@@ -1067,7 +1067,11 @@ async fn apply_replace(
                 manifest_hash,
                 prior_provenance_hash: prior,
                 amk_version: u64::from(envelope.amk_version),
-                provenance: address.clone(),
+                // The manifest is this session's own blob, measured against the stage's length.
+                provenance: crate::index::OpBlob {
+                    address: address.clone(),
+                    size: record.total_size,
+                },
                 metadata: Some(metadata),
                 original: Some(original),
                 retention_until: None,
@@ -1126,7 +1130,7 @@ async fn named_blob(
     context: &UploadContext,
     hex: Option<&str>,
     field: &'static str,
-) -> Result<ContentAddress, FinalizeFailure> {
+) -> Result<crate::index::OpBlob, FinalizeFailure> {
     let Some(hex) = hex else {
         // Refused at the gate; reaching here means a session predates that check.
         return Err(FinalizeFailure::EnvelopeRejected(
@@ -1140,11 +1144,17 @@ async fn named_blob(
         .stat(&address)
         .await
         .map_err(blob_unavailable("stat a blob a replace names"))?;
-    if present.is_none() {
+    let Some(present) = present else {
         tracing::info!(%address, field, "a replace named a blob the store does not hold");
         return Err(FinalizeFailure::ReplaceIncomplete { field });
-    }
-    Ok(address)
+    };
+    // The member finalized through its own session, which measured these bytes; the store's
+    // length is that measurement, read once here because this is the only place the manifest's
+    // finalization meets the member (#1128).
+    Ok(crate::index::OpBlob {
+        address,
+        size: present.size,
+    })
 }
 
 /// What one pass over the staged bytes established.
@@ -1353,11 +1363,26 @@ async fn revalidate(
     Ok(envelope)
 }
 
-/// Step 8, the winning half.
-async fn complete(context: &UploadContext, upload: &UploadId) -> Result<(), FinalizeFailure> {
+/// Step 8, the winning half: the session's quota reservation is settled, then the session is
+/// `Completed`.
+///
+/// The settle comes after the blob commit, so a reservation sweep racing it either finds the
+/// blob or is answered by the settle re-charging the bytes ([`super::reservation::settle`]).
+/// A settle that found the reservation swept and could not charge the bytes leaves the
+/// session claimed, as a status write that fails does: the bytes are committed, so the claim
+/// is re-driven ([`recover`]) rather than failed, and `Completed` is written only once the
+/// bytes are charged to somebody. A settle the ledger cannot answer at all completes, because
+/// the reservation it left is the sweep's to settle.
+async fn complete(
+    context: &UploadContext,
+    record: &UploadSessionRecord,
+) -> Result<(), FinalizeFailure> {
+    super::reservation::settle(context, record)
+        .await
+        .map_err(unavailable("settle the quota reservation"))?;
     context
         .sessions()
-        .set_status(upload, UploadSessionStatus::Completed)
+        .set_status(&record.upload_id, UploadSessionStatus::Completed)
         .await
         .map_err(unavailable("complete the session"))?;
     Ok(())

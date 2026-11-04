@@ -22,9 +22,13 @@ public actor ManagedProvider: AssetProvider, TrashProvider, AssetOwning {
     private let authGate: any LocalAuthGate
     private let sidecarCoder: any SidecarCoding
     private let uploads: (any UploadPort)?
+    private let purgeDelivery: (any PurgeDelivering)?
     private var observers: [UUID: AsyncStream<AssetChange>.Continuation] = [:]
     /// The last queued mutation of each asset; see ``serializingMutation(of:_:)``.
     private var mutationTails: [String: Task<Void, Never>] = [:]
+    /// Purges the server refused for good since this provider started, which
+    /// ``redeliverPurges()`` skips; see ``PurgeDelivery/failed(permanent:)``.
+    private var refusedPurges: Set<String> = []
 
     /// - Parameter authGate: the SR1 fresh-local-auth adapter used to open the
     ///   Recently Deleted view. Defaults to the real `LAContext` gate; tests and
@@ -37,16 +41,21 @@ public actor ManagedProvider: AssetProvider, TrashProvider, AssetOwning {
     /// - Parameter uploads: this device's upload sessions, whose in-flight
     ///   upload of an asset ``delete(_:)`` redacts. With none, a delete redacts
     ///   nothing.
+    /// - Parameter purgeDelivery: where a purge's `delete` goes to reach the
+    ///   server. With none (signed out, or the mock lane), a purge stays local
+    ///   and its records wait on the workspace's kept chain.
     public init(
         library: ManagedLibrary,
         authGate: any LocalAuthGate = LocalAuthenticationGate(),
         sidecarCoder: any SidecarCoding = JSONSidecarCoder(),
-        uploads: (any UploadPort)? = nil
+        uploads: (any UploadPort)? = nil,
+        purgeDelivery: (any PurgeDelivering)? = nil
     ) {
         self.library = library
         self.authGate = authGate
         self.sidecarCoder = sidecarCoder
         self.uploads = uploads
+        self.purgeDelivery = purgeDelivery
     }
 
     public func authorizationStatus() -> AssetAuthorizationStatus {
@@ -273,6 +282,12 @@ public actor ManagedProvider: AssetProvider, TrashProvider, AssetOwning {
     /// purge asks for, so that refusal is not an error. An early purge hands
     /// back a signed shorter-retention `delete` for the album's ops surface; the
     /// workspace keeps it on the asset's chain until something delivers it.
+    ///
+    /// Once purged, the asset's `delete` (with that re-issue) goes to the
+    /// server through ``PurgeDelivering`` (``deliverPurge(of:)``). A delivery
+    /// that fails or is held changes nothing here: the workspace still holds the
+    /// records, and ``redeliverPurges()`` sends them later, also after a
+    /// relaunch.
     public func purge(_ id: AssetID) async throws {
         guard case let .managed(uuid) = id else { return }
         do {
@@ -286,8 +301,64 @@ public actor ManagedProvider: AssetProvider, TrashProvider, AssetOwning {
             }
         } catch TrashRefusal.notFound {
             CapsuleLog.assetKit.debug("managed purge of \(uuid, privacy: .private): already gone")
+            await emitReload()
+            return
         }
         await emitReload()
+        await deliverPurge(of: uuid)
+    }
+
+    /// Send every purge the workspace kept whose delivery failed or was held:
+    /// the retry a relaunch, a sign-in or a sync that lists new assets runs. A
+    /// purge whose head the server already holds sends nothing (the port
+    /// answers it delivered off the feed), so the walk's network cost is the
+    /// port's feed read plus the purges still undelivered. A purge the server refused for good since this provider
+    /// started is skipped: sending it again could only be refused again. With
+    /// no delivery port this does nothing.
+    public func redeliverPurges() async {
+        guard let purgeDelivery else { return }
+        let ids: [String]
+        do {
+            ids = try await purgeDelivery.purgedAssetIDs()
+        } catch {
+            CapsuleLog.assetKit.error(
+                "purge redelivery could not list the purged assets: \(String(describing: error), privacy: .public)"
+            )
+            return
+        }
+        let pending = ids.filter { !refusedPurges.contains($0) }
+        CapsuleLog.assetKit.info(
+            "redelivering \(pending.count) kept purges, skipping \(ids.count - pending.count) refused for good"
+        )
+        for uuid in pending {
+            await deliverPurge(of: uuid)
+        }
+    }
+
+    /// Deliver one purged asset's `delete` through the port, logging what
+    /// became of it. Never throws: the purge stands locally either way, and the
+    /// records stay on the workspace's kept chain for ``redeliverPurges()``.
+    private func deliverPurge(of uuid: String) async {
+        guard let purgeDelivery else { return }
+        do {
+            switch try await purgeDelivery.deliverPurge(assetID: uuid) {
+            case .delivered:
+                CapsuleLog.assetKit.info("purge of \(uuid, privacy: .private) delivered")
+            case .held:
+                CapsuleLog.assetKit.info(
+                    "purge of \(uuid, privacy: .private) held: the server has not indexed the asset"
+                )
+            case let .failed(permanent):
+                if permanent { refusedPurges.insert(uuid) }
+                CapsuleLog.assetKit.error(
+                    "purge of \(uuid, privacy: .private) not delivered, permanent=\(permanent, privacy: .public)"
+                )
+            }
+        } catch {
+            CapsuleLog.assetKit.error(
+                "purge of \(uuid, privacy: .private) not delivered: \(String(describing: error), privacy: .public)"
+            )
+        }
     }
 
     // MARK: AssetOwning

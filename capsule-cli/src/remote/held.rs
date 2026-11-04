@@ -169,15 +169,8 @@ pub(crate) fn plan(
             retention_until: None,
         };
     };
-    let after = after_head(records, server_head);
     // Level with the server: the head alone, as a replay.
-    let stretch = if after.is_empty() {
-        records
-            .get(records.len().saturating_sub(1)..)
-            .unwrap_or_default()
-    } else {
-        after
-    };
+    let stretch = capsule_sdk::albums::stretch_after(records, server_head);
     if let Some(until) = restore_too_late(stretch, judge) {
         return Delivery::Held {
             reason: HoldReason::RestoreTooLate,
@@ -187,22 +180,11 @@ pub(crate) fn plan(
     Delivery::Send(stretch)
 }
 
-/// The records of `records` (a chain, oldest first) the server lacks when it holds `head`: those
-/// after it, which is none when `head` already is the last; or the last record alone when
-/// `head` is unknown or not in the chain, which the server judges (a stale chain is refused,
-/// never applied).
-///
-/// The one rule for that stretch: [`plan`] sends it, and the delegation ledger holds it until a
-/// hand-off's custody ([`super::lifecycle_ops_after`]).
-pub(crate) fn after_head(
-    records: &[ProvenanceRecord],
-    head: Option<Hash32>,
-) -> &[ProvenanceRecord] {
-    let start = head
-        .and_then(|head| records.iter().position(|r| r.record_hash() == head))
-        .map_or_else(|| records.len().saturating_sub(1), |at| at + 1);
-    records.get(start..).unwrap_or_default()
-}
+/// The records of `records` (a chain, oldest first) the server lacks when it holds `head`, by
+/// the SDK's one rule for every client ([`capsule_sdk::albums::chain_after`]): [`plan`] sends
+/// it, and the delegation ledger holds it until a hand-off's custody
+/// ([`super::lifecycle_ops_after`]).
+pub(crate) use capsule_sdk::albums::chain_after as after_head;
 
 /// The closed window of a `delete` in `stretch` that a later `trash-restore` of the same
 /// stretch undoes, when there is one.

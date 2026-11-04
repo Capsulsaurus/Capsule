@@ -17,6 +17,7 @@ pub mod drop;
 pub mod enroll;
 pub mod escrow;
 pub mod federation;
+pub mod hints;
 pub mod moderation;
 pub mod oidc;
 pub mod ops;

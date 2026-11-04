@@ -311,6 +311,18 @@ pub mod error_codes {
     /// `error.federation.circuit_open`
     pub const FEDERATION_CIRCUIT_OPEN: &str = "error.federation.circuit_open";
 
+    /// `error.federation.hint_at_capacity`
+    pub const FEDERATION_HINT_AT_CAPACITY: &str = "error.federation.hint_at_capacity";
+
+    /// `error.federation.hint_malformed`
+    pub const FEDERATION_HINT_MALFORMED: &str = "error.federation.hint_malformed";
+
+    /// `error.federation.hint_rate_limited`
+    pub const FEDERATION_HINT_RATE_LIMITED: &str = "error.federation.hint_rate_limited";
+
+    /// `error.federation.hint_unsigned`
+    pub const FEDERATION_HINT_UNSIGNED: &str = "error.federation.hint_unsigned";
+
     /// `error.federation.member_not_on_roster`
     pub const FEDERATION_MEMBER_NOT_ON_ROSTER: &str = "error.federation.member_not_on_roster";
 
@@ -331,6 +343,9 @@ pub mod error_codes {
 
     /// `error.federation.scope_insufficient`
     pub const FEDERATION_SCOPE_INSUFFICIENT: &str = "error.federation.scope_insufficient";
+
+    /// `error.federation.subscription_limit`
+    pub const FEDERATION_SUBSCRIPTION_LIMIT: &str = "error.federation.subscription_limit";
 
     /// `error.federation.unavailable`
     pub const FEDERATION_UNAVAILABLE: &str = "error.federation.unavailable";

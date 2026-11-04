@@ -156649,6 +156649,334 @@
         }
       }
     },
+    "error.federation.hint_at_capacity": {
+      "localizations": {
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "يتعامل هذا الخادم مع عدد كبير جدًا من إشعارات التحديث حاليًا. يُرجى الانتظار ثم المحاولة مرة أخرى."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dieser Server verarbeitet gerade zu viele Aktualisierungsmeldungen. Bitte warten Sie und versuchen Sie es erneut."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This server is handling too many update notices right now. Please wait and try again."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este servidor está gestionando demasiados avisos de actualización en este momento. Espera e inténtalo de nuevo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ce serveur traite trop d'avis de mise à jour en ce moment. Veuillez patienter et réessayer."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "यह सर्वर अभी बहुत अधिक अपडेट सूचनाएँ संभाल रहा है। कृपया प्रतीक्षा करें और फिर से प्रयास करें।"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Questo server sta gestendo troppi avvisi di aggiornamento in questo momento. Attendi e riprova."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このサーバーは現在、処理中の更新通知が多すぎます。しばらくしてからもう一度お試しください。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "현재 이 서버에서 처리 중인 업데이트 알림이 너무 많습니다. 잠시 후 다시 시도해 주세요."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este servidor está processando avisos de atualização demais no momento. Aguarde e tente novamente."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сейчас этот сервер обрабатывает слишком много уведомлений об обновлении. Подождите и повторите попытку."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此服务器当前正在处理的更新通知过多。请稍候再试。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此伺服器目前正在處理的更新通知過多。請稍候再試。"
+          }
+        }
+      }
+    },
+    "error.federation.hint_malformed": {
+      "localizations": {
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "إشعار التحديث هذا غير صالح."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diese Aktualisierungsmeldung ist ungültig."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "That update notice isn't valid."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ese aviso de actualización no es válido."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cet avis de mise à jour n'est pas valide."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "वह अपडेट सूचना मान्य नहीं है।"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Questo avviso di aggiornamento non è valido."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "その更新通知は無効です。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "해당 업데이트 알림이 올바르지 않습니다."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Esse aviso de atualização não é válido."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Это уведомление об обновлении недействительно."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "该更新通知无效。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "該更新通知無效。"
+          }
+        }
+      }
+    },
+    "error.federation.hint_rate_limited": {
+      "localizations": {
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "إشعارات تحديث كثيرة جدًا من هذا الخادم. يُرجى الانتظار ثم المحاولة مرة أخرى."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zu viele Aktualisierungsmeldungen von diesem Server. Bitte warten Sie und versuchen Sie es erneut."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Too many update notices from this server. Please wait and try again."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Demasiados avisos de actualización de este servidor. Espera e inténtalo de nuevo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Trop d'avis de mise à jour provenant de ce serveur. Veuillez patienter et réessayer."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "इस सर्वर से बहुत अधिक अपडेट सूचनाएँ। कृपया प्रतीक्षा करें और फिर से प्रयास करें।"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Troppi avvisi di aggiornamento da questo server. Attendi e riprova."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このサーバーからの更新通知が多すぎます。しばらくしてからもう一度お試しください。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 서버에서 보낸 업데이트 알림이 너무 많습니다. 잠시 후 다시 시도해 주세요."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Muitos avisos de atualização deste servidor. Aguarde e tente novamente."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Слишком много уведомлений об обновлении от этого сервера. Подождите и повторите попытку."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "来自此服务器的更新通知过多。请稍候再试。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "來自此伺服器的更新通知過多。請稍候再試。"
+          }
+        }
+      }
+    },
+    "error.federation.hint_unsigned": {
+      "localizations": {
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "تعذّر التحقق من إشعار التحديث."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Aktualisierungsmeldung konnte nicht verifiziert werden."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The update notice could not be verified."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No se pudo verificar el aviso de actualización."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L'avis de mise à jour n'a pas pu être vérifié."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "अपडेट सूचना सत्यापित नहीं की जा सकी।"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Non è stato possibile verificare l'avviso di aggiornamento."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "更新通知を検証できませんでした。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "업데이트 알림을 확인할 수 없습니다."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não foi possível verificar o aviso de atualização."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось проверить уведомление об обновлении."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法验证该更新通知。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "無法驗證該更新通知。"
+          }
+        }
+      }
+    },
     "error.federation.member_not_on_roster": {
       "localizations": {
         "ar": {
@@ -157219,6 +157547,88 @@
           "stringUnit": {
             "state": "translated",
             "value": "此存取授權不涵蓋所請求的內容。"
+          }
+        }
+      }
+    },
+    "error.federation.subscription_limit": {
+      "localizations": {
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "لقد بلغت الحد الأقصى للألبومات المشتركة التي يمكنك متابعتها من خوادم أخرى. أزل ألبومًا لإضافة آخر."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Du hast die maximale Anzahl geteilter Alben von anderen Servern erreicht, denen du folgen kannst. Entferne eines, um ein weiteres hinzuzufügen."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You've reached the limit of shared albums you can follow from other servers. Remove one to add another."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Has alcanzado el límite de álbumes compartidos de otros servidores que puedes seguir. Quita uno para añadir otro."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vous avez atteint la limite d'albums partagés d'autres serveurs que vous pouvez suivre. Retirez-en un pour en ajouter un autre."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "आप अन्य सर्वरों के जितने साझा एल्बम फ़ॉलो कर सकते हैं, उस सीमा तक पहुँच गए हैं। दूसरा जोड़ने के लिए एक हटाएँ।"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hai raggiunto il limite di album condivisi da altri server che puoi seguire. Rimuovine uno per aggiungerne un altro."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "他のサーバーからフォローできる共有アルバムの上限に達しました。別のアルバムを追加するには、いずれかを削除してください。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "다른 서버에서 팔로우할 수 있는 공유 앨범 수의 한도에 도달했습니다. 다른 앨범을 추가하려면 하나를 삭제하세요."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Você atingiu o limite de álbuns compartilhados de outros servidores que pode seguir. Remova um para adicionar outro."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Вы достигли предела общих альбомов с других серверов, на которые можно подписаться. Удалите один, чтобы добавить другой."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "你关注的其他服务器共享相册已达上限。请移除一个后再添加。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "你追蹤的其他伺服器共享相簿已達上限。請移除一個後再新增。"
           }
         }
       }

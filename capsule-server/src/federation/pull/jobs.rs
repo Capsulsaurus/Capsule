@@ -81,7 +81,9 @@ pub trait PullJobs: fmt::Debug + Send + Sync {
     /// `floor` past its last pull, when that is earlier than its next due.
     ///
     /// Answers the new due when it moved, `None` when it did not — a job with no schedule is
-    /// already due, and a job due sooner keeps its time. Never moves a pull later.
+    /// already due, a job due sooner keeps its time, and a job backing off after a failed pull
+    /// (`failures > 0`) keeps its back-off: the peer whose pull failed cannot shorten it by
+    /// hinting. Never moves a pull later.
     fn hint<'a>(
         &'a self,
         job: &'a JobKey,
@@ -196,6 +198,9 @@ impl PullJobs for InMemoryPullJobs {
             let Some(state) = jobs.get_mut(job).and_then(|row| row.state.as_mut()) else {
                 return Ok(None);
             };
+            if state.failures > 0 {
+                return Ok(None);
+            }
             let candidate = state
                 .last_pull
                 .map_or(now, |last| deadline(last, floor).max(now));

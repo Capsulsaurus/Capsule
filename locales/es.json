@@ -7471,6 +7471,22 @@
     "message": "Esta fuente está temporalmente en espera tras errores repetidos.",
     "origin": "machine"
   },
+  "error.federation.hint_at_capacity": {
+    "message": "Este servidor está gestionando demasiados avisos de actualización en este momento. Espera e inténtalo de nuevo.",
+    "origin": "machine"
+  },
+  "error.federation.hint_malformed": {
+    "message": "Ese aviso de actualización no es válido.",
+    "origin": "machine"
+  },
+  "error.federation.hint_rate_limited": {
+    "message": "Demasiados avisos de actualización de este servidor. Espera e inténtalo de nuevo.",
+    "origin": "machine"
+  },
+  "error.federation.hint_unsigned": {
+    "message": "No se pudo verificar el aviso de actualización.",
+    "origin": "machine"
+  },
   "error.federation.member_not_on_roster": {
     "message": "Esa persona no está en la lista de miembros de este álbum.",
     "origin": "machine"
@@ -7497,6 +7513,10 @@
   },
   "error.federation.scope_insufficient": {
     "message": "Esta concesión de acceso no cubre el contenido solicitado.",
+    "origin": "machine"
+  },
+  "error.federation.subscription_limit": {
+    "message": "Has alcanzado el límite de álbumes compartidos de otros servidores que puedes seguir. Quita uno para añadir otro.",
     "origin": "machine"
   },
   "error.federation.unavailable": {

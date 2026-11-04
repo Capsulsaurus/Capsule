@@ -1858,6 +1858,10 @@
     <string name="error_federation_capability_malformed">その共有リクエストは無効です。</string>
     <string name="error_federation_capability_revoked">この共有アルバムへのアクセスは取り消されました。</string>
     <string name="error_federation_circuit_open">この提供元は繰り返しエラーが発生したため一時的にバックオフされています。</string>
+    <string name="error_federation_hint_at_capacity">このサーバーは現在、処理中の更新通知が多すぎます。しばらくしてからもう一度お試しください。</string>
+    <string name="error_federation_hint_malformed">その更新通知は無効です。</string>
+    <string name="error_federation_hint_rate_limited">このサーバーからの更新通知が多すぎます。しばらくしてからもう一度お試しください。</string>
+    <string name="error_federation_hint_unsigned">更新通知を検証できませんでした。</string>
     <string name="error_federation_member_not_on_roster">その人はこのアルバムのメンバー一覧に含まれていません。</string>
     <string name="error_federation_mint_at_capacity">このサーバーは現在、多数のアクセス許可を処理しています。しばらくしてからもう一度お試しください。</string>
     <string name="error_federation_not_configured">このサーバーは他のサーバーとアルバムを共有していません。</string>
@@ -1865,6 +1869,7 @@
     <string name="error_federation_rate_budget_exceeded">この提供元はリクエスト上限に達しました。しばらくしてからもう一度お試しください。</string>
     <string name="error_federation_revocations_unavailable">Capsule は取り消しリストを読み取れませんでした。もう一度お試しください。</string>
     <string name="error_federation_scope_insufficient">このアクセス許可は要求されたコンテンツを対象としていません。</string>
+    <string name="error_federation_subscription_limit">他のサーバーからフォローできる共有アルバムの上限に達しました。別のアルバムを追加するには、いずれかを削除してください。</string>
     <string name="error_federation_unavailable">Capsule は連合の記録にアクセスできませんでした。もう一度お試しください。</string>
     <string name="error_moderation_account_suspended">アカウントが停止されています。復元されるまで、アップロードや共有はできません。</string>
     <string name="error_moderation_report_at_capacity">このサーバーは現在、多数の報告を処理しています。しばらくしてからもう一度お試しください。</string>

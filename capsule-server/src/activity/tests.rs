@@ -27,6 +27,14 @@ impl ActivityStore for Refusing {
     ) -> StoreFuture<'a, Vec<ActivityEvent>> {
         Box::pin(async { Ok(Vec::new()) })
     }
+
+    fn count_expired(&self, _: Timestamp) -> StoreFuture<'_, u64> {
+        Box::pin(async { Ok(0) })
+    }
+
+    fn delete_expired(&self, _: Timestamp, _: usize) -> StoreFuture<'_, u64> {
+        Box::pin(async { Ok(0) })
+    }
 }
 
 /// A context over a fresh in-memory log and a clock the test moves.
@@ -159,6 +167,14 @@ impl ActivityStore for Stalled {
         _: usize,
     ) -> StoreFuture<'a, Vec<ActivityEvent>> {
         Box::pin(async { Ok(Vec::new()) })
+    }
+
+    fn count_expired(&self, _: Timestamp) -> StoreFuture<'_, u64> {
+        Box::pin(async { Ok(0) })
+    }
+
+    fn delete_expired(&self, _: Timestamp, _: usize) -> StoreFuture<'_, u64> {
+        Box::pin(async { Ok(0) })
     }
 }
 

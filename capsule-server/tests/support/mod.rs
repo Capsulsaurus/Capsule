@@ -99,7 +99,8 @@ use capsule_server::moderation::{
     Standing,
 };
 use capsule_server::quota::{
-    ChargeOutcome, InMemoryQuota, QuotaContext, QuotaLimits, QuotaStore, StoredUsage,
+    ChargeOutcome, ExpiredReservation, InMemoryQuota, QuotaContext, QuotaLimits, QuotaStore,
+    StoredUsage,
 };
 use capsule_server::serve::ServeContext;
 use capsule_server::share::{InMemoryShares, IssueOutcome, ShareContext, ShareRecord, ShareStore};
@@ -1720,6 +1721,20 @@ impl ActivityStore for SwitchableActivity {
         }
         self.inner.recent(user, since, limit)
     }
+
+    fn count_expired(&self, before: Timestamp) -> StoreFuture<'_, u64> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.count_expired(before)
+    }
+
+    fn delete_expired(&self, before: Timestamp, limit: usize) -> StoreFuture<'_, u64> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.delete_expired(before, limit)
+    }
 }
 
 /// A moderation store that can be made to fail on demand.
@@ -1825,6 +1840,24 @@ impl SubscriptionStore for SwitchableSubscriptions {
             return Box::pin(async { Self::refuse() });
         }
         self.inner.put(subscription)
+    }
+
+    fn put_within(
+        &self,
+        subscription: Subscription,
+        limit: u32,
+    ) -> StoreFuture<'_, Option<PutOutcome>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.put_within(subscription, limit)
+    }
+
+    fn renew(&self, subscription: Subscription) -> StoreFuture<'_, Option<PutOutcome>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.renew(subscription)
     }
 
     fn of_subscriber<'a>(&'a self, subscriber: &'a UserId) -> StoreFuture<'a, Vec<Subscription>> {
@@ -3426,6 +3459,8 @@ pub(crate) struct SwitchableQuota {
     unavailable: AtomicBool,
     /// Fail [`QuotaStore::charge`] alone, so a caller that reads usage first gets past the read.
     charges_unavailable: AtomicBool,
+    /// Fail [`QuotaStore::settle`] alone: a ledger that stops answering at a completion.
+    settles_unavailable: AtomicBool,
     /// Release this account's attribution of the charged address once the next charge has
     /// answered: another session ending between a create's charge and its open.
     release_after_next_charge: std::sync::Mutex<Option<UserId>>,
@@ -3448,6 +3483,12 @@ impl SwitchableQuota {
             .store(unavailable, Ordering::SeqCst);
     }
 
+    /// Make every subsequent settle fail while the rest keeps answering, or stop.
+    pub(crate) fn set_settles_unavailable(&self, unavailable: bool) {
+        self.settles_unavailable
+            .store(unavailable, Ordering::SeqCst);
+    }
+
     /// Release `holder`'s attribution of whatever the next charge names, right after it
     /// answers — the window between a create's charge and its session becoming visible.
     pub(crate) fn release_after_next_charge(&self, holder: UserId) {
@@ -3467,6 +3508,40 @@ impl SwitchableQuota {
     fn is_down(&self) -> bool {
         self.unavailable.load(Ordering::SeqCst)
     }
+
+    /// A charge or a reservation, with the switches both obey.
+    fn attribute<'a>(
+        &'a self,
+        user: &'a UserId,
+        address: &'a ContentAddress,
+        size: u64,
+        at: Timestamp,
+        until: Option<Timestamp>,
+        limits: QuotaLimits,
+    ) -> StoreFuture<'a, ChargeOutcome> {
+        if self.is_down() || self.charges_unavailable.load(Ordering::SeqCst) {
+            return Box::pin(async { Self::refuse() });
+        }
+        let holder = self
+            .release_after_next_charge
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        Box::pin(async move {
+            let outcome = match until {
+                Some(until) => {
+                    self.inner
+                        .reserve(user, address, size, at, until, limits)
+                        .await?
+                }
+                None => self.inner.charge(user, address, size, at, limits).await?,
+            };
+            if let Some(holder) = holder {
+                self.inner.release(&holder, address).await?;
+            }
+            Ok(outcome)
+        })
+    }
 }
 
 impl QuotaStore for SwitchableQuota {
@@ -3485,21 +3560,60 @@ impl QuotaStore for SwitchableQuota {
         at: Timestamp,
         limits: QuotaLimits,
     ) -> StoreFuture<'a, ChargeOutcome> {
-        if self.is_down() || self.charges_unavailable.load(Ordering::SeqCst) {
+        self.attribute(user, address, size, at, None, limits)
+    }
+
+    fn reserve<'a>(
+        &'a self,
+        user: &'a UserId,
+        address: &'a ContentAddress,
+        size: u64,
+        at: Timestamp,
+        until: Timestamp,
+        limits: QuotaLimits,
+    ) -> StoreFuture<'a, ChargeOutcome> {
+        self.attribute(user, address, size, at, Some(until), limits)
+    }
+
+    fn settle<'a>(&'a self, address: &'a ContentAddress) -> StoreFuture<'a, bool> {
+        if self.is_down() || self.settles_unavailable.load(Ordering::SeqCst) {
             return Box::pin(async { Self::refuse() });
         }
-        let holder = self
-            .release_after_next_charge
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take();
-        Box::pin(async move {
-            let outcome = self.inner.charge(user, address, size, at, limits).await?;
-            if let Some(holder) = holder {
-                self.inner.release(&holder, address).await?;
-            }
-            Ok(outcome)
-        })
+        self.inner.settle(address)
+    }
+
+    fn expired_reservations(
+        &self,
+        now: Timestamp,
+        limit: usize,
+    ) -> StoreFuture<'_, Vec<ExpiredReservation>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.expired_reservations(now, limit)
+    }
+
+    fn extend_reservation<'a>(
+        &'a self,
+        address: &'a ContentAddress,
+        until: Timestamp,
+    ) -> StoreFuture<'a, bool> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.extend_reservation(address, until)
+    }
+
+    fn release_expired<'a>(
+        &'a self,
+        user: &'a UserId,
+        address: &'a ContentAddress,
+        now: Timestamp,
+    ) -> StoreFuture<'a, bool> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.release_expired(user, address, now)
     }
 
     fn release<'a>(
@@ -3959,6 +4073,19 @@ impl AssetIndex for SwitchableIndex {
         self.inner.set_hold(asset, hold)
     }
 
+    fn repair_blob_size<'a>(
+        &'a self,
+        asset: &'a AssetId,
+        role: capsule_server::store::BlobRole,
+        address: &'a ContentAddress,
+        size: u64,
+    ) -> IndexFuture<'a, capsule_server::index::SizeRepair> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.repair_blob_size(asset, role, address, size)
+    }
+
     fn reference_count<'a>(&'a self, address: &'a ContentAddress) -> IndexFuture<'a, u64> {
         if self.is_down() {
             return Box::pin(async { Self::refuse() });
@@ -4238,6 +4365,9 @@ pub(crate) struct Fixture {
     /// Whether the server federates — the *same* switch it reads, so a case can turn the whole
     /// federation surface off for the requests it is about.
     pub(crate) federation: Arc<SwitchableFederation>,
+    /// What every verified pull hint is handed to, in place of the pull worker: the *same*
+    /// double the server holds, so a case reads which jobs it was hinted and sets the answer.
+    pub(crate) hints: Arc<capsule_server::federation::RecordingHints>,
     /// Whether the server refuses password sign-in — the *same* switch it reads.
     pub(crate) passwords: Arc<SwitchablePasswords>,
     /// The capability codec the server mints with — the *same* one, over the *same* key as
@@ -4384,6 +4514,7 @@ impl Fixture {
         let peers = Arc::new(InMemoryPeers::new());
         let subscriptions = Arc::new(SwitchableSubscriptions::new());
         let federation = Arc::new(SwitchableFederation::new(federating));
+        let hints = Arc::new(capsule_server::federation::RecordingHints::new());
         let passwords = Arc::new(SwitchablePasswords::new(passwords_disabled));
         let chunk_pace = Arc::new(SwitchableChunkPace::new(ChunkPace::default()));
         let challenges = Arc::new(SwitchableChallenges::new(clock.clone()));
@@ -4485,7 +4616,8 @@ impl Fixture {
                 subscriptions: subscriptions.clone(),
                 clock: clock.clone(),
                 enabled: federation.clone(),
-            }),
+            })
+            .with_hints(hints.clone()),
             enrollment: EnrollmentContext::new(
                 enrollments.clone(),
                 channels.clone(),
@@ -4538,6 +4670,7 @@ impl Fixture {
             peers,
             subscriptions,
             federation,
+            hints,
             passwords,
             codec,
             challenges,
@@ -4919,6 +5052,44 @@ pub(crate) fn sign_report(
         "album_id": claim.album_id,
         "reason": claim.reason,
         "reported_at": claim.reported_at,
+        "signature": base64::engine::general_purpose::STANDARD.encode(signature.as_ref()),
+    })
+}
+
+/// A pull hint body, signed by `pair` exactly as a home server signs one, with a fresh nonce.
+///
+/// Built through [`HintClaim::signing_bytes`](capsule_server::federation::HintClaim::signing_bytes)
+/// for the reason [`signed_report`] is built through the report's.
+pub(crate) fn signed_hint(
+    pair: &ring::signature::Ed25519KeyPair,
+    home_server: &str,
+    album_id: &str,
+    sent_at: &str,
+) -> serde_json::Value {
+    sign_hint(
+        pair,
+        &capsule_server::federation::HintClaim {
+            home_server: home_server.to_owned(),
+            recipient_server: SERVER_ORIGIN.to_owned(),
+            nonce: uuid::Uuid::now_v7().to_string(),
+            album_id: album_id.to_owned(),
+            sent_at: sent_at.to_owned(),
+        },
+    )
+}
+
+/// `claim` as the body a home server sends, signed by `pair`.
+pub(crate) fn sign_hint(
+    pair: &ring::signature::Ed25519KeyPair,
+    claim: &capsule_server::federation::HintClaim,
+) -> serde_json::Value {
+    let signature = pair.sign(&claim.signing_bytes().expect("a claim encodes"));
+    serde_json::json!({
+        "home_server": claim.home_server,
+        "recipient_server": claim.recipient_server,
+        "nonce": claim.nonce,
+        "album_id": claim.album_id,
+        "sent_at": claim.sent_at,
         "signature": base64::engine::general_purpose::STANDARD.encode(signature.as_ref()),
     })
 }

@@ -9,10 +9,16 @@
 //!   `since`; an append deletes the account's events older than its `retain_from` and every
 //!   event beyond the newest [`MAX_EVENTS_PER_ACCOUNT`], and touches no other account's log.
 //! - **Append-only.** A duplicate `event_id` is refused and the first event stands.
+//! - **The sweep deletes only what has expired.** [`ActivityStore::delete_expired`] deletes
+//!   events recorded before its instant across every account — an account that stopped
+//!   recording included — and never one recorded at or after it; it deletes at most its `limit`
+//!   per call, and [`ActivityStore::count_expired`] counts exactly what it would delete.
 //!
 //! # Reusing a harness
 //!
-//! Every case scopes its own account, so cases may share one store and [`run_all`] does.
+//! Every case scopes its own account, so cases may share one store and [`run_all`] does. The
+//! sweep cases reach across accounts, so they record their expired events before the fixed
+//! origin every other case records after, and sweep only up to it.
 
 use jiff::{SignedDuration, Timestamp};
 
@@ -228,6 +234,86 @@ pub async fn a_duplicate_event_id_is_refused_and_the_first_stands(h: &dyn Harnes
     assert_eq!(everything(h, "duplicate").await, vec![first]);
 }
 
+/// Record one event of `case` for each entry of `before_origin`, that many seconds before the
+/// fixed origin: the log of an account that has stopped recording.
+async fn record_before_origin(h: &dyn Harness, case: &str, before_origin: &[i64]) {
+    for (n, secs) in before_origin.iter().enumerate() {
+        record(h, event(case, n + 1, -secs)).await;
+    }
+}
+
+/// The sweep deletes every account's events recorded before its instant, and nothing else.
+pub async fn the_sweep_deletes_every_accounts_expired_events_and_nothing_else(h: &dyn Harness) {
+    // Two accounts that stopped recording, and one that records inside the window.
+    record_before_origin(h, "swept", &[300, 200, 100]).await;
+    record_before_origin(h, "also-swept", &[250]).await;
+    record(h, event("active", 1, 10)).await;
+    let before = at(-100);
+
+    assert_eq!(
+        ok(
+            h.activity().count_expired(before).await,
+            "count expired events"
+        ),
+        3,
+        "the count is every event before the instant, across accounts, and not the one at it"
+    );
+    let mut deleted = 0;
+    loop {
+        let batch = ok(
+            h.activity().delete_expired(before, 2).await,
+            "delete expired events",
+        );
+        assert!(
+            batch <= 2,
+            "a batch deletes at most its limit, deleted {batch}"
+        );
+        deleted += batch;
+        if batch < 2 {
+            break;
+        }
+    }
+    assert_eq!(deleted, 3);
+    assert_eq!(
+        ok(
+            h.activity().count_expired(before).await,
+            "count expired events"
+        ),
+        0
+    );
+    // The event recorded exactly at the instant is inside the window, and stays.
+    assert_eq!(ids(&everything(h, "swept").await), ["swept-event-00003"]);
+    assert!(everything(h, "also-swept").await.is_empty());
+    assert_eq!(ids(&everything(h, "active").await), ["active-event-00001"]);
+}
+
+/// A sweep with nothing expired deletes nothing, and a count changes nothing.
+///
+/// Runs before [`the_sweep_deletes_every_accounts_expired_events_and_nothing_else`] on a shared
+/// store: its event is after that case's instant, and that case's are before this one's.
+pub async fn a_sweep_with_nothing_expired_deletes_nothing(h: &dyn Harness) {
+    record_before_origin(h, "unexpired", &[50]).await;
+    let before = at(-50);
+    assert_eq!(
+        ok(
+            h.activity().count_expired(before).await,
+            "count expired events"
+        ),
+        0
+    );
+    assert_eq!(
+        ok(
+            h.activity().delete_expired(before, 10).await,
+            "delete expired events"
+        ),
+        0
+    );
+    assert_eq!(
+        ids(&everything(h, "unexpired").await),
+        ["unexpired-event-00001"]
+    );
+}
+
 /// The whole suite, in one pass on one store.
 pub async fn run_all(h: &dyn Harness) {
     an_untouched_account_has_an_empty_log(h).await;
@@ -241,6 +327,8 @@ pub async fn run_all(h: &dyn Harness) {
     an_append_deletes_its_accounts_expired_events(h).await;
     an_append_keeps_at_most_the_bound(h).await;
     a_duplicate_event_id_is_refused_and_the_first_stands(h).await;
+    a_sweep_with_nothing_expired_deletes_nothing(h).await;
+    the_sweep_deletes_every_accounts_expired_events_and_nothing_else(h).await;
 }
 
 #[cfg(test)]

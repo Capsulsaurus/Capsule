@@ -25015,6 +25015,578 @@
         }
       }
     },
+    "/v1/federation/hints": {
+      "post": {
+        "tags": [
+          "federation"
+        ],
+        "summary": "Receive a signed pull hint from an album's home server.",
+        "description": "Answers `404 error.federation.not_configured` when this deployment does not federate —\n`FEDERATION_ENABLED` is off, which is the default — before the body is read, a budget is\ncharged or a store is touched.\n\n# A hint is advisory, and that is all it is\n\nA verified hint brings the job pulling `album_id` from `home_server` forward: no sooner than\none minute after that job's last pull, never for a peer on probation, and never past the\njob's back-off after a failed pull or the peer's open circuit, which the pull worker applies\nto the job exactly as it would have. A hint adds no job, changes nothing about what is pulled or where from, and carries\nnothing that reaches validation. The album is pulled on its own interval whether or not a\nhint ever arrives, so a refused hint costs at most that interval.\n\n# Only a pinned peer can hint, and only about its own albums\n\nThe hint carries its own Ed25519 signature, verified against the key an operator pinned for\n`home_server` with `capsule-server peer pin`; a peer nobody pinned is\n`403 error.federation.peer_unknown`, whatever it signed. The job a hint touches is keyed on the\nsigner, so a peer can only hint about albums this server pulls from that peer.\n\n# The order the checks run in\n\nThe order report intake runs them in: bounds; whether it is addressed here and signed just\nnow; who is speaking; whether they are welcome; whether they really said it; whether they said\nit before; how much they may ask for. **No budget is charged before the signature\nverifies**, so a stranger cannot spend a real peer's hint budget by sending garbage under its\nname. A hint addressed to another server, signed more than five minutes from this server's\nclock, or reusing a nonce this peer already used is `401 error.federation.hint_unsigned`; a\npeer that retries signs again with a fresh nonce.\n\n# `202` whether or not this server pulls the album\n\nA verified, admitted hint is answered `202` with the instant it was received, whatever became\nof it: it moved a job, the job was already due, this server pulls no such album, or the\npeer is on probation. Telling them apart would let a pinned peer walk album ids and read off\nwhich ones this server's members subscribe to. A held job and one that is not cost the same\nwork — one peer read and one schedule operation — so the answer's timing does not tell them\napart either; a peer on probation is answered after the peer read alone, which tells it only\nits own standing.\nOnly a store that could not answer is different: `500 error.federation.unavailable`, which\nsays nothing about any album.",
+        "operationId": "submit_pull_hint",
+        "parameters": [
+          {
+            "name": "X-Capsule-Protocol",
+            "in": "header",
+            "description": "The `YYYY-MM-DD` protocol version this request is written against. Outside the server's `[X-Capsule-Protocol-Min, X-Capsule-Protocol-Max]` window the request is refused with `426`.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+            }
+          },
+          {
+            "name": "X-Capsule-Crypto-Suite",
+            "in": "header",
+            "description": "The crypto suite id from the primitives inventory. Sent on writes; a suite this server does not implement is refused with `400`.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 65535.0,
+              "minimum": 0.0
+            }
+          },
+          {
+            "name": "X-Capsule-Sidecar-Schema",
+            "in": "header",
+            "description": "The sidecar schema version declared at `sidecar_schema` field 0. Sent on metadata updates; a schema newer than this server indexes is refused with `400`.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 65535.0,
+              "minimum": 0.0
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PullHintRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "400": {
+            "description": "Bad Request; Malformed hint; Malformed handshake",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              },
+              "X-Request-Id": {
+                "description": "The UUIDv7 this server minted for the request. Quote it when reporting a failure: it names the request's log lines. Never taken from the client.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Payload Too Large; the request body exceeds the configured limit",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              },
+              "X-Request-Id": {
+                "description": "The UUIDv7 this server minted for the request. Quote it when reporting a failure: it names the request's log lines. Never taken from the client.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported Media Type",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              },
+              "X-Request-Id": {
+                "description": "The UUIDv7 this server minted for the request. Quote it when reporting a failure: it names the request's log lines. Never taken from the client.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              },
+              "X-Request-Id": {
+                "description": "The UUIDv7 this server minted for the request. Quote it when reporting a failure: it names the request's log lines. Never taken from the client.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "The hint was received",
+            "headers": {
+              "X-Request-Id": {
+                "description": "The UUIDv7 this server minted for the request. Quote it when reporting a failure: it names the request's log lines. Never taken from the client.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PullHintResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Hint unsigned",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              },
+              "X-Request-Id": {
+                "description": "The UUIDv7 this server minted for the request. Quote it when reporting a failure: it names the request's log lines. Never taken from the client.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Peer unknown; Server blocked",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              },
+              "X-Request-Id": {
+                "description": "The UUIDv7 this server minted for the request. Quote it when reporting a failure: it names the request's log lines. Never taken from the client.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Hint rate limited",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              },
+              "X-Request-Id": {
+                "description": "The UUIDv7 this server minted for the request. Quote it when reporting a failure: it names the request's log lines. Never taken from the client.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              },
+              "X-Request-Id": {
+                "description": "The UUIDv7 this server minted for the request. Quote it when reporting a failure: it names the request's log lines. Never taken from the client.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              },
+              "X-Request-Id": {
+                "description": "The UUIDv7 this server minted for the request. Quote it when reporting a failure: it names the request's log lines. Never taken from the client.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "425": {
+            "description": "Too early",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              },
+              "X-Request-Id": {
+                "description": "The UUIDv7 this server minted for the request. Quote it when reporting a failure: it names the request's log lines. Never taken from the client.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "Protocol version unsupported",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              },
+              "X-Request-Id": {
+                "description": "The UUIDv7 this server minted for the request. Quote it when reporting a failure: it names the request's log lines. Never taken from the client.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/federation/subscriptions": {
       "get": {
         "tags": [
@@ -25378,7 +25950,7 @@
           "federation"
         ],
         "summary": "Subscribe to a federated album with the capability its home server minted for this server.",
-        "description": "The capability is verified against the issuer's pinned key before anything is recorded, and\nmust name this server as its recipient. Posting one for an album already subscribed keeps\nwhichever capability lives longer, so a replayed invite never undoes a renewal.\n\nAnswers `404 error.federation.not_configured` when this deployment does not federate —\n`FEDERATION_ENABLED` is off, which is the default — before the credential is read or a store\nis touched.",
+        "description": "The capability is verified against the issuer's pinned key before anything is recorded, and\nmust name this server as its recipient. Posting one for an album already subscribed keeps\nwhichever capability lives longer, so a replayed invite never undoes a renewal. An account\nholds at most 1,000 subscriptions; one more is refused `403\nerror.federation.subscription_limit` until the caller unsubscribes from another.\n\nAnswers `404 error.federation.not_configured` when this deployment does not federate —\n`FEDERATION_ENABLED` is off, which is the default — before the credential is read or a store\nis touched.",
         "operationId": "subscribe_album",
         "parameters": [
           {
@@ -36424,6 +36996,57 @@
           "received_at"
         ],
         "description": "An accepted report.\n\nThe identifier is this server's, so an operator and the reporting peer can talk about one\nreport. Nothing about the reported account is echoed — accepting a report says nothing about\nwhether it is true, and a body that reported on the account's standing would say it does."
+      },
+      "PullHintRequest": {
+        "properties": {
+          "home_server": {
+            "type": "string",
+            "description": "The album's home server, which sends and signs the hint, as its own `server-info` names\nit."
+          },
+          "recipient_server": {
+            "type": "string",
+            "description": "The server the hint is addressed to — this one, as its own `server-info` names it."
+          },
+          "nonce": {
+            "type": "string",
+            "description": "A value the peer never signs twice: 16 to 64 bytes, a UUID being the obvious choice."
+          },
+          "album_id": {
+            "type": "string",
+            "description": "The album that has news, as its home server names it."
+          },
+          "sent_at": {
+            "type": "string",
+            "description": "When the peer signed the hint, RFC 3339. Refused when more than five minutes from this\nserver's clock either way."
+          },
+          "signature": {
+            "type": "string",
+            "description": "The peer's Ed25519 signature over the canonical CBOR of the fields above and the\n`context` `capsule-federation-hint-v1`, base64."
+          }
+        },
+        "type": "object",
+        "required": [
+          "home_server",
+          "recipient_server",
+          "nonce",
+          "album_id",
+          "sent_at",
+          "signature"
+        ],
+        "description": "An advisory hint from an album's home server: \"album A has news\".\n\nEvery field except `signature` is covered by the signature, in canonical CBOR with a fixed\n`context` — see [`HintClaim`]."
+      },
+      "PullHintResponse": {
+        "properties": {
+          "received_at": {
+            "type": "string",
+            "description": "When this server accepted the hint, RFC 3339."
+          }
+        },
+        "type": "object",
+        "required": [
+          "received_at"
+        ],
+        "description": "An accepted hint.\n\nSays when it was received and nothing else: in particular not whether this server pulls the\nalbum, which a hint must never be a way to learn."
       },
       "SubscribeRequest": {
         "properties": {

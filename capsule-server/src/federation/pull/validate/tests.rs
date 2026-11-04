@@ -550,17 +550,50 @@ fn a_successor_is_accepted_and_the_head_it_replaced_cannot_return() {
     assert_eq!(held.superseded, vec![first_head]);
 
     // The home server serves the superseded manifest again, at a new position.
+    let revival = screen(
+        page(
+            vec![entry(asset(1), 3, "updated", Some(&first))],
+            "c3",
+            false,
+        ),
+        &moved,
+        &established(),
+    );
+    let Err(Refused::Invalid(invalid)) = revival.clone() else {
+        panic!("a revival must be refused as invalid: {revival:?}");
+    };
+    assert_eq!(refused_at(revival), "invariant 17");
     assert_eq!(
-        refused_at(screen(
-            page(
-                vec![entry(asset(1), 3, "updated", Some(&first))],
-                "c3",
-                false
-            ),
-            &moved,
-            &established()
-        )),
-        "invariant 17"
+        invalid.revived,
+        Some(Revived {
+            asset_id: asset(1).to_string(),
+            head: first_head,
+        }),
+        "the refusal names the revived head, for the rejected-hash table"
+    );
+}
+
+#[test]
+fn only_a_revival_names_a_revived_head() {
+    let state = holding(1, &create(1));
+    let mut again = core(asset(1), Action::Create, None, 1);
+    again.plaintext_size = 2048;
+    let refused = screen(
+        page(
+            vec![entry(asset(1), 2, "created", Some(&record(again)))],
+            "c",
+            false,
+        ),
+        &state,
+        &established(),
+    );
+    let Err(Refused::Invalid(invalid)) = refused else {
+        panic!("a second create must be refused as invalid: {refused:?}");
+    };
+    assert_eq!(invalid.rule, "invariant 17");
+    assert_eq!(
+        invalid.revived, None,
+        "a second create revives no held head"
     );
 }
 

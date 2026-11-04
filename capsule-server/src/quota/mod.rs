@@ -69,6 +69,51 @@
 //! "fix" the enforcement when the test fails. The states exist to describe an account that *is*
 //! over, however it got there.
 //!
+//! # A reservation is an attribution no committed blob has settled yet (#1059)
+//!
+//! An upload session is charged when it is created, before a byte arrives, and that charge is a
+//! **reservation** ([`QuotaStore::reserve`]): it carries a deadline, `created_at` plus the
+//! session lifetime cap ([`crate::store::upload::LIFETIME_CAP`]). A finalization that commits
+//! the bytes **settles** it ([`QuotaStore::settle`]), and from then on it is an ordinary charge
+//! the collector releases with the blob. Every other charge — a share's metadata record, a
+//! rebuild's re-charge of stored bytes — pays for bytes already stored and is settled from the
+//! start ([`QuotaStore::charge`]).
+//!
+//! A session that ends without its bytes gives its reservation back on the path that ended it
+//! ([`crate::upload::reservation::release`]). One that simply expires has no such path: the
+//! session store drops the record and nothing observes it. The reservation sweep
+//! ([`crate::upload::reservation::ReservationSweep`]) closes that gap by walking the
+//! reservations past their deadline ([`QuotaStore::expired_reservations`]), bounded by the
+//! deadline index rather than by every stored blob, and releasing each one no committed blob
+//! and no live session holds ([`QuotaStore::release_expired`]). The release is conditional on
+//! the row still being an expired reservation, so a settle or an extension that lands first
+//! wins and a second sweep releases nothing.
+//!
+//! # Pulled blobs count against every receiver, once each (#1162)
+//!
+//! A metadata blob a federation pull holds (`crate::federation::pull::pulled`) is charged to
+//! each local account subscribed to an album that holds it, live or lapsed, **in full** and
+//! **once per account** however many of its albums, on however many peers, hold it. That is
+//! a second rule beside the global one above, and it is per receiver on purpose: a pulled album
+//! is shared by its subscribers, so no subscriber is "first", and charging only one of them
+//! would let the others hold the bytes free.
+//!
+//! The pulled charge is **derived, never stored**: [`StoredUsage::used`] is the ledger's
+//! attributions plus the distinct pulled blobs [`PulledHoldings`] says the account holds now.
+//! So the charge lands with the pulled page that holds the blob (the rows are written in the
+//! page's own commit) and is released by whatever ends the holding — an unsubscribe, or the
+//! job's rows being forgotten — with no second write that could run twice, run never, or credit
+//! below zero. A blob the account itself is attributed in the ledger (an upload, a reservation)
+//! is counted there and not again as pulled; one another account is attributed is still charged
+//! to the receiver, because dropping it would make `GET /v1/quota` say that somebody on this
+//! server uploaded those bytes — the cross-tenant answer [`ChargeOutcome::AlreadyAttributed`]
+//! refuses to give.
+//!
+//! Pulled growth is never refused here — it is bounded by the per-peer caching budget
+//! ([`crate::federation::pull::pulled::PeerCachingBudget`]), which caps the same bytes rather
+//! than adding to them — so it is one of the ways an account becomes
+//! [`QuotaState::HardExceeded`], and unsubscribing is always the way back.
+//!
 //! # A self-hosted server has no quota, and that is the default
 //!
 //! [`QuotaLimits::unlimited`] is what a deployment with no billing runs, and it is what the
@@ -176,7 +221,8 @@ pub enum WriteClass {
 /// What the store holds for one user.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct StoredUsage {
-    /// Bytes attributed to them.
+    /// Bytes charged to them: their ledger attributions, plus every distinct pulled metadata
+    /// blob they hold and are not themselves attributed.
     pub used: u64,
     /// When they first crossed the hard limit and have not been under it since, if ever.
     ///
@@ -206,6 +252,19 @@ pub enum ChargeOutcome {
     AlreadyAttributed,
 }
 
+/// One reservation past its deadline, as [`QuotaStore::expired_reservations`] lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExpiredReservation {
+    /// The account the reservation is charged to.
+    pub user: UserId,
+    /// The content address it reserves.
+    pub address: ContentAddress,
+    /// The bytes it reserves.
+    pub size: u64,
+    /// The deadline it passed.
+    pub reserved_until: Timestamp,
+}
+
 /// Where quota accounting lives.
 pub trait QuotaStore: std::fmt::Debug + Send + Sync {
     /// What `user` currently owes.
@@ -223,6 +282,63 @@ pub trait QuotaStore: std::fmt::Debug + Send + Sync {
         at: Timestamp,
         limits: QuotaLimits,
     ) -> StoreFuture<'a, ChargeOutcome>;
+
+    /// [`Self::charge`], recording the attribution as a reservation that lapses at `until`.
+    ///
+    /// The charge an upload session's creation makes: the bytes are not stored yet, so the row
+    /// says so until [`Self::settle`] clears it. An address that is already attributed is
+    /// answered [`ChargeOutcome::AlreadyAttributed`] and left exactly as it is — reserved or
+    /// settled, and with its own deadline.
+    fn reserve<'a>(
+        &'a self,
+        user: &'a UserId,
+        address: &'a ContentAddress,
+        size: u64,
+        at: Timestamp,
+        until: Timestamp,
+        limits: QuotaLimits,
+    ) -> StoreFuture<'a, ChargeOutcome>;
+
+    /// Settle `address`'s reservation, whoever it is charged to: its bytes are committed.
+    ///
+    /// `true` when the address is attributed after the call — a reservation settled now, or an
+    /// attribution that was settled already. `false` when nothing attributes the address, which
+    /// a finalizer answers by charging the bytes it just committed: the reservation sweep may
+    /// have released it between that finalizer's blob check and this call.
+    fn settle<'a>(&'a self, address: &'a ContentAddress) -> StoreFuture<'a, bool>;
+
+    /// Up to `limit` reservations whose deadline is at or before `now`, earliest deadline first,
+    /// ties broken by address.
+    ///
+    /// Bounded by the deadline, not by the ledger: a settled attribution is never listed.
+    fn expired_reservations(
+        &self,
+        now: Timestamp,
+        limit: usize,
+    ) -> StoreFuture<'_, Vec<ExpiredReservation>>;
+
+    /// Move `address`'s reservation deadline to `until`, if it is still a reservation.
+    ///
+    /// `true` when a reservation was extended. A live session still declares the address, so
+    /// the reservation is still owed. Never shortens a deadline.
+    fn extend_reservation<'a>(
+        &'a self,
+        address: &'a ContentAddress,
+        until: Timestamp,
+    ) -> StoreFuture<'a, bool>;
+
+    /// Release `user`'s reservation of `address`, only if it is still a reservation whose
+    /// deadline is at or before `now`.
+    ///
+    /// `true` when something was released. The condition and the delete are one operation, so
+    /// a [`Self::settle`] or [`Self::extend_reservation`] that lands first keeps the attribution
+    /// and a second call releases nothing.
+    fn release_expired<'a>(
+        &'a self,
+        user: &'a UserId,
+        address: &'a ContentAddress,
+        now: Timestamp,
+    ) -> StoreFuture<'a, bool>;
 
     /// Release the attribution for `address`, if it is `user`'s.
     ///
@@ -326,23 +442,151 @@ pub fn admits(
     }
 }
 
+/// The pulled metadata blobs an account holds, which the in-memory ledger counts in its usage.
+///
+/// The durable ledger reads the same fact from the federation tables in its usage statement; the
+/// in-memory one is handed it, because its pulled albums are a separate double.
+pub trait PulledHoldings: std::fmt::Debug + Send + Sync {
+    /// Every distinct pulled metadata blob `user` holds through an album it subscribes to, live
+    /// or lapsed, with its size.
+    fn held_by<'a>(&'a self, user: &'a UserId) -> StoreFuture<'a, BTreeMap<ContentAddress, u64>>;
+}
+
+/// One account's subscription to one peer's album: `(subscriber, peer, album)`, the key
+/// `federation_subscriptions` uses, so two peers' albums that share an id are two albums.
+type Subscription = (UserId, String, String);
+
+/// A deterministic [`PulledHoldings`]: which albums each account holds which blobs through.
+#[derive(Debug, Default)]
+pub struct InMemoryPulledHoldings {
+    held: Mutex<BTreeMap<Subscription, BTreeMap<ContentAddress, u64>>>,
+}
+
+impl InMemoryPulledHoldings {
+    /// No account holds anything.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// `user` holds `address`, of `size` bytes, through `peer`'s album `album`.
+    pub fn hold(
+        &self,
+        user: &UserId,
+        peer: &str,
+        album: &str,
+        address: &ContentAddress,
+        size: u64,
+    ) {
+        lock(&self.held)
+            .entry((user.clone(), peer.to_owned(), album.to_owned()))
+            .or_default()
+            .insert(address.clone(), size);
+    }
+
+    /// `user` no longer subscribes to `peer`'s album `album`.
+    pub fn unsubscribe(&self, user: &UserId, peer: &str, album: &str) {
+        lock(&self.held).remove(&(user.clone(), peer.to_owned(), album.to_owned()));
+    }
+}
+
+impl PulledHoldings for InMemoryPulledHoldings {
+    fn held_by<'a>(&'a self, user: &'a UserId) -> StoreFuture<'a, BTreeMap<ContentAddress, u64>> {
+        Box::pin(async move {
+            let held = lock(&self.held);
+            let mut blobs = BTreeMap::new();
+            for ((holder, _, _), album) in held.iter() {
+                if holder == user {
+                    for (address, size) in album {
+                        let entry = blobs.entry(address.clone()).or_insert(0);
+                        *entry = (*entry).max(*size);
+                    }
+                }
+            }
+            Ok(blobs)
+        })
+    }
+}
+
 /// A deterministic in-memory adapter.
 ///
 /// One mutex over both maps, which is what makes [`Self::charge`]'s check-and-debit atomic.
+/// Pulled holdings ([`Self::with_pulled`]) are read before that lock is taken, so a pulled page
+/// committed during a charge may be missed by it; the durable ledger reads them in the charge's
+/// own statement.
 #[derive(Debug, Default)]
 pub struct InMemoryQuota {
     inner: Mutex<Inner>,
+    pulled: Option<Arc<dyn PulledHoldings>>,
 }
 
 #[derive(Debug, Default)]
 struct Inner {
-    /// Who each address's bytes are charged to, and how many.
-    attributed: BTreeMap<ContentAddress, (UserId, u64)>,
+    /// Who each address's bytes are charged to, how many, and whether it is a reservation.
+    attributed: BTreeMap<ContentAddress, Attribution>,
     /// Each user's total and the moment they went over.
     usage: BTreeMap<UserId, StoredUsage>,
 }
 
+/// One row of the in-memory ledger.
+#[derive(Debug, Clone)]
+struct Attribution {
+    /// The account the bytes are charged to.
+    user: UserId,
+    /// How many.
+    size: u64,
+    /// The reservation's deadline, or `None` once the attribution is settled.
+    reserved_until: Option<Timestamp>,
+}
+
 impl Inner {
+    /// Attribute `row`'s bytes at `address` to its account, unless it is attributed already.
+    ///
+    /// The one body [`QuotaStore::charge`] and [`QuotaStore::reserve`] share; they differ only
+    /// in the deadline the row carries. `pulled` is what the account holds through its
+    /// subscriptions ([`PulledHoldings`]).
+    fn attribute(
+        &mut self,
+        address: &ContentAddress,
+        row: Attribution,
+        at: Timestamp,
+        limits: QuotaLimits,
+        pulled: &BTreeMap<ContentAddress, u64>,
+    ) -> ChargeOutcome {
+        if self.attributed.contains_key(address) {
+            return ChargeOutcome::AlreadyAttributed;
+        }
+        let (user, size) = (row.user.clone(), row.size);
+        let user = &user;
+        self.attributed.insert(address.clone(), row);
+        // Totalled after the insert, so a pulled blob this charge now attributes to the account
+        // is counted once, here, rather than once here and once as pulled.
+        let pulled = self.pulled_total(user, pulled);
+        let entry = self.usage.entry(user.clone()).or_default();
+        entry.used = entry.used.saturating_add(size);
+        let used = entry.used.saturating_add(pulled);
+        // The moment they crossed, recorded on the crossing rather than on every write, so
+        // the grace window measures from when it started.
+        if used >= limits.hard_limit && entry.over_since.is_none() {
+            entry.over_since = Some(at);
+            tracing::info!(%user, used, pulled, "an account crossed its hard quota limit");
+        }
+        ChargeOutcome::Charged { used }
+    }
+
+    /// What `pulled`, the blobs `user` holds through its subscriptions, adds to its usage: every
+    /// one the ledger does not already attribute to `user`.
+    fn pulled_total(&self, user: &UserId, pulled: &BTreeMap<ContentAddress, u64>) -> u64 {
+        pulled
+            .iter()
+            .filter(|(address, _)| {
+                self.attributed
+                    .get(*address)
+                    .is_none_or(|row| &row.user != user)
+            })
+            .map(|(_, size)| *size)
+            .fold(0_u64, u64::saturating_add)
+    }
+
     /// Give `size` bytes back to `user`.
     ///
     /// One place, because both releases do exactly this and a second copy would eventually
@@ -363,6 +607,24 @@ impl InMemoryQuota {
     pub fn new() -> Self {
         Self::default()
     }
+
+    /// This ledger, counting the pulled blobs `pulled` says each account holds.
+    #[must_use]
+    pub fn with_pulled(mut self, pulled: Arc<dyn PulledHoldings>) -> Self {
+        self.pulled = Some(pulled);
+        self
+    }
+
+    /// The pulled blobs `user` holds, or none when the ledger was assembled without them.
+    async fn pulled_of(
+        &self,
+        user: &UserId,
+    ) -> Result<BTreeMap<ContentAddress, u64>, crate::store::StoreError> {
+        match &self.pulled {
+            Some(pulled) => pulled.held_by(user).await,
+            None => Ok(BTreeMap::new()),
+        }
+    }
 }
 
 /// Take the lock, recovering from a poisoned mutex.
@@ -375,11 +637,11 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 impl QuotaStore for InMemoryQuota {
     fn usage<'a>(&'a self, user: &'a UserId) -> StoreFuture<'a, StoredUsage> {
         Box::pin(async move {
-            Ok(lock(&self.inner)
-                .usage
-                .get(user)
-                .copied()
-                .unwrap_or_default())
+            let pulled = self.pulled_of(user).await?;
+            let inner = lock(&self.inner);
+            let mut usage = inner.usage.get(user).copied().unwrap_or_default();
+            usage.used = usage.used.saturating_add(inner.pulled_total(user, &pulled));
+            Ok(usage)
         })
     }
 
@@ -392,22 +654,111 @@ impl QuotaStore for InMemoryQuota {
         limits: QuotaLimits,
     ) -> StoreFuture<'a, ChargeOutcome> {
         Box::pin(async move {
+            let pulled = self.pulled_of(user).await?;
+            let row = Attribution {
+                user: user.clone(),
+                size,
+                reserved_until: None,
+            };
+            Ok(lock(&self.inner).attribute(address, row, at, limits, &pulled))
+        })
+    }
+
+    fn reserve<'a>(
+        &'a self,
+        user: &'a UserId,
+        address: &'a ContentAddress,
+        size: u64,
+        at: Timestamp,
+        until: Timestamp,
+        limits: QuotaLimits,
+    ) -> StoreFuture<'a, ChargeOutcome> {
+        Box::pin(async move {
+            let pulled = self.pulled_of(user).await?;
+            let row = Attribution {
+                user: user.clone(),
+                size,
+                reserved_until: Some(until),
+            };
+            Ok(lock(&self.inner).attribute(address, row, at, limits, &pulled))
+        })
+    }
+
+    fn settle<'a>(&'a self, address: &'a ContentAddress) -> StoreFuture<'a, bool> {
+        Box::pin(async move {
             let mut inner = lock(&self.inner);
-            if inner.attributed.contains_key(address) {
-                return Ok(ChargeOutcome::AlreadyAttributed);
-            }
-            inner
+            let Some(row) = inner.attributed.get_mut(address) else {
+                return Ok(false);
+            };
+            row.reserved_until = None;
+            Ok(true)
+        })
+    }
+
+    fn expired_reservations(
+        &self,
+        now: Timestamp,
+        limit: usize,
+    ) -> StoreFuture<'_, Vec<ExpiredReservation>> {
+        Box::pin(async move {
+            let inner = lock(&self.inner);
+            let mut expired: Vec<ExpiredReservation> = inner
                 .attributed
-                .insert(address.clone(), (user.clone(), size));
-            let entry = inner.usage.entry(user.clone()).or_default();
-            entry.used = entry.used.saturating_add(size);
-            // The moment they crossed, recorded on the crossing rather than on every write, so
-            // the grace window measures from when it started.
-            if entry.used >= limits.hard_limit && entry.over_since.is_none() {
-                entry.over_since = Some(at);
-                tracing::info!(%user, used = entry.used, "an account crossed its hard quota limit");
+                .iter()
+                .filter_map(|(address, row)| {
+                    let until = row.reserved_until.filter(|until| *until <= now)?;
+                    Some(ExpiredReservation {
+                        user: row.user.clone(),
+                        address: address.clone(),
+                        size: row.size,
+                        reserved_until: until,
+                    })
+                })
+                .collect();
+            // The map is in address order, so a stable sort by deadline breaks ties by address.
+            expired.sort_by_key(|reservation| reservation.reserved_until);
+            expired.truncate(limit);
+            Ok(expired)
+        })
+    }
+
+    fn extend_reservation<'a>(
+        &'a self,
+        address: &'a ContentAddress,
+        until: Timestamp,
+    ) -> StoreFuture<'a, bool> {
+        Box::pin(async move {
+            let mut inner = lock(&self.inner);
+            let Some(deadline) = inner
+                .attributed
+                .get_mut(address)
+                .and_then(|row| row.reserved_until.as_mut())
+            else {
+                return Ok(false);
+            };
+            *deadline = (*deadline).max(until);
+            Ok(true)
+        })
+    }
+
+    fn release_expired<'a>(
+        &'a self,
+        user: &'a UserId,
+        address: &'a ContentAddress,
+        now: Timestamp,
+    ) -> StoreFuture<'a, bool> {
+        Box::pin(async move {
+            let mut inner = lock(&self.inner);
+            let expired = inner.attributed.get(address).is_some_and(|row| {
+                &row.user == user && row.reserved_until.is_some_and(|until| until <= now)
+            });
+            if !expired {
+                return Ok(false);
             }
-            Ok(ChargeOutcome::Charged { used: entry.used })
+            if let Some(row) = inner.attributed.remove(address) {
+                inner.credit(user, row.size);
+            }
+            Ok(true)
         })
     }
 
@@ -418,14 +769,14 @@ impl QuotaStore for InMemoryQuota {
     ) -> StoreFuture<'a, bool> {
         Box::pin(async move {
             let mut inner = lock(&self.inner);
-            let Some((owner, size)) = inner.attributed.get(address).cloned() else {
+            let Some(row) = inner.attributed.get(address).cloned() else {
                 return Ok(false);
             };
-            if &owner != user {
+            if &row.user != user {
                 return Ok(false);
             }
             inner.attributed.remove(address);
-            inner.credit(user, size);
+            inner.credit(user, row.size);
             Ok(true)
         })
     }
@@ -436,7 +787,10 @@ impl QuotaStore for InMemoryQuota {
     ) -> StoreFuture<'a, Option<(UserId, u64)>> {
         Box::pin(async move {
             let mut inner = lock(&self.inner);
-            let Some((owner, size)) = inner.attributed.remove(address) else {
+            let Some(Attribution {
+                user: owner, size, ..
+            }) = inner.attributed.remove(address)
+            else {
                 return Ok(None);
             };
             inner.credit(&owner, size);
@@ -538,6 +892,43 @@ pub async fn charge_upload(
     address: &ContentAddress,
     size: u64,
 ) -> Result<UploadCharge, crate::store::StoreError> {
+    admit_upload(context, user, address, size, false).await
+}
+
+/// [`charge_upload`] for an upload session, whose bytes are not stored yet: the charge is a
+/// reservation ([`QuotaStore::reserve`]) that lapses at [`reservation_deadline`] unless a
+/// finalization settles it.
+///
+/// # Errors
+///
+/// Propagates the ledger's failure. Nothing is charged when it does.
+pub async fn reserve_upload(
+    context: &QuotaContext,
+    user: &UserId,
+    address: &ContentAddress,
+    size: u64,
+) -> Result<UploadCharge, crate::store::StoreError> {
+    admit_upload(context, user, address, size, true).await
+}
+
+/// When a reservation made at `now` lapses: one session lifetime cap later.
+///
+/// A session declaring the address may live that long, so a reservation is never swept before
+/// the session it was made for has expired. A live session admitted later against the same
+/// reservation is the sweep's to see; it extends the deadline rather than releasing.
+pub fn reservation_deadline(now: Timestamp) -> Timestamp {
+    now.checked_add(crate::store::upload::LIFETIME_CAP)
+        .unwrap_or(Timestamp::MAX)
+}
+
+/// The body [`charge_upload`] and [`reserve_upload`] share.
+async fn admit_upload(
+    context: &QuotaContext,
+    user: &UserId,
+    address: &ContentAddress,
+    size: u64,
+    reserve: bool,
+) -> Result<UploadCharge, crate::store::StoreError> {
     let limits = context.limits();
     if context
         .quotas()
@@ -549,10 +940,18 @@ pub async fn charge_upload(
         tracing::info!(%user, size, "an upload was refused: the account's quota is suspended");
         return Ok(UploadCharge::Suspended);
     }
-    let outcome = context
-        .quotas()
-        .charge(user, address, size, context.clock().now(), limits)
-        .await?;
+    let now = context.clock().now();
+    let outcome = if reserve {
+        context
+            .quotas()
+            .reserve(user, address, size, now, reservation_deadline(now), limits)
+            .await?
+    } else {
+        context
+            .quotas()
+            .charge(user, address, size, now, limits)
+            .await?
+    };
     let ChargeOutcome::Charged { used } = outcome else {
         // Somebody already holds these bytes. A merge is not storage, so there is nothing to
         // refuse and nothing to release.

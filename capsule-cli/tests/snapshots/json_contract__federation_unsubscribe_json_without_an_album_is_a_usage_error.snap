@@ -1,0 +1,14 @@
+---
+source: capsule-cli/tests/json_contract.rs
+expression: "run(&scratch, &[\"federation\", \"unsubscribe\", \"home.test\", \"--json\"])"
+---
+status: 2
+--- stdout ---
+
+--- stderr ---
+error: the following required arguments were not provided:
+  <ALBUM_ID>
+
+Usage: capsule federation unsubscribe --json <PEER> <ALBUM_ID>
+
+For more information, try '--help'.

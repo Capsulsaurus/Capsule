@@ -7471,6 +7471,22 @@
     "message": "Этот источник временно приостановлен после повторяющихся ошибок.",
     "origin": "machine"
   },
+  "error.federation.hint_at_capacity": {
+    "message": "Сейчас этот сервер обрабатывает слишком много уведомлений об обновлении. Подождите и повторите попытку.",
+    "origin": "machine"
+  },
+  "error.federation.hint_malformed": {
+    "message": "Это уведомление об обновлении недействительно.",
+    "origin": "machine"
+  },
+  "error.federation.hint_rate_limited": {
+    "message": "Слишком много уведомлений об обновлении от этого сервера. Подождите и повторите попытку.",
+    "origin": "machine"
+  },
+  "error.federation.hint_unsigned": {
+    "message": "Не удалось проверить уведомление об обновлении.",
+    "origin": "machine"
+  },
   "error.federation.member_not_on_roster": {
     "message": "Этого человека нет в списке участников альбома.",
     "origin": "machine"
@@ -7497,6 +7513,10 @@
   },
   "error.federation.scope_insufficient": {
     "message": "Это разрешение на доступ не распространяется на запрошенный контент.",
+    "origin": "machine"
+  },
+  "error.federation.subscription_limit": {
+    "message": "Вы достигли предела общих альбомов с других серверов, на которые можно подписаться. Удалите один, чтобы добавить другой.",
     "origin": "machine"
   },
   "error.federation.unavailable": {

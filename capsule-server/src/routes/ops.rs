@@ -120,7 +120,7 @@ use serde::{Deserialize, Serialize};
 use crate::attestation::AttestationContext;
 use crate::auth::AccessToken;
 use crate::blob::ContentAddress;
-use crate::index::{LifecycleOp, OpAction, OpOutcome};
+use crate::index::{LifecycleOp, OpAction, OpBlob, OpOutcome};
 use crate::ledger::LedgerEvent;
 use crate::store::{AlbumId, AssetId, OwnerId};
 use crate::upload::envelope::{GateContext, GateReject, ManifestEnvelope, check_op};
@@ -544,9 +544,19 @@ pub async fn apply_op(
             manifest_hash,
             prior_provenance_hash,
             amk_version: u64::from(request.manifest_envelope.amk_version),
-            provenance,
+            // The sizes of the bytes this request carried and the store now holds: the feed
+            // serves them for a client to budget a fetch by (#1128).
+            provenance: OpBlob {
+                address: provenance,
+                size: manifest.len() as u64,
+            },
             original: None,
-            metadata: metadata_address,
+            metadata: metadata_address
+                .zip(metadata.as_ref())
+                .map(|(address, bytes)| OpBlob {
+                    address,
+                    size: bytes.len() as u64,
+                }),
             retention_until,
             at: now,
         })

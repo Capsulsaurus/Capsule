@@ -37,6 +37,8 @@ conformance_cases! {
     an_append_deletes_its_accounts_expired_events,
     an_append_keeps_at_most_the_bound,
     a_duplicate_event_id_is_refused_and_the_first_stands,
+    a_sweep_with_nothing_expired_deletes_nothing,
+    the_sweep_deletes_every_accounts_expired_events_and_nothing_else,
 }
 
 /// The whole suite, in one pass on one store — the entry point the container case uses.

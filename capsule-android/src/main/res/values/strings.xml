@@ -2012,6 +2012,10 @@
     <string name="error_federation_capability_malformed">That sharing request isn\'t valid.</string>
     <string name="error_federation_capability_revoked">Access to this shared album has been revoked.</string>
     <string name="error_federation_circuit_open">This source is temporarily backed off after repeated errors.</string>
+    <string name="error_federation_hint_at_capacity">This server is handling too many update notices right now. Please wait and try again.</string>
+    <string name="error_federation_hint_malformed">That update notice isn\'t valid.</string>
+    <string name="error_federation_hint_rate_limited">Too many update notices from this server. Please wait and try again.</string>
+    <string name="error_federation_hint_unsigned">The update notice could not be verified.</string>
     <string name="error_federation_member_not_on_roster">That person isn\'t on this album\'s member list.</string>
     <string name="error_federation_mint_at_capacity">This server is handling too many access grants right now. Please try again shortly.</string>
     <string name="error_federation_not_configured">This server doesn\'t share albums with other servers.</string>
@@ -2019,6 +2023,7 @@
     <string name="error_federation_rate_budget_exceeded">This source has reached its request limit. Please wait and try again.</string>
     <string name="error_federation_revocations_unavailable">Capsule couldn\'t read the revocation list. Please try again.</string>
     <string name="error_federation_scope_insufficient">This access grant does not cover the requested content.</string>
+    <string name="error_federation_subscription_limit">You\'ve reached the limit of shared albums you can follow from other servers. Remove one to add another.</string>
     <string name="error_federation_unavailable">Capsule couldn\'t reach the federation records. Please try again.</string>
     <string name="error_moderation_account_suspended">Your account is suspended. You can\'t upload or share until it\'s reinstated.</string>
     <string name="error_moderation_report_at_capacity">This server is handling too many reports right now. Please wait and try again.</string>

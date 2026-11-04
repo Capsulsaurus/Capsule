@@ -1858,6 +1858,10 @@
     <string name="error_federation_capability_malformed">Этот запрос на общий доступ недействителен.</string>
     <string name="error_federation_capability_revoked">Доступ к этому общему альбому отозван.</string>
     <string name="error_federation_circuit_open">Этот источник временно приостановлен после повторяющихся ошибок.</string>
+    <string name="error_federation_hint_at_capacity">Сейчас этот сервер обрабатывает слишком много уведомлений об обновлении. Подождите и повторите попытку.</string>
+    <string name="error_federation_hint_malformed">Это уведомление об обновлении недействительно.</string>
+    <string name="error_federation_hint_rate_limited">Слишком много уведомлений об обновлении от этого сервера. Подождите и повторите попытку.</string>
+    <string name="error_federation_hint_unsigned">Не удалось проверить уведомление об обновлении.</string>
     <string name="error_federation_member_not_on_roster">Этого человека нет в списке участников альбома.</string>
     <string name="error_federation_mint_at_capacity">Сейчас этот сервер обрабатывает слишком много разрешений на доступ. Повторите попытку чуть позже.</string>
     <string name="error_federation_not_configured">Этот сервер не делится альбомами с другими серверами.</string>
@@ -1865,6 +1869,7 @@
     <string name="error_federation_rate_budget_exceeded">Этот источник достиг лимита запросов. Подождите и повторите попытку.</string>
     <string name="error_federation_revocations_unavailable">Capsule не удалось прочитать список отзывов. Повторите попытку.</string>
     <string name="error_federation_scope_insufficient">Это разрешение на доступ не распространяется на запрошенный контент.</string>
+    <string name="error_federation_subscription_limit">Вы достигли предела общих альбомов с других серверов, на которые можно подписаться. Удалите один, чтобы добавить другой.</string>
     <string name="error_federation_unavailable">Capsule не удалось получить данные федерации. Повторите попытку.</string>
     <string name="error_moderation_account_suspended">Ваша учётная запись приостановлена. Вы не можете загружать или делиться, пока она не будет восстановлена.</string>
     <string name="error_moderation_report_at_capacity">Сейчас этот сервер обрабатывает слишком много жалоб. Подождите и повторите попытку.</string>

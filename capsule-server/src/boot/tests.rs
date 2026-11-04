@@ -330,6 +330,67 @@ mod postgres_conformance {
         assembled.service().expect("the router builds");
     }
 
+    /// The durable arm's pulled albums are assembled with the configured caching budget, so
+    /// `serve` on Postgres charges [`PeerBudgetCharge`](crate::federation::pull::pulled::postgres::PeerBudgetCharge)
+    /// rather than the uncharged default.
+    #[tokio::test]
+    async fn the_durable_pulled_albums_charge_the_configured_peer_budget() {
+        let Some(database) = testing::start("the durable pulled-album budget").await else {
+            return;
+        };
+        let Some((valkey_url, _valkey)) = valkey("the durable pulled-album budget").await else {
+            return;
+        };
+        let root = tempfile::tempdir().expect("a scratch directory");
+        let mut environment: BTreeMap<String, String> = durable_environment(root.path());
+        environment.insert("DATABASE_URL".to_owned(), database.url().to_owned());
+        environment.insert("VALKEY_URL".to_owned(), valkey_url);
+        environment.insert("FEDERATION_PEER_BUDGET_PERCENT".to_owned(), "0".to_owned());
+        let config = Config::load(&environment, &Overrides::default(), Demands::Serve)
+            .expect("it is well-formed");
+        let base = super::super::base(&config, std::sync::Arc::new(super::super::SystemClock))
+            .await
+            .expect("the base opens");
+        let connection = super::super::open_durable_database(&config)
+            .await
+            .expect("the database opens");
+        let valkey = super::super::valkey(&config).await.expect("Valkey answers");
+        let stores = base.durable(&connection, &valkey);
+        super::a_new_pulled_blob_is_refused_at_a_zero_budget(&stores).await;
+    }
+
+    /// `serve`'s and `gc`'s durable arm counts the pulled albums' claims (#1141): the page's
+    /// blob lands in the blob root through the durable adapter, and the collector over the same
+    /// database keeps it past the grace window.
+    #[tokio::test]
+    async fn the_durable_collector_keeps_the_blobs_pulled_albums_hold() {
+        let Some(database) = testing::start("the durable collector and pulled albums").await else {
+            return;
+        };
+        let Some((valkey_url, _valkey)) = valkey("the durable collector and pulled albums").await
+        else {
+            return;
+        };
+        let root = tempfile::tempdir().expect("a scratch directory");
+        let mut environment: BTreeMap<String, String> = durable_environment(root.path());
+        environment.insert("DATABASE_URL".to_owned(), database.url().to_owned());
+        environment.insert("VALKEY_URL".to_owned(), valkey_url);
+        let config = Config::load(&environment, &Overrides::default(), Demands::Serve)
+            .expect("it is well-formed");
+        let clock = std::sync::Arc::new(crate::store::memory::ManualClock::new(
+            jiff::Timestamp::now(),
+        ));
+        let base = super::super::base(&config, clock.clone())
+            .await
+            .expect("the base opens");
+        let connection = super::super::open_durable_database(&config)
+            .await
+            .expect("the database opens");
+        let valkey = super::super::valkey(&config).await.expect("Valkey answers");
+        let stores = base.durable(&connection, &valkey);
+        super::a_pulled_blob_outlives_the_assembled_collector(&stores, &clock).await;
+    }
+
     /// A durable `gc` keeps its marks between processes, so a later pass can sweep.
     ///
     /// The reason the maintenance arm exists: the collector marks a blob on one pass and
@@ -617,6 +678,282 @@ async fn federation_url_is_published_only_when_federation_is_switched_on() {
 }
 
 #[tokio::test]
+async fn a_pull_worker_is_assembled_and_started_only_when_federation_is_switched_on() {
+    let root = tempfile::tempdir().expect("a scratch directory");
+    let off = assemble(&memory_config_with(
+        root.path(),
+        &[("FEDERATION_URL", "https://capsule.example/v1")],
+    ))
+    .await
+    .expect("it assembles");
+    assert!(off.pull_worker.is_none(), "a URL alone federates nothing");
+    assert!(off.spawn_pull_worker().is_none(), "and nothing is pulled");
+    let federation: crate::federation::FederationContext = kynos::di::Provides::provide(&off.app);
+    assert!(federation.hints().is_none(), "and no hint reaches anything");
+
+    let on = assemble(&memory_config_with(
+        root.path(),
+        &[
+            ("FEDERATION_URL", "https://capsule.example/v1"),
+            ("FEDERATION_ENABLED", "true"),
+        ],
+    ))
+    .await
+    .expect("it assembles");
+    assert!(on.pull_worker.is_some());
+    let federation: crate::federation::FederationContext = kynos::di::Provides::provide(&on.app);
+    assert!(
+        federation.hints().is_some(),
+        "a verified hint reaches the worker the server runs"
+    );
+    let running = on
+        .spawn_pull_worker()
+        .expect("a federating server starts its worker");
+    assert!(
+        !running.is_finished(),
+        "the loop runs until the process stops"
+    );
+    running.abort();
+}
+
+/// Assert `stores` refuses a pulled page holding a blob new to its one subscriber, as the
+/// budget of `FEDERATION_PEER_BUDGET_PERCENT=0` must and a store assembled without the
+/// configured budget never does.
+async fn a_new_pulled_blob_is_refused_at_a_zero_budget(stores: &super::Stores) {
+    use crate::federation::pull::JobKey;
+    use crate::federation::pull::pulled::{Committed, PulledAlbum, ValidatedPage};
+    use crate::federation::{CapabilityToken, PeerId, Scope, Subscription};
+    use crate::store::{AlbumId, UserId};
+
+    let job = JobKey::new(PeerId::new("home.test"), AlbumId::new("budgeted"));
+    let subscriber = UserId::new("budgeted-member");
+    let now = jiff::Timestamp::from_second(1_767_225_600).expect("a representable instant");
+    stores
+        .subscriptions
+        .put(Subscription {
+            subscriber: subscriber.clone(),
+            peer: job.peer.clone(),
+            album: job.album.clone(),
+            scope: Scope::Read,
+            jti: "budgeted-jti".to_owned(),
+            token: CapabilityToken::new("header.payload.signature"),
+            issued_at: now,
+            expires_at: jiff::Timestamp::MAX,
+            min_protocol_version: capsule_core::crypto::primitives::PROTOCOL_VERSION.to_owned(),
+            subscribed_at: now,
+            updated_at: now,
+        })
+        .await
+        .expect("the subscription is recorded");
+    let bytes = b"a metadata blob new to everyone".to_vec();
+    let size = u64::try_from(bytes.len()).expect("a small blob");
+    let page = ValidatedPage {
+        entries: Vec::new(),
+        metadata_blobs: BTreeMap::from([(capsule_core::crypto::hash::hash_bytes(&bytes), bytes)]),
+        state: PulledAlbum {
+            cursor: Some("c1".to_owned()),
+            high_water: Some(1),
+            ..PulledAlbum::default()
+        },
+    };
+    match stores
+        .pulled
+        .commit(&job, None, page)
+        .await
+        .expect("the commit is answered")
+    {
+        Committed::OverBudget(over) => {
+            assert_eq!(over.subscriber, subscriber);
+            assert_eq!(
+                over.budget, 0,
+                "the configured percentage of the hard limit"
+            );
+            assert_eq!(over.used, size);
+        }
+        other => panic!("a zero budget must refuse a page holding a new blob, got {other:?}"),
+    }
+    assert_eq!(
+        stores.pulled.read(&job).await.expect("a read"),
+        PulledAlbum::default(),
+        "the refused page moved nothing"
+    );
+}
+
+/// The bytes [`a_pulled_blob_outlives_the_assembled_collector`] pulls.
+const PULLED_METADATA: &[u8] = b"a pulled metadata blob the assembled collector must keep";
+
+/// Assert the collector and the scrub `stores` assemble — the ones `serve` and `gc` run — keep
+/// a pulled page's metadata blob in the blob root past the grace window (#1141), while sweeping
+/// an orphan beside it. The page carries [`PULLED_METADATA`], which must already be in the blob
+/// root once the commit returns; `clock` is the stores' own.
+async fn a_pulled_blob_outlives_the_assembled_collector(
+    stores: &super::Stores,
+    clock: &ManualClock,
+) {
+    use crate::blob::{BlobStore as _, ContentAddress};
+    use crate::federation::PeerId;
+    use crate::federation::pull::JobKey;
+    use crate::federation::pull::pulled::{Committed, PulledAlbum, ValidatedPage};
+    use crate::gc::{DEFAULT_GRACE_WINDOW, Mode, collect};
+    use crate::store::AlbumId;
+
+    let hash = capsule_core::crypto::hash::hash_bytes(PULLED_METADATA);
+    let job = JobKey::new(PeerId::new("home.test"), AlbumId::new("held"));
+    let page = ValidatedPage {
+        entries: Vec::new(),
+        metadata_blobs: BTreeMap::from([(hash, PULLED_METADATA.to_vec())]),
+        state: PulledAlbum {
+            cursor: Some("c1".to_owned()),
+            high_water: Some(1),
+            ..PulledAlbum::default()
+        },
+    };
+    assert_eq!(
+        stores
+            .pulled
+            .commit(&job, None, page)
+            .await
+            .expect("the commit is answered"),
+        Committed::Written
+    );
+    let held = ContentAddress::parse(&hash.to_hex()).expect("an address");
+    let orphan_bytes = b"an orphan beside the pulled blob";
+    let orphan =
+        ContentAddress::parse(&capsule_core::crypto::hash::hash_bytes(orphan_bytes).to_hex())
+            .expect("an address");
+    stores
+        .blobs
+        .put(&orphan, orphan_bytes)
+        .await
+        .expect("the orphan is stored");
+
+    let maintenance = stores.maintenance(
+        DEFAULT_GRACE_WINDOW,
+        crate::ledger::replay::LedgerKeys::default(),
+        None,
+    );
+    let report = collect(&maintenance.collection, Mode::Apply)
+        .await
+        .expect("a pass");
+    assert_eq!(report.marked, vec![orphan.clone()], "{report:?}");
+    clock.advance(jiff::SignedDuration::from_hours(72));
+    let report = collect(&maintenance.collection, Mode::Apply)
+        .await
+        .expect("a pass past the window");
+    assert_eq!(report.swept, vec![orphan], "{report:?}");
+    assert!(
+        stores.blobs.stat(&held).await.expect("stat").is_some(),
+        "the assembled collector must count the pulled albums' claims"
+    );
+    let scrubbed = crate::scrub::scrub(&maintenance.scrub, crate::scrub::Depth::Structural)
+        .await
+        .expect("a scrub pass");
+    assert_eq!(
+        scrubbed.count("orphan"),
+        0,
+        "and so must the assembled scrub: {:?}",
+        scrubbed.findings
+    );
+}
+
+/// `serve`'s and `gc`'s in-memory arm counts the pulled albums' claims (#1141).
+#[tokio::test]
+async fn the_in_memory_collector_keeps_the_blobs_pulled_albums_hold() {
+    use crate::blob::BlobStore as _;
+
+    let root = tempfile::tempdir().expect("a scratch directory");
+    let config = memory_config(root.path());
+    let clock = std::sync::Arc::new(ManualClock::new(jiff::Timestamp::now()));
+    let stores = super::base(&config, clock.clone())
+        .await
+        .expect("the base opens")
+        .in_memory(std::sync::Arc::new(super::InMemoryReceipts::new()));
+    // The in-memory pulled albums keep their blobs in memory; put the bytes in the blob root
+    // as the durable adapter does, so the collector has something to sweep.
+    let address = crate::blob::ContentAddress::parse(
+        &capsule_core::crypto::hash::hash_bytes(PULLED_METADATA).to_hex(),
+    )
+    .expect("an address");
+    stores
+        .blobs
+        .put(&address, PULLED_METADATA)
+        .await
+        .expect("stored");
+    a_pulled_blob_outlives_the_assembled_collector(&stores, &clock).await;
+}
+
+/// The in-memory arm's pulled albums are assembled with the configured caching budget.
+#[tokio::test]
+async fn the_in_memory_pulled_albums_charge_the_configured_peer_budget() {
+    let root = tempfile::tempdir().expect("a scratch directory");
+    let config = memory_config_with(root.path(), &[("FEDERATION_PEER_BUDGET_PERCENT", "0")]);
+    let stores = super::base(&config, std::sync::Arc::new(super::SystemClock))
+        .await
+        .expect("the base opens")
+        .in_memory(std::sync::Arc::new(super::InMemoryReceipts::new()));
+    a_new_pulled_blob_is_refused_at_a_zero_budget(&stores).await;
+}
+
+#[tokio::test]
+async fn the_pull_worker_reads_the_subscriptions_and_peers_the_application_writes() {
+    use kynos::di::Provides as _;
+
+    use crate::federation::pull::{JobKey, JobOutcome};
+    use crate::federation::{CapabilityToken, FederationContext, PeerId, Scope, Subscription};
+    use crate::store::{AlbumId, UserId};
+
+    let root = tempfile::tempdir().expect("a scratch directory");
+    let assembled = assemble(&memory_config_with(
+        root.path(),
+        &[
+            ("FEDERATION_URL", "https://capsule.example/v1"),
+            ("FEDERATION_ENABLED", "true"),
+        ],
+    ))
+    .await
+    .expect("it assembles");
+    let federation: FederationContext = assembled.app.provide();
+    let now = federation.clock().now();
+    let peer = PeerId::new("home.test");
+    let album = AlbumId::new("album");
+    federation
+        .subscriptions()
+        .put(Subscription {
+            subscriber: UserId::new("member"),
+            peer: peer.clone(),
+            album: album.clone(),
+            scope: Scope::Read,
+            jti: "jti".to_owned(),
+            token: CapabilityToken::new("header.payload.signature"),
+            issued_at: now,
+            expires_at: jiff::Timestamp::MAX,
+            min_protocol_version: capsule_core::crypto::primitives::PROTOCOL_VERSION.to_owned(),
+            subscribed_at: now,
+            updated_at: now,
+        })
+        .await
+        .expect("the subscription is recorded");
+    // Blocked through the application's own peer store, so the round reaches the job and stops
+    // before any request leaves the process.
+    federation
+        .peers()
+        .block(&peer, now, None)
+        .await
+        .expect("the peer is blocked");
+
+    let worker = assembled
+        .pull_worker
+        .expect("a federating server has a worker");
+    let report = worker.tick().await;
+    assert_eq!(
+        report.outcomes,
+        vec![(JobKey::new(peer, album), JobOutcome::PeerBlocked)],
+        "the subscription the application recorded is the worker's job, and the block the \
+         application recorded is the worker's"
+    );
+}
+
+#[tokio::test]
 async fn the_published_protocol_window_is_the_configured_one() {
     let root = tempfile::tempdir().expect("a scratch directory");
     let config = memory_config(root.path());
@@ -808,6 +1145,48 @@ async fn the_assembled_maintenance_workers_see_the_links_the_application_issues(
         "and so must the scrub: {:?}",
         scrubbed.findings
     );
+}
+
+#[tokio::test]
+async fn the_assembled_collector_sweeps_the_activity_the_application_records() {
+    // #1112: the sweep rides the collection context, so an assembly that dropped
+    // `with_activity_sweep` would keep every unit test green and leave expired rows forever.
+    // Only a case over the assembled `Maintenance` and the application's own store sees it.
+    use crate::activity::{ActivityEvent, ActivityKind};
+
+    let root = tempfile::tempdir().expect("a scratch directory");
+    let assembled = assemble(&memory_config(root.path()))
+        .await
+        .expect("it assembles");
+    let store = assembled.app.activity().store();
+    store
+        .record(
+            ActivityEvent {
+                event_id: "expired-1".to_owned(),
+                user_id: crate::store::UserId::new("gone-quiet"),
+                kind: ActivityKind::SignOut,
+                at: jiff::Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_hours(24),
+                request_id: None,
+                session_id: None,
+                subject: None,
+            },
+            jiff::Timestamp::MIN,
+        )
+        .await
+        .expect("a record");
+    let horizon = crate::activity::horizon(jiff::Timestamp::now());
+
+    let dry = crate::gc::collect(&assembled.maintenance.collection, crate::gc::Mode::DryRun)
+        .await
+        .expect("a dry run");
+    assert_eq!(dry.expired_activity, 1, "the assembled pass counts it");
+    assert_eq!(store.count_expired(horizon).await.expect("a count"), 1);
+
+    let applied = crate::gc::collect(&assembled.maintenance.collection, crate::gc::Mode::Apply)
+        .await
+        .expect("an applied pass");
+    assert_eq!(applied.expired_activity, 1, "the assembled pass deletes it");
+    assert_eq!(store.count_expired(horizon).await.expect("a count"), 0);
 }
 
 #[tokio::test]

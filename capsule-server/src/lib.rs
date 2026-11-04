@@ -281,7 +281,8 @@ pub fn router() -> Router<App, Propagate, ServerInterceptors, impl Sized> {
         // Its own group rather than a fifth `mount` on the one above, for two reasons: these
         // are one surface and the sixteen-operation tuple ceiling is close, and they carry a
         // **tighter body cap** than the rest of the writes — no body here is anywhere near an
-        // upload chunk, and `submit_federated_report` is the server's only unauthenticated write.
+        // upload chunk, and `submit_federated_report` and `submit_pull_hint` are the server's only
+        // writes whose caller holds no credential of this server's.
         // See [`crate::limits::MAX_FEDERATION_BODY_BYTES`].
         //
         // The `FEDERATION_ENABLED` gate is the group's **first** interceptor, so a deployment that
@@ -298,6 +299,7 @@ pub fn router() -> Router<App, Propagate, ServerInterceptors, impl Sized> {
                     routes::federation::revoke_capability,
                     routes::federation::refresh_capability,
                     routes::federation::submit_federated_report,
+                    routes::hints::submit_pull_hint,
                     routes::subscriptions::subscribe_album,
                     routes::subscriptions::unsubscribe_album,
                 ]),

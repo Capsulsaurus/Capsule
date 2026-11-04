@@ -311,7 +311,7 @@ fn kinds_of(feed: &[capsule_sdk::sync::FeedEntry], asset: Uuid) -> Vec<ChangeKin
 /// server only once A's own custody check finds the create's receipts; it is sent once.
 #[tokio::test]
 async fn e2e_case_15_a_delete_after_hand_off_reaches_the_server_only_once_custody_exists() {
-    delete_after_hand_off(false).await;
+    Box::pin(delete_after_hand_off(false)).await;
 }
 
 /// As above, with an edit between the hand-off and the delete: the server's head is the create B
@@ -320,7 +320,7 @@ async fn e2e_case_15_a_delete_after_hand_off_reaches_the_server_only_once_custod
 /// than refusing it as a stale chain.
 #[tokio::test]
 async fn e2e_case_15_an_edit_then_a_delete_after_hand_off_both_reach_the_server_in_order() {
-    delete_after_hand_off(true).await;
+    Box::pin(delete_after_hand_off(true)).await;
 }
 
 async fn delete_after_hand_off(edit_first: bool) {

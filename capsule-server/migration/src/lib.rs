@@ -25,6 +25,16 @@
 //! - `000024` (#1003): `activity_events`, the account activity log.
 //! - `000025` (#1035): `federation_subscriptions`, the albums this server pulls from peers for
 //!   its own members.
+//! - `000026` (#1112): an index on `activity_events (at)`, for the operator's sweep of expired
+//!   activity events.
+//! - `000027` (#1059): `quota_attributions.reserved_until`, the reservation state an upload
+//!   session's charge carries until a finalization settles it or the reservation sweep
+//!   releases it.
+//! - `000028` (#1124): `federation_pulled_albums` and its children, the federation pull's
+//!   accepted entries, asset heads and held metadata blobs, per job.
+//! - `000029` (#1157): `federation_rejected_hashes`, the bounded soft-fail table, and an index
+//!   on `federation_accepted_entries (peer_id, album_id, asset_id, position)` for the breadcrumb
+//!   index's latest-entry-per-asset read.
 //!
 //! # Every instant is a `BIGINT` of microseconds since the Unix epoch
 //!
@@ -113,6 +123,10 @@ migrations![
     m20260902_000023_album_key_escrows,
     m20260902_000024_activity_log,
     m20260902_000025_federation_subscriptions,
+    m20260902_000026_activity_events_at_index,
+    m20260902_000027_upload_reservations,
+    m20260902_000028_federation_pulled_albums,
+    m20260902_000029_federation_rejected_hashes,
 ];
 
 /// The content checksum of one migration's source: lowercase hex SHA-256.
