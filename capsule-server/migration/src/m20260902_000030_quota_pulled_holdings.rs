@@ -28,7 +28,9 @@
 //! Two locks, always in this order:
 //!
 //! 1. **The job lock**, `pg_advisory_xact_lock(hashtext('quota_pulled_job'), hashtext(peer ||
-//!    '/' || album))`, taken by the subscription and pulled blob triggers, in job order, after
+//!    '/' || album))`, taken by the subscription and pulled blob triggers in the order of that
+//!    second key (so two statements naming several jobs cannot take colliding keys in opposite
+//!    orders), after
 //!    their own rows are written and before they read the other table. A subscription and a
 //!    pulled page for one job therefore cannot both miss each other's rows: whichever takes the
 //!    lock second reads, in a fresh READ COMMITTED snapshot, the rows the first committed. The
@@ -142,7 +144,8 @@ DECLARE
     counts BIGINT[];
 BEGIN
     FOR job IN SELECT peer_id, album_id FROM changed GROUP BY peer_id, album_id
-               ORDER BY peer_id COLLATE "C", album_id COLLATE "C" LOOP
+               ORDER BY hashtext(peer_id || '/' || album_id), peer_id COLLATE "C",
+                        album_id COLLATE "C" LOOP
         PERFORM quota_pulled_lock_job(job.peer_id, job.album_id);
     END LOOP;
     SELECT array_agg(user_id), array_agg(address), array_agg(size), array_agg(refs)
@@ -177,7 +180,8 @@ DECLARE
     counts BIGINT[];
 BEGIN
     FOR job IN SELECT peer_id, album_id FROM changed GROUP BY peer_id, album_id
-               ORDER BY peer_id COLLATE "C", album_id COLLATE "C" LOOP
+               ORDER BY hashtext(peer_id || '/' || album_id), peer_id COLLATE "C",
+                        album_id COLLATE "C" LOOP
         PERFORM quota_pulled_lock_job(job.peer_id, job.album_id);
     END LOOP;
     SELECT array_agg(user_id), array_agg(address), array_agg(size), array_agg(refs)

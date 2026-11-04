@@ -174,7 +174,7 @@ pub const EXPECTED_MIGRATIONS: &[ExpectedMigration] = &[
     },
     ExpectedMigration {
         name: "m20260902_000030_quota_pulled_holdings",
-        checksum: "59efd9238352dd14e82c0670840bbf5c30a2ef39402ff8309ee741ed8bb0ff7c",
+        checksum: "795624559ec2649b17981cc1614eee6d3fcc7b7332db39dbcbc84eacef6cad08",
     },
 ];
 

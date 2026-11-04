@@ -405,9 +405,16 @@ mod postgres_conformance {
         /// Rows written before the migration are counted by it, and its `down` and `up` round
         /// trip.
         pub(super) async fn the_migration_backfills_existing_holdings(h: &PostgresHarness) {
-            use server_migration::MigratorTrait as _;
+            use server_migration::{MigrationName as _, MigratorTrait as _};
 
-            server_migration::Migrator::down(&h.connection, Some(1))
+            // Down to just before `000030`, however many ordinals come after it.
+            let migrations = server_migration::Migrator::migrations();
+            let ordinal = migrations
+                .iter()
+                .position(|migration| migration.name() == "m20260902_000030_quota_pulled_holdings")
+                .expect("the materialised total's migration exists");
+            let later = u32::try_from(migrations.len() - ordinal).expect("a handful of ordinals");
+            server_migration::Migrator::down(&h.connection, Some(later))
                 .await
                 .expect("roll back the materialised total");
             let (owner, blob, mine) = (
