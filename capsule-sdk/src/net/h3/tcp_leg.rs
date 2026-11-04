@@ -6,7 +6,9 @@
 //! ([`probe`]), closed as soon as it connects. It proves the TCP path answers, which is all the
 //! race asks of it; the exchange that follows rides `reqwest`'s own pooled connection. Nothing
 //! here speaks HTTP over the probe's socket, so the SDK still does not reimplement the HTTP
-//! connector (networking doc, Packet Marking).
+//! connector (networking doc, Packet Marking). The dial connects directly, as QUIC does, so it
+//! never runs while a proxy is configured: the router then builds no transport
+//! ([`super::route::configured_proxy`]).
 //!
 //! An exchange runs on the `reqwest::Client` its request names in a [`LegContext`] extension —
 //! the caller's, so its pool and default headers are the ones the request would have ridden —

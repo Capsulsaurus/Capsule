@@ -9,6 +9,8 @@
 //!
 //! - **Discovers.** Every response's `Alt-Svc`, on either transport, feeds the policy
 //!   ([`super::transport::observe_response`]).
+//! - **Never bypasses a proxy.** With a proxy configured ([`configured_proxy`]) there is no
+//!   process transport, and every request rides its `reqwest` client through the proxy.
 //! - **Chooses once.** A request rides QUIC only for an `https` origin the policy answers a race
 //!   for ([`Carrier::races`]), and only when it is safe to send twice ([`resendable`]): an idempotent method, or a
 //!   request its caller marked [`replayable`] (an upload chunk, addressed by offset and checked
@@ -336,12 +338,42 @@ pub fn current_generation() -> PathGeneration {
     PathGeneration(NETWORK.load(Ordering::Relaxed))
 }
 
-/// The process's transport, built once: webpki roots, default windows and bounds. `None` when it
-/// cannot be configured, and every request then rides TCP.
+/// The proxy variables a `reqwest` client reads from the environment (curl's names, either case).
+pub const PROXY_VARIABLES: [&str; 6] = [
+    "ALL_PROXY",
+    "all_proxy",
+    "HTTPS_PROXY",
+    "https_proxy",
+    "HTTP_PROXY",
+    "http_proxy",
+];
+
+/// The first of [`PROXY_VARIABLES`] `var` reads a non-empty value for: a proxy the SDK's
+/// `reqwest` clients send through. Every SDK client starts from [`crate::net::http_builder`],
+/// which keeps `reqwest`'s environment proxies, so this is the proxy its requests ride. QUIC and
+/// the TCP leg's reachability dial both connect directly, so a configured proxy means no request
+/// races QUIC: it would bypass the proxy. `NO_PROXY` is not consulted, so a host it exempts
+/// rides TCP too rather than the SDK re-deciding `reqwest`'s exemptions.
+pub fn configured_proxy(var: impl Fn(&str) -> Option<String>) -> Option<&'static str> {
+    PROXY_VARIABLES
+        .into_iter()
+        .find(|name| var(name).is_some_and(|value| !value.trim().is_empty()))
+}
+
+/// The process's transport, built once: webpki roots, default windows and bounds. `None` when a
+/// proxy is configured ([`configured_proxy`]) or the transport cannot be configured, and every
+/// request then rides TCP.
 pub fn transport() -> Option<&'static SdkTransport> {
     static TRANSPORT: OnceLock<Option<SdkTransport>> = OnceLock::new();
     TRANSPORT
         .get_or_init(|| {
+            if let Some(variable) = configured_proxy(|name| std::env::var(name).ok()) {
+                tracing::info!(
+                    variable,
+                    "h3: a proxy is configured; QUIC would bypass it, so every request rides TCP"
+                );
+                return None;
+            }
             let built = H3Dialer::new(&H3Config::default())
                 .map_err(|e| e.to_string())
                 .and_then(|dialer| {

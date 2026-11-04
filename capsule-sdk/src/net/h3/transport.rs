@@ -11,6 +11,8 @@
 //!   request rides whichever connects first. A QUIC dial that loses the race keeps running in
 //!   the background: it is pooled for the next request when it connects, and records UDP
 //!   unusable on the network ([`UdpFailure::DialFailed`]) when it fails while TCP succeeded.
+//!   When both dials fail, UDP is recorded unusable too ([`UdpFailure::BothDialsFailed`]), so
+//!   the next request on the network does not wait out the QUIC dial again.
 //! - **Progress.** While a request rides QUIC, a watchdog reads the connection's received
 //!   datagrams. QUIC keep-alives make a live path answer at least every quarter of the stall
 //!   bound, so a path silent for half of it has stopped making progress: the request fails with
@@ -1020,10 +1022,15 @@ where
                 }
                 self.exchange_tcp(conn, request, bounds).await
             }
-            Err(BothFailed { quic, tcp }) => Err(TransportError::Dial {
-                quic: Some(quic.to_string()),
-                tcp: tcp.to_string(),
-            }),
+            Err(BothFailed { quic, tcp }) => {
+                tracing::debug!(%quic, %tcp, "h3: both dials failed");
+                self.policy
+                    .record_udp_unusable(network, UdpFailure::BothDialsFailed);
+                Err(TransportError::Dial {
+                    quic: Some(quic.to_string()),
+                    tcp: tcp.to_string(),
+                })
+            }
         }
     }
 

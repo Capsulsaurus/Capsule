@@ -384,6 +384,27 @@ async fn the_generated_clients_backend_routes_through_the_process_transport() {
 }
 
 #[test]
+fn any_proxy_variable_reqwest_reads_keeps_requests_off_quic() {
+    assert_eq!(configured_proxy(|_| None), None);
+    assert_eq!(
+        configured_proxy(|_| Some("  ".to_owned())),
+        None,
+        "an empty variable configures no proxy"
+    );
+    for variable in PROXY_VARIABLES {
+        let found = configured_proxy(|name| {
+            (name == variable).then(|| "http://proxy.example:3128".to_owned())
+        });
+        assert_eq!(found, Some(variable), "{variable}");
+    }
+    assert_eq!(
+        configured_proxy(|name| (name == "NO_PROXY").then(|| "*".to_owned())),
+        None,
+        "an exemption alone configures no proxy"
+    );
+}
+
+#[test]
 fn the_network_follows_the_reported_generation() {
     observe_generation(PathGeneration(41));
     assert_eq!(current_generation(), PathGeneration(41));

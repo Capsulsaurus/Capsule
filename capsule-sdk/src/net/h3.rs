@@ -10,8 +10,8 @@
 //! - **Race at dial.** [`H3Policy::choose`] answers [`TransportChoice::Race`] for an origin with a
 //!   live advertisement on a network whose UDP is not known to be unusable. The race is between
 //!   connection attempts, never between requests: a request rides exactly one dialed connection.
-//! - **Per-network "UDP unusable" record.** A QUIC dial that fails while TCP succeeds, or a QUIC
-//!   path that stops making progress, records UDP as unusable on that [`PathGeneration`] for
+//! - **Per-network "UDP unusable" record.** A QUIC dial that fails while TCP succeeds, a race in
+//!   which both dials fail, or a QUIC path that stops making progress, records UDP as unusable on that [`PathGeneration`] for
 //!   [`UDP_UNUSABLE_TTL`] ([`H3Policy::record_udp_unusable`]). A new path starts with no record.
 //! - **Fallback at a request boundary.** The choice is taken once, when a request starts. A
 //!   request already riding QUIC is never moved mid-flight: it fails, the retry engine re-sends it,
@@ -227,6 +227,10 @@ pub enum UdpFailure {
     DialFailed,
     /// A QUIC path stopped making progress mid-request.
     Stalled,
+    /// The QUIC dial and the TCP dial it raced both failed. Recorded so a network where neither
+    /// connects (a proxy-only network among them) does not wait out the QUIC dial on every
+    /// request; TCP alone decides the next one.
+    BothDialsFailed,
 }
 
 #[derive(Debug, Default)]

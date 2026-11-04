@@ -255,7 +255,11 @@ fn for_build_races_only_where_the_http3_feature_built_the_transport() {
 
 #[test]
 fn udp_unusable_falls_back_to_tcp_at_the_next_request_until_expiry() {
-    for failure in [UdpFailure::DialFailed, UdpFailure::Stalled] {
+    for failure in [
+        UdpFailure::DialFailed,
+        UdpFailure::Stalled,
+        UdpFailure::BothDialsFailed,
+    ] {
         let (clock, policy) = capable();
         policy.observe_alt_svc(ORIGIN, r#"h3=":443""#);
         // The request in flight already chose; the failure only moves the next one.

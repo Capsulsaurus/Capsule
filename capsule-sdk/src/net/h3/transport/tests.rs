@@ -899,7 +899,7 @@ async fn a_quic_dial_that_connects_after_tcp_won_is_pooled_for_the_next_request(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn both_dials_failing_is_a_dial_error_that_records_nothing() {
+async fn both_dials_failing_is_a_dial_error_that_records_udp_unusable() {
     let server = server().await;
     let blackhole = UdpRelay::to(server.quic_addr).await;
     blackhole.drop_everything();
@@ -933,10 +933,11 @@ async fn both_dials_failing_is_a_dial_error_that_records_nothing() {
         matches!(failed, Err(TransportError::Dial { quic: Some(_), .. })),
         "{failed:?}"
     );
-    assert!(matches!(
+    // The next request on this network rides TCP alone instead of waiting out the QUIC dial.
+    assert_eq!(
         transport.policy().choose(&key, NET),
-        TransportChoice::Race { .. }
-    ));
+        TransportChoice::Tcp(TcpReason::UdpUnusable)
+    );
 }
 
 /// The acceptance scenario without privileges: UDP starts dropping mid-transfer, and the
