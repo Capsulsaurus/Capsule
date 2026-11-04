@@ -10,7 +10,8 @@ private let syncLog = Logger(subsystem: CapsuleLog.subsystem, category: "sync-dr
 
 /// The session and workspace verbs a sync of the managed lane drives, bound
 /// to one server: `FfiSession.syncPull`, `FfiSession.fetchBlobToPath`,
-/// `FfiWorkspace.applySyncEntryFromFile`, `FfiWorkspace.openSyncedOriginal`,
+/// `FfiSession.fetchProvenanceHistory`, `FfiWorkspace.applySyncEntryFromFile`,
+/// `FfiWorkspace.openSyncedOriginal`, `FfiWorkspace.openSyncedHistory`,
 /// `FfiWorkspace.provenanceHead` and `FfiWorkspace.assetIds`, and nothing else
 /// of either.
 ///
@@ -22,6 +23,10 @@ protocol FFISyncDriverVerbs: Sendable {
     /// Fetch the blob at content address `hash` (`size` bytes) into the file
     /// at `path`, which holds exactly the verified ciphertext once this returns.
     func fetchBlob(hash: String, size: UInt64, to path: URL) async throws
+    /// The records before `manifestCbor` (a feed entry's latest record) back
+    /// to its asset's `create`, oldest first; empty for a `create`. Nothing is
+    /// verified: the walk only follows links.
+    func fetchProvenanceHistory(manifestCbor: Data) async throws -> [Data]
     /// Run the sync chokepoint over `head` with the original's ciphertext read
     /// from the file at `path`. Writes nothing.
     func applySyncEntry(_ head: FfiSyncHead, ciphertextAt path: URL) throws -> FfiSyncApplyOutcome
@@ -29,6 +34,17 @@ protocol FFISyncDriverVerbs: Sendable {
     /// from the file at `path`, and decrypt it to `destination`, which holds
     /// the verified plaintext only when this answers `opened`.
     func openSyncedOriginal(_ head: FfiSyncHead, ciphertextAt path: URL, to destination: URL) throws -> FfiOpenedOriginal
+    /// ``openSyncedOriginal(_:ciphertextAt:to:)`` for an asset the workspace
+    /// does not hold, first seen past its create: `head` is applied against
+    /// the last record of `history` (what ``fetchProvenanceHistory(manifestCbor:)``
+    /// answered), every record is verified from the create, and the asset is
+    /// adopted, which the opened facts' `adopted` says.
+    func openSyncedHistory(
+        _ head: FfiSyncHead,
+        history: [Data],
+        ciphertextAt path: URL,
+        to destination: URL
+    ) throws -> FfiOpenedOriginal
     /// The head of a held asset's chain, as canonical CBOR.
     func provenanceHead(assetId: String) throws -> Data
     /// Every asset the workspace holds, live or in the trash.
@@ -62,12 +78,33 @@ struct FFISessionSyncVerbs: FFISyncDriverVerbs {
         )
     }
 
+    func fetchProvenanceHistory(manifestCbor: Data) async throws -> [Data] {
+        try await session.fetchProvenanceHistory(
+            blobBaseUrl: Self.blobBaseURL(apiBaseURL: apiBaseURL),
+            manifestCbor: manifestCbor
+        )
+    }
+
     func applySyncEntry(_ head: FfiSyncHead, ciphertextAt path: URL) throws -> FfiSyncApplyOutcome {
         try workspace.applySyncEntryFromFile(entry: head, ciphertextPath: path.path)
     }
 
     func openSyncedOriginal(_ head: FfiSyncHead, ciphertextAt path: URL, to destination: URL) throws -> FfiOpenedOriginal {
         try workspace.openSyncedOriginal(entry: head, ciphertextPath: path.path, destinationPath: destination.path)
+    }
+
+    func openSyncedHistory(
+        _ head: FfiSyncHead,
+        history: [Data],
+        ciphertextAt path: URL,
+        to destination: URL
+    ) throws -> FfiOpenedOriginal {
+        try workspace.openSyncedHistory(
+            entry: head,
+            history: history,
+            ciphertextPath: path.path,
+            destinationPath: destination.path
+        )
     }
 
     func provenanceHead(assetId: String) throws -> Data {
@@ -94,7 +131,16 @@ struct FFISessionSyncVerbs: FFISyncDriverVerbs {
 /// head. An entry that names a metadata blob is opened
 /// (`FfiWorkspace.openSyncedOriginal`): verified, and its original decrypted
 /// to a staged plaintext that hashes to the signed sidecar's digest, which
-/// the catalog writer keeps in the store. One that names none (a `delete` or
+/// the catalog writer keeps in the store. An opened entry of an asset the
+/// workspace does not hold first has its earlier records fetched
+/// (`FfiSession.fetchProvenanceHistory`); when there are any, the asset was
+/// first seen past its create, and the entry is opened against them
+/// (`FfiWorkspace.openSyncedHistory`), which verifies the chain from its
+/// create and adopts the asset, so its trash verbs and tag edits work here.
+/// An adopted asset is held for the rest of the drain. A history fetch that
+/// fails is thrown as a blob fetch is; one whose records do not decode, or
+/// run past the walk's bound, quarantines the entry as
+/// ``SyncVerdict/malformedHistoryReason``. One that names none (a `delete` or
 /// `trash-restore`) is only verified (`FfiWorkspace.applySyncEntryFromFile`).
 /// Every staged file the writer does not keep is removed; each drain first
 /// empties the staging directory of what a drain the process was killed in
@@ -238,7 +284,7 @@ public actor FFISyncDriver {
             }
             var fold = PageFold(state: kept, known: known)
             for entry in page.entries {
-                try await apply(entry, into: &fold, heldIDs: heldIDs)
+                try await apply(entry, into: &fold, heldIDs: &heldIDs)
             }
             if page.hasMore, page.nextCursor == kept.cursor {
                 syncLog.error("sync drain stopped: a page claims more but did not advance the cursor")
@@ -259,8 +305,10 @@ public actor FFISyncDriver {
     }
 
     /// Judge one entry against the head this device holds for its asset, and
-    /// apply it when it is not level.
-    private func apply(_ entry: FfiFeedEntry, into fold: inout PageFold, heldIDs: [String: String]) async throws {
+    /// apply it when it is not level. An asset the workspace adopts while it
+    /// is applied joins `heldIDs`: the adoption is the workspace's own write,
+    /// kept whether or not the page is.
+    private func apply(_ entry: FfiFeedEntry, into fold: inout PageFold, heldIDs: inout [String: String]) async throws {
         guard let key = FFIPurgeDelivery.feedKey(entry.assetId) else {
             syncLog.debug("feed entry names no asset id this library uses")
             fold.tally.skipped += 1
@@ -289,12 +337,21 @@ public actor FFISyncDriver {
             fold.tally.awaitingOriginal += 1
             return
         }
-        guard let verdict = try await verify(entry, key: key, original: original, localChainHead: applied ?? own) else {
+        guard let verdict = try await verify(
+            entry,
+            key: key,
+            original: original,
+            localChainHead: applied ?? own,
+            held: heldIDs[key] != nil
+        ) else {
             fold.tally.skipped += 1
             return
         }
         defer {
             if let plaintext = verdict.plaintext { removeStaged(plaintext) }
+        }
+        if case let .applied(facts) = verdict.outcome, facts.adopted {
+            heldIDs[key] = facts.assetId
         }
         try await settle(verdict, key: key, into: &fold)
     }
@@ -326,20 +383,30 @@ public actor FFISyncDriver {
     /// naming a metadata blob is opened, and an `opened` verdict hands back
     /// the staged plaintext, which the caller removes once the catalog has
     /// written it; one naming none (a `delete` or `trash-restore`) is only
-    /// verified. `nil`, logged, for an entry naming a metadata blob it does
-    /// not list, which cannot be fetched without its size.
+    /// verified. An opened entry of an asset not `held` here is opened against
+    /// its fetched history when it has one. `nil`, logged, for an entry naming
+    /// a metadata blob it does not list, which cannot be fetched without its
+    /// size.
     private func verify(
         _ entry: FfiFeedEntry,
         key: String,
         original: FfiBlobRef,
-        localChainHead: Data?
+        localChainHead: Data?,
+        held: Bool
     ) async throws -> SyncVerdict? {
         var metadata = Data()
+        var history: [Data] = []
         if !entry.metadataBlob.isEmpty {
             let address = String(data: entry.metadataBlob, encoding: .utf8)
             guard let blob = entry.blobs.derivatives.first(where: { $0.ciphertextHash == address }) else {
                 syncLog.error("entry of \(key, privacy: .public) names a metadata blob it does not list")
                 return nil
+            }
+            if !held {
+                switch try await fetchHistory(entry, key: key) {
+                case let .records(records): history = records
+                case let .refused(verdict): return verdict
+                }
             }
             let staged = try await fetchStaged(blob)
             defer { removeStaged(staged) }
@@ -359,12 +426,40 @@ public actor FFISyncDriver {
         let plaintext = stagingDirectory.appending(path: UUID().uuidString)
         let opened: FfiOpenedOriginal
         do {
-            opened = try verbs.openSyncedOriginal(head, ciphertextAt: staged, to: plaintext)
+            if history.isEmpty {
+                opened = try verbs.openSyncedOriginal(head, ciphertextAt: staged, to: plaintext)
+            } else {
+                opened = try verbs.openSyncedHistory(head, history: history, ciphertextAt: staged, to: plaintext)
+                if case let .opened(facts) = opened {
+                    syncLog.info(
+                        "asset \(key, privacy: .public) opened from its \(history.count, privacy: .public)-record history, adopted=\(facts.adopted, privacy: .public)"
+                    )
+                }
+            }
         } catch {
             removeStaged(plaintext)
             throw error
         }
         return SyncVerdict(opened, plaintext: plaintext, key: key)
+    }
+
+    /// The records before `entry`'s, oldest first, for an asset this
+    /// workspace does not hold: empty for a `create`. A history whose records
+    /// do not decode, or that runs past the walk's bound (`FfiError.Sync`),
+    /// never verifies, so it fails as a quarantined verdict; any other error,
+    /// a record's fetch among them, is thrown, as a blob fetch's is.
+    private func fetchHistory(_ entry: FfiFeedEntry, key: String) async throws -> HistoryFetch {
+        do {
+            let history = try await verbs.fetchProvenanceHistory(manifestCbor: entry.manifestCbor)
+            syncLog.debug("entry of \(key, privacy: .public) has \(history.count, privacy: .public) earlier records")
+            return .records(history)
+        } catch let FfiError.Sync(_, detail) {
+            syncLog.error("history of \(key, privacy: .public) is unreadable: \(detail, privacy: .public)")
+            return .refused(SyncVerdict(
+                outcome: .quarantined(reason: SyncVerdict.malformedHistoryReason, detail: detail),
+                plaintext: nil
+            ))
+        }
     }
 
     /// Fetch `blob` into a fresh file in the staging directory.
@@ -434,6 +529,10 @@ struct SyncVerdict {
     /// The quarantine reason an opened entry whose plaintext does not hash to
     /// the signed sidecar's digest is passed with.
     static let digestMismatchReason = "DigestMismatch"
+    /// The quarantine reason an entry of an unheld asset is passed with when
+    /// its earlier records do not decode or run past the walk's bound, so its
+    /// chain can never verify from its create.
+    static let malformedHistoryReason = "MalformedHistory"
 
     let outcome: FfiSyncApplyOutcome
     /// The verified plaintext, present only for an `applied` outcome of an
@@ -463,6 +562,13 @@ struct SyncVerdict {
             self.init(outcome: .quarantined(reason: Self.digestMismatchReason, detail: facts.assetId), plaintext: nil)
         }
     }
+}
+
+/// What fetching an unheld asset's earlier records came to: the records,
+/// oldest first, or the verdict an unreadable history passes its entry with.
+private enum HistoryFetch {
+    case records([Data])
+    case refused(SyncVerdict)
 }
 
 /// One page's effect while its entries are applied, kept only once all are.
