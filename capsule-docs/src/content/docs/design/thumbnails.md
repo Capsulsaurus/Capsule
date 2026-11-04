@@ -52,7 +52,7 @@ The table is the contract, not an inventory. Native encoders sit behind the opt-
 | --- | --- | --- | --- |
 | `media-linked-codecs` (CLI) | JXL (lossy q=50) + AVIF | JXL + AVIF, q=70 | WebP (`rawshift-image` fails to compile it on aarch64) |
 | `media` only (FFI, cross) | JXL **lossless** (q=50 is advisory) | none | AVIF, lossy JXL (native code), WebP |
-| Either | — | — | All video derivatives (`rawshift-video` unpublished) |
+| Either | — | — | All video derivatives (`rawshift-video` 0.1.1 is a placeholder with no decoder or encoder) |
 
 Decode covers JPEG, PNG, JXL, TIFF, GIF, ARW and DNG in every build, plus AVIF under `media-avif-decode` (system libdav1d; not on Windows). Capsule pre-walks RAW IFD chains to bound value sizes and nesting depth (≤16) before handing them to the RAW reader. **HEIC is refused by decision** (libheif/libde265 are LGPL-3.0; see [Dependencies](/design/dependencies/)); WebP, other RAW families, and AVIF without the feature are recognised and refused.
 
