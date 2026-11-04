@@ -27,6 +27,6 @@
         "@biomejs/biome": "^2.5.1",
         "rehype": "^13.0.2",
         "vitest": "^4.1.11",
-        "wrangler": "^4.151.1"
+        "wrangler": "^4.151.2"
     }
 }
