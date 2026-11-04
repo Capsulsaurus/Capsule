@@ -14,6 +14,7 @@
 //! [`fetch_blob_to_path`](crate::ffi::FfiSession::fetch_blob_to_path),
 //! [`apply_lifecycle_op`](crate::ffi::FfiSession::apply_lifecycle_op),
 //! [`deliver_purge`](crate::ffi::FfiSession::deliver_purge),
+//! [`deliver_lifecycle_at_hash`](crate::ffi::FfiSession::deliver_lifecycle_at_hash),
 //! [`sync_pull`](crate::ffi::FfiSession::sync_pull),
 //! [`logout`](crate::ffi::FfiSession::logout)) rides that handle, and
 //! [`transfer_events`](crate::ffi::FfiSession::transfer_events) subscribes to the step-by-step

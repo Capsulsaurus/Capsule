@@ -1,9 +1,10 @@
-//! Tests for what of an asset's chain goes to the server, and when: held until the create is
-//! indexed, then the stretch after the server's head, and never a too-late restore of a held
-//! delete.
+//! Tests for the CLI's reading of the library and the feed a held delivery is judged on. The
+//! held rules themselves are the SDK's and tested there (`capsule_sdk::albums::plan_delivery`);
+//! these pin that the CLI judges them on the heads and the clock floor its feed drain names.
 
 use std::path::PathBuf;
 
+use capsule_core::crypto::provenance::Action;
 use capsule_library::lifecycle::Workspace;
 use capsule_sdk::sync::{BlobManifest, ChangeKind};
 
@@ -81,73 +82,11 @@ fn much_later() -> jiff::Timestamp {
     now() + jiff::SignedDuration::from_hours(24 * 365)
 }
 
-/// **The server never sees a record of an asset it has not indexed.** Whatever the chain
-/// holds, an asset the feed does not list is held, and nothing of it is sent.
+/// The CLI judges the shared rule on what its drain read: an asset the feed does not list is
+/// held, a listed one is sent the stretch after its head, and a server `changed_at` past a held
+/// delete's window floors a lagging device clock, so the restore that undoes it is withheld.
 #[test]
-fn an_asset_the_server_has_not_indexed_is_held() {
-    let scratch = Scratch::new();
-    let (mut ws, asset) = library(&scratch);
-    ws.soft_delete(&asset, 30).expect("deleted");
-    let chain = records(&ws, &asset);
-
-    assert_eq!(
-        plan(&chain, None, now()),
-        Delivery::Held {
-            reason: HoldReason::NotIndexed,
-            retention_until: None,
-        }
-    );
-}
-
-/// Once the create is indexed, the records after the server's head go, in chain order: a
-/// delete, and a restore made after it, each chaining onto the one before.
-#[test]
-fn an_indexed_asset_is_sent_the_stretch_after_the_servers_head() {
-    let scratch = Scratch::new();
-    let (mut ws, asset) = library(&scratch);
-    let create = records(&ws, &asset)[0].record_hash();
-    ws.soft_delete(&asset, 30).expect("deleted");
-
-    let chain = records(&ws, &asset);
-    assert_eq!(
-        delivery_actions(&plan(&chain, Some(Some(create)), now())),
-        Some(vec![Action::Delete])
-    );
-
-    ws.restore(&asset).expect("restored");
-    let chain = records(&ws, &asset);
-    assert_eq!(
-        delivery_actions(&plan(&chain, Some(Some(create)), now())),
-        Some(vec![Action::Delete, Action::TrashRestore]),
-        "a restore inside the window goes after the delete it undoes"
-    );
-}
-
-/// A server already level with the library is sent the head alone, which it answers as a
-/// replay; a head the server holds that the chain does not know (or none at all) is the head
-/// alone too, which the server judges and refuses as a stale chain if it must.
-#[test]
-fn a_level_or_unknown_server_head_is_sent_the_local_head_alone() {
-    let scratch = Scratch::new();
-    let (mut ws, asset) = library(&scratch);
-    ws.soft_delete(&asset, 30).expect("deleted");
-    let chain = records(&ws, &asset);
-    let head = chain.last().expect("a head").record_hash();
-
-    for server in [Some(head), Some(hash_bytes(b"elsewhere")), None] {
-        assert_eq!(
-            delivery_actions(&plan(&chain, Some(server), now())),
-            Some(vec![Action::Delete]),
-            "server head {server:?}"
-        );
-    }
-}
-
-/// **A restore of a held delete is never sent too late.** Sent after the delete's window has
-/// closed, the server would apply the delete, refuse the restore and purge an asset the user
-/// restored in time; the pair is withheld and the closed window reported.
-#[test]
-fn a_restore_undoing_a_held_delete_whose_window_closed_is_withheld() {
+fn the_shared_rule_is_judged_on_the_feeds_heads_and_clock_floor() {
     let scratch = Scratch::new();
     let (mut ws, asset) = library(&scratch);
     let create = records(&ws, &asset)[0].record_hash();
@@ -159,29 +98,37 @@ fn a_restore_undoing_a_held_delete_whose_window_closed_is_withheld() {
     ws.restore(&asset).expect("restored");
     let chain = records(&ws, &asset);
 
+    let unlisted = ServerChains::default();
     assert_eq!(
-        plan(&chain, Some(Some(create)), much_later()),
+        plan(&chain, unlisted.head(&asset), unlisted.judging_clock(now())),
+        Delivery::Held {
+            reason: HoldReason::NotIndexed,
+            retention_until: None,
+        }
+    );
+
+    let listed = |changed_at: &str| ServerChains {
+        heads: HashMap::from([(asset, Some(create))]),
+        latest_changed_at: Some(changed_at.parse().expect("a timestamp")),
+    };
+    let early = listed("2026-01-01T00:00:00Z");
+    assert_eq!(
+        delivery_actions(&plan(
+            &chain,
+            early.head(&asset),
+            early.judging_clock(now())
+        )),
+        Some(vec![Action::Delete, Action::TrashRestore]),
+        "inside the window by both clocks"
+    );
+    let late = listed("2999-01-01T00:00:00Z");
+    assert_eq!(
+        plan(&chain, late.head(&asset), late.judging_clock(now())),
         Delivery::Held {
             reason: HoldReason::RestoreTooLate,
             retention_until: Some(until),
-        }
-    );
-}
-
-/// The withholding covers only a delete the server has not seen. One already applied leaves
-/// the restore alone in the stretch, and the server's own clock judges it.
-#[test]
-fn a_restore_of_a_delete_the_server_holds_is_sent_whatever_the_clock() {
-    let scratch = Scratch::new();
-    let (mut ws, asset) = library(&scratch);
-    ws.soft_delete(&asset, 1).expect("deleted");
-    let delete = records(&ws, &asset).last().expect("a delete").record_hash();
-    ws.restore(&asset).expect("restored");
-    let chain = records(&ws, &asset);
-
-    assert_eq!(
-        delivery_actions(&plan(&chain, Some(Some(delete)), much_later())),
-        Some(vec![Action::TrashRestore])
+        },
+        "the server's clock says the window closed"
     );
 }
 

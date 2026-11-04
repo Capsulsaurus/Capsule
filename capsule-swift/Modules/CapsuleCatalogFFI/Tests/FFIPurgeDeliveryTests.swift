@@ -17,24 +17,37 @@ private final class ScriptedVerbs: FFIPurgeDeliveryVerbs, @unchecked Sendable {
         let serverHeadHash: Data?
     }
 
+    struct LifecycleCall: Equatable {
+        let assetID: String
+        let serverHeadHash: Data?
+        let latestChangedAt: String?
+    }
+
     private let lock = NSLock()
     private var pages: [Result<FfiSyncPage, any Error>]
     private var pulledFrom: [Data] = []
     private var delivered: [Delivery] = []
+    private var lifecycleCalls: [LifecycleCall] = []
     private let outcomes: [String: FfiLifecycleOpOutcome]
     private let purged: [String]
     private let keptHeads: [String: Data]
+    private let held: [String]
+    private let chainHeads: [String: Data]
 
     init(
         pages: [Result<FfiSyncPage, any Error>],
         outcomes: [String: FfiLifecycleOpOutcome] = [:],
         purged: [String] = [],
-        keptHeads: [String: Data] = [:]
+        keptHeads: [String: Data] = [:],
+        held: [String] = [],
+        chainHeads: [String: Data] = [:]
     ) {
         self.pages = pages
         self.outcomes = outcomes
         self.purged = purged
         self.keptHeads = keptHeads
+        self.held = held
+        self.chainHeads = chainHeads
     }
 
     var cursors: [Data] {
@@ -43,6 +56,10 @@ private final class ScriptedVerbs: FFIPurgeDeliveryVerbs, @unchecked Sendable {
 
     var deliveries: [Delivery] {
         lock.withLock { delivered }
+    }
+
+    var lifecycleDeliveries: [LifecycleCall] {
+        lock.withLock { lifecycleCalls }
     }
 
     /// Script the pages the next drains read.
@@ -72,11 +89,38 @@ private final class ScriptedVerbs: FFIPurgeDeliveryVerbs, @unchecked Sendable {
     func purgedAssetIds() -> [String] {
         purged
     }
+
+    func deliverLifecycle(assetId: String, serverHeadHash: Data?, latestChangedAt: String?) -> FfiLifecycleOpOutcome {
+        lock.withLock {
+            lifecycleCalls.append(LifecycleCall(
+                assetID: assetId,
+                serverHeadHash: serverHeadHash,
+                latestChangedAt: latestChangedAt
+            ))
+            return outcomes[assetId] ?? .notIndexed
+        }
+    }
+
+    func provenanceHead(assetId: String) throws -> Data {
+        guard let head = chainHeads[assetId] else {
+            throw FfiError.Workspace(detail: "asset \(assetId) is not managed by this workspace")
+        }
+        return head
+    }
+
+    func assetIds() -> [String] {
+        held
+    }
 }
 
 /// A feed entry listing `asset` (as UTF-8 bytes of its id) with `head` as its
-/// latest record.
-private func entry(_ asset: String, head: Data, seq: UInt64 = 1) -> FfiFeedEntry {
+/// latest record, changed at `changedAt` on the server's clock.
+private func entry(
+    _ asset: String,
+    head: Data,
+    seq: UInt64 = 1,
+    changedAt: String = "2026-01-01T00:00:00Z"
+) -> FfiFeedEntry {
     FfiFeedEntry(
         albumId: Data(repeating: 0xAB, count: 16),
         syncSeq: seq,
@@ -87,7 +131,7 @@ private func entry(_ asset: String, head: Data, seq: UInt64 = 1) -> FfiFeedEntry
         metadataBlob: Data(),
         blobs: FfiBlobManifest(original: nil, derivatives: []),
         originalHeld: true,
-        changedAt: "2026-01-01T00:00:00Z"
+        changedAt: changedAt
     )
 }
 
@@ -121,6 +165,7 @@ struct FFIPurgeDeliveryTests {
             (applied, PurgeDelivery.delivered),
             (FfiLifecycleOpOutcome.applied(assetId: assetA, action: "delete", syncSeq: 9, replayed: true), .delivered),
             (FfiLifecycleOpOutcome.notIndexed, .held),
+            (FfiLifecycleOpOutcome.restoreTooLate(retentionUntil: "2026-01-02T00:00:00Z"), .held),
             (failure(permanent: true), .failed(permanent: true)),
             (failure(permanent: false), .failed(permanent: false)),
         ]
@@ -272,6 +317,134 @@ struct FFIPurgeDeliveryTests {
         let verbs = ScriptedVerbs(pages: [], purged: [assetA, assetB])
 
         #expect(try await FFIPurgeDelivery(verbs: verbs).purgedAssetIDs() == [assetA, assetB])
+        #expect(verbs.cursors.isEmpty)
+    }
+}
+
+@Suite("FFIPurgeDelivery — a held asset's lifecycle records delivered with the head the sync feed names")
+struct FFILifecycleDeliveryTests {
+    @Test(
+        "each session outcome becomes the LifecycleDelivery it names, a too-late restore distinctly",
+        arguments: [
+            (applied, LifecycleDelivery.delivered),
+            (FfiLifecycleOpOutcome.notIndexed, .held),
+            (
+                FfiLifecycleOpOutcome.restoreTooLate(retentionUntil: "2026-01-02T00:00:00Z"),
+                .withheld(retentionUntil: "2026-01-02T00:00:00Z")
+            ),
+            (failure(permanent: true), .failed(permanent: true)),
+            (failure(permanent: false), .failed(permanent: false)),
+        ]
+    )
+    func mapsOutcomes(outcome: FfiLifecycleOpOutcome, expected: LifecycleDelivery) async throws {
+        let verbs = ScriptedVerbs(
+            pages: [.success(page([entry(assetA, head: Data([1]))], next: Data([1])))],
+            outcomes: [assetA: outcome],
+            chainHeads: [assetA: Data([2])]
+        )
+
+        #expect(try await FFIPurgeDelivery(verbs: verbs).deliverLifecycle(assetID: assetA) == expected)
+    }
+
+    @Test("an asset whose chain head the feed lists is delivered without a send; one the server lacks is sent")
+    func levelAssetSendsNothing() async throws {
+        let head = Data([0x09, 0x0A])
+        let verbs = ScriptedVerbs(
+            pages: [.success(page([entry(assetA, head: head), entry(assetB, head: Data([0x01]))], next: Data([1])))],
+            outcomes: [assetB: applied],
+            chainHeads: [assetA: head, assetB: Data([0x02])]
+        )
+        let delivery = FFIPurgeDelivery(verbs: verbs)
+
+        #expect(try await delivery.deliverLifecycle(assetID: assetA) == .delivered)
+        #expect(try await delivery.deliverLifecycle(assetID: assetB) == .delivered)
+
+        #expect(verbs.lifecycleDeliveries.map(\.assetID) == [assetB])
+        #expect(verbs.lifecycleDeliveries.map(\.serverHeadHash) == [hashed(0x01)])
+        #expect(verbs.deliveries.isEmpty, "no purge verb is driven")
+    }
+
+    @Test("an unlisted asset is sent with no head, and a listed entry with no record as an empty one")
+    func unlistedAndEmptyHeads() async throws {
+        let verbs = ScriptedVerbs(
+            pages: [.success(page([entry(assetB, head: Data())], next: Data([1])))],
+            chainHeads: [assetA: Data([0x01]), assetB: Data()]
+        )
+        let delivery = FFIPurgeDelivery(verbs: verbs)
+
+        #expect(try await delivery.deliverLifecycle(assetID: assetA) == .held)
+        _ = try await delivery.deliverLifecycle(assetID: assetB)
+
+        #expect(verbs.lifecycleDeliveries.map(\.serverHeadHash) == [nil, Data()])
+    }
+
+    @Test("the session is handed the latest changed_at the drain saw, by instant rather than feed order")
+    func passesTheLatestServerInstant() async throws {
+        let verbs = ScriptedVerbs(
+            pages: [
+                .success(page(
+                    [entry(assetB, head: Data([0x01]), changedAt: "2026-10-03T00:00:00.250000Z")],
+                    next: Data([1]),
+                    more: true
+                )),
+                .success(page(
+                    [
+                        entry(assetA, head: Data([0x02]), changedAt: "2026-10-01T00:00:00Z"),
+                        entry(assetB, head: Data([0x03]), changedAt: "not a time"),
+                    ],
+                    next: Data([2])
+                )),
+            ],
+            chainHeads: [assetA: Data([0x04])]
+        )
+
+        _ = try await FFIPurgeDelivery(verbs: verbs).deliverLifecycle(assetID: assetA)
+
+        #expect(verbs.lifecycleDeliveries == [.init(
+            assetID: assetA,
+            serverHeadHash: hashed(0x02),
+            latestChangedAt: "2026-10-03T00:00:00.250000Z"
+        )])
+    }
+
+    @Test("with no readable changed_at in the feed the session gets no floor")
+    func noFloorWithoutAReadableInstant() async throws {
+        let verbs = ScriptedVerbs(
+            pages: [.success(page([entry(assetA, head: Data([0x01]), changedAt: "")], next: Data([1])))],
+            chainHeads: [assetA: Data([0x02])]
+        )
+
+        _ = try await FFIPurgeDelivery(verbs: verbs).deliverLifecycle(assetID: assetA)
+
+        #expect(verbs.lifecycleDeliveries.map(\.latestChangedAt) == [nil])
+    }
+
+    @Test("an RFC 3339 instant keeps its fractional second; anything else is no instant")
+    func parsesServerInstants() throws {
+        let whole = try #require(ServerInstant("2026-10-03T00:00:00Z"))
+        let fractional = try #require(ServerInstant("2026-10-03T00:00:00.250000Z"))
+        #expect(fractional.date.timeIntervalSince(whole.date) == 0.25)
+        #expect(ServerInstant.later(whole, fractional) == fractional)
+        #expect(ServerInstant.later(nil, whole) == whole)
+        #expect(ServerInstant("2026-10-03") == nil)
+        #expect(ServerInstant("2026-10-03T00:00:00.Z") == nil)
+    }
+
+    @Test("a chain head the workspace cannot read is thrown, and nothing is sent")
+    func unreadableHeadThrows() async {
+        let verbs = ScriptedVerbs(pages: [.success(page([entry(assetA, head: Data([0x01]))], next: Data([1])))])
+
+        await #expect(throws: FfiError.self) {
+            _ = try await FFIPurgeDelivery(verbs: verbs).deliverLifecycle(assetID: assetA)
+        }
+        #expect(verbs.lifecycleDeliveries.isEmpty)
+    }
+
+    @Test("the held assets are the workspace's list, unchanged")
+    func listsHeldAssets() async throws {
+        let verbs = ScriptedVerbs(pages: [], held: [assetA, assetB])
+
+        #expect(try await FFIPurgeDelivery(verbs: verbs).heldAssetIDs() == [assetA, assetB])
         #expect(verbs.cursors.isEmpty)
     }
 }

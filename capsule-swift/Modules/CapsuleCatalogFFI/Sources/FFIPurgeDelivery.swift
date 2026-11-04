@@ -10,9 +10,11 @@ private let purgeLog = Logger(subsystem: CapsuleLog.subsystem, category: "purge-
 
 // MARK: - Session seam
 
-/// The session and workspace verbs a purge delivery drives, bound to one
-/// server: `FfiSession.syncPull`, `FfiSession.deliverPurgeAtHash`,
-/// `FfiWorkspace.purgedRecord` and `FfiWorkspace.purgedAssetIds`, and nothing
+/// The session and workspace verbs a purge or lifecycle delivery drives,
+/// bound to one server: `FfiSession.syncPull`,
+/// `FfiSession.deliverPurgeAtHash`, `FfiSession.deliverLifecycleAtHash`,
+/// `FfiWorkspace.purgedRecord`, `FfiWorkspace.purgedAssetIds`,
+/// `FfiWorkspace.provenanceHead` and `FfiWorkspace.assetIds`, and nothing
 /// else of either.
 ///
 /// Narrowed to a protocol so the delivery is tested over a scripted feed and
@@ -29,6 +31,19 @@ protocol FFIPurgeDeliveryVerbs: Sendable {
     func purgedRecord(assetId: String) throws -> Data?
     /// Every asset the workspace has purged.
     func purgedAssetIds() throws -> [String]
+    /// Send what the server lacks of a held asset's chain, given the record
+    /// hash of the head the feed lists (as ``deliverPurge(assetId:serverHeadHash:)``)
+    /// and the latest `changed_at` the drain saw (RFC 3339, `nil` for none),
+    /// which floors the clock the held rules judge by.
+    func deliverLifecycle(
+        assetId: String,
+        serverHeadHash: Data?,
+        latestChangedAt: String?
+    ) async throws -> FfiLifecycleOpOutcome
+    /// The head of a held asset's chain, as canonical CBOR.
+    func provenanceHead(assetId: String) throws -> Data
+    /// Every asset the workspace holds, live or in the trash.
+    func assetIds() throws -> [String]
 }
 
 /// The verbs over a signed-in session and the workspace it delivers from.
@@ -56,6 +71,28 @@ struct FFISessionPurgeVerbs: FFIPurgeDeliveryVerbs {
 
     func purgedAssetIds() throws -> [String] {
         try workspace.purgedAssetIds()
+    }
+
+    func deliverLifecycle(
+        assetId: String,
+        serverHeadHash: Data?,
+        latestChangedAt: String?
+    ) async throws -> FfiLifecycleOpOutcome {
+        try await session.deliverLifecycleAtHash(
+            apiBaseUrl: apiBaseURL,
+            workspace: workspace,
+            assetId: assetId,
+            serverHeadHash: serverHeadHash,
+            latestChangedAt: latestChangedAt
+        )
+    }
+
+    func provenanceHead(assetId: String) throws -> Data {
+        try workspace.provenanceHead(assetId: assetId)
+    }
+
+    func assetIds() throws -> [String] {
+        try workspace.assetIds()
     }
 }
 
@@ -85,7 +122,15 @@ struct FFISessionPurgeVerbs: FFIPurgeDeliveryVerbs {
 /// The heads live in memory: a relaunch drains from the start again, and a
 /// drain that fails keeps the cursor and heads from before it, so nothing it
 /// read halfway is trusted.
-public actor FFIPurgeDelivery: PurgeDelivering {
+///
+/// The same drain serves ``LifecycleDelivering``: a live or trashed asset's
+/// held `delete` or `trash-restore` goes through
+/// `FfiSession.deliverLifecycleAtHash` with the head the feed lists and the
+/// latest `changed_at` the drain saw, which floors the clock the session
+/// judges a too-late restore by. An asset whose chain head
+/// (`FfiWorkspace.provenanceHead`) the feed lists answers
+/// ``LifecycleDelivery/delivered`` without a send.
+public actor FFIPurgeDelivery: PurgeDelivering, LifecycleDelivering {
     /// Entries asked for per feed page.
     static let pageSize: UInt32 = 500
 
@@ -96,6 +141,10 @@ public actor FFIPurgeDelivery: PurgeDelivering {
     /// ``headHash(_:)`` of its latest entry's `manifest_cbor` (empty for one
     /// that carries none).
     private var heads: [String: Data] = [:]
+    /// The latest `changed_at` any drained entry carried, on the server's
+    /// clock, with the text it was read from; `nil` before an entry with a
+    /// readable one.
+    private var latestChangedAt: ServerInstant?
     /// The drain in flight, which a concurrent delivery awaits rather than
     /// starting a second one.
     private var drain: Task<Void, any Error>?
@@ -136,12 +185,62 @@ public actor FFIPurgeDelivery: PurgeDelivering {
             purgeLog.info("purge of \(assetID, privacy: .public) applied")
         case .notIndexed:
             purgeLog.info("purge of \(assetID, privacy: .public) held: the feed does not list the asset")
+        case let .restoreTooLate(retentionUntil):
+            purgeLog.info(
+                "purge of \(assetID, privacy: .public) withheld: a restore undoes a held delete whose window closed at \(retentionUntil, privacy: .public)"
+            )
         case let .failed(kind, code, permanent, _, _, detail):
             purgeLog.error(
                 "purge of \(assetID, privacy: .public) failed: kind=\(kind, privacy: .public) code=\(code ?? "none", privacy: .public) permanent=\(permanent, privacy: .public) \(detail, privacy: .public)"
             )
         }
         return delivery
+    }
+
+    // MARK: LifecycleDelivering
+
+    /// Bring the feed's heads up to date, then send what the server lacks of
+    /// the held asset `assetID`'s chain, or nothing when the feed already
+    /// lists its head.
+    ///
+    /// - Throws: the feed read's error, before anything is sent; the
+    ///   workspace's or the session's `FfiError` (a refused session, an asset
+    ///   this workspace does not hold).
+    public func deliverLifecycle(assetID: String) async throws -> LifecycleDelivery {
+        try await drainFeed()
+        let head = Self.feedKey(assetID).flatMap { heads[$0] }
+        if let head, !head.isEmpty, try Self.headHash(verbs.provenanceHead(assetId: assetID)) == head {
+            purgeLog.debug("records of \(assetID, privacy: .public) already delivered: the feed lists their head")
+            return .delivered
+        }
+        let changedAt = latestChangedAt?.text
+        purgeLog.debug(
+            "delivering held records of \(assetID, privacy: .public), indexed=\(head != nil, privacy: .public) floor=\(changedAt ?? "none", privacy: .public)"
+        )
+        let outcome = try await verbs.deliverLifecycle(
+            assetId: assetID,
+            serverHeadHash: head,
+            latestChangedAt: changedAt
+        )
+        switch outcome {
+        case .applied:
+            purgeLog.info("held records of \(assetID, privacy: .public) applied")
+        case .notIndexed:
+            purgeLog.info("records of \(assetID, privacy: .public) held: the feed does not list the asset")
+        case let .restoreTooLate(retentionUntil):
+            purgeLog.info(
+                "records of \(assetID, privacy: .public) withheld: a restore undoes a held delete whose window closed at \(retentionUntil, privacy: .public)"
+            )
+        case let .failed(kind, code, permanent, _, _, detail):
+            purgeLog.error(
+                "records of \(assetID, privacy: .public) failed: kind=\(kind, privacy: .public) code=\(code ?? "none", privacy: .public) permanent=\(permanent, privacy: .public) \(detail, privacy: .public)"
+            )
+        }
+        return LifecycleDelivery(outcome)
+    }
+
+    public func heldAssetIDs() async throws -> [String] {
+        try verbs.assetIds()
     }
 
     /// Whether the server already holds the head of `assetID`'s kept chain:
@@ -180,6 +279,7 @@ public actor FFIPurgeDelivery: PurgeDelivering {
     private func pullToEnd() async throws {
         var position = cursor
         var folded = heads
+        var latest = latestChangedAt
         var pages = 0
         var entries = 0
         while true {
@@ -192,6 +292,7 @@ public actor FFIPurgeDelivery: PurgeDelivering {
                     continue
                 }
                 folded[key] = entry.manifestCbor.isEmpty ? Data() : Self.headHash(entry.manifestCbor)
+                latest = ServerInstant.later(latest, ServerInstant(entry.changedAt))
             }
             purgeLog.debug("feed page \(pages): \(page.entries.count) entries, more=\(page.hasMore, privacy: .public)")
             guard page.hasMore else {
@@ -206,6 +307,7 @@ public actor FFIPurgeDelivery: PurgeDelivering {
         }
         cursor = position
         heads = folded
+        latestChangedAt = latest
         purgeLog.debug("feed drained: \(pages) pages, \(entries) entries, \(folded.count) assets listed")
     }
 
@@ -229,6 +331,44 @@ public actor FFIPurgeDelivery: PurgeDelivering {
     }
 }
 
+/// A feed entry's `changed_at`: the instant it names on the server's clock,
+/// and the RFC 3339 text it was read from, which is what the session is
+/// handed so it parses the same instant itself.
+struct ServerInstant: Sendable, Equatable {
+    let date: Date
+    let text: String
+
+    /// `nil` for text that is not an RFC 3339 timestamp, which floors
+    /// nothing: the session then judges by this device's clock alone.
+    init?(_ text: String) {
+        guard let date = Self.parse(text) else { return nil }
+        self.date = date
+        self.text = text
+    }
+
+    /// The later of two instants, either of which may be missing.
+    static func later(_ lhs: ServerInstant?, _ rhs: ServerInstant?) -> ServerInstant? {
+        guard let lhs else { return rhs }
+        guard let rhs else { return lhs }
+        return rhs.date > lhs.date ? rhs : lhs
+    }
+
+    /// Parse RFC 3339 text. The fractional second, which the server writes
+    /// to the microsecond and formatters disagree on past the millisecond, is
+    /// split off and added back.
+    static func parse(_ text: String) -> Date? {
+        var whole = text
+        var fraction: TimeInterval = 0
+        if let dot = text.firstIndex(of: ".") {
+            let digits = text[text.index(after: dot)...].prefix(while: \.isNumber)
+            guard !digits.isEmpty, let value = TimeInterval("0.\(digits)") else { return nil }
+            fraction = value
+            whole = String(text[..<dot]) + String(text[digits.endIndex...])
+        }
+        return ISO8601DateFormatter().date(from: whole)?.addingTimeInterval(fraction)
+    }
+}
+
 /// Why a feed drain stopped before the feed's end.
 enum FeedDrainError: Error, Equatable {
     /// A page claimed more entries but handed back the cursor it was pulled
@@ -242,10 +382,27 @@ extension PurgeDelivery {
     /// The delivery a session's lifecycle op outcome names: an applied op (or
     /// a replay) is delivered, an unindexed asset is held, and a failure keeps
     /// the session's judgement of whether a resend can only be refused again.
+    /// A kept chain whose too-late restore the session withheld is held too:
+    /// nothing was sent and nothing was refused, and the next walk judges it
+    /// the same way without a request.
+    init(_ outcome: FfiLifecycleOpOutcome) {
+        switch outcome {
+        case .applied: self = .delivered
+        case .notIndexed, .restoreTooLate: self = .held
+        case let .failed(_, _, permanent, _, _, _): self = .failed(permanent: permanent)
+        }
+    }
+}
+
+extension LifecycleDelivery {
+    /// The delivery a session's lifecycle op outcome names: as
+    /// ``PurgeDelivery/init(_:)``, except that a too-late restore the session
+    /// withheld is reported as such, with the window that closed.
     init(_ outcome: FfiLifecycleOpOutcome) {
         switch outcome {
         case .applied: self = .delivered
         case .notIndexed: self = .held
+        case let .restoreTooLate(retentionUntil): self = .withheld(retentionUntil: retentionUntil)
         case let .failed(_, _, permanent, _, _, _): self = .failed(permanent: permanent)
         }
     }

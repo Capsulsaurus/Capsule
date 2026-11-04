@@ -771,3 +771,221 @@ async fn a_purge_is_delivered_from_the_listed_heads_hash() {
     let by_purge: Vec<ProvenanceRecord> = seen.lock().unwrap().iter().map(sent_record).collect();
     assert_eq!(at_empty, by_purge, "both verbs send the same stretch");
 }
+
+// ─── A live or trashed asset's held records ──────────────────────────────────
+
+/// The listed head's record hash, as a caller that kept it passes it.
+fn listed(head: &[u8]) -> Option<Vec<u8>> {
+    Some(hash_bytes(head).as_bytes().to_vec())
+}
+
+fn sent_actions(seen: &Mutex<Vec<MockRequest>>) -> Vec<Action> {
+    seen.lock()
+        .unwrap()
+        .iter()
+        .map(|req| sent_record(req).manifest.core.action)
+        .collect()
+}
+
+/// **The server never sees a record of an asset it has not indexed.** A trashed asset the feed
+/// does not list is held, and nothing of its chain is sent.
+#[tokio::test]
+async fn a_held_delete_of_an_asset_the_feed_does_not_list_is_held() {
+    let (server, seen) = ops_server(|req| applied(req, 1)).await;
+    let session = login(&server).await;
+    let root = tempfile::TempDir::new().unwrap();
+    let (workspace, asset) = sealed(root.path());
+    workspace.delete_asset(asset.clone(), 30).unwrap();
+
+    let outcome = session
+        .deliver_lifecycle_at_hash(server.base_url(), workspace.clone(), asset, None, None)
+        .await
+        .unwrap();
+    assert_eq!(outcome, FfiLifecycleOpOutcome::NotIndexed);
+    assert!(
+        seen.lock().unwrap().is_empty(),
+        "nothing reached the server"
+    );
+}
+
+/// Once the create is listed, the stretch after it goes in chain order: a held delete, and a
+/// restore made after it inside the window, each once the one before was applied. A head the
+/// server already holds sends only what follows it.
+#[tokio::test]
+async fn a_live_assets_held_stretch_is_sent_after_the_listed_head() {
+    let (server, seen) = ops_server(|req| applied(req, 7)).await;
+    let session = login(&server).await;
+    let root = tempfile::TempDir::new().unwrap();
+    let (workspace, asset) = sealed(root.path());
+    let create = create_head(&workspace, &asset);
+    workspace.delete_asset(asset.clone(), 30).unwrap();
+    let delete = workspace.provenance_head(asset.clone()).unwrap();
+    workspace.restore_asset(asset.clone()).unwrap();
+
+    let outcome = session
+        .deliver_lifecycle_at_hash(
+            server.base_url(),
+            workspace.clone(),
+            asset.clone(),
+            listed(&create),
+            Some("2026-01-01T00:00:00Z".into()),
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(outcome, FfiLifecycleOpOutcome::Applied { sync_seq: 7, ref action, .. } if action == "trash-restore"),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        sent_actions(&seen),
+        vec![Action::Delete, Action::TrashRestore]
+    );
+    let head: ProvenanceRecord =
+        capsule_core::cbor::from_slice(&workspace.provenance_head(asset.clone()).unwrap()).unwrap();
+    assert_eq!(
+        seen.lock().unwrap().last().map(sent_record),
+        Some(head),
+        "the chain's head goes last"
+    );
+
+    seen.lock().unwrap().clear();
+    session
+        .deliver_lifecycle_at_hash(
+            server.base_url(),
+            workspace.clone(),
+            asset,
+            listed(&delete),
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        sent_actions(&seen),
+        vec![Action::TrashRestore],
+        "the server holds the delete"
+    );
+}
+
+/// **A restore of a held delete is never sent too late.** When the server's clock (the latest
+/// `changed_at` the drain saw) is past the held delete's window, the pair is withheld, the
+/// outcome names the closed window, and nothing reaches the server. Once the server holds the
+/// delete, the restore alone goes, and the server's clock judges it.
+#[tokio::test]
+async fn a_restore_undoing_a_held_delete_whose_window_closed_is_withheld() {
+    let (server, seen) = ops_server(|req| applied(req, 3)).await;
+    let session = login(&server).await;
+    let root = tempfile::TempDir::new().unwrap();
+    let (workspace, asset) = sealed(root.path());
+    let create = create_head(&workspace, &asset);
+    workspace.delete_asset(asset.clone(), 1).unwrap();
+    let delete = workspace.provenance_head(asset.clone()).unwrap();
+    let until = decode_op_record(&delete)
+        .unwrap()
+        .manifest
+        .core
+        .retention_until
+        .expect("a delete signs its window");
+    workspace.restore_asset(asset.clone()).unwrap();
+
+    let outcome = session
+        .deliver_lifecycle_at_hash(
+            server.base_url(),
+            workspace.clone(),
+            asset.clone(),
+            listed(&create),
+            Some("2999-01-01T00:00:00Z".into()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        outcome,
+        FfiLifecycleOpOutcome::RestoreTooLate {
+            retention_until: until
+        }
+    );
+    assert!(
+        seen.lock().unwrap().is_empty(),
+        "nothing reached the server"
+    );
+
+    let outcome = session
+        .deliver_lifecycle_at_hash(
+            server.base_url(),
+            workspace.clone(),
+            asset,
+            listed(&delete),
+            Some("2999-01-01T00:00:00Z".into()),
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(outcome, FfiLifecycleOpOutcome::Applied { .. }),
+        "{outcome:?}"
+    );
+    assert_eq!(sent_actions(&seen), vec![Action::TrashRestore]);
+}
+
+/// The verb reads only a chain the workspace still holds: a purged asset is refused as not
+/// found (its kept chain goes through `deliver_purge_at_hash`), and a server clock that is not
+/// a timestamp is refused, before anything is sent.
+#[tokio::test]
+async fn a_lifecycle_delivery_refuses_bad_arguments_before_anything_is_sent() {
+    let (server, seen) = ops_server(|req| applied(req, 1)).await;
+    let session = login(&server).await;
+    let root = tempfile::TempDir::new().unwrap();
+    let (workspace, asset) = sealed(root.path());
+    let create = create_head(&workspace, &asset);
+    workspace.delete_asset(asset.clone(), 30).unwrap();
+
+    let result = session
+        .deliver_lifecycle_at_hash(
+            server.base_url(),
+            workspace.clone(),
+            asset.clone(),
+            listed(&create),
+            Some("yesterday".into()),
+        )
+        .await;
+    assert!(
+        matches!(result, Err(FfiError::InvalidArgument { ref detail }) if detail.contains("latest_changed_at")),
+        "{result:?}"
+    );
+    let result = session
+        .deliver_lifecycle_at_hash(
+            server.base_url(),
+            workspace.clone(),
+            asset.clone(),
+            Some(vec![0u8; 31]),
+            None,
+        )
+        .await;
+    assert!(
+        matches!(result, Err(FfiError::InvalidArgument { .. })),
+        "{result:?}"
+    );
+
+    workspace.purge_asset(asset.clone()).unwrap();
+    let result = session
+        .deliver_lifecycle_at_hash(
+            server.base_url(),
+            workspace.clone(),
+            asset,
+            listed(&create),
+            None,
+        )
+        .await;
+    assert!(
+        matches!(
+            result,
+            Err(FfiError::Trash {
+                refusal: crate::ffi::FfiTrashRefusal::NotFound,
+                ..
+            })
+        ),
+        "{result:?}"
+    );
+    assert!(
+        seen.lock().unwrap().is_empty(),
+        "nothing reached the server"
+    );
+}

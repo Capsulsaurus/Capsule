@@ -36,6 +36,15 @@
 //! server, the re-issue alone would be refused as a stale chain, so
 //! [`FfiSession::deliver_purge`] sends every record of the kept chain after the head the server
 //! holds, in chain order, each once the one before it was applied.
+//!
+//! # A live or trashed asset's held records go the same way
+//!
+//! A `delete` or `trash-restore` of an asset the workspace still holds is signed onto its chain
+//! and held there until the feed lists the asset. [`FfiSession::deliver_lifecycle_at_hash`]
+//! sends the stretch after the head the server holds, by the same rule as a purge and as the
+//! CLI ([`plan_delivery`](crate::albums::plan_delivery)): held while the asset is not indexed, and never a `trash-restore`
+//! that undoes a held `delete` whose window has closed, which answers
+//! [`FfiLifecycleOpOutcome::RestoreTooLate`].
 
 use std::sync::Arc;
 
@@ -43,11 +52,13 @@ use capsule_core::crypto::hash::{Hash32, hash_bytes};
 use capsule_core::crypto::provenance::{Action, ProvenanceRecord};
 use capsule_core::crypto::verify_asset::verify_device_signature;
 use capsule_library::lifecycle::Workspace;
+use uuid::Uuid;
 
 use super::workspace::{parse_uuid, trash_error};
 use super::{FfiError, FfiSession, FfiWorkspace};
 use crate::albums::{
-    AlbumClient, AlbumTransport, AppliedOp, LifecycleOpError, op_envelope, stretch_after,
+    AlbumClient, AlbumTransport, AppliedOp, HeldDelivery, HoldReason, LifecycleOpError,
+    judging_clock, op_envelope, plan_delivery,
 };
 
 /// The largest record [`FfiSession::apply_lifecycle_op`] decodes. A lifecycle record is one
@@ -74,6 +85,16 @@ pub enum FfiLifecycleOpOutcome {
     /// server, and the server never sees a `delete` for an asset it has not indexed. The record
     /// stays on the asset's chain; deliver it once a sync lists the asset.
     NotIndexed,
+    /// Nothing was sent: a `trash-restore` in the stretch undoes a `delete` the server has not
+    /// seen, and that delete's window closed at `retention_until`. Sent, the server would apply
+    /// the delete, refuse the restore and purge an asset the user restored in time. Withheld
+    /// for good: the server keeps the asset live at the head it holds, the workspace keeps
+    /// every record, and nothing after the pair can be sent either, since the chain is
+    /// hash-linked. A later delivery judges it the same way, so it never needs retrying.
+    RestoreTooLate {
+        /// The withheld `delete`'s signed window (RFC 3339), which had closed.
+        retention_until: String,
+    },
     /// The server refused the op, or could not be reached. `permanent` says whether sending
     /// the same bytes again can only be refused again.
     Failed {
@@ -335,6 +356,11 @@ impl FfiSession {
     /// record's `Applied` — the purge reached the server — or the first record that was not
     /// applied, whose `Failed` stops the stretch.
     ///
+    /// The held rules are a live asset's
+    /// ([`deliver_lifecycle_at_hash`](Self::deliver_lifecycle_at_hash)), judged by this
+    /// device's clock: a kept chain whose stretch holds a `trash-restore` undoing a `delete` the server never saw, whose window has
+    /// closed, is withheld and answers [`FfiLifecycleOpOutcome::RestoreTooLate`].
+    ///
     /// # Errors
     ///
     /// [`FfiError::Trash`] with [`FfiTrashRefusal::NotFound`](super::FfiTrashRefusal::NotFound)
@@ -350,8 +376,15 @@ impl FfiSession {
         server_head: Option<Vec<u8>>,
     ) -> Result<FfiLifecycleOpOutcome, FfiError> {
         let head = server_head.as_deref().map(listed_head);
-        self.deliver_kept_chain(&api_base_url, &workspace, &asset_id, head)
-            .await
+        self.deliver_chain(
+            &api_base_url,
+            &workspace,
+            &asset_id,
+            head,
+            ChainSource::Kept,
+            jiff::Timestamp::now(),
+        )
+        .await
     }
 
     /// [`deliver_purge`](Self::deliver_purge) with the head the feed lists given by its record
@@ -372,62 +405,189 @@ impl FfiSession {
         server_head_hash: Option<Vec<u8>>,
     ) -> Result<FfiLifecycleOpOutcome, FfiError> {
         let head = server_head_hash.as_deref().map(listed_hash).transpose()?;
-        self.deliver_kept_chain(&api_base_url, &workspace, &asset_id, head)
-            .await
+        self.deliver_chain(
+            &api_base_url,
+            &workspace,
+            &asset_id,
+            head,
+            ChainSource::Kept,
+            jiff::Timestamp::now(),
+        )
+        .await
+    }
+
+    /// Deliver the held lifecycle records of an asset `workspace` still holds, live or in the
+    /// trash: every record of its chain after the head the server holds, in chain order, each
+    /// once the one before it was applied. That is a `delete` or `trash-restore` signed while
+    /// the server had not indexed the asset, or whose send failed, together with any it chains
+    /// onto that the server never saw. The rule is the CLI's and a purge's
+    /// ([`plan_delivery`]).
+    ///
+    /// `server_head_hash` is the feed's evidence for the asset, as
+    /// [`deliver_purge_at_hash`](Self::deliver_purge_at_hash) takes it: `None`, an asset the
+    /// feed does not list, sends nothing and answers [`FfiLifecycleOpOutcome::NotIndexed`].
+    ///
+    /// `latest_changed_at` is the latest `changed_at` (RFC 3339) the caller's feed drain saw,
+    /// on the server's clock, or `None` when it saw none. It floors this device's clock
+    /// ([`judging_clock`]), and a stretch in which a `trash-restore` undoes a `delete` whose
+    /// window had closed by that clock is withheld and answers
+    /// [`FfiLifecycleOpOutcome::RestoreTooLate`]: sent, the server would apply the delete and
+    /// refuse the restore.
+    ///
+    /// Everything is read from the workspace's chain, so a delivery that failed or was held is
+    /// retried by calling this again, also after the workspace was reopened. The workspace lock
+    /// is held only while the chain is read, never across the network, and every record of
+    /// the stretch is judged as [`apply_lifecycle_op`](Self::apply_lifecycle_op) judges a
+    /// foreign one before any is sent. A server level with the chain is sent its head alone,
+    /// which it answers as a replay; a caller that compares the listed head with
+    /// [`FfiWorkspace::provenance_head`] first sends nothing for it. The answer is the last
+    /// record's `Applied`, or the first record that was not applied, whose `Failed` stops the
+    /// stretch.
+    ///
+    /// # Errors
+    ///
+    /// [`FfiError::Trash`] with [`FfiTrashRefusal::NotFound`](super::FfiTrashRefusal::NotFound)
+    /// for an asset this workspace does not hold (a purged one goes through
+    /// [`deliver_purge_at_hash`](Self::deliver_purge_at_hash)); [`FfiError::InvalidArgument`]
+    /// for a malformed `asset_id` or `api_base_url`, a `server_head_hash` that is neither empty
+    /// nor 32 bytes, or a `latest_changed_at` that is not an RFC 3339 timestamp, before
+    /// anything is sent; [`FfiError::Workspace`] for a chain whose records do not verify under
+    /// the workspace's device directory; [`FfiError::Auth`] for a refused session.
+    pub async fn deliver_lifecycle_at_hash(
+        &self,
+        api_base_url: String,
+        workspace: Arc<FfiWorkspace>,
+        asset_id: String,
+        server_head_hash: Option<Vec<u8>>,
+        latest_changed_at: Option<String>,
+    ) -> Result<FfiLifecycleOpOutcome, FfiError> {
+        let head = server_head_hash.as_deref().map(listed_hash).transpose()?;
+        let seen = latest_changed_at
+            .as_deref()
+            .map(|at| {
+                at.parse::<jiff::Timestamp>()
+                    .map_err(|e| FfiError::InvalidArgument {
+                        detail: format!(
+                            "latest_changed_at: {at:?} is not an RFC 3339 timestamp ({e})"
+                        ),
+                    })
+            })
+            .transpose()?;
+        let judge = judging_clock(jiff::Timestamp::now(), seen);
+        self.deliver_chain(
+            &api_base_url,
+            &workspace,
+            &asset_id,
+            head,
+            ChainSource::Held,
+            judge,
+        )
+        .await
+    }
+}
+
+/// Which of an asset's chains a delivery reads from the workspace.
+#[derive(Debug, Clone, Copy)]
+enum ChainSource {
+    /// The chain a purge kept ([`Workspace::purged_chain`]).
+    Kept,
+    /// The chain of an asset the workspace still holds, live or in the trash.
+    Held,
+}
+
+impl ChainSource {
+    /// `asset`'s chain of this kind in `ws`, or the `NotFound` refusal for an asset with none.
+    fn read<'a>(self, ws: &'a Workspace, asset: &Uuid) -> Result<&'a [ProvenanceRecord], FfiError> {
+        let (chain, what) = match self {
+            Self::Kept => (ws.purged_chain(asset), "purged asset"),
+            Self::Held => (ws.asset(asset).map(|held| held.chain.records()), "asset"),
+        };
+        chain.ok_or_else(|| {
+            trash_error(capsule_library::lifecycle::LifecycleError::NotFound(
+                format!("{what} {asset}"),
+            ))
+        })
+    }
+
+    /// What a log line or detail calls the chain.
+    fn name(self) -> &'static str {
+        match self {
+            Self::Kept => "the kept chain",
+            Self::Held => "the chain",
+        }
     }
 }
 
 impl FfiSession {
-    /// The body of both purge delivery verbs, given what the feed lists for the asset: `None`
-    /// when it does not list it, otherwise the hash of the head it holds (`None` for an entry
-    /// that carries no record).
-    async fn deliver_kept_chain(
+    /// The body of every delivery verb, given what the feed lists for the asset (`None` when it
+    /// does not list it, otherwise the hash of the head it holds, `None` for an entry that
+    /// carries no record), the chain to read, and the clock the held rules judge by.
+    async fn deliver_chain(
         &self,
         api_base_url: &str,
         workspace: &FfiWorkspace,
         asset_id: &str,
         head: Option<Option<Hash32>>,
+        source: ChainSource,
+        judge: jiff::Timestamp,
     ) -> Result<FfiLifecycleOpOutcome, FfiError> {
         let asset = parse_uuid("asset_id", asset_id)?;
         let client = self.album_client(api_base_url)?;
-        let stretch: Vec<(ProvenanceRecord, Vec<u8>)> = workspace.with(|ws| {
-            let chain = ws.purged_chain(&asset).ok_or_else(|| {
-                trash_error(capsule_library::lifecycle::LifecycleError::NotFound(
-                    format!("purged asset {asset}"),
-                ))
+        let chain_name = source.name();
+        let planned: Result<Vec<(ProvenanceRecord, Vec<u8>)>, FfiLifecycleOpOutcome> =
+            workspace.with(|ws| {
+                let chain = source.read(ws, &asset)?;
+                let stretch = match plan_delivery(chain, head, judge) {
+                    HeldDelivery::Held {
+                        reason: HoldReason::NotIndexed,
+                        ..
+                    } => return Ok(Err(FfiLifecycleOpOutcome::NotIndexed)),
+                    HeldDelivery::Held {
+                        reason: HoldReason::RestoreTooLate,
+                        retention_until,
+                    } => {
+                        return Ok(Err(FfiLifecycleOpOutcome::RestoreTooLate {
+                            retention_until: retention_until.unwrap_or_default(),
+                        }));
+                    }
+                    HeldDelivery::Send(stretch) => stretch,
+                };
+                stretch
+                    .iter()
+                    .map(|record| {
+                        judge_own_record(ws, record).map_err(|detail| {
+                            tracing::error!(%asset, %detail, chain = chain_name, "ffi: a chain record does not verify; nothing is sent");
+                            FfiError::Workspace {
+                                detail: format!("{chain_name} of {asset}: {detail}"),
+                            }
+                        })?;
+                        let bytes = capsule_core::cbor::to_canonical_vec(record).map_err(|e| {
+                            FfiError::Workspace {
+                                detail: format!("encoding {chain_name} of {asset}: {e}"),
+                            }
+                        })?;
+                        Ok((record.clone(), bytes))
+                    })
+                    .collect::<Result<_, FfiError>>()
+                    .map(Ok)
             })?;
-            stretch_after(chain, head.flatten())
-                .iter()
-                .map(|record| {
-                    judge_own_record(ws, record).map_err(|detail| {
-                        tracing::error!(%asset, %detail, "ffi: a kept chain record does not verify; nothing is sent");
-                        FfiError::Workspace {
-                            detail: format!("the kept chain of {asset}: {detail}"),
-                        }
-                    })?;
-                    let bytes = capsule_core::cbor::to_canonical_vec(record).map_err(|e| {
-                        FfiError::Workspace {
-                            detail: format!("encoding the kept chain of {asset}: {e}"),
-                        }
-                    })?;
-                    Ok((record.clone(), bytes))
-                })
-                .collect::<Result<_, FfiError>>()
-        })?;
-        if head.is_none() {
-            tracing::info!(%asset, held = stretch.len(), "ffi: the feed does not list the purged asset; its delete is held");
-            return Ok(FfiLifecycleOpOutcome::NotIndexed);
-        }
-        tracing::info!(%asset, records = stretch.len(), "ffi: delivering a purge to the album's ops surface");
+        let stretch = match planned {
+            Ok(stretch) => stretch,
+            Err(held) => {
+                tracing::info!(%asset, chain = chain_name, outcome = ?held, %judge, "ffi: nothing of the asset's chain is sent; its records are held");
+                return Ok(held);
+            }
+        };
+        tracing::info!(%asset, chain = chain_name, records = stretch.len(), "ffi: delivering an asset's records to the album's ops surface");
         let mut outcome = FfiLifecycleOpOutcome::NotIndexed;
         for (record, bytes) in &stretch {
             outcome = send(&client, record, bytes).await?;
             if !matches!(outcome, FfiLifecycleOpOutcome::Applied { .. }) {
-                tracing::warn!(%asset, ?outcome, "ffi: the purge's delivery stopped; the kept chain still holds it");
+                tracing::warn!(%asset, chain = chain_name, ?outcome, "ffi: the delivery stopped; the workspace still holds the records");
                 return Ok(outcome);
             }
         }
-        tracing::info!(%asset, "ffi: the purge reached the server");
+        tracing::info!(%asset, chain = chain_name, "ffi: the asset's records reached the server");
         Ok(outcome)
     }
 }
