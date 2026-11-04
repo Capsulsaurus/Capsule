@@ -304,15 +304,20 @@ pub fn router() -> Router<App, Propagate, ServerInterceptors, impl Sized> {
                     routes::subscriptions::unsubscribe_album,
                 ]),
         )
-        // The one federation read: a member's own subscriptions (#1035). Behind the same gate,
-        // first, so a deployment that does not federate answers it `404` like every other
-        // federation operation; held to the read handshake, as every `GET` is.
+        // The federation reads: a member's own subscriptions (#1035), and what was pulled for
+        // them (#1160). Behind the same gate, first, so a deployment that does not federate
+        // answers them `404` like every other federation operation; held to the read
+        // handshake, as every `GET` is.
         .group(
             Group::<App>::new("/")
                 .intercept(routes::federation::FederationGate::new())
                 .intercept(limits::bounded_body_size())
                 .intercept(negotiation::ProtocolReadGate::new())
-                .mount(kynos::routes![routes::subscriptions::list_subscriptions]),
+                .mount(kynos::routes![
+                    routes::subscriptions::list_subscriptions,
+                    routes::subscriptions::list_pulled_assets,
+                    routes::subscriptions::get_pulled_asset_metadata,
+                ]),
         )
         // The reads: every gated `GET` and `HEAD`. Held to the handshake's grammar, admitted at
         // any protocol date, and declaring the `400` alone. None takes a body, so the bounded cap.

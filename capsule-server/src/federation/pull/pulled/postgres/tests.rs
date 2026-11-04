@@ -82,14 +82,15 @@ mod postgres_conformance {
     use crate::federation::pull::JobKey;
     use crate::federation::pull::pulled::conformance::{self, Inspect as _};
     use crate::federation::pull::pulled::{
-        Committed, OverBudget, PeerCachingBudget, PulledAlbum, PulledAlbums as _, ValidatedPage,
+        AcceptedEntry, Change, Committed, OverBudget, PeerCachingBudget, PulledAlbum,
+        PulledAlbumReads as _, PulledAlbums as _, ValidatedPage,
     };
     use crate::federation::subscriptions::postgres::PostgresSubscriptions;
     use crate::federation::subscriptions::{CapabilityToken, Subscription, SubscriptionStore as _};
     use crate::gc::HeldBlobs as _;
     use crate::postgres::testing;
     use crate::quota::QuotaStore as _;
-    use crate::store::{AlbumId, StoreFuture, UserId};
+    use crate::store::{AlbumId, StoreError, StoreFuture, UserId};
 
     /// Records every charge, and refuses them all once told to.
     #[derive(Debug, Default)]
@@ -257,9 +258,60 @@ mod postgres_conformance {
         charged_to_quota(&budgeted, &subscriptions, &quotas).await;
 
         held_blobs_outlive_the_durable_collector(&store, &blobs, database.connection()).await;
+        a_claimed_blob_missing_from_the_blob_store_is_a_fault(&store, &blobs).await;
 
         a_sweep_inside_a_commit_waits_for_its_claim(database.connection()).await;
         a_commit_inside_a_sweep_puts_the_bytes_again(database.connection()).await;
+    }
+
+    /// A claim row whose bytes the blob store lost is this server's integrity fault: both reads
+    /// through the claim answer [`StoreError::Corrupt`], never the absence a client would be
+    /// told is a not-found.
+    async fn a_claimed_blob_missing_from_the_blob_store_is_a_fault(
+        store: &PostgresPulledAlbums,
+        blobs: &InMemoryBlobStore,
+    ) {
+        let bytes: &[u8] = b"missing/a held metadata blob the blob store lost";
+        let hash = hash_bytes(bytes);
+        let job = JobKey::new(PeerId::new("missing.home"), AlbumId::new("missing"));
+        let mut lost = page(1, &[bytes]);
+        lost.entries.push(AcceptedEntry {
+            asset_id: "asset".to_owned(),
+            sync_seq: 1,
+            change: Change::Updated,
+            changed_at: jiff::Timestamp::UNIX_EPOCH,
+            manifest: Some(b"asset@1".to_vec()),
+            head: Some(hash_bytes(b"asset@1")),
+            metadata_blob: Some(hash),
+            blobs: Vec::new(),
+            derivative_manifests: Vec::new(),
+            original_held: false,
+            purged: false,
+        });
+        assert!(matches!(
+            store.commit(&job, None, lost).await.expect("a commit"),
+            Committed::Written
+        ));
+        assert_eq!(
+            store
+                .asset_metadata(&job, "asset")
+                .await
+                .expect("the bytes are there"),
+            Some(bytes.to_vec())
+        );
+
+        let address = ContentAddress::parse(&hash.to_hex()).expect("an address");
+        assert!(blobs.remove(&address).await.expect("remove"));
+        let error = store
+            .asset_metadata(&job, "asset")
+            .await
+            .expect_err("the claim names bytes that are gone");
+        assert!(matches!(error, StoreError::Corrupt { .. }), "{error:?}");
+        let error = store
+            .held_metadata_blob(&job, &hash)
+            .await
+            .expect_err("the same claim, read directly");
+        assert!(matches!(error, StoreError::Corrupt { .. }), "{error:?}");
     }
 
     /// Parks a commit after its puts and claim rows, before its transaction commits.

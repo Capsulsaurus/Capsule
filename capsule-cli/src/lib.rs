@@ -870,6 +870,18 @@ async fn dispatch(command: Commands) -> Result<()> {
                 album_id,
                 json,
             } => federation_unsubscribe(&peer, &album_id, json).await?,
+            FederationCommands::Assets {
+                peer,
+                album_id,
+                json,
+            } => federation_assets(&peer, &album_id, json).await?,
+            FederationCommands::Metadata {
+                peer,
+                album_id,
+                asset_id,
+                out,
+                json,
+            } => federation_metadata(&peer, &album_id, &asset_id, &out, json).await?,
         },
 
         // ── Peer ──────────────────────────────────────────────────────────
@@ -2930,6 +2942,113 @@ async fn federation_unsubscribe(peer: &str, album_id: &str, json: bool) -> Resul
     println!(
         "{}",
         format!("Album {album_id} on {peer} is no longer pulled for this account.").green()
+    );
+    Ok(())
+}
+
+/// `capsule federation assets`: every live asset this account's server pulled for one
+/// subscription.
+///
+/// With `json`, stdout carries exactly one document, [`federation::PulledAssets`].
+async fn federation_assets(peer: &str, album_id: &str, json: bool) -> Result<()> {
+    let remote = remote::RemoteConfig::from_env();
+    let store = session_store()?;
+    let pulled = federation::assets(&remote, &store, peer, album_id)
+        .await
+        .map_err(|error| {
+            eyre!(
+                "Pulled assets not listed: {}",
+                federation::describe_error(&error)
+            )
+        })?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&pulled)?);
+        return Ok(());
+    }
+    if pulled.assets.is_empty() {
+        println!(
+            "{}",
+            format!(
+                "Nothing pulled yet for album {} on {}.",
+                pulled.album_id, pulled.peer
+            )
+            .yellow()
+        );
+        return Ok(());
+    }
+    for asset in &pulled.assets {
+        println!(
+            "{}  {}  {} bytes  by {}",
+            asset.asset_id.bold(),
+            asset.timestamp,
+            asset.size,
+            asset.author
+        );
+    }
+    Ok(())
+}
+
+/// What `capsule federation metadata --json` prints.
+#[derive(Debug, serde::Serialize)]
+struct PulledMetadataReport {
+    /// The album's home server, as given.
+    peer: String,
+    /// The album, as given.
+    album_id: String,
+    /// The asset, as given.
+    asset_id: String,
+    /// The blob's size in bytes.
+    size: usize,
+    /// The blob's content hash, hex: the address the asset's record commits to.
+    hash: String,
+    /// The file the blob was written to.
+    out: PathBuf,
+}
+
+/// `capsule federation metadata`: write one pulled asset's encrypted metadata blob to `out`.
+///
+/// With `json`, stdout carries exactly one document, [`PulledMetadataReport`].
+async fn federation_metadata(
+    peer: &str,
+    album_id: &str,
+    asset_id: &str,
+    out: &Path,
+    json: bool,
+) -> Result<()> {
+    let remote = remote::RemoteConfig::from_env();
+    let store = session_store()?;
+    let bytes = federation::metadata(&remote, &store, peer, album_id, asset_id)
+        .await
+        .map_err(|error| {
+            eyre!(
+                "Pulled metadata not fetched: {}",
+                federation::describe_error(&error)
+            )
+        })?;
+    std::fs::write(out, &bytes)
+        .map_err(|error| eyre!("Pulled metadata not written to {}: {error}", out.display()))?;
+    let hash = capsule_core::crypto::hash::hash_bytes(&bytes).to_hex();
+    tracing::info!(%peer, %album_id, %asset_id, %hash, out = %out.display(), "wrote a pulled asset's metadata");
+    if json {
+        let report = PulledMetadataReport {
+            peer: peer.to_owned(),
+            album_id: album_id.to_owned(),
+            asset_id: asset_id.to_owned(),
+            size: bytes.len(),
+            hash,
+            out: out.to_path_buf(),
+        };
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
+    println!(
+        "{}",
+        format!(
+            "Wrote the {}-byte metadata of asset {asset_id} to {}.",
+            bytes.len(),
+            out.display()
+        )
+        .green()
     );
     Ok(())
 }

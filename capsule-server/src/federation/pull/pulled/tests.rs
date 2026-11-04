@@ -1,4 +1,5 @@
 use super::*;
+use crate::store::AlbumId;
 
 fn hash(byte: u8) -> Hash32 {
     Hash32([byte; 32])
@@ -124,4 +125,184 @@ fn the_superseded_heads_are_bounded() {
     let mut newest = [0_u8; 32];
     newest[..2].copy_from_slice(&199_u16.to_be_bytes());
     assert_eq!(head.superseded.last(), Some(&Hash32(newest)));
+}
+
+/// A validated page at `high_water` holding `blobs` and no entries.
+fn page(high_water: u64, blobs: &[&[u8]]) -> ValidatedPage {
+    ValidatedPage {
+        entries: Vec::new(),
+        metadata_blobs: blobs
+            .iter()
+            .map(|bytes| {
+                (
+                    capsule_core::crypto::hash::hash_bytes(bytes),
+                    bytes.to_vec(),
+                )
+            })
+            .collect(),
+        state: PulledAlbum {
+            cursor: Some(format!("c{high_water}")),
+            high_water: Some(high_water),
+            ..PulledAlbum::default()
+        },
+    }
+}
+
+/// `user` subscribed to `job`, already lapsed.
+async fn subscribe(subscriptions: &dyn SubscriptionStore, user: &UserId, job: &JobKey) {
+    use crate::federation::{CapabilityToken, Scope, Subscription};
+    let at = Timestamp::UNIX_EPOCH;
+    subscriptions
+        .put(Subscription {
+            subscriber: user.clone(),
+            peer: job.peer.clone(),
+            album: job.album.clone(),
+            scope: Scope::Read,
+            jti: format!("quota-{user}-{job}"),
+            token: CapabilityToken::new(format!("token-quota-{user}-{job}")),
+            issued_at: at,
+            expires_at: at,
+            min_protocol_version: "2026-06-01".to_owned(),
+            subscribed_at: at,
+            updated_at: at,
+        })
+        .await
+        .expect("subscribing");
+}
+
+/// What `quotas` says `user` uses.
+async fn used(quotas: &crate::quota::InMemoryQuota, user: &UserId) -> u64 {
+    use crate::quota::QuotaStore as _;
+    quotas.usage(user).await.expect("reading usage").used
+}
+
+/// The in-memory twin of the Postgres `charged_to_quota` case: a written page charges every
+/// subscriber's `quota_used`, lapsed ones too; a page the budget refuses charges nobody; an
+/// unsubscribe releases one subscriber only.
+#[tokio::test]
+async fn the_budgeted_in_memory_store_is_charged_to_quota() {
+    let subscriptions = Arc::new(crate::federation::subscriptions::InMemorySubscriptions::new());
+    let store = Arc::new(InMemoryPulledAlbums::new().with_budget(
+        subscriptions.clone(),
+        PeerCachingBudget::bytes(conformance::BUDGET),
+    ));
+    let quotas = crate::quota::InMemoryQuota::new().with_pulled(store.clone());
+
+    let job = JobKey::new(PeerId::new("home.quota.test"), AlbumId::new("quota-a"));
+    let (alice, bob) = (UserId::new("quota-alice"), UserId::new("quota-bob"));
+    subscribe(subscriptions.as_ref(), &alice, &job).await;
+    subscribe(subscriptions.as_ref(), &bob, &job).await;
+
+    let held: &[u8] = b"a metadata blob the quota counts";
+    assert_eq!(
+        store
+            .commit(&job, None, page(1, &[held]))
+            .await
+            .expect("commit"),
+        Committed::Written
+    );
+    let size = u64::try_from(held.len()).expect("a small size");
+    assert_eq!(
+        used(&quotas, &alice).await,
+        size,
+        "charged in full to each subscriber"
+    );
+    assert_eq!(used(&quotas, &bob).await, size);
+
+    let over = vec![7_u8; usize::try_from(conformance::BUDGET).expect("a small budget")];
+    assert!(matches!(
+        store
+            .commit(&job, Some(1), page(2, &[held, &over]))
+            .await
+            .expect("commit"),
+        Committed::OverBudget(_)
+    ));
+    assert_eq!(
+        used(&quotas, &alice).await,
+        size,
+        "a refused page charges nothing"
+    );
+
+    assert!(
+        subscriptions
+            .remove(&alice, &job.peer, &job.album)
+            .await
+            .expect("unsubscribing")
+    );
+    assert_eq!(
+        used(&quotas, &alice).await,
+        0,
+        "the unsubscribe released it"
+    );
+    assert_eq!(used(&quotas, &bob).await, size, "for that subscriber only");
+}
+
+/// A blob held through two of an account's albums is counted once, whichever peers they are
+/// on, and a store assembled without a budget knows no subscriber to count anything for.
+#[tokio::test]
+async fn pulled_holdings_count_each_distinct_blob_once_across_peers() {
+    use crate::quota::PulledHoldings as _;
+
+    let subscriptions = Arc::new(crate::federation::subscriptions::InMemorySubscriptions::new());
+    let store = InMemoryPulledAlbums::new()
+        .with_budget(subscriptions.clone(), PeerCachingBudget::unlimited());
+    let user = UserId::new("holder");
+    let here = JobKey::new(PeerId::new("one.test"), AlbumId::new("a"));
+    let there = JobKey::new(PeerId::new("two.test"), AlbumId::new("b"));
+    let unsubscribed = JobKey::new(PeerId::new("one.test"), AlbumId::new("c"));
+    subscribe(subscriptions.as_ref(), &user, &here).await;
+    subscribe(subscriptions.as_ref(), &user, &there).await;
+
+    let (shared, own, foreign): (&[u8], &[u8], &[u8]) = (
+        b"held through both",
+        b"held through one",
+        b"held for nobody",
+    );
+    for (job, blobs) in [
+        (&here, vec![shared]),
+        (&there, vec![shared, own]),
+        (&unsubscribed, vec![foreign]),
+    ] {
+        assert_eq!(
+            store
+                .commit(job, None, page(1, &blobs))
+                .await
+                .expect("commit"),
+            Committed::Written
+        );
+    }
+
+    let address = |bytes: &[u8]| {
+        crate::blob::ContentAddress::parse(&capsule_core::crypto::hash::hash_bytes(bytes).to_hex())
+            .expect("an address")
+    };
+    let size = |bytes: &[u8]| u64::try_from(bytes.len()).expect("a small size");
+    assert_eq!(
+        store.held_by(&user).await.expect("holdings"),
+        BTreeMap::from([(address(shared), size(shared)), (address(own), size(own))])
+    );
+    assert!(
+        store
+            .held_by(&UserId::new("stranger"))
+            .await
+            .expect("holdings")
+            .is_empty()
+    );
+
+    let unbudgeted = InMemoryPulledAlbums::new();
+    assert_eq!(
+        unbudgeted
+            .commit(&here, None, page(1, &[shared]))
+            .await
+            .expect("commit"),
+        Committed::Written
+    );
+    assert!(
+        unbudgeted
+            .held_by(&user)
+            .await
+            .expect("holdings")
+            .is_empty(),
+        "no subscriptions, so no subscriber"
+    );
 }

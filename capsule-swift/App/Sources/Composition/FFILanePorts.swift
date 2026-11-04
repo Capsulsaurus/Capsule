@@ -1,4 +1,5 @@
 #if CAPSULE_FFI
+    import AssetKit
     import CapsuleCatalog
     import CapsuleCatalogFFI
     import CapsuleDomain
@@ -32,6 +33,9 @@
         /// `http[s]://host:port`): the session delivers it to the album's ops
         /// surface there. Without either, it stays local and its records wait
         /// on the workspace's chains until a signed-in launch delivers them.
+        /// The same session and root sync the managed store
+        /// (``managedSync(workspace:session:apiBaseURL:)``); without them
+        /// nothing syncs.
         static func ffi(workspace: FfiWorkspace, session: FfiSession?, apiBaseURL: String? = nil) -> LanePorts {
             let transferEvents: any TransferEventPort = if let session {
                 FFITransferEventFeed(session: session)
@@ -65,8 +69,45 @@
                 },
                 renderLadder: .ffi,
                 embeddedPreviews: FFIEmbeddedPreviewReader(),
+                openManagedSync: managedSync(workspace: workspace, session: session, apiBaseURL: apiBaseURL),
                 cull: FFICullPort(workspace: workspace)
             )
+        }
+
+        /// The managed store's sync over `session`, against the server at
+        /// `apiBaseURL`: an ``FFISyncDriver`` keeping its cursor and staging
+        /// its fetches under the store's `sync/` directory. Each drain's newly
+        /// indexed assets go to the provider's redelivery walk, and a drain
+        /// that applied an entry re-publishes the timeline. A drain that fails
+        /// is logged; the next one resumes from the last page it kept.
+        static func managedSync(
+            workspace: FfiWorkspace,
+            session: FfiSession?,
+            apiBaseURL: String?
+        ) -> OpenManagedLaneSync? {
+            guard let session, let apiBaseURL else { return nil }
+            return { layout, provider in
+                let driver = FFISyncDriver(
+                    session: session,
+                    workspace: workspace,
+                    apiBaseURL: apiBaseURL,
+                    directory: layout.root.appending(path: "sync", directoryHint: .isDirectory)
+                ) { drain in
+                    await provider.syncDrained(newlyIndexed: drain.newlyIndexed)
+                    if drain.applied > 0 {
+                        await provider.refresh()
+                    }
+                }
+                return {
+                    do {
+                        try await driver.sync()
+                    } catch {
+                        CapsuleLog.app.error(
+                            "managed lane sync failed: \(String(describing: error), privacy: .public)"
+                        )
+                    }
+                }
+            }
         }
     }
 

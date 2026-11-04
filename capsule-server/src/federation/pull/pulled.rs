@@ -42,7 +42,9 @@
 //!
 //! Both adapters are also the [`BreadcrumbIndex`] over the entries they hold
 //! ([`crate::federation::breadcrumbs`]): an asset's breadcrumb is read from its latest written
-//! entry, so the index stores nothing of its own.
+//! entry, so the index stores nothing of its own. Over it, both are [`PulledAlbumReads`], what a
+//! subscriber's client reads of an album pulled for it: the breadcrumbs, and the metadata blob
+//! each live asset carries.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -298,6 +300,25 @@ pub trait PulledAlbums: std::fmt::Debug + Send + Sync {
     fn restart<'a>(&'a self, job: &'a JobKey) -> StoreFuture<'a, ()>;
 }
 
+/// What a member's client reads of an album this server pulled for it: the album's
+/// breadcrumbs, and the metadata blob each of its live assets carries.
+///
+/// Read from the entries a pull committed and the blobs it held, and from nothing else, so a
+/// reader only ever sees input that passed re-validation. An asset is readable exactly when it
+/// has a breadcrumb ([`leaves_a_breadcrumb`] on its latest entry): a deleted or purged asset
+/// has neither. Who may read a job is the route's decision, never the port's.
+pub trait PulledAlbumReads: BreadcrumbIndex {
+    /// The bytes of the metadata blob `asset_id`'s latest entry in `job` carries; `None` when
+    /// that entry leaves no breadcrumb, binds no blob, `job` never named the asset, or `job`
+    /// does not hold the blob. A blob `job` holds whose bytes are gone is an error, never
+    /// `None`: it is this server's fault, not an absence to answer a client with.
+    fn asset_metadata<'a>(
+        &'a self,
+        job: &'a JobKey,
+        asset_id: &'a str,
+    ) -> StoreFuture<'a, Option<Vec<u8>>>;
+}
+
 /// The deterministic double of [`PulledAlbums`].
 ///
 /// Charges nothing unless assembled [`with_budget`](Self::with_budget). Its subscriptions are
@@ -509,6 +530,71 @@ impl BreadcrumbIndex for InMemoryPulledAlbums {
                 .iter()
                 .filter_map(|entry| breadcrumb(job, entry).transpose())
                 .collect()
+        })
+    }
+}
+
+impl PulledAlbumReads for InMemoryPulledAlbums {
+    fn asset_metadata<'a>(
+        &'a self,
+        job: &'a JobKey,
+        asset_id: &'a str,
+    ) -> StoreFuture<'a, Option<Vec<u8>>> {
+        Box::pin(async move {
+            let albums = self.lock();
+            let Some(held) = albums.get(job) else {
+                return Ok(None);
+            };
+            Ok(held
+                .entries
+                .iter()
+                .rev()
+                .find(|entry| entry.asset_id == asset_id)
+                .filter(|entry| leaves_a_breadcrumb(entry))
+                .and_then(|entry| entry.metadata_blob)
+                .and_then(|hash| held.metadata_blobs.get(&hash).cloned()))
+        })
+    }
+}
+
+/// What the in-memory quota ledger counts of this store: the distinct metadata blobs held by
+/// every job `user` subscribes to, live or lapsed, on every peer — the fact the durable ledger's
+/// usage statement joins `federation_subscriptions` with `federation_pulled_metadata_blobs` for.
+///
+/// Only a store assembled [`with_budget`](InMemoryPulledAlbums::with_budget) knows its
+/// subscribers; one assembled without holds nothing for anyone. The subscriptions are read
+/// before the lock is taken, as [`PulledAlbums::commit`] reads them.
+impl crate::quota::PulledHoldings for InMemoryPulledAlbums {
+    fn held_by<'a>(
+        &'a self,
+        user: &'a UserId,
+    ) -> StoreFuture<'a, BTreeMap<crate::blob::ContentAddress, u64>> {
+        Box::pin(async move {
+            let Some((subscriptions, _)) = &self.budget else {
+                return Ok(BTreeMap::new());
+            };
+            let jobs: BTreeSet<JobKey> = subscriptions
+                .of_subscriber(user)
+                .await?
+                .iter()
+                .map(crate::federation::Subscription::job)
+                .collect();
+            let albums = self.lock();
+            let mut held = BTreeMap::new();
+            for album in jobs.iter().filter_map(|job| albums.get(job)) {
+                for (hash, bytes) in &album.metadata_blobs {
+                    let address =
+                        crate::blob::ContentAddress::parse(&hash.to_hex()).map_err(|error| {
+                            crate::store::StoreError::Rejected {
+                                store: "pulled albums",
+                                detail: format!("{hash} is not a content address: {error}"),
+                            }
+                        })?;
+                    held.insert(address, u64::try_from(bytes.len()).unwrap_or(u64::MAX));
+                }
+            }
+            tracing::trace!(%user, jobs = jobs.len(), blobs = held.len(), "pulled holdings read for the quota ledger");
+            Ok(held)
         })
     }
 }

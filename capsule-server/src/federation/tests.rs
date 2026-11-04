@@ -127,6 +127,7 @@ fn context(peers: Arc<dyn PeerStore>, clock: Arc<ManualClock>) -> FederationCont
         capabilities: Arc::new(InMemoryCapabilities::new(clock.clone())),
         peers,
         subscriptions: Arc::new(InMemorySubscriptions::new()),
+        pulled: Arc::new(crate::federation::pull::InMemoryPulledAlbums::new()),
         clock,
         enabled: Arc::new(true),
     })
