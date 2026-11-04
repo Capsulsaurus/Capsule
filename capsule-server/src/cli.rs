@@ -848,7 +848,7 @@ async fn scrub(config: &Config, depth: Depth) -> Result<ExitCode> {
 ///
 /// Exits [`EXIT_FINDINGS`] when the report holds a fault — a broken ledger, a row that disagrees
 /// with the index, a dangling entry, a quarantined manifest — and zero when the only news is rows
-/// to restore, which is what a rebuild is for.
+/// to restore or drifted pulled quota totals to rebuild (#1183), which is what a rebuild is for.
 async fn rebuild(config: &Config, mode: Mode, accept_rewrites: bool) -> Result<ExitCode> {
     let maintenance = maintenance(config).await?;
     let context = if accept_rewrites {
@@ -1416,6 +1416,31 @@ impl std::fmt::Display for Rendered<'_, RebuildReport> {
             writeln!(f, "  orphans, left to gc ({})", report.orphans.len())?;
             for address in &report.orphans {
                 writeln!(f, "    {address}")?;
+            }
+        }
+        if !report.pulled_drift.is_empty() {
+            let rebuilt = match mode {
+                Mode::Apply => "rebuilt",
+                Mode::DryRun => "would rebuild",
+            };
+            writeln!(
+                f,
+                "  pulled quota totals that drifted, {rebuilt} ({})",
+                report.pulled_drift.len()
+            )?;
+            for drift in &report.pulled_drift {
+                writeln!(
+                    f,
+                    "    {}: stored {}, derived {}{}",
+                    drift.user,
+                    drift.stored,
+                    drift.derived,
+                    if drift.holdings {
+                        ", holdings differ"
+                    } else {
+                        ""
+                    }
+                )?;
             }
         }
         if report.owners.is_empty() {
