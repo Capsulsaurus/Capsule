@@ -34,6 +34,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use capsule_core::content_type::extension_for;
 use capsule_core::crypto::hash::Hash32;
 use capsule_core::crypto::provenance::ProvenanceRecord;
 use capsule_library::lifecycle::{
@@ -652,38 +653,6 @@ fn refusal(verdict: &SyncApplyOutcome) -> AssetRestoreFailure {
 /// upload protocol's largest chunk). A sealed sidecar is a few KiB; the cap only stops a
 /// server that keeps answering full windows from growing the buffer without bound.
 pub const MAX_METADATA_BLOB_BYTES: u64 = capsule_sdk::upload::PROTOCOL_MAX_CHUNK;
-
-/// A file extension for a media type, for naming a restored original. Cosmetic: the bytes are
-/// the original's whatever the name says, and an unlisted type is written as `.bin`.
-#[must_use]
-pub fn extension_for(content_type: &str) -> &'static str {
-    match content_type {
-        "image/jpeg" => "jpg",
-        "image/png" => "png",
-        "image/webp" => "webp",
-        "image/jxl" => "jxl",
-        "image/tiff" => "tiff",
-        "image/gif" => "gif",
-        "image/avif" => "avif",
-        "image/heic" => "heic",
-        "image/heif" => "heif",
-        "image/x-portable-anymap" => "pnm",
-        "image/x-adobe-dng" | "image/dng" => "dng",
-        "image/x-sony-arw" => "arw",
-        "image/x-canon-cr2" => "cr2",
-        "image/x-canon-cr3" => "cr3",
-        "image/x-nikon-nef" => "nef",
-        "image/x-fuji-raf" => "raf",
-        "image/x-olympus-orf" => "orf",
-        "image/x-panasonic-rw2" => "rw2",
-        "video/mp4" => "mp4",
-        "video/quicktime" => "mov",
-        "video/x-matroska" => "mkv",
-        "video/webm" => "webm",
-        "video/x-msvideo" => "avi",
-        _ => "bin",
-    }
-}
 
 /// Move a fully written staging file into place as `target`, so that `target` is either absent
 /// or complete: flushed and synced to disk, then renamed (`staging` is under `OUT`, on the same

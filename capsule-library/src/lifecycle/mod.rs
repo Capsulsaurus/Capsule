@@ -17,6 +17,10 @@
 //! - [`export_backup`](Workspace::export_backup) / [`import_backup`](Workspace::import_backup)
 //!   — the portable artifact round-trip; the client stores plaintext, so ciphertext is
 //!   regenerated deterministically from the manifest's recorded nonce prefix.
+//! - [`adopt_remote_head`](Workspace::adopt_remote_head) /
+//!   [`adopt_remote_original`](Workspace::adopt_remote_original) — hold an asset another
+//!   device wrote, from a verified sync entry: its chain, sidecar, sealed metadata blob and
+//!   original under `media/`, indexed, so the verbs above work on it as on an import.
 //!
 //! Clients store **plaintext** locally (original + signed sidecar + provenance chain);
 //! encryption produces the artifacts that cross a boundary. Offline epoch rotation is supported
@@ -80,8 +84,8 @@ pub use self::open::HardwareDekBinding;
 pub use self::organize::{FeedDrain, PurgeOutcome, TrashEntry};
 pub use self::reseal::{ResealOutcome, ResealRefusal};
 pub use self::sync_apply::{
-    QuarantineReason, RemoteAssetFacts, RemoteEntry, RemoteHead, RemoteOriginal, SyncApplyOutcome,
-    hash_ciphertext_from,
+    Adoption, QuarantineReason, RemoteAssetFacts, RemoteEntry, RemoteHead, RemoteOriginal,
+    SyncApplyOutcome, hash_ciphertext_from,
 };
 pub use self::unanchored::{UnanchoredShape, UnanchoredSidecar, unanchored_sidecars};
 pub use self::upload::{
@@ -162,6 +166,11 @@ pub enum LifecycleError {
     /// on the wire is not what the asset's provenance vouches for.
     #[error("asset {0}: re-derived ciphertext does not match the manifest's ciphertext_hash")]
     CiphertextMismatch(Uuid),
+    /// The plaintext original handed to [`adopt_remote_original`](Workspace::adopt_remote_original)
+    /// does not hash to the digest the entry's signed sidecar commits to: it is not the original
+    /// the chokepoint vouched for. Nothing of the asset was written.
+    #[error("asset {0}: the original handed over does not hash to its signed sidecar's digest")]
+    OriginalMismatch(Uuid),
     /// [`upload_bundle`](Workspace::upload_bundle) was asked for an asset whose `create` binds a
     /// metadata blob the library no longer holds: an edit replaced it before the library kept
     /// the create's blob beside the chain, so neither copy answers the create's

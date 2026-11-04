@@ -214,6 +214,21 @@ impl<R: Read> Read for Tee<R> {
     }
 }
 
+/// A writer that only hashes what it is given: the sink [`io::copy`] streams a file into to
+/// digest it one buffer at a time.
+struct HashSink<'a>(&'a mut Sha256Hasher);
+
+impl Write for HashSink<'_> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.0.update(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
 /// An import's library copy of its original, written to `{media}.tmp` while it is encrypted
 /// and renamed into place only once the asset has self-verified. Dropped uncommitted — the
 /// import failed after the copy began — it removes the `.tmp`, so a failed import leaves no
@@ -497,6 +512,61 @@ impl Workspace {
                 .map_err(|e| LifecycleError::Io(format!("write {}: {e}", media_path.display())))?;
         }
         self.write_signed_artifacts(asset)
+    }
+
+    /// Place the plaintext original at `src` as `asset`'s library original, durably, and only if
+    /// it hashes to `expected`. Returns its length.
+    ///
+    /// The file is copied to `{media}.tmp`, the staged copy is hashed, and it is renamed over
+    /// the media path only once its SHA-256 is `expected`, then fsynced with its directory.
+    /// Hashing the staged copy rather than `src` means the bytes checked are the bytes placed.
+    /// The copy is never a hard link: `src` stays where it is for the caller to keep, and a
+    /// linked original would share its inode, so a later in-place write to `src` would change
+    /// the library original unchecked. `fs::copy` clones the extents where the filesystem can
+    /// (`clonefile` on APFS, `copy_file_range` on Btrfs and XFS), which is copy-on-write and
+    /// so equally independent of `src`. On a mismatch the staged copy is removed and
+    /// [`LifecycleError::OriginalMismatch`] returned; nothing reaches the media path.
+    pub(super) fn place_original_from(
+        &self,
+        asset: &AssetState,
+        src: &Path,
+        expected: Hash32,
+    ) -> Result<u64> {
+        let dir = media_dir(&self.root, asset.capture_utc);
+        create_dir_durable(&dir)?;
+        let target = self.media_path(asset);
+        let tmp = tmp_path(&target);
+        let _ = fs::remove_file(&tmp);
+        fs::copy(src, &tmp).map_err(|e| {
+            LifecycleError::Io(format!("copy {} to {}: {e}", src.display(), tmp.display()))
+        })?;
+        let staged = StagedOriginal(Some(Staged {
+            tmp: tmp.clone(),
+            target: target.clone(),
+        }));
+        let mut file = fs::File::open(&tmp)
+            .map_err(|e| LifecycleError::Io(format!("open {}: {e}", tmp.display())))?;
+        let mut hasher = Sha256Hasher::new();
+        let len = io::copy(&mut file, &mut HashSink(&mut hasher))
+            .map_err(|e| LifecycleError::Io(format!("read {}: {e}", tmp.display())))?;
+        if hasher.finalize() != expected {
+            tracing::warn!(
+                asset_id = %asset.asset_id,
+                src = %src.display(),
+                "the original handed over does not hash to its signed digest; not placing it"
+            );
+            return Err(LifecycleError::OriginalMismatch(asset.asset_id));
+        }
+        file.sync_all()
+            .map_err(|e| LifecycleError::Io(format!("fsync {}: {e}", tmp.display())))?;
+        staged.commit()?;
+        sync_dir_entries(&dir)?;
+        tracing::debug!(
+            asset_id = %asset.asset_id,
+            bytes = len,
+            "verified original copied into the library"
+        );
+        Ok(len)
     }
 
     /// The signed half of [`write_asset_files`](Self::write_asset_files): the sidecar, the

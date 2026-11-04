@@ -396,7 +396,7 @@ async fn a_restore_writes_byte_identical_originals() {
             outcome
                 .path
                 .as_deref()
-                .is_some_and(|path| path.ends_with(&format!("{asset}.jpg")))
+                .is_some_and(|path| path.ends_with(&format!("{asset}.jpeg")))
         );
     }
     let staged: Vec<_> = std::fs::read_dir(out.path().join(STAGING_DIR))
@@ -952,7 +952,7 @@ fn the_json_report_lists_each_assets_outcome() {
 
 #[test]
 fn a_media_type_names_its_extension_and_anything_else_is_bin() {
-    assert_eq!(extension_for("image/jpeg"), "jpg");
+    assert_eq!(extension_for("image/jpeg"), "jpeg");
     assert_eq!(extension_for("video/quicktime"), "mov");
     assert_eq!(extension_for("application/x-unknown"), "bin");
 }

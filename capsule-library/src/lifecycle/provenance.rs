@@ -255,7 +255,7 @@ impl Workspace {
     /// create that binds no blob, a blob an earlier edit already moved aside, and a library
     /// written before the blob was kept (whose current blob no longer answers the create) keep
     /// nothing.
-    fn keep_create_metadata_blob(&self, asset_id: &Uuid) -> Result<()> {
+    pub(super) fn keep_create_metadata_blob(&self, asset_id: &Uuid) -> Result<()> {
         let asset = &self.assets[asset_id];
         let bound = asset
             .chain

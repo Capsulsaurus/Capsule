@@ -27,6 +27,10 @@ enum FFISyncCatalogWrite: Equatable, Sendable {
     /// row here, an entry with no metadata whose action the store does not
     /// project, or metadata with neither an original nor a row to update.
     case unwritten
+    /// Nothing was written because the workspace adopted the entry
+    /// (`FfiAssetFacts.adopted`): it already wrote the asset's row, its user
+    /// tags and its original, and holds the asset for its trash verbs.
+    case adopted
 }
 
 /// Where the sync driver writes each applied entry: the managed catalog's row
@@ -59,6 +63,12 @@ protocol FFISyncCatalogWriting: Sendable {
 ///
 /// LQIP columns stay empty and the capture timezone unresolved, as the
 /// workspace's own projection leaves them.
+///
+/// An entry the workspace adopted (`FfiAssetFacts.adopted`) writes nothing
+/// here: the workspace holds the asset and has written its row, user tags and
+/// original itself. What is left to this writer is an entry the workspace
+/// could not adopt — an asset it first saw past its create — whose row it
+/// keeps as before.
 public actor FFISyncCatalogWriter: FFISyncCatalogWriting {
     /// The head manifest action that moves an asset into the trash.
     static let deleteAction = "delete"
@@ -105,6 +115,10 @@ public actor FFISyncCatalogWriter: FFISyncCatalogWriting {
     }
 
     func write(_ facts: FfiAssetFacts, original: URL?) async throws -> FFISyncCatalogWrite {
+        if facts.adopted {
+            writerLog.debug("synced \(facts.assetId, privacy: .public) adopted by the workspace; nothing written")
+            return .adopted
+        }
         let catalog = try openedCatalog()
         let existing = try await catalog.asset(id: facts.assetId)
         guard let metadata = facts.metadata else {
@@ -160,8 +174,8 @@ public actor FFISyncCatalogWriter: FFISyncCatalogWriting {
         row.isHidden = metadata.hidden
         row.caption = metadata.caption.flatMap { $0.isEmpty ? nil : $0 }
         // `metadata.tags` is not projected: the workspace writes user tags to
-        // `asset_tags` beside the row, and the catalog this writer holds has no
-        // tag write. They arrive once the workspace adopts synced assets.
+        // `asset_tags` beside the row of an asset it adopts, and the catalog this
+        // writer holds has no tag write.
         return row
     }
 

@@ -41,6 +41,23 @@
 //! [`Workspace::open_remote_original_from`] hashes the ciphertext it streams and opens nothing
 //! unless that hash is the one the chokepoint accepted.
 //!
+//! # Adopting what applied
+//!
+//! Applying is read-only: it says what is true and writes nothing. A client whose catalog *is*
+//! this workspace's library adopts the entry instead ([`Workspace::adopt_remote_head`],
+//! [`Workspace::adopt_remote_original`]): the same verdict, and then the verified record joins a
+//! chain this workspace holds — a `create` starts one, with its sidecar, sealed metadata blob and
+//! original written under `media/` and its row and user tags indexed, and a later record that
+//! chains onto the held head is appended. The chain held is the records the chokepoint accepted,
+//! byte for byte, so the asset's next signed record chains onto the head the server holds, and
+//! a reopen reads the asset back from its files like any other.
+//!
+//! A chain begins at its create and nowhere else, and the feed serves only an asset's latest
+//! record. An asset first seen at a later record is therefore not held
+//! ([`Adoption::MissingHistory`]) — anchoring a chain at a non-create head would forge a chain
+//! that never verifies from its start — and a record that does not chain onto the held head is
+//! not appended ([`Adoption::Diverged`]).
+//!
 //! # Transport independence
 //!
 //! Nothing below names a transport. The gRPC sync feed, a REST re-fronting of the same feed, a
@@ -88,23 +105,29 @@
 //! [`VerifyOutcome`]: capsule_core::crypto::verify_asset::VerifyOutcome
 
 use std::io::{Read, Write};
+use std::path::Path;
 
+use capsule_core::content_type::extension_for;
 use capsule_core::crypto::encryption::{
     CIPHERTEXT_CHUNK, StreamDecryptor, StreamError, blob_ciphertext_hash, blob_nonce, open_blob,
 };
 use capsule_core::crypto::hash::{Hash32, Sha256Hasher, hash_bytes};
 use capsule_core::crypto::keys::Amk;
 use capsule_core::crypto::provenance::{
-    Action, AssetManifest, ProvenanceRecord, RecordDecodeError,
+    Action, AssetManifest, ProvenanceChain, ProvenanceRecord, RecordDecodeError,
 };
 use capsule_core::crypto::verify_asset::{
     BindingReject, PendingReason, RejectReason, VerifyOutcome, diagnose_misattributed_signer,
     verify_asset_hashed,
 };
 use capsule_core::sidecar::sidecar_v1::{SIDECAR_SCHEMA_V1, SidecarV1};
+use jiff::Timestamp;
 use uuid::Uuid;
 
-use super::{LifecycleError, Result, Workspace};
+use super::open::original_extension;
+use super::{
+    AssetState, LifecycleError, Result, StackPlacement, Workspace, media_dir, media_file_path,
+};
 
 /// One remote feed entry, exactly as a sync feed delivers it: opaque bytes plus the album the
 /// entry claims and the head the receiving catalog already holds. Borrowed rather than owned so
@@ -343,7 +366,8 @@ impl Workspace {
     /// Read-only with respect to this workspace — it decides *what is true* and leaves *what to
     /// persist* to the caller's catalog. That split is deliberate: the same verdict feeds an
     /// iOS gallery upsert, a CLI `sync` report, and a quarantine surface, none of which want
-    /// this layer writing to their index.
+    /// this layer writing to their index. A client whose catalog is this workspace's own adopts
+    /// the entry instead ([`adopt_remote_head`](Self::adopt_remote_head)).
     ///
     /// `Err` is reserved for a failure of *this workspace* (an unreadable album keystore, say).
     /// A refused **entry** is never an `Err` — it is a [`SyncApplyOutcome::Quarantined`],
@@ -745,6 +769,298 @@ impl Workspace {
             "open-remote: original verified and decrypted"
         );
         Ok(RemoteOriginal::Opened { facts, plaintext })
+    }
+}
+
+/// What adopting one applied entry did to the assets this workspace holds
+/// ([`Workspace::adopt_remote_head`], [`Workspace::adopt_remote_original`]).
+///
+/// Adoption never decides whether an entry is true; the chokepoint did. It decides only
+/// whether the verified record can become part of a chain this workspace holds without
+/// breaking that chain's rules: a chain starts at its `create`
+/// ([`ProvenanceChain::append`]), and each later record names the head before it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Adoption {
+    /// A `create` of an asset this workspace did not hold. Its record, sidecar, sealed metadata
+    /// blob and original are written under `media/`, its row and user tags indexed, and the
+    /// asset is held: the trash verbs, tag edits and uploads work on it, and its next signed
+    /// record chains onto the create.
+    Adopted,
+    /// A record of a held asset that chains onto its head. It is appended; the sidecar and
+    /// sealed metadata blob follow it when it binds one, the original when it replaces it, and
+    /// the index row is rewritten.
+    Advanced,
+    /// The held chain already contains this record. Nothing was written.
+    AlreadyHeld,
+    /// An asset this workspace does not hold, whose record is not its `create`. A chain cannot
+    /// start anywhere but at its create, and the feed carries only an asset's latest record, so
+    /// the asset stays unheld until its earlier records can be fetched. Nothing was written.
+    MissingHistory,
+    /// A record that needs the plaintext original — the `create` of an unheld asset, or one
+    /// that replaces a held original — applied without it. Nothing was written; adopt it
+    /// through [`Workspace::adopt_remote_original`].
+    NeedsOriginal,
+    /// A record of a held asset that does not chain onto its head: a fork, or a gap of records
+    /// this workspace has not seen. Nothing was written; the held chain stands.
+    Diverged,
+}
+
+impl Adoption {
+    /// Whether the workspace holds the asset at the entry's record afterwards, so its own index
+    /// row and user tags describe the asset and a catalog writer has nothing to add.
+    #[must_use]
+    pub fn holds(self) -> bool {
+        matches!(self, Self::Adopted | Self::Advanced | Self::AlreadyHeld)
+    }
+}
+
+impl Workspace {
+    /// [`apply_remote_head`](Self::apply_remote_head), then **adopt** what applied: a record
+    /// that chains onto an asset this workspace holds is appended to its chain, with the
+    /// sealed metadata it binds, and written under `media/` and indexed, so the asset's next
+    /// signed record chains onto the head the server holds.
+    ///
+    /// A record that needs the original's plaintext (a `create`, or a replace) is not adopted
+    /// here: it answers [`Adoption::NeedsOriginal`], and
+    /// [`adopt_remote_original`](Self::adopt_remote_original) adopts it. A record that does
+    /// not change the original needs none, because the held original is the one it commits to.
+    ///
+    /// The verdict is exactly [`apply_remote_head`](Self::apply_remote_head)'s, and the
+    /// [`Adoption`] is `Some` only for an `Applied` one.
+    ///
+    /// # Errors
+    ///
+    /// As [`apply_remote_head`](Self::apply_remote_head), plus the I/O or index failure that
+    /// stopped an adoption's write.
+    #[tracing::instrument(skip_all, fields(album_id = %entry.album_id))]
+    pub fn adopt_remote_head(
+        &mut self,
+        entry: RemoteHead<'_>,
+    ) -> Result<(SyncApplyOutcome, Option<Adoption>)> {
+        self.adopt_remote(entry, None)
+    }
+
+    /// [`adopt_remote_head`](Self::adopt_remote_head) for an entry whose original's verified
+    /// plaintext is the file at `plaintext` — the one an
+    /// [`open_remote_original_from`](Self::open_remote_original_from) of the same head answered
+    /// [`RemoteOriginal::Opened`] for. This is what adopts a `create`: the asset is held with
+    /// that original as its library copy.
+    ///
+    /// The file is not trusted for being handed over. It is placed only if it hashes to the
+    /// digest the entry's signed sidecar commits to, and is copied into `media/` (never
+    /// hard-linked), so `plaintext` is left in place for its owner to keep or remove, and
+    /// nothing later written to it reaches the library original.
+    /// An entry that does not need the original adopts as
+    /// [`adopt_remote_head`](Self::adopt_remote_head) would, without reading the file.
+    ///
+    /// # Errors
+    ///
+    /// As [`adopt_remote_head`](Self::adopt_remote_head), and
+    /// [`LifecycleError::OriginalMismatch`] when the file is not the signed original (nothing of
+    /// the asset is written).
+    #[tracing::instrument(skip_all, fields(album_id = %entry.album_id, plaintext = %plaintext.display()))]
+    pub fn adopt_remote_original(
+        &mut self,
+        entry: RemoteHead<'_>,
+        plaintext: &Path,
+    ) -> Result<(SyncApplyOutcome, Option<Adoption>)> {
+        self.adopt_remote(entry, Some(plaintext))
+    }
+
+    fn adopt_remote(
+        &mut self,
+        entry: RemoteHead<'_>,
+        plaintext: Option<&Path>,
+    ) -> Result<(SyncApplyOutcome, Option<Adoption>)> {
+        let outcome = self.apply_remote_head(entry)?;
+        let SyncApplyOutcome::Applied(facts) = &outcome else {
+            return Ok((outcome, None));
+        };
+        // The apply decoded these exact bytes a moment ago, so this cannot fail; answered as
+        // "nothing adopted" rather than unwrapped all the same.
+        let Ok(record) = ProvenanceRecord::decode(entry.manifest_cbor) else {
+            return Ok((outcome, None));
+        };
+        let adoption = if self.assets.contains_key(&facts.asset_id) {
+            self.advance_held(record, facts, entry.metadata_blob, plaintext)?
+        } else {
+            self.adopt_unheld(record, facts, entry.metadata_blob, plaintext)?
+        };
+        tracing::info!(
+            asset_id = %facts.asset_id,
+            action = ?facts.action,
+            ?adoption,
+            "sync-adopt: applied entry adopted"
+        );
+        Ok((outcome, Some(adoption)))
+    }
+
+    /// Hold an asset from its verified `create`: the record, sidecar and sealed blob the entry
+    /// carried, and the original at `plaintext`.
+    fn adopt_unheld(
+        &mut self,
+        record: ProvenanceRecord,
+        facts: &RemoteAssetFacts,
+        metadata_blob: &[u8],
+        plaintext: Option<&Path>,
+    ) -> Result<Adoption> {
+        if record.manifest.core.action != Action::Create {
+            tracing::info!(
+                asset_id = %facts.asset_id,
+                action = ?facts.action,
+                "sync-adopt: an unheld asset's record is not its create; its earlier records are not here"
+            );
+            return Ok(Adoption::MissingHistory);
+        }
+        let Some(plaintext) = plaintext else {
+            tracing::debug!(asset_id = %facts.asset_id, "sync-adopt: a create needs its original");
+            return Ok(Adoption::NeedsOriginal);
+        };
+        // A create binds a metadata blob, so the apply opened and verified its sidecar.
+        let Some(sidecar) = facts.sidecar.clone() else {
+            return Err(LifecycleError::RestoredMetadata(format!(
+                "asset {}: an applied create carries no sidecar",
+                facts.asset_id
+            )));
+        };
+        let mut chain = ProvenanceChain::new();
+        chain
+            .append(record)
+            .map_err(|e| LifecycleError::Cbor(format!("adopted chain: {e}")))?;
+        // Filed under the sidecar's capture time, as a reopen reads it back
+        // (`restore_one_asset` step 3) and as a restore files a new asset.
+        let capture_utc = sidecar
+            .capture_timestamp
+            .parse::<Timestamp>()
+            .or_else(|_| facts.timestamp.parse::<Timestamp>())
+            .map_or(0, Timestamp::as_second);
+        let stack = sidecar
+            .stack_membership
+            .get()
+            .and_then(|membership| membership.as_ref().map(StackPlacement::from_membership));
+        let mut asset = AssetState {
+            asset_id: facts.asset_id,
+            album_id: facts.album_id,
+            ext: extension_for(&sidecar.content_type).to_owned(),
+            capture_utc,
+            chain,
+            sidecar,
+            metadata_blob: metadata_blob.to_vec(),
+            stack,
+        };
+        let bytes = self.place_adopted_original(&mut asset, plaintext)?;
+        self.write_signed_artifacts(&asset)?;
+        self.index_asset_row(&asset)?;
+        self.index_original_representation(&asset, usize::try_from(bytes).unwrap_or(usize::MAX))?;
+        self.assets.insert(asset.asset_id, asset);
+        Ok(Adoption::Adopted)
+    }
+
+    /// The library original of a newly adopted asset, placed from `plaintext`. An original the
+    /// library already holds under the asset's name — one an app placed before the workspace
+    /// adopted synced assets — is kept when it is the signed original, under its own extension,
+    /// and removed when it is not.
+    fn place_adopted_original(&self, asset: &mut AssetState, plaintext: &Path) -> Result<u64> {
+        let dir = media_dir(&self.root, asset.capture_utc);
+        if let Some(found) = original_extension(&dir, &asset.asset_id) {
+            let held = media_file_path(&self.root, asset.capture_utc, asset.asset_id, &found);
+            let (digest, len) = std::fs::File::open(&held)
+                .map_err(|e| LifecycleError::Io(format!("open {}: {e}", held.display())))
+                .and_then(hash_ciphertext_from)?;
+            if digest == asset.sidecar.hash {
+                tracing::debug!(asset_id = %asset.asset_id, ext = %found, "sync-adopt: keeping the signed original already in the library");
+                asset.ext = found;
+                return Ok(len);
+            }
+            tracing::warn!(asset_id = %asset.asset_id, ext = %found, "sync-adopt: removing a file under the asset's name that is not its signed original");
+            std::fs::remove_file(&held)
+                .map_err(|e| LifecycleError::Io(format!("remove {}: {e}", held.display())))?;
+        }
+        self.place_original_from(asset, plaintext, asset.sidecar.hash)
+    }
+
+    /// Append a verified record onto the held chain it extends.
+    fn advance_held(
+        &mut self,
+        record: ProvenanceRecord,
+        facts: &RemoteAssetFacts,
+        metadata_blob: &[u8],
+        plaintext: Option<&Path>,
+    ) -> Result<Adoption> {
+        let asset_id = facts.asset_id;
+        let held = &self.assets[&asset_id];
+        if held
+            .chain
+            .records()
+            .iter()
+            .any(|held| held.record_hash() == facts.provenance_head)
+        {
+            tracing::debug!(%asset_id, "sync-adopt: the held chain already contains the record");
+            return Ok(Adoption::AlreadyHeld);
+        }
+        if record.prior_provenance_hash != held.chain.head() {
+            tracing::warn!(
+                %asset_id,
+                action = ?facts.action,
+                "sync-adopt: the record does not chain onto the held head; the held chain stands"
+            );
+            return Ok(Adoption::Diverged);
+        }
+        let mut chain = held.chain.clone();
+        chain
+            .append(record)
+            .map_err(|e| LifecycleError::Cbor(format!("adopted chain: {e}")))?;
+        let held_ciphertext = held
+            .chain
+            .records()
+            .last()
+            .expect("provenance chain is never empty")
+            .manifest
+            .core
+            .ciphertext_hash;
+        let replaces_original = facts.ciphertext_hash != held_ciphertext;
+        if replaces_original && plaintext.is_none() {
+            tracing::debug!(%asset_id, "sync-adopt: the record replaces the original; it needs the new one");
+            return Ok(Adoption::NeedsOriginal);
+        }
+        let binds = facts.action.binds_metadata_blob();
+        // A replaced original is placed before anything of the asset changes, so an original
+        // that is not the signed one leaves the held asset exactly as it was. It keeps the held
+        // original's name: its shard and extension.
+        let placed = match plaintext.filter(|_| replaces_original) {
+            Some(plaintext) => {
+                let expected = facts.sidecar.as_ref().map_or(held.sidecar.hash, |s| s.hash);
+                Some(self.place_original_from(held, plaintext, expected)?)
+            }
+            None => None,
+        };
+        // The record's sealed metadata replaces the held one, so the blob the create binds is
+        // kept first, as a local edit keeps it: an upload of the create needs those bytes.
+        if binds {
+            self.keep_create_metadata_blob(&asset_id)?;
+        }
+        let asset = self
+            .assets
+            .get_mut(&asset_id)
+            .expect("the asset is held: checked above");
+        if let Some(sidecar) = facts.sidecar.as_ref().filter(|_| binds) {
+            asset.sidecar = sidecar.clone();
+            asset.metadata_blob = metadata_blob.to_vec();
+            if let Some(membership) = asset.sidecar.stack_membership.get() {
+                asset.stack = membership.as_ref().map(StackPlacement::from_membership);
+            }
+        }
+        asset.chain = chain;
+        let asset = &self.assets[&asset_id];
+        if let Some(bytes) = placed {
+            self.index_original_representation(
+                asset,
+                usize::try_from(bytes).unwrap_or(usize::MAX),
+            )?;
+        }
+        self.write_signed_artifacts(asset)?;
+        self.index_asset_row(asset)?;
+        Ok(Adoption::Advanced)
     }
 }
 
