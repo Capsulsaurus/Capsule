@@ -452,9 +452,11 @@ struct ManagedProviderWorkspaceRoutingTests {
     private actor RecordingWorkspace: ManagedWorkspace {
         private(set) var calls: [String] = []
         private let restoreRefusal: TrashRefusal?
+        private let purgeRefusal: TrashRefusal?
 
-        init(restoreRefusal: TrashRefusal? = nil) {
+        init(restoreRefusal: TrashRefusal? = nil, purgeRefusal: TrashRefusal? = nil) {
             self.restoreRefusal = restoreRefusal
+            self.purgeRefusal = purgeRefusal
         }
 
         func sealAsset(fileName: String, bytes _: Data) -> String {
@@ -471,13 +473,18 @@ struct ManagedProviderWorkspaceRoutingTests {
             if let restoreRefusal { throw restoreRefusal }
         }
 
-        func purgeAsset(id: String) -> ManagedPurgeOutcome {
+        func purgeAsset(id: String) throws -> ManagedPurgeOutcome {
             calls.append("purge \(id)")
+            if let purgeRefusal { throw purgeRefusal }
             return ManagedPurgeOutcome(assetID: id, reissueRecord: Data([0xA1]))
         }
     }
 
-    private func makeProvider(_ workspace: RecordingWorkspace, catalog: MockCatalog) -> ManagedProvider {
+    private func makeProvider(
+        _ workspace: RecordingWorkspace,
+        catalog: MockCatalog,
+        purgeDelivery: (any PurgeDelivering)? = nil
+    ) -> ManagedProvider {
         ManagedProvider(
             library: ManagedLibrary(
                 layout: ManagedLibraryLayout(root: URL(filePath: "/capsule/Library")),
@@ -485,7 +492,8 @@ struct ManagedProviderWorkspaceRoutingTests {
                 catalog: catalog,
                 workspace: workspace
             ),
-            authGate: MockLocalAuthGate()
+            authGate: MockLocalAuthGate(),
+            purgeDelivery: purgeDelivery
         )
     }
 
@@ -513,5 +521,33 @@ struct ManagedProviderWorkspaceRoutingTests {
         await #expect(throws: TrashRefusal.retentionElapsed(retentionUntil: "2024-08-02T00:00:00Z")) {
             try await provider.restore(.managed(uuid: "a"))
         }
+    }
+
+    @Test("a purge the workspace cannot find while the catalog holds the row is thrown, keeps the row, and delivers nothing")
+    func purgeOfARowTheWorkspaceDoesNotHoldIsThrown() async throws {
+        let workspace = RecordingWorkspace(purgeRefusal: .notFound)
+        let catalog = MockCatalog()
+        try await catalog.insertAsset(Fixtures.catalogAsset(id: "synced", isDeleted: true, deletedAt: 1720000000))
+        let delivery = ScriptedPurgeDelivery()
+        let provider = makeProvider(workspace, catalog: catalog, purgeDelivery: delivery)
+
+        await #expect(throws: TrashRefusal.notFound) {
+            try await provider.purge(.managed(uuid: "synced"))
+        }
+
+        #expect(await catalog.asset(id: "synced") != nil)
+        #expect(await delivery.delivered.isEmpty)
+    }
+
+    @Test("a purge the workspace cannot find with no catalog row is already gone, and delivers nothing")
+    func purgeOfAnAssetNeitherHoldsSucceeds() async throws {
+        let workspace = RecordingWorkspace(purgeRefusal: .notFound)
+        let delivery = ScriptedPurgeDelivery()
+        let provider = makeProvider(workspace, catalog: MockCatalog(), purgeDelivery: delivery)
+
+        try await provider.purge(.managed(uuid: "gone"))
+
+        #expect(await workspace.calls == ["purge gone"])
+        #expect(await delivery.delivered.isEmpty)
     }
 }

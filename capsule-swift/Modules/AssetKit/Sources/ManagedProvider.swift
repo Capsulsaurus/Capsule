@@ -130,7 +130,9 @@ public actor ManagedProvider: AssetProvider, TrashProvider, AssetOwning {
     /// re-published before the deliveries, as a purge does. A delete that
     /// throws stops the batch before anything is delivered: the deletes
     /// already signed stay on their chains for
-    /// ``redeliverLifecycleRecords()``.
+    /// ``redeliverLifecycleRecords()``. A row sync wrote for another device's
+    /// asset is not held by the workspace, which refuses its delete with
+    /// ``TrashRefusal/notFound``; that refusal stops the batch the same way.
     public func delete(_ ids: [AssetID]) async throws {
         let retainDays = UInt32(TrashEntry.defaultRetentionDays)
         var deleted: [String] = []
@@ -290,7 +292,9 @@ public actor ManagedProvider: AssetProvider, TrashProvider, AssetOwning {
 
     /// Restore a trashed asset. The workspace refuses it once the retention
     /// window has closed (``TrashRefusal/retentionElapsed(retentionUntil:)``),
-    /// and the asset stays in Recently Deleted.
+    /// and the asset stays in Recently Deleted. A row sync wrote for another
+    /// device's asset is not held by the workspace, which refuses it with
+    /// ``TrashRefusal/notFound``, thrown here unchanged.
     ///
     /// Once restored, the `trash-restore` goes to the server through
     /// ``LifecycleDelivering`` (``deliverLifecycle(of:)``), with the delete it
@@ -309,10 +313,15 @@ public actor ManagedProvider: AssetProvider, TrashProvider, AssetOwning {
     /// the row, and throws — leaving the asset in Recently Deleted for a retry —
     /// when a file cannot be removed.
     ///
-    /// An asset the workspace no longer holds is already gone, which is what a
-    /// purge asks for, so that refusal is not an error. An early purge hands
-    /// back a signed shorter-retention `delete` for the album's ops surface; the
-    /// workspace keeps it on the asset's chain until something delivers it.
+    /// An asset the workspace no longer holds and the catalog has no row for is
+    /// already gone, which is what a purge asks for, so that refusal is not an
+    /// error. A row the catalog still holds without the workspace holding the
+    /// asset (one written by sync for another device's asset) was not purged,
+    /// so that refusal is thrown and the row stays in Recently Deleted.
+    ///
+    /// An early purge hands back a signed shorter-retention `delete` for the
+    /// album's ops surface; the workspace keeps it on the asset's chain until
+    /// something delivers it.
     ///
     /// Once purged, the asset's `delete` (with that re-issue) goes to the
     /// server through ``PurgeDelivering`` (``deliverPurge(of:)``). A delivery
@@ -331,6 +340,15 @@ public actor ManagedProvider: AssetProvider, TrashProvider, AssetOwning {
                 CapsuleLog.assetKit.debug("managed purge of \(uuid, privacy: .private)")
             }
         } catch TrashRefusal.notFound {
+            if try await library.catalog().asset(id: uuid) != nil {
+                // A row the workspace does not hold: one the sync driver wrote
+                // for another device's asset. Nothing was purged, so the
+                // refusal is the caller's, and the row stays in the trash.
+                CapsuleLog.assetKit.error(
+                    "managed purge of \(uuid, privacy: .private) refused: the catalog row is not held by the workspace"
+                )
+                throw TrashRefusal.notFound
+            }
             CapsuleLog.assetKit.debug("managed purge of \(uuid, privacy: .private): already gone")
             await emitReload()
             return
