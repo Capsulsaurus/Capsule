@@ -165,6 +165,10 @@ kamadak-exif = "0.5"
 # unimplemented upstream). Each is a typed
 # `media::MediaError::UnsupportedFormat` today rather than a silent gap. MPL-2.0, already
 # allow-listed in `deny.toml`; see the Media row in design/dependencies.md.
+#
+# Video is absent too. It waits on `rawshift-video`, which is still an unimplemented
+# placeholder at 0.1.1, and Capsule links no video codec of its own (design/licensing.md, "The
+# video transcoder seam").
 rawshift-image = { version = "0.1.1", default-features = false, features = [
     "jpeg-decode",
     "png-decode",
