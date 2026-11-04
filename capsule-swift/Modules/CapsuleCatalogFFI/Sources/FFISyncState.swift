@@ -61,7 +61,7 @@ public struct FFISyncDrain: Sendable, Equatable {
     /// that lists it once it lands.
     public var awaitingOriginal = 0
     /// Entries that name no asset of this library, carry no record, or name a
-    /// metadata blob the entry does not list.
+    /// metadata blob address that is not a content address.
     public var skipped = 0
     /// Whether the server had moved the library to a new sync epoch, so the
     /// drain started over from the feed's start.

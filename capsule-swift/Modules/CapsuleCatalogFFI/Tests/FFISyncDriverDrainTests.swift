@@ -78,6 +78,10 @@ private final class GatedVerbs: FFISyncDriverVerbs, @unchecked Sendable {
         try Data(hash.utf8).write(to: path)
     }
 
+    func fetchMetadataBlob(hash: String) -> Data {
+        Data(hash.utf8)
+    }
+
     func fetchProvenanceHistory(manifestCbor _: Data) -> [Data] {
         lock.withLock { historyFetchCount += 1 }
         return history
@@ -159,6 +163,8 @@ private actor DrainCounter {
 
 /// A created entry listing `asset` with `record` as its latest record and an
 /// original the server holds, naming a metadata blob when `metadata` is set.
+/// As the server's feed does, it names the metadata blob by address only and
+/// lists only the original among its blobs.
 private func entry(_ asset: String, record: Data, metadata: Bool = false) -> FfiFeedEntry {
     FfiFeedEntry(
         albumId: Data(repeating: 0xAB, count: 16),
@@ -170,7 +176,7 @@ private func entry(_ asset: String, record: Data, metadata: Bool = false) -> Ffi
         metadataBlob: metadata ? Data(metadataHash.utf8) : Data(),
         blobs: FfiBlobManifest(
             original: FfiBlobRef(ciphertextHash: originalHash, role: "original", size: 64),
-            derivatives: metadata ? [FfiBlobRef(ciphertextHash: metadataHash, role: "metadata", size: 64)] : []
+            derivatives: []
         ),
         originalHeld: true,
         changedAt: "2026-01-01T00:00:00Z"

@@ -23,7 +23,8 @@ private struct ApplyCall: Equatable {
 private let plaintextBytes = Data("verified plaintext".utf8)
 
 /// A session double: serves scripted feed pages in order, writes each fetched
-/// blob as its hash's bytes, answers each apply or open with the verdict
+/// blob as its hash's bytes and answers each metadata blob fetch with its
+/// hash's bytes (or the scripted failure), answers each apply or open with the verdict
 /// scripted for the manifest, and records every call. An open that answers
 /// `opened` writes ``plaintextBytes`` at its destination, as the workspace does.
 /// A manifest's history is the one scripted for it, else none (a `create`'s);
@@ -43,6 +44,7 @@ private final class ScriptedVerbs: FFISyncDriverVerbs, @unchecked Sendable {
     private let histories: [Data: Result<[Data], any Error>]
     private let historyOpenings: [Data: FfiOpenedOriginal]
     private var chainHeads: [String: Data]
+    private let metadataFailure: (any Error)?
 
     init(
         pages: [Result<FfiSyncPage, any Error>],
@@ -50,8 +52,10 @@ private final class ScriptedVerbs: FFISyncDriverVerbs, @unchecked Sendable {
         openings: [Data: FfiOpenedOriginal] = [:],
         histories: [Data: Result<[Data], any Error>] = [:],
         historyOpenings: [Data: FfiOpenedOriginal] = [:],
-        chainHeads: [String: Data] = [:]
+        chainHeads: [String: Data] = [:],
+        metadataFailure: (any Error)? = nil
     ) {
+        self.metadataFailure = metadataFailure
         self.pages = pages
         self.verdicts = verdicts
         self.openings = openings
@@ -100,6 +104,12 @@ private final class ScriptedVerbs: FFISyncDriverVerbs, @unchecked Sendable {
     func fetchBlob(hash: String, size _: UInt64, to path: URL) throws {
         lock.withLock { fetched.append(hash) }
         try Data(hash.utf8).write(to: path)
+    }
+
+    func fetchMetadataBlob(hash: String) throws -> Data {
+        lock.withLock { fetched.append(hash) }
+        if let metadataFailure { throw metadataFailure }
+        return Data(hash.utf8)
     }
 
     func fetchProvenanceHistory(manifestCbor: Data) throws -> [Data] {
@@ -317,13 +327,16 @@ private func facts(
 }
 
 /// A feed entry listing `asset` with `record` as its latest record, carrying
-/// an original the server holds unless `held` is false.
+/// an original the server holds unless `held` is false. As the server's feed
+/// does, it names its metadata blob (`metadataAddress`, when `metadata` is
+/// set) by address only, and lists only the original among its blobs.
 private func entry(
     _ asset: String,
     record: Data,
     kind: FfiChangeKind = .created,
     metadata: Bool = false,
-    held: Bool = true
+    held: Bool = true,
+    metadataAddress: Data = Data(metadataHash.utf8)
 ) -> FfiFeedEntry {
     FfiFeedEntry(
         albumId: Data(repeating: 0xAB, count: 16),
@@ -332,10 +345,10 @@ private func entry(
         kind: kind,
         assetId: Data(asset.utf8),
         manifestCbor: record,
-        metadataBlob: metadata ? Data(metadataHash.utf8) : Data(),
+        metadataBlob: metadata ? metadataAddress : Data(),
         blobs: FfiBlobManifest(
             original: FfiBlobRef(ciphertextHash: originalHash, role: "original", size: 64),
-            derivatives: metadata ? [FfiBlobRef(ciphertextHash: metadataHash, role: "metadata", size: 64)] : []
+            derivatives: []
         ),
         originalHeld: held,
         changedAt: "2026-01-01T00:00:00Z"
@@ -711,7 +724,7 @@ struct FFISyncDriverTests {
         #expect(verbs.opens.first?.localChainHead == FFIPurgeDelivery.headHash(Data([1])))
     }
 
-    @Test("an unheld asset's delete is only verified, reading no history")
+    @Test("an unheld asset's delete naming no metadata blob is only verified, reading no history")
     func unheldDeleteReadsNoHistory() async throws {
         let verbs = ScriptedVerbs(
             pages: [.success(page([entry(assetA, record: Data([2]), kind: .deleted)], next: Data([1])))],
@@ -721,7 +734,92 @@ struct FFISyncDriverTests {
         try await driver(verbs, sink: DrainSink()).sync()
 
         #expect(verbs.historyFetches.isEmpty)
+        #expect(verbs.fetches == [originalHash])
         #expect(verbs.applies.count == 1)
+    }
+
+    @Test("an unheld asset first seen at its delete in trash is adopted from its history with its live metadata blob, and its restore opens against the adopted head")
+    func trashedDeleteIsAdoptedAndRestored() async throws {
+        let delete = Data([3])
+        let restore = Data([4])
+        let history = [Data([1]), Data([2])]
+        let verbs = ScriptedVerbs(
+            pages: [.success(page(
+                [
+                    entry(assetA, record: delete, kind: .deleted, metadata: true),
+                    entry(assetA, record: restore, kind: .updated, metadata: true),
+                ],
+                next: Data([1])
+            ))],
+            openings: [restore: .opened(facts: facts(restore, action: "trash-restore", metadata: metadataFacts, adopted: true))],
+            histories: [delete: .success(history)],
+            historyOpenings: [delete: .opened(facts: facts(delete, action: "delete", metadata: metadataFacts, adopted: true))]
+        )
+        let catalog = RecordingCatalog()
+        let store = MemoryStore()
+        let staging = stagingDirectory()
+
+        let drain = try await driver(verbs, store: store, catalog: catalog, staging: staging, sink: DrainSink()).sync()
+
+        #expect(drain.applied == 2)
+        #expect(drain.skipped == 0)
+        #expect(verbs.fetches == [metadataHash, originalHash, metadataHash, originalHash])
+        #expect(verbs.historyFetches == [delete])
+        #expect(verbs.historyOpens == [HistoryOpenCall(
+            call: ApplyCall(
+                manifest: delete,
+                metadata: Data(metadataHash.utf8),
+                localChainHead: nil,
+                ciphertext: Data(originalHash.utf8)
+            ),
+            history: history
+        )])
+        #expect(verbs.opens.map(\.manifest) == [restore])
+        #expect(verbs.opens.first?.metadata == Data(metadataHash.utf8))
+        #expect(verbs.opens.first?.localChainHead == FFIPurgeDelivery.headHash(delete))
+        #expect(verbs.applies.isEmpty)
+        #expect(catalog.writes.map(\.action) == ["delete", "trash-restore"])
+        #expect(store.state?.heads[assetA] == FFIPurgeDelivery.headHash(restore))
+        #expect(try leftovers(in: staging).isEmpty)
+    }
+
+    @Test("an entry whose metadata blob address is not a content address is skipped, fetching nothing")
+    func malformedMetadataAddressIsSkipped() async throws {
+        let verbs = ScriptedVerbs(
+            pages: [.success(page(
+                [entry(assetA, record: Data([1]), metadata: true, metadataAddress: Data("../../etc/passwd".utf8))],
+                next: Data([1])
+            ))]
+        )
+        let store = MemoryStore()
+
+        let drain = try await driver(verbs, store: store, sink: DrainSink()).sync()
+
+        #expect(drain.skipped == 1)
+        #expect(drain.applied == 0)
+        #expect(verbs.fetches.isEmpty)
+        #expect(verbs.historyFetches.isEmpty)
+        #expect(verbs.opens.isEmpty)
+        #expect(store.state?.cursor == Data([1]))
+    }
+
+    @Test("a metadata blob that cannot be fetched stops the drain before its page is kept, staging nothing")
+    func failedMetadataFetchKeepsNothing() async throws {
+        let verbs = ScriptedVerbs(
+            pages: [.success(page([entry(assetA, record: Data([1]), metadata: true)], next: Data([1])))],
+            metadataFailure: FfiError.Fetch(code: nil, detail: "blob exceeds the limit for a blob of unlisted size")
+        )
+        let store = MemoryStore()
+        let staging = stagingDirectory()
+
+        await #expect(throws: FfiError.self) {
+            try await driver(verbs, store: store, staging: staging, sink: DrainSink()).sync()
+        }
+
+        #expect(store.saves == 0)
+        #expect(verbs.fetches == [metadataHash])
+        #expect(verbs.opens.isEmpty)
+        #expect(try leftovers(in: staging).isEmpty)
     }
 
     @Test("a history the chokepoint refuses is passed as its verdict and writes nothing")
