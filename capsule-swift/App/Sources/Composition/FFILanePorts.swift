@@ -76,10 +76,13 @@
 
         /// The managed store's sync over `session`, against the server at
         /// `apiBaseURL`: an ``FFISyncDriver`` keeping its cursor and staging
-        /// its fetches under the store's `sync/` directory. Each drain's newly
-        /// indexed assets go to the provider's redelivery walk, and a drain
-        /// that applied an entry re-publishes the timeline. A drain that fails
-        /// is logged; the next one resumes from the last page it kept.
+        /// its fetches under the store's `sync/` directory, and writing each
+        /// applied entry into the store's catalog and its verified original
+        /// into the store's media partitions. Each drain's newly indexed
+        /// assets go to the provider's redelivery walk, and a drain that
+        /// applied an entry re-publishes the timeline, which then lists the
+        /// rows it wrote. A drain that fails is logged; the next one resumes
+        /// from the last page it kept.
         static func managedSync(
             workspace: FfiWorkspace,
             session: FfiSession?,
@@ -91,7 +94,11 @@
                     session: session,
                     workspace: workspace,
                     apiBaseURL: apiBaseURL,
-                    directory: layout.root.appending(path: "sync", directoryHint: .isDirectory)
+                    directory: layout.root.appending(path: "sync", directoryHint: .isDirectory),
+                    catalog: FFISyncCatalogWriter(
+                        catalogFile: layout.catalogFile,
+                        mediaDirectory: { layout.mediaDirectory(forCaptureDate: $0) }
+                    )
                 ) { drain in
                     await provider.syncDrained(newlyIndexed: drain.newlyIndexed)
                     if drain.applied > 0 {

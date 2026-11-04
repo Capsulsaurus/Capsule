@@ -78,12 +78,23 @@ private final class GatedVerbs: FFISyncDriverVerbs, @unchecked Sendable {
         ))
     }
 
+    func openSyncedOriginal(_: FfiSyncHead, ciphertextAt _: URL, to _: URL) -> FfiOpenedOriginal {
+        .refused(outcome: .quarantined(reason: "MalformedManifest", detail: nil))
+    }
+
     func provenanceHead(assetId: String) throws -> Data {
         throw FfiError.Workspace(detail: "asset \(assetId) is not managed by this workspace")
     }
 
     func assetIds() -> [String] {
         []
+    }
+}
+
+/// A catalog writer that writes nothing: these drains carry no metadata.
+private struct NoCatalog: FFISyncCatalogWriting {
+    func write(_: FfiAssetFacts, original _: URL?) -> FFISyncCatalogWrite {
+        .unwritten
     }
 }
 
@@ -154,7 +165,7 @@ struct FFISyncDriverDrainTests {
         let verbs = GatedVerbs(pages: twoPages())
         let store = CountingStore()
         let counter = DrainCounter()
-        let subject = FFISyncDriver(verbs: verbs, store: store, stagingDirectory: stagingDirectory()) {
+        let subject = FFISyncDriver(verbs: verbs, store: store, stagingDirectory: stagingDirectory(), catalog: NoCatalog()) {
             await counter.record($0)
         }
 
@@ -189,7 +200,7 @@ struct FFISyncDriverDrainTests {
         try Data("half-fetched original".utf8).write(to: leftover)
         let verbs = GatedVerbs(pages: twoPages())
         await verbs.release.open()
-        let subject = FFISyncDriver(verbs: verbs, store: CountingStore(), stagingDirectory: staging) { _ in }
+        let subject = FFISyncDriver(verbs: verbs, store: CountingStore(), stagingDirectory: staging, catalog: NoCatalog()) { _ in }
 
         try await subject.sync()
 
