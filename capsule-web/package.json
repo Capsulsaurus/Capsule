@@ -54,7 +54,7 @@
         "@rsdoctor/rspack-plugin": "^1.5.16",
         "@tanstack/react-router-devtools": "^1.167.0",
         "@tanstack/router-plugin": "^1.168.18",
-        "@types/node": "^26.0.1",
+        "@types/node": "^26.6.5",
         "@types/react": "^19.2.17",
         "@types/react-dom": "^19.2.3",
         "cross-env": "^7.0.3",
