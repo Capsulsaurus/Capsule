@@ -107,8 +107,8 @@
 //! read, maintained by the schema in the transaction that changes the holdings and checked
 //! against the derivation ([`PostgresQuota`], #1171): [`QuotaStore::pulled_drift`] is that
 //! check, reported by `capsule-server scrub`, and [`QuotaStore::reconcile_pulled`] its repair,
-//! run by `capsule-server rebuild --apply` (#1183). A blob the account itself is attributed in the ledger (an upload, a reservation)
-//! is counted there and not again as pulled; one another account is attributed is still charged
+//! run by `capsule-server rebuild --apply` (#1183). A blob the account itself is attributed in
+//! the ledger (an upload, a reservation) is counted there and not again as pulled; one another account is attributed is still charged
 //! to the receiver, because dropping it would make `GET /v1/quota` say that somebody on this
 //! server uploaded those bytes — the cross-tenant answer [`ChargeOutcome::AlreadyAttributed`]
 //! refuses to give.

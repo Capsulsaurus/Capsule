@@ -42,8 +42,8 @@
 //! # Dry run by default
 //!
 //! [`Mode::DryRun`] reads everything and writes nothing: no row, no quota charge, no pulled
-//! total rebuilt, no epoch, no quarantine move. The report is the same shape either way, so an operator reads what a rebuild
-//! would do before doing it.
+//! total rebuilt, no epoch, no quarantine move. The report is the same shape either way, so an
+//! operator reads what a rebuild would do before doing it.
 //!
 //! # Idempotent
 //!

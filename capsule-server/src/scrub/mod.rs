@@ -9,9 +9,10 @@
 //! error, and the two call for opposite actions.
 //!
 //! Repair therefore stays with the paths that own it — [`crate::gc`] for orphans, an index
-//! rebuild for a lost index and for a drifted pulled quota total, an operator for quarantines. Keeping the check separate from every
-//! write path is also what stops a hot-path bug from being a bug in the check that would catch
-//! it, which is the whole reason this is a distinct code path rather than an assertion.
+//! rebuild for a lost index and for a drifted pulled quota total, an operator for quarantines.
+//! Keeping the check separate from every write path is also what stops a hot-path bug from being
+//! a bug in the check that would catch it, which is the whole reason this is a distinct code
+//! path rather than an assertion.
 //!
 //! # What it checks, and what it cannot
 //!
