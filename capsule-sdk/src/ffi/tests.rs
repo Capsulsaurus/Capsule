@@ -1632,6 +1632,70 @@ async fn ffi_fetch_blob_to_path_keeps_a_failing_refresh_transient() {
     assert!(!path.exists());
 }
 
+/// **A metadata blob of unlisted size.** `fetch_metadata_blob` reads the blob a feed entry
+/// names by address only in bounded `Range` windows until the answer runs short, and returns
+/// exactly the bytes that hash to the address.
+#[tokio::test]
+async fn ffi_fetch_metadata_blob_reads_a_blob_of_unlisted_size_in_bounded_windows() {
+    // Two full windows and a short third: the fetch learns the end from the short answer.
+    let blob = original_plaintext(2 * crate::fetch::UNSIZED_WINDOW as usize + 1000);
+    let hash = capsule_core::crypto::hash::hash_bytes(&blob).to_hex();
+    let ranges = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let server = blob_server(blob.clone(), hash.clone(), ranges.clone()).await;
+    let session = login(&server).await;
+
+    let fetched = session
+        .fetch_metadata_blob(format!("{}/v1", server.base_url()), hash)
+        .await
+        .unwrap();
+
+    assert_eq!(fetched, blob);
+    let ranges = ranges.lock().unwrap().clone();
+    assert_eq!(ranges.len(), 3, "{ranges:?}");
+    assert!(
+        ranges
+            .iter()
+            .all(|len| len.is_some_and(|l| l <= crate::fetch::UNSIZED_WINDOW)),
+        "every request is a bounded window: {ranges:?}"
+    );
+}
+
+/// Bytes that do not hash to the requested address are refused, a blob the server does not
+/// serve is a fetch error, and a malformed address never reaches the network.
+#[tokio::test]
+async fn ffi_fetch_metadata_blob_refuses_what_does_not_verify() {
+    let blob = original_plaintext(4096);
+    let claimed = capsule_core::crypto::hash::hash_bytes(b"something else").to_hex();
+    let ranges = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let server = blob_server(blob, claimed.clone(), ranges.clone()).await;
+    let session = login(&server).await;
+    let base = format!("{}/v1", server.base_url());
+
+    match session.fetch_metadata_blob(base.clone(), claimed).await {
+        Err(FfiError::Fetch { detail, .. }) => assert!(detail.contains("integrity"), "{detail}"),
+        other => panic!("expected an integrity failure, got {other:?}"),
+    }
+    let absent = capsule_core::crypto::hash::hash_bytes(b"absent").to_hex();
+    match session.fetch_metadata_blob(base.clone(), absent).await {
+        Err(FfiError::Fetch { .. }) => {}
+        other => panic!("expected a fetch failure, got {other:?}"),
+    }
+
+    let requests = ranges.lock().unwrap().len();
+    match session
+        .fetch_metadata_blob(base, "../../etc/passwd".into())
+        .await
+    {
+        Err(FfiError::InvalidArgument { .. }) => {}
+        other => panic!("expected InvalidArgument, got {other:?}"),
+    }
+    assert_eq!(
+        ranges.lock().unwrap().len(),
+        requests,
+        "nothing was requested"
+    );
+}
+
 // ─── Bounded-memory apply and open of a synced original ─────────────────────
 
 /// Heap accounting for the bounded-memory tests: every allocation and free made **on the
@@ -3604,7 +3668,8 @@ async fn records_server(records: Vec<Vec<u8>>) -> MockServer {
 }
 
 /// **An asset first seen at a `delete` is adopted from its fetched history.** The session walks
-/// the delete's links back to the create through the blob route, and the workspace verifies the
+/// the delete's links back to the create through the blob route and fetches the live metadata
+/// blob the delete names without a size, and the workspace verifies the
 /// records in order, opens the original, and holds the asset from its create with its live
 /// sidecar: the asset is in this device's trash with the tags its edit added, and restores. A
 /// history missing its create is refused and places nothing, and a record the server will not
@@ -3648,12 +3713,26 @@ async fn ffi_an_asset_first_seen_at_a_delete_is_adopted_from_its_fetched_history
         .collect();
     let history = records[..records.len() - 1].to_vec();
 
-    // The feed entry of the delete, carrying the asset's live metadata blob.
+    // The feed entry of the delete names the asset's live metadata blob by address only; the
+    // server serves it, as it serves the superseded records, while the asset is in trash.
     let (mut head, ciphertext) = remote_head(&other, asset, None, blobs.path());
-    head.metadata_blob = other.asset(&asset).unwrap().metadata_blob.clone();
+    let live_metadata = other.asset(&asset).unwrap().metadata_blob.clone();
+    let mut served = history.clone();
+    served.push(live_metadata.clone());
 
-    let server = records_server(history.clone()).await;
+    let server = records_server(served).await;
     let session = login(&server).await;
+    head.metadata_blob = session
+        .fetch_metadata_blob(
+            format!("{}/v1", server.base_url()),
+            capsule_core::crypto::hash::hash_bytes(&live_metadata).to_hex(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        head.metadata_blob, live_metadata,
+        "the sidecar, byte for byte"
+    );
     let fetched = session
         .fetch_provenance_history(
             format!("{}/v1", server.base_url()),

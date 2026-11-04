@@ -150,6 +150,13 @@
             },
             {
               "kind": "func",
+              "name": "fetchMetadataBlob",
+              "signature": "func fetchMetadataBlob(blobBaseUrl: String, hash: String) async throws -> Data",
+              "doc": "**Fetch the metadata blob** at content address `hash`, which a sync feed entry names by\naddress only (its `metadata_blob`): the feed lists no size for it, so it is read in\nbounded `Range` windows until the server's answer ends, and returned whole once it hashes\nto `hash`. This is the bytes [`FfiSyncHead::metadata_blob`] carries into\n[`FfiWorkspace::open_synced_original`] or [`FfiWorkspace::open_synced_history`].\n\nA sealed sidecar is a few KiB; a blob that grows past [`MAX_METADATA_BLOB_BYTES`] is\nrefused rather than buffered without bound. On a `delete` in trash the server serves the\nasset's live metadata blob to its readers until the retention window closes, so an asset\nfirst seen at its delete can be adopted and restored.\n\n`blob_base_url` is as for [`fetch_blob_to_path`](Self::fetch_blob_to_path). A `hash` that\nis not a lowercase hex SHA-256 is [`FfiError::InvalidArgument`] and reaches no network; a\nsession that cannot authorize the fetch is [`FfiError::Auth`]; a blob the server refuses,\nthat does not hash to its address, or that runs past the bound is [`FfiError::Fetch`].",
+              "members": []
+            },
+            {
+              "kind": "func",
               "name": "fetchProvenanceHistory",
               "signature": "func fetchProvenanceHistory(blobBaseUrl: String, manifestCbor: Data) async throws -> [Data]",
               "doc": "**Fetch the earlier provenance records** of the asset whose latest record is\n`manifest_cbor` (a feed entry's): each record the one after it names by\n`prior_provenance_hash`, back to the asset's `create`, from the blob route the server\nserves an asset's superseded records on. Returned oldest first, each the exact bytes the\nserver holds, checked against its content address; empty for a `create`.\n\nFor an asset this workspace does not hold, first seen past its create — an entry\n[`FfiWorkspace::apply_sync_entry_from_file`] quarantines as `Rejected.ForgedChain` when\nthe app's catalog holds no head for it, or applies without adopting\n([`FfiAssetFacts::adopted`] `false`) when it does — hand the records to\n[`FfiWorkspace::open_synced_history`], which verifies them in order and holds the asset\nfrom its create. Nothing is verified here: the walk only follows links.\n\nAn asset first seen at its `delete` is fetched the same way while it is in trash: the\nserver serves a trashed asset's records, and the entry's metadata blob and original, to\nits readers until the retention window closes, so the adopted asset can be restored.\n\n`blob_base_url` is as for [`fetch_blob_to_path`](Self::fetch_blob_to_path). A record the\nserver refuses (a deleted asset's past its retention window, a purged asset's, or one the\ncaller may not read) or that does not hash\nto its address is [`FfiError::Fetch`]; a session that cannot authorize the fetch is\n[`FfiError::Auth`]; a record that does not decode, or a chain longer than\n[`MAX_HISTORY_RECORDS`](crate::sync::MAX_HISTORY_RECORDS), is [`FfiError::Sync`].",
@@ -3237,6 +3244,13 @@
               "name": "fetchDeviceDirectory",
               "signature": "suspend fun fetchDeviceDirectory(apiBaseUrl: kotlin.String, userId: kotlin.String, pinnedUserIk: kotlin.ByteArray): kotlin.ByteArray",
               "doc": "Fetch a user's signed device directory, **verified under `pinned_user_ik`** (the bytes\n[`FfiWorkspace::user_ik_public`](FfiWorkspace::user_ik_public) returns) before it is\nhanded back. A document that does not verify is an error, never a return value.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "fetchMetadataBlob",
+              "signature": "suspend fun fetchMetadataBlob(blobBaseUrl: kotlin.String, hash: kotlin.String): kotlin.ByteArray",
+              "doc": "**Fetch the metadata blob** at content address `hash`, which a sync feed entry names by\naddress only (its `metadata_blob`): the feed lists no size for it, so it is read in\nbounded `Range` windows until the server's answer ends, and returned whole once it hashes\nto `hash`. This is the bytes [`FfiSyncHead::metadata_blob`] carries into\n[`FfiWorkspace::open_synced_original`] or [`FfiWorkspace::open_synced_history`].\n\nA sealed sidecar is a few KiB; a blob that grows past [`MAX_METADATA_BLOB_BYTES`] is\nrefused rather than buffered without bound. On a `delete` in trash the server serves the\nasset's live metadata blob to its readers until the retention window closes, so an asset\nfirst seen at its delete can be adopted and restored.\n\n`blob_base_url` is as for [`fetch_blob_to_path`](Self::fetch_blob_to_path). A `hash` that\nis not a lowercase hex SHA-256 is [`FfiError::InvalidArgument`] and reaches no network; a\nsession that cannot authorize the fetch is [`FfiError::Auth`]; a blob the server refuses,\nthat does not hash to its address, or that runs past the bound is [`FfiError::Fetch`].",
               "members": []
             },
             {
