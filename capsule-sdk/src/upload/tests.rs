@@ -4124,3 +4124,33 @@ fn the_session_state_only_moves_forward() {
     assert_eq!(later_state(s(STATUS_WAITING), None), None);
     assert_eq!(later_state(None, s("uploading")), s("uploading"));
 }
+
+/// Under `http3` the chunk `PATCH` the upload client builds is marked replayable, carrying its
+/// body's bytes, so the router may carry it over QUIC.
+#[cfg(feature = "http3")]
+#[test]
+fn the_chunk_patch_is_marked_replayable_under_http3() {
+    let http = reqwest::Client::new();
+    let client = UploadClient::new(UploadTransport::with_static_token(
+        http.clone(),
+        "http://localhost/upload",
+        PROTOCOL,
+        StaticToken("t".into()),
+    ));
+    let progress = ExchangeProgress::waiting();
+    let bytes = bytes::Bytes::from_static(b"chunk");
+    let request = client
+        .chunk_request(&http, "sess", 7, "sum", &bytes, &progress)
+        .build()
+        .unwrap();
+    assert_eq!(request.method(), reqwest::Method::PATCH);
+    let request = http::Request::<reqwest::Body>::try_from(request).unwrap();
+    assert_eq!(request.headers()["X-Capsule-Offset"], "7");
+    assert!(
+        request
+            .extensions()
+            .get::<crate::net::h3::route::Replay>()
+            .is_some(),
+        "a chunk carries its replayable bytes"
+    );
+}
