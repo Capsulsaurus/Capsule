@@ -4596,6 +4596,7 @@ impl Fixture {
                 marks.clone(),
                 uploads.clone(),
                 capsule_server::serve::membership_reads(members.clone()),
+                clock.clone(),
             ),
             verify: VerifyContext::new(
                 index_fault.clone(),
@@ -4787,6 +4788,7 @@ impl Fixture {
                 Arc::new(InMemoryCollection::new()),
                 Arc::new(SwitchableUploads::new(clock.clone())),
                 capsule_server::serve::membership_reads(members.clone()),
+                clock.clone(),
             ),
             verify: VerifyContext::new(
                 index,

@@ -353,6 +353,50 @@ fn the_signal_on_a_live_entry_is_ignored() {
     assert!(!decoded.purged);
 }
 
+// ─── Wire decoding: what a restore needs (#1192) ─────────────────────────────
+
+/// A tombstone in trash names its live metadata blob and its original, and both decode as they
+/// do on a live entry: they are what a device that first sees the asset at its delete fetches,
+/// with the records before it, to adopt the asset and restore it.
+#[test]
+fn a_tombstone_in_trash_decodes_the_blobs_a_restore_needs() {
+    let decoded = decode_entry(wire_entry(serde_json::json!({
+        "change": "deleted",
+        "metadata_blob": "live-metadata",
+        "blobs": [{ "role": "original", "hash": "original", "size": 4096 }],
+        "original_held": true,
+    })))
+    .unwrap();
+    assert_eq!(decoded.kind, ChangeKind::Deleted);
+    assert!(!decoded.purged);
+    assert_eq!(decoded.metadata_blob, b"live-metadata");
+    assert_eq!(
+        decoded.blobs.original,
+        Some(BlobRef {
+            ciphertext_hash: "original".into(),
+            role: "original".into(),
+            size: 4096,
+        })
+    );
+    assert!(decoded.blobs.derivatives.is_empty());
+    assert!(decoded.original_held);
+}
+
+/// A server that predates naming them sends a tombstone with none, which decodes to a delete
+/// carrying no blob to fetch rather than to a malformed entry.
+#[test]
+fn a_tombstone_naming_no_blob_decodes_to_none() {
+    let decoded = decode_entry(wire_entry(serde_json::json!({
+        "change": "deleted",
+        "metadata_blob": null,
+        "blobs": [],
+    })))
+    .unwrap();
+    assert!(decoded.metadata_blob.is_empty());
+    assert_eq!(decoded.blobs, BlobManifest::default());
+    assert!(!decoded.original_held);
+}
+
 // ─── Sync epoch (#697) ───────────────────────────────────────────────────────
 
 /// A stale cursor is recognised by its code, and nothing else is.

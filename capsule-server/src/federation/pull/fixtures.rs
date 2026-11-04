@@ -88,7 +88,12 @@ pub(crate) fn record(core: ManifestCore) -> Vec<u8> {
         .expect("a record encodes")
 }
 
-/// One feed entry for `asset` at `sync_seq`, serving `record`.
+/// One feed entry for `asset` at `sync_seq`, serving `record`, as an album page serves it to a
+/// peer.
+///
+/// A `deleted` entry is the album page's tombstone: its record and no byte reference — no
+/// metadata blob, an empty blob list and `original_held: false`. Only the owner's own feed names
+/// the blobs a restore needs on a tombstone, and a peer never reads that feed.
 pub(crate) fn entry(
     asset: uuid::Uuid,
     sync_seq: u64,
@@ -114,7 +119,7 @@ pub(crate) fn entry(
         "metadata_blob": (!deleted).then(|| hash_bytes(METADATA).to_hex()),
         "blobs": blobs,
         "derivative_manifests": [],
-        "original_held": true,
+        "original_held": !deleted,
         "changed_at": "2026-05-31T12:00:00Z",
     })
 }

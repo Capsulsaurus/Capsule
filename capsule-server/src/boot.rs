@@ -1314,6 +1314,7 @@ fn compose(
             marks.clone(),
             uploads.clone(),
             crate::serve::membership_reads(members.clone()),
+            clock.clone(),
         ),
         verify: VerifyContext::new(index.clone(), blobs.clone(), marks.clone(), clock.clone()),
         directories: DeviceDirectoryContext::new(directories.clone(), clock.clone()),

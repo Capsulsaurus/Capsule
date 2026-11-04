@@ -38363,14 +38363,14 @@
               "string",
               "null"
             ],
-            "description": "The encrypted metadata blob's content address."
+            "description": "The encrypted metadata blob's content address.\n\nOn a tombstone in the owner's own feed, the asset's live metadata blob, which a restore\nneeds; absent once a purge has dropped it. Absent on a tombstone in any album page, an\naccount's or a peer's."
           },
           "blobs": {
             "items": {
               "$ref": "#/components/schemas/SyncBlobRef"
             },
             "type": "array",
-            "description": "The asset's original and derivative blobs."
+            "description": "The asset's original and derivative blobs.\n\nOn a tombstone in the owner's own feed, only its original, which a restore needs; empty\nonce a purge has dropped it. Empty on a tombstone in any album page."
           },
           "derivative_manifests": {
             "items": {
@@ -38381,7 +38381,7 @@
           },
           "original_held": {
             "type": "boolean",
-            "description": "Whether the original has landed. `false` is the derived `awaiting-original` state."
+            "description": "Whether the original has landed. `false` is the derived `awaiting-original` state.\n\nOn a tombstone in the owner's own feed, whether the original a restore needs is held;\n`false` once a purge has dropped it. Always `false` on a tombstone in any album page."
           },
           "purged": {
             "type": "boolean",

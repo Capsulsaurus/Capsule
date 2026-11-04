@@ -12,6 +12,7 @@
 
 mod support;
 
+use capsule_core::crypto::hash::Hash32;
 use capsule_core::crypto::keys::HybridSigningKey;
 use capsule_server::activity::ActivityStore as _;
 use capsule_server::blob::{BlobStore, ContentAddress};
@@ -21,7 +22,9 @@ use capsule_server::federation::{
     CapabilityCodec, CapabilityRecord, CapabilityStore as _, MintRequest, PeerAdministration,
     PeerId, PeerStore as _, Scope,
 };
-use capsule_server::index::{AssetIndex, BlobRecord, PendingAsset, ServingHold};
+use capsule_server::index::{
+    AssetIndex, BlobRecord, LifecycleOp, OpAction, OpBlob, OpOutcome, PendingAsset, ServingHold,
+};
 use capsule_server::membership::{MemberRole, MembershipStore as _, RosterRecord};
 use capsule_server::moderation::ModerationStore as _;
 use capsule_server::store::{AlbumId, AssetId, BlobRole, Clock as _, UserId};
@@ -377,6 +380,100 @@ async fn a_session_token_on_the_feed_is_unchanged_by_the_capability_arm() {
             .collect::<Vec<_>>(),
         expected
     );
+}
+
+/// Move `asset` to trash with a signed delete chained onto its head, its window still open.
+async fn trash(fixture: &Fixture, asset: &AssetId) {
+    let delete = b"signed-delete-for-shared-1";
+    let provenance = store_blob(fixture, delete).await;
+    let chain_head = fixture
+        .index
+        .read(asset)
+        .await
+        .expect("the index reads")
+        .expect("the row exists")
+        .chain_head;
+    let outcome = fixture
+        .index
+        .apply_op(LifecycleOp {
+            asset_id: asset.clone(),
+            owner_id: owner(),
+            album_id: album(),
+            action: OpAction::Delete,
+            manifest_hash: Hash32::from_bytes([0xde; 32]),
+            prior_provenance_hash: chain_head,
+            amk_version: 1,
+            provenance: OpBlob {
+                address: provenance,
+                size: delete.len() as u64,
+            },
+            metadata: None,
+            original: None,
+            retention_until: Some(Timestamp::MAX),
+            at: Timestamp::UNIX_EPOCH,
+        })
+        .await
+        .expect("the index applies");
+    assert!(
+        matches!(outcome, OpOutcome::Applied { .. }),
+        "the delete applies: {outcome:?}"
+    );
+}
+
+/// The tombstone named by `asset` on `body`'s page.
+fn tombstone<'a>(body: &'a Value, asset: &str) -> &'a Value {
+    body["entries"]
+        .as_array()
+        .expect("an array")
+        .iter()
+        .find(|entry| entry["asset_id"] == asset && entry["change"] == "deleted")
+        .expect("the page carries the tombstone")
+}
+
+/// A tombstone names the blobs a restore needs on the owner's own feed only. On the album page,
+/// the peer's and a member's alike, it carries its record and no byte reference: a peer's
+/// puller binds a delete to no metadata blob, so one on an older server would refuse the page.
+#[tokio::test]
+async fn a_tombstone_names_restore_blobs_on_the_owners_feed_and_none_on_an_album_page() {
+    let (fixture, _) = shared().await;
+    let asset = AssetId::new("shared-1");
+    let original = store_blob(&fixture, b"original-of-shared-1").await;
+    record(&fixture, &asset, BlobRole::Original, &original).await;
+    trash(&fixture, &asset).await;
+
+    let owner_bearer = fixture.bearer().await;
+    let own = page(&fixture, &owner_bearer, "").await;
+    own.assert_status(StatusCode::OK);
+    let own: Value = own.json();
+    let entry = tombstone(&own, "shared-1");
+    assert!(
+        entry["metadata_blob"].is_string(),
+        "the owner's feed names the live metadata blob a restore needs"
+    );
+    assert_eq!(
+        entry["blobs"],
+        serde_json::json!([{ "role": "original", "hash": original.as_str(), "size": 32 }])
+    );
+    assert_eq!(entry["original_held"], true);
+
+    let (peer, _) = capability(&fixture, PEER, Scope::Read, 1).await;
+    let bob = fixture.other_bearer(BOB).await;
+    for (who, bearer) in [("a peer", &peer), ("a member", &bob)] {
+        let body = page(&fixture, bearer, &album_query()).await;
+        body.assert_status(StatusCode::OK);
+        let body: Value = body.json();
+        let entry = tombstone(&body, "shared-1");
+        assert!(
+            entry["manifest_cbor"].is_string(),
+            "{who}: the delete record still rides the tombstone"
+        );
+        assert!(
+            entry["metadata_blob"].is_null(),
+            "{who}: an album page's tombstone names no metadata blob"
+        );
+        assert_eq!(entry["blobs"], serde_json::json!([]), "{who}");
+        assert_eq!(entry["original_held"], false, "{who}");
+    }
 }
 
 #[tokio::test]

@@ -1419,12 +1419,57 @@ async fn every_declared_response_is_exercised() {
         .await
         .expect("the counter answers");
 
-    // 410 last, because it is the one that consumes the asset.
-    fixture
-        .index
-        .tombstone(&asset, jiff::Timestamp::UNIX_EPOCH)
-        .await
-        .expect("the index tombstones");
+    // 410 last, because it is the one that consumes the asset. A trashed asset serves on to its
+    // readers until its retention window closes (#1192), so the walk moves it to trash with a
+    // signed `delete` whose window is a second long, then moves the injected clock past it (by
+    // seconds, so the walk's bearer stays live): the `410` is a deleted asset whose restore the
+    // server would now refuse.
+    {
+        use capsule_server::index::{LifecycleOp, OpAction, OpBlob, OpOutcome};
+        let row = fixture
+            .index
+            .read(&asset)
+            .await
+            .expect("the index reads")
+            .expect("the row exists");
+        let record = b"signed-delete-of-conformance-served";
+        let provenance = capsule_server::blob::ContentAddress::parse(&checksum(record))
+            .expect("a content address");
+        fixture
+            .blobs
+            .put(&provenance, record)
+            .await
+            .expect("the store accepts");
+        let window = jiff::SignedDuration::from_secs(1);
+        let outcome = fixture
+            .index
+            .apply_op(LifecycleOp {
+                asset_id: asset.clone(),
+                owner_id: row.owner_id.clone(),
+                album_id: row.album_id.clone(),
+                action: OpAction::Delete,
+                manifest_hash: capsule_core::crypto::hash::hash_bytes(record),
+                prior_provenance_hash: row.chain_head,
+                amk_version: 1,
+                provenance: OpBlob {
+                    address: provenance,
+                    size: record.len() as u64,
+                },
+                metadata: None,
+                original: None,
+                retention_until: Some(fixture.clock.now() + window),
+                at: fixture.clock.now(),
+            })
+            .await
+            .expect("the index applies");
+        assert!(
+            matches!(outcome, OpOutcome::Applied { .. }),
+            "the delete applies: {outcome:?}"
+        );
+        fixture
+            .clock
+            .advance(window + jiff::SignedDuration::from_secs(1));
+    }
     client
         .get(&format!("/v1/blob/{address}"))
         .header("authorization", &bearer)

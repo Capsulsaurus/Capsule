@@ -14,6 +14,7 @@ fn reference(owner: &str) -> BlobReference {
         state: AssetState::Visible,
         original_held: true,
         hold: None,
+        retention_until: None,
     }
 }
 

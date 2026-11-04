@@ -173,7 +173,7 @@ async fn feed(fixture: &Fixture, bearer: &str) -> Value {
 // ===========================================================================================
 
 /// A delete tombstones the asset, and the tombstone reaches the feed carrying its signed delete
-/// record and no byte references.
+/// record and, on the owner's own feed, exactly the blobs a restore needs (#1192).
 #[tokio::test]
 async fn a_delete_tombstones_the_asset_and_reaches_the_feed() {
     let fixture = Fixture::working();
@@ -205,10 +205,14 @@ async fn a_delete_tombstones_the_asset_and_reaches_the_feed() {
     );
     assert!(
         entry["blobs"].as_array().expect("blob refs").is_empty(),
-        "a tombstone points at nothing: a client that fetched its blobs would be fetching \
-         bytes the delete exists to stop it wanting"
+        "the owner's tombstone names only an original a restore needs, and none has landed"
     );
-    assert!(entry["metadata_blob"].is_null());
+    assert_eq!(
+        entry["metadata_blob"],
+        support::checksum(b"published-metadata"),
+        "the owner's own feed names the live metadata blob a restoring device adopts from"
+    );
+    assert_eq!(entry["original_held"], false);
 }
 
 /// A restore returns the asset, and both changes are on the feed in order.

@@ -150,12 +150,15 @@ pub struct FeedEntry {
     /// (decoded and verified by core's `apply_remote_entry`). Never re-encoded here.
     pub manifest_cbor: Vec<u8>,
     /// The encrypted metadata blob's **content address**, as its UTF-8 bytes; empty when the
-    /// entry carries none (a tombstone).
+    /// entry carries none (a purged tombstone, or any tombstone from a server that predates
+    /// naming it). A tombstone in trash names the asset's live metadata blob, which a device
+    /// that first sees the asset at its delete opens the sidecar from to adopt and restore it.
     ///
     /// An address, not the bytes: blob bytes never ride the feed. The field name predates the
     /// REST port and the type is kept so a caller's storage does not move.
     pub metadata_blob: Vec<u8>,
-    /// Content addresses of the asset's blobs by role.
+    /// Content addresses of the asset's blobs by role. A tombstone in trash names only its
+    /// original, the blob a restore needs; a purged one names none.
     pub blobs: BlobManifest,
     /// The asset's signed derivative manifests, each the **exact** canonical CBOR of one
     /// `derivative_manifest` blob, served back unchanged (#556). Empty on a tombstone.
@@ -892,7 +895,8 @@ pub enum HistoryError {
         detail: String,
     },
     /// The record a link names could not be fetched: the server refused it (an asset the caller
-    /// may not read, or a deleted one), it did not hash to its address, or the transport failed.
+    /// may not read, a deleted one past its retention window, or a purged one), it did not hash
+    /// to its address, or the transport failed.
     #[error("fetching the provenance record {hash} failed: {source}")]
     Fetch {
         /// The content address the link names.

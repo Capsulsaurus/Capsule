@@ -199,6 +199,7 @@ const ASSET_COLUMNS: &str = "asset_id, owner_id, album_id, protocol_version, cry
 /// roles. An asset that names the address only in its superseded chain holds it as a
 /// provenance record, so the role falls back to `provenance`.
 const FIND_REFERENCES_SQL: &str = "SELECT a.asset_id, a.owner_id, a.album_id, a.state, a.hold, \
+       a.retention_until, \
        COALESCE((SELECT b.role FROM asset_blobs b \
         WHERE b.asset_id = a.asset_id AND b.address = $1 \
         ORDER BY CASE b.role WHEN 'original' THEN 0 WHEN 'derivative' THEN 1 \
@@ -1114,6 +1115,8 @@ impl AssetIndex for PostgresAssetIndex {
                 let hold: Option<String> = found.try_get("", "hold").map_err(&column)?;
                 let role: String = found.try_get("", "role").map_err(&column)?;
                 let original_held: bool = found.try_get("", "original_held").map_err(&column)?;
+                let retention_until: Option<i64> =
+                    found.try_get("", "retention_until").map_err(&column)?;
                 references.push(BlobReference {
                     asset_id: AssetId::new(asset_id),
                     album_id: AlbumId::new(album_id),
@@ -1122,6 +1125,7 @@ impl AssetIndex for PostgresAssetIndex {
                     state: state_from(&state)?,
                     original_held: crate::upload::visibility::derive_original_held(original_held),
                     hold: hold_from(hold)?,
+                    retention_until: retention_until.map(instant_from).transpose()?,
                 });
             }
             tracing::trace!(

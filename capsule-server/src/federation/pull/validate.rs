@@ -484,8 +484,8 @@ fn screen_entry(
         superseded: Vec::new(),
         deleted,
         amk_version: core.amk_version.0,
-        // A delete names no blob on the wire; the asset still holds the one it bound, which a
-        // `trash-restore` brings back.
+        // A delete binds no blob: a peer's page names none on it, and one it names anyway is
+        // not taken. The asset still holds the one it bound, which a `trash-restore` brings back.
         metadata_blob: if deleted {
             held.and_then(|held| held.metadata_blob)
         } else {
@@ -520,7 +520,10 @@ fn screen_entry(
 /// head. Answers the blob the asset now carries, and the blob the page must fetch for it.
 ///
 /// A record that binds one (`create`, `replace`, `metadata-update`) must be served with exactly
-/// that blob. A `delete` is served with none. A record that binds none (`derivative-*`,
+/// that blob. A `delete` binds none and takes none: a home server serves it with none, and a
+/// blob one names anyway (the shape the owner's own feed gives a tombstone) is neither taken
+/// nor fetched, so the page is accepted and a blob gone past its window never aborts the pull.
+/// A record that binds none (`derivative-*`,
 /// `trash-restore`) is served with the blob the asset's last binding record committed to, which
 /// the home server keeps:
 ///
@@ -540,7 +543,16 @@ fn metadata_bound(
     named: Option<Hash32>,
     held: Option<&AssetHead>,
 ) -> Result<(Option<Hash32>, Option<Hash32>), Invalid> {
-    if core.action.binds_metadata_blob() || core.action == Action::Delete {
+    if core.action == Action::Delete {
+        if let Some(named) = named {
+            tracing::debug!(
+                named = %named.to_hex(),
+                "a delete names a metadata blob; it binds none, so the blob is neither taken nor fetched"
+            );
+        }
+        return Ok((None, None));
+    }
+    if core.action.binds_metadata_blob() {
         if named != core.metadata_blob_hash {
             return Err(Invalid::new(
                 "invariant 25",

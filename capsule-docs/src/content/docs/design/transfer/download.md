@@ -38,6 +38,14 @@ A surface asks for the rung its intent needs (the grid asks for Thumbnail, the s
 - The roster is a transport control over who is handed bytes, never a confidentiality control; removal is paired with an AMK epoch bump.
 - Share-link and drop paths serve from their own capabilities and answer `404` once withdrawn; they do not use membership.
 
+### Trash
+
+A `delete` moves an asset to trash, restorable by a `trash-restore` until the `retention_until` its signed record fixed ([Organization — Retention Window](/design/organization/#retention-window)). Until then the asset's blobs serve as the live asset's did: its provenance records (the ones the delete moved past included), its live metadata blob, its original and its derivatives. A device that first sees the asset at its `delete` fetches them to adopt the asset from its create and restore it.
+
+- The window that serves the blobs is the window that admits the restore, judged on the server's clock. No instant serves a blob of an asset whose restore it would refuse. A delete that signed no `retention_until` never closes its window, as it never makes the asset purgeable.
+- Past the window the asset's blobs are `410`; after the purge drops their references they are `404`, as an address nothing references.
+- The authority is decided first in every state. A stranger gets `404` and a former member `403` whether the asset is live, in trash or past its window, and a serving hold is `410` inside the window too.
+
 ## Awaiting-Original
 
 An asset whose T0 tier has finalized but whose original has not (see [staged uploads](/design/transfer/upload/#upload-tiering-staged-uploads)) carries `original_held = false` on its feed entry. The state is **derived** from held blob roles, never stored.

@@ -966,6 +966,42 @@ fn a_delete_is_accepted_and_a_purge_without_a_record_is_kept() {
     assert_eq!(screened.page.state.high_water, Some(3));
 }
 
+/// The shape the owner's own feed gives a tombstone, served to a peer anyway: the delete names
+/// the asset's live metadata blob and its original. The page is accepted, the blob is never
+/// fetched (one past its window would be a `410` that aborts the pull), and the asset keeps the
+/// blob it bound.
+#[test]
+fn a_delete_naming_a_metadata_blob_is_accepted_and_the_blob_is_not_fetched() {
+    let first = create(1);
+    let state = holding(1, &first);
+    let delete = record(core(asset(1), Action::Delete, Some(hash_bytes(&first)), 1));
+    for named in [hash_bytes(METADATA), hash_bytes(b"another")] {
+        let mut served = entry(asset(1), 2, "deleted", Some(&delete));
+        served["metadata_blob"] = serde_json::json!(named.to_hex());
+        served["blobs"] = serde_json::json!([
+            { "role": "original", "hash": original().to_hex(), "size": 2048 },
+        ]);
+        served["original_held"] = serde_json::json!(true);
+        let screened = screen(page(vec![served], "c2", false), &state, &established())
+            .expect("a delete naming a metadata blob is accepted");
+        assert!(
+            screened.needed.is_empty(),
+            "a delete binds no metadata blob, so the one it names is never fetched"
+        );
+        assert_eq!(
+            screened.page.entries[0].metadata_blob, None,
+            "the named blob is not taken"
+        );
+        let held = &screened.page.state.assets[&asset(1).to_string()];
+        assert!(held.deleted);
+        assert_eq!(
+            held.metadata_blob,
+            Some(hash_bytes(METADATA)),
+            "the asset keeps the blob it bound, which a restore brings back"
+        );
+    }
+}
+
 #[test]
 fn a_purge_on_an_entry_that_is_no_delete_is_refused() {
     let bytes = create(1);

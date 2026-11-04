@@ -152,7 +152,7 @@
               "kind": "func",
               "name": "fetchProvenanceHistory",
               "signature": "func fetchProvenanceHistory(blobBaseUrl: String, manifestCbor: Data) async throws -> [Data]",
-              "doc": "**Fetch the earlier provenance records** of the asset whose latest record is\n`manifest_cbor` (a feed entry's): each record the one after it names by\n`prior_provenance_hash`, back to the asset's `create`, from the blob route the server\nserves an asset's superseded records on. Returned oldest first, each the exact bytes the\nserver holds, checked against its content address; empty for a `create`.\n\nFor an asset this workspace does not hold, first seen past its create — an entry\n[`FfiWorkspace::apply_sync_entry_from_file`] quarantines as `Rejected.ForgedChain` when\nthe app's catalog holds no head for it, or applies without adopting\n([`FfiAssetFacts::adopted`] `false`) when it does — hand the records to\n[`FfiWorkspace::open_synced_history`], which verifies them in order and holds the asset\nfrom its create. Nothing is verified here: the walk only follows links.\n\n`blob_base_url` is as for [`fetch_blob_to_path`](Self::fetch_blob_to_path). A record the\nserver refuses (a deleted asset's, or one the caller may not read) or that does not hash\nto its address is [`FfiError::Fetch`]; a session that cannot authorize the fetch is\n[`FfiError::Auth`]; a record that does not decode, or a chain longer than\n[`MAX_HISTORY_RECORDS`](crate::sync::MAX_HISTORY_RECORDS), is [`FfiError::Sync`].",
+              "doc": "**Fetch the earlier provenance records** of the asset whose latest record is\n`manifest_cbor` (a feed entry's): each record the one after it names by\n`prior_provenance_hash`, back to the asset's `create`, from the blob route the server\nserves an asset's superseded records on. Returned oldest first, each the exact bytes the\nserver holds, checked against its content address; empty for a `create`.\n\nFor an asset this workspace does not hold, first seen past its create — an entry\n[`FfiWorkspace::apply_sync_entry_from_file`] quarantines as `Rejected.ForgedChain` when\nthe app's catalog holds no head for it, or applies without adopting\n([`FfiAssetFacts::adopted`] `false`) when it does — hand the records to\n[`FfiWorkspace::open_synced_history`], which verifies them in order and holds the asset\nfrom its create. Nothing is verified here: the walk only follows links.\n\nAn asset first seen at its `delete` is fetched the same way while it is in trash: the\nserver serves a trashed asset's records, and the entry's metadata blob and original, to\nits readers until the retention window closes, so the adopted asset can be restored.\n\n`blob_base_url` is as for [`fetch_blob_to_path`](Self::fetch_blob_to_path). A record the\nserver refuses (a deleted asset's past its retention window, a purged asset's, or one the\ncaller may not read) or that does not hash\nto its address is [`FfiError::Fetch`]; a session that cannot authorize the fetch is\n[`FfiError::Auth`]; a record that does not decode, or a chain longer than\n[`MAX_HISTORY_RECORDS`](crate::sync::MAX_HISTORY_RECORDS), is [`FfiError::Sync`].",
               "members": []
             },
             {
@@ -1055,14 +1055,14 @@
               "kind": "field",
               "name": "metadataBlob",
               "signature": "public var metadataBlob: Data",
-              "doc": "The encrypted metadata blob's content address, as UTF-8 bytes; empty for deletes.",
+              "doc": "The encrypted metadata blob's content address, as UTF-8 bytes. On a delete in trash, the\nasset's live metadata blob, which a restore needs; empty for a purged delete.",
               "members": []
             },
             {
               "kind": "field",
               "name": "blobs",
               "signature": "public var blobs: FfiBlobManifest",
-              "doc": "Content addresses of the asset's blobs by role.",
+              "doc": "Content addresses of the asset's blobs by role. On a delete in trash, only its original;\nnone for a purged delete.",
               "members": []
             },
             {
@@ -3243,7 +3243,7 @@
               "kind": "fun",
               "name": "fetchProvenanceHistory",
               "signature": "suspend fun fetchProvenanceHistory(blobBaseUrl: kotlin.String, manifestCbor: kotlin.ByteArray): List<kotlin.ByteArray>",
-              "doc": "**Fetch the earlier provenance records** of the asset whose latest record is\n`manifest_cbor` (a feed entry's): each record the one after it names by\n`prior_provenance_hash`, back to the asset's `create`, from the blob route the server\nserves an asset's superseded records on. Returned oldest first, each the exact bytes the\nserver holds, checked against its content address; empty for a `create`.\n\nFor an asset this workspace does not hold, first seen past its create — an entry\n[`FfiWorkspace::apply_sync_entry_from_file`] quarantines as `Rejected.ForgedChain` when\nthe app's catalog holds no head for it, or applies without adopting\n([`FfiAssetFacts::adopted`] `false`) when it does — hand the records to\n[`FfiWorkspace::open_synced_history`], which verifies them in order and holds the asset\nfrom its create. Nothing is verified here: the walk only follows links.\n\n`blob_base_url` is as for [`fetch_blob_to_path`](Self::fetch_blob_to_path). A record the\nserver refuses (a deleted asset's, or one the caller may not read) or that does not hash\nto its address is [`FfiError::Fetch`]; a session that cannot authorize the fetch is\n[`FfiError::Auth`]; a record that does not decode, or a chain longer than\n[`MAX_HISTORY_RECORDS`](crate::sync::MAX_HISTORY_RECORDS), is [`FfiError::Sync`].",
+              "doc": "**Fetch the earlier provenance records** of the asset whose latest record is\n`manifest_cbor` (a feed entry's): each record the one after it names by\n`prior_provenance_hash`, back to the asset's `create`, from the blob route the server\nserves an asset's superseded records on. Returned oldest first, each the exact bytes the\nserver holds, checked against its content address; empty for a `create`.\n\nFor an asset this workspace does not hold, first seen past its create — an entry\n[`FfiWorkspace::apply_sync_entry_from_file`] quarantines as `Rejected.ForgedChain` when\nthe app's catalog holds no head for it, or applies without adopting\n([`FfiAssetFacts::adopted`] `false`) when it does — hand the records to\n[`FfiWorkspace::open_synced_history`], which verifies them in order and holds the asset\nfrom its create. Nothing is verified here: the walk only follows links.\n\nAn asset first seen at its `delete` is fetched the same way while it is in trash: the\nserver serves a trashed asset's records, and the entry's metadata blob and original, to\nits readers until the retention window closes, so the adopted asset can be restored.\n\n`blob_base_url` is as for [`fetch_blob_to_path`](Self::fetch_blob_to_path). A record the\nserver refuses (a deleted asset's past its retention window, a purged asset's, or one the\ncaller may not read) or that does not hash\nto its address is [`FfiError::Fetch`]; a session that cannot authorize the fetch is\n[`FfiError::Auth`]; a record that does not decode, or a chain longer than\n[`MAX_HISTORY_RECORDS`](crate::sync::MAX_HISTORY_RECORDS), is [`FfiError::Sync`].",
               "members": []
             },
             {
@@ -4146,14 +4146,14 @@
               "kind": "field",
               "name": "metadataBlob",
               "signature": "var metadataBlob: kotlin.ByteArray",
-              "doc": "The encrypted metadata blob's content address, as UTF-8 bytes; empty for deletes.",
+              "doc": "The encrypted metadata blob's content address, as UTF-8 bytes. On a delete in trash, the\nasset's live metadata blob, which a restore needs; empty for a purged delete.",
               "members": []
             },
             {
               "kind": "field",
               "name": "blobs",
               "signature": "var blobs: FfiBlobManifest",
-              "doc": "Content addresses of the asset's blobs by role.",
+              "doc": "Content addresses of the asset's blobs by role. On a delete in trash, only its original;\nnone for a purged delete.",
               "members": []
             },
             {
