@@ -1048,6 +1048,53 @@ pub async fn a_pulled_blob_counts_once_across_a_subscribers_peers(h: &dyn Harnes
     assert_eq!(used(h, &owner).await, 0);
 }
 
+/// A ledger written only through its port and the pulled holdings reports no pulled drift, and
+/// its reconcile rebuilds nothing and moves no account's usage (#1183).
+///
+/// Every write above went through the same two paths, so the audit is asserted over the whole
+/// ledger, not this case's accounts: drift is what a write that bypassed them leaves, and none
+/// did. The drift itself is injected per adapter, behind the port, where only that adapter's
+/// harness can reach.
+pub async fn a_ledger_written_through_its_port_has_no_pulled_drift(h: &dyn Harness) {
+    let owner = user("pulleddrift", 1);
+    let (pulled, mine) = (address("pulleddrift", 1), address("pulleddrift", 2));
+    ok(
+        h.hold_pulled(&owner, PEER, "pulleddrift-album", &pulled, 12)
+            .await,
+        "hold a pulled blob",
+    );
+    ok(
+        h.hold_pulled(&owner, PEER, "pulleddrift-album", &mine, 3)
+            .await,
+        "hold a second pulled blob",
+    );
+    ok(
+        h.quotas().charge(&owner, &mine, 3, day(0), limits()).await,
+        "charge a pulled address",
+    );
+    let before = used(h, &owner).await;
+    assert_eq!(before, 15, "attributed and pulled is one copy");
+
+    assert_eq!(
+        ok(h.quotas().pulled_drift().await, "audit the pulled totals"),
+        Vec::new(),
+        "a ledger written through its port has not drifted"
+    );
+    assert_eq!(
+        ok(
+            h.quotas().reconcile_pulled().await,
+            "reconcile the pulled totals"
+        ),
+        Vec::new(),
+        "and its reconcile finds nothing to rebuild"
+    );
+    assert_eq!(
+        used(h, &owner).await,
+        before,
+        "a reconcile that finds nothing moves nothing"
+    );
+}
+
 // ===========================================================================================
 // The whole suite
 // ===========================================================================================
@@ -1083,6 +1130,8 @@ pub async fn run_all(h: &dyn Harness) {
     a_pulled_blob_another_account_uploaded_still_counts_for_the_receiver(h).await;
     pulled_bytes_count_toward_the_hard_limit(h).await;
     a_pulled_blob_counts_once_across_a_subscribers_peers(h).await;
+
+    a_ledger_written_through_its_port_has_no_pulled_drift(h).await;
 }
 
 #[cfg(test)]

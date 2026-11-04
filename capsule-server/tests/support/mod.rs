@@ -99,8 +99,8 @@ use capsule_server::moderation::{
     Standing,
 };
 use capsule_server::quota::{
-    ChargeOutcome, ExpiredReservation, InMemoryQuota, QuotaContext, QuotaLimits, QuotaStore,
-    StoredUsage,
+    ChargeOutcome, ExpiredReservation, InMemoryQuota, PulledDrift, QuotaContext, QuotaLimits,
+    QuotaStore, StoredUsage,
 };
 use capsule_server::serve::ServeContext;
 use capsule_server::share::{InMemoryShares, IssueOutcome, ShareContext, ShareRecord, ShareStore};
@@ -3649,6 +3649,20 @@ impl QuotaStore for SwitchableQuota {
             return Box::pin(async { Self::refuse() });
         }
         self.inner.unsuspend(user)
+    }
+
+    fn pulled_drift(&self) -> StoreFuture<'_, Vec<PulledDrift>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.pulled_drift()
+    }
+
+    fn reconcile_pulled(&self) -> StoreFuture<'_, Vec<PulledDrift>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.reconcile_pulled()
     }
 }
 

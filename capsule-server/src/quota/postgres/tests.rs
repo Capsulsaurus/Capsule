@@ -151,7 +151,7 @@ mod postgres_conformance {
     }
 
     /// What the reconciler would rebuild now.
-    async fn drift(harness: &PostgresHarness) -> Vec<super::super::PulledDrift> {
+    async fn drift(harness: &PostgresHarness) -> Vec<crate::quota::PulledDrift> {
         harness
             .quotas
             .pulled_drift()
