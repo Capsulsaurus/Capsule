@@ -582,6 +582,8 @@ async fn maintenance(config: &Config) -> Result<Maintenance> {
 /// configured by accident.
 async fn serve(config: &Config) -> Result<ExitCode> {
     let assembled = assemble(config).await?;
+    // Awaited, and before the recovery: the recovery reads the sessions this pairs with stages.
+    scrub_staged_uploads(&assembled.app).await;
     // Before the listener binds, so every claim listed belongs to a process that is gone.
     recover_stranded_claims(&assembled.app).await;
     // Detached, like the recovery: only a federating deployment has a worker to start (#1117).
@@ -646,6 +648,19 @@ async fn drain_activity(app: &crate::App) {
             "detached account activity writes did not land before shutdown; their events are lost"
         );
     }
+}
+
+/// Pair every staged upload with its session before anything else reads either
+/// ([`crate::upload::scrub::startup`]).
+///
+/// Awaited rather than detached, unlike the recovery that follows: it must finish before the
+/// listener accepts a request, because a request could otherwise create a stage the scrub has
+/// not listed a session for, or write to a session it is about to discard.
+async fn scrub_staged_uploads(app: &crate::App) {
+    use kynos::di::Provides as _;
+
+    let upload: crate::upload::UploadContext = app.provide();
+    crate::upload::scrub::startup(&upload).await;
 }
 
 /// Re-drive the finalization claims a previous process died holding — album finalizations and
