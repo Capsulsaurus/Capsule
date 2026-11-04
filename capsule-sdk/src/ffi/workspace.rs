@@ -1793,6 +1793,13 @@ impl FfiWorkspace {
     /// ([`FfiAssetFacts::adopted`]); a held asset's `delete`, `trash-restore` or edit then works
     /// on this device as on one it imported.
     ///
+    /// An entry that names no metadata blob or original — a `delete` on an album page, the
+    /// surface a writer member's device reads — is opened the same way once they are fetched:
+    /// [`synced_history_sources`](crate::ffi::synced_history_sources) names both from the entry
+    /// and `history`, the fetched metadata blob goes in the entry's `metadata_blob`, and the
+    /// fetched original is `ciphertext_path`. Left empty, the `metadata_blob` binds to nothing
+    /// and the entry is refused.
+    ///
     /// A history that does not verify, or a live metadata blob that does not bind, is
     /// [`FfiOpenedOriginal::Refused`] with the verdict that refused it, and
     /// `destination_path` is untouched: the original is placed there only once the asset it

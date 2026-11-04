@@ -29,7 +29,9 @@
 //!
 //! The feed carries only an asset's latest provenance record. [`fetch_history`] walks the
 //! chain back from it to the asset's `create` through that blob fetch, for a device that first
-//! sees an asset past its create and adopts it from its whole chain.
+//! sees an asset past its create and adopts it from its whole chain; [`history_sources`] names
+//! the live metadata blob and the original that adoption fetches, which an album page's
+//! tombstone does not.
 //!
 //! [Download & Sync]: https://docs/design/sync/
 //! [Download & Sync — cursor authenticity]: https://docs/design/sync/#cursor-authenticity-and-anti-rewind
@@ -880,7 +882,8 @@ pub const MAX_HISTORY_RECORDS: usize = 4096;
 /// manifest and its chain link, a few KiB; anything past this is not one.
 pub const MAX_RECORD_BYTES: u64 = 1024 * 1024;
 
-/// Why an asset's earlier provenance records could not be fetched. Nothing is verified here —
+/// Why an asset's earlier provenance records could not be fetched, or the blobs its adoption
+/// needs could not be named from them ([`history_sources`]). Nothing is verified here —
 /// [`Workspace::adopt_remote_history`](capsule_library::lifecycle::Workspace::adopt_remote_history)
 /// does that — so each variant is a fact about the walk, not a verdict on the chain.
 #[derive(Debug, thiserror::Error)]
@@ -911,6 +914,91 @@ pub enum HistoryError {
         /// The bound, [`MAX_HISTORY_RECORDS`].
         limit: usize,
     },
+    /// Neither the head nor any record of its history binds a metadata blob, so there is no live
+    /// metadata blob to name. A chain starts at a `create`, which binds one, so a history that
+    /// reaches its create never answers this.
+    #[error("no record of the chain binds a metadata blob")]
+    Unbound,
+}
+
+/// The blobs adopting an asset from its fetched history needs beyond its records, by content
+/// address: what [`history_sources`] reads off a head and the records before it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistorySources {
+    /// The asset's live metadata blob: the head's own when it binds one, else the newest record
+    /// of the history that binds one.
+    pub metadata_blob_hash: capsule_core::crypto::hash::Hash32,
+    /// The original the head commits to (its `ciphertext_hash`).
+    pub original_hash: capsule_core::crypto::hash::Hash32,
+    /// The original's exact ciphertext length, from the head's `plaintext_size`.
+    pub original_size: u64,
+}
+
+/// Name the live metadata blob and the original an asset's adoption needs, from its head record
+/// (a feed entry's `manifest_cbor`) and the records before it ([`fetch_history`]'s answer).
+///
+/// This is how a device that first sees an asset at its `delete` on an album page, which names
+/// no byte reference on a tombstone, finds what to fetch: the delete binds no metadata blob, so
+/// the live one is the newest record of the history that binds one, and the delete still commits
+/// to the asset's original. Both are served by the blob route to the asset's readers until its
+/// retention window closes. A head that binds a metadata blob names its own, so an entry that
+/// names one agrees with this.
+///
+/// Nothing is trusted for being read here: the adoption binds the metadata blob to the record
+/// that names it and the original to the head's content address, so a wrong answer is refused
+/// there, never adopted.
+///
+/// # Errors
+///
+/// [`HistoryError::Malformed`] when the head or a history record does not decode (`hash` is
+/// `head` or the record's position), and [`HistoryError::Unbound`] when no record binds a
+/// metadata blob.
+#[instrument(skip_all, fields(head_bytes = head_record.len(), records = history.len()))]
+pub fn history_sources(
+    head_record: &[u8],
+    history: &[Vec<u8>],
+) -> Result<HistorySources, HistoryError> {
+    use capsule_core::crypto::provenance::ProvenanceRecord;
+
+    let decode = |bytes: &[u8], at: String| {
+        ProvenanceRecord::decode(bytes).map_err(|error| HistoryError::Malformed {
+            hash: at,
+            detail: error.to_string(),
+        })
+    };
+    let head = decode(head_record, "head".to_owned())?;
+    let mut metadata_blob_hash = head.manifest.core.metadata_blob_hash;
+    for (position, bytes) in history.iter().enumerate().rev() {
+        if metadata_blob_hash.is_some() {
+            break;
+        }
+        let record = decode(bytes, format!("history[{position}]"))?;
+        if record.manifest.core.action.binds_metadata_blob() {
+            metadata_blob_hash = record.manifest.core.metadata_blob_hash;
+        }
+    }
+    let Some(metadata_blob_hash) = metadata_blob_hash else {
+        tracing::warn!(
+            records = history.len(),
+            "sync-history: no record of the chain binds a metadata blob"
+        );
+        return Err(HistoryError::Unbound);
+    };
+    let sources = HistorySources {
+        metadata_blob_hash,
+        original_hash: head.manifest.core.ciphertext_hash,
+        original_size: capsule_core::crypto::encryption::ciphertext_len(
+            head.manifest.core.plaintext_size,
+        ),
+    };
+    tracing::debug!(
+        metadata = %sources.metadata_blob_hash.to_hex(),
+        original = %sources.original_hash.to_hex(),
+        original_size = sources.original_size,
+        action = ?head.manifest.core.action,
+        "sync-history: the blobs an adoption needs were named from the chain"
+    );
+    Ok(sources)
 }
 
 /// Walk an asset's provenance chain back from `head_record` (the `manifest_cbor` a feed entry

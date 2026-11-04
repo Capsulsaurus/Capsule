@@ -627,3 +627,73 @@ async fn what_is_not_the_named_record_is_refused() {
     }
     assert!(source.asked().is_empty());
 }
+
+fn core_of(bytes: &[u8]) -> capsule_core::crypto::provenance::ManifestCore {
+    capsule_core::crypto::provenance::ProvenanceRecord::decode(bytes)
+        .unwrap()
+        .manifest
+        .core
+}
+
+/// A delete binds no metadata blob, so the live one is the newest record before it that binds
+/// one (the second edit's, not the create's), and the original is the one the delete commits
+/// to, sized to its exact ciphertext.
+#[test]
+fn a_delete_names_the_newest_bound_metadata_blob_and_its_original() {
+    let (_lib, chain) = real_chain();
+    let (head, before) = chain.split_last().unwrap();
+
+    let sources = history_sources(head, before).unwrap();
+    let delete = core_of(head);
+    assert_eq!(delete.metadata_blob_hash, None, "a delete binds none");
+    assert_eq!(
+        Some(sources.metadata_blob_hash),
+        core_of(&chain[2]).metadata_blob_hash
+    );
+    assert_ne!(
+        Some(sources.metadata_blob_hash),
+        core_of(&chain[0]).metadata_blob_hash,
+        "the create's blob is superseded"
+    );
+    assert_eq!(sources.original_hash, delete.ciphertext_hash);
+    assert_eq!(
+        sources.original_size,
+        capsule_core::crypto::encryption::ciphertext_len(delete.plaintext_size)
+    );
+}
+
+/// A head that binds a metadata blob names its own and reads none of its history; a create
+/// needs none.
+#[test]
+fn a_head_that_binds_a_metadata_blob_names_its_own() {
+    let (_lib, chain) = real_chain();
+    let sources = history_sources(&chain[2], &[b"not a record".to_vec()]).unwrap();
+    assert_eq!(
+        Some(sources.metadata_blob_hash),
+        core_of(&chain[2]).metadata_blob_hash
+    );
+    let create = history_sources(&chain[0], &[]).unwrap();
+    assert_eq!(
+        Some(create.metadata_blob_hash),
+        core_of(&chain[0]).metadata_blob_hash
+    );
+}
+
+/// A delete with no history binds nothing, and bytes that are not a record are named by where
+/// they sit.
+#[test]
+fn an_unbound_or_malformed_chain_names_no_sources() {
+    let (_lib, chain) = real_chain();
+    assert!(matches!(
+        history_sources(&chain[3], &[]),
+        Err(HistoryError::Unbound)
+    ));
+    match history_sources(&chain[3], &[chain[0].clone(), b"not a record".to_vec()]) {
+        Err(HistoryError::Malformed { hash, .. }) => assert_eq!(hash, "history[1]"),
+        other => panic!("{other:?}"),
+    }
+    match history_sources(b"not a record", &chain[..3]) {
+        Err(HistoryError::Malformed { hash, .. }) => assert_eq!(hash, "head"),
+        other => panic!("{other:?}"),
+    }
+}
