@@ -611,7 +611,7 @@ async fn a_subscriber_lists_its_pulled_album_and_fetches_each_assets_metadata() 
 }
 
 #[tokio::test]
-async fn a_pulled_album_reads_only_for_its_subscribers_and_says_nothing_to_anyone_else() {
+async fn a_pulled_album_reads_only_for_its_live_subscribers_and_says_nothing_to_anyone_else() {
     let fixture = Fixture::working();
     let bearer = fixture.bearer().await;
     let other = fixture.other_bearer(OTHER_MEMBER).await;
@@ -639,27 +639,45 @@ async fn a_pulled_album_reads_only_for_its_subscribers_and_says_nothing_to_anyon
     assert_eq!(unsubscribed, refusal(read(&fixture, &other, &blob).await));
     assert_eq!(unsubscribed, refusal(read(&fixture, &bearer, &never).await));
 
-    // A lapsed subscription still reads what its pulls committed.
+    // The other member subscribes with a longer capability, so the shared job stays live for
+    // them after this member's capability lapses.
+    subscribe(&fixture, &other, HOME, &invite(&codec, SERVER_ORIGIN, 24))
+        .await
+        .assert_status(StatusCode::CREATED);
+    assert_eq!(ids(&pulled_assets(&fixture, &other, "").await), PULLED[..2]);
+
+    // A lapsed subscription reads nothing, though the job is still pulled under the other
+    // member's live one: the same answer as no subscription at all.
     fixture.clock.advance(SignedDuration::from_hours(2));
     let bearer = fixture.bearer().await;
+    let other = fixture.other_bearer(OTHER_MEMBER).await;
     assert_eq!(listed(&fixture, &bearer).await[0]["live"], false);
     assert_eq!(
-        ids(&pulled_assets(&fixture, &bearer, "").await),
-        PULLED[..2]
+        unsubscribed,
+        refusal(read(&fixture, &bearer, &listing).await)
     );
+    assert_eq!(unsubscribed, refusal(read(&fixture, &bearer, &blob).await));
+    assert_eq!(
+        ids(&pulled_assets(&fixture, &other, "").await),
+        PULLED[..2],
+        "the live subscriber still reads"
+    );
+    read(&fixture, &other, &blob)
+        .await
+        .assert_status(StatusCode::OK);
 
-    // Unsubscribing ends the reads; what was pulled is untouched for any other subscriber.
+    // Unsubscribing ends a live subscriber's reads too.
     fixture
         .client
         .delete(&format!("/v1/federation/subscriptions/{HOME}/{ALBUM}"))
-        .header("authorization", &bearer)
+        .header("authorization", &other)
         .header("x-capsule-protocol", PROTOCOL_VERSION)
         .send()
         .await
         .assert_status(StatusCode::NO_CONTENT);
     assert_eq!(
         unsubscribed,
-        refusal(read(&fixture, &bearer, &listing).await)
+        refusal(read(&fixture, &other, &listing).await)
     );
-    assert_eq!(unsubscribed, refusal(read(&fixture, &bearer, &blob).await));
+    assert_eq!(unsubscribed, refusal(read(&fixture, &other, &blob).await));
 }

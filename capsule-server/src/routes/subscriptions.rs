@@ -37,10 +37,18 @@
 //! The two `assets` reads are how a member's client renders an album its server pulled for it:
 //! its assets as their breadcrumbs, and each asset's encrypted metadata blob, both read through
 //! [`PulledAlbumReads`](crate::federation::pull::pulled::PulledAlbumReads) from what a pull
-//! committed and nothing else. Only a subscriber reads: an album the caller holds no
-//! subscription to answers `404 error.federation.album_not_found` whether or not another member
-//! subscribed to it and whatever was pulled for them, so the reads cannot be used to learn
+//! committed and nothing else. Only a **live** subscriber reads: an album the caller holds no
+//! live subscription to answers `404 error.federation.album_not_found` whether or not another
+//! member subscribed to it and whatever was pulled for them, so the reads cannot be used to learn
 //! another account's subscriptions. An asset with no metadata to serve is the same answer.
+//!
+//! A lapsed subscription reads nothing. A job is shared by every local subscription to its
+//! album and keeps being pulled under whichever of them is still live, so a member whose
+//! capability lapsed (expired unrenewed, or cut on the home server by revocation or roster
+//! removal, which refuses every refresh) would otherwise keep reading what was pulled after
+//! their access ended. Refusing the read is the bound this server can enforce: a pulled entry
+//! carries no record of whose capability committed it. Posting a fresh invite revives the
+//! subscription and its reads.
 //!
 //! # The receiving half of Token Lifecycle step 1
 //!
@@ -519,7 +527,7 @@ pub struct PulledAssetPath {
 /// Why a pulled album could not be read.
 #[derive(Debug, thiserror::Error, ApiError)]
 pub enum PulledAlbumRejection {
-    /// The caller holds no subscription to this album, or, for one asset, the album holds no
+    /// The caller holds no live subscription to this album, or, for one asset, the album holds no
     /// live asset by that id with a metadata blob. One answer for every case, so the route
     /// never tells a caller what another member's subscriptions pulled.
     #[error("no such album")]
@@ -554,11 +562,12 @@ impl PulledAlbumRejection {
     }
 }
 
-/// The job behind `subscriber`'s subscription to `album_id` on `peer`, or the one not-found
-/// answer when the subscriber holds none, live or lapsed.
+/// The job behind `subscriber`'s live subscription to `album_id` on `peer`, or the one
+/// not-found answer when the subscriber holds none, or holds only a lapsed one.
 ///
-/// A lapsed subscription still reads: what its pulls committed is still held, and still
-/// charged to the subscriber, until it unsubscribes.
+/// A lapsed subscription reads nothing: the job goes on being pulled under any other member's
+/// live capability, and a lapsed subscriber must not read what was pulled after its own access
+/// ended. What its pulls committed stays held, and charged, until it unsubscribes or renews.
 async fn subscribed_job(
     federation: &FederationContext,
     subscriber: &UserId,
@@ -577,11 +586,15 @@ async fn subscribed_job(
             tracing::error!(%error, %subscriber, %peer, %album, "the subscriptions could not be read for a pulled album");
             PulledAlbumRejection::unavailable()
         })?;
-    if !held
+    let Some(subscription) = held
         .iter()
-        .any(|subscription| subscription.peer == peer && subscription.album == album)
-    {
+        .find(|subscription| subscription.peer == peer && subscription.album == album)
+    else {
         tracing::info!(%subscriber, %peer, %album, "a pulled album was asked for by an account not subscribed to it");
+        return Err(PulledAlbumRejection::not_found());
+    };
+    if !subscription.is_live(federation.clock().now()) {
+        tracing::info!(%subscriber, %peer, %album, expires_at = %subscription.expires_at, "a pulled album was asked for under a lapsed subscription");
         return Err(PulledAlbumRejection::not_found());
     }
     Ok(JobKey::new(peer, album))
@@ -593,8 +606,8 @@ async fn subscribed_job(
 /// listed is anything but what passed this server's re-validation. Deleted and purged assets
 /// are not listed. A subscription nothing has been pulled for yet answers an empty page.
 ///
-/// Answers `404 error.federation.album_not_found` when the caller holds no subscription to the
-/// album, live or lapsed, whoever else does; and `404 error.federation.not_configured` when
+/// Answers `404 error.federation.album_not_found` when the caller holds no live subscription to
+/// the album, whoever else does; and `404 error.federation.not_configured` when
 /// this deployment does not federate.
 #[kynos::get(
     "/v1/federation/subscriptions/{peer}/{album_id}/assets",
@@ -638,8 +651,8 @@ pub async fn list_pulled_assets(
 /// against its address: this server holds no key to them. The blob is the one the asset's
 /// latest accepted entry carries.
 ///
-/// Answers `404 error.federation.album_not_found` when the caller holds no subscription to the
-/// album, or the album holds no live asset by that id with a metadata blob; and `404
+/// Answers `404 error.federation.album_not_found` when the caller holds no live subscription to
+/// the album, or the album holds no live asset by that id with a metadata blob; and `404
 /// error.federation.not_configured` when this deployment does not federate.
 #[kynos::get(
     "/v1/federation/subscriptions/{peer}/{album_id}/assets/{asset_id}/metadata",

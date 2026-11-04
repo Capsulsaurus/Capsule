@@ -26990,7 +26990,7 @@
           "federation"
         ],
         "summary": "List the assets this server pulled for one of the caller's subscriptions, a page at a time.",
-        "description": "Each asset is its breadcrumb, read from the latest entry a pull accepted for it, so nothing\nlisted is anything but what passed this server's re-validation. Deleted and purged assets\nare not listed. A subscription nothing has been pulled for yet answers an empty page.\n\nAnswers `404 error.federation.album_not_found` when the caller holds no subscription to the\nalbum, live or lapsed, whoever else does; and `404 error.federation.not_configured` when\nthis deployment does not federate.",
+        "description": "Each asset is its breadcrumb, read from the latest entry a pull accepted for it, so nothing\nlisted is anything but what passed this server's re-validation. Deleted and purged assets\nare not listed. A subscription nothing has been pulled for yet answers an empty page.\n\nAnswers `404 error.federation.album_not_found` when the caller holds no live subscription to\nthe album, whoever else does; and `404 error.federation.not_configured` when\nthis deployment does not federate.",
         "operationId": "list_pulled_assets",
         "parameters": [
           {
@@ -27394,7 +27394,7 @@
           "federation"
         ],
         "summary": "Fetch the encrypted metadata blob one asset of a pulled album carries, as the pull stored it.",
-        "description": "Opaque octets, byte for byte what the album's home server served and this server verified\nagainst its address: this server holds no key to them. The blob is the one the asset's\nlatest accepted entry carries.\n\nAnswers `404 error.federation.album_not_found` when the caller holds no subscription to the\nalbum, or the album holds no live asset by that id with a metadata blob; and `404\nerror.federation.not_configured` when this deployment does not federate.",
+        "description": "Opaque octets, byte for byte what the album's home server served and this server verified\nagainst its address: this server holds no key to them. The blob is the one the asset's\nlatest accepted entry carries.\n\nAnswers `404 error.federation.album_not_found` when the caller holds no live subscription to\nthe album, or the album holds no live asset by that id with a metadata blob; and `404\nerror.federation.not_configured` when this deployment does not federate.",
         "operationId": "get_pulled_asset_metadata",
         "parameters": [
           {
