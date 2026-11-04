@@ -51,6 +51,13 @@
 //! The **adoption path** cross-asset deduplication needs is [`adopt`]: a create refused as
 //! `409 duplicate_blob` because another asset of the same owner and album holds the bytes first
 //! records the blob against the requesting asset, so the collector counts both holders (#672).
+//!
+//! # A boot reconciles stages and sessions first
+//!
+//! A session's creation and its end each write a stage and a record in two steps, and a process
+//! can die between them. [`scrub::startup`] runs before boot recovery and repairs both halves:
+//! a stage no session holds is abandoned, and an evictable session whose stage is missing is
+//! discarded with its reservation given back.
 
 pub mod adopt;
 pub mod advice;
@@ -61,6 +68,7 @@ pub mod envelope;
 pub mod finalize;
 pub mod policy;
 pub mod reservation;
+pub mod scrub;
 pub mod signer;
 pub mod visibility;
 

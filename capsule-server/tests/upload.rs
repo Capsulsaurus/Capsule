@@ -3454,6 +3454,158 @@ async fn a_claim_whose_process_died_after_its_index_write_completes_at_boot() {
 }
 
 // ===========================================================================================
+// The startup scrub (transfer/upload.md, Session Lifetime and Discard)
+// ===========================================================================================
+
+/// Run the startup scrub over the fixture's stores, as a restarted process does before recovery.
+async fn scrub_at_boot(fixture: &Fixture) -> capsule_server::upload::scrub::StartupScrub {
+    use capsule_server::upload::UploadContext;
+    use kynos::di::Provides as _;
+
+    let upload: UploadContext = fixture.app().provide();
+    let drops: capsule_server::drop::DropContext = fixture.app().provide();
+    capsule_server::upload::scrub::startup(&upload, drops.drops()).await
+}
+
+/// Stage bytes under `id` with no session, as a creation that died after its stage leaves.
+async fn plant_orphan_stage(fixture: &Fixture, id: &str) {
+    use capsule_server::blob::BlobStore as _;
+
+    fixture
+        .blobs
+        .begin(&capsule_server::store::UploadId::new(id))
+        .await
+        .expect("the in-memory store stages");
+}
+
+#[tokio::test]
+async fn a_boot_turns_a_lost_stage_into_the_uniform_404_and_drops_orphaned_stages() {
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (first, second, whole) = blob();
+    let id = fixture.open_session(&whole, "original", &bearer).await;
+    // The range is recorded and its stage is lost: until a boot, every write is a `500`.
+    fixture.blobs.swallow_next_append();
+    fixture
+        .chunk(&id, 0, &first, &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let orphan = "018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5e01";
+    plant_orphan_stage(&fixture, orphan).await;
+    // A claimed session without a stage is finalization's, never the scrub's.
+    let claimed = fixture
+        .open_session(&payload(b'c', CHUNK * 2), "derivative", &bearer)
+        .await;
+    fixture.uploads.claim_for_test(&claimed).await;
+    {
+        use capsule_server::blob::BlobStore as _;
+        fixture
+            .blobs
+            .abandon(&capsule_server::store::UploadId::new(claimed.as_str()))
+            .await
+            .expect("the in-memory store abandons");
+    }
+
+    let report = scrub_at_boot(&fixture).await;
+    assert_eq!(
+        report
+            .abandoned
+            .iter()
+            .map(capsule_server::store::UploadId::as_str)
+            .collect::<Vec<_>>(),
+        vec![orphan],
+        "{report:?}"
+    );
+    assert_eq!(
+        report
+            .discarded
+            .iter()
+            .map(capsule_server::store::UploadId::as_str)
+            .collect::<Vec<_>>(),
+        vec![id.as_str()],
+        "{report:?}"
+    );
+    assert_eq!(fixture.blobs.staged_len_for_test(orphan).await, None);
+    assert_eq!(
+        fixture
+            .uploads
+            .read_for_test(&claimed)
+            .await
+            .map(|record| record.status.as_str()),
+        Some("waiting_for_processing"),
+        "the claim is left to boot recovery"
+    );
+
+    // The client reads the uniform 404 and re-creates, and the bytes land.
+    let response = fixture.chunk(&id, 4096, &second, &bearer).send().await;
+    response.assert_status(StatusCode::NOT_FOUND);
+    assert_eq!(
+        code(&response.json::<serde_json::Value>()),
+        "error.upload.session_not_found"
+    );
+    let recreated = create_again(&fixture, &bearer, &whole).await;
+    recreated.assert_status(StatusCode::CREATED);
+    let fresh = recreated.json::<serde_json::Value>()["id"]
+        .as_str()
+        .expect("the session id")
+        .to_owned();
+    assert_ne!(fresh, id, "a fresh session");
+    for (offset, chunk) in [(0, &first), (4096, &second)] {
+        fixture
+            .chunk(&fresh, offset, chunk, &bearer)
+            .send()
+            .await
+            .assert_status(StatusCode::NO_CONTENT);
+    }
+    assert_eq!(terminal_status(&fixture, &fresh).await, "completed");
+
+    // A second boot has nothing left to repair.
+    assert_eq!(
+        scrub_at_boot(&fixture).await,
+        capsule_server::upload::scrub::StartupScrub::default()
+    );
+}
+
+#[tokio::test]
+async fn a_session_store_that_cannot_answer_keeps_every_stage_and_session() {
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (first, _, whole) = blob();
+    let id = fixture.open_session(&whole, "original", &bearer).await;
+    fixture.blobs.swallow_next_append();
+    fixture
+        .chunk(&id, 0, &first, &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let orphan = "018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5e02";
+    plant_orphan_stage(&fixture, orphan).await;
+
+    fixture.uploads.set_unavailable(true);
+    let report = scrub_at_boot(&fixture).await;
+    fixture.uploads.set_unavailable(false);
+
+    assert_eq!(
+        report,
+        capsule_server::upload::scrub::StartupScrub::default(),
+        "nothing it could not read is repaired"
+    );
+    assert!(
+        fixture.blobs.staged_len_for_test(orphan).await.is_some(),
+        "a stage whose session could not be read is kept"
+    );
+    assert!(
+        fixture.uploads.read_for_test(&id).await.is_some(),
+        "a session the store could not list is kept"
+    );
+    // The next boot, with the store answering, repairs both.
+    let report = scrub_at_boot(&fixture).await;
+    assert_eq!(report.abandoned.len(), 1, "{report:?}");
+    assert_eq!(report.discarded.len(), 1, "{report:?}");
+}
+
+// ===========================================================================================
 // Member writes
 // ===========================================================================================
 
