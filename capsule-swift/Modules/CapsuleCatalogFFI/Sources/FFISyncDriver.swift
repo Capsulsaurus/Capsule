@@ -10,8 +10,9 @@ private let syncLog = Logger(subsystem: CapsuleLog.subsystem, category: "sync-dr
 
 /// The session and workspace verbs a sync of the managed lane drives, bound
 /// to one server: `FfiSession.syncPull`, `FfiSession.fetchBlobToPath`,
-/// `FfiWorkspace.applySyncEntryFromFile`, `FfiWorkspace.provenanceHead` and
-/// `FfiWorkspace.assetIds`, and nothing else of either.
+/// `FfiWorkspace.applySyncEntryFromFile`, `FfiWorkspace.openSyncedOriginal`,
+/// `FfiWorkspace.provenanceHead` and `FfiWorkspace.assetIds`, and nothing else
+/// of either.
 ///
 /// Narrowed to a protocol so the driver is tested over a scripted feed and
 /// scripted verdicts rather than a live session.
@@ -24,6 +25,10 @@ protocol FFISyncDriverVerbs: Sendable {
     /// Run the sync chokepoint over `head` with the original's ciphertext read
     /// from the file at `path`. Writes nothing.
     func applySyncEntry(_ head: FfiSyncHead, ciphertextAt path: URL) throws -> FfiSyncApplyOutcome
+    /// Run the sync chokepoint over `head` with the original's ciphertext read
+    /// from the file at `path`, and decrypt it to `destination`, which holds
+    /// the verified plaintext only when this answers `opened`.
+    func openSyncedOriginal(_ head: FfiSyncHead, ciphertextAt path: URL, to destination: URL) throws -> FfiOpenedOriginal
     /// The head of a held asset's chain, as canonical CBOR.
     func provenanceHead(assetId: String) throws -> Data
     /// Every asset the workspace holds, live or in the trash.
@@ -61,6 +66,10 @@ struct FFISessionSyncVerbs: FFISyncDriverVerbs {
         try workspace.applySyncEntryFromFile(entry: head, ciphertextPath: path.path)
     }
 
+    func openSyncedOriginal(_ head: FfiSyncHead, ciphertextAt path: URL, to destination: URL) throws -> FfiOpenedOriginal {
+        try workspace.openSyncedOriginal(entry: head, ciphertextPath: path.path, destinationPath: destination.path)
+    }
+
     func provenanceHead(assetId: String) throws -> Data {
         try workspace.provenanceHead(assetId: assetId)
     }
@@ -73,20 +82,28 @@ struct FFISessionSyncVerbs: FFISyncDriverVerbs {
 // MARK: - FFISyncDriver
 
 /// The sync of the signed-in managed lane: drains `FfiSession.syncPull` from
-/// a persisted cursor, runs every entry through the sync chokepoint
-/// (`FfiWorkspace.applySyncEntryFromFile`), and keeps the cursor only once
-/// the whole page is applied.
+/// a persisted cursor, runs every entry through the sync chokepoint, writes
+/// each applied one into the managed catalog, and keeps the cursor only once
+/// the whole page is applied and written.
 ///
 /// Each entry is judged against the head this device holds for its asset:
 /// the head the last applied entry established, else the head of the
 /// workspace's own chain. An entry whose record is that head is level and
 /// costs nothing; any other has its metadata blob and original fetched into
-/// the staging directory, is applied with that head as its local chain head,
-/// and its staged files are removed; each drain first empties the staging
-/// directory of what a drain the process was killed in left. An applied
-/// entry's provenance head is kept for the asset's next entry. A quarantined
-/// entry is logged and passed; an entry whose original the server does not hold yet is passed, since the
-/// feed lists the asset again once it lands; a pending one (its epoch key not
+/// the staging directory and is applied with that head as its local chain
+/// head. An entry that names a metadata blob is opened
+/// (`FfiWorkspace.openSyncedOriginal`): verified, and its original decrypted
+/// to a staged plaintext that hashes to the signed sidecar's digest, which
+/// the catalog writer keeps in the store. One that names none (a `delete` or
+/// `trash-restore`) is only verified (`FfiWorkspace.applySyncEntryFromFile`).
+/// Every staged file the writer does not keep is removed; each drain first
+/// empties the staging directory of what a drain the process was killed in
+/// left. An applied entry's facts go to the catalog writer, and its
+/// provenance head is kept for the asset's next entry. A quarantined entry,
+/// or an opened one whose original does not decrypt or match its digest, is
+/// logged and passed and writes nothing; an entry whose original the server
+/// does not hold yet is passed, writing nothing, since the feed lists the
+/// asset again once it lands; a pending one (its epoch key not
 /// here yet) stops the drain before its page is kept, so the next sync
 /// retries it. A page that fails for any reason keeps the cursor and heads
 /// from before it, so nothing it applied halfway is trusted.
@@ -110,6 +127,7 @@ public actor FFISyncDriver {
     private let verbs: any FFISyncDriverVerbs
     private let store: any FFISyncStateStoring
     private let stagingDirectory: URL
+    private let catalog: any FFISyncCatalogWriting
     private let drained: @Sendable (FFISyncDrain) async -> Void
     /// The state the last kept page saved, loaded on the first drain.
     private var state: FFISyncState?
@@ -122,33 +140,40 @@ public actor FFISyncDriver {
 
     /// Sync the lane `workspace` holds over `session` against the server at
     /// `apiBaseURL` (`http[s]://host:port`), keeping its state and staging
-    /// its fetches under `directory`, and hand each drain's tally to
-    /// `drained`.
+    /// its fetches under `directory`, writing each applied entry through
+    /// `catalog`, and hand each drain's tally to `drained`. `directory` must
+    /// be on the volume `catalog` keeps originals on, so a verified original
+    /// is moved into the store rather than copied.
     public init(
         session: FfiSession,
         workspace: FfiWorkspace,
         apiBaseURL: String,
         directory: URL,
+        catalog: FFISyncCatalogWriter,
         drained: @escaping @Sendable (FFISyncDrain) async -> Void
     ) {
         self.init(
             verbs: FFISessionSyncVerbs(session: session, workspace: workspace, apiBaseURL: apiBaseURL),
             store: FFISyncStateFile(url: directory.appending(path: "state.json")),
             stagingDirectory: directory.appending(path: "staging", directoryHint: .isDirectory),
+            catalog: catalog,
             drained: drained
         )
     }
 
-    /// Sync through `verbs`, keeping state in `store`. The seam tests drive.
+    /// Sync through `verbs`, keeping state in `store` and writing through
+    /// `catalog`. The seam tests drive.
     init(
         verbs: any FFISyncDriverVerbs,
         store: any FFISyncStateStoring,
         stagingDirectory: URL,
+        catalog: any FFISyncCatalogWriting,
         drained: @escaping @Sendable (FFISyncDrain) async -> Void
     ) {
         self.verbs = verbs
         self.store = store
         self.stagingDirectory = stagingDirectory
+        self.catalog = catalog
         self.drained = drained
     }
 
@@ -264,13 +289,25 @@ public actor FFISyncDriver {
             fold.tally.awaitingOriginal += 1
             return
         }
-        guard let outcome = try await verify(entry, key: key, original: original, localChainHead: applied ?? own) else {
+        guard let verdict = try await verify(entry, key: key, original: original, localChainHead: applied ?? own) else {
             fold.tally.skipped += 1
             return
         }
-        switch outcome {
+        defer {
+            if let plaintext = verdict.plaintext { removeStaged(plaintext) }
+        }
+        try await settle(verdict, key: key, into: &fold)
+    }
+
+    /// Fold the chokepoint's verdict on the entry of `key` into the page,
+    /// writing an applied one into the catalog first.
+    private func settle(_ verdict: SyncVerdict, key: String, into fold: inout PageFold) async throws {
+        switch verdict.outcome {
         case let .applied(facts):
-            syncLog.debug("entry of \(key, privacy: .public) applied: \(facts.action, privacy: .public)")
+            let write = try await catalog.write(facts, original: verdict.plaintext)
+            syncLog.debug(
+                "entry of \(key, privacy: .public) applied: \(facts.action, privacy: .public), catalog \(String(describing: write), privacy: .public)"
+            )
             fold.state.heads[key] = facts.provenanceHead
             fold.tally.applied += 1
         case let .pending(reason):
@@ -285,15 +322,18 @@ public actor FFISyncDriver {
     }
 
     /// Fetch `entry`'s blobs into the staging directory and run the
-    /// chokepoint over them, removing them after. `nil`, logged, for an entry
-    /// naming a metadata blob it does not list, which cannot be fetched
-    /// without its size; a `delete` or `trash-restore` names none.
+    /// chokepoint over them, removing the fetched ciphertext after. An entry
+    /// naming a metadata blob is opened, and an `opened` verdict hands back
+    /// the staged plaintext, which the caller removes once the catalog has
+    /// written it; one naming none (a `delete` or `trash-restore`) is only
+    /// verified. `nil`, logged, for an entry naming a metadata blob it does
+    /// not list, which cannot be fetched without its size.
     private func verify(
         _ entry: FfiFeedEntry,
         key: String,
         original: FfiBlobRef,
         localChainHead: Data?
-    ) async throws -> FfiSyncApplyOutcome? {
+    ) async throws -> SyncVerdict? {
         var metadata = Data()
         if !entry.metadataBlob.isEmpty {
             let address = String(data: entry.metadataBlob, encoding: .utf8)
@@ -313,7 +353,18 @@ public actor FFISyncDriver {
             metadataBlob: metadata,
             localChainHead: localChainHead
         )
-        return try verbs.applySyncEntry(head, ciphertextAt: staged)
+        guard !metadata.isEmpty else {
+            return SyncVerdict(outcome: try verbs.applySyncEntry(head, ciphertextAt: staged), plaintext: nil)
+        }
+        let plaintext = stagingDirectory.appending(path: UUID().uuidString)
+        let opened: FfiOpenedOriginal
+        do {
+            opened = try verbs.openSyncedOriginal(head, ciphertextAt: staged, to: plaintext)
+        } catch {
+            removeStaged(plaintext)
+            throw error
+        }
+        return SyncVerdict(opened, plaintext: plaintext, key: key)
     }
 
     /// Fetch `blob` into a fresh file in the staging directory.
@@ -371,6 +422,46 @@ public actor FFISyncDriver {
     static func isStaleCursor(_ error: any Error) -> Bool {
         guard let error = error as? FfiError, case let .Sync(code, _) = error else { return false }
         return code == staleCursorCode
+    }
+}
+
+/// The chokepoint's verdict on one entry, with the staged plaintext of its
+/// original when the entry was opened.
+struct SyncVerdict {
+    /// The quarantine reason an opened entry whose file key could not be
+    /// recovered, or whose ciphertext failed authentication, is passed with.
+    static let undecryptableReason = "Undecryptable"
+    /// The quarantine reason an opened entry whose plaintext does not hash to
+    /// the signed sidecar's digest is passed with.
+    static let digestMismatchReason = "DigestMismatch"
+
+    let outcome: FfiSyncApplyOutcome
+    /// The verified plaintext, present only for an `applied` outcome of an
+    /// opened entry.
+    let plaintext: URL?
+
+    init(outcome: FfiSyncApplyOutcome, plaintext: URL?) {
+        self.outcome = outcome
+        self.plaintext = plaintext
+    }
+
+    /// The verdict `openSyncedOriginal` answered with, `plaintext` being the
+    /// destination it was asked to open to. An original that applied but did
+    /// not open writes nothing, so it is passed as quarantined, with the
+    /// asset id as its detail.
+    init(_ opened: FfiOpenedOriginal, plaintext: URL, key: String) {
+        switch opened {
+        case let .opened(facts):
+            self.init(outcome: .applied(facts: facts), plaintext: plaintext)
+        case let .refused(outcome):
+            self.init(outcome: outcome, plaintext: nil)
+        case let .undecryptable(facts):
+            syncLog.error("original of \(key, privacy: .public) did not decrypt; nothing written")
+            self.init(outcome: .quarantined(reason: Self.undecryptableReason, detail: facts.assetId), plaintext: nil)
+        case let .digestMismatch(facts):
+            syncLog.error("original of \(key, privacy: .public) does not match its signed digest; nothing written")
+            self.init(outcome: .quarantined(reason: Self.digestMismatchReason, detail: facts.assetId), plaintext: nil)
+        }
     }
 }
 
