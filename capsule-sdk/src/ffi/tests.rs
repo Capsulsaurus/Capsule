@@ -3483,3 +3483,78 @@ fn ffi_a_synced_asset_is_adopted_and_takes_the_trash_verbs() {
     workspace.purge_asset(asset.to_string()).unwrap();
     assert!(workspace.read_plaintext(asset.to_string()).is_err());
 }
+
+/// **An asset first seen past its create is not adopted.** An entry whose record follows a
+/// create this workspace never held verifies (the caller's catalog kept the create's head) but
+/// cannot start a chain, so both the open and the apply verb answer it with `adopted == false`,
+/// and the workspace still does not hold the asset: the app's catalog writer must keep its row.
+#[test]
+fn ffi_an_entry_past_an_unheld_create_is_applied_but_not_adopted() {
+    use capsule_library::lifecycle::{SidecarEnrichment, SignedImportOptions};
+
+    let (lib, other_lib, blobs, out) = (
+        tempfile::TempDir::new().unwrap(),
+        tempfile::TempDir::new().unwrap(),
+        tempfile::TempDir::new().unwrap(),
+        tempfile::TempDir::new().unwrap(),
+    );
+    let workspace = enroll(lib.path());
+    let album = workspace.create_album("Trip".into()).unwrap();
+    let mut other = other_device(&workspace, &album, other_lib.path());
+
+    let photo = blobs.path().join("IMG_0002.JPG");
+    std::fs::write(&photo, original_plaintext(4096)).unwrap();
+    let options = SignedImportOptions {
+        enrichment: Some(SidecarEnrichment {
+            tags: vec!["harbour".into()],
+            ..SidecarEnrichment::default()
+        }),
+        ..SignedImportOptions::default()
+    };
+    let asset = other
+        .import_asset_with(uuid::Uuid::parse_str(&album).unwrap(), &photo, &options)
+        .unwrap()
+        .asset_id;
+    let create = other.asset(&asset).unwrap().chain.head().unwrap();
+    other.tag_add(&asset, "dusk").unwrap();
+
+    let (head, ciphertext) = remote_head(
+        &other,
+        asset,
+        Some(create.as_bytes().to_vec()),
+        blobs.path(),
+    );
+    let destination = out.path().join("staged");
+    match workspace
+        .open_synced_original(
+            head.clone(),
+            path_string(&ciphertext),
+            path_string(&destination),
+        )
+        .unwrap()
+    {
+        FfiOpenedOriginal::Opened { facts } => {
+            assert!(!facts.adopted, "a chain cannot start past its create");
+        }
+        other => panic!("expected the edit to open, got {other:?}"),
+    }
+    assert_eq!(
+        std::fs::read(&destination).unwrap(),
+        original_plaintext(4096)
+    );
+
+    match workspace
+        .apply_sync_entry_from_file(head, path_string(&ciphertext))
+        .unwrap()
+    {
+        FfiSyncApplyOutcome::Applied { facts } => {
+            assert!(!facts.adopted, "the apply verb does not adopt it either");
+        }
+        other => panic!("expected the edit to apply, got {other:?}"),
+    }
+    assert!(
+        workspace.read_plaintext(asset.to_string()).is_err(),
+        "the workspace does not hold the asset"
+    );
+    assert!(workspace.provenance_head(asset.to_string()).is_err());
+}

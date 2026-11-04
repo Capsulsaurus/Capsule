@@ -1163,6 +1163,22 @@ fn an_original_already_under_the_assets_name_is_kept_only_when_it_is_the_signed_
     }
 }
 
+/// Only a verdict after which the workspace holds the asset at the entry's record says it holds
+/// it; a catalog writer skips its row for exactly those.
+#[test]
+fn only_a_held_adoption_holds_the_asset() {
+    for (adoption, holds) in [
+        (Adoption::Adopted, true),
+        (Adoption::Advanced, true),
+        (Adoption::AlreadyHeld, true),
+        (Adoption::MissingHistory, false),
+        (Adoption::NeedsOriginal, false),
+        (Adoption::Diverged, false),
+    ] {
+        assert_eq!(adoption.holds(), holds, "{adoption:?}");
+    }
+}
+
 /// The library original is the workspace's own copy, not a second name for the handed-over
 /// plaintext: an in-place write to the kept file afterwards leaves the library original as the
 /// signed bytes.
