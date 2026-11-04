@@ -9,7 +9,7 @@
 //! error, and the two call for opposite actions.
 //!
 //! Repair therefore stays with the paths that own it — [`crate::gc`] for orphans, an index
-//! rebuild for a lost index, an operator for quarantines. Keeping the check separate from every
+//! rebuild for a lost index and for a drifted pulled quota total, an operator for quarantines. Keeping the check separate from every
 //! write path is also what stops a hot-path bug from being a bug in the check that would catch
 //! it, which is the whole reason this is a distinct code path rather than an assertion.
 //!
@@ -24,11 +24,14 @@
 //! | 5. Mirrored-fact agreement | done |
 //! | 6. Ledger ⇄ index: each owner ledger verifies, and each entry has its row | done |
 //! | 7. Debris and quarantine inventory | done |
+//! | 8. Quota ledger: each stored pulled total equals its derivation | done |
 //!
 //! Checks 4 and 5 decode manifests, and they do it through [`crate::ledger::manifest`], the
 //! server's one manifest parser, shared with the index rebuild and fuzzed. The write path never
 //! decodes one. Check 6 reads the owner ledgers through [`crate::ledger::replay`], the pairing
-//! rebuild replays from, so the two agree about which writes a ledger records.
+//! rebuild replays from, so the two agree about which writes a ledger records. Check 8 asks the
+//! quota ledger its own audit ([`QuotaStore::pulled_drift`]), the one the rebuild's reconcile
+//! repairs, so the scrub reports exactly what `rebuild --apply` would rebuild (#1183).
 //!
 //! # The report is the product
 //!
@@ -47,8 +50,9 @@ use crate::index::{AssetIndex, AssetState};
 use crate::ledger::manifest::ManifestFault;
 use crate::ledger::replay::{self, LedgerKeys, Resolution};
 use crate::ledger::{ChainFault, OwnerLedger};
+use crate::quota::{PulledDrift, QuotaStore};
 use crate::share::ShareStore;
-use crate::store::{AssetId, BlobRole, Clock, OwnerId, StoreError, UploadSessionStore};
+use crate::store::{AssetId, BlobRole, Clock, OwnerId, StoreError, UploadSessionStore, UserId};
 
 /// How many bytes to hash at a time when re-hashing a blob.
 const HASH_WINDOW: usize = 1024 * 1024;
@@ -197,6 +201,23 @@ pub enum Finding {
         /// The upload the stage belongs to.
         upload: crate::store::UploadId,
     },
+    /// An account whose stored pulled quota total or holdings differ from what its
+    /// subscriptions, pulled blobs and attributions derive (check 8, #1183).
+    ///
+    /// Something wrote the quota tables behind the schema that keeps them (an operator's
+    /// `psql`, a `TRUNCATE`, a restore of one table). Unlike the findings above, the derivation
+    /// is the authority by definition, so `rebuild --apply` rebuilds it; the scrub still only
+    /// names it.
+    PulledQuotaDrift {
+        /// The account.
+        user: UserId,
+        /// The pulled total the ledger stores for it.
+        stored: u64,
+        /// The pulled total its rows derive.
+        derived: u64,
+        /// Whether its stored holdings differ from the derived ones, whatever the totals say.
+        holdings: bool,
+    },
 }
 
 impl Finding {
@@ -215,6 +236,7 @@ impl Finding {
             Self::LedgerBroken { .. } => "ledger_broken",
             Self::LedgerEntryUnindexed { .. } => "ledger_entry_unindexed",
             Self::StaleStage { .. } => "stale_stage",
+            Self::PulledQuotaDrift { .. } => "pulled_quota_drift",
         }
     }
 }
@@ -286,6 +308,8 @@ pub struct ScrubContext {
     ledger: Option<(Arc<dyn OwnerLedger>, LedgerKeys)>,
     /// The pulled albums' claims on metadata blobs (#1141). `None` counts none as a reference.
     held: Option<Arc<dyn HeldBlobs>>,
+    /// The quota ledger, for check 8 (#1183). `None` skips the check.
+    quotas: Option<Arc<dyn QuotaStore>>,
 }
 
 impl ScrubContext {
@@ -308,6 +332,7 @@ impl ScrubContext {
             clock,
             ledger: None,
             held: None,
+            quotas: None,
         }
     }
 
@@ -326,6 +351,17 @@ impl ScrubContext {
     #[must_use]
     pub fn with_ledger(mut self, ledger: Arc<dyn OwnerLedger>, keys: LedgerKeys) -> Self {
         self.ledger = Some((ledger, keys));
+        self
+    }
+
+    /// Also run check 8 over `quotas`: every account whose stored pulled total drifted from
+    /// its derivation (#1183).
+    ///
+    /// The same ledger the rebuild reconciles, so a drift reported here is one
+    /// `rebuild --apply` rebuilds.
+    #[must_use]
+    pub fn with_quotas(mut self, quotas: Arc<dyn QuotaStore>) -> Self {
+        self.quotas = Some(quotas);
         self
     }
 }
@@ -348,6 +384,7 @@ pub async fn scrub(context: &ScrubContext, depth: Depth) -> Result<ScrubReport, 
     blobs_are_referenced(context, depth, &mut report).await?;
     ledger_agrees(context, &mut report).await?;
     inventory(context, &mut report).await?;
+    quota_agrees(context, &mut report).await?;
 
     for (class, count) in report.counts() {
         tracing::warn!(class, count, "the integrity scrub found something");
@@ -826,6 +863,36 @@ async fn inventory(context: &ScrubContext, report: &mut ScrubReport) -> Result<(
             report.findings.push(Finding::StaleStage { upload });
         }
     }
+    Ok(())
+}
+
+/// Check 8: every stored pulled quota total equals what the account's holdings derive (#1183).
+///
+/// One audit call, because the comparison is the ledger's: an adapter that derives the total
+/// holds no second copy and answers empty, and one that stores it compares the two in one
+/// snapshot. Read-only like every other check; the repair is `rebuild --apply`'s.
+async fn quota_agrees(context: &ScrubContext, report: &mut ScrubReport) -> Result<(), StoreError> {
+    let Some(quotas) = &context.quotas else {
+        return Ok(());
+    };
+    let drift = quotas.pulled_drift().await?;
+    tracing::debug!(
+        accounts = drift.len(),
+        "audited the stored pulled quota totals"
+    );
+    report.findings.extend(drift.into_iter().map(
+        |PulledDrift {
+             user,
+             stored,
+             derived,
+             holdings,
+         }| Finding::PulledQuotaDrift {
+            user,
+            stored,
+            derived,
+            holdings,
+        },
+    ));
     Ok(())
 }
 
