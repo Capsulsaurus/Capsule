@@ -36,6 +36,10 @@ pub mod sharing;
 /// build-embedded git commit. Always compiled: pure string formatting, no native deps.
 pub mod client_build;
 
+/// The file extension an original is named by for its sidecar `content_type` — the one table
+/// the library's adoption and a restore share. Always compiled: a pure string table.
+pub mod content_type;
+
 /// The closed set of still-derivative formats and the structural check over it — the tier
 /// table's format column as a type. Always compiled, and for the same reason [`lqip`] is: the
 /// crates that *receive* a `DerivativeManifest` (`capsule-server`, `capsule-wasm`) build with

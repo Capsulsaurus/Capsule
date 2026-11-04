@@ -107,6 +107,7 @@
 use std::io::{Read, Write};
 use std::path::Path;
 
+use capsule_core::content_type::extension_for;
 use capsule_core::crypto::encryption::{
     CIPHERTEXT_CHUNK, StreamDecryptor, StreamError, blob_ciphertext_hash, blob_nonce, open_blob,
 };
@@ -1060,36 +1061,6 @@ impl Workspace {
         self.write_signed_artifacts(asset)?;
         self.index_asset_row(asset)?;
         Ok(Adoption::Advanced)
-    }
-}
-
-/// The extension an adopted original is stored under for its media type: the one the Apple
-/// lane's file-type table prefers for it, so a library an app wrote before adoption and one the
-/// workspace wrote name an original alike. A type with none takes `bin`, as a restore's does.
-fn extension_for(content_type: &str) -> &'static str {
-    match content_type {
-        "image/jpeg" => "jpeg",
-        "image/png" => "png",
-        "image/gif" => "gif",
-        "image/tiff" => "tiff",
-        "image/webp" => "webp",
-        "image/heic" => "heic",
-        "image/heif" => "heif",
-        "image/avif" => "avif",
-        "image/jxl" => "jxl",
-        "image/x-adobe-dng" => "dng",
-        "image/x-sony-arw" => "arw",
-        "image/x-canon-cr2" => "cr2",
-        "image/x-canon-cr3" => "cr3",
-        "image/x-canon-crw" => "crw",
-        "image/x-nikon-nef" => "nef",
-        "image/x-fuji-raf" => "raf",
-        "video/mp4" => "mp4",
-        "video/quicktime" => "mov",
-        "video/x-matroska" => "mkv",
-        "video/webm" => "webm",
-        "video/x-msvideo" => "avi",
-        _ => "bin",
     }
 }
 

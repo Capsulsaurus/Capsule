@@ -1208,5 +1208,6 @@ fn an_adopted_original_is_named_for_its_media_type() {
     assert_eq!(extension_for("image/jpeg"), "jpeg");
     assert_eq!(extension_for("video/quicktime"), "mov");
     assert_eq!(extension_for("image/heic"), "heic");
+    assert_eq!(extension_for("image/x-portable-anymap"), "pnm");
     assert_eq!(extension_for("application/octet-stream"), "bin");
 }
