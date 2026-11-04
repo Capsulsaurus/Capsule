@@ -382,9 +382,10 @@ struct AppEnvironment {
     /// retry a relaunch and a sign-in run: each rebuilds the world with the
     /// session. It runs detached, because a launch never waits on the
     /// network; the provider logs each delivery's fate, and a record left
-    /// undelivered stays on its chain for the next walk. The purges go first,
-    /// then the held assets, one after the other so both read one feed drain.
-    /// Each walk lists everything the workspace holds of its kind, but an
+    /// undelivered stays on its chain for the next walk. The walk is
+    /// `ManagedProvider.redeliverHeldRecords()`: the purges go first, then the
+    /// held assets, one after the other so both read one feed drain, and a
+    /// sync's walk asked for meanwhile queues behind it. Each walk lists everything the workspace holds of its kind, but an
     /// asset whose head the feed already lists sends nothing, so the cost is
     /// one feed drain plus what the server still lacks. With no delivery
     /// (signed out, the mock lane) there is nothing to send.
@@ -394,8 +395,7 @@ struct AppEnvironment {
             "redelivering held records for the signed-in lane, purges=\(purges, privacy: .public) lifecycles=\(lifecycles, privacy: .public)"
         )
         Task {
-            await provider.redeliverPurges()
-            await provider.redeliverLifecycleRecords()
+            await provider.redeliverHeldRecords()
         }
     }
 
