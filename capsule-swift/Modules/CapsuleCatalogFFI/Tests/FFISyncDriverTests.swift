@@ -28,7 +28,8 @@ private let plaintextBytes = Data("verified plaintext".utf8)
 /// scripted for the manifest, and records every call. An open that answers
 /// `opened` writes ``plaintextBytes`` at its destination, as the workspace does.
 /// A manifest's history is the one scripted for it, else none (a `create`'s);
-/// an open against a history adopts unless scripted otherwise, and an asset
+/// the blobs its history names are the ones scripted for it, else
+/// ``defaultSources``; an open against a history adopts unless scripted otherwise, and an asset
 /// adopted by either open is held from then on, its chain head the entry's.
 private final class ScriptedVerbs: FFISyncDriverVerbs, @unchecked Sendable {
     private let lock = NSLock()
@@ -39,10 +40,13 @@ private final class ScriptedVerbs: FFISyncDriverVerbs, @unchecked Sendable {
     private var openCalls: [ApplyCall] = []
     private var historyFetchCalls: [Data] = []
     private var historyOpenCalls: [HistoryOpenCall] = []
+    private var sourceCalls: [SourcesCall] = []
+    private var blobSizes: [UInt64] = []
     private let verdicts: [Data: FfiSyncApplyOutcome]
     private let openings: [Data: FfiOpenedOriginal]
     private let histories: [Data: Result<[Data], any Error>]
     private let historyOpenings: [Data: FfiOpenedOriginal]
+    private let sources: [Data: Result<FfiHistorySources, any Error>]
     private var chainHeads: [String: Data]
     private let metadataFailure: (any Error)?
 
@@ -52,6 +56,7 @@ private final class ScriptedVerbs: FFISyncDriverVerbs, @unchecked Sendable {
         openings: [Data: FfiOpenedOriginal] = [:],
         histories: [Data: Result<[Data], any Error>] = [:],
         historyOpenings: [Data: FfiOpenedOriginal] = [:],
+        sources: [Data: Result<FfiHistorySources, any Error>] = [:],
         chainHeads: [String: Data] = [:],
         metadataFailure: (any Error)? = nil
     ) {
@@ -61,6 +66,7 @@ private final class ScriptedVerbs: FFISyncDriverVerbs, @unchecked Sendable {
         self.openings = openings
         self.histories = histories
         self.historyOpenings = historyOpenings
+        self.sources = sources
         self.chainHeads = chainHeads
     }
 
@@ -75,6 +81,16 @@ private final class ScriptedVerbs: FFISyncDriverVerbs, @unchecked Sendable {
 
     var historyOpens: [HistoryOpenCall] {
         lock.withLock { historyOpenCalls }
+    }
+
+    /// The records each history-sources naming was asked about, in order.
+    var sourceNamings: [SourcesCall] {
+        lock.withLock { sourceCalls }
+    }
+
+    /// The size each blob fetch was asked for, in order.
+    var fetchedSizes: [UInt64] {
+        lock.withLock { blobSizes }
     }
 
     var cursors: [Data] {
@@ -101,8 +117,11 @@ private final class ScriptedVerbs: FFISyncDriverVerbs, @unchecked Sendable {
         }
     }
 
-    func fetchBlob(hash: String, size _: UInt64, to path: URL) throws {
-        lock.withLock { fetched.append(hash) }
+    func fetchBlob(hash: String, size: UInt64, to path: URL) throws {
+        lock.withLock {
+            fetched.append(hash)
+            blobSizes.append(size)
+        }
         try Data(hash.utf8).write(to: path)
     }
 
@@ -116,6 +135,13 @@ private final class ScriptedVerbs: FFISyncDriverVerbs, @unchecked Sendable {
         try lock.withLock {
             historyFetchCalls.append(manifestCbor)
             return try histories[manifestCbor]?.get() ?? []
+        }
+    }
+
+    func historySources(manifestCbor: Data, history: [Data]) throws -> FfiHistorySources {
+        try lock.withLock {
+            sourceCalls.append(SourcesCall(manifest: manifestCbor, history: history))
+            return try sources[manifestCbor]?.get() ?? defaultSources
         }
     }
 
@@ -206,6 +232,19 @@ private struct HistoryOpenCall: Equatable {
     let call: ApplyCall
     let history: [Data]
 }
+
+/// One call of ``FFISyncDriverVerbs/historySources(manifestCbor:history:)``.
+private struct SourcesCall: Equatable {
+    let manifest: Data
+    let history: [Data]
+}
+
+/// The blobs a history names unless scripted otherwise: the feed's own
+/// metadata blob and original.
+private let defaultSources = FfiHistorySources(
+    metadataBlobHash: metadataHash,
+    original: FfiBlobRef(ciphertextHash: originalHash, role: "original", size: 64)
+)
 
 /// An in-memory ``FFISyncStateStoring`` that counts its saves.
 private final class MemoryStore: FFISyncStateStoring, @unchecked Sendable {
@@ -355,6 +394,33 @@ private func entry(
     )
 }
 
+/// An album page's tombstone of `asset`: its delete `record`, and, as every
+/// album page serves a delete, no metadata blob, no blob and no held original.
+private func tombstone(_ asset: String, record: Data) -> FfiFeedEntry {
+    FfiFeedEntry(
+        albumId: Data(repeating: 0xAB, count: 16),
+        syncSeq: 1,
+        protocolVersion: "2026-01-01",
+        kind: .deleted,
+        assetId: Data(asset.utf8),
+        manifestCbor: record,
+        metadataBlob: Data(),
+        blobs: FfiBlobManifest(original: nil, derivatives: []),
+        originalHeld: false,
+        changedAt: "2026-01-01T00:00:00Z"
+    )
+}
+
+private let liveMetadataHash = String(repeating: "e", count: 64)
+private let liveOriginalHash = String(repeating: "f", count: 64)
+
+/// The blobs a tombstone's history names: its asset's live metadata blob and
+/// the original its delete commits to, neither of which the feed lists.
+private let liveSources = FfiHistorySources(
+    metadataBlobHash: liveMetadataHash,
+    original: FfiBlobRef(ciphertextHash: liveOriginalHash, role: "original", size: 80)
+)
+
 private func page(_ entries: [FfiFeedEntry], next: Data, more: Bool = false) -> FfiSyncPage {
     FfiSyncPage(entries: entries, nextCursor: next, hasMore: more)
 }
@@ -402,13 +468,14 @@ struct FFISyncDriverTests {
 
     @Test("an applied entry's head is the local chain head its asset's next entry is applied with")
     func chainsTheAppliedHead() async throws {
-        let verbs = ScriptedVerbs(pages: [
-            .success(page([entry(assetA, record: Data([1])), entry(assetA, record: Data([2]), kind: .updated)], next: Data([1]))),
-        ])
+        let verbs = ScriptedVerbs(
+            pages: [.success(page([entry(assetA, record: Data([1])), entry(assetA, record: Data([2]), kind: .updated)], next: Data([1])))],
+            chainHeads: [assetA: Data([0])]
+        )
 
         try await driver(verbs, sink: DrainSink()).sync()
 
-        #expect(verbs.applies.map(\.localChainHead) == [nil, FFIPurgeDelivery.headHash(Data([1]))])
+        #expect(verbs.applies.map(\.localChainHead) == [FFIPurgeDelivery.headHash(Data([0])), FFIPurgeDelivery.headHash(Data([1]))])
         #expect(verbs.applies.allSatisfy { $0.ciphertext == Data(originalHash.utf8) })
     }
 
@@ -439,7 +506,7 @@ struct FFISyncDriverTests {
 
         #expect(verbs.cursors == [Data([7])])
         #expect(drain.newlyIndexed == [assetB])
-        #expect(verbs.applies.first?.localChainHead == FFIPurgeDelivery.headHash(Data([1])))
+        #expect(verbs.opens.first?.localChainHead == FFIPurgeDelivery.headHash(Data([1])))
     }
 
     @Test("a failed page keeps the cursor and heads from before it, and hands over what the kept pages listed")
@@ -468,7 +535,7 @@ struct FFISyncDriverTests {
     func failedApplyKeepsNothingOfItsPage() async throws {
         let verbs = ScriptedVerbs(
             pages: [.success(page([entry(assetA, record: Data([1])), entry(assetB, record: Data([2]))], next: Data([1])))],
-            verdicts: [Data([2]): .pending(reason: "AmkNotYetLocal")]
+            openings: [Data([2]): .refused(outcome: .pending(reason: "AmkNotYetLocal"))]
         )
         let store = MemoryStore()
         let sink = DrainSink()
@@ -500,10 +567,10 @@ struct FFISyncDriverTests {
 
     @Test("a quarantined entry is passed and its page kept; an entry awaiting its original is not applied")
     func quarantineAndAwaitingPass() async throws {
-        let entries = [entry(assetA, record: Data([1])), entry(assetB, record: Data([2]), held: false)]
+        let entries = [entry(assetA, record: Data([1]), metadata: true), entry(assetB, record: Data([2]), metadata: true, held: false)]
         let verbs = ScriptedVerbs(
             pages: [.success(page(entries, next: Data([1])))],
-            verdicts: [Data([1]): .quarantined(reason: "Rejected.ForgedChain", detail: nil)]
+            openings: [Data([1]): .refused(outcome: .quarantined(reason: "Rejected.ForgedChain", detail: nil))]
         )
         let store = MemoryStore()
         let catalog = RecordingCatalog()
@@ -514,7 +581,7 @@ struct FFISyncDriverTests {
         #expect(drain.quarantined == 1)
         #expect(drain.awaitingOriginal == 1)
         #expect(drain.newlyIndexed == [assetA, assetB])
-        #expect(verbs.applies.count == 1)
+        #expect(verbs.opens.count == 1)
         #expect(store.state?.cursor == Data([1]))
         #expect(store.state?.heads.isEmpty == true)
     }
@@ -548,11 +615,12 @@ struct FFISyncDriverTests {
         #expect(try leftovers(in: staging).isEmpty)
     }
 
-    @Test("an applied delete is only verified, and the catalog is handed its facts with no original")
+    @Test("a held asset's applied delete is only verified, and the catalog is handed its facts with no original")
     func writesAVerifiedLifecycleEntry() async throws {
         let verbs = ScriptedVerbs(
             pages: [.success(page([entry(assetA, record: Data([1]), kind: .deleted)], next: Data([1])))],
-            verdicts: [Data([1]): .applied(facts: facts(Data([1]), action: "delete"))]
+            verdicts: [Data([1]): .applied(facts: facts(Data([1]), action: "delete"))],
+            chainHeads: [assetA: Data([0])]
         )
         let catalog = RecordingCatalog()
 
@@ -724,18 +792,110 @@ struct FFISyncDriverTests {
         #expect(verbs.opens.first?.localChainHead == FFIPurgeDelivery.headHash(Data([1])))
     }
 
-    @Test("an unheld asset's delete naming no metadata blob is only verified, reading no history")
-    func unheldDeleteReadsNoHistory() async throws {
+    @Test("an unheld asset first seen at its delete on an album page is adopted from the blobs its history names, and its restore opens against the adopted head")
+    func albumTombstoneIsAdoptedFromItsRecords() async throws {
+        let delete = Data([3])
+        let restore = Data([4])
+        let history = [Data([1]), Data([2])]
         let verbs = ScriptedVerbs(
-            pages: [.success(page([entry(assetA, record: Data([2]), kind: .deleted)], next: Data([1])))],
-            verdicts: [Data([2]): .applied(facts: facts(Data([2]), action: "delete"))]
+            pages: [.success(page(
+                [
+                    tombstone(assetA, record: delete),
+                    entry(assetA, record: restore, kind: .updated, metadata: true),
+                ],
+                next: Data([1])
+            ))],
+            openings: [restore: .opened(facts: facts(restore, action: "trash-restore", metadata: metadataFacts, adopted: true))],
+            histories: [delete: .success(history)],
+            historyOpenings: [delete: .opened(facts: facts(delete, action: "delete", metadata: metadataFacts, adopted: true))],
+            sources: [delete: .success(liveSources)]
+        )
+        let catalog = RecordingCatalog()
+        let store = MemoryStore()
+        let staging = stagingDirectory()
+
+        let drain = try await driver(verbs, store: store, catalog: catalog, staging: staging, sink: DrainSink()).sync()
+
+        #expect(drain.applied == 2)
+        #expect(drain.awaitingOriginal == 0)
+        #expect(verbs.historyFetches == [delete])
+        #expect(verbs.sourceNamings == [SourcesCall(manifest: delete, history: history)])
+        #expect(verbs.fetches == [liveMetadataHash, liveOriginalHash, metadataHash, originalHash])
+        #expect(verbs.fetchedSizes == [liveSources.original.size, 64])
+        #expect(verbs.historyOpens == [HistoryOpenCall(
+            call: ApplyCall(
+                manifest: delete,
+                metadata: Data(liveMetadataHash.utf8),
+                localChainHead: nil,
+                ciphertext: Data(liveOriginalHash.utf8)
+            ),
+            history: history
+        )])
+        #expect(verbs.opens.map(\.manifest) == [restore])
+        #expect(verbs.opens.first?.localChainHead == FFIPurgeDelivery.headHash(delete))
+        #expect(verbs.applies.isEmpty)
+        #expect(catalog.writes.map(\.action) == ["delete", "trash-restore"])
+        #expect(catalog.writes.first?.original == plaintextBytes)
+        #expect(store.state?.heads[assetA] == FFIPurgeDelivery.headHash(restore))
+        #expect(try leftovers(in: staging).isEmpty)
+    }
+
+    @Test("an album page's tombstone whose history names no live metadata blob is quarantined, fetching no blob")
+    func unboundTombstoneIsRefused() async throws {
+        let delete = Data([3])
+        let history = [Data([1]), Data([2])]
+        let verbs = ScriptedVerbs(
+            pages: [.success(page([tombstone(assetA, record: delete)], next: Data([1])))],
+            histories: [delete: .success(history)],
+            sources: [delete: .failure(FfiError.Sync(code: nil, detail: "no record of the chain binds a metadata blob"))]
+        )
+        let catalog = RecordingCatalog()
+        let store = MemoryStore()
+        let staging = stagingDirectory()
+
+        let drain = try await driver(verbs, store: store, catalog: catalog, staging: staging, sink: DrainSink()).sync()
+
+        #expect(drain.quarantined == 1)
+        #expect(drain.applied == 0)
+        #expect(verbs.sourceNamings == [SourcesCall(manifest: delete, history: history)])
+        #expect(verbs.fetches.isEmpty)
+        #expect(verbs.historyOpens.isEmpty)
+        #expect(verbs.opens.isEmpty)
+        #expect(verbs.applies.isEmpty)
+        #expect(catalog.writes.isEmpty)
+        #expect(store.state?.cursor == Data([1]))
+        #expect(store.state?.heads.isEmpty == true)
+        #expect(try leftovers(in: staging).isEmpty)
+    }
+
+    @Test("an album page's tombstone whose records do not decode is quarantined before its sources are named")
+    func unreadableTombstoneHistoryQuarantines() async throws {
+        let delete = Data([3])
+        let verbs = ScriptedVerbs(
+            pages: [.success(page([tombstone(assetA, record: delete)], next: Data([1])))],
+            histories: [delete: .failure(FfiError.Sync(code: nil, detail: "a record does not decode"))]
         )
 
-        try await driver(verbs, sink: DrainSink()).sync()
+        let drain = try await driver(verbs, sink: DrainSink()).sync()
 
+        #expect(drain.quarantined == 1)
+        #expect(verbs.sourceNamings.isEmpty)
+        #expect(verbs.fetches.isEmpty)
+    }
+
+    @Test("a held asset's album-page tombstone reads no history: it awaits its original")
+    func heldTombstoneReadsNoHistory() async throws {
+        let verbs = ScriptedVerbs(
+            pages: [.success(page([tombstone(assetA, record: Data([2]))], next: Data([1])))],
+            chainHeads: [assetA: Data([1])]
+        )
+
+        let drain = try await driver(verbs, sink: DrainSink()).sync()
+
+        #expect(drain.awaitingOriginal == 1)
         #expect(verbs.historyFetches.isEmpty)
-        #expect(verbs.fetches == [originalHash])
-        #expect(verbs.applies.count == 1)
+        #expect(verbs.sourceNamings.isEmpty)
+        #expect(verbs.fetches.isEmpty)
     }
 
     @Test("an unheld asset first seen at its delete in trash is adopted from its history with its live metadata blob, and its restore opens against the adopted head")

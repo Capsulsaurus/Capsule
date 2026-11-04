@@ -31,7 +31,8 @@ private actor Latch {
 /// entry, and records each pull's cursor and each apply. Every asset is first
 /// seen past its create, with `history` as its earlier records: an entry
 /// naming a metadata blob is opened against it and adopted, its plaintext
-/// written at the destination as the workspace writes it.
+/// written at the destination as the workspace writes it, and one naming
+/// none has the feed's own metadata blob and original named from it first.
 private final class GatedVerbs: FFISyncDriverVerbs, @unchecked Sendable {
     let entered = Latch()
     let release = Latch()
@@ -41,6 +42,7 @@ private final class GatedVerbs: FFISyncDriverVerbs, @unchecked Sendable {
     private var applyCount = 0
     private var historyFetchCount = 0
     private var historyOpenCount = 0
+    private var sourceNamingCount = 0
     private let history: [Data]
 
     init(pages: [FfiSyncPage], history: [Data] = []) {
@@ -54,6 +56,10 @@ private final class GatedVerbs: FFISyncDriverVerbs, @unchecked Sendable {
 
     var historyOpens: Int {
         lock.withLock { historyOpenCount }
+    }
+
+    var sourceNamings: Int {
+        lock.withLock { sourceNamingCount }
     }
 
     var cursors: [Data] {
@@ -85,6 +91,14 @@ private final class GatedVerbs: FFISyncDriverVerbs, @unchecked Sendable {
     func fetchProvenanceHistory(manifestCbor _: Data) -> [Data] {
         lock.withLock { historyFetchCount += 1 }
         return history
+    }
+
+    func historySources(manifestCbor _: Data, history _: [Data]) -> FfiHistorySources {
+        lock.withLock { sourceNamingCount += 1 }
+        return FfiHistorySources(
+            metadataBlobHash: metadataHash,
+            original: FfiBlobRef(ciphertextHash: originalHash, role: "original", size: 64)
+        )
     }
 
     func applySyncEntry(_ head: FfiSyncHead, ciphertextAt _: URL) -> FfiSyncApplyOutcome {
@@ -162,7 +176,8 @@ private actor DrainCounter {
 }
 
 /// A created entry listing `asset` with `record` as its latest record and an
-/// original the server holds, naming a metadata blob when `metadata` is set.
+/// original the server holds, naming a metadata blob when `metadata` is set;
+/// naming none, the drain adopts it from its records.
 /// As the server's feed does, it names the metadata blob by address only and
 /// lists only the original among its blobs.
 private func entry(_ asset: String, record: Data, metadata: Bool = false) -> FfiFeedEntry {
@@ -200,7 +215,7 @@ private func stagingDirectory() -> URL {
 struct FFISyncDriverDrainTests {
     @Test("a sync asked for while a drain runs joins it: each page is pulled, applied and saved once")
     func concurrentSyncJoinsTheDrain() async throws {
-        let verbs = GatedVerbs(pages: twoPages())
+        let verbs = GatedVerbs(pages: twoPages(), history: [Data([0])])
         let store = CountingStore()
         let counter = DrainCounter()
         let subject = FFISyncDriver(verbs: verbs, store: store, stagingDirectory: stagingDirectory(), catalog: NoCatalog()) {
@@ -225,7 +240,10 @@ struct FFISyncDriverDrainTests {
         #expect(firstDrain.pages == 2)
         #expect(firstDrain.newlyIndexed == [firstAsset, secondAsset])
         #expect(verbs.cursors == [Data(), Data([1])])
-        #expect(verbs.applies == 2)
+        #expect(firstDrain.applied == 2)
+        #expect(verbs.sourceNamings == 2)
+        #expect(verbs.historyOpens == 2)
+        #expect(verbs.applies == 0)
         #expect(store.saves == 2)
         #expect(await counter.drains == 1)
     }
