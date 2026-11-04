@@ -60,8 +60,11 @@ public struct FFISyncDrain: Sendable, Equatable {
     /// Entries whose original the server does not hold yet, left for the entry
     /// that lists it once it lands.
     public var awaitingOriginal = 0
-    /// Entries that name no asset of this library, carry no record, or name a
-    /// metadata blob address that is not a content address.
+    /// Entries that name no asset of this library, carry no record, name a
+    /// metadata blob address that is not a content address, or are the
+    /// tombstone of an asset this device does not hold whose records the
+    /// server no longer serves (its retention window closed, a takedown, a
+    /// purge).
     public var skipped = 0
     /// Whether the server had moved the library to a new sync epoch, so the
     /// drain started over from the feed's start.

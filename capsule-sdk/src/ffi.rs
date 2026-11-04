@@ -228,7 +228,9 @@ pub enum FfiError {
     /// written locally. Nothing is left at the destination path.
     #[error("blob fetch failed ({code:?}): {detail}")]
     Fetch {
-        /// Stable `error.*` catalog code, when one applies (e.g. `error.blob.pending_upload`).
+        /// Stable `error.*` catalog code, when one applies (e.g. `error.blob.pending_upload`;
+        /// `error.blob.gone` for a blob or record the server will never serve again: a `410`
+        /// past a retention window or under a takedown, or a `404`).
         code: Option<String>,
         /// English detail (developer/log message).
         detail: String,
@@ -831,6 +833,35 @@ pub fn synced_history_sources(
     history: Vec<Vec<u8>>,
 ) -> Result<FfiHistorySources, FfiError> {
     Ok(crate::sync::history_sources(&manifest_cbor, &history)?.into())
+}
+
+/// **Whether a tombstone's retention window had closed** at `changed_at` (RFC 3339, a feed
+/// entry's own): `manifest_cbor` is a `delete` record and `changed_at` is at or after the
+/// `retention_until` signed into it.
+///
+/// A device that first sees an asset at an album page's tombstone reads this before it calls
+/// [`FfiSession::fetch_provenance_history`]: once the window has closed the server refuses the
+/// asset's records and bytes to its readers, so there is nothing left to adopt, and passing the
+/// entry loses nothing. A record that is not a `delete`, or a `delete` whose window is absent or
+/// unreadable, answers `false`.
+///
+/// Pure and offline.
+///
+/// # Errors
+///
+/// [`FfiError::InvalidArgument`] when `changed_at` is not an RFC 3339 instant;
+/// [`FfiError::Sync`] when `manifest_cbor` does not decode.
+#[uniffi::export]
+pub fn synced_retention_closed(
+    manifest_cbor: Vec<u8>,
+    changed_at: String,
+) -> Result<bool, FfiError> {
+    let at = changed_at
+        .parse::<jiff::Timestamp>()
+        .map_err(|error| FfiError::InvalidArgument {
+            detail: format!("changed_at {changed_at:?} is not an RFC 3339 instant: {error}"),
+        })?;
+    Ok(crate::sync::retention_closed(&manifest_cbor, at)?)
 }
 
 /// FFI mirror of [`FeedEntry`] — one decoded sync feed entry. Ids/manifest/metadata

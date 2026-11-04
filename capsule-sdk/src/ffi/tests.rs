@@ -3827,7 +3827,8 @@ async fn ffi_an_asset_first_seen_at_a_delete_is_adopted_from_its_fetched_history
     workspace.restore_asset(asset.to_string()).unwrap();
     assert!(workspace.trash().unwrap().is_empty());
 
-    // A record the server does not serve stops the walk.
+    // A record the server does not serve stops the walk, with the code that tells a permanent
+    // refusal from a transient one.
     let server = records_server(history[1..].to_vec()).await;
     let session = login(&server).await;
     match session
@@ -3837,9 +3838,10 @@ async fn ffi_an_asset_first_seen_at_a_delete_is_adopted_from_its_fetched_history
         )
         .await
     {
-        Err(FfiError::Fetch { detail, .. }) => {
+        Err(FfiError::Fetch { code, detail }) => {
             let create = capsule_core::crypto::hash::hash_bytes(&history[0]).to_hex();
             assert!(detail.contains(&create), "{detail}");
+            assert_eq!(code.as_deref(), Some(capsule_i18n::error_codes::BLOB_GONE));
         }
         other => panic!("expected a fetch error, got {other:?}"),
     }
@@ -4007,4 +4009,132 @@ fn ffi_synced_history_sources_refuses_what_names_no_sources() {
         Err(other) => panic!("expected a sync error, got {other:?}"),
         Ok(sources) => panic!("expected a sync error, got {}", sources.metadata_blob_hash),
     }
+}
+
+/// **A tombstone's window is judged from its signed `retention_until`**: open strictly before
+/// it, closed from it on; a record that is not a delete has none. An instant that is not RFC
+/// 3339 is a bad argument and a head that does not decode a sync error.
+#[test]
+fn ffi_synced_retention_closed_reads_the_signed_window() {
+    let (lib, other_lib, blobs) = (
+        tempfile::TempDir::new().unwrap(),
+        tempfile::TempDir::new().unwrap(),
+        tempfile::TempDir::new().unwrap(),
+    );
+    let workspace = enroll(lib.path());
+    let album = workspace.create_album("Trip".into()).unwrap();
+    let mut other = other_device(&workspace, &album, other_lib.path());
+    let photo = blobs.path().join("IMG_0005.JPG");
+    std::fs::write(&photo, original_plaintext(4096)).unwrap();
+    let asset = other
+        .import_asset(uuid::Uuid::parse_str(&album).unwrap(), &photo)
+        .unwrap();
+    let (create, _) = remote_head(&other, asset, None, blobs.path());
+    other.soft_delete(&asset, 30).unwrap();
+    let (delete, _) = remote_head(&other, asset, None, blobs.path());
+    let until: jiff::Timestamp =
+        capsule_core::crypto::provenance::ProvenanceRecord::decode(&delete.manifest_cbor)
+            .unwrap()
+            .manifest
+            .core
+            .retention_until
+            .unwrap()
+            .parse()
+            .unwrap();
+    let before = (until - jiff::SignedDuration::from_secs(1)).to_string();
+
+    assert!(!synced_retention_closed(delete.manifest_cbor.clone(), before.clone()).unwrap());
+    assert!(synced_retention_closed(delete.manifest_cbor.clone(), until.to_string()).unwrap());
+    assert!(!synced_retention_closed(create.manifest_cbor, until.to_string()).unwrap());
+    assert!(matches!(
+        synced_retention_closed(delete.manifest_cbor, "yesterday".into()),
+        Err(FfiError::InvalidArgument { .. })
+    ));
+    assert!(matches!(
+        synced_retention_closed(b"not a record".to_vec(), before),
+        Err(FfiError::Sync { .. })
+    ));
+}
+
+/// **A held asset's album-page tombstone applies against the held original.** The page names
+/// no metadata blob and no blob, and none is fetched: the delete is verified against the held
+/// chain, adopted, and the asset is in this device's trash. A record of an asset this
+/// workspace does not hold is an error, and bytes that are not a record are quarantined.
+#[test]
+fn ffi_a_held_assets_album_page_tombstone_applies_without_a_fetch() {
+    let (lib, other_lib, blobs, out) = (
+        tempfile::TempDir::new().unwrap(),
+        tempfile::TempDir::new().unwrap(),
+        tempfile::TempDir::new().unwrap(),
+        tempfile::TempDir::new().unwrap(),
+    );
+    let workspace = enroll(lib.path());
+    let album = workspace.create_album("Trip".into()).unwrap();
+    let mut other = other_device(&workspace, &album, other_lib.path());
+    let photo = blobs.path().join("IMG_0006.JPG");
+    std::fs::write(&photo, original_plaintext(4096)).unwrap();
+    let album_id = uuid::Uuid::parse_str(&album).unwrap();
+    let asset = other.import_asset(album_id, &photo).unwrap();
+    let (head, ciphertext) = remote_head(&other, asset, None, blobs.path());
+    assert!(matches!(
+        workspace
+            .open_synced_original(
+                head,
+                path_string(&ciphertext),
+                path_string(&out.path().join("staged"))
+            )
+            .unwrap(),
+        FfiOpenedOriginal::Opened { facts } if facts.adopted
+    ));
+    let create = other.asset(&asset).unwrap().chain.head().unwrap();
+
+    // Not held: refused before anything is applied.
+    let second = blobs.path().join("IMG_0007.JPG");
+    std::fs::write(&second, original_plaintext(2048)).unwrap();
+    let stranger = other.import_asset(album_id, &second).unwrap();
+    let (unheld, _) = remote_head(&other, stranger, None, blobs.path());
+    assert!(matches!(
+        workspace.apply_held_sync_entry(unheld),
+        Err(FfiError::Workspace { .. })
+    ));
+
+    other.soft_delete(&asset, 30).unwrap();
+    let (tombstone, _) = remote_head(
+        &other,
+        asset,
+        Some(create.as_bytes().to_vec()),
+        blobs.path(),
+    );
+    assert!(
+        tombstone.metadata_blob.is_empty(),
+        "an album page names none"
+    );
+    let malformed = FfiSyncHead {
+        manifest_cbor: b"not a record".to_vec(),
+        ..tombstone.clone()
+    };
+    assert!(matches!(
+        workspace.apply_held_sync_entry(malformed).unwrap(),
+        FfiSyncApplyOutcome::Quarantined { .. }
+    ));
+    match workspace.apply_held_sync_entry(tombstone.clone()).unwrap() {
+        FfiSyncApplyOutcome::Applied { facts } => {
+            assert_eq!(facts.action, "delete");
+            assert!(facts.adopted, "the delete advanced the held chain");
+        }
+        other => panic!("expected the delete to apply, got {other:?}"),
+    }
+    assert_eq!(
+        workspace.provenance_head(asset.to_string()).unwrap(),
+        tombstone.manifest_cbor
+    );
+    assert_eq!(
+        workspace
+            .trash()
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.asset_id)
+            .collect::<Vec<_>>(),
+        vec![asset.to_string()]
+    );
 }

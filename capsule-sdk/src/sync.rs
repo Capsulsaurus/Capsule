@@ -1001,6 +1001,49 @@ pub fn history_sources(
     Ok(sources)
 }
 
+/// Whether the retention window of the `delete` that is `head_record` (a feed entry's
+/// `manifest_cbor`) had closed at `at`: `at` is at or after the `retention_until` signed into
+/// it, the instant from which the server refuses a `trash-restore` and stops serving the asset's
+/// records and bytes to its readers.
+///
+/// A device that first sees an asset at an album page's tombstone reads this before it fetches
+/// the asset's history: a closed window means the fetch is refused, and there is nothing left to
+/// adopt or restore. A record that is not a `delete`, or a `delete` whose `retention_until` is
+/// absent or unreadable, has no closed window (`false`), as the trash judges one: a guessed
+/// deadline could only ever lose data.
+///
+/// # Errors
+///
+/// [`HistoryError::Malformed`] (`hash` is `head`) when `head_record` does not decode.
+#[instrument(skip_all, fields(head_bytes = head_record.len(), %at))]
+pub fn retention_closed(head_record: &[u8], at: jiff::Timestamp) -> Result<bool, HistoryError> {
+    use capsule_core::crypto::provenance::{Action, ProvenanceRecord};
+
+    let head = ProvenanceRecord::decode(head_record).map_err(|error| HistoryError::Malformed {
+        hash: "head".to_owned(),
+        detail: error.to_string(),
+    })?;
+    let core = &head.manifest.core;
+    if core.action != Action::Delete {
+        tracing::trace!(action = ?core.action, "sync-retention: not a delete; no window");
+        return Ok(false);
+    }
+    let Some(until) = core.retention_until.as_deref() else {
+        tracing::debug!(asset_id = %core.file_id, "sync-retention: the delete signs no retention_until; the window is open");
+        return Ok(false);
+    };
+    let until = match until.parse::<jiff::Timestamp>() {
+        Ok(until) => until,
+        Err(error) => {
+            tracing::warn!(asset_id = %core.file_id, retention_until = %until, %error, "sync-retention: unreadable retention_until; treating the window as open");
+            return Ok(false);
+        }
+    };
+    let closed = at >= until;
+    tracing::debug!(asset_id = %core.file_id, %until, closed, "sync-retention: the delete's window judged");
+    Ok(closed)
+}
+
 /// Walk an asset's provenance chain back from `head_record` (the `manifest_cbor` a feed entry
 /// carries) to its `create`, fetching each record the one after it names by
 /// `prior_provenance_hash` through `source` (`GET /v1/blob/{hash}`, where the server keeps an
