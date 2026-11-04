@@ -1189,8 +1189,9 @@ impl FfiSession {
     /// server holds, checked against its content address; empty for a `create`.
     ///
     /// For an asset this workspace does not hold, first seen past its create — an entry
-    /// [`FfiWorkspace::apply_sync_entry_from_file`] applies without adopting
-    /// ([`FfiAssetFacts::adopted`] `false`) — hand the records to
+    /// [`FfiWorkspace::apply_sync_entry_from_file`] quarantines as `Rejected.ForgedChain` when
+    /// the app's catalog holds no head for it, or applies without adopting
+    /// ([`FfiAssetFacts::adopted`] `false`) when it does — hand the records to
     /// [`FfiWorkspace::open_synced_history`], which verifies them in order and holds the asset
     /// from its create. Nothing is verified here: the walk only follows links.
     ///
