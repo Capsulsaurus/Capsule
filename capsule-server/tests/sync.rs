@@ -347,13 +347,30 @@ async fn delete(
     );
 }
 
-/// A tombstone carries its signed delete record and no byte reference: the record is what tells
-/// a client the retention window, and a blob list would invite a fetch of collected bytes.
+/// A tombstone carries its signed delete record and names exactly the blobs a restore needs
+/// (#1192): the record tells a client the retention window, and a device that first sees the
+/// asset at its delete adopts it from its live metadata blob and its original, which the serving
+/// path hands its readers until that window closes. No derivative and no derivative manifest:
+/// the restore's own entry names them again.
 #[tokio::test]
-async fn a_tombstone_carries_its_delete_record_and_no_byte_references() {
+async fn a_tombstone_carries_its_delete_record_and_names_what_a_restore_needs() {
     let fixture = Fixture::working();
     let bearer = bearer(&fixture).await;
     let (asset, _) = publish(&fixture, "doomed").await;
+    let original = store_blob(&fixture, b"original-of-doomed").await;
+    record(&fixture, &asset, BlobRole::Original, &original, 18).await;
+    let derivative = store_blob(&fixture, b"thumbnail-of-doomed").await;
+    record(&fixture, &asset, BlobRole::Derivative, &derivative, 19).await;
+    let derivative_manifest = store_blob(&fixture, b"derivative-manifest-of-doomed").await;
+    record(
+        &fixture,
+        &asset,
+        BlobRole::DerivativeManifest,
+        &derivative_manifest,
+        29,
+    )
+    .await;
+    let metadata = store_blob(&fixture, b"metadata-doomed").await;
     let record = b"signed-delete-for-doomed";
     delete(
         &fixture,
@@ -371,12 +388,18 @@ async fn a_tombstone_carries_its_delete_record_and_no_byte_references() {
         BASE64.encode(record),
         "a tombstone serves its delete record byte for byte, so a client can read its window"
     );
-    assert!(entry["metadata_blob"].is_null());
-    assert!(
-        entry["blobs"].as_array().expect("an array").is_empty(),
-        "a tombstone's blob list invites a client to fetch bytes GC may already have collected"
+    assert_eq!(
+        entry["metadata_blob"],
+        metadata.as_str(),
+        "the live metadata blob, which the adopting device opens the sidecar from"
     );
-    assert_eq!(entry["original_held"], false);
+    assert_eq!(
+        entry["blobs"],
+        serde_json::json!([{ "role": "original", "hash": original.as_str(), "size": 18 }]),
+        "the original alone: derivatives are not what a restore needs"
+    );
+    assert_eq!(entry["original_held"], true);
+    assert_eq!(entry["derivative_manifests"], serde_json::json!([]));
     assert_eq!(
         entry["purged"], false,
         "an asset in trash is still restorable, so its tombstone is no purge"
@@ -414,6 +437,12 @@ async fn a_purged_tombstone_carries_no_manifest_and_the_purge_signal() {
         entry["purged"], true,
         "a purged asset's tombstone carries the signal a client records its tombstone on"
     );
+    assert!(
+        entry["metadata_blob"].is_null(),
+        "a purge dropped the reference, so the entry names no blob to fetch"
+    );
+    assert_eq!(entry["blobs"], serde_json::json!([]));
+    assert_eq!(entry["original_held"], false);
 }
 
 /// Apply one lifecycle op to `asset`, chaining onto its head, with `manifest` as its provenance

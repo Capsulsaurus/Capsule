@@ -38,13 +38,16 @@
 //!
 //! # What a tombstone discloses
 //!
-//! A `deleted` entry carries no metadata reference, no blob list and no derivative manifest. The
-//! row still holds them — GC decides what happens to bytes, not this surface — but sending them
-//! would invite a client to fetch blobs that may already be collected, and a deletion needs none
-//! of it to be applied. The index reports the row truthfully; the wire decides what a tombstone
-//! says.
+//! A `deleted` entry names what a **restore** needs and nothing more (#1192): its live metadata
+//! reference and its original, with `original_held` as for a live asset, and no derivative or
+//! derivative manifest. Trash is a signed delete restorable until its retention window closes,
+//! and a device that first sees the asset at its delete adopts it from those blobs and its
+//! records before it can sign the `trash-restore`; the serving path hands them to the asset's
+//! readers for exactly that window. Applying the deletion needs none of it. A purge drops every
+//! reference, so a purged entry names none, and a fetch of one named before the purge is a `410`
+//! once the window has closed and a `404` after the purge — never bytes about to be collected.
 //!
-//! It does carry its asset manifest, inline: the signed `delete` record that moved the asset to
+//! It also carries its asset manifest, inline: the signed `delete` record that moved the asset to
 //! trash. That is no byte reference, and it is what tells a client the asset's retention window,
 //! the `retention_until` after which a `trash-restore` is refused and the asset is purged. A
 //! purge drops the provenance blob, so the entry of a purged asset carries none, and says
@@ -172,8 +175,14 @@ pub struct SyncEntry {
     /// server-side log — when the index names a provenance blob the store cannot produce.
     pub manifest_cbor: Option<String>,
     /// The encrypted metadata blob's content address.
+    ///
+    /// On a tombstone, the asset's live metadata blob, which a restore needs; absent once a
+    /// purge has dropped it.
     pub metadata_blob: Option<String>,
     /// The asset's original and derivative blobs.
+    ///
+    /// On a tombstone, only its original, which a restore needs; empty once a purge has dropped
+    /// it.
     pub blobs: Vec<SyncBlobRef>,
     /// The asset's signed derivative manifests, each base64 of its `derivative_manifest`
     /// blob's exact bytes, in address order (#556).
@@ -185,6 +194,9 @@ pub struct SyncEntry {
     #[serde(default)]
     pub derivative_manifests: Vec<String>,
     /// Whether the original has landed. `false` is the derived `awaiting-original` state.
+    ///
+    /// On a tombstone, whether the original a restore needs is held; `false` once a purge has
+    /// dropped it.
     pub original_held: bool,
     /// Whether the asset has been purged: its retention window closed and the server dropped
     /// its references, so no `trash-restore` can bring it back (#885).
@@ -684,26 +696,23 @@ async fn render(sync: &SyncContext, entry: FeedEntry) -> SyncEntry {
         sync_seq: entry.sync_seq,
         change: entry.change.into(),
         manifest_cbor: manifest,
-        metadata_blob: if deleted {
-            None
-        } else {
-            entry.metadata.map(|address| address.to_string())
-        },
-        blobs: if deleted {
-            Vec::new()
-        } else {
-            entry
-                .blobs
-                .into_iter()
-                .map(|blob| SyncBlobRef {
-                    role: blob.role.into(),
-                    hash: blob.address.to_string(),
-                    size: blob.size,
-                })
-                .collect()
-        },
+        // On a tombstone too: the live metadata blob is what a device that first sees the asset
+        // at its delete opens the sidecar from. A purged row holds none, so its entry names none.
+        metadata_blob: entry.metadata.map(|address| address.to_string()),
+        blobs: entry
+            .blobs
+            .into_iter()
+            // A tombstone names only its original, the one blob a restore needs beyond its
+            // records and metadata; the restore's own entry names the derivatives again.
+            .filter(|blob| !deleted || blob.role == crate::store::BlobRole::Original)
+            .map(|blob| SyncBlobRef {
+                role: blob.role.into(),
+                hash: blob.address.to_string(),
+                size: blob.size,
+            })
+            .collect(),
         derivative_manifests,
-        original_held: !deleted && entry.original_held,
+        original_held: entry.original_held,
         purged: deleted && entry.purged,
         changed_at: entry.at.to_string(),
     }
