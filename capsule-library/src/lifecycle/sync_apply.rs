@@ -569,9 +569,12 @@ impl Workspace {
                     authority,
                     local_chain_head,
                 ) {
-                    // The record mirrors its manifest and names its asset (both checked
-                    // above), so its hash is the one the next record's link carries.
-                    let record_hash = record.record_hash();
+                    let record_hash = ProvenanceRecord::new(
+                        core.file_id,
+                        record.manifest.clone(),
+                        core.prior_provenance_hash,
+                    )
+                    .record_hash();
                     tracing::warn!(
                         asset_id = %core.file_id,
                         named_device = %core.created_by_device,
