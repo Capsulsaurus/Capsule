@@ -34,15 +34,18 @@ use super::{
     AcceptedEntry, AssetHead, Change, Committed, OverBudget, PulledAlbum, PulledAlbums, PulledBlob,
     ValidatedPage,
 };
+use crate::blob::ContentAddress;
 use crate::federation::PeerId;
 use crate::federation::capability::Scope;
 use crate::federation::pull::JobKey;
 use crate::federation::subscriptions::{CapabilityToken, Subscription, SubscriptionStore};
+use crate::gc::HeldBlobs;
 use crate::store::{AlbumId, StoreError, StoreFuture, UserId};
 
 /// What the suite reads besides the port: what a commit wrote that the port's own reads do not
-/// answer.
-pub trait Inspect: PulledAlbums {
+/// answer, and the claims the collector reads ([`HeldBlobs`], #1141), which every adapter
+/// must answer for.
+pub trait Inspect: PulledAlbums + HeldBlobs {
     /// Every entry written for `job`, in the order written.
     fn written_entries<'a>(&'a self, job: &'a JobKey) -> StoreFuture<'a, Vec<AcceptedEntry>>;
 
@@ -52,6 +55,44 @@ pub trait Inspect: PulledAlbums {
         job: &'a JobKey,
         hash: &'a Hash32,
     ) -> StoreFuture<'a, Option<Vec<u8>>>;
+}
+
+/// The double holds a blob while any job it keeps carries it: the same answer the durable
+/// adapter's `EXISTS` gives (#1141). Beside [`Inspect`] because both read the double's held
+/// state through its lock; the double keeps its blobs in memory rather than in a blob store, so
+/// the claim is what `serve`'s in-memory arm hands its collector.
+impl HeldBlobs for super::InMemoryPulledAlbums {
+    fn holds<'a>(&'a self, address: &'a ContentAddress) -> StoreFuture<'a, bool> {
+        Box::pin(async move {
+            // A content address is a digest's hex, so one that is not a digest names no blob
+            // this double could hold.
+            let Ok(hash) = Hash32::from_hex(address.as_str()) else {
+                return Ok(false);
+            };
+            Ok(self
+                .lock()
+                .values()
+                .any(|held| held.metadata_blobs.contains_key(&hash)))
+        })
+    }
+
+    /// No exclusion is needed, so none is taken: the double keeps a page's metadata blobs in
+    /// its own map and never puts them in the collector's blob store, and its commit lands
+    /// whole under its one mutex, so there is no put-before-claim window for a sweep to fall
+    /// into and nothing the collector removes can be bytes a commit names.
+    fn sweep_unless_held<'a>(
+        &'a self,
+        address: &'a ContentAddress,
+        sweep: StoreFuture<'a, ()>,
+    ) -> StoreFuture<'a, bool> {
+        Box::pin(async move {
+            if self.holds(address).await? {
+                return Ok(true);
+            }
+            sweep.await?;
+            Ok(false)
+        })
+    }
 }
 
 /// Unwrap a store result, failing with the operation that was expected to work.
@@ -142,6 +183,72 @@ pub async fn run_all(store: &dyn Inspect) {
     a_restart_forgets_the_position_and_keeps_the_heads(store).await;
     a_later_state_replaces_the_earlier_one(store).await;
     jobs_are_kept_apart(store).await;
+    a_held_metadata_blob_is_a_reference_the_collector_reads(store).await;
+}
+
+/// `bytes` as the content address the blob store keeps them at.
+fn address_of(bytes: &[u8]) -> ContentAddress {
+    ContentAddress::parse(&hash_bytes(bytes).to_hex()).expect("a digest is an address")
+}
+
+/// [`HeldBlobs::holds`] answers for every job at once, from the instant a commit holds a blob,
+/// across a restart, and never for a blob only a refused page carried (#1141).
+async fn a_held_metadata_blob_is_a_reference_the_collector_reads(store: &dyn Inspect) {
+    let held = b"held/a metadata blob a pulled page carried".to_vec();
+    let refused = b"held/a metadata blob only a stale page carried".to_vec();
+    let never = b"held/bytes no page ever carried".to_vec();
+    assert!(
+        !ok(store.holds(&address_of(&held)).await, "asking about a blob"),
+        "nothing is held before a page carries it"
+    );
+
+    let first = job("held", "home", "a");
+    let mut carrying = page(1, Vec::new());
+    carrying
+        .metadata_blobs
+        .insert(hash_bytes(&held), held.clone());
+    assert!(wrote(
+        store.commit(&first, None, carrying).await,
+        "a commit"
+    ));
+    assert!(
+        ok(store.holds(&address_of(&held)).await, "asking about a blob"),
+        "a committed page's metadata blob is held"
+    );
+    assert!(
+        !ok(
+            store.holds(&address_of(&never)).await,
+            "asking about a blob"
+        ),
+        "a blob no page carried is not held"
+    );
+
+    let mut stale = page(9, Vec::new());
+    stale
+        .metadata_blobs
+        .insert(hash_bytes(&refused), refused.clone());
+    assert!(!wrote(
+        store.commit(&first, Some(7), stale).await,
+        "a commit from a position the album never reached"
+    ));
+    assert!(
+        !ok(
+            store.holds(&address_of(&refused)).await,
+            "asking about a blob"
+        ),
+        "a blob only a refused page carried is not held"
+    );
+
+    // A second job holding the same blob: the answer is per address, not per job.
+    let second = job("held", "elsewhere", "a");
+    let mut again = page(1, Vec::new());
+    again.metadata_blobs.insert(hash_bytes(&held), held.clone());
+    assert!(wrote(store.commit(&second, None, again).await, "a commit"));
+    ok(store.restart(&first).await, "a restart");
+    assert!(
+        ok(store.holds(&address_of(&held)).await, "asking about a blob"),
+        "a restart keeps the held blobs, so they stay references"
+    );
 }
 
 async fn an_album_never_pulled_reads_as_the_start(store: &dyn Inspect) {

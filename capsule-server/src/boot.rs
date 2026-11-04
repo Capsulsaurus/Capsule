@@ -104,7 +104,7 @@ use crate::federation::{
 };
 use crate::gc::memory::InMemoryCollection;
 use crate::gc::postgres::PostgresCollection;
-use crate::gc::{CollectionContext, CollectionStore};
+use crate::gc::{CollectionContext, CollectionStore, HeldBlobs};
 use crate::index::AssetIndex;
 use crate::index::memory::InMemoryAssetIndex;
 use crate::index::postgres::PostgresAssetIndex;
@@ -598,6 +598,10 @@ struct Stores {
     /// blobs (#1124). Here rather than in [`Ports`] because the durable adapter keeps its blobs
     /// in [`Stores::blobs`].
     pulled: Arc<dyn PulledAlbums>,
+    /// The same store as [`Self::pulled`], as the claims the collector and the scrub count as
+    /// references (#1141): a pulled metadata blob has no asset row, so a collector not handed
+    /// these would sweep it from [`Stores::blobs`] once the grace window passed.
+    held: Arc<dyn HeldBlobs>,
     /// The bounded soft-fail table the pull worker remembers each refused stale revival in
     /// (#1157): durable, so Postgres on the durable arm.
     rejected: Arc<dyn RejectedHashes>,
@@ -643,7 +647,10 @@ impl Stores {
         )))
         // An account that stopped recording keeps its expired activity rows until a sweep
         // deletes them, so `gc --apply` does (#1112).
-        .with_activity_sweep(self.activity.clone());
+        .with_activity_sweep(self.activity.clone())
+        // The pull worker writes pulled metadata blobs into the same blob store, and no asset
+        // row names them, so the collector must count the pulled albums' claims (#1141).
+        .with_held_blobs(self.held.clone());
         if let Some(attestation) = purge_signer {
             collection = collection.with_attestation(attestation);
         }
@@ -660,7 +667,8 @@ impl Stores {
                 self.shares.clone(),
                 self.clock.clone(),
             )
-            .with_ledger(self.ledger.clone(), keys.clone()),
+            .with_ledger(self.ledger.clone(), keys.clone())
+            .with_held_blobs(self.held.clone()),
             rebuild: RebuildContext::new(
                 self.index.clone(),
                 self.blobs.clone(),
@@ -758,6 +766,9 @@ impl Base {
     /// (#693), so the attestation context must be built over the same log.
     fn in_memory(self, receipts: Arc<InMemoryReceipts>) -> Stores {
         let subscriptions = Arc::new(InMemorySubscriptions::new());
+        let pulled = Arc::new(
+            InMemoryPulledAlbums::new().with_budget(subscriptions.clone(), self.pulled_budget),
+        );
         Stores {
             index: Arc::new(InMemoryAssetIndex::with_receipts(receipts)),
             uploads: Arc::new(InMemoryUploadSessions::with_default_ttl(self.clock.clone())),
@@ -766,9 +777,8 @@ impl Base {
             shares: Arc::new(InMemoryShares::new()),
             capabilities: Arc::new(InMemoryCapabilities::new(self.clock.clone())),
             peers: Arc::new(InMemoryPeers::new()),
-            pulled: Arc::new(
-                InMemoryPulledAlbums::new().with_budget(subscriptions.clone(), self.pulled_budget),
-            ),
+            pulled: pulled.clone(),
+            held: pulled,
             subscriptions,
             rejected: Arc::new(InMemoryRejectedHashes::new(self.rejected_bounds)),
             moderation: Arc::new(InMemoryModeration::new()),
@@ -782,6 +792,10 @@ impl Base {
 
     /// The shared stores on Postgres, and the upload sessions on Valkey.
     fn durable(self, connection: &DatabaseConnection, valkey: &ValkeyStores) -> Stores {
+        let pulled = Arc::new(
+            PostgresPulledAlbums::new(connection.clone(), self.blobs.clone())
+                .with_charge(Arc::new(PeerBudgetCharge::new(self.pulled_budget))),
+        );
         Stores {
             index: Arc::new(PostgresAssetIndex::new(connection.clone())),
             uploads: valkey.uploads(),
@@ -794,10 +808,8 @@ impl Base {
             )),
             peers: Arc::new(PostgresPeers::new(connection.clone())),
             subscriptions: Arc::new(PostgresSubscriptions::new(connection.clone())),
-            pulled: Arc::new(
-                PostgresPulledAlbums::new(connection.clone(), self.blobs.clone())
-                    .with_charge(Arc::new(PeerBudgetCharge::new(self.pulled_budget))),
-            ),
+            pulled: pulled.clone(),
+            held: pulled,
             rejected: Arc::new(PostgresRejectedHashes::new(
                 connection.clone(),
                 self.rejected_bounds,

@@ -359,6 +359,38 @@ mod postgres_conformance {
         super::a_new_pulled_blob_is_refused_at_a_zero_budget(&stores).await;
     }
 
+    /// `serve`'s and `gc`'s durable arm counts the pulled albums' claims (#1141): the page's
+    /// blob lands in the blob root through the durable adapter, and the collector over the same
+    /// database keeps it past the grace window.
+    #[tokio::test]
+    async fn the_durable_collector_keeps_the_blobs_pulled_albums_hold() {
+        let Some(database) = testing::start("the durable collector and pulled albums").await else {
+            return;
+        };
+        let Some((valkey_url, _valkey)) = valkey("the durable collector and pulled albums").await
+        else {
+            return;
+        };
+        let root = tempfile::tempdir().expect("a scratch directory");
+        let mut environment: BTreeMap<String, String> = durable_environment(root.path());
+        environment.insert("DATABASE_URL".to_owned(), database.url().to_owned());
+        environment.insert("VALKEY_URL".to_owned(), valkey_url);
+        let config = Config::load(&environment, &Overrides::default(), Demands::Serve)
+            .expect("it is well-formed");
+        let clock = std::sync::Arc::new(crate::store::memory::ManualClock::new(
+            jiff::Timestamp::now(),
+        ));
+        let base = super::super::base(&config, clock.clone())
+            .await
+            .expect("the base opens");
+        let connection = super::super::open_durable_database(&config)
+            .await
+            .expect("the database opens");
+        let valkey = super::super::valkey(&config).await.expect("Valkey answers");
+        let stores = base.durable(&connection, &valkey);
+        super::a_pulled_blob_outlives_the_assembled_collector(&stores, &clock).await;
+    }
+
     /// A durable `gc` keeps its marks between processes, so a later pass can sweep.
     ///
     /// The reason the maintenance arm exists: the collector marks a blob on one pass and
@@ -745,6 +777,109 @@ async fn a_new_pulled_blob_is_refused_at_a_zero_budget(stores: &super::Stores) {
         PulledAlbum::default(),
         "the refused page moved nothing"
     );
+}
+
+/// The bytes [`a_pulled_blob_outlives_the_assembled_collector`] pulls.
+const PULLED_METADATA: &[u8] = b"a pulled metadata blob the assembled collector must keep";
+
+/// Assert the collector and the scrub `stores` assemble — the ones `serve` and `gc` run — keep
+/// a pulled page's metadata blob in the blob root past the grace window (#1141), while sweeping
+/// an orphan beside it. The page carries [`PULLED_METADATA`], which must already be in the blob
+/// root once the commit returns; `clock` is the stores' own.
+async fn a_pulled_blob_outlives_the_assembled_collector(
+    stores: &super::Stores,
+    clock: &ManualClock,
+) {
+    use crate::blob::{BlobStore as _, ContentAddress};
+    use crate::federation::PeerId;
+    use crate::federation::pull::JobKey;
+    use crate::federation::pull::pulled::{Committed, PulledAlbum, ValidatedPage};
+    use crate::gc::{DEFAULT_GRACE_WINDOW, Mode, collect};
+    use crate::store::AlbumId;
+
+    let hash = capsule_core::crypto::hash::hash_bytes(PULLED_METADATA);
+    let job = JobKey::new(PeerId::new("home.test"), AlbumId::new("held"));
+    let page = ValidatedPage {
+        entries: Vec::new(),
+        metadata_blobs: BTreeMap::from([(hash, PULLED_METADATA.to_vec())]),
+        state: PulledAlbum {
+            cursor: Some("c1".to_owned()),
+            high_water: Some(1),
+            ..PulledAlbum::default()
+        },
+    };
+    assert_eq!(
+        stores
+            .pulled
+            .commit(&job, None, page)
+            .await
+            .expect("the commit is answered"),
+        Committed::Written
+    );
+    let held = ContentAddress::parse(&hash.to_hex()).expect("an address");
+    let orphan_bytes = b"an orphan beside the pulled blob";
+    let orphan =
+        ContentAddress::parse(&capsule_core::crypto::hash::hash_bytes(orphan_bytes).to_hex())
+            .expect("an address");
+    stores
+        .blobs
+        .put(&orphan, orphan_bytes)
+        .await
+        .expect("the orphan is stored");
+
+    let maintenance = stores.maintenance(
+        DEFAULT_GRACE_WINDOW,
+        crate::ledger::replay::LedgerKeys::default(),
+        None,
+    );
+    let report = collect(&maintenance.collection, Mode::Apply)
+        .await
+        .expect("a pass");
+    assert_eq!(report.marked, vec![orphan.clone()], "{report:?}");
+    clock.advance(jiff::SignedDuration::from_hours(72));
+    let report = collect(&maintenance.collection, Mode::Apply)
+        .await
+        .expect("a pass past the window");
+    assert_eq!(report.swept, vec![orphan], "{report:?}");
+    assert!(
+        stores.blobs.stat(&held).await.expect("stat").is_some(),
+        "the assembled collector must count the pulled albums' claims"
+    );
+    let scrubbed = crate::scrub::scrub(&maintenance.scrub, crate::scrub::Depth::Structural)
+        .await
+        .expect("a scrub pass");
+    assert_eq!(
+        scrubbed.count("orphan"),
+        0,
+        "and so must the assembled scrub: {:?}",
+        scrubbed.findings
+    );
+}
+
+/// `serve`'s and `gc`'s in-memory arm counts the pulled albums' claims (#1141).
+#[tokio::test]
+async fn the_in_memory_collector_keeps_the_blobs_pulled_albums_hold() {
+    use crate::blob::BlobStore as _;
+
+    let root = tempfile::tempdir().expect("a scratch directory");
+    let config = memory_config(root.path());
+    let clock = std::sync::Arc::new(ManualClock::new(jiff::Timestamp::now()));
+    let stores = super::base(&config, clock.clone())
+        .await
+        .expect("the base opens")
+        .in_memory(std::sync::Arc::new(super::InMemoryReceipts::new()));
+    // The in-memory pulled albums keep their blobs in memory; put the bytes in the blob root
+    // as the durable adapter does, so the collector has something to sweep.
+    let address = crate::blob::ContentAddress::parse(
+        &capsule_core::crypto::hash::hash_bytes(PULLED_METADATA).to_hex(),
+    )
+    .expect("an address");
+    stores
+        .blobs
+        .put(&address, PULLED_METADATA)
+        .await
+        .expect("stored");
+    a_pulled_blob_outlives_the_assembled_collector(&stores, &clock).await;
 }
 
 /// The in-memory arm's pulled albums are assembled with the configured caching budget.

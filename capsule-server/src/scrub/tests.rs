@@ -390,6 +390,50 @@ async fn a_blob_a_live_share_link_serves_is_not_an_orphan() {
     assert_eq!(report.findings, vec![Finding::Orphan { address: expiring }]);
 }
 
+/// A pulled album's held metadata blob is not an orphan, on the collector's terms (#1141).
+#[tokio::test]
+async fn a_blob_a_pulled_album_holds_is_not_an_orphan() {
+    use crate::federation::pull::PulledAlbums as _;
+    use crate::federation::pull::pulled::{Committed, PulledAlbum, ValidatedPage};
+
+    let h = Harness::new();
+    let bytes = b"a pulled album's metadata blob";
+    let held = h.store(bytes).await;
+    let pulled = Arc::new(crate::federation::pull::InMemoryPulledAlbums::new());
+    let job = crate::federation::pull::JobKey::new(
+        crate::federation::PeerId::new("home.scrub.test"),
+        crate::store::AlbumId::new("pulled"),
+    );
+    let page = ValidatedPage {
+        entries: Vec::new(),
+        metadata_blobs: std::collections::BTreeMap::from([(
+            capsule_core::crypto::hash::hash_bytes(bytes),
+            bytes.to_vec(),
+        )]),
+        state: PulledAlbum {
+            cursor: Some("c1".to_owned()),
+            high_water: Some(1),
+            ..PulledAlbum::default()
+        },
+    };
+    assert_eq!(
+        pulled.commit(&job, None, page).await.expect("a commit"),
+        Committed::Written
+    );
+
+    let report = scrub(&h.context, Depth::Structural).await.expect("a pass");
+    assert_eq!(
+        report.findings,
+        vec![Finding::Orphan {
+            address: held.clone()
+        }],
+        "a scrub not given the claims reports it"
+    );
+    let context = h.context.clone().with_held_blobs(pulled);
+    let report = scrub(&context, Depth::Structural).await.expect("a pass");
+    assert!(report.is_clean(), "{:?}", report.findings);
+}
+
 #[tokio::test]
 async fn bit_rot_is_found_only_by_a_deep_pass() {
     let h = Harness::new();
