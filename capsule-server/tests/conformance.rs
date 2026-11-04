@@ -191,6 +191,14 @@ async fn every_declared_response_is_exercised() {
         ("POST", "/v1/federation/subscriptions"),
         ("GET", "/v1/federation/subscriptions"),
         ("DELETE", "/v1/federation/subscriptions/anything/anything"),
+        (
+            "GET",
+            "/v1/federation/subscriptions/anything/anything/assets",
+        ),
+        (
+            "GET",
+            "/v1/federation/subscriptions/anything/anything/assets/anything/metadata",
+        ),
         ("GET", "/v1/quota"),
         ("GET", "/v1/upload/sessions"),
         ("GET", "/v1/assets/anything/receipts"),
@@ -1459,6 +1467,14 @@ async fn every_declared_response_is_exercised() {
         (
             kynos::http::Method::DELETE,
             "/v1/federation/subscriptions/anything/anything".to_owned(),
+        ),
+        (
+            kynos::http::Method::GET,
+            "/v1/federation/subscriptions/anything/anything/assets".to_owned(),
+        ),
+        (
+            kynos::http::Method::GET,
+            "/v1/federation/subscriptions/anything/anything/assets/anything/metadata".to_owned(),
         ),
     ] {
         let refused = client
@@ -3526,6 +3542,105 @@ async fn every_declared_response_is_exercised() {
             .assert_status(StatusCode::OK)
             .json();
         assert_eq!(listed["subscriptions"][0]["album_id"], SUBSCRIBED_ALBUM);
+
+        // What was pulled for the subscription: 401, 403, 500 a subscription store that could
+        // not answer, 404 an album the caller does not subscribe to, then 200 — the listing of
+        // an album nothing was pulled for yet, and the metadata blob of an asset a page
+        // committed.
+        {
+            use capsule_core::crypto::hash::hash_bytes;
+            use capsule_server::federation::pull::PulledAlbums as _;
+            use capsule_server::federation::pull::pulled::{
+                AcceptedEntry, Change, PulledAlbum, ValidatedPage,
+            };
+
+            let assets = format!("/v1/federation/subscriptions/{HOME}/{SUBSCRIBED_ALBUM}/assets");
+            let metadata = format!("{assets}/pulled-asset/metadata");
+            let foreign = format!("/v1/federation/subscriptions/{HOME}/not-subscribed/assets");
+            for path in [&assets, &metadata] {
+                client
+                    .get(path)
+                    .send()
+                    .await
+                    .assert_status(StatusCode::UNAUTHORIZED);
+                client
+                    .get(path)
+                    .header("authorization", &refresh_bearer)
+                    .send()
+                    .await
+                    .assert_status(StatusCode::FORBIDDEN);
+                fixture.subscriptions.set_unavailable(true);
+                client
+                    .get(path)
+                    .header("authorization", &bearer)
+                    .send()
+                    .await
+                    .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+                fixture.subscriptions.set_unavailable(false);
+            }
+            for path in [foreign.clone(), format!("{foreign}/pulled-asset/metadata")] {
+                client
+                    .get(&path)
+                    .header("authorization", &bearer)
+                    .header("accept", "application/json")
+                    .send()
+                    .await
+                    .assert_status(StatusCode::NOT_FOUND);
+            }
+            client
+                .get(&assets)
+                .header("authorization", &bearer)
+                .header("accept", "application/json")
+                .send()
+                .await
+                .assert_status(StatusCode::OK);
+
+            let sealed = b"a sealed metadata blob".to_vec();
+            let committed = fixture
+                .pulled
+                .commit(
+                    &capsule_server::federation::pull::JobKey::new(
+                        PeerId::new(HOME),
+                        capsule_server::store::AlbumId::new(SUBSCRIBED_ALBUM),
+                    ),
+                    None,
+                    ValidatedPage {
+                        entries: vec![AcceptedEntry {
+                            asset_id: "pulled-asset".to_owned(),
+                            sync_seq: 1,
+                            change: Change::Created,
+                            changed_at: fixture.now(),
+                            manifest: Some(b"a record".to_vec()),
+                            head: Some(hash_bytes(b"a record")),
+                            metadata_blob: Some(hash_bytes(&sealed)),
+                            blobs: Vec::new(),
+                            derivative_manifests: Vec::new(),
+                            original_held: true,
+                            purged: false,
+                        }],
+                        metadata_blobs: [(hash_bytes(&sealed), sealed.clone())].into(),
+                        state: PulledAlbum {
+                            cursor: Some("c1".to_owned()),
+                            high_water: Some(1),
+                            ..PulledAlbum::default()
+                        },
+                    },
+                )
+                .await
+                .expect("the store commits");
+            assert_eq!(
+                committed,
+                capsule_server::federation::pull::pulled::Committed::Written
+            );
+            let served = client
+                .get(&metadata)
+                .header("authorization", &bearer)
+                .header("accept", "application/octet-stream")
+                .send()
+                .await;
+            served.assert_status(StatusCode::OK);
+            assert_eq!(served.bytes().as_ref(), sealed.as_slice());
+        }
 
         let unsubscribe = format!("/v1/federation/subscriptions/{HOME}/{SUBSCRIBED_ALBUM}");
         client

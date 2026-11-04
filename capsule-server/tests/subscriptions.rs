@@ -434,4 +434,232 @@ async fn a_deployment_that_does_not_federate_takes_no_subscription() {
     );
     let jobs = SubscriptionJobs::new(fixture.subscriptions.clone(), fixture.clock.clone());
     assert!(jobs.jobs().await.expect("the source lists").is_empty());
+    for path in [
+        format!("/v1/federation/subscriptions/{HOME}/{ALBUM}/assets"),
+        format!("/v1/federation/subscriptions/{HOME}/{ALBUM}/assets/a/metadata"),
+    ] {
+        assert_eq!(
+            code(read(&fixture, &bearer, &path).await, StatusCode::NOT_FOUND),
+            "error.federation.not_configured",
+            "{path}"
+        );
+    }
+}
+
+// ── What a subscriber reads of a pulled album (#1160) ───────────────────────────────────
+
+/// The pulled album's asset ids, in the byte order the listing answers them in.
+const PULLED: [&str; 3] = [
+    "01937b7c-0000-7000-8000-00000000a001",
+    "01937b7c-0000-7000-8000-00000000a002",
+    "01937b7c-0000-7000-8000-00000000a003",
+];
+
+/// The metadata blob [`PULLED`]`[index]` carries.
+fn metadata(index: usize) -> Vec<u8> {
+    format!("sealed metadata of asset {index}").into_bytes()
+}
+
+/// `GET path` as `bearer`.
+async fn read(fixture: &Fixture, bearer: &str, path: &str) -> kynos::test::TestResponse {
+    fixture
+        .client
+        .get(path)
+        .header("authorization", bearer)
+        .header("accept", "application/json, application/octet-stream")
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .send()
+        .await
+}
+
+/// The listing of [`ALBUM`]'s pulled assets with `query`, as `bearer`.
+async fn pulled_assets(fixture: &Fixture, bearer: &str, query: &str) -> Value {
+    read(
+        fixture,
+        bearer,
+        &format!("/v1/federation/subscriptions/{HOME}/{ALBUM}/assets{query}"),
+    )
+    .await
+    .assert_status(StatusCode::OK)
+    .json()
+}
+
+/// The asset ids a listing answered.
+fn ids(listing: &Value) -> Vec<&str> {
+    listing["assets"]
+        .as_array()
+        .expect("a list")
+        .iter()
+        .map(|asset| asset["asset_id"].as_str().expect("an id"))
+        .collect()
+}
+
+/// Commit one page pulling [`ALBUM`] from [`HOME`]: every [`PULLED`] asset created with its
+/// metadata blob, and then the last one deleted, as the pull worker commits what it validated.
+async fn pull_album(fixture: &Fixture) {
+    use capsule_core::crypto::hash::hash_bytes;
+    use capsule_server::federation::pull::PulledAlbums as _;
+    use capsule_server::federation::pull::pulled::{
+        AcceptedEntry, Change, Committed, PulledAlbum, ValidatedPage,
+    };
+
+    let entry = |index: usize, sync_seq: u64| {
+        let asset = uuid::Uuid::parse_str(PULLED[index]).expect("a uuid");
+        let manifest = support::signed_create(
+            &fixture.clock,
+            asset,
+            format!("original {index}").as_bytes(),
+            &metadata(index),
+        );
+        AcceptedEntry {
+            asset_id: PULLED[index].to_owned(),
+            sync_seq,
+            change: Change::Created,
+            changed_at: fixture.now(),
+            head: Some(hash_bytes(&manifest)),
+            manifest: Some(manifest),
+            metadata_blob: Some(hash_bytes(&metadata(index))),
+            blobs: Vec::new(),
+            derivative_manifests: Vec::new(),
+            original_held: true,
+            purged: false,
+        }
+    };
+    let mut entries: Vec<AcceptedEntry> = (0..PULLED.len())
+        .map(|index| entry(index, index as u64 + 1))
+        .collect();
+    let mut deleted = entry(2, 4);
+    deleted.change = Change::Deleted;
+    entries.push(deleted);
+    let page = ValidatedPage {
+        entries,
+        metadata_blobs: (0..PULLED.len())
+            .map(|index| (hash_bytes(&metadata(index)), metadata(index)))
+            .collect(),
+        state: PulledAlbum {
+            cursor: Some("c4".to_owned()),
+            high_water: Some(4),
+            ..PulledAlbum::default()
+        },
+    };
+    let job = JobKey::new(PeerId::new(HOME), AlbumId::new(ALBUM));
+    assert_eq!(
+        fixture
+            .pulled
+            .commit(&job, None, page)
+            .await
+            .expect("the store commits"),
+        Committed::Written
+    );
+}
+
+#[tokio::test]
+async fn a_subscriber_lists_its_pulled_album_and_fetches_each_assets_metadata() {
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let codec = home(&fixture, HOME);
+    pin(&fixture, &codec).await;
+    subscribe(&fixture, &bearer, HOME, &invite(&codec, SERVER_ORIGIN, 6))
+        .await
+        .assert_status(StatusCode::CREATED);
+
+    let empty = pulled_assets(&fixture, &bearer, "").await;
+    assert_eq!(
+        empty,
+        json!({ "peer": HOME, "album_id": ALBUM, "assets": [], "next_after": null }),
+        "a subscription nothing was pulled for yet is an empty album, not a refusal"
+    );
+
+    pull_album(&fixture).await;
+    let listing = pulled_assets(&fixture, &bearer, "").await;
+    assert_eq!(
+        ids(&listing),
+        PULLED[..2],
+        "the deleted asset is not listed"
+    );
+    assert_eq!(listing["next_after"], Value::Null, "{listing:#}");
+    let first = &listing["assets"][0];
+    assert_eq!(first["size"], "original 0".len());
+    assert_eq!(first["author"], support::user().as_str());
+    assert_eq!(first["timestamp"], fixture.now().to_string());
+    assert_eq!(first["head"].as_str().map(str::len), Some(64), "{first}");
+
+    // A page at a time, resumed from the `next_after` each page answers.
+    let page = pulled_assets(&fixture, &bearer, "?limit=1").await;
+    assert_eq!(ids(&page), [PULLED[0]]);
+    assert_eq!(page["next_after"], PULLED[0]);
+    let page = pulled_assets(&fixture, &bearer, &format!("?limit=1&after={}", PULLED[0])).await;
+    assert_eq!(ids(&page), [PULLED[1]]);
+    let page = pulled_assets(&fixture, &bearer, &format!("?limit=1&after={}", PULLED[1])).await;
+    assert!(ids(&page).is_empty());
+    assert_eq!(page["next_after"], Value::Null, "the end of the album");
+
+    for (index, asset) in PULLED[..2].iter().enumerate() {
+        let path = format!("/v1/federation/subscriptions/{HOME}/{ALBUM}/assets/{asset}/metadata");
+        let served = read(&fixture, &bearer, &path).await;
+        served.assert_status(StatusCode::OK);
+        assert_eq!(served.bytes().as_ref(), metadata(index).as_slice());
+    }
+    for asset in [PULLED[2], "never-pulled"] {
+        let path = format!("/v1/federation/subscriptions/{HOME}/{ALBUM}/assets/{asset}/metadata");
+        assert_eq!(
+            code(read(&fixture, &bearer, &path).await, StatusCode::NOT_FOUND),
+            "error.federation.album_not_found",
+            "a deleted asset and one never pulled have no metadata: {asset}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_pulled_album_reads_only_for_its_subscribers_and_says_nothing_to_anyone_else() {
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let other = fixture.other_bearer(OTHER_MEMBER).await;
+    let codec = home(&fixture, HOME);
+    pin(&fixture, &codec).await;
+    subscribe(&fixture, &bearer, HOME, &invite(&codec, SERVER_ORIGIN, 1))
+        .await
+        .assert_status(StatusCode::CREATED);
+    pull_album(&fixture).await;
+
+    let listing = format!("/v1/federation/subscriptions/{HOME}/{ALBUM}/assets");
+    let blob = format!("{listing}/{}/metadata", PULLED[0]);
+    let never =
+        format!("/v1/federation/subscriptions/{HOME}/01937b7c-0000-7000-8000-00000000dead/assets");
+    let refusal = |response: kynos::test::TestResponse| {
+        let mut body: Value = response.assert_status(StatusCode::NOT_FOUND).json();
+        body.as_object_mut().map(|body| body.remove("request_id"));
+        body
+    };
+    // Another member: the album was pulled, but not for them. The same answer as an album
+    // nobody ever pulled, so the read cannot tell them what this member subscribed to.
+    let unsubscribed = refusal(read(&fixture, &other, &listing).await);
+    assert_eq!(unsubscribed["code"], "error.federation.album_not_found");
+    assert_eq!(unsubscribed, refusal(read(&fixture, &other, &never).await));
+    assert_eq!(unsubscribed, refusal(read(&fixture, &other, &blob).await));
+    assert_eq!(unsubscribed, refusal(read(&fixture, &bearer, &never).await));
+
+    // A lapsed subscription still reads what its pulls committed.
+    fixture.clock.advance(SignedDuration::from_hours(2));
+    let bearer = fixture.bearer().await;
+    assert_eq!(listed(&fixture, &bearer).await[0]["live"], false);
+    assert_eq!(
+        ids(&pulled_assets(&fixture, &bearer, "").await),
+        PULLED[..2]
+    );
+
+    // Unsubscribing ends the reads; what was pulled is untouched for any other subscriber.
+    fixture
+        .client
+        .delete(&format!("/v1/federation/subscriptions/{HOME}/{ALBUM}"))
+        .header("authorization", &bearer)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(
+        unsubscribed,
+        refusal(read(&fixture, &bearer, &listing).await)
+    );
+    assert_eq!(unsubscribed, refusal(read(&fixture, &bearer, &blob).await));
 }

@@ -20,7 +20,27 @@
 //! 204 (idempotent)
 //! 404 error.federation.not_configured
 //! 500 error.federation.unavailable
+//!
+//! GET    /v1/federation/subscriptions/{peer}/{album_id}/assets?after=&limit=
+//! 200 { peer, album_id, assets: [ { asset_id, head, timestamp, author, size } ], next_after }
+//! 404 error.federation.not_configured | error.federation.album_not_found
+//! 500 error.federation.unavailable
+//!
+//! GET    /v1/federation/subscriptions/{peer}/{album_id}/assets/{asset_id}/metadata
+//! 200 application/octet-stream
+//! 404 error.federation.not_configured | error.federation.album_not_found
+//! 500 error.federation.unavailable
 //! ```
+//!
+//! # What a subscriber reads of a pulled album
+//!
+//! The two `assets` reads are how a member's client renders an album its server pulled for it:
+//! its assets as their breadcrumbs, and each asset's encrypted metadata blob, both read through
+//! [`PulledAlbumReads`](crate::federation::pull::pulled::PulledAlbumReads) from what a pull
+//! committed and nothing else. Only a subscriber reads: an album the caller holds no
+//! subscription to answers `404 error.federation.album_not_found` whether or not another member
+//! subscribed to it and whatever was pulled for them, so the reads cannot be used to learn
+//! another account's subscriptions. An asset with no metadata to serve is the same answer.
 //!
 //! # The receiving half of Token Lifecycle step 1
 //!
@@ -54,11 +74,13 @@
 //! # Gated like the rest of federation
 //!
 //! Mounted behind [`FederationGate`](super::federation::FederationGate), the first interceptor
-//! of the two writes' group and of the list's own read group: a deployment that does not
-//! federate answers all three `404 error.federation.not_configured` before the session is
-//! authenticated, and pulls nothing.
+//! of the two writes' group and of the reads' own group: a deployment that does not federate
+//! answers all five `404 error.federation.not_configured` before the session is authenticated,
+//! and pulls nothing.
 
 use capsule_i18n::error_codes;
+use kynos::extract::body::binary::Binary;
+use kynos::http::media::OctetStream;
 use kynos::prelude::*;
 use kynos::response::status::NoContent;
 use kynos::security::auth::Auth;
@@ -66,6 +88,8 @@ use serde::{Deserialize, Serialize};
 
 use super::federation::{FederationTag, WireScope};
 use crate::auth::AccessToken;
+use crate::federation::breadcrumbs::{Breadcrumb, MAX_BREADCRUMB_PAGE};
+use crate::federation::pull::JobKey;
 use crate::federation::subscriptions::{MAX_CAPABILITY_BYTES, MAX_SUBSCRIPTIONS_PER_ACCOUNT};
 use crate::federation::{
     CapabilityError, CapabilityToken, FederationContext, PeerId, PutOutcome, Subscription,
@@ -414,6 +438,235 @@ pub async fn unsubscribe_album(
         })?;
     tracing::info!(%subscriber, %peer, %album, removed, "a member unsubscribed from a federated album");
     Ok(NoContent)
+}
+
+/// How many assets a page of a pulled album answers when the caller names no `limit`.
+pub const DEFAULT_PULLED_ASSETS_PAGE: u32 = 100;
+
+/// The page a pulled album's assets are asked for in.
+#[derive(Schema, QueryParams, Debug)]
+pub struct PulledAssetsQuery {
+    /// Resume after this asset id: the `next_after` the previous page answered. Absent starts
+    /// from the first asset.
+    pub after: Option<String>,
+    /// How many assets to answer: 100 when absent, and clamped into 1 to 1,000.
+    pub limit: Option<u32>,
+}
+
+/// One asset of a pulled album: its breadcrumb, built from the latest entry this server's pull
+/// accepted for it.
+#[derive(Schema, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct PulledAssetView {
+    /// The asset, as its home server names it.
+    pub asset_id: String,
+    /// Its chain head: the hash of its latest accepted provenance record, lowercase hex.
+    pub head: String,
+    /// When the head record says it was written, RFC 3339. Self-asserted by its author.
+    pub timestamp: String,
+    /// The account that wrote the head record, on the album's home server.
+    pub author: String,
+    /// The asset's plaintext size in bytes.
+    pub size: u64,
+}
+
+impl PulledAssetView {
+    fn of(breadcrumb: &Breadcrumb) -> Self {
+        Self {
+            asset_id: breadcrumb.asset_id.clone(),
+            head: breadcrumb.hash.to_hex(),
+            timestamp: breadcrumb.timestamp.to_string(),
+            author: breadcrumb.author.to_string(),
+            size: breadcrumb.size,
+        }
+    }
+}
+
+/// A page of the assets this server pulled for one of the caller's subscriptions.
+#[derive(Schema, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct PulledAssetsResponse {
+    /// The album's home server.
+    pub peer: String,
+    /// The album, as its home server names it.
+    pub album_id: String,
+    /// The album's live assets after `after`, by asset id in byte order. Deleted and purged
+    /// assets are not listed.
+    pub assets: Vec<PulledAssetView>,
+    /// The `after` that asks for the next page; absent once a page came back short, so the
+    /// album has been listed to its end.
+    pub next_after: Option<String>,
+}
+
+/// One of the caller's pulled albums.
+#[derive(PathParams, Schema)]
+pub struct PulledAlbumPath {
+    /// The album's home server.
+    pub peer: String,
+    /// The album, as its home server names it.
+    pub album_id: String,
+}
+
+/// One asset of one of the caller's pulled albums.
+#[derive(PathParams, Schema)]
+pub struct PulledAssetPath {
+    /// The album's home server.
+    pub peer: String,
+    /// The album, as its home server names it.
+    pub album_id: String,
+    /// The asset, as its home server names it.
+    pub asset_id: String,
+}
+
+/// Why a pulled album could not be read.
+#[derive(Debug, thiserror::Error, ApiError)]
+pub enum PulledAlbumRejection {
+    /// The caller holds no subscription to this album, or, for one asset, the album holds no
+    /// live asset by that id with a metadata blob. One answer for every case, so the route
+    /// never tells a caller what another member's subscriptions pulled.
+    #[error("no such album")]
+    #[problem(status = 404, title = "Not found")]
+    NotFound {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
+    /// A store could not answer.
+    #[error("the pulled album could not be read")]
+    #[problem(status = 500, title = "Internal server error")]
+    Unavailable {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+}
+
+impl PulledAlbumRejection {
+    fn not_found() -> Self {
+        Self::NotFound {
+            code: error_codes::FEDERATION_ALBUM_NOT_FOUND,
+        }
+    }
+
+    fn unavailable() -> Self {
+        Self::Unavailable {
+            code: error_codes::FEDERATION_UNAVAILABLE,
+        }
+    }
+}
+
+/// The job behind `subscriber`'s subscription to `album_id` on `peer`, or the one not-found
+/// answer when the subscriber holds none, live or lapsed.
+///
+/// A lapsed subscription still reads: what its pulls committed is still held, and still
+/// charged to the subscriber, until it unsubscribes.
+async fn subscribed_job(
+    federation: &FederationContext,
+    subscriber: &UserId,
+    peer: &str,
+    album_id: &str,
+) -> Result<JobKey, PulledAlbumRejection> {
+    // Folded as every stored peer is, and not parsed, as on unsubscribe: a name no
+    // subscription could carry simply matches nothing.
+    let peer = PeerId::new(peer);
+    let album = AlbumId::new(album_id);
+    let held = federation
+        .subscriptions()
+        .of_subscriber(subscriber)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, %subscriber, %peer, %album, "the subscriptions could not be read for a pulled album");
+            PulledAlbumRejection::unavailable()
+        })?;
+    if !held
+        .iter()
+        .any(|subscription| subscription.peer == peer && subscription.album == album)
+    {
+        tracing::info!(%subscriber, %peer, %album, "a pulled album was asked for by an account not subscribed to it");
+        return Err(PulledAlbumRejection::not_found());
+    }
+    Ok(JobKey::new(peer, album))
+}
+
+/// List the assets this server pulled for one of the caller's subscriptions, a page at a time.
+///
+/// Each asset is its breadcrumb, read from the latest entry a pull accepted for it, so nothing
+/// listed is anything but what passed this server's re-validation. Deleted and purged assets
+/// are not listed. A subscription nothing has been pulled for yet answers an empty page.
+///
+/// Answers `404 error.federation.album_not_found` when the caller holds no subscription to the
+/// album, live or lapsed, whoever else does; and `404 error.federation.not_configured` when
+/// this deployment does not federate.
+#[kynos::get(
+    "/v1/federation/subscriptions/{peer}/{album_id}/assets",
+    operation_id = "list_pulled_assets",
+    tag = FederationTag
+)]
+pub async fn list_pulled_assets(
+    Auth(credential): Auth<AccessToken>,
+    Inject(federation): Inject<FederationContext>,
+    Path(path): Path<PulledAlbumPath>,
+    Query(query): Query<PulledAssetsQuery>,
+) -> Result<Json<PulledAssetsResponse>, PulledAlbumRejection> {
+    let subscriber = UserId::new(credential.user.as_str());
+    let job = subscribed_job(&federation, &subscriber, &path.peer, &path.album_id).await?;
+    let limit = usize::try_from(query.limit.unwrap_or(DEFAULT_PULLED_ASSETS_PAGE))
+        .unwrap_or(MAX_BREADCRUMB_PAGE)
+        .clamp(1, MAX_BREADCRUMB_PAGE);
+    let breadcrumbs = federation
+        .pulled()
+        .breadcrumbs(&job, query.after.as_deref(), limit)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, %subscriber, %job, "a pulled album's breadcrumbs could not be read");
+            PulledAlbumRejection::unavailable()
+        })?;
+    let next_after = (breadcrumbs.len() == limit)
+        .then(|| breadcrumbs.last().map(|crumb| crumb.asset_id.clone()))
+        .flatten();
+    tracing::debug!(%subscriber, %job, assets = breadcrumbs.len(), more = next_after.is_some(), "listed a pulled album's assets");
+    Ok(Json(PulledAssetsResponse {
+        peer: job.peer.as_str().to_owned(),
+        album_id: job.album.as_str().to_owned(),
+        assets: breadcrumbs.iter().map(PulledAssetView::of).collect(),
+        next_after,
+    }))
+}
+
+/// Fetch the encrypted metadata blob one asset of a pulled album carries, as the pull stored it.
+///
+/// Opaque octets, byte for byte what the album's home server served and this server verified
+/// against its address: this server holds no key to them. The blob is the one the asset's
+/// latest accepted entry carries.
+///
+/// Answers `404 error.federation.album_not_found` when the caller holds no subscription to the
+/// album, or the album holds no live asset by that id with a metadata blob; and `404
+/// error.federation.not_configured` when this deployment does not federate.
+#[kynos::get(
+    "/v1/federation/subscriptions/{peer}/{album_id}/assets/{asset_id}/metadata",
+    operation_id = "get_pulled_asset_metadata",
+    tag = FederationTag
+)]
+pub async fn get_pulled_asset_metadata(
+    Auth(credential): Auth<AccessToken>,
+    Inject(federation): Inject<FederationContext>,
+    Path(path): Path<PulledAssetPath>,
+) -> Result<Binary<OctetStream>, PulledAlbumRejection> {
+    let subscriber = UserId::new(credential.user.as_str());
+    let job = subscribed_job(&federation, &subscriber, &path.peer, &path.album_id).await?;
+    let bytes = federation
+        .pulled()
+        .asset_metadata(&job, &path.asset_id)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, %subscriber, %job, asset = %path.asset_id, "a pulled asset's metadata could not be read");
+            PulledAlbumRejection::unavailable()
+        })?;
+    let Some(bytes) = bytes else {
+        tracing::info!(%subscriber, %job, asset = %path.asset_id, "a pulled asset has no metadata to serve");
+        return Err(PulledAlbumRejection::not_found());
+    };
+    tracing::debug!(%subscriber, %job, asset = %path.asset_id, bytes = bytes.len(), "served a pulled asset's metadata");
+    Ok(Binary::new(bytes))
 }
 
 #[cfg(test)]
