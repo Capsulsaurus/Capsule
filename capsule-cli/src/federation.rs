@@ -1,5 +1,6 @@
-//! `capsule federation subscribe|list|unsubscribe` — this account's subscriptions to albums
-//! whose home is another server (design/federation.md, Token Lifecycle step 1; #1117).
+//! `capsule federation subscribe|list|unsubscribe|assets|metadata` — this account's
+//! subscriptions to albums whose home is another server (design/federation.md, Token Lifecycle
+//! step 1; #1117), and what its server pulled for them (#1160).
 //!
 //! A member who is shared into an album on another server receives, in the share invite, a
 //! capability that album's home server minted for **this** account's home server. Posting it
@@ -13,6 +14,14 @@
 //! - `list` reads every subscription, live or lapsed (`GET /v1/federation/subscriptions`).
 //! - `unsubscribe` stops pulling one album (`DELETE /v1/federation/subscriptions/{peer}/
 //!   {album_id}`). Idempotent: an album not subscribed is the same success.
+//! - `assets` lists every live asset the server pulled for one subscription, as its
+//!   breadcrumb, walking `GET /v1/federation/subscriptions/{peer}/{album_id}/assets` a page at
+//!   a time to the album's end.
+//! - `metadata` fetches one pulled asset's encrypted metadata blob, byte for byte as the pull
+//!   stored it (`GET …/assets/{asset_id}/metadata`).
+//!
+//! The two reads answer only a subscriber: an album the account does not subscribe to is
+//! `error.federation.album_not_found`, however much another account's subscription pulled.
 //!
 //! A refusal carries the server's stable `error.*` code, rendered through the English catalog.
 
@@ -205,6 +214,192 @@ pub async fn unsubscribe(
     Ok(())
 }
 
+/// How many assets each page `assets` asks for: the most the server answers in one.
+const PULLED_ASSETS_PAGE: i64 = 1_000;
+
+/// One asset of an album this account's server pulled, as `assets` reports it: its breadcrumb.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct PulledAssetEntry {
+    /// The asset, as its home server names it.
+    pub asset_id: String,
+    /// Its chain head: the hash of its latest provenance record the pull accepted, hex.
+    pub head: String,
+    /// When the head record says it was written, RFC 3339. Self-asserted by its author.
+    pub timestamp: String,
+    /// The account that wrote the head record, on the album's home server.
+    pub author: String,
+    /// The asset's plaintext size in bytes.
+    pub size: u64,
+}
+
+impl From<rest::types::PulledAssetView> for PulledAssetEntry {
+    fn from(view: rest::types::PulledAssetView) -> Self {
+        Self {
+            asset_id: view.asset_id,
+            head: view.head,
+            timestamp: view.timestamp,
+            author: view.author,
+            size: u64::try_from(view.size).unwrap_or(0),
+        }
+    }
+}
+
+/// What `assets` reports: every live asset this account's server pulled for one subscription.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct PulledAssets {
+    /// The album's home server.
+    pub peer: String,
+    /// The album, as its home server names it.
+    pub album_id: String,
+    /// Every live asset, by asset id in byte order.
+    pub assets: Vec<PulledAssetEntry>,
+}
+
+/// `capsule federation assets`: every live asset this account's server pulled from `peer`'s
+/// album `album_id`, walked a page at a time to the album's end.
+///
+/// # Errors
+///
+/// [`FederationCommandError::Invalid`] for an empty peer or album, before any request; a
+/// [`FederationCommandError::Transport`] when the server answers a page that does not move
+/// past the one before it; else what the session or the server answered.
+#[instrument(skip(store))]
+pub async fn assets(
+    remote: &RemoteConfig,
+    store: &SessionStore,
+    peer: &str,
+    album_id: &str,
+) -> Result<PulledAssets, FederationCommandError> {
+    let (peer, album_id) = album_arguments(peer, album_id)?;
+    let session = remote::resume_session(remote, store).await?;
+    let outcome = read_pulled_assets(&remote.sync_endpoint, session.clone(), peer, album_id).await;
+    remote::checkpoint(store, &session).await;
+    let pulled = outcome?;
+    tracing::info!(%peer, %album_id, assets = pulled.assets.len(), "listed a pulled album's assets");
+    Ok(pulled)
+}
+
+/// `capsule federation metadata`: the encrypted metadata blob of `asset_id` in `peer`'s album
+/// `album_id`, byte for byte as this account's server pulled it.
+///
+/// # Errors
+///
+/// [`FederationCommandError::Invalid`] for an empty peer, album or asset, before any request;
+/// else what the session or the server answered.
+#[instrument(skip(store))]
+pub async fn metadata(
+    remote: &RemoteConfig,
+    store: &SessionStore,
+    peer: &str,
+    album_id: &str,
+    asset_id: &str,
+) -> Result<Vec<u8>, FederationCommandError> {
+    let (peer, album_id) = album_arguments(peer, album_id)?;
+    let asset_id = asset_id.trim();
+    if asset_id.is_empty() {
+        return Err(FederationCommandError::Invalid("the asset id is empty"));
+    }
+    let session = remote::resume_session(remote, store).await?;
+    let outcome = read_pulled_metadata(
+        &remote.sync_endpoint,
+        session.clone(),
+        peer,
+        album_id,
+        asset_id,
+    )
+    .await;
+    remote::checkpoint(store, &session).await;
+    let bytes = outcome?;
+    tracing::info!(%peer, %album_id, %asset_id, bytes = bytes.len(), "fetched a pulled asset's metadata");
+    Ok(bytes)
+}
+
+/// `peer` and `album_id` trimmed, refused when either is empty.
+fn album_arguments<'a>(
+    peer: &'a str,
+    album_id: &'a str,
+) -> Result<(&'a str, &'a str), FederationCommandError> {
+    let (peer, album_id) = (peer.trim(), album_id.trim());
+    if peer.is_empty() {
+        return Err(FederationCommandError::Invalid("the peer is empty"));
+    }
+    if album_id.is_empty() {
+        return Err(FederationCommandError::Invalid("the album id is empty"));
+    }
+    Ok((peer, album_id))
+}
+
+/// The walk over the album's pages itself, over a session somebody else persists.
+async fn read_pulled_assets(
+    api_root: &str,
+    session: Session,
+    peer: &str,
+    album_id: &str,
+) -> Result<PulledAssets, FederationCommandError> {
+    let client = client(api_root, session)?;
+    let mut pulled = PulledAssets {
+        peer: peer.to_owned(),
+        album_id: album_id.to_owned(),
+        assets: Vec::new(),
+    };
+    let mut after: Option<String> = None;
+    loop {
+        let params = rest::ListPulledAssetsParams {
+            after: after.clone(),
+            limit: Some(PULLED_ASSETS_PAGE),
+            ..rest::ListPulledAssetsParams::default()
+        };
+        let page = client
+            .list_pulled_assets(
+                peer.to_owned(),
+                album_id.to_owned(),
+                PROTOCOL_VERSION,
+                params,
+            )
+            .await
+            .map_err(|error| refusal(error, pulled_assets_code))?
+            .into_inner();
+        pulled.peer = page.peer;
+        pulled.album_id = page.album_id;
+        pulled
+            .assets
+            .extend(page.assets.into_iter().map(PulledAssetEntry::from));
+        tracing::debug!(after = ?after, next = ?page.next_after, assets = pulled.assets.len(), "read a page of a pulled album");
+        match page.next_after {
+            None => return Ok(pulled),
+            // Asset ids ascend, so a page that does not move past the last would repeat forever.
+            Some(next) if after.as_ref().is_some_and(|after| next <= *after) => {
+                return Err(FederationCommandError::Transport(format!(
+                    "the server resumed a pulled album at {next}, which does not move past the page before it"
+                )));
+            }
+            Some(next) => after = Some(next),
+        }
+    }
+}
+
+/// The metadata fetch itself, over a session somebody else persists.
+async fn read_pulled_metadata(
+    api_root: &str,
+    session: Session,
+    peer: &str,
+    album_id: &str,
+    asset_id: &str,
+) -> Result<Vec<u8>, FederationCommandError> {
+    let bytes = client(api_root, session)?
+        .get_pulled_asset_metadata(
+            peer.to_owned(),
+            album_id.to_owned(),
+            asset_id.to_owned(),
+            PROTOCOL_VERSION,
+            None,
+        )
+        .await
+        .map_err(|error| refusal(error, pulled_metadata_code))?
+        .into_inner();
+    Ok(bytes.to_vec())
+}
+
 /// The authenticated client over `session`, against the API root.
 fn client(api_root: &str, session: Session) -> Result<AuthenticatedClient, FederationCommandError> {
     AuthenticatedClient::new(api_root, session)
@@ -335,6 +530,30 @@ fn unsubscribe_code(error: &rest::UnsubscribeAlbumError) -> String {
         | Refusal::Status413(problem)
         | Refusal::Status425(problem)
         | Refusal::Status426(problem)
+        | Refusal::Status500(problem) => problem.code.clone(),
+    }
+}
+
+fn pulled_assets_code(error: &rest::ListPulledAssetsError) -> String {
+    use rest::ListPulledAssetsError as Refusal;
+    match error {
+        Refusal::Status400(problem)
+        | Refusal::Status401(problem)
+        | Refusal::Status403(problem)
+        | Refusal::Status404(problem)
+        | Refusal::Status413(problem)
+        | Refusal::Status500(problem) => problem.code.clone(),
+    }
+}
+
+fn pulled_metadata_code(error: &rest::GetPulledAssetMetadataError) -> String {
+    use rest::GetPulledAssetMetadataError as Refusal;
+    match error {
+        Refusal::Status400(problem)
+        | Refusal::Status401(problem)
+        | Refusal::Status403(problem)
+        | Refusal::Status404(problem)
+        | Refusal::Status413(problem)
         | Refusal::Status500(problem) => problem.code.clone(),
     }
 }
