@@ -150,6 +150,13 @@
             },
             {
               "kind": "func",
+              "name": "fetchProvenanceHistory",
+              "signature": "func fetchProvenanceHistory(blobBaseUrl: String, manifestCbor: Data) async throws -> [Data]",
+              "doc": "**Fetch the earlier provenance records** of the asset whose latest record is\n`manifest_cbor` (a feed entry's): each record the one after it names by\n`prior_provenance_hash`, back to the asset's `create`, from the blob route the server\nserves an asset's superseded records on. Returned oldest first, each the exact bytes the\nserver holds, checked against its content address; empty for a `create`.\n\nFor an asset this workspace does not hold, first seen past its create — an entry\n[`FfiWorkspace::apply_sync_entry_from_file`] applies without adopting\n([`FfiAssetFacts::adopted`] `false`) — hand the records to\n[`FfiWorkspace::open_synced_history`], which verifies them in order and holds the asset\nfrom its create. Nothing is verified here: the walk only follows links.\n\n`blob_base_url` is as for [`fetch_blob_to_path`](Self::fetch_blob_to_path). A record the\nserver refuses (a deleted asset's, or one the caller may not read) or that does not hash\nto its address is [`FfiError::Fetch`]; a session that cannot authorize the fetch is\n[`FfiError::Auth`]; a record that does not decode, or a chain longer than\n[`MAX_HISTORY_RECORDS`](crate::sync::MAX_HISTORY_RECORDS), is [`FfiError::Sync`].",
+              "members": []
+            },
+            {
+              "kind": "func",
               "name": "isAuthenticated",
               "signature": "func isAuthenticated() async -> Bool",
               "doc": "Whether the session currently holds tokens (`false` after logout).",
@@ -467,6 +474,13 @@
             },
             {
               "kind": "func",
+              "name": "openSyncedHistory",
+              "signature": "func openSyncedHistory(entry: FfiSyncHead, history: [Data], ciphertextPath: String, destinationPath: String) throws -> FfiOpenedOriginal",
+              "doc": "[`open_synced_original`](Self::open_synced_original) for an asset this workspace does not\nhold and first sees **past its create**, with `history` the records before the entry's,\noldest first from the create — what\n[`FfiSession::fetch_provenance_history`](crate::ffi::FfiSession::fetch_provenance_history)\nreturns for the entry's `manifest_cbor`.\n\nThe entry is applied against the last record of `history`, whatever its\n`local_chain_head` says, and its original opened from `ciphertext_path` as\n`open_synced_original` opens one. Then every record of `history` is verified through\nthe chokepoint in order from the create, the sidecar is opened from the entry's\n`metadata_blob` (the asset's live one, which the server's metadata role names: a\nsuperseded metadata blob is collected), and the asset is **adopted**, held from its\ncreate with the opened original as its library copy. The facts say whether it was\n([`FfiAssetFacts::adopted`]); a held asset's `delete`, `trash-restore` or edit then works\non this device as on one it imported.\n\nA history that does not verify, or a live metadata blob that does not bind, is\n[`FfiOpenedOriginal::Refused`] with the verdict that refused it, and\n`destination_path` is untouched: the original is placed there only once the asset it\nbelongs to verifies from its create. An empty `history` is `open_synced_original`.\n\n# Errors\n\nAs [`open_synced_original`](Self::open_synced_original); an adoption whose write failed\nleaves nothing at `destination_path`.",
+              "members": []
+            },
+            {
+              "kind": "func",
               "name": "openSyncedOriginal",
               "signature": "func openSyncedOriginal(entry: FfiSyncHead, ciphertextPath: String, destinationPath: String) throws -> FfiOpenedOriginal",
               "doc": "**Open a synced original** from the ciphertext file at `ciphertext_path` to its plaintext\nat `destination_path`, in memory bounded by a few STREAM chunks whatever its size.\n\nThe entry goes through the chokepoint as\n[`apply_sync_entry_from_file`](Self::apply_sync_entry_from_file) would take it, then the\nfile is hashed while it is decrypted: it opens only if it is the ciphertext the manifest\ncommits to, every chunk authenticates, and the plaintext hashes to the signed sidecar's\ndigest. The plaintext is written to a hidden staging file beside the destination and\nrenamed into place only once all of that holds, so `destination_path` is untouched by\nany other verdict and never holds a partial or unverified original. An existing file there\nis replaced only by a verified one.\n\nAn opened entry is then **adopted**: a `create` of an asset this workspace does not hold\nmakes it held, with its chain, sidecar and sealed metadata written under `media/`, the\nopened original copied there as its own library copy, and its row and user\ntags indexed; a later record of a held asset is appended as\n[`apply_sync_entry_from_file`](Self::apply_sync_entry_from_file) appends one. The facts\nsay whether it was ([`FfiAssetFacts::adopted`]). `destination_path` still holds the\nplaintext either way, for the caller to keep or remove.\n\nThe workspace stays locked while the original decrypts and is adopted.\n\n# Errors\n\n[`FfiError::Workspace`] when a file cannot be read or written, or the workspace itself\nfails (an adoption whose write failed included, after the original was placed at\n`destination_path`); [`FfiError::InvalidArgument`] for a malformed entry or a destination\nwith no file name. A refused entry is a verdict, never an error.",
@@ -724,7 +738,7 @@
               "kind": "field",
               "name": "adopted",
               "signature": "public var adopted: Bool",
-              "doc": "Whether this workspace now holds the asset at this entry's record: it adopted the\nentry, writing the asset's chain, sidecar, sealed metadata and original under `media/`\nand its index row and user tags into the library catalog, so the trash verbs and tag\nedits work on it. When `true` the catalog already describes the asset and an app writes\nnothing of its own for it; when `false` (an asset first seen past its create, a fork, or\na verb that applies without adopting) the facts are the app's to upsert.",
+              "doc": "Whether this workspace now holds the asset at this entry's record: it adopted the\nentry, writing the asset's chain, sidecar, sealed metadata and original under `media/`\nand its index row and user tags into the library catalog, so the trash verbs and tag\nedits work on it. When `true` the catalog already describes the asset and an app writes\nnothing of its own for it; when `false` (an asset first seen past its create, a fork, or\na verb that applies without adopting) the facts are the app's to upsert. An asset first\nseen past its create is adopted from its earlier records:\n[`FfiSession::fetch_provenance_history`](crate::ffi::FfiSession::fetch_provenance_history),\nthen [`FfiWorkspace::open_synced_history`].",
               "members": []
             }
           ]
@@ -3227,6 +3241,13 @@
             },
             {
               "kind": "fun",
+              "name": "fetchProvenanceHistory",
+              "signature": "suspend fun fetchProvenanceHistory(blobBaseUrl: kotlin.String, manifestCbor: kotlin.ByteArray): List<kotlin.ByteArray>",
+              "doc": "**Fetch the earlier provenance records** of the asset whose latest record is\n`manifest_cbor` (a feed entry's): each record the one after it names by\n`prior_provenance_hash`, back to the asset's `create`, from the blob route the server\nserves an asset's superseded records on. Returned oldest first, each the exact bytes the\nserver holds, checked against its content address; empty for a `create`.\n\nFor an asset this workspace does not hold, first seen past its create — an entry\n[`FfiWorkspace::apply_sync_entry_from_file`] applies without adopting\n([`FfiAssetFacts::adopted`] `false`) — hand the records to\n[`FfiWorkspace::open_synced_history`], which verifies them in order and holds the asset\nfrom its create. Nothing is verified here: the walk only follows links.\n\n`blob_base_url` is as for [`fetch_blob_to_path`](Self::fetch_blob_to_path). A record the\nserver refuses (a deleted asset's, or one the caller may not read) or that does not hash\nto its address is [`FfiError::Fetch`]; a session that cannot authorize the fetch is\n[`FfiError::Auth`]; a record that does not decode, or a chain longer than\n[`MAX_HISTORY_RECORDS`](crate::sync::MAX_HISTORY_RECORDS), is [`FfiError::Sync`].",
+              "members": []
+            },
+            {
+              "kind": "fun",
               "name": "isAuthenticated",
               "signature": "suspend fun isAuthenticated(): kotlin.Boolean",
               "doc": "Whether the session currently holds tokens (`false` after logout).",
@@ -3544,6 +3565,13 @@
             },
             {
               "kind": "fun",
+              "name": "openSyncedHistory",
+              "signature": "fun openSyncedHistory(entry: FfiSyncHead, history: List<kotlin.ByteArray>, ciphertextPath: kotlin.String, destinationPath: kotlin.String): FfiOpenedOriginal",
+              "doc": "[`open_synced_original`](Self::open_synced_original) for an asset this workspace does not\nhold and first sees **past its create**, with `history` the records before the entry's,\noldest first from the create — what\n[`FfiSession::fetch_provenance_history`](crate::ffi::FfiSession::fetch_provenance_history)\nreturns for the entry's `manifest_cbor`.\n\nThe entry is applied against the last record of `history`, whatever its\n`local_chain_head` says, and its original opened from `ciphertext_path` as\n`open_synced_original` opens one. Then every record of `history` is verified through\nthe chokepoint in order from the create, the sidecar is opened from the entry's\n`metadata_blob` (the asset's live one, which the server's metadata role names: a\nsuperseded metadata blob is collected), and the asset is **adopted**, held from its\ncreate with the opened original as its library copy. The facts say whether it was\n([`FfiAssetFacts::adopted`]); a held asset's `delete`, `trash-restore` or edit then works\non this device as on one it imported.\n\nA history that does not verify, or a live metadata blob that does not bind, is\n[`FfiOpenedOriginal::Refused`] with the verdict that refused it, and\n`destination_path` is untouched: the original is placed there only once the asset it\nbelongs to verifies from its create. An empty `history` is `open_synced_original`.\n\n# Errors\n\nAs [`open_synced_original`](Self::open_synced_original); an adoption whose write failed\nleaves nothing at `destination_path`.",
+              "members": []
+            },
+            {
+              "kind": "fun",
               "name": "openSyncedOriginal",
               "signature": "fun openSyncedOriginal(entry: FfiSyncHead, ciphertextPath: kotlin.String, destinationPath: kotlin.String): FfiOpenedOriginal",
               "doc": "**Open a synced original** from the ciphertext file at `ciphertext_path` to its plaintext\nat `destination_path`, in memory bounded by a few STREAM chunks whatever its size.\n\nThe entry goes through the chokepoint as\n[`apply_sync_entry_from_file`](Self::apply_sync_entry_from_file) would take it, then the\nfile is hashed while it is decrypted: it opens only if it is the ciphertext the manifest\ncommits to, every chunk authenticates, and the plaintext hashes to the signed sidecar's\ndigest. The plaintext is written to a hidden staging file beside the destination and\nrenamed into place only once all of that holds, so `destination_path` is untouched by\nany other verdict and never holds a partial or unverified original. An existing file there\nis replaced only by a verified one.\n\nAn opened entry is then **adopted**: a `create` of an asset this workspace does not hold\nmakes it held, with its chain, sidecar and sealed metadata written under `media/`, the\nopened original copied there as its own library copy, and its row and user\ntags indexed; a later record of a held asset is appended as\n[`apply_sync_entry_from_file`](Self::apply_sync_entry_from_file) appends one. The facts\nsay whether it was ([`FfiAssetFacts::adopted`]). `destination_path` still holds the\nplaintext either way, for the caller to keep or remove.\n\nThe workspace stays locked while the original decrypts and is adopted.\n\n# Errors\n\n[`FfiError::Workspace`] when a file cannot be read or written, or the workspace itself\nfails (an adoption whose write failed included, after the original was placed at\n`destination_path`); [`FfiError::InvalidArgument`] for a malformed entry or a destination\nwith no file name. A refused entry is a verdict, never an error.",
@@ -3801,7 +3829,7 @@
               "kind": "field",
               "name": "adopted",
               "signature": "var adopted: kotlin.Boolean = false",
-              "doc": "Whether this workspace now holds the asset at this entry's record: it adopted the\nentry, writing the asset's chain, sidecar, sealed metadata and original under `media/`\nand its index row and user tags into the library catalog, so the trash verbs and tag\nedits work on it. When `true` the catalog already describes the asset and an app writes\nnothing of its own for it; when `false` (an asset first seen past its create, a fork, or\na verb that applies without adopting) the facts are the app's to upsert.",
+              "doc": "Whether this workspace now holds the asset at this entry's record: it adopted the\nentry, writing the asset's chain, sidecar, sealed metadata and original under `media/`\nand its index row and user tags into the library catalog, so the trash verbs and tag\nedits work on it. When `true` the catalog already describes the asset and an app writes\nnothing of its own for it; when `false` (an asset first seen past its create, a fork, or\na verb that applies without adopting) the facts are the app's to upsert. An asset first\nseen past its create is adopted from its earlier records:\n[`FfiSession::fetch_provenance_history`](crate::ffi::FfiSession::fetch_provenance_history),\nthen [`FfiWorkspace::open_synced_history`].",
               "members": []
             }
           ]

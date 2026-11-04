@@ -353,6 +353,26 @@ impl From<FetchError> for FfiError {
     }
 }
 
+impl From<crate::sync::HistoryError> for FfiError {
+    fn from(err: crate::sync::HistoryError) -> Self {
+        match err {
+            // The fetch's own mapping, so a refused refresh stays an auth error, with the link
+            // that could not be followed named.
+            crate::sync::HistoryError::Fetch { hash, source } => match Self::from(source) {
+                Self::Fetch { code, detail } => Self::Fetch {
+                    code,
+                    detail: format!("provenance record {hash}: {detail}"),
+                },
+                other => other,
+            },
+            other => Self::Sync {
+                code: None,
+                detail: other.to_string(),
+            },
+        }
+    }
+}
+
 impl From<SyncError> for FfiError {
     fn from(err: SyncError) -> Self {
         if let SyncError::Auth(auth) = err {
@@ -1160,6 +1180,35 @@ impl FfiSession {
             let _ = std::fs::remove_file(&path);
         }
         result
+    }
+
+    /// **Fetch the earlier provenance records** of the asset whose latest record is
+    /// `manifest_cbor` (a feed entry's): each record the one after it names by
+    /// `prior_provenance_hash`, back to the asset's `create`, from the blob route the server
+    /// serves an asset's superseded records on. Returned oldest first, each the exact bytes the
+    /// server holds, checked against its content address; empty for a `create`.
+    ///
+    /// For an asset this workspace does not hold, first seen past its create — an entry
+    /// [`FfiWorkspace::apply_sync_entry_from_file`] applies without adopting
+    /// ([`FfiAssetFacts::adopted`] `false`) — hand the records to
+    /// [`FfiWorkspace::open_synced_history`], which verifies them in order and holds the asset
+    /// from its create. Nothing is verified here: the walk only follows links.
+    ///
+    /// `blob_base_url` is as for [`fetch_blob_to_path`](Self::fetch_blob_to_path). A record the
+    /// server refuses (a deleted asset's, or one the caller may not read) or that does not hash
+    /// to its address is [`FfiError::Fetch`]; a session that cannot authorize the fetch is
+    /// [`FfiError::Auth`]; a record that does not decode, or a chain longer than
+    /// [`MAX_HISTORY_RECORDS`](crate::sync::MAX_HISTORY_RECORDS), is [`FfiError::Sync`].
+    pub async fn fetch_provenance_history(
+        &self,
+        blob_base_url: String,
+        manifest_cbor: Vec<u8>,
+    ) -> Result<Vec<Vec<u8>>, FfiError> {
+        let source = HttpBlobSource::new(self.path_session(), blob_base_url);
+        let fetcher = RangedFetcher::new(self.path.plan().class).with_events(self.events.clone());
+        crate::sync::fetch_history(&fetcher, &source, &manifest_cbor)
+            .await
+            .map_err(FfiError::from)
     }
 
     /// Pull one page of the key-free sync feed after `cursor` from `api_base_url`

@@ -559,7 +559,10 @@ pub struct FfiAssetFacts {
     /// and its index row and user tags into the library catalog, so the trash verbs and tag
     /// edits work on it. When `true` the catalog already describes the asset and an app writes
     /// nothing of its own for it; when `false` (an asset first seen past its create, a fork, or
-    /// a verb that applies without adopting) the facts are the app's to upsert.
+    /// a verb that applies without adopting) the facts are the app's to upsert. An asset first
+    /// seen past its create is adopted from its earlier records:
+    /// [`FfiSession::fetch_provenance_history`](crate::ffi::FfiSession::fetch_provenance_history),
+    /// then [`FfiWorkspace::open_synced_history`].
     #[uniffi(default = false)]
     pub adopted: bool,
 }
@@ -1186,11 +1189,19 @@ fn commit_staged(
     staged: &Path,
     target: &Path,
 ) -> std::io::Result<()> {
-    let file = sink
-        .into_inner()
-        .map_err(std::io::IntoInnerError::into_error)?;
-    file.sync_all()?;
-    drop(file);
+    finish_staged(sink)?;
+    place_staged(staged, target)
+}
+
+/// Flush and sync a fully written staging file, so it can be read back before it is placed.
+fn finish_staged(sink: std::io::BufWriter<std::fs::File>) -> std::io::Result<()> {
+    sink.into_inner()
+        .map_err(std::io::IntoInnerError::into_error)?
+        .sync_all()
+}
+
+/// Rename a finished staging file into place as `target`.
+fn place_staged(staged: &Path, target: &Path) -> std::io::Result<()> {
     std::fs::rename(staged, target)?;
     // Persist the rename itself. Best effort: not every platform opens a directory for sync.
     if let Some(parent) = target.parent()
@@ -1760,6 +1771,131 @@ impl FfiWorkspace {
             );
             // Still under the lock the open took, so the workspace is the one that verified it.
             let (_, adoption) = ws.adopt_remote_original(head, &destination)?;
+            let mut facts = FfiAssetFacts::from(*facts);
+            facts.adopted = adoption.is_some_and(Adoption::holds);
+            Ok(FfiOpenedOriginal::Opened { facts })
+        })
+    }
+
+    /// [`open_synced_original`](Self::open_synced_original) for an asset this workspace does not
+    /// hold and first sees **past its create**, with `history` the records before the entry's,
+    /// oldest first from the create — what
+    /// [`FfiSession::fetch_provenance_history`](crate::ffi::FfiSession::fetch_provenance_history)
+    /// returns for the entry's `manifest_cbor`.
+    ///
+    /// The entry is applied against the last record of `history`, whatever its
+    /// `local_chain_head` says, and its original opened from `ciphertext_path` as
+    /// `open_synced_original` opens one. Then every record of `history` is verified through
+    /// the chokepoint in order from the create, the sidecar is opened from the entry's
+    /// `metadata_blob` (the asset's live one, which the server's metadata role names: a
+    /// superseded metadata blob is collected), and the asset is **adopted**, held from its
+    /// create with the opened original as its library copy. The facts say whether it was
+    /// ([`FfiAssetFacts::adopted`]); a held asset's `delete`, `trash-restore` or edit then works
+    /// on this device as on one it imported.
+    ///
+    /// A history that does not verify, or a live metadata blob that does not bind, is
+    /// [`FfiOpenedOriginal::Refused`] with the verdict that refused it, and
+    /// `destination_path` is untouched: the original is placed there only once the asset it
+    /// belongs to verifies from its create. An empty `history` is `open_synced_original`.
+    ///
+    /// # Errors
+    ///
+    /// As [`open_synced_original`](Self::open_synced_original); an adoption whose write failed
+    /// leaves nothing at `destination_path`.
+    pub fn open_synced_history(
+        &self,
+        entry: FfiSyncHead,
+        history: Vec<Vec<u8>>,
+        ciphertext_path: String,
+        destination_path: String,
+    ) -> Result<FfiOpenedOriginal, FfiError> {
+        if history.is_empty() {
+            return self.open_synced_original(entry, ciphertext_path, destination_path);
+        }
+        // The head chains onto the last record handed over; the adoption verifies that record,
+        // and every one before it, from the create.
+        let chains_onto = match history.last().map(|bytes| ProvenanceRecord::decode(bytes)) {
+            Some(Ok(record)) => Some(record.record_hash()),
+            Some(Err(error)) => {
+                tracing::warn!(%error, "ffi: the last record of a synced history does not decode");
+                return Ok(FfiOpenedOriginal::Refused {
+                    outcome: SyncApplyOutcome::Quarantined(QuarantineReason::MalformedManifest(
+                        error.to_string(),
+                    ))
+                    .into(),
+                });
+            }
+            None => None,
+        };
+        let source = PathBuf::from(ciphertext_path);
+        let destination = PathBuf::from(destination_path);
+        // The claim the chokepoint checks first, as `open_synced_original` makes it.
+        let committed = ProvenanceRecord::decode(&entry.manifest_cbor)
+            .map_or(Hash32::from_bytes([0; 32]), |record| {
+                record.manifest.core.ciphertext_hash
+            });
+        let head = RemoteHead {
+            local_chain_head: chains_onto,
+            ..entry.remote(committed)?
+        };
+        let ciphertext = std::fs::File::open(&source)
+            .map_err(|e| local_io("opening the ciphertext file", &source, &e))?;
+        let staged = staging_path(&destination)?;
+        let sink = std::fs::File::create_new(&staged)
+            .map(std::io::BufWriter::new)
+            .map_err(|e| local_io("creating the staging file", &staged, &e))?;
+        self.with(|ws| {
+            let (facts, sink) = match ws.open_remote_original_from(head, ciphertext, sink) {
+                Ok(RemoteOriginal::Opened { facts, plaintext }) => (facts, plaintext),
+                Ok(refused) => {
+                    discard_staged(&staged);
+                    tracing::warn!(source = %source.display(), "ffi: synced original not opened; nothing placed");
+                    return Ok(refused.into());
+                }
+                Err(error) => {
+                    discard_staged(&staged);
+                    return Err(error.into());
+                }
+            };
+            if let Err(e) = finish_staged(sink) {
+                discard_staged(&staged);
+                return Err(local_io("writing the staging file", &staged, &e));
+            }
+            // Adopted from the staged plaintext, which the library copies, so the destination
+            // is written only once the asset verifies from its create.
+            let (outcome, adoption) = match ws.adopt_remote_history(head, &history, &staged) {
+                Ok(adopted) => adopted,
+                Err(error) => {
+                    discard_staged(&staged);
+                    return Err(error.into());
+                }
+            };
+            if !matches!(outcome, SyncApplyOutcome::Applied(_)) {
+                discard_staged(&staged);
+                tracing::warn!(
+                    asset_id = %facts.asset_id,
+                    records = history.len(),
+                    "ffi: a synced history did not verify; nothing adopted or placed"
+                );
+                return Ok(FfiOpenedOriginal::Refused {
+                    outcome: outcome.into(),
+                });
+            }
+            if let Err(e) = place_staged(&staged, &destination) {
+                discard_staged(&staged);
+                return Err(local_io(
+                    "moving the original into place at",
+                    &destination,
+                    &e,
+                ));
+            }
+            tracing::info!(
+                asset_id = %facts.asset_id,
+                records = history.len(),
+                ?adoption,
+                destination = %destination.display(),
+                "ffi: synced original opened and its asset adopted from its history"
+            );
             let mut facts = FfiAssetFacts::from(*facts);
             facts.adopted = adoption.is_some_and(Adoption::holds);
             Ok(FfiOpenedOriginal::Opened { facts })
