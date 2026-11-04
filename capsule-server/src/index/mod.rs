@@ -488,7 +488,8 @@ pub struct BlobReference {
     pub owner_id: OwnerId,
     /// The role the address holds in that asset's bundle.
     pub role: BlobRole,
-    /// The asset's lifecycle state — `Tombstoned` is what turns a reference into a `410`.
+    /// The asset's lifecycle state — `Tombstoned`, once its retention window has closed, is
+    /// what turns a reference into a `410` ([`Self::readable_at`]).
     pub state: AssetState,
     /// Whether that asset's original has landed, which is what tells a missing original apart
     /// from a dangling reference.
@@ -499,6 +500,37 @@ pub struct BlobReference {
     /// a takedown from the *same read* that found the reference — one round trip, and no window
     /// in which a hold applied between the two reads is missed.
     pub hold: Option<ServingHold>,
+    /// The retention floor the asset's signed `delete` fixed ([`AssetRow::retention_until`]),
+    /// if it carries one.
+    ///
+    /// Carried for the reason [`Self::hold`] is: whether a trashed asset's blobs are still
+    /// readable is decided from the same read that found the reference.
+    pub retention_until: Option<Timestamp>,
+}
+
+impl BlobReference {
+    /// Whether the asset's lifecycle lets an entitled reader fetch the address at `now`: the
+    /// asset is visible, or it is in trash and its retention window is still open (#1192).
+    ///
+    /// Trash is a signed delete restorable until `retention_until`, and a device that first
+    /// sees the asset at its `delete` needs the asset's records, live metadata blob and
+    /// original to adopt it and sign the `trash-restore`. So the window that admits the
+    /// restore is the window that serves the bytes, decided by the one definition
+    /// [`restore_window_closed`] gives — no instant serves a blob of an asset whose restore it
+    /// would refuse. A purged asset holds no reference at all, so it never reaches here.
+    ///
+    /// Says nothing about **who** may read: the read authority is asked first, and this is a
+    /// fact about the asset only an entitled reader is told.
+    #[must_use]
+    pub fn readable_at(&self, now: Timestamp) -> bool {
+        match self.state {
+            AssetState::Visible => true,
+            AssetState::Tombstoned => {
+                restore_window_closed(self.state, self.retention_until, false, now).is_none()
+            }
+            AssetState::Pending => false,
+        }
+    }
 }
 
 /// A lifecycle write that does not move blob bytes.
@@ -871,6 +903,10 @@ pub trait AssetIndex: std::fmt::Debug + Send + Sync {
     /// chain back to it. Where the asset also holds the address in a current role, that role is
     /// reported. A purge clears the chain with the bytes, so the record stops being served
     /// exactly when it stops being retained.
+    ///
+    /// **A tombstone's reference carries its retention floor (#1192)**, so the serving path
+    /// decides from this read whether a trashed asset is still inside the window its restore
+    /// is admitted in ([`BlobReference::readable_at`]).
     fn find_references<'a>(
         &'a self,
         address: &'a ContentAddress,

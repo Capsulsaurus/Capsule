@@ -2001,6 +2001,10 @@ pub async fn a_superseded_manifest_is_served_as_a_provenance_reference(index: &d
         "the reference carries the owner the read authority decides on"
     );
     assert_eq!(reference.album_id, pending("serve-past", 1).album_id);
+    assert_eq!(
+        reference.retention_until, None,
+        "a live asset signed no window"
+    );
     // The current manifest is still found in its own role, alongside.
     assert_eq!(
         ok(
@@ -2026,6 +2030,21 @@ pub async fn a_superseded_manifest_is_served_as_a_provenance_reference(index: &d
         .expect("a tombstone keeps its chain until the purge");
     assert_eq!(reference.state, AssetState::Tombstoned);
     assert_eq!(reference.role, BlobRole::Provenance);
+    // The tombstone's reference carries the window its delete signed (#1192), and the window
+    // is what decides whether its reader may still fetch it.
+    assert_eq!(reference.retention_until, Some(Timestamp::UNIX_EPOCH));
+    assert!(
+        reference.readable_at(
+            Timestamp::UNIX_EPOCH
+                .checked_sub(jiff::SignedDuration::from_secs(1))
+                .expect("in range")
+        ),
+        "inside the window the trashed asset is readable"
+    );
+    assert!(
+        !reference.readable_at(Timestamp::UNIX_EPOCH),
+        "at the signed floor the window has closed"
+    );
 
     // The purge closes the retention window, and the records stop being references with it.
     assert!(matches!(

@@ -478,6 +478,7 @@ impl AssetIndex for InMemoryAssetIndex {
                 state: row.state,
                 original_held: row.original_held(),
                 hold: row.hold,
+                retention_until: row.retention_until,
             };
             let in_state = |state: AssetState| {
                 inner
