@@ -340,10 +340,10 @@ struct ManagedLaneSyncTests {
     func syncOpensOverTheLane() async {
         let root = ManagedLaneTests.temporaryRoot().appending(path: "Library", directoryHint: .isDirectory)
         let probe = SyncProbe()
-        let lane = AppEnvironment.makeManagedLane(root: root) { layout, provider in
+        let lane = AppEnvironment.makeManagedLane(root: root, openSync: { layout, provider in
             probe.opened(root: layout.root, provider: provider)
             return { probe.ran() }
-        }
+        })
 
         await lane.sync?()
 
