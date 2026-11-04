@@ -41,10 +41,13 @@
 //! it enforces a [`PeerCachingBudget`] as the [port's docs](super) count it. [`Uncharged`], the
 //! default of [`PostgresPulledAlbums::new`], charges nothing.
 //!
-//! The receivers' `quota_used` is not written here at all: the quota ledger
-//! ([`crate::quota::PostgresQuota`]) reads the `federation_pulled_metadata_blobs` rows this commit
-//! inserts, so a written page is counted from the instant it commits and a rolled-back one never
-//! is, whichever hook is assembled.
+//! The receivers' `quota_used` is not written by this adapter either: inserting the
+//! `federation_pulled_metadata_blobs` rows fires the schema's trigger that adds each newly held
+//! address to every subscriber's stored pulled total (migration `000030`,
+//! [`crate::quota::PostgresQuota`]), inside this commit's transaction. So a written page is
+//! counted from the instant it commits and a rolled-back one never is, whichever hook is
+//! assembled. That trigger takes a per-job lock and then the subscribers' `quota_usage` rows, in
+//! account order, after the per-address locks above, so a commit holds them to its end.
 //!
 //! # The budget is read under the job's lock
 //!

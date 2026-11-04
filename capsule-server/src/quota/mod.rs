@@ -98,12 +98,14 @@
 //! is shared by its subscribers, so no subscriber is "first", and charging only one of them
 //! would let the others hold the bytes free.
 //!
-//! The pulled charge is **derived, never stored**: [`StoredUsage::used`] is the ledger's
-//! attributions plus the distinct pulled blobs [`PulledHoldings`] says the account holds now.
-//! So the charge lands with the pulled page that holds the blob (the rows are written in the
-//! page's own commit) and is released by whatever ends the holding — an unsubscribe, or the
-//! job's rows being forgotten — with no second write that could run twice, run never, or credit
-//! below zero. A blob the account itself is attributed in the ledger (an upload, a reservation)
+//! The pulled charge is **defined by the holdings, never written by a caller**:
+//! [`StoredUsage::used`] is the ledger's attributions plus the distinct pulled blobs the account
+//! holds now ([`PulledHoldings`] for the in-memory ledger). So the charge lands with the pulled
+//! page that holds the blob and is released by whatever ends the holding — an unsubscribe, or
+//! the job's rows being forgotten — with no second write that could run twice, run never, or
+//! credit below zero. The Postgres ledger keeps that total stored rather than summing it per
+//! read, maintained by the schema in the transaction that changes the holdings and checked
+//! against the derivation ([`PostgresQuota`], #1171). A blob the account itself is attributed in the ledger (an upload, a reservation)
 //! is counted there and not again as pulled; one another account is attributed is still charged
 //! to the receiver, because dropping it would make `GET /v1/quota` say that somebody on this
 //! server uploaded those bytes — the cross-tenant answer [`ChargeOutcome::AlreadyAttributed`]
