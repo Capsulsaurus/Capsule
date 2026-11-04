@@ -89,7 +89,7 @@ use sea_orm::{
 use super::conformance::Inspect;
 use super::{
     AcceptedEntry, AssetHead, Change, Committed, OverBudget, PeerCachingBudget, PulledAlbum,
-    PulledAlbums, PulledBlob, ValidatedPage,
+    PulledAlbumReads, PulledAlbums, PulledBlob, ValidatedPage,
 };
 use crate::blob::{BlobError, BlobStore, ContentAddress, Placement};
 use crate::federation::breadcrumbs::{
@@ -284,6 +284,41 @@ impl PostgresPulledAlbums {
     pub fn with_charge(mut self, charge: Arc<dyn PulledBlobCharge>) -> Self {
         self.charge = charge;
         self
+    }
+
+    /// The bytes of the metadata blob at `hash`, if `job`'s claim names it.
+    ///
+    /// The claim row is read first, so a blob some other job holds is never answered for this
+    /// one, and its recorded size bounds the read.
+    async fn held_bytes(&self, job: &JobKey, hash: &Hash32) -> Result<Option<Vec<u8>>, StoreError> {
+        let doing = "looking up a held metadata blob";
+        let address = address_of(hash)?;
+        let mut values = job_values(job);
+        values.push(Value::from(address.as_str().to_owned()));
+        let rows = self
+            .select(
+                "SELECT size FROM federation_pulled_metadata_blobs \
+                 WHERE peer_id = $1 AND album_id = $2 AND address = $3",
+                values,
+                doing,
+            )
+            .await?;
+        let Some(row) = rows.first() else {
+            return Ok(None);
+        };
+        let size: i64 = row.try_get("", "size").map_err(PORT.failing(doing))?;
+        let len: usize = count_from(size, "blob size")?;
+        let bytes = self
+            .blobs
+            .read_at(&address, 0, len)
+            .await
+            .map_err(blob_failure)?;
+        if bytes.is_none() {
+            // A row naming bytes the store does not have: the dangling reference the
+            // collector reports and never resolves by deleting the row.
+            tracing::error!(%job, %address, "a held pulled metadata blob is missing from the blob store");
+        }
+        Ok(bytes)
     }
 
     /// Every row `sql` selects with `values`.
@@ -944,6 +979,48 @@ impl BreadcrumbIndex for PostgresPulledAlbums {
     }
 }
 
+/// An asset's metadata is read from its latest entry, along the index the breadcrumbs read, and
+/// only where that entry leaves a breadcrumb: the predicate [`leaves_a_breadcrumb`] states and
+/// the breadcrumb query restates. The bytes come through the job's own claim, never another
+/// job's.
+impl PulledAlbumReads for PostgresPulledAlbums {
+    fn asset_metadata<'a>(
+        &'a self,
+        job: &'a JobKey,
+        asset_id: &'a str,
+    ) -> StoreFuture<'a, Option<Vec<u8>>> {
+        Box::pin(async move {
+            let doing = "reading a pulled asset's metadata";
+            let mut values = job_values(job);
+            values.push(Value::from(asset_id.to_owned()));
+            let rows = self
+                .select(
+                    "SELECT metadata_blob FROM (\
+                     SELECT change, purged, manifest IS NOT NULL AS has_manifest, \
+                     head IS NOT NULL AS has_head, metadata_blob \
+                     FROM federation_accepted_entries \
+                     WHERE peer_id = $1 AND album_id = $2 AND asset_id = $3 \
+                     ORDER BY position DESC LIMIT 1) latest \
+                     WHERE change <> 'deleted' AND NOT purged AND has_manifest AND has_head",
+                    values,
+                    doing,
+                )
+                .await?;
+            let Some(row) = rows.first() else {
+                tracing::trace!(%job, asset = asset_id, "a pulled asset has no readable entry");
+                return Ok(None);
+            };
+            let metadata_blob: Option<String> = row
+                .try_get("", "metadata_blob")
+                .map_err(PORT.failing(doing))?;
+            let Some(hash) = metadata_blob.as_deref().map(hash_from_hex).transpose()? else {
+                return Ok(None);
+            };
+            self.held_bytes(job, &hash).await
+        })
+    }
+}
+
 /// A blob is held while any job's `federation_pulled_metadata_blobs` row names it (#1141).
 ///
 /// One `EXISTS` along `idx_federation_pulled_metadata_blobs_address`, across every job: the
@@ -1089,37 +1166,7 @@ impl Inspect for PostgresPulledAlbums {
         job: &'a JobKey,
         hash: &'a Hash32,
     ) -> StoreFuture<'a, Option<Vec<u8>>> {
-        Box::pin(async move {
-            let address = address_of(hash)?;
-            let mut values = job_values(job);
-            values.push(Value::from(address.as_str().to_owned()));
-            let rows = self
-                .select(
-                    "SELECT size FROM federation_pulled_metadata_blobs \
-                     WHERE peer_id = $1 AND album_id = $2 AND address = $3",
-                    values,
-                    "looking up a held metadata blob",
-                )
-                .await?;
-            let Some(row) = rows.first() else {
-                return Ok(None);
-            };
-            let size: i64 = row
-                .try_get("", "size")
-                .map_err(PORT.failing("looking up a held metadata blob"))?;
-            let len: usize = count_from(size, "blob size")?;
-            let bytes = self
-                .blobs
-                .read_at(&address, 0, len)
-                .await
-                .map_err(blob_failure)?;
-            if bytes.is_none() {
-                // A row naming bytes the store does not have: the dangling reference the
-                // collector reports and never resolves by deleting the row.
-                tracing::error!(%job, %address, "a held pulled metadata blob is missing from the blob store");
-            }
-            Ok(bytes)
-        })
+        Box::pin(self.held_bytes(job, hash))
     }
 }
 

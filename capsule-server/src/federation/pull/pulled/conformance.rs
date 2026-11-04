@@ -31,8 +31,8 @@ use capsule_core::crypto::hash::{Hash32, hash_bytes};
 use jiff::Timestamp;
 
 use super::{
-    AcceptedEntry, AssetHead, Change, Committed, OverBudget, PulledAlbum, PulledAlbums, PulledBlob,
-    ValidatedPage,
+    AcceptedEntry, AssetHead, Change, Committed, OverBudget, PulledAlbum, PulledAlbumReads,
+    PulledAlbums, PulledBlob, ValidatedPage,
 };
 use crate::blob::ContentAddress;
 use crate::federation::PeerId;
@@ -44,8 +44,9 @@ use crate::store::{AlbumId, StoreError, StoreFuture, UserId};
 
 /// What the suite reads besides the port: what a commit wrote that the port's own reads do not
 /// answer, and the claims the collector reads ([`HeldBlobs`], #1141), which every adapter
-/// must answer for.
-pub trait Inspect: PulledAlbums + HeldBlobs {
+/// must answer for. Every adapter is also what a subscriber's client reads
+/// ([`PulledAlbumReads`]), which [`run_all`] holds to the entries a commit wrote.
+pub trait Inspect: PulledAlbums + PulledAlbumReads + HeldBlobs {
     /// Every entry written for `job`, in the order written.
     fn written_entries<'a>(&'a self, job: &'a JobKey) -> StoreFuture<'a, Vec<AcceptedEntry>>;
 
@@ -184,6 +185,89 @@ pub async fn run_all(store: &dyn Inspect) {
     a_later_state_replaces_the_earlier_one(store).await;
     jobs_are_kept_apart(store).await;
     a_held_metadata_blob_is_a_reference_the_collector_reads(store).await;
+    an_assets_metadata_is_what_its_latest_entry_carries(store).await;
+}
+
+/// [`PulledAlbumReads::asset_metadata`] answers the blob an asset's **latest** entry carries,
+/// only while that entry leaves a breadcrumb, and only through the job that holds it.
+async fn an_assets_metadata_is_what_its_latest_entry_carries(store: &dyn Inspect) {
+    let first = b"reads/the metadata an asset first carried".to_vec();
+    let second = b"reads/the metadata an asset carries now".to_vec();
+    let job = job("reads", "home", "a");
+    let read = |asset: &'static str, job: JobKey| async move {
+        ok(
+            store.asset_metadata(&job, asset).await,
+            "reading an asset's metadata",
+        )
+    };
+    assert_eq!(read("live", job.clone()).await, None, "nothing pulled yet");
+
+    let mut carrying = entry("live", 1);
+    carrying.metadata_blob = Some(hash_bytes(&first));
+    let mut unbound = entry("unbound", 2);
+    unbound.metadata_blob = None;
+    let mut doomed = entry("doomed", 3);
+    doomed.metadata_blob = Some(hash_bytes(&first));
+    let mut opening = page(3, vec![carrying, unbound, doomed]);
+    opening
+        .metadata_blobs
+        .insert(hash_bytes(&first), first.clone());
+    assert!(wrote(store.commit(&job, None, opening).await, "a commit"));
+    assert_eq!(read("live", job.clone()).await, Some(first.clone()));
+    assert_eq!(
+        read("unbound", job.clone()).await,
+        None,
+        "a record binding no blob has no metadata to read"
+    );
+    assert_eq!(
+        read("absent", job.clone()).await,
+        None,
+        "an asset never named"
+    );
+
+    let mut moved = entry("live", 4);
+    moved.metadata_blob = Some(hash_bytes(&second));
+    let mut deleted = entry("doomed", 5);
+    deleted.change = Change::Deleted;
+    deleted.metadata_blob = Some(hash_bytes(&first));
+    let mut later = page(5, vec![moved, deleted]);
+    later
+        .metadata_blobs
+        .insert(hash_bytes(&second), second.clone());
+    assert!(wrote(store.commit(&job, Some(3), later).await, "a commit"));
+    assert_eq!(
+        read("live", job.clone()).await,
+        Some(second.clone()),
+        "the latest entry's blob, not the first one's"
+    );
+    assert_eq!(
+        read("doomed", job.clone()).await,
+        None,
+        "a deleted asset leaves no breadcrumb, so no metadata either"
+    );
+
+    let mut purged = entry("live", 6);
+    purged.metadata_blob = Some(hash_bytes(&second));
+    purged.purged = true;
+    assert!(wrote(
+        store.commit(&job, Some(5), page(6, vec![purged])).await,
+        "a commit"
+    ));
+    assert_eq!(read("live", job.clone()).await, None, "a purged asset");
+
+    // Another job naming the same asset id holds nothing of this one's.
+    let other = JobKey::new(job.peer.clone(), AlbumId::new("reads-elsewhere"));
+    let mut named = entry("live", 1);
+    named.metadata_blob = Some(hash_bytes(&first));
+    assert!(wrote(
+        store.commit(&other, None, page(1, vec![named])).await,
+        "a commit carrying no blob"
+    ));
+    assert_eq!(
+        read("live", other).await,
+        None,
+        "a blob this job never held is not read through it, whoever else holds it"
+    );
 }
 
 /// `bytes` as the content address the blob store keeps them at.
