@@ -557,6 +557,48 @@ impl PulledAlbumReads for InMemoryPulledAlbums {
     }
 }
 
+/// What the in-memory quota ledger counts of this store: the distinct metadata blobs held by
+/// every job `user` subscribes to, live or lapsed, on every peer — the fact the durable ledger's
+/// usage statement joins `federation_subscriptions` with `federation_pulled_metadata_blobs` for.
+///
+/// Only a store assembled [`with_budget`](InMemoryPulledAlbums::with_budget) knows its
+/// subscribers; one assembled without holds nothing for anyone. The subscriptions are read
+/// before the lock is taken, as [`PulledAlbums::commit`] reads them.
+impl crate::quota::PulledHoldings for InMemoryPulledAlbums {
+    fn held_by<'a>(
+        &'a self,
+        user: &'a UserId,
+    ) -> StoreFuture<'a, BTreeMap<crate::blob::ContentAddress, u64>> {
+        Box::pin(async move {
+            let Some((subscriptions, _)) = &self.budget else {
+                return Ok(BTreeMap::new());
+            };
+            let jobs: BTreeSet<JobKey> = subscriptions
+                .of_subscriber(user)
+                .await?
+                .iter()
+                .map(crate::federation::Subscription::job)
+                .collect();
+            let albums = self.lock();
+            let mut held = BTreeMap::new();
+            for album in jobs.iter().filter_map(|job| albums.get(job)) {
+                for (hash, bytes) in &album.metadata_blobs {
+                    let address =
+                        crate::blob::ContentAddress::parse(&hash.to_hex()).map_err(|error| {
+                            crate::store::StoreError::Rejected {
+                                store: "pulled albums",
+                                detail: format!("{hash} is not a content address: {error}"),
+                            }
+                        })?;
+                    held.insert(address, u64::try_from(bytes.len()).unwrap_or(u64::MAX));
+                }
+            }
+            tracing::trace!(%user, jobs = jobs.len(), blobs = held.len(), "pulled holdings read for the quota ledger");
+            Ok(held)
+        })
+    }
+}
+
 impl conformance::Inspect for InMemoryPulledAlbums {
     fn written_entries<'a>(&'a self, job: &'a JobKey) -> StoreFuture<'a, Vec<AcceptedEntry>> {
         Box::pin(async move { Ok(self.entries(job)) })

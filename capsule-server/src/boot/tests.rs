@@ -777,6 +777,16 @@ async fn a_new_pulled_blob_is_refused_at_a_zero_budget(stores: &super::Stores) {
         PulledAlbum::default(),
         "the refused page moved nothing"
     );
+    assert_eq!(
+        stores
+            .quotas
+            .usage(&subscriber)
+            .await
+            .expect("reading usage")
+            .used,
+        0,
+        "and charged nobody's quota"
+    );
 }
 
 /// The bytes [`a_pulled_blob_outlives_the_assembled_collector`] pulls.
@@ -892,6 +902,87 @@ async fn the_in_memory_pulled_albums_charge_the_configured_peer_budget() {
         .expect("the base opens")
         .in_memory(std::sync::Arc::new(super::InMemoryReceipts::new()));
     a_new_pulled_blob_is_refused_at_a_zero_budget(&stores).await;
+}
+
+/// `serve`'s in-memory arm counts pulled metadata blobs in `quota_used`, as the durable arm's
+/// usage statement does: a page the pull worker's store writes is charged in full to each of
+/// the job's subscribers, a lapsed one too, and an unsubscribe releases that subscriber only.
+#[tokio::test]
+async fn the_in_memory_quota_counts_the_blobs_pulled_albums_hold() {
+    use crate::federation::pull::JobKey;
+    use crate::federation::pull::pulled::{Committed, PulledAlbum, ValidatedPage};
+    use crate::federation::{CapabilityToken, PeerId, Scope, Subscription};
+    use crate::store::{AlbumId, UserId};
+
+    let root = tempfile::tempdir().expect("a scratch directory");
+    let config = memory_config(root.path());
+    let stores = super::base(&config, std::sync::Arc::new(super::SystemClock))
+        .await
+        .expect("the base opens")
+        .in_memory(std::sync::Arc::new(super::InMemoryReceipts::new()));
+
+    let job = JobKey::new(PeerId::new("home.quota.test"), AlbumId::new("quota-a"));
+    let (alice, bob) = (UserId::new("quota-alice"), UserId::new("quota-bob"));
+    let lapsed = jiff::Timestamp::UNIX_EPOCH;
+    for user in [&alice, &bob] {
+        stores
+            .subscriptions
+            .put(Subscription {
+                subscriber: user.clone(),
+                peer: job.peer.clone(),
+                album: job.album.clone(),
+                scope: Scope::Read,
+                jti: format!("quota-{user}"),
+                token: CapabilityToken::new("header.payload.signature"),
+                issued_at: lapsed,
+                expires_at: lapsed,
+                min_protocol_version: capsule_core::crypto::primitives::PROTOCOL_VERSION.to_owned(),
+                subscribed_at: lapsed,
+                updated_at: lapsed,
+            })
+            .await
+            .expect("the subscription is recorded");
+    }
+
+    let held = b"a metadata blob the quota counts".to_vec();
+    let size = u64::try_from(held.len()).expect("a small blob");
+    let page = ValidatedPage {
+        entries: Vec::new(),
+        metadata_blobs: BTreeMap::from([(capsule_core::crypto::hash::hash_bytes(&held), held)]),
+        state: PulledAlbum {
+            cursor: Some("c1".to_owned()),
+            high_water: Some(1),
+            ..PulledAlbum::default()
+        },
+    };
+    assert_eq!(
+        stores
+            .pulled
+            .commit(&job, None, page)
+            .await
+            .expect("the commit is answered"),
+        Committed::Written
+    );
+    let used = |user: &UserId| {
+        let (quotas, user) = (stores.quotas.clone(), user.clone());
+        async move { quotas.usage(&user).await.expect("reading usage").used }
+    };
+    assert_eq!(
+        used(&alice).await,
+        size,
+        "charged in full to each subscriber"
+    );
+    assert_eq!(used(&bob).await, size);
+
+    assert!(
+        stores
+            .subscriptions
+            .remove(&alice, &job.peer, &job.album)
+            .await
+            .expect("unsubscribing")
+    );
+    assert_eq!(used(&alice).await, 0, "the unsubscribe released it");
+    assert_eq!(used(&bob).await, size, "for that subscriber only");
 }
 
 #[tokio::test]

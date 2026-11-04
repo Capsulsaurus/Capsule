@@ -776,7 +776,9 @@ impl Base {
             index: Arc::new(InMemoryAssetIndex::with_receipts(receipts)),
             uploads: Arc::new(InMemoryUploadSessions::with_default_ttl(self.clock.clone())),
             marks: Arc::new(InMemoryCollection::new()),
-            quotas: Arc::new(InMemoryQuota::new()),
+            // Over the same pulled albums the pull worker writes, so `quota_used` counts what a
+            // pull holds for an account as the durable ledger's usage statement does.
+            quotas: Arc::new(InMemoryQuota::new().with_pulled(pulled.clone())),
             shares: Arc::new(InMemoryShares::new()),
             capabilities: Arc::new(InMemoryCapabilities::new(self.clock.clone())),
             peers: Arc::new(InMemoryPeers::new()),
