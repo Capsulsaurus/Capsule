@@ -408,11 +408,15 @@ impl PostgresQuota {
             return Ok(ChargeOutcome::AlreadyAttributed);
         }
 
-        // The account's row in `quota_usage` exists from its first charge or its first pulled
-        // hold, whichever comes first: migration 000030's triggers create it on either, and
-        // the attribution trigger already did so for the debit above, so this insert is a
-        // no-op kept so the lock below never depends on a trigger having run. The row holds the clock (`over_since`)
-        // and the stored `pulled` total, which only those triggers write.
+        // The account's row in `quota_usage` is created by whichever writer reaches it first:
+        // this insert, `suspend`'s upsert, `quota_pulled_lock_accounts` (called by every
+        // migration 000030 trigger on attributions, subscriptions and pulled blob rows, and by
+        // `repair_pulled`), or 000030's backfill. The attribution trigger already created it
+        // for the debit above, so this insert is a no-op kept so the lock below never depends
+        // on a trigger having run. Nothing deletes the row. Its columns and their writers:
+        // `over_since`, stamped below and cleared by `stop_the_clock` on every release;
+        // `suspended_since`, set by `suspend` and cleared by `unsuspend`; and the stored
+        // `pulled` total, written by the 000030 triggers, its backfill and `repair_pulled`.
         transaction
             .execute_raw(Statement::from_sql_and_values(
                 DbBackend::Postgres,
