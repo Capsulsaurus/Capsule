@@ -778,6 +778,61 @@ impl From<BlobManifest> for FfiBlobManifest {
     }
 }
 
+/// FFI mirror of [`HistorySources`](crate::sync::HistorySources): the blobs adopting an asset
+/// from its fetched history needs beyond its records.
+#[derive(uniffi::Record)]
+pub struct FfiHistorySources {
+    /// The asset's live metadata blob's content address (lowercase hex), for
+    /// [`FfiSession::fetch_metadata_blob`]; its bytes are the [`FfiSyncHead::metadata_blob`]
+    /// [`FfiWorkspace::open_synced_history`] takes.
+    pub metadata_blob_hash: String,
+    /// The original the head commits to, role `original`, sized for
+    /// [`FfiSession::fetch_blob_to_path`]; that file is the `ciphertext_path`
+    /// [`FfiWorkspace::open_synced_history`] takes.
+    pub original: FfiBlobRef,
+}
+
+impl From<crate::sync::HistorySources> for FfiHistorySources {
+    fn from(sources: crate::sync::HistorySources) -> Self {
+        Self {
+            metadata_blob_hash: sources.metadata_blob_hash.to_hex(),
+            original: FfiBlobRef {
+                ciphertext_hash: sources.original_hash.to_hex(),
+                role: "original".to_owned(),
+                size: sources.original_size,
+            },
+        }
+    }
+}
+
+/// **Name what adopting an asset from its history fetches**: the live metadata blob and the
+/// original, read off the asset's latest record `manifest_cbor` (a feed entry's) and `history`,
+/// the records before it that [`FfiSession::fetch_provenance_history`] returned.
+///
+/// An album page — the one a writer member's device reads — serves a `delete` with no metadata
+/// blob and no blob, so a device that first sees the asset there has only its records. The live
+/// metadata blob is the newest record that binds one, and the delete commits to the original;
+/// the server serves both to the asset's readers until its retention window closes. Fetch them
+/// with [`FfiSession::fetch_metadata_blob`] and [`FfiSession::fetch_blob_to_path`], set the
+/// entry's `metadata_blob` to the first, and hand the second to
+/// [`FfiWorkspace::open_synced_history`]: the asset is held in this device's trash and its
+/// `trash-restore` can be signed. An entry that names its metadata blob (the owner's own feed)
+/// agrees with this answer.
+///
+/// Pure and offline. Nothing is trusted for being named: the adoption binds the metadata blob and
+/// the original to the records, and refuses what does not.
+///
+/// # Errors
+///
+/// [`FfiError::Sync`] when a record does not decode or none binds a metadata blob.
+#[uniffi::export]
+pub fn synced_history_sources(
+    manifest_cbor: Vec<u8>,
+    history: Vec<Vec<u8>>,
+) -> Result<FfiHistorySources, FfiError> {
+    Ok(crate::sync::history_sources(&manifest_cbor, &history)?.into())
+}
+
 /// FFI mirror of [`FeedEntry`] — one decoded sync feed entry. Ids/manifest/metadata
 /// cross as opaque bytes.
 #[derive(uniffi::Record)]
@@ -1189,7 +1244,8 @@ impl FfiSession {
     /// A sealed sidecar is a few KiB; a blob that grows past [`MAX_METADATA_BLOB_BYTES`] is
     /// refused rather than buffered without bound. On a `delete` in trash the server serves the
     /// asset's live metadata blob to its readers until the retention window closes, so an asset
-    /// first seen at its delete can be adopted and restored.
+    /// first seen at its delete can be adopted and restored; where the entry names no metadata
+    /// blob (an album page's tombstone), [`synced_history_sources`] names its address.
     ///
     /// `blob_base_url` is as for [`fetch_blob_to_path`](Self::fetch_blob_to_path). A `hash` that
     /// is not a lowercase hex SHA-256 is [`FfiError::InvalidArgument`] and reaches no network; a
@@ -1228,8 +1284,10 @@ impl FfiSession {
     /// from its create. Nothing is verified here: the walk only follows links.
     ///
     /// An asset first seen at its `delete` is fetched the same way while it is in trash: the
-    /// server serves a trashed asset's records, and the entry's metadata blob and original, to
-    /// its readers until the retention window closes, so the adopted asset can be restored.
+    /// server serves a trashed asset's records, and its live metadata blob and original, to
+    /// its readers until the retention window closes, so the adopted asset can be restored. An
+    /// album page's tombstone names neither blob; [`synced_history_sources`] names both from
+    /// these records.
     ///
     /// `blob_base_url` is as for [`fetch_blob_to_path`](Self::fetch_blob_to_path). A record the
     /// server refuses (a deleted asset's past its retention window, a purged asset's, or one the

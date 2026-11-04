@@ -53,7 +53,10 @@
 //! an older server binds a `delete` to no metadata blob (invariant 25) and would refuse a page
 //! that named one, and an album page has one shape whoever reads it, so the page a member's
 //! account reads is the page a peer pulls. Protocol evolution stays additive: no peer stalls on
-//! this feed. The owner's own feed is the surface a restoring device reads.
+//! this feed. A writer member's device restores from the records alone: it walks the delete's
+//! history, names the live metadata blob (the newest record binding one) and the original (the
+//! delete's own commitment) from those records, and fetches both from the serving path, which
+//! hands them to the asset's readers for the window whatever this page names.
 //!
 //! It also carries its asset manifest, inline: the signed `delete` record that moved the asset to
 //! trash. That is no byte reference, and it is what tells a client the asset's retention window,
@@ -685,9 +688,9 @@ async fn album_read_access(
 
 /// What a tombstone names beyond its signed delete record, decided by the surface serving it.
 ///
-/// See the module docs on what a tombstone discloses: the owner's own feed is the surface a
-/// restoring device reads, and every other surface keeps the record-only tombstone a peer on an
-/// older server validates.
+/// See the module docs on what a tombstone discloses: the owner's own feed names what a restore
+/// needs, and every other surface keeps the record-only tombstone a peer on an older server
+/// validates; a member's device names the same blobs from the delete's records.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TombstoneDisclosure {
     /// The owner's own feed: the live metadata blob and the original a restore needs.

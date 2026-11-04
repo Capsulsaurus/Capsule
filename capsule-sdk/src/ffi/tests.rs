@@ -3844,3 +3844,167 @@ async fn ffi_an_asset_first_seen_at_a_delete_is_adopted_from_its_fetched_history
         other => panic!("expected a fetch error, got {other:?}"),
     }
 }
+
+/// **A device that first sees an asset at its `delete` on an album page adopts and restores
+/// it.** The album page's tombstone names no metadata blob and no blob, so the device walks the
+/// delete's history, names the live metadata blob (the newest record that binds one) and the
+/// original (the delete's commitment) from those records, fetches both through the blob route,
+/// and opens the entry from its history: the asset is held in trash with its edited tags and
+/// restores. The same entry with its metadata blob left empty is refused and places nothing.
+#[tokio::test]
+async fn ffi_an_asset_first_seen_deleted_on_an_album_page_is_adopted_from_its_named_sources() {
+    use capsule_library::lifecycle::{SidecarEnrichment, SignedImportOptions};
+
+    let (lib, other_lib, blobs, out) = (
+        tempfile::TempDir::new().unwrap(),
+        tempfile::TempDir::new().unwrap(),
+        tempfile::TempDir::new().unwrap(),
+        tempfile::TempDir::new().unwrap(),
+    );
+    let workspace = enroll(lib.path());
+    let album = workspace.create_album("Trip".into()).unwrap();
+    let mut other = other_device(&workspace, &album, other_lib.path());
+
+    let photo = blobs.path().join("IMG_0004.JPG");
+    std::fs::write(&photo, original_plaintext(4096)).unwrap();
+    let options = SignedImportOptions {
+        enrichment: Some(SidecarEnrichment {
+            tags: vec!["harbour".into()],
+            ..SidecarEnrichment::default()
+        }),
+        ..SignedImportOptions::default()
+    };
+    let asset = other
+        .import_asset_with(uuid::Uuid::parse_str(&album).unwrap(), &photo, &options)
+        .unwrap()
+        .asset_id;
+    other.tag_add(&asset, "dusk").unwrap();
+    other.soft_delete(&asset, 30).unwrap();
+    let records: Vec<Vec<u8>> = other
+        .asset(&asset)
+        .unwrap()
+        .chain
+        .records()
+        .iter()
+        .map(|record| capsule_core::cbor::to_canonical_vec(record).unwrap())
+        .collect();
+    let history = records[..records.len() - 1].to_vec();
+
+    // The album page's tombstone: its delete record, and no metadata blob.
+    let (head, served_original) = remote_head(&other, asset, None, blobs.path());
+    assert!(head.metadata_blob.is_empty(), "an album page names none");
+    let live_metadata = other.asset(&asset).unwrap().metadata_blob.clone();
+    let ciphertext = std::fs::read(&served_original).unwrap();
+    let mut served = history.clone();
+    served.extend([live_metadata.clone(), ciphertext.clone()]);
+    let server = records_server(served).await;
+    let session = login(&server).await;
+    let blob_base = format!("{}/v1", server.base_url());
+
+    let fetched = session
+        .fetch_provenance_history(blob_base.clone(), head.manifest_cbor.clone())
+        .await
+        .unwrap();
+    assert_eq!(fetched, history);
+    let sources = synced_history_sources(head.manifest_cbor.clone(), fetched.clone()).unwrap();
+    assert_eq!(
+        sources.metadata_blob_hash,
+        capsule_core::crypto::hash::hash_bytes(&live_metadata).to_hex(),
+        "the live blob, not the create's"
+    );
+    assert_eq!(
+        sources.original.ciphertext_hash,
+        capsule_core::crypto::hash::hash_bytes(&ciphertext).to_hex()
+    );
+    assert_eq!(sources.original.size, ciphertext.len() as u64);
+    assert_eq!(sources.original.role, "original");
+
+    let metadata_blob = session
+        .fetch_metadata_blob(blob_base.clone(), sources.metadata_blob_hash.clone())
+        .await
+        .unwrap();
+    let original = out.path().join("original.blob");
+    session
+        .fetch_blob_to_path(
+            blob_base,
+            sources.original.ciphertext_hash.clone(),
+            sources.original.size,
+            path_string(&original),
+        )
+        .await
+        .unwrap();
+
+    // Left as the page served it, the entry's empty metadata blob binds to nothing.
+    let placed = out.path().join("placed");
+    std::fs::create_dir(&placed).unwrap();
+    let destination = placed.join("opened");
+    match workspace
+        .open_synced_history(
+            head.clone(),
+            fetched.clone(),
+            path_string(&original),
+            path_string(&destination),
+        )
+        .unwrap()
+    {
+        FfiOpenedOriginal::Refused { .. } => {}
+        other => panic!("expected an unbound metadata blob to be refused, got {other:?}"),
+    }
+    assert!(dir_names(&placed).is_empty(), "nothing placed or staged");
+    assert!(workspace.provenance_head(asset.to_string()).is_err());
+
+    let entry = FfiSyncHead {
+        metadata_blob,
+        ..head
+    };
+    match workspace
+        .open_synced_history(
+            entry,
+            fetched,
+            path_string(&original),
+            path_string(&destination),
+        )
+        .unwrap()
+    {
+        FfiOpenedOriginal::Opened { facts } => {
+            assert!(facts.adopted, "the asset is held from its create");
+            assert_eq!(facts.action, "delete");
+        }
+        other => panic!("expected the delete to open, got {other:?}"),
+    }
+    assert_eq!(
+        std::fs::read(&destination).unwrap(),
+        original_plaintext(4096)
+    );
+    assert_eq!(
+        workspace.provenance_head(asset.to_string()).unwrap(),
+        records[records.len() - 1]
+    );
+    let tags = workspace
+        .with(|ws| Ok(ws.db().tags_for(&asset.to_string()).unwrap()))
+        .unwrap();
+    assert_eq!(tags, vec!["dusk".to_string(), "harbour".to_string()]);
+    assert_eq!(
+        workspace
+            .trash()
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.asset_id)
+            .collect::<Vec<_>>(),
+        vec![asset.to_string()]
+    );
+    workspace.restore_asset(asset.to_string()).unwrap();
+    assert!(workspace.trash().unwrap().is_empty());
+}
+
+/// A head that does not decode names no sources: a sync error naming the head, with no network
+/// reached. (A chain binding no metadata blob is the SDK's `HistoryError::Unbound`, mapped the
+/// same way.)
+#[test]
+fn ffi_synced_history_sources_refuses_what_names_no_sources() {
+    match synced_history_sources(b"not a record".to_vec(), Vec::new()) {
+        Err(FfiError::Sync { detail, .. }) => assert!(detail.contains("head"), "{detail}"),
+        Err(other) => panic!("expected a sync error, got {other:?}"),
+        Ok(sources) => panic!("expected a sync error, got {}", sources.metadata_blob_hash),
+    }
+}
