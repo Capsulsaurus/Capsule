@@ -675,6 +675,28 @@ struct FFISyncDriverTests {
         #expect(verbs.opens.first?.localChainHead == FFIPurgeDelivery.headHash(Data([3])))
     }
 
+    @Test("an asset its create adopted is held for the rest of the drain: its next entry reads no history")
+    func adoptedCreateIsHeldAfter() async throws {
+        let verbs = ScriptedVerbs(
+            pages: [.success(page(
+                [
+                    entry(assetA, record: Data([1]), metadata: true),
+                    entry(assetA, record: Data([2]), kind: .updated, metadata: true),
+                ],
+                next: Data([1])
+            ))],
+            openings: [Data([1]): .opened(facts: facts(Data([1]), metadata: metadataFacts, adopted: true))]
+        )
+
+        let drain = try await driver(verbs, sink: DrainSink()).sync()
+
+        #expect(drain.applied == 2)
+        #expect(verbs.historyFetches == [Data([1])])
+        #expect(verbs.historyOpens.isEmpty)
+        #expect(verbs.opens.map(\.manifest) == [Data([1]), Data([2])])
+        #expect(verbs.opens.last?.localChainHead == FFIPurgeDelivery.headHash(Data([1])))
+    }
+
     @Test("a held asset's entry is opened against its own chain, reading no history")
     func heldAssetReadsNoHistory() async throws {
         let verbs = ScriptedVerbs(
