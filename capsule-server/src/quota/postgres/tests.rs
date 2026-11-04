@@ -405,7 +405,7 @@ mod postgres_conformance {
         /// Rows written before the migration are counted by it, and its `down` and `up` round
         /// trip.
         pub(super) async fn the_migration_backfills_existing_holdings(h: &PostgresHarness) {
-            use server_migration::{MigrationName as _, MigratorTrait as _};
+            use server_migration::MigratorTrait as _;
 
             // Down to just before `000030`, however many ordinals come after it.
             let migrations = server_migration::Migrator::migrations();
