@@ -3274,3 +3274,212 @@ fn ffi_trash_refuses_a_restore_after_retention_until() {
             .is_none()
     );
 }
+
+/// Another device of this FFI workspace's account, as an enrolled second device is: a library
+/// workspace made from the account's master key that holds `album`'s keys, with a device
+/// directory listing both devices on each side.
+fn other_device(
+    workspace: &FfiWorkspace,
+    album: &str,
+    root: &std::path::Path,
+) -> capsule_library::lifecycle::Workspace {
+    use capsule_core::crypto::primitives::DeviceTier;
+    use capsule_library::lifecycle::Workspace;
+
+    let album = uuid::Uuid::parse_str(album).unwrap();
+    workspace
+        .with(|ws| {
+            let secret = b"a recovery secret for the other device";
+            let escrow = ws.escrow_master_key(secret, DeviceTier::LowRam)?;
+            let master = capsule_core::backup::recover_master_key(&escrow, secret).unwrap();
+            let mut other = Workspace::create_from_master(
+                root,
+                b"other device",
+                DeviceTier::LowRam.params(),
+                capsule_core::crypto::keys::MasterKey::from_bytes(master),
+                ws.user_id(),
+                &ws.sealed_identity(),
+            )?;
+            other.adopt_album_key_escrows(&[(album, ws.album_key_escrow(&album)?)])?;
+            let entry = other
+                .device_directory()
+                .device(&other.device_id())
+                .unwrap()
+                .clone();
+            let both = ws.cross_sign_device(entry)?;
+            assert!(other.extend_account_directory(&both)?.is_none());
+            Ok(other)
+        })
+        .unwrap()
+}
+
+/// The feed head of `asset`'s latest record on `ws`, with its original ciphertext written to
+/// `dir` as `fetch_blob_to_path` would leave it.
+fn remote_head(
+    ws: &capsule_library::lifecycle::Workspace,
+    asset: uuid::Uuid,
+    local_chain_head: Option<Vec<u8>>,
+    dir: &std::path::Path,
+) -> (FfiSyncHead, std::path::PathBuf) {
+    let state = ws.asset(&asset).unwrap();
+    let head = state.chain.records().last().unwrap();
+    let metadata_blob = if head.manifest.core.action.binds_metadata_blob() {
+        state.metadata_blob.clone()
+    } else {
+        Vec::new()
+    };
+    let ciphertext = dir.join(format!("{}.blob", uuid::Uuid::now_v7()));
+    let original = ws.upload_bundle(&asset).unwrap().original.to_vec().unwrap();
+    std::fs::write(&ciphertext, original).unwrap();
+    (
+        FfiSyncHead {
+            album_id: state.album_id.as_bytes().to_vec(),
+            manifest_cbor: capsule_core::cbor::to_canonical_vec(head).unwrap(),
+            metadata_blob,
+            local_chain_head,
+        },
+        ciphertext,
+    )
+}
+
+/// **Synced assets are held.** A create another device of the account imported is opened and
+/// adopted: the facts say so, the user tag its create carries is in `asset_tags`, and the trash
+/// verbs work on it, the delete this device signs chaining onto the other device's head (which
+/// that device verifies). A delete the other device signs is adopted by the apply verb, after
+/// which this device purges the asset it never imported.
+#[test]
+fn ffi_a_synced_asset_is_adopted_and_takes_the_trash_verbs() {
+    use capsule_library::lifecycle::{SidecarEnrichment, SignedImportOptions};
+
+    let (lib, other_lib, blobs, out) = (
+        tempfile::TempDir::new().unwrap(),
+        tempfile::TempDir::new().unwrap(),
+        tempfile::TempDir::new().unwrap(),
+        tempfile::TempDir::new().unwrap(),
+    );
+    let workspace = enroll(lib.path());
+    let album = workspace.create_album("Trip".into()).unwrap();
+    let mut other = other_device(&workspace, &album, other_lib.path());
+
+    let photo = blobs.path().join("IMG_0001.JPG");
+    std::fs::write(&photo, original_plaintext(4096)).unwrap();
+    let options = SignedImportOptions {
+        enrichment: Some(SidecarEnrichment {
+            tags: vec!["harbour".into()],
+            ..SidecarEnrichment::default()
+        }),
+        ..SignedImportOptions::default()
+    };
+    let asset = other
+        .import_asset_with(uuid::Uuid::parse_str(&album).unwrap(), &photo, &options)
+        .unwrap()
+        .asset_id;
+    let remote = other.asset(&asset).unwrap().chain.head().unwrap();
+
+    let (head, ciphertext) = remote_head(&other, asset, None, blobs.path());
+    let destination = out.path().join("staged");
+    let facts = match workspace
+        .open_synced_original(head, path_string(&ciphertext), path_string(&destination))
+        .unwrap()
+    {
+        FfiOpenedOriginal::Opened { facts } => facts,
+        other => panic!("expected the create to open, got {other:?}"),
+    };
+    assert!(facts.adopted, "the workspace holds the synced asset");
+    assert_eq!(facts.provenance_head, remote.as_bytes().to_vec());
+    assert_eq!(
+        workspace.read_plaintext(asset.to_string()).unwrap(),
+        original_plaintext(4096)
+    );
+    assert_eq!(
+        std::fs::read(&destination).unwrap(),
+        original_plaintext(4096),
+        "the opened original is still the caller's"
+    );
+    let tags = workspace
+        .with(|ws| Ok(ws.db().tags_for(&asset.to_string()).unwrap()))
+        .unwrap();
+    assert_eq!(tags, vec!["harbour".to_string()]);
+
+    workspace.delete_asset(asset.to_string(), 30).unwrap();
+    let delete = capsule_core::crypto::provenance::ProvenanceRecord::decode(
+        &workspace.provenance_head(asset.to_string()).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(delete.prior_provenance_hash, Some(remote));
+    let ours = workspace
+        .with(|ws| Ok(remote_head(ws, asset, None, blobs.path())))
+        .unwrap()
+        .0;
+    let verdict = other
+        .apply_remote_entry(capsule_library::lifecycle::RemoteEntry {
+            album_id: uuid::Uuid::parse_str(&album).unwrap(),
+            manifest_cbor: &ours.manifest_cbor,
+            metadata_blob: &ours.metadata_blob,
+            original_ciphertext: &other
+                .upload_bundle(&asset)
+                .unwrap()
+                .original
+                .to_vec()
+                .unwrap(),
+            local_chain_head: Some(remote),
+        })
+        .unwrap();
+    assert!(
+        verdict.facts().is_some(),
+        "the other device verifies this device's delete: {verdict:?}"
+    );
+    workspace.restore_asset(asset.to_string()).unwrap();
+    assert!(workspace.trash().unwrap().is_empty());
+
+    // A delete the other device signs, adopted by the apply verb. On a fresh pair: this
+    // device's own delete and restore above moved its chain past the other device's.
+    let (lib2, other_lib2) = (
+        tempfile::TempDir::new().unwrap(),
+        tempfile::TempDir::new().unwrap(),
+    );
+    let workspace = enroll(lib2.path());
+    let album = workspace.create_album("Trip".into()).unwrap();
+    let mut other = other_device(&workspace, &album, other_lib2.path());
+    let asset = other
+        .import_asset_with(uuid::Uuid::parse_str(&album).unwrap(), &photo, &options)
+        .unwrap()
+        .asset_id;
+    let (head, ciphertext) = remote_head(&other, asset, None, blobs.path());
+    let staged = out.path().join("staged-2");
+    assert!(matches!(
+        workspace
+            .open_synced_original(head, path_string(&ciphertext), path_string(&staged))
+            .unwrap(),
+        FfiOpenedOriginal::Opened { facts } if facts.adopted
+    ));
+    let create = other.asset(&asset).unwrap().chain.head().unwrap();
+    other.soft_delete(&asset, 30).unwrap();
+    let (head, ciphertext) = remote_head(
+        &other,
+        asset,
+        Some(create.as_bytes().to_vec()),
+        blobs.path(),
+    );
+    match workspace
+        .apply_sync_entry_from_file(head, path_string(&ciphertext))
+        .unwrap()
+    {
+        FfiSyncApplyOutcome::Applied { facts } => {
+            assert_eq!(facts.action, "delete");
+            assert!(facts.adopted, "the remote delete advanced the held chain");
+        }
+        other => panic!("expected the delete to apply, got {other:?}"),
+    }
+    assert_eq!(
+        workspace
+            .trash()
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.asset_id)
+            .collect::<Vec<_>>(),
+        vec![asset.to_string()]
+    );
+    workspace.purge_asset(asset.to_string()).unwrap();
+    assert!(workspace.read_plaintext(asset.to_string()).is_err());
+}

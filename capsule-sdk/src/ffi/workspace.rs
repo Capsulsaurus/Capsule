@@ -49,7 +49,7 @@ use capsule_core::sidecar::{
     LabelError, Region, RegionError, RegionShape, SidecarV1, normalize_label,
 };
 use capsule_library::lifecycle::{
-    FeedDrain, HardwareSignerBinding, LifecycleError, QuarantineReason, RemoteAssetFacts,
+    Adoption, FeedDrain, HardwareSignerBinding, LifecycleError, QuarantineReason, RemoteAssetFacts,
     RemoteEntry, RemoteHead, RemoteOriginal, SyncApplyOutcome, TrashEntry, UploadBundle, Workspace,
     hash_ciphertext_from,
 };
@@ -554,6 +554,14 @@ pub struct FfiAssetFacts {
     /// `trash-restore`. Those are fully-verified entries that simply carry no metadata, so an
     /// app applies the lifecycle change and leaves the row's metadata as it stands.
     pub metadata: Option<FfiAssetMetadata>,
+    /// Whether this workspace now holds the asset at this entry's record: it adopted the
+    /// entry, writing the asset's chain, sidecar, sealed metadata and original under `media/`
+    /// and its index row and user tags into the library catalog, so the trash verbs and tag
+    /// edits work on it. When `true` the catalog already describes the asset and an app writes
+    /// nothing of its own for it; when `false` (an asset first seen past its create, a fork, or
+    /// a verb that applies without adopting) the facts are the app's to upsert.
+    #[uniffi(default = false)]
+    pub adopted: bool,
 }
 
 /// The decrypted sidecar's facts, flattened for a catalog upsert.
@@ -616,7 +624,19 @@ impl From<RemoteAssetFacts> for FfiAssetFacts {
             created_by_device: facts.created_by_device.to_string(),
             provenance_head: facts.provenance_head.as_bytes().to_vec(),
             metadata: facts.sidecar.map(FfiAssetMetadata::from),
+            adopted: false,
         }
+    }
+}
+
+impl FfiSyncApplyOutcome {
+    /// This verdict with its facts marked [`adopted`](FfiAssetFacts::adopted) when `adoption`
+    /// left the workspace holding the asset.
+    fn adopted(mut self, adoption: Option<Adoption>) -> Self {
+        if let Self::Applied { facts } = &mut self {
+            facts.adopted = adoption.is_some_and(Adoption::holds);
+        }
+        self
     }
 }
 
@@ -1596,18 +1616,26 @@ impl FfiWorkspace {
     /// Never silently drops and never silently accepts: a refused entry is a
     /// [`FfiSyncApplyOutcome::Quarantined`] the app must surface, not an error that aborts the
     /// page. Errors are reserved for a failure of this workspace itself.
+    ///
+    /// An applied record that chains onto an asset this workspace holds is **adopted**: appended
+    /// to the asset's chain with the metadata it binds, written and indexed, and the facts say
+    /// so ([`FfiAssetFacts::adopted`]). A `create` is adopted only by
+    /// [`open_synced_original`](Self::open_synced_original), which has its original.
     pub fn apply_sync_entry(&self, entry: FfiSyncEntry) -> Result<FfiSyncApplyOutcome, FfiError> {
         let album_id = uuid_from_bytes("album_id", &entry.album_id)?;
         let local_chain_head = chain_head(entry.local_chain_head.as_deref())?;
         self.with(|ws| {
-            let outcome = ws.apply_remote_entry(RemoteEntry {
-                album_id,
-                manifest_cbor: &entry.manifest_cbor,
-                metadata_blob: &entry.metadata_blob,
-                original_ciphertext: &entry.original_ciphertext,
-                local_chain_head,
-            })?;
-            Ok(outcome.into())
+            let (outcome, adoption) = ws.adopt_remote_head(
+                RemoteEntry {
+                    album_id,
+                    manifest_cbor: &entry.manifest_cbor,
+                    metadata_blob: &entry.metadata_blob,
+                    original_ciphertext: &entry.original_ciphertext,
+                    local_chain_head,
+                }
+                .head(),
+            )?;
+            Ok(FfiSyncApplyOutcome::from(outcome).adopted(adoption))
         })
     }
 
@@ -1619,7 +1647,12 @@ impl FfiWorkspace {
     /// The same chokepoint and verdicts: the file is hashed, and that digest is what the
     /// content-integrity step checks against the manifest's content address, so a file that is
     /// not the committed ciphertext is quarantined as `Rejected.CiphertextHashMismatch`, as
-    /// `apply_sync_entry` quarantines those bytes. Nothing is written anywhere.
+    /// `apply_sync_entry` quarantines those bytes. The ciphertext file is only read.
+    ///
+    /// An applied record is adopted as [`apply_sync_entry`](Self::apply_sync_entry) adopts one:
+    /// a `delete`, `trash-restore` or edit of an asset this workspace holds is appended to its
+    /// chain, written under `media/` and indexed, and the facts say so
+    /// ([`FfiAssetFacts::adopted`]).
     ///
     /// A malformed `album_id` or `local_chain_head` is refused before the file is opened, so a
     /// bad argument never costs a read of the original. The file is hashed before the workspace
@@ -1642,7 +1675,10 @@ impl FfiWorkspace {
             original_ciphertext_hash: digest,
             local_chain_head,
         };
-        self.with(|ws| Ok(ws.apply_remote_head(head)?.into()))
+        self.with(|ws| {
+            let (outcome, adoption) = ws.adopt_remote_head(head)?;
+            Ok(FfiSyncApplyOutcome::from(outcome).adopted(adoption))
+        })
     }
 
     /// **Open a synced original** from the ciphertext file at `ciphertext_path` to its plaintext
@@ -1657,13 +1693,22 @@ impl FfiWorkspace {
     /// any other verdict and never holds a partial or unverified original. An existing file there
     /// is replaced only by a verified one.
     ///
-    /// The workspace stays locked while the original decrypts.
+    /// An opened entry is then **adopted**: a `create` of an asset this workspace does not hold
+    /// makes it held, with its chain, sidecar and sealed metadata written under `media/`, the
+    /// opened original hard-linked (or copied) there as its library copy, and its row and user
+    /// tags indexed; a later record of a held asset is appended as
+    /// [`apply_sync_entry_from_file`](Self::apply_sync_entry_from_file) appends one. The facts
+    /// say whether it was ([`FfiAssetFacts::adopted`]). `destination_path` still holds the
+    /// plaintext either way, for the caller to keep or remove.
+    ///
+    /// The workspace stays locked while the original decrypts and is adopted.
     ///
     /// # Errors
     ///
     /// [`FfiError::Workspace`] when a file cannot be read or written, or the workspace itself
-    /// fails; [`FfiError::InvalidArgument`] for a malformed entry or a destination with no file
-    /// name. A refused entry is a verdict, never an error.
+    /// fails (an adoption whose write failed included, after the original was placed at
+    /// `destination_path`); [`FfiError::InvalidArgument`] for a malformed entry or a destination
+    /// with no file name. A refused entry is a verdict, never an error.
     pub fn open_synced_original(
         &self,
         entry: FfiSyncHead,
@@ -1687,34 +1732,37 @@ impl FfiWorkspace {
         let sink = std::fs::File::create_new(&staged)
             .map(std::io::BufWriter::new)
             .map_err(|e| local_io("creating the staging file", &staged, &e))?;
-        let opened = self.with(|ws| Ok(ws.open_remote_original_from(head, ciphertext, sink)?));
-        let (facts, sink) = match opened {
-            Ok(RemoteOriginal::Opened { facts, plaintext }) => (facts, plaintext),
-            Ok(refused) => {
+        self.with(|ws| {
+            let (facts, sink) = match ws.open_remote_original_from(head, ciphertext, sink) {
+                Ok(RemoteOriginal::Opened { facts, plaintext }) => (facts, plaintext),
+                Ok(refused) => {
+                    discard_staged(&staged);
+                    tracing::warn!(source = %source.display(), "ffi: synced original not opened; nothing placed");
+                    return Ok(refused.into());
+                }
+                Err(error) => {
+                    discard_staged(&staged);
+                    return Err(error.into());
+                }
+            };
+            if let Err(e) = commit_staged(sink, &staged, &destination) {
                 discard_staged(&staged);
-                tracing::warn!(source = %source.display(), "ffi: synced original not opened; nothing placed");
-                return Ok(refused.into());
+                return Err(local_io(
+                    "moving the original into place at",
+                    &destination,
+                    &e,
+                ));
             }
-            Err(error) => {
-                discard_staged(&staged);
-                return Err(error);
-            }
-        };
-        if let Err(e) = commit_staged(sink, &staged, &destination) {
-            discard_staged(&staged);
-            return Err(local_io(
-                "moving the original into place at",
-                &destination,
-                &e,
-            ));
-        }
-        tracing::info!(
-            asset_id = %facts.asset_id,
-            destination = %destination.display(),
-            "ffi: synced original verified and opened to disk"
-        );
-        Ok(FfiOpenedOriginal::Opened {
-            facts: (*facts).into(),
+            tracing::info!(
+                asset_id = %facts.asset_id,
+                destination = %destination.display(),
+                "ffi: synced original verified and opened to disk"
+            );
+            // Still under the lock the open took, so the workspace is the one that verified it.
+            let (_, adoption) = ws.adopt_remote_original(head, &destination)?;
+            let mut facts = FfiAssetFacts::from(*facts);
+            facts.adopted = adoption.is_some_and(Adoption::holds);
+            Ok(FfiOpenedOriginal::Opened { facts })
         })
     }
 
