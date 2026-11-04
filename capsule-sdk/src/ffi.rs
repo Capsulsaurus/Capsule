@@ -1645,8 +1645,6 @@ fn release_if_complete(
     }
 }
 
-/// Stream the blob at `hash` from `source` into a fresh file at `path`, synced to disk once
-/// its content address has checked out. Leaves cleanup of a failed fetch to the caller.
 /// The most [`FfiSession::fetch_metadata_blob`] reads of a metadata blob whose size the feed
 /// does not list (16 MiB, the upload protocol's largest chunk), the bound the CLI's restore
 /// reads one under. A sealed sidecar is a few KiB; the cap only stops a server that keeps
@@ -1663,6 +1661,8 @@ fn check_content_address(hash: &str) -> Result<(), FfiError> {
     Ok(())
 }
 
+/// Stream the blob at `hash` from `source` into a fresh file at `path`, synced to disk once
+/// its content address has checked out. Leaves cleanup of a failed fetch to the caller.
 async fn fetch_to_file<B: crate::fetch::BlobSource>(
     source: &B,
     hash: &str,
