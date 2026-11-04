@@ -794,9 +794,11 @@ pub struct FfiFeedEntry {
     pub asset_id: Vec<u8>,
     /// The signed `AssetManifest` as opaque canonical CBOR.
     pub manifest_cbor: Vec<u8>,
-    /// The encrypted metadata blob's content address, as UTF-8 bytes; empty for deletes.
+    /// The encrypted metadata blob's content address, as UTF-8 bytes. On a delete in trash, the
+    /// asset's live metadata blob, which a restore needs; empty for a purged delete.
     pub metadata_blob: Vec<u8>,
-    /// Content addresses of the asset's blobs by role.
+    /// Content addresses of the asset's blobs by role. On a delete in trash, only its original;
+    /// none for a purged delete.
     pub blobs: FfiBlobManifest,
     /// Whether the original blob is finalized server-side.
     pub original_held: bool,
@@ -1195,8 +1197,13 @@ impl FfiSession {
     /// [`FfiWorkspace::open_synced_history`], which verifies them in order and holds the asset
     /// from its create. Nothing is verified here: the walk only follows links.
     ///
+    /// An asset first seen at its `delete` is fetched the same way while it is in trash: the
+    /// server serves a trashed asset's records, and the entry's metadata blob and original, to
+    /// its readers until the retention window closes, so the adopted asset can be restored.
+    ///
     /// `blob_base_url` is as for [`fetch_blob_to_path`](Self::fetch_blob_to_path). A record the
-    /// server refuses (a deleted asset's, or one the caller may not read) or that does not hash
+    /// server refuses (a deleted asset's past its retention window, a purged asset's, or one the
+    /// caller may not read) or that does not hash
     /// to its address is [`FfiError::Fetch`]; a session that cannot authorize the fetch is
     /// [`FfiError::Auth`]; a record that does not decode, or a chain longer than
     /// [`MAX_HISTORY_RECORDS`](crate::sync::MAX_HISTORY_RECORDS), is [`FfiError::Sync`].
