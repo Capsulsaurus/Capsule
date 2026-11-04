@@ -289,7 +289,9 @@ impl PostgresPulledAlbums {
     /// The bytes of the metadata blob at `hash`, if `job`'s claim names it.
     ///
     /// The claim row is read first, so a blob some other job holds is never answered for this
-    /// one, and its recorded size bounds the read.
+    /// one, and its recorded size bounds the read. `Ok(None)` means `job` holds no claim to it;
+    /// a claim whose bytes the blob store does not have is [`StoreError::Corrupt`], a fault of
+    /// this server's own state and never an absence.
     async fn held_bytes(&self, job: &JobKey, hash: &Hash32) -> Result<Option<Vec<u8>>, StoreError> {
         let doing = "looking up a held metadata blob";
         let address = address_of(hash)?;
@@ -313,12 +315,17 @@ impl PostgresPulledAlbums {
             .read_at(&address, 0, len)
             .await
             .map_err(blob_failure)?;
-        if bytes.is_none() {
+        let Some(bytes) = bytes else {
             // A row naming bytes the store does not have: the dangling reference the
             // collector reports and never resolves by deleting the row.
             tracing::error!(%job, %address, "a held pulled metadata blob is missing from the blob store");
-        }
-        Ok(bytes)
+            return Err(StoreError::Corrupt {
+                store: PORT.store,
+                record: "held metadata blob",
+                detail: format!("{address} is claimed but missing from the blob store"),
+            });
+        };
+        Ok(Some(bytes))
     }
 
     /// Every row `sql` selects with `values`.

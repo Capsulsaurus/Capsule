@@ -310,7 +310,8 @@ pub trait PulledAlbums: std::fmt::Debug + Send + Sync {
 pub trait PulledAlbumReads: BreadcrumbIndex {
     /// The bytes of the metadata blob `asset_id`'s latest entry in `job` carries; `None` when
     /// that entry leaves no breadcrumb, binds no blob, `job` never named the asset, or `job`
-    /// does not hold the blob.
+    /// does not hold the blob. A blob `job` holds whose bytes are gone is an error, never
+    /// `None`: it is this server's fault, not an absence to answer a client with.
     fn asset_metadata<'a>(
         &'a self,
         job: &'a JobKey,
