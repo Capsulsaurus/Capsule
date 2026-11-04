@@ -2,8 +2,8 @@
 //!
 //! # The total is derived, and the clock is not
 //!
-//! `quota_attributions` holds one row per charged content address. A user's `used` is
-//! `SUM(size)` over their rows and is **never** a stored column, for the reason
+//! `quota_attributions` holds one row per charged content address. A user's attributed bytes are
+//! `SUM(size)` over their rows and **never** a stored column, for the reason
 //! [`crate::index::AssetIndex::reference_count`] is a query: a stored total is a second copy of
 //! a derivable fact, and one that drifts low hands somebody free storage.
 //!
@@ -12,15 +12,26 @@
 //! one of the two columns of `quota_usage`; the other is when an operator suspended the account
 //! (`suspended_since`, #705), which no charge or release touches.
 //!
-//! # Pulled blobs are read, not charged (#1162)
+//! # Pulled blobs are a stored total, kept by the schema (#1162, #1171)
 //!
-//! An account's pulled metadata blobs ([`super`], "Pulled blobs") are part of the same derived
-//! total: the usage statement sums the distinct addresses the federation pull holds for the albums the
-//! account subscribes to (`federation_subscriptions` joined with
-//! `federation_pulled_metadata_blobs`, along both tables' primary keys), less the ones it is
-//! itself attributed here. No row of this ledger records them, so the charge is written by the
-//! pulled page's own commit, released by the unsubscribe or forget that removes the holding, and
-//! correct for every page committed before this ledger counted them, with nothing to backfill.
+//! An account's pulled metadata blobs ([`super`], "Pulled blobs") are part of the same total,
+//! but not summed at read time: that sum runs over every `(album, blob)` row the account's
+//! subscriptions hold, which no row count caps on an unlimited deployment, and it would run
+//! under the account's lock on every charge. `quota_usage.pulled` holds it instead, beside
+//! `quota_pulled_holdings`, one row per `(account, address)` with the number of the account's
+//! albums that hold it. Triggers on `federation_subscriptions`,
+//! `federation_pulled_metadata_blobs` and `quota_attributions` keep both, in the transaction of
+//! the statement that changed them (migration `000030` states the rule and its locks): the
+//! pulled page's commit, the unsubscribe, the cascade that forgets a job, a charge of an address
+//! the account holds pulled, and every release. So this adapter reads one row and writes nothing
+//! for pulled blobs. A release of an attribution returns the address to the pulled total while
+//! the account still holds it, which is why [`QuotaStore::release_attribution`] never credits
+//! pulled bytes.
+//!
+//! The pulled total is a second copy of a derivable fact, which this ledger otherwise refuses
+//! (above), so the derivation is kept beside it: [`PostgresQuota::pulled_drift`] compares the
+//! stored holdings and totals with what the rows derive, in one snapshot, and
+//! [`PostgresQuota::reconcile_pulled`] rebuilds every account it names.
 //!
 //! # Why `charge` is a transaction and not one statement
 //!
@@ -88,11 +99,8 @@ fn size_from(value: i64) -> Result<u64, StoreError> {
 /// clock come from one snapshot: read separately, a concurrent release between them could report
 /// a total that is already under the limit beside a crossing that has already been cleared.
 ///
-/// The total is the account's attributions plus its pulled holdings: the distinct addresses in
-/// `federation_pulled_metadata_blobs` of every album it subscribes to, live or lapsed, that it is
-/// not itself attributed (the module's docs, "Pulled blobs"). That subquery runs in time linear in
-/// every `(album, blob)` row the account's subscriptions hold, which no row count caps on an
-/// unlimited deployment; keeping a per-account total instead is #1171.
+/// The total is the account's attributions plus its stored pulled total (the module's docs,
+/// "Pulled blobs"), which is `0` for an account with no usage row.
 async fn usage_of<C: ConnectionTrait>(
     connection: &C,
     user: &UserId,
@@ -103,15 +111,8 @@ async fn usage_of<C: ConnectionTrait>(
             "SELECT \
                (SELECT COALESCE(SUM(size), 0)::bigint FROM quota_attributions WHERE user_id = $1) \
                  AS attributed, \
-               (SELECT COALESCE(SUM(held.size), 0)::bigint FROM ( \
-                  SELECT b.address, MAX(b.size) AS size \
-                  FROM federation_subscriptions s \
-                  JOIN federation_pulled_metadata_blobs b \
-                    ON b.peer_id = s.peer_id AND b.album_id = s.album_id \
-                  WHERE s.subscriber_id = $1 \
-                    AND NOT EXISTS (SELECT 1 FROM quota_attributions a \
-                                    WHERE a.address = b.address AND a.user_id = $1) \
-                  GROUP BY b.address) held) AS pulled, \
+               COALESCE((SELECT pulled FROM quota_usage WHERE user_id = $1), 0)::bigint \
+                 AS pulled, \
                (SELECT over_since FROM quota_usage WHERE user_id = $1) AS over_since, \
                (SELECT suspended_since FROM quota_usage WHERE user_id = $1) AS suspended_since",
             [Value::from(user.as_str().to_owned())],
@@ -180,7 +181,193 @@ async fn commit(transaction: DatabaseTransaction) -> Result<(), StoreError> {
         .map_err(PORT.failing("committing a transaction"))
 }
 
+/// An account whose stored pulled holdings or total differ from what its rows derive.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PulledDrift {
+    /// The account.
+    pub user: UserId,
+    /// Its stored pulled total, `quota_usage.pulled`.
+    pub stored: u64,
+    /// The pulled total its subscriptions, pulled blobs and attributions derive.
+    pub derived: u64,
+    /// Whether its `quota_pulled_holdings` rows differ from the derived ones, whatever the
+    /// totals say: a wrong reference count is a wrong total at the next unsubscribe.
+    pub holdings: bool,
+}
+
+/// Every `(account, address)` holding the rows derive, with its size and reference count: the
+/// definition `quota_pulled_holdings` materialises. `{filter}` narrows it to one account.
+const DERIVED_HOLDINGS: &str = "\
+    SELECT s.subscriber_id AS user_id, b.address, MAX(b.size)::BIGINT AS size, \
+           COUNT(*)::BIGINT AS refs \
+    FROM federation_subscriptions s \
+    JOIN federation_pulled_metadata_blobs b \
+      ON b.peer_id = s.peer_id AND b.album_id = s.album_id \
+    {filter} \
+    GROUP BY s.subscriber_id, b.address";
+
+/// Every account whose stored pulled state differs from the derived one, in one snapshot.
+const PULLED_DRIFT: &str = "\
+    WITH derived AS ({derived}), \
+    accounts AS ( \
+        SELECT user_id FROM quota_usage \
+        UNION SELECT user_id FROM derived \
+        UNION SELECT user_id FROM quota_pulled_holdings), \
+    holdings_drift AS ( \
+        SELECT DISTINCT COALESCE(d.user_id, h.user_id) AS user_id \
+        FROM derived d \
+        FULL JOIN quota_pulled_holdings h ON h.user_id = d.user_id AND h.address = d.address \
+        WHERE d.user_id IS NULL OR h.user_id IS NULL OR d.size <> h.size OR d.refs <> h.refs), \
+    derived_total AS ( \
+        SELECT d.user_id, SUM(d.size)::BIGINT AS bytes FROM derived d \
+        WHERE NOT EXISTS (SELECT 1 FROM quota_attributions a \
+                          WHERE a.address = d.address AND a.user_id = d.user_id) \
+        GROUP BY d.user_id), \
+    report AS ( \
+        SELECT a.user_id, COALESCE(u.pulled, 0)::BIGINT AS stored, \
+               COALESCE(t.bytes, 0)::BIGINT AS derived, \
+               EXISTS (SELECT 1 FROM holdings_drift x WHERE x.user_id = a.user_id) AS holdings \
+        FROM accounts a \
+        LEFT JOIN quota_usage u ON u.user_id = a.user_id \
+        LEFT JOIN derived_total t ON t.user_id = a.user_id) \
+    SELECT user_id, stored, derived, holdings FROM report \
+    WHERE stored <> derived OR holdings \
+    ORDER BY user_id COLLATE \"C\"";
+
 impl PostgresQuota {
+    /// Every account whose stored pulled holdings or total differ from what its subscriptions,
+    /// pulled blobs and attributions derive, in account order.
+    ///
+    /// One statement, so one snapshot: the triggers move the stored state in the transaction
+    /// that moves the rows, so a committed snapshot shows no drift unless something bypassed
+    /// them. It reads every holding on the server, so it is an audit, not a request-path read.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError`] if the database cannot be read.
+    pub async fn pulled_drift(&self) -> Result<Vec<PulledDrift>, StoreError> {
+        let doing = "comparing the stored pulled totals with the derived ones";
+        let derived = DERIVED_HOLDINGS.replace("{filter}", "");
+        let rows = self
+            .connection
+            .query_all_raw(Statement::from_string(
+                DbBackend::Postgres,
+                PULLED_DRIFT.replace("{derived}", &derived),
+            ))
+            .await
+            .map_err(PORT.failing(doing))?;
+        let failed = PORT.failing(doing);
+        let drift = rows
+            .into_iter()
+            .map(|row| {
+                let user: String = row.try_get("", "user_id").map_err(&failed)?;
+                let stored: i64 = row.try_get("", "stored").map_err(&failed)?;
+                let derived: i64 = row.try_get("", "derived").map_err(&failed)?;
+                let holdings: bool = row.try_get("", "holdings").map_err(&failed)?;
+                Ok(PulledDrift {
+                    user: UserId::new(user),
+                    stored: size_from(stored)?,
+                    derived: size_from(derived)?,
+                    holdings,
+                })
+            })
+            .collect::<Result<Vec<_>, StoreError>>()?;
+        tracing::debug!(
+            accounts = drift.len(),
+            "compared the stored pulled totals with the derived ones"
+        );
+        Ok(drift)
+    }
+
+    /// Rebuild `user`'s pulled holdings and total from its rows, under its usage row's lock.
+    ///
+    /// The lock is the one every trigger that changes `user`'s holdings takes before it does, so
+    /// no change is lost: one that committed first is in the rows this rebuild reads, and one
+    /// still waiting applies its own difference on top of the rebuilt state once this commits.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError`] if the database cannot be read or written.
+    pub async fn repair_pulled(&self, user: &UserId) -> Result<(), StoreError> {
+        let account = || vec![Value::from(user.as_str().to_owned())];
+        let transaction = begin(&self.connection).await?;
+        let run = |sql: String, doing: &'static str| {
+            let transaction = &transaction;
+            async move {
+                transaction
+                    .execute_raw(Statement::from_sql_and_values(
+                        DbBackend::Postgres,
+                        sql,
+                        account(),
+                    ))
+                    .await
+                    .map_err(PORT.failing(doing))
+            }
+        };
+        run(
+            "SELECT quota_pulled_lock_accounts(ARRAY[$1]::TEXT[])".to_owned(),
+            "locking an account's usage row for a pulled rebuild",
+        )
+        .await?;
+        run(
+            "DELETE FROM quota_pulled_holdings WHERE user_id = $1".to_owned(),
+            "clearing an account's pulled holdings",
+        )
+        .await?;
+        let derived = DERIVED_HOLDINGS.replace("{filter}", "WHERE s.subscriber_id = $1");
+        run(
+            format!(
+                "INSERT INTO quota_pulled_holdings (user_id, address, size, refs) \
+                 SELECT user_id, address, size, refs FROM ({derived}) held"
+            ),
+            "rebuilding an account's pulled holdings",
+        )
+        .await?;
+        run(
+            "UPDATE quota_usage SET pulled = ( \
+               SELECT COALESCE(SUM(h.size), 0)::BIGINT FROM quota_pulled_holdings h \
+               WHERE h.user_id = $1 AND NOT EXISTS ( \
+                 SELECT 1 FROM quota_attributions a \
+                 WHERE a.address = h.address AND a.user_id = $1)) \
+             WHERE user_id = $1"
+                .to_owned(),
+            "rebuilding an account's pulled total",
+        )
+        .await?;
+        commit(transaction).await?;
+        tracing::debug!(%user, "rebuilt an account's pulled holdings and total");
+        Ok(())
+    }
+
+    /// Find every account [`Self::pulled_drift`] names and [`Self::repair_pulled`] it, answering
+    /// what was found.
+    ///
+    /// An empty answer is the expected one; each account it names is logged at `WARN`, because
+    /// drift means some write reached the tables without the triggers.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError`] if the comparison or a rebuild fails; accounts before it stay
+    /// rebuilt.
+    pub async fn reconcile_pulled(&self) -> Result<Vec<PulledDrift>, StoreError> {
+        let drift = self.pulled_drift().await?;
+        for account in &drift {
+            tracing::warn!(
+                user = %account.user,
+                stored = account.stored,
+                derived = account.derived,
+                holdings = account.holdings,
+                "an account's stored pulled total drifted from its rows; rebuilding it"
+            );
+            self.repair_pulled(&account.user).await?;
+        }
+        tracing::info!(
+            accounts = drift.len(),
+            "reconciled the stored pulled totals"
+        );
+        Ok(drift)
+    }
+
     /// Attribute `size` bytes at `address` to `user`, unless the address is attributed already,
     /// carrying `reserved_until` as the row's reservation deadline (`None` for a settled charge).
     ///

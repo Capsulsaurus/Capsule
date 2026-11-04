@@ -35,6 +35,9 @@
 //! - `000029` (#1157): `federation_rejected_hashes`, the bounded soft-fail table, and an index
 //!   on `federation_accepted_entries (peer_id, album_id, asset_id, position)` for the breadcrumb
 //!   index's latest-entry-per-asset read.
+//! - `000030` (#1171): `quota_pulled_holdings` and `quota_usage.pulled`, the quota ledger's
+//!   per-account pulled total, kept by triggers on the subscriptions, the pulled metadata blobs
+//!   and the attributions, and backfilled from them.
 //!
 //! # Every instant is a `BIGINT` of microseconds since the Unix epoch
 //!
@@ -127,6 +130,7 @@ migrations![
     m20260902_000027_upload_reservations,
     m20260902_000028_federation_pulled_albums,
     m20260902_000029_federation_rejected_hashes,
+    m20260902_000030_quota_pulled_holdings,
 ];
 
 /// The content checksum of one migration's source: lowercase hex SHA-256.

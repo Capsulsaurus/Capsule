@@ -262,6 +262,13 @@ mod postgres_conformance {
 
         a_sweep_inside_a_commit_waits_for_its_claim(database.connection()).await;
         a_commit_inside_a_sweep_puts_the_bytes_again(database.connection()).await;
+
+        // Every commit, refusal, subscription and forget above went through the real adapters;
+        // the stored pulled totals they left must be the ones the rows derive (#1171).
+        assert_eq!(
+            quotas.pulled_drift().await.expect("the drift audit reads"),
+            Vec::new()
+        );
     }
 
     /// A claim row whose bytes the blob store lost is this server's integrity fault: both reads
