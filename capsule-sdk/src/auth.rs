@@ -737,7 +737,7 @@ impl AuthClient {
         // the typed client (issue #674). The OIDC legs are session upkeep, so only the server's
         // own `426` refuses them — see `NegotiatedSend`.
         let backend: Arc<dyn rest::HttpBackend> = Arc::new(crate::client::Negotiate::observing(
-            Arc::new(rest::ReqwestBackend::new(http.clone())),
+            crate::net::backend(http.clone()),
         ));
         let rest = rest::Client::with_backend(backend, &base.server_root).map_err(|e| {
             AuthError::InvalidBaseUrl {

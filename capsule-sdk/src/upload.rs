@@ -2065,14 +2065,18 @@ impl UploadClient {
         let resp = self
             .transport
             .send_tracked(&progress, |http| {
-                http.patch(self.transport.session_url(session_id))
+                let request = http
+                    .patch(self.transport.session_url(session_id))
                     .header("X-Capsule-Protocol", &self.transport.protocol_version)
                     .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
                     .header("X-Capsule-Offset", offset.to_string())
                     .header("X-Capsule-Checksum", &checksum)
                     // A fresh body per invocation, over the same bytes: the session path may
                     // rebuild the request for its one 401 refresh-and-replay.
-                    .body(PacedBody::new(bytes.clone(), progress.clone()))
+                    .body(PacedBody::new(bytes.clone(), progress.clone()));
+                // A chunk is addressed by offset and checked by checksum, so it is safe to send
+                // twice: under `http3` it may ride QUIC.
+                crate::net::replayable(request, bytes.clone(), &progress)
             })
             .await?;
         let resp = match resp {
