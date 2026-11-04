@@ -42,7 +42,7 @@
 //! A `delete` or `trash-restore` of an asset the workspace still holds is signed onto its chain
 //! and held there until the feed lists the asset. [`FfiSession::deliver_lifecycle_at_hash`]
 //! sends the stretch after the head the server holds, by the same rule as a purge and as the
-//! CLI ([`plan_delivery`]): held while the asset is not indexed, and never a `trash-restore`
+//! CLI ([`plan_delivery`](crate::albums::plan_delivery)): held while the asset is not indexed, and never a `trash-restore`
 //! that undoes a held `delete` whose window has closed, which answers
 //! [`FfiLifecycleOpOutcome::RestoreTooLate`].
 
