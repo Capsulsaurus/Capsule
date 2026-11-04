@@ -384,7 +384,7 @@ async fn the_generated_clients_backend_routes_through_the_process_transport() {
 }
 
 #[test]
-fn any_proxy_variable_reqwest_reads_keeps_requests_off_quic() {
+fn any_https_proxy_variable_reqwest_reads_keeps_requests_off_quic() {
     assert_eq!(configured_proxy(|_| None), None);
     assert_eq!(
         configured_proxy(|_| Some("  ".to_owned())),
@@ -402,6 +402,15 @@ fn any_proxy_variable_reqwest_reads_keeps_requests_off_quic() {
         None,
         "an exemption alone configures no proxy"
     );
+    for variable in ["HTTP_PROXY", "http_proxy"] {
+        assert_eq!(
+            configured_proxy(|name| {
+                (name == variable).then(|| "http://proxy.example:3128".to_owned())
+            }),
+            None,
+            "{variable} proxies only http:// destinations, which never race QUIC"
+        );
+    }
 }
 
 #[test]

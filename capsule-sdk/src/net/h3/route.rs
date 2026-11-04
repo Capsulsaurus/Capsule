@@ -9,8 +9,9 @@
 //!
 //! - **Discovers.** Every response's `Alt-Svc`, on either transport, feeds the policy
 //!   ([`super::transport::observe_response`]).
-//! - **Never bypasses a proxy.** With a proxy configured ([`configured_proxy`]) there is no
-//!   process transport, and every request rides its `reqwest` client through the proxy.
+//! - **Never bypasses a proxy.** With a proxy for `https` destinations configured
+//!   ([`configured_proxy`]) there is no process transport, and every request rides its `reqwest`
+//!   client, which sends `https` requests through the proxy.
 //! - **Chooses once.** A request rides QUIC only for an `https` origin the policy answers a race
 //!   for ([`Carrier::races`]), and only when it is safe to send twice ([`resendable`]): an idempotent method, or a
 //!   request its caller marked [`replayable`] (an upload chunk, addressed by offset and checked
@@ -338,18 +339,14 @@ pub fn current_generation() -> PathGeneration {
     PathGeneration(NETWORK.load(Ordering::Relaxed))
 }
 
-/// The proxy variables a `reqwest` client reads from the environment (curl's names, either case).
-pub const PROXY_VARIABLES: [&str; 6] = [
-    "ALL_PROXY",
-    "all_proxy",
-    "HTTPS_PROXY",
-    "https_proxy",
-    "HTTP_PROXY",
-    "http_proxy",
-];
+/// The proxy variables a `reqwest` client applies to an `https` destination (curl's names, either
+/// case). Only `https` origins race QUIC, so these are the ones a race could bypass.
+/// `HTTP_PROXY`/`http_proxy` are absent: `reqwest` applies them only to `http://` destinations,
+/// so an `https` request goes direct under them and QUIC bypasses nothing.
+pub const PROXY_VARIABLES: [&str; 4] = ["ALL_PROXY", "all_proxy", "HTTPS_PROXY", "https_proxy"];
 
 /// The first of [`PROXY_VARIABLES`] `var` reads a non-empty value for: a proxy the SDK's
-/// `reqwest` clients send through. Every SDK client starts from [`crate::net::http_builder`],
+/// `reqwest` clients send `https` requests through. Every SDK client starts from [`crate::net::http_builder`],
 /// which keeps `reqwest`'s environment proxies, so this is the proxy its requests ride. QUIC and
 /// the TCP leg's reachability dial both connect directly, so a configured proxy means no request
 /// races QUIC: it would bypass the proxy. `NO_PROXY` is not consulted, so a host it exempts
