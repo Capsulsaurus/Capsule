@@ -1488,3 +1488,63 @@ fn a_history_of_another_asset_is_refused() {
     );
     assert!(pair.b.asset(&asset).is_none());
 }
+
+/// An asset held already adopts its entry as `adopt_remote_original` would, with the handed-over
+/// history unread: a history that would not verify does not refuse an advance, an entry already
+/// held is held, and a fork is diverged however good the history is.
+#[test]
+fn a_held_asset_adopts_with_the_history_unread() {
+    let (mut pair, _) = adopted_pair();
+    let (asset, album) = (pair.asset, pair.album);
+    let create_head = pair.b.asset(&asset).unwrap().chain.head();
+
+    pair.a.tag_add(&asset, "dusk").unwrap();
+    let edit = live_wire(&pair.a, asset);
+    let plaintext = pair.open_on_b(&edit, create_head);
+    let unreadable = vec![b"not a record".to_vec()];
+    let (outcome, adoption) = pair
+        .b
+        .adopt_remote_history(
+            entry(album, &edit, create_head).head(),
+            &unreadable,
+            &plaintext,
+        )
+        .unwrap();
+    assert_eq!(
+        outcome.facts().map(|f| f.action),
+        Some(Action::MetadataUpdate)
+    );
+    assert_eq!(adoption, Some(Adoption::Advanced));
+    let edit_head = pair.a.asset(&asset).unwrap().chain.head();
+    assert_eq!(pair.b.asset(&asset).unwrap().chain.head(), edit_head);
+
+    let (_, adoption) = pair
+        .b
+        .adopt_remote_history(
+            entry(album, &edit, create_head).head(),
+            &unreadable,
+            &plaintext,
+        )
+        .unwrap();
+    assert_eq!(adoption, Some(Adoption::AlreadyHeld));
+
+    // A fork: both devices edit onto the edit. The other device's history verifies from its
+    // create, and the held chain stands all the same.
+    pair.b.tag_add(&asset, "mine").unwrap();
+    let held_head = pair.b.asset(&asset).unwrap().chain.head();
+    pair.a.tag_add(&asset, "theirs").unwrap();
+    let theirs = live_wire(&pair.a, asset);
+    let history = history_of(&pair.a, asset);
+    let plaintext = pair.open_on_b(&theirs, edit_head);
+    let (outcome, adoption) = pair
+        .b
+        .adopt_remote_history(
+            entry(album, &theirs, edit_head).head(),
+            &history,
+            &plaintext,
+        )
+        .unwrap();
+    assert!(outcome.facts().is_some(), "{outcome:?}");
+    assert_eq!(adoption, Some(Adoption::Diverged));
+    assert_eq!(pair.b.asset(&asset).unwrap().chain.head(), held_head);
+}

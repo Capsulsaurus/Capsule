@@ -947,8 +947,10 @@ impl Workspace {
     /// The verdict returned is the first one that is not `Applied`, in chain order: a record of
     /// `history` that does not verify, a record naming another asset, or a live metadata blob
     /// that does not bind, refuses the whole adoption and writes nothing. An empty `history`
-    /// adopts as [`adopt_remote_original`](Self::adopt_remote_original) would, and an asset this
-    /// workspace already holds is advanced as it would be, the history unread.
+    /// adopts as [`adopt_remote_original`](Self::adopt_remote_original) would, and so does an
+    /// entry of an asset this workspace already holds: the history is not read, so none of its
+    /// records can refuse the entry, and the entry is checked against
+    /// [`RemoteHead::local_chain_head`].
     ///
     /// # Errors
     ///
@@ -961,6 +963,21 @@ impl Workspace {
         plaintext: &Path,
     ) -> Result<(SyncApplyOutcome, Option<Adoption>)> {
         if history.is_empty() {
+            return self.adopt_remote(entry, Some(plaintext));
+        }
+        // An asset held here already extends its own chain, so the history is not read at all:
+        // the entry is adopted exactly as `adopt_remote_original` adopts it, against the
+        // caller's `local_chain_head`, and a history record that would not verify cannot
+        // refuse an advance that verb applies. Bytes that do not decode fall through to the
+        // checks below, which refuse them.
+        if let Ok(record) = ProvenanceRecord::decode(entry.manifest_cbor)
+            && self.assets.contains_key(&record.manifest.core.file_id)
+        {
+            tracing::info!(
+                asset_id = %record.manifest.core.file_id,
+                records = history.len(),
+                "sync-adopt: the asset is held already; adopting the entry with the history unread"
+            );
             return self.adopt_remote(entry, Some(plaintext));
         }
         // The superseded records, in order, each against the one before it.
@@ -1007,12 +1024,6 @@ impl Workspace {
                 ))),
                 None,
             ));
-        }
-        if self.assets.contains_key(&facts.asset_id) {
-            let adoption =
-                self.advance_held(record, facts, entry.metadata_blob, Some(plaintext))?;
-            tracing::info!(asset_id = %facts.asset_id, ?adoption, "sync-adopt: the asset is held already; the history was not needed");
-            return Ok((outcome, Some(adoption)));
         }
         let sidecar = if let Some(sidecar) = facts.sidecar.clone() {
             sidecar
