@@ -355,10 +355,15 @@ struct AppEnvironment {
             library: library,
             authGate: trashGate,
             uploads: uploads,
-            purgeDelivery: library.purgeDelivery
+            purgeDelivery: library.purgeDelivery,
+            lifecycleDelivery: library.lifecycleDelivery
         )
         CapsuleLog.app.debug("managed lane composed at \(root.path, privacy: .private)")
-        redeliverKeptPurges(provider, deliveringTo: library.purgeDelivery)
+        redeliverHeldRecords(
+            provider,
+            purges: library.purgeDelivery != nil,
+            lifecycles: library.lifecycleDelivery != nil
+        )
         return ManagedLane(
             provider: provider,
             importer: LibraryImporter(importService: importService, managedProvider: provider),
@@ -369,22 +374,29 @@ struct AppEnvironment {
         )
     }
 
-    /// Send the purges the workspace kept whose delivery failed or was held,
-    /// once a lane is composed with somewhere to send them.
+    /// Send the purges the workspace kept, and the deletes and restores of
+    /// the assets it still holds, whose delivery failed or was held, once a
+    /// lane is composed with somewhere to send them.
     ///
-    /// A lane composed with a purge delivery is a signed-in one, so this is
-    /// the retry a relaunch and a sign-in run: each rebuilds the world with
-    /// the session. It runs detached, because a launch never waits on the
-    /// network; the provider logs each purge's fate, and a purge left
-    /// undelivered stays on the kept chain for the next walk. The walk lists
-    /// every purge the workspace ever kept, but one whose head the feed
-    /// already lists sends nothing, so its cost is one feed drain plus the
-    /// purges the server still lacks. With no
-    /// delivery (signed out, the mock lane) there is nothing to send.
-    private static func redeliverKeptPurges(_ provider: ManagedProvider, deliveringTo delivery: (any PurgeDelivering)?) {
-        guard delivery != nil else { return }
-        CapsuleLog.app.info("redelivering kept purges for the signed-in lane")
-        Task { await provider.redeliverPurges() }
+    /// A lane composed with a delivery is a signed-in one, so this is the
+    /// retry a relaunch and a sign-in run: each rebuilds the world with the
+    /// session. It runs detached, because a launch never waits on the
+    /// network; the provider logs each delivery's fate, and a record left
+    /// undelivered stays on its chain for the next walk. The purges go first,
+    /// then the held assets, one after the other so both read one feed drain.
+    /// Each walk lists everything the workspace holds of its kind, but an
+    /// asset whose head the feed already lists sends nothing, so the cost is
+    /// one feed drain plus what the server still lacks. With no delivery
+    /// (signed out, the mock lane) there is nothing to send.
+    private static func redeliverHeldRecords(_ provider: ManagedProvider, purges: Bool, lifecycles: Bool) {
+        guard purges || lifecycles else { return }
+        CapsuleLog.app.info(
+            "redelivering held records for the signed-in lane, purges=\(purges, privacy: .public) lifecycles=\(lifecycles, privacy: .public)"
+        )
+        Task {
+            await provider.redeliverPurges()
+            await provider.redeliverLifecycleRecords()
+        }
     }
 
     /// Recently Deleted over both stores: the composite timeline's `delete`

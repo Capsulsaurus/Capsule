@@ -102,6 +102,54 @@ public enum PurgeDelivery: Sendable, Equatable {
     case failed(permanent: Bool)
 }
 
+/// Delivers the held lifecycle records of a managed asset the workspace still
+/// holds, live or in the trash: a `delete` or `trash-restore` signed onto its
+/// chain that has not reached the server.
+///
+/// Declared beside ``PurgeDelivering`` for the same reason: `CapsuleCatalogFFI`
+/// conforms without depending on `AssetKit`'s `ManagedProvider`, which drives
+/// it after a managed delete or restore and on the relaunch walk.
+///
+/// On the FFI lane a conformer reads the asset's head off the sync feed and
+/// calls `FfiSession.deliverLifecycleAtHash`, which applies the same held
+/// rules as the CLI and a purge: nothing is sent while the server has not
+/// indexed the asset, and a `trash-restore` undoing a held `delete` whose
+/// window has closed is withheld. An asset whose head the feed already lists
+/// is answered delivered without a send. Everything is read from the
+/// workspace, so a delivery that failed is retried by calling it again, also
+/// after a relaunch.
+public protocol LifecycleDelivering: Sendable {
+    /// Deliver what the server lacks of the asset `assetID`'s chain. Throws
+    /// only when the delivery could not be attempted (a refused session, an
+    /// unreadable feed, an asset the workspace does not hold).
+    func deliverLifecycle(assetID: String) async throws -> LifecycleDelivery
+
+    /// Every asset the workspace holds, live or in the trash
+    /// (`FfiWorkspace.assetIds`): what
+    /// `ManagedProvider.redeliverLifecycleRecords()` walks.
+    func heldAssetIDs() async throws -> [String]
+}
+
+/// What became of one ``LifecycleDelivering/deliverLifecycle(assetID:)``.
+public enum LifecycleDelivery: Sendable, Equatable {
+    /// The server applied every record it lacked, or already held the chain's
+    /// head.
+    case delivered
+    /// Nothing was sent: the server has not indexed the asset's create, and it
+    /// never sees a lifecycle record of an asset it has not indexed.
+    case held
+    /// Nothing was sent, for good: a `trash-restore` undoes a held `delete`
+    /// whose window closed at `retentionUntil` (RFC 3339). Sent, the server
+    /// would apply the delete and refuse the restore, purging an asset the
+    /// user restored in time; withheld, it keeps the asset live at the head it
+    /// holds. Nothing later on the chain can be sent either, so
+    /// `ManagedProvider.redeliverLifecycleRecords()` stops walking it.
+    case withheld(retentionUntil: String)
+    /// The server refused a record or could not be reached; as
+    /// ``PurgeDelivery/failed(permanent:)``.
+    case failed(permanent: Bool)
+}
+
 /// Why a ``ManagedWorkspace`` trash verb was refused. Nothing was written.
 public enum TrashRefusal: Error, Sendable, Equatable {
     /// The library holds no such asset.

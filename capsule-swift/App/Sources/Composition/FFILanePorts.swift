@@ -27,24 +27,28 @@
         /// catalog is the workspace's own index under the same root, so
         /// `workspace` must have been opened at the managed library's root.
         ///
-        /// A purge reaches the server only with a session and the API root it
-        /// signed in against (`apiBaseURL`, `http[s]://host:port`): the
-        /// session delivers it to the album's ops surface there. Without
-        /// either, a purge stays local and its records wait on the
-        /// workspace's kept chain until a signed-in launch delivers them.
+        /// A purge, delete or restore reaches the server only with a session
+        /// and the API root it signed in against (`apiBaseURL`,
+        /// `http[s]://host:port`): the session delivers it to the album's ops
+        /// surface there. Without either, it stays local and its records wait
+        /// on the workspace's chains until a signed-in launch delivers them.
         static func ffi(workspace: FfiWorkspace, session: FfiSession?, apiBaseURL: String? = nil) -> LanePorts {
             let transferEvents: any TransferEventPort = if let session {
                 FFITransferEventFeed(session: session)
             } else {
                 IdleTransferEventFeed()
             }
-            let purgeDelivery: (any PurgeDelivering)? = if let session, let apiBaseURL {
+            // One delivery serves purges and live assets' held records alike,
+            // so both read the server's heads off one feed drain.
+            let delivery: FFIPurgeDelivery? = if let session, let apiBaseURL {
                 FFIPurgeDelivery(session: session, workspace: workspace, apiBaseURL: apiBaseURL)
             } else {
                 nil
             }
+            let purgeDelivery: (any PurgeDelivering)? = delivery
+            let lifecycleDelivery: (any LifecycleDelivering)? = delivery
             CapsuleLog.app.info(
-                "ffi lane ports composed, session=\(session != nil, privacy: .public) purgeDelivery=\(purgeDelivery != nil, privacy: .public)"
+                "ffi lane ports composed, session=\(session != nil, privacy: .public) delivery=\(delivery != nil, privacy: .public)"
             )
             let managedWorkspace = FFIManagedWorkspace(workspace: workspace)
             return LanePorts(
@@ -55,7 +59,8 @@
                         layout: layout,
                         catalogOpener: FFICatalogOpener(),
                         workspace: managedWorkspace,
-                        purgeDelivery: purgeDelivery
+                        purgeDelivery: purgeDelivery,
+                        lifecycleDelivery: lifecycleDelivery
                     )
                 },
                 renderLadder: .ffi,

@@ -32,26 +32,34 @@ public actor ManagedLibrary {
     /// workspace's kept chain.
     public nonisolated let purgeDelivery: (any PurgeDelivering)?
 
+    /// Where a delete's or restore's signed record goes to reach the server:
+    /// the FFI lane's session over ``workspace``, once signed in. `nil` signed
+    /// out and on the mock lane, where the record stays on the asset's chain.
+    public nonisolated let lifecycleDelivery: (any LifecycleDelivering)?
+
     private let fileStore: any FileStore
     private let catalogOpener: any CatalogOpening
     private var openedCatalog: (any AssetCatalog)?
 
     /// A library whose catalog is opened lazily by `catalogOpener` and whose
     /// writes go through `workspace` — the FFI lane, where both sit over the
-    /// same root — and whose purges reach the server through `purgeDelivery`
-    /// when there is a session to send them on.
+    /// same root — and whose purges, deletes and restores reach the server
+    /// through `purgeDelivery` and `lifecycleDelivery` when there is a session
+    /// to send them on.
     public init(
         layout: ManagedLibraryLayout,
         fileStore: any FileStore = SystemFileStore(),
         catalogOpener: any CatalogOpening,
         workspace: any ManagedWorkspace,
-        purgeDelivery: (any PurgeDelivering)? = nil
+        purgeDelivery: (any PurgeDelivering)? = nil,
+        lifecycleDelivery: (any LifecycleDelivering)? = nil
     ) {
         self.layout = layout
         self.fileStore = fileStore
         self.catalogOpener = catalogOpener
         self.workspace = workspace
         self.purgeDelivery = purgeDelivery
+        self.lifecycleDelivery = lifecycleDelivery
     }
 
     /// A library over an in-memory catalog, written through a
@@ -71,6 +79,7 @@ public actor ManagedLibrary {
         catalogOpener = PreopenedCatalogOpener(catalog: catalog)
         openedCatalog = catalog
         purgeDelivery = nil
+        lifecycleDelivery = nil
         workspace = LocalManagedWorkspace(
             layout: layout,
             fileStore: fileStore,
@@ -95,6 +104,7 @@ public actor ManagedLibrary {
         openedCatalog = catalog
         self.workspace = workspace
         purgeDelivery = nil
+        lifecycleDelivery = nil
     }
 
     /// The catalog, opening it (and creating the directory skeleton) on first

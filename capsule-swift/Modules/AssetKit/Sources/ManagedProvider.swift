@@ -23,12 +23,18 @@ public actor ManagedProvider: AssetProvider, TrashProvider, AssetOwning {
     private let sidecarCoder: any SidecarCoding
     private let uploads: (any UploadPort)?
     private let purgeDelivery: (any PurgeDelivering)?
+    private let lifecycleDelivery: (any LifecycleDelivering)?
     private var observers: [UUID: AsyncStream<AssetChange>.Continuation] = [:]
     /// The last queued mutation of each asset; see ``serializingMutation(of:_:)``.
     private var mutationTails: [String: Task<Void, Never>] = [:]
     /// Purges the server refused for good since this provider started, which
     /// ``redeliverPurges()`` skips; see ``PurgeDelivery/failed(permanent:)``.
     private var refusedPurges: Set<String> = []
+    /// Assets whose held records the server refused for good, or whose
+    /// too-late restore was withheld, since this provider started, which
+    /// ``redeliverLifecycleRecords()`` skips; see
+    /// ``LifecycleDelivery/withheld(retentionUntil:)``.
+    private var settledLifecycles: Set<String> = []
 
     /// - Parameter authGate: the SR1 fresh-local-auth adapter used to open the
     ///   Recently Deleted view. Defaults to the real `LAContext` gate; tests and
@@ -44,18 +50,23 @@ public actor ManagedProvider: AssetProvider, TrashProvider, AssetOwning {
     /// - Parameter purgeDelivery: where a purge's `delete` goes to reach the
     ///   server. With none (signed out, or the mock lane), a purge stays local
     ///   and its records wait on the workspace's kept chain.
+    /// - Parameter lifecycleDelivery: where a delete's or restore's signed
+    ///   record goes to reach the server. With none (signed out, or the mock
+    ///   lane), it stays on the asset's chain in the workspace.
     public init(
         library: ManagedLibrary,
         authGate: any LocalAuthGate = LocalAuthenticationGate(),
         sidecarCoder: any SidecarCoding = JSONSidecarCoder(),
         uploads: (any UploadPort)? = nil,
-        purgeDelivery: (any PurgeDelivering)? = nil
+        purgeDelivery: (any PurgeDelivering)? = nil,
+        lifecycleDelivery: (any LifecycleDelivering)? = nil
     ) {
         self.library = library
         self.authGate = authGate
         self.sidecarCoder = sidecarCoder
         self.uploads = uploads
         self.purgeDelivery = purgeDelivery
+        self.lifecycleDelivery = lifecycleDelivery
     }
 
     public func authorizationStatus() -> AssetAuthorizationStatus {
@@ -111,16 +122,27 @@ public actor ManagedProvider: AssetProvider, TrashProvider, AssetOwning {
     ///
     /// Once the workspace holds an asset's delete, its in-flight upload is
     /// redacted (``redactUpload(of:uuid:)``), as the deletion state machine
-    /// requires.
+    /// requires, and the delete goes to the server through
+    /// ``LifecycleDelivering`` (``deliverLifecycle(of:)``), which holds it
+    /// while the server has not indexed the asset. The timeline is
+    /// re-published before the deliveries, as a purge does. A delete that
+    /// throws stops the batch before anything is delivered: the deletes
+    /// already signed stay on their chains for
+    /// ``redeliverLifecycleRecords()``.
     public func delete(_ ids: [AssetID]) async throws {
         let retainDays = UInt32(TrashEntry.defaultRetentionDays)
+        var deleted: [String] = []
         for id in ids {
             guard case let .managed(uuid) = id else { continue }
             try await library.workspace.deleteAsset(id: uuid, retainDays: retainDays)
+            deleted.append(uuid)
             CapsuleLog.assetKit.debug("managed delete of \(uuid, privacy: .private)")
             await redactUpload(of: id, uuid: uuid)
         }
         await emitReload()
+        for uuid in deleted {
+            await deliverLifecycle(of: uuid)
+        }
     }
 
     /// Stop this device's upload of an asset the workspace has just deleted.
@@ -267,10 +289,17 @@ public actor ManagedProvider: AssetProvider, TrashProvider, AssetOwning {
     /// Restore a trashed asset. The workspace refuses it once the retention
     /// window has closed (``TrashRefusal/retentionElapsed(retentionUntil:)``),
     /// and the asset stays in Recently Deleted.
+    ///
+    /// Once restored, the `trash-restore` goes to the server through
+    /// ``LifecycleDelivering`` (``deliverLifecycle(of:)``), with the delete it
+    /// undoes when the server never saw it. A restore of a held delete whose
+    /// window has closed is withheld there, so the server keeps the asset live
+    /// rather than purging it.
     public func restore(_ id: AssetID) async throws {
         guard case let .managed(uuid) = id else { return }
         try await library.workspace.restoreAsset(id: uuid)
         await emitReload()
+        await deliverLifecycle(of: uuid)
     }
 
     /// Permanently remove a trashed asset through the workspace, which removes
@@ -357,6 +386,67 @@ public actor ManagedProvider: AssetProvider, TrashProvider, AssetOwning {
         } catch {
             CapsuleLog.assetKit.error(
                 "purge of \(uuid, privacy: .private) not delivered: \(String(describing: error), privacy: .public)"
+            )
+        }
+    }
+
+    /// Send the held lifecycle records of every asset the workspace still
+    /// holds: the deletes and restores whose delivery failed or was held, the
+    /// retry a relaunch, a sign-in or a sync that lists new assets runs beside
+    /// ``redeliverPurges()``. An asset whose head the server already holds
+    /// sends nothing (the port answers it delivered off the feed), so the
+    /// walk's network cost is the port's feed read plus the records still
+    /// undelivered. An asset the server refused for good, or whose too-late
+    /// restore was withheld, since this provider started is skipped: neither
+    /// can go any other way. With no delivery port this does nothing.
+    public func redeliverLifecycleRecords() async {
+        guard let lifecycleDelivery else { return }
+        let ids: [String]
+        do {
+            ids = try await lifecycleDelivery.heldAssetIDs()
+        } catch {
+            CapsuleLog.assetKit.error(
+                "lifecycle redelivery could not list the held assets: \(String(describing: error), privacy: .public)"
+            )
+            return
+        }
+        let pending = ids.filter { !settledLifecycles.contains($0) }
+        CapsuleLog.assetKit.info(
+            "redelivering the held records of \(pending.count) assets, skipping \(ids.count - pending.count) settled for good"
+        )
+        for uuid in pending {
+            await deliverLifecycle(of: uuid)
+        }
+    }
+
+    /// Deliver one held asset's lifecycle records through the port, logging
+    /// what became of them. Never throws: the delete or restore stands
+    /// locally either way, and its record stays on the asset's chain for
+    /// ``redeliverLifecycleRecords()``.
+    private func deliverLifecycle(of uuid: String) async {
+        guard let lifecycleDelivery else { return }
+        do {
+            switch try await lifecycleDelivery.deliverLifecycle(assetID: uuid) {
+            case .delivered:
+                CapsuleLog.assetKit.info("lifecycle records of \(uuid, privacy: .private) delivered")
+            case .held:
+                CapsuleLog.assetKit.info(
+                    "lifecycle records of \(uuid, privacy: .private) held: the server has not indexed the asset"
+                )
+            case let .withheld(retentionUntil):
+                settledLifecycles.insert(uuid)
+                CapsuleLog.assetKit.info(
+                    "lifecycle records of \(uuid, privacy: .private) withheld: the restore came after the held delete's window closed at \(retentionUntil, privacy: .public)"
+                )
+            case let .failed(permanent):
+                if permanent { settledLifecycles.insert(uuid) }
+                CapsuleLog.assetKit.error(
+                    "lifecycle records of \(uuid, privacy: .private) not delivered, permanent=\(permanent, privacy: .public)"
+                )
+            }
+        } catch {
+            CapsuleLog.assetKit.error(
+                "lifecycle records of \(uuid, privacy: .private) not delivered: \(String(describing: error), privacy: .public)"
             )
         }
     }
