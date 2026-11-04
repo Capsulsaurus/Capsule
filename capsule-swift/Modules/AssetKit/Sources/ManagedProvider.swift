@@ -35,6 +35,8 @@ public actor ManagedProvider: AssetProvider, TrashProvider, AssetOwning {
     /// ``redeliverLifecycleRecords()`` skips; see
     /// ``LifecycleDelivery/withheld(retentionUntil:)``.
     private var settledLifecycles: Set<String> = []
+    /// The last queued redelivery walk; see ``redeliverHeldRecords()``.
+    private var walkTail: Task<Void, Never>?
 
     /// - Parameter authGate: the SR1 fresh-local-auth adapter used to open the
     ///   Recently Deleted view. Defaults to the real `LAContext` gate; tests and
@@ -503,5 +505,59 @@ public actor ManagedProvider: AssetProvider, TrashProvider, AssetOwning {
         for continuation in observers.values {
             continuation.yield(.reload(snapshot))
         }
+    }
+}
+
+// MARK: Redelivery walk
+
+public extension ManagedProvider {
+    /// Run ``redeliverPurges()`` and then ``redeliverLifecycleRecords()``: the
+    /// walk a relaunch, a sign-in and ``syncDrained(newlyIndexed:)`` run. The
+    /// purges go first, then the held assets, one after the other so both
+    /// read one feed drain.
+    ///
+    /// Walks run one at a time, in call order. A walk asked for while one is
+    /// running starts once that one ends, so a sync that lands mid-walk is
+    /// never lost to a walk that listed the held records before it, and two
+    /// walks never send one asset's records side by side. With no delivery
+    /// port this does nothing.
+    func redeliverHeldRecords() async {
+        guard purgeDelivery != nil || lifecycleDelivery != nil else { return }
+        let previous = walkTail
+        let walk = Task {
+            await previous?.value
+            await self.redeliverPurges()
+            await self.redeliverLifecycleRecords()
+        }
+        walkTail = walk
+        if previous != nil {
+            CapsuleLog.assetKit.debug("redelivery walk queued behind the one in flight")
+        }
+        await walk.value
+        if walkTail == walk { walkTail = nil }
+    }
+
+    /// Run the redelivery walk after a sync that drained the feed, when the
+    /// drain listed assets the server had not indexed before it.
+    ///
+    /// A purge, delete or restore is held while the feed does not list its
+    /// asset, so a drain that lists newly indexed assets is what can release
+    /// one before the next launch. The walk is ``redeliverHeldRecords()``,
+    /// the one a launch runs: an asset whose head the feed already lists sends
+    /// nothing. A drain that lists nothing new releases nothing, so it walks
+    /// nothing.
+    ///
+    /// - Parameter assetIDs: the assets the drain listed that the feed had not
+    ///   listed before it, as the sync driver applied them.
+    func syncDrained(newlyIndexed assetIDs: [String]) async {
+        guard !assetIDs.isEmpty else {
+            CapsuleLog.assetKit.debug("sync drain listed no newly indexed assets: no redelivery")
+            return
+        }
+        let count = assetIDs.count
+        CapsuleLog.assetKit.info(
+            "sync drain listed \(count, privacy: .public) newly indexed assets: redelivering held records"
+        )
+        await redeliverHeldRecords()
     }
 }
