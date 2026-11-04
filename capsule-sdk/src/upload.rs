@@ -1025,6 +1025,21 @@ pub trait UploadSource: Sync {
     fn check_unchanged(&self) -> Result<SourceIdentity, SourceChanged> {
         Ok(SourceIdentity::Unknown)
     }
+
+    /// Whether every window this source returns is checked against the bytes it first
+    /// produced, so a window it returns again is byte-identical or refused with
+    /// [`SourceChanged`]: bytes in memory cannot change, and an original re-derives every
+    /// STREAM chunk a window touches and compares its tag with the one recorded when the bundle
+    /// was built.
+    ///
+    /// Only such a source is sent with more than one range of a session in flight. A parallel
+    /// schedule re-sends ranges far more often (a refused overlap, a lost answer, a cut), and a
+    /// source that only answers [`check_unchanged`](Self::check_unchanged) can miss a change
+    /// that keeps its identity, which a re-derived range would then put under nonces the first
+    /// read spent. A source that cannot say — the default — is sent one range at a time.
+    fn verifies_rederived(&self) -> bool {
+        false
+    }
 }
 
 /// What [`UploadSource::check_unchanged`] can say about a source it found no change in.
@@ -1053,6 +1068,10 @@ impl UploadSource for [u8] {
     fn check_unchanged(&self) -> Result<SourceIdentity, SourceChanged> {
         Ok(SourceIdentity::Affirmed)
     }
+
+    fn verifies_rederived(&self) -> bool {
+        true
+    }
 }
 
 impl UploadSource for Vec<u8> {
@@ -1062,6 +1081,10 @@ impl UploadSource for Vec<u8> {
 
     fn check_unchanged(&self) -> Result<SourceIdentity, SourceChanged> {
         Ok(SourceIdentity::Affirmed)
+    }
+
+    fn verifies_rederived(&self) -> bool {
+        true
     }
 }
 
@@ -1073,6 +1096,10 @@ impl<const N: usize> UploadSource for [u8; N] {
     fn check_unchanged(&self) -> Result<SourceIdentity, SourceChanged> {
         Ok(SourceIdentity::Affirmed)
     }
+
+    fn verifies_rederived(&self) -> bool {
+        true
+    }
 }
 
 impl<T: UploadSource + ?Sized> UploadSource for &T {
@@ -1082,6 +1109,10 @@ impl<T: UploadSource + ?Sized> UploadSource for &T {
 
     fn check_unchanged(&self) -> Result<SourceIdentity, SourceChanged> {
         (**self).check_unchanged()
+    }
+
+    fn verifies_rederived(&self) -> bool {
+        (**self).verifies_rederived()
     }
 }
 
@@ -1647,16 +1678,17 @@ pub struct UploadClient {
     ranges: u32,
 }
 
-/// The ranges of one session a client holds in flight unless told otherwise: one, the
-/// sequential schedule.
+/// The ranges of one session a client holds in flight unless told otherwise: the lane's default
+/// P ([`queue::DEFAULT_RANGES_WINDOW`]).
 ///
-/// Wider windows are opted into per client ([`UploadClient::with_ranges_window`]). A parallel
-/// schedule re-sends ranges far more often (a refused overlap, a lost answer, a cut), and every
-/// re-send of an original re-derives its ciphertext from the plaintext on disk; until that
-/// source checks each re-derived STREAM chunk against the tag it first sealed, a source changed
-/// mid-upload could put two ciphertexts under one nonce on the wire. One range in flight keeps
-/// re-sends to what the sequential client already made.
-pub const DEFAULT_CLIENT_RANGES: u32 = 1;
+/// It applies only to a source that verifies what it re-derives
+/// ([`UploadSource::verifies_rederived`]): bytes in memory, and an original that checks every
+/// re-derived STREAM chunk against the tag its bundle recorded. A parallel schedule re-sends
+/// ranges far more often (a refused overlap, a lost answer, a cut), so any other source is sent
+/// one range at a time, whatever this window, and a source changed mid-upload never puts two
+/// ciphertexts under one nonce on the wire. [`UploadClient::with_ranges_window`] narrows or
+/// widens it per client.
+pub const DEFAULT_CLIENT_RANGES: u32 = queue::DEFAULT_RANGES_WINDOW;
 
 impl UploadClient {
     /// Build a client over an authorized [`UploadTransport`], on an unmetered link, with a
@@ -2412,9 +2444,19 @@ impl UploadClient {
         let gate = recovery.gate;
         let mut flights = Vec::new();
         let mut flying: Vec<(u64, u64)> = Vec::new();
+        // A source that does not check what it re-derives is sent one range at a time, the
+        // schedule that re-sends least (`UploadSource::verifies_rederived`).
+        let sequential = !data.verifies_rederived();
+        if sequential && cursor.window > 1 {
+            tracing::debug!(session_id = %cursor.session_id, window = cursor.window, "the source does not verify what it re-derives; sending one range at a time");
+        }
         loop {
             if !cursor.step.is_set() {
-                let window = cursor.window as usize;
+                let window = if sequential {
+                    1
+                } else {
+                    cursor.window as usize
+                };
                 // A request this client abandoned may still hold a claim on the server until its
                 // write returns: it counts against the window, but never fills it.
                 let ghosts = cursor.abandoned_claims().min(window - 1);

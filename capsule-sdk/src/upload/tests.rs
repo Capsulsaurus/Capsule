@@ -351,7 +351,12 @@ async fn absent_advice_falls_back_to_the_bodys_suggestion() {
 
     let size = 600 * KB;
     let data = vec![6u8; size as usize];
-    let outcome = server.client(PROTOCOL).upload(&request(size), &data).await;
+    // One range at a time, so the recorded offsets are the chunk sizes in order.
+    let outcome = server
+        .client(PROTOCOL)
+        .with_ranges_window(1)
+        .upload(&request(size), &data)
+        .await;
 
     assert!(matches!(outcome, Ok(UploadOutcome::Completed { .. })));
     assert_eq!(*offsets.lock().unwrap(), vec![0, suggested]);
@@ -370,7 +375,12 @@ async fn unusable_advice_is_clamped_rather_than_refused() {
 
     let size = 600 * KB;
     let data = vec![4u8; size as usize];
-    let outcome = server.client(PROTOCOL).upload(&request(size), &data).await;
+    // One range at a time, so the recorded offsets are the chunk sizes in order.
+    let outcome = server
+        .client(PROTOCOL)
+        .with_ranges_window(1)
+        .upload(&request(size), &data)
+        .await;
 
     assert!(matches!(outcome, Ok(UploadOutcome::Completed { .. })));
     // 530 000 bytes aligned down to the 4 KiB grid.
@@ -3351,6 +3361,83 @@ fn the_client_window_is_clamped_into_the_protocol_bounds() {
         client.with_ranges_window(99).ranges_window(),
         MAX_RANGES_WINDOW
     );
+}
+
+/// The default window is the lane's P: a client left as built sends a source that verifies
+/// what it re-derives four ranges at once.
+#[tokio::test]
+async fn the_default_window_sends_a_verifying_source_in_parallel() {
+    assert_eq!(DEFAULT_CLIENT_RANGES, 4);
+    let size = 8 * C;
+    let grid = Grid::new(
+        size,
+        "chunk=262144, sessions=4, ranges=4, ttl=300",
+        Duration::from_millis(300),
+        Box::new(|_, _, _| None),
+    );
+    let server = grid_server(&grid).await;
+    let data = vec![1u8; size as usize];
+    assert!(data.verifies_rederived());
+    server
+        .client(PROTOCOL)
+        .upload(&request(size), &data)
+        .await
+        .unwrap();
+
+    let patches = grid.patches.lock().unwrap().clone();
+    assert_eq!(patches.len(), 8, "every range once: {patches:?}");
+    assert!(
+        patches[3].2 - patches[0].2 < Duration::from_millis(250),
+        "the first four were in flight together: {patches:?}"
+    );
+}
+
+/// Bytes behind a source that affirms its identity but does not verify what it re-derives.
+struct UnverifiedBytes(Vec<u8>);
+
+impl UploadSource for UnverifiedBytes {
+    fn read_at(&self, offset: u64, len: usize) -> std::io::Result<Cow<'_, [u8]>> {
+        self.0.read_at(offset, len)
+    }
+
+    fn check_unchanged(&self) -> Result<SourceIdentity, SourceChanged> {
+        Ok(SourceIdentity::Affirmed)
+    }
+}
+
+/// A source that does not verify what it re-derives is sent one range at a time, whatever the
+/// client's and the session's windows: a parallel schedule re-sends more, and such a source
+/// could re-derive changed bytes under the nonces the first read spent.
+#[tokio::test]
+async fn a_source_that_does_not_verify_rederived_bytes_is_sent_one_range_at_a_time() {
+    let size = 4 * C;
+    let grid = Grid::new(
+        size,
+        "chunk=262144, sessions=4, ranges=4, ttl=300",
+        Duration::from_millis(200),
+        Box::new(|_, _, _| None),
+    );
+    let server = grid_server(&grid).await;
+    let data = UnverifiedBytes(vec![1u8; size as usize]);
+    assert!(!data.verifies_rederived());
+    let outcome = server
+        .client(PROTOCOL)
+        .with_ranges_window(4)
+        .upload(&request(size), &data)
+        .await
+        .unwrap();
+
+    assert!(matches!(outcome, UploadOutcome::Completed { .. }));
+    let patches = grid.patches.lock().unwrap().clone();
+    assert_eq!(patches.len(), 4, "every range once: {patches:?}");
+    for pair in patches.windows(2) {
+        assert!(
+            pair[1].2 - pair[0].2 >= Duration::from_millis(150),
+            "each range waited for the one before it: {patches:?}"
+        );
+    }
+    let offsets: Vec<u64> = patches.iter().map(|p| p.0).collect();
+    assert_eq!(offsets, vec![0, C, 2 * C, 3 * C], "in order");
 }
 
 /// **`range_conflict` carrying the committed set.** The server already held the first range (a

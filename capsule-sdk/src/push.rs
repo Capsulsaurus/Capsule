@@ -67,7 +67,7 @@ use capsule_library::import::UploadTier;
 use capsule_library::library::{
     BlobRole as CoreBlobRole, CustodyReceipt, ReceiptExpectations, ReceiptRejection, verify_receipt,
 };
-use capsule_library::lifecycle::{OriginalCiphertext, UploadBundle};
+use capsule_library::lifecycle::{OriginalChanged, OriginalCiphertext, UploadBundle};
 use serde::Serialize;
 use tracing::instrument;
 
@@ -156,7 +156,10 @@ impl UploadSource for BlobBytes<'_> {
         match self {
             Self::Inline(bytes) => bytes.read_at(offset, len),
             Self::Original(original) => {
-                let window = original.read_at(offset, len)?;
+                // The original checks every chunk it re-derives against the tag its bundle
+                // recorded, and refuses the read carrying `OriginalChanged` on a mismatch: that
+                // is a changed source, typed as one.
+                let window = original.read_at(offset, len).map_err(source_change_of)?;
                 // The check before the read cannot see an edit made while the window was being
                 // sealed; this one refuses that window before it is sent.
                 original
@@ -178,6 +181,29 @@ impl UploadSource for BlobBytes<'_> {
                 .map(|()| SourceIdentity::Affirmed)
                 .map_err(|changed| SourceChanged::new(changed.reason)),
         }
+    }
+
+    /// Both verify what they return: inline bytes cannot change, and an original checks every
+    /// re-derived STREAM chunk against the tag its bundle recorded.
+    fn verifies_rederived(&self) -> bool {
+        true
+    }
+}
+
+/// A failed read of an original, with an [`OriginalChanged`] it carries re-carried as the
+/// SDK's [`SourceChanged`], which the upload client types as
+/// [`UploadError::SourceChanged`](crate::upload::UploadError::SourceChanged).
+fn source_change_of(error: std::io::Error) -> std::io::Error {
+    if !matches!(error.get_ref(), Some(inner) if inner.is::<OriginalChanged>()) {
+        return error;
+    }
+    let kind = error.kind();
+    match error.into_inner() {
+        Some(inner) => match inner.downcast::<OriginalChanged>() {
+            Ok(changed) => std::io::Error::other(SourceChanged::new(changed.reason)),
+            Err(inner) => std::io::Error::new(kind, inner),
+        },
+        None => kind.into(),
     }
 }
 
@@ -809,7 +835,9 @@ impl TransferGate for QueueGate<'_> {
 /// sends and by the lane's [`session_cap`](LanePush::session_cap), serving lanes round-robin; a bundle drives its own blobs one session at a time in
 /// ladder order, exactly as [`push_bundle`] does, so W bundles in flight are W sessions, each on
 /// its own HTTP/1.1 connection. Every range any of them sends reserves its length against the
-/// one `budget` before its bytes are read, and waits while the budget is full. Each lane's
+/// one `budget` before its bytes are read, and waits while the budget is full. A session holds
+/// up to the lane's P ranges in flight (`windows.ranges`, never more than the lane client's own
+/// window), lowered by the server's advice. Each lane's
 /// client spends from its lane's shared retry budget, so a failing server costs a bounded number
 /// of retries across all of its bundles.
 ///
@@ -828,9 +856,13 @@ pub async fn push_lanes<H: std::hash::BuildHasher + Sync>(
     let mut queue = UploadQueue::new(budget, Duration::from_secs(3600)).with_windows(windows);
     let mut clients = Vec::with_capacity(lanes.len());
     for (lane_at, lane) in lanes.iter().enumerate() {
+        // Each session plans no more ranges than the lane's P lets it reserve; a source that
+        // does not verify what it re-derives is still sent one at a time.
+        let ranges = lane.client.ranges_window().min(windows.ranges);
         clients.push(
             lane.client
                 .clone()
+                .with_ranges_window(ranges)
                 .with_lane_retries(queue.lane_retries(&lane.server)),
         );
         if let Some(cap) = lane.session_cap {
