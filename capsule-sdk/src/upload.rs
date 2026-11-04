@@ -2046,6 +2046,30 @@ impl UploadClient {
         Ok(body.sessions)
     }
 
+    /// The chunk `PATCH` carrying `bytes` at `offset` on `http`, its body paced into `progress`.
+    /// Built afresh per invocation over the same bytes: the session path may rebuild the request
+    /// for its one 401 refresh-and-replay.
+    fn chunk_request(
+        &self,
+        http: &reqwest::Client,
+        session_id: &str,
+        offset: u64,
+        checksum: &str,
+        bytes: &bytes::Bytes,
+        progress: &ExchangeProgress,
+    ) -> reqwest::RequestBuilder {
+        let request = http
+            .patch(self.transport.session_url(session_id))
+            .header("X-Capsule-Protocol", &self.transport.protocol_version)
+            .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
+            .header("X-Capsule-Offset", offset.to_string())
+            .header("X-Capsule-Checksum", checksum)
+            .body(PacedBody::new(bytes.clone(), progress.clone()));
+        // A chunk is addressed by offset and checked by checksum, so it is safe to send twice:
+        // under `http3` it may ride QUIC.
+        crate::net::replayable(request, bytes.clone(), progress)
+    }
+
     /// Append one chunk at `offset` (`PATCH /upload/{id}`), sending the required
     /// `X-Capsule-Checksum` and `X-Capsule-Offset`. Maps the server's response to
     /// a [`ChunkAck`]; `426` and other non-recoverable rejections are `Err`.
@@ -2065,14 +2089,7 @@ impl UploadClient {
         let resp = self
             .transport
             .send_tracked(&progress, |http| {
-                http.patch(self.transport.session_url(session_id))
-                    .header("X-Capsule-Protocol", &self.transport.protocol_version)
-                    .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
-                    .header("X-Capsule-Offset", offset.to_string())
-                    .header("X-Capsule-Checksum", &checksum)
-                    // A fresh body per invocation, over the same bytes: the session path may
-                    // rebuild the request for its one 401 refresh-and-replay.
-                    .body(PacedBody::new(bytes.clone(), progress.clone()))
+                self.chunk_request(http, session_id, offset, &checksum, &bytes, &progress)
             })
             .await?;
         let resp = match resp {

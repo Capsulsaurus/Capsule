@@ -1347,6 +1347,9 @@ impl FfiSession {
     /// The session, sending through the current path generation's pooled connections.
     fn path_session(&self) -> Session {
         let generation = self.path.snapshot().generation;
+        // Requests routed through the HTTP/3 transport start on the same network.
+        #[cfg(feature = "http3")]
+        crate::net::h3::route::observe_generation(generation);
         match self.pool.client(generation) {
             Ok(http) => self.session.with_http_client(http),
             Err(error) => {

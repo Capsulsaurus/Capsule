@@ -1233,6 +1233,66 @@ pub fn http_client() -> reqwest::Result<reqwest::Client> {
     http_builder().build()
 }
 
+// ─── The one send ────────────────────────────────────────────────────────────
+
+/// Send a prepared request on `client`: the one place a hand-written SDK request leaves.
+///
+/// A default build sends it on `client` and nothing else. Under the `http3` feature it is routed
+/// through the HTTP/3 transport (`h3::route::execute`), which may carry it over QUIC and
+/// otherwise sends it on `client` as before, feeding every response's `Alt-Svc` to the policy.
+///
+/// # Errors
+///
+/// The `reqwest::Error` the send over `client` ended with.
+pub(crate) async fn execute(
+    client: &reqwest::Client,
+    request: reqwest::Request,
+) -> reqwest::Result<reqwest::Response> {
+    // Boxed: the routed send nests the transport's race, and every caller up to the CLI's
+    // dispatch would otherwise carry it inline.
+    #[cfg(feature = "http3")]
+    {
+        Box::pin(h3::route::execute(client, request)).await
+    }
+    #[cfg(not(feature = "http3"))]
+    {
+        client.execute(request).await
+    }
+}
+
+/// The generated client's transport over `http`: [`crate::rest::ReqwestBackend`] in a default
+/// build, and the router (`h3::route::RoutedBackend`) under the `http3` feature, so a
+/// generated operation leaves exactly as a hand-written request does ([`execute`]).
+pub(crate) fn backend(http: reqwest::Client) -> Arc<dyn crate::rest::HttpBackend> {
+    #[cfg(feature = "http3")]
+    {
+        Arc::new(h3::route::RoutedBackend::new(http))
+    }
+    #[cfg(not(feature = "http3"))]
+    {
+        Arc::new(crate::rest::ReqwestBackend::new(http))
+    }
+}
+
+/// Mark the request `builder` holds as safe to send twice, so under the `http3` feature it may
+/// ride QUIC (`h3::route::replayable`): `bytes` are the bytes of the streamed body it holds,
+/// and `progress` what its caller bounds it by. A default build returns `builder` unchanged.
+pub(crate) fn replayable(
+    builder: reqwest::RequestBuilder,
+    bytes: bytes::Bytes,
+    progress: &ExchangeProgress,
+) -> reqwest::RequestBuilder {
+    #[cfg(feature = "http3")]
+    {
+        h3::route::replayable(builder, bytes, progress)
+    }
+    #[cfg(not(feature = "http3"))]
+    {
+        let _ = (bytes, progress);
+        builder
+    }
+}
+
 // ─── Packet marking ──────────────────────────────────────────────────────────
 
 /// The Lower Effort per-hop behaviour's DSCP (RFC 8622), `000001`: traffic that yields to every

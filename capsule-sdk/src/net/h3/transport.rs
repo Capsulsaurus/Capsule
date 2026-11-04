@@ -11,6 +11,8 @@
 //!   request rides whichever connects first. A QUIC dial that loses the race keeps running in
 //!   the background: it is pooled for the next request when it connects, and records UDP
 //!   unusable on the network ([`UdpFailure::DialFailed`]) when it fails while TCP succeeded.
+//!   When both dials fail, UDP is recorded unusable too ([`UdpFailure::BothDialsFailed`]), so
+//!   the next request on the network does not wait out the QUIC dial again.
 //! - **Progress.** While a request rides QUIC, a watchdog reads the connection's received
 //!   datagrams. QUIC keep-alives make a live path answer at least every quarter of the stall
 //!   bound, so a path silent for half of it has stopped making progress: the request fails with
@@ -19,6 +21,8 @@
 //! - **Discovery.** Every response's `Alt-Svc` header, on either transport, feeds
 //!   [`H3Policy::observe_alt_svc`] ([`observe_response`]); an origin with no live advertisement
 //!   asks the [`HttpsResolver`] for HTTPS (SVCB) records first.
+//! - **Routing.** The SDK's requests reach [`H3Transport::send`] through `super::route`, and
+//!   its TCP leg is `super::tcp_leg::ReqwestLeg`, the SDK's own `reqwest` client.
 //! - **Windows.** The QUIC flow-control windows and the UDP socket buffers are sized by
 //!   [`size_window`] ([`Windows`]).
 //! - **No early data.** TLS 1.3 only, `enable_early_data` off, and a dial always waits for the
@@ -510,7 +514,9 @@ impl H3Connection {
         self.quic.close_reason().is_some()
     }
 
-    /// Carry `request` on its own stream under `bounds`, and read the whole response.
+    /// Carry `request` on its own stream under `bounds`, and read the whole response. Each step
+    /// is reported to the [`ExchangeProgress`] the request carries as an extension, or to one of
+    /// its own.
     ///
     /// # Errors
     ///
@@ -524,7 +530,13 @@ impl H3Connection {
         request: http::Request<Bytes>,
         bounds: RequestBounds,
     ) -> Result<http::Response<Bytes>, TransportError> {
-        let progress = ExchangeProgress::waiting();
+        // A caller that bounds the request itself hands its progress along, so its bounds see
+        // the bytes QUIC moves.
+        let progress = request
+            .extensions()
+            .get::<ExchangeProgress>()
+            .cloned()
+            .unwrap_or_else(ExchangeProgress::waiting);
         let exchange = within_bounds(
             bounds,
             &progress,
@@ -1010,10 +1022,15 @@ where
                 }
                 self.exchange_tcp(conn, request, bounds).await
             }
-            Err(BothFailed { quic, tcp }) => Err(TransportError::Dial {
-                quic: Some(quic.to_string()),
-                tcp: tcp.to_string(),
-            }),
+            Err(BothFailed { quic, tcp }) => {
+                tracing::debug!(%quic, %tcp, "h3: both dials failed");
+                self.policy
+                    .record_udp_unusable(network, UdpFailure::BothDialsFailed);
+                Err(TransportError::Dial {
+                    quic: Some(quic.to_string()),
+                    tcp: tcp.to_string(),
+                })
+            }
         }
     }
 

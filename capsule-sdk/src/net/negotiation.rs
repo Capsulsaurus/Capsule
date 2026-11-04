@@ -325,7 +325,7 @@ pub(crate) async fn send_negotiated(
     let request = request?;
     let protocol = protocol_of(request.headers());
     preflight(request.method(), request.url(), &protocol)?;
-    let response = client.execute(request).await?;
+    let response = super::execute(&client, request).await?;
     Ok(screen(&protocol, response).await?)
 }
 
@@ -337,7 +337,7 @@ pub(crate) async fn send_screened(
     let (client, request) = builder.build_split();
     let request = request?;
     let protocol = protocol_of(request.headers());
-    let response = client.execute(request).await?;
+    let response = super::execute(&client, request).await?;
     Ok(screen(&protocol, response).await?)
 }
 
