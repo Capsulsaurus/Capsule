@@ -159,6 +159,9 @@ public actor FFISyncCatalogWriter: FFISyncCatalogWriting {
         row.rating = Int64(metadata.rating ?? 0)
         row.isHidden = metadata.hidden
         row.caption = metadata.caption.flatMap { $0.isEmpty ? nil : $0 }
+        // `metadata.tags` is not projected: the workspace writes user tags to
+        // `asset_tags` beside the row, and the catalog this writer holds has no
+        // tag write. They arrive once the workspace adopts synced assets.
         return row
     }
 
