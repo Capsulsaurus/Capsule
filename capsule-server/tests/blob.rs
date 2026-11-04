@@ -9,9 +9,13 @@
 
 mod support;
 
+use capsule_core::crypto::hash::Hash32;
 use capsule_server::blob::{BlobStore, ContentAddress};
 use capsule_server::gc::CollectionStore;
-use capsule_server::index::{AssetIndex, BlobRecord, HoldOutcome, PendingAsset, ServingHold};
+use capsule_server::index::{
+    AssetIndex, BlobRecord, HoldOutcome, LifecycleOp, OpAction, OpBlob, OpOutcome, PendingAsset,
+    ServingHold,
+};
 use capsule_server::membership::{MemberRole, MembershipStore as _, RosterRecord};
 use capsule_server::store::{AlbumId, AssetId, BlobRole, OwnerId, UserId};
 use jiff::Timestamp;
@@ -1464,4 +1468,99 @@ async fn a_writer_members_upload_is_pending_to_the_member_and_not_to_the_owner()
     fetch(&fixture, &bearer(&fixture).await, &address)
         .await
         .assert_status(StatusCode::NOT_FOUND);
+}
+
+// ===========================================================================================
+// Superseded provenance records
+// ===========================================================================================
+
+/// A lifecycle op leaves the record it moved past readable by its address (#1188), byte for
+/// byte, to exactly the readers of the live record: the owner and the album's members, and not
+/// a stranger, who is told what an unknown address is told.
+///
+/// A device that first sees an asset past its `create` holds only the feed's latest record, and
+/// walks the chain back through the `prior_provenance_hash` each record names. Before this the
+/// first step of that walk was a `404` for everyone.
+#[tokio::test]
+async fn a_superseded_record_is_served_to_whoever_reads_the_live_one() {
+    let fixture = Fixture::working();
+    let asset = publish(&fixture, "edited").await;
+    let row = fixture
+        .index
+        .read(&asset)
+        .await
+        .expect("the index reads")
+        .expect("the row exists");
+    let first = row
+        .address_for(BlobRole::Provenance)
+        .cloned()
+        .expect("publication landed a record");
+
+    let edit = b"signed-metadata-update-for-edited";
+    let provenance = store(&fixture, edit).await;
+    let metadata = store(&fixture, b"edited-metadata-2").await;
+    let outcome = fixture
+        .index
+        .apply_op(LifecycleOp {
+            asset_id: asset.clone(),
+            owner_id: owner(),
+            album_id: album(),
+            action: OpAction::MetadataUpdate,
+            manifest_hash: Hash32::from_bytes([0xed; 32]),
+            prior_provenance_hash: row.chain_head,
+            amk_version: 1,
+            provenance: OpBlob {
+                address: provenance.clone(),
+                size: edit.len() as u64,
+            },
+            metadata: Some(OpBlob {
+                address: metadata,
+                size: 17,
+            }),
+            original: None,
+            retention_until: None,
+            at: Timestamp::UNIX_EPOCH,
+        })
+        .await
+        .expect("the index applies");
+    assert!(
+        matches!(outcome, OpOutcome::Applied { .. }),
+        "the edit applies: {outcome:?}"
+    );
+
+    // The owner reads the record the edit moved past, exactly as it was stored, and the live one.
+    let owner_bearer = bearer(&fixture).await;
+    let earlier = fetch(&fixture, &owner_bearer, first.as_str()).await;
+    earlier.assert_status(StatusCode::OK);
+    assert_eq!(earlier.bytes().as_ref(), b"edited-provenance");
+    fetch(&fixture, &owner_bearer, provenance.as_str())
+        .await
+        .assert_status(StatusCode::OK);
+
+    // A member of either role reads it too.
+    let bob = fixture.other_bearer(BOB).await;
+    for (version, role) in [(1, MemberRole::Reader), (2, MemberRole::Writer)] {
+        roster(&fixture, version, &[(BOB, role)]).await;
+        let response = fetch(&fixture, &bob, first.as_str()).await;
+        response.assert_status(StatusCode::OK);
+        assert_eq!(response.bytes().as_ref(), b"edited-provenance", "{role:?}");
+    }
+
+    // A stranger is told what an address nothing references is told.
+    let carol = fixture
+        .other_bearer("01937b7c-0000-7000-8000-0000000000c0")
+        .await;
+    let refused = fetch(&fixture, &carol, first.as_str()).await;
+    refused.assert_status(StatusCode::NOT_FOUND);
+    let unknown = fetch(&fixture, &carol, &support::checksum(b"never existed")).await;
+    assert_eq!(
+        support::masked_request_id(refused.bytes()),
+        support::masked_request_id(unknown.bytes())
+    );
+
+    // And a former member is told access was revoked, as for the live record.
+    roster(&fixture, 3, &[]).await;
+    fetch(&fixture, &bob, first.as_str())
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
 }

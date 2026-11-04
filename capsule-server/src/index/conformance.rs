@@ -1951,9 +1951,97 @@ pub async fn a_lifecycle_write_repoints_the_provenance_blob(index: &dyn AssetInd
         ok(
             index.find_reference(&before).await,
             "look up the superseded manifest"
-        ),
-        None,
-        "the superseded manifest is no longer referenced, which is what makes it collectable"
+        )
+        .map(|reference| (reference.asset_id, reference.role)),
+        Some((asset, BlobRole::Provenance)),
+        "the superseded manifest is still the asset's provenance record, not the current one"
+    );
+}
+
+/// A superseded manifest is a **provenance reference** of the asset that moved past it (#1188),
+/// in the asset's lifecycle state, until a purge drops the chain.
+///
+/// It is what lets a device first seeing an asset past its `create` fetch the records the feed's
+/// latest one names by `prior_provenance_hash`, under the read authority that decides the live
+/// record. Every holder is still listed, so a manifest two chains pass through names both.
+pub async fn a_superseded_manifest_is_served_as_a_provenance_reference(index: &dyn AssetIndex) {
+    let (asset, _) = publish(index, "serve-past", 1).await;
+    let first = ok(index.read(&asset).await, "read")
+        .expect("the row exists")
+        .address_for(BlobRole::Provenance)
+        .cloned()
+        .expect("publication landed a manifest");
+
+    let mut update = op(
+        "serve-past",
+        1,
+        OpAction::MetadataUpdate,
+        head_of(index, &asset).await,
+        manifest(241),
+    );
+    update.provenance = sized("serve-past-prov-2");
+    let outcome = ok(index.apply_op(update).await, "apply");
+    assert!(
+        matches!(outcome, OpOutcome::Applied { .. }),
+        "the edit applies: {outcome:?}"
+    );
+
+    let references = ok(
+        index.find_references(&first).await,
+        "look up the first record",
+    );
+    assert_eq!(references.len(), 1, "{references:?}");
+    let reference = &references[0];
+    assert_eq!(reference.asset_id, asset);
+    assert_eq!(reference.role, BlobRole::Provenance);
+    assert_eq!(reference.state, AssetState::Visible);
+    assert_eq!(
+        reference.owner_id,
+        pending("serve-past", 1).owner_id,
+        "the reference carries the owner the read authority decides on"
+    );
+    assert_eq!(reference.album_id, pending("serve-past", 1).album_id);
+    // The current manifest is still found in its own role, alongside.
+    assert_eq!(
+        ok(
+            index.find_reference(&address("serve-past-prov-2")).await,
+            "look up the current record"
+        )
+        .map(|reference| reference.role),
+        Some(BlobRole::Provenance)
+    );
+
+    // A delete leaves the earlier records referenced, in the tombstone's state.
+    let mut delete = op(
+        "serve-past",
+        1,
+        OpAction::Delete,
+        head_of(index, &asset).await,
+        manifest(242),
+    );
+    delete.provenance = sized("serve-past-prov-3");
+    delete.retention_until = Some(Timestamp::UNIX_EPOCH);
+    ok(index.apply_op(delete).await, "delete");
+    let reference = ok(index.find_reference(&first).await, "look up after a delete")
+        .expect("a tombstone keeps its chain until the purge");
+    assert_eq!(reference.state, AssetState::Tombstoned);
+    assert_eq!(reference.role, BlobRole::Provenance);
+
+    // The purge closes the retention window, and the records stop being references with it.
+    assert!(matches!(
+        ok(index.purge(&asset, Timestamp::UNIX_EPOCH).await, "purge"),
+        PurgeOutcome::Purged(_)
+    ));
+    assert!(
+        ok(index.find_references(&first).await, "look up after a purge").is_empty(),
+        "a purged chain is served by nobody"
+    );
+    assert!(
+        ok(
+            index.find_references(&address("serve-past-prov-2")).await,
+            "look up a purged record"
+        )
+        .is_empty()
     );
 }
 
@@ -3225,6 +3313,7 @@ pub async fn run_all(index: &dyn AssetIndex) {
     every_lifecycle_op_records_its_blobs_at_their_sizes(index).await;
     a_size_repair_fills_only_a_zero_size(index).await;
     a_lifecycle_write_retains_the_manifest_it_supersedes(index).await;
+    a_superseded_manifest_is_served_as_a_provenance_reference(index).await;
     references_are_counted_from_the_rows_that_name_them(index).await;
     purging_drops_the_references_and_keeps_the_tombstone(index).await;
     a_purge_rechecks_state_and_retention_under_the_lock(index).await;

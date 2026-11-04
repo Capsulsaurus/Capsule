@@ -235,15 +235,18 @@ pub struct AssetRow {
     ///
     /// # Why the server holds it at all
     ///
-    /// Two documented capabilities rest on it, and both were quietly lost while a lifecycle
-    /// write simply dropped the manifest it superseded:
+    /// Three documented capabilities rest on it, and the first two were quietly lost while a
+    /// lifecycle write simply dropped the manifest it superseded:
     ///
     /// - the integrity scrub's *envelope chain ⇄ index agreement* check has something to walk
     ///   (without the superseded manifests it has nothing);
-    /// - and the takedown rebuttal is **evidentiary**. A server accused of losing an asset
+    /// - the takedown rebuttal is **evidentiary**. A server accused of losing an asset
     ///   answers with the user's own signed `delete` manifest and its elapsed `retention_until`.
     ///   A superseded manifest that has been collected is a rebuttal that is gone precisely when
-    ///   a chain has history worth disputing.
+    ///   a chain has history worth disputing;
+    /// - and a device that first sees the asset past its `create` fetches the chain back to it
+    ///   by address, so it can hold the asset from its start
+    ///   ([`AssetIndex::find_references`] reports these as provenance references).
     ///
     /// These count as references for the collector, so a manifest an asset has moved past is
     /// **not** an orphan. That is the whole retention: content addressing does the rest, and two
@@ -859,6 +862,15 @@ pub trait AssetIndex: std::fmt::Debug + Send + Sync {
     /// first — a `404` for an entitled member, or a `403` for a member who happened to have
     /// been removed from the *other* album. The serving path folds its authority over all of
     /// them instead.
+    ///
+    /// **A superseded manifest is a reference (#1188).** An asset whose
+    /// [`AssetRow::superseded`] chain names `address` holds it in the
+    /// [`BlobRole::Provenance`] role, exactly as it holds its current manifest, so the record a
+    /// later one names by `prior_provenance_hash` is served under the same read authority as the
+    /// live record. That is how a device that first sees an asset past its `create` walks the
+    /// chain back to it. Where the asset also holds the address in a current role, that role is
+    /// reported. A purge clears the chain with the bytes, so the record stops being served
+    /// exactly when it stops being retained.
     fn find_references<'a>(
         &'a self,
         address: &'a ContentAddress,

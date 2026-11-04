@@ -434,3 +434,152 @@ async fn a_feed_pull_is_served_and_latches_the_window() {
         Some(crate::net::negotiation::UpgradeReason::BuildBelowFloor)
     );
 }
+
+// ─── Provenance history ──────────────────────────────────────────────────────
+
+/// A blob source holding a set of blobs at their addresses, answering `404` for any other, and
+/// counting what it was asked for.
+struct Blobs {
+    held: HashMap<String, Vec<u8>>,
+    asked: std::sync::Mutex<Vec<String>>,
+}
+
+impl Blobs {
+    fn new(blobs: impl IntoIterator<Item = Vec<u8>>) -> Self {
+        Self {
+            held: blobs
+                .into_iter()
+                .map(|bytes| {
+                    (
+                        capsule_core::crypto::hash::hash_bytes(&bytes).to_hex(),
+                        bytes,
+                    )
+                })
+                .collect(),
+            asked: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    fn asked(&self) -> Vec<String> {
+        self.asked.lock().unwrap().clone()
+    }
+}
+
+impl crate::fetch::BlobSource for Blobs {
+    async fn get_range(
+        &self,
+        hash: &str,
+        start: u64,
+        _max_len: Option<u64>,
+    ) -> crate::fetch::RangeOutcome {
+        self.asked.lock().unwrap().push(hash.to_owned());
+        match self.held.get(hash) {
+            Some(bytes) => crate::fetch::RangeOutcome::Complete {
+                bytes: bytes[usize::try_from(start).unwrap().min(bytes.len())..].to_vec(),
+            },
+            None => crate::fetch::RangeOutcome::Status {
+                status: 404,
+                code: None,
+            },
+        }
+    }
+}
+
+/// A real asset's chain: created, edited twice and deleted, each record its canonical CBOR,
+/// oldest first. The library is returned so it outlives the bytes' borrow-free contents.
+fn real_chain() -> (tempfile::TempDir, Vec<Vec<u8>>) {
+    use capsule_library::lifecycle::Workspace;
+
+    let dir = tempfile::TempDir::new().unwrap();
+    let lib = dir.path().join("library");
+    std::fs::create_dir_all(&lib).unwrap();
+    let src = dir.path().join("photo.jpg");
+    std::fs::write(&src, b"\xFF\xD8\xFF a chain walked back to its create").unwrap();
+    let fast = capsule_core::crypto::primitives::Argon2Params {
+        mem_kib: 64,
+        t_cost: 1,
+        p_cost: 1,
+    };
+    let mut ws = Workspace::create_with_params(&lib, b"passphrase", fast).unwrap();
+    let album = ws.default_album_id();
+    ws.ensure_album(album, "Imports").unwrap();
+    let asset = ws.import_asset(album, &src).unwrap();
+    ws.tag_add(&asset, "dusk").unwrap();
+    ws.tag_add(&asset, "night").unwrap();
+    ws.soft_delete(&asset, 30).unwrap();
+    let records = ws
+        .asset(&asset)
+        .unwrap()
+        .chain
+        .records()
+        .iter()
+        .map(|record| capsule_core::cbor::to_canonical_vec(record).unwrap())
+        .collect();
+    (dir, records)
+}
+
+fn fetcher() -> crate::fetch::RangedFetcher {
+    crate::fetch::RangedFetcher::new(crate::net::ConnectionClass::Unmetered)
+}
+
+/// The walk follows each record's link back to the create and hands the records before the
+/// head over oldest first, byte for byte as the server holds them, asking for each once.
+#[tokio::test]
+async fn the_history_walk_follows_the_links_back_to_the_create() {
+    let (_lib, chain) = real_chain();
+    let (head, before) = chain.split_last().unwrap();
+    let source = Blobs::new(chain.clone());
+
+    let history = fetch_history(&fetcher(), &source, head).await.unwrap();
+    assert_eq!(history, before.to_vec());
+    assert_eq!(source.asked().len(), before.len(), "{:?}", source.asked());
+}
+
+/// A create is its own start: nothing to walk, and nothing asked for.
+#[tokio::test]
+async fn a_create_has_no_history_to_fetch() {
+    let (_lib, chain) = real_chain();
+    let source = Blobs::new(chain.clone());
+    let history = fetch_history(&fetcher(), &source, &chain[0]).await.unwrap();
+    assert!(history.is_empty());
+    assert!(source.asked().is_empty());
+}
+
+/// A record the server will not serve stops the walk and names the link it could not follow.
+#[tokio::test]
+async fn a_record_the_server_refuses_stops_the_walk_at_its_link() {
+    let (_lib, chain) = real_chain();
+    let missing = capsule_core::crypto::hash::hash_bytes(&chain[1]).to_hex();
+    let source = Blobs::new([chain[0].clone(), chain[2].clone()]);
+    match fetch_history(&fetcher(), &source, &chain[3]).await {
+        Err(HistoryError::Fetch { hash, source }) => {
+            assert_eq!(hash, missing);
+            assert!(source.is_permanent(), "{source:?}");
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+/// Bytes that are not the record a link names are refused by the fetch's content check, and a
+/// head that is not a record is refused before anything is fetched.
+#[tokio::test]
+async fn what_is_not_the_named_record_is_refused() {
+    let (_lib, chain) = real_chain();
+    let wanted = capsule_core::crypto::hash::hash_bytes(&chain[2]).to_hex();
+    let mut source = Blobs::new(chain.clone());
+    source.held.insert(wanted.clone(), chain[0].clone());
+    match fetch_history(&fetcher(), &source, &chain[3]).await {
+        Err(HistoryError::Fetch {
+            hash,
+            source: crate::fetch::FetchError::IntegrityFailed { .. },
+        }) => assert_eq!(hash, wanted),
+        other => panic!("{other:?}"),
+    }
+
+    let source = Blobs::new(chain);
+    match fetch_history(&fetcher(), &source, b"not a record").await {
+        Err(HistoryError::Malformed { hash, .. }) => assert_eq!(hash, "head"),
+        other => panic!("{other:?}"),
+    }
+    assert!(source.asked().is_empty());
+}

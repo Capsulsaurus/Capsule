@@ -27,6 +27,10 @@
 //!
 //! Blob bytes never ride this surface; on-demand ranged blob fetch is [`crate::fetch`].
 //!
+//! The feed carries only an asset's latest provenance record. [`fetch_history`] walks the
+//! chain back from it to the asset's `create` through that blob fetch, for a device that first
+//! sees an asset past its create and adopts it from its whole chain.
+//!
 //! [Download & Sync]: https://docs/design/sync/
 //! [Download & Sync — cursor authenticity]: https://docs/design/sync/#cursor-authenticity-and-anti-rewind
 
@@ -860,6 +864,124 @@ fn role_str(role: &rest::types::WireBlobRole) -> &'static str {
         // arm exists and spells the token the server would.
         rest::types::WireBlobRole::DerivativeManifest => "derivative_manifest",
     }
+}
+
+// ─── Provenance history ──────────────────────────────────────────────────────
+
+/// The most records [`fetch_history`] walks back from a head: a chain longer than this is
+/// refused ([`HistoryError::TooLong`]) rather than held in memory without bound. Every record of
+/// a chain is one lifecycle write of one asset, so a real chain is far shorter.
+pub const MAX_HISTORY_RECORDS: usize = 4096;
+
+/// The largest provenance record [`fetch_history`] accepts (1 MiB). A record is a signed
+/// manifest and its chain link, a few KiB; anything past this is not one.
+pub const MAX_RECORD_BYTES: u64 = 1024 * 1024;
+
+/// Why an asset's earlier provenance records could not be fetched. Nothing is verified here —
+/// [`Workspace::adopt_remote_history`](capsule_library::lifecycle::Workspace::adopt_remote_history)
+/// does that — so each variant is a fact about the walk, not a verdict on the chain.
+#[derive(Debug, thiserror::Error)]
+pub enum HistoryError {
+    /// A record does not decode, so the link to the record before it cannot be read. `hash` is
+    /// the record's address, or `head` for the record the walk started from.
+    #[error("the provenance record {hash} does not decode: {detail}")]
+    Malformed {
+        /// The record's content address, or `head`.
+        hash: String,
+        /// English detail (developer/log message).
+        detail: String,
+    },
+    /// The record a link names could not be fetched: the server refused it (an asset the caller
+    /// may not read, or a deleted one), it did not hash to its address, or the transport failed.
+    #[error("fetching the provenance record {hash} failed: {source}")]
+    Fetch {
+        /// The content address the link names.
+        hash: String,
+        /// Why the fetch failed.
+        #[source]
+        source: crate::fetch::FetchError,
+    },
+    /// The chain is longer than [`MAX_HISTORY_RECORDS`].
+    #[error("the provenance chain is longer than {limit} records")]
+    TooLong {
+        /// The bound, [`MAX_HISTORY_RECORDS`].
+        limit: usize,
+    },
+}
+
+/// Walk an asset's provenance chain back from `head_record` (the `manifest_cbor` a feed entry
+/// carries) to its `create`, fetching each record the one after it names by
+/// `prior_provenance_hash` through `source` (`GET /v1/blob/{hash}`, where the server keeps an
+/// asset's superseded records under the live record's read authority).
+///
+/// Returns the records **before** the head, oldest first, each the exact bytes the server
+/// holds, verified against its content address by the fetch: what
+/// [`Workspace::adopt_remote_history`](capsule_library::lifecycle::Workspace::adopt_remote_history)
+/// takes. A head that is its asset's `create` has no history, and the walk fetches nothing.
+///
+/// Nothing is trusted for being fetched: the walk only follows links, and the chain is verified
+/// record by record when it is adopted.
+///
+/// # Errors
+///
+/// [`HistoryError`]; the walk stops at the first record it cannot fetch or decode.
+#[instrument(skip_all, fields(head_bytes = head_record.len()))]
+pub async fn fetch_history<B, S, C>(
+    fetcher: &crate::fetch::RangedFetcher<S, C>,
+    source: &B,
+    head_record: &[u8],
+) -> Result<Vec<Vec<u8>>, HistoryError>
+where
+    B: crate::fetch::BlobSource,
+    S: Sleeper,
+    C: crate::net::MonotonicClock,
+{
+    let mut prior = prior_of(head_record, "head")?;
+    let mut history = Vec::new();
+    while let Some(link) = prior {
+        if history.len() == MAX_HISTORY_RECORDS {
+            tracing::warn!(
+                limit = MAX_HISTORY_RECORDS,
+                "sync-history: the chain is longer than the walk's bound"
+            );
+            return Err(HistoryError::TooLong {
+                limit: MAX_HISTORY_RECORDS,
+            });
+        }
+        let hash = link.to_hex();
+        let record = fetcher
+            .fetch_unsized(source, &hash, MAX_RECORD_BYTES)
+            .await
+            .map_err(|source| {
+                tracing::warn!(%hash, error = %source, "sync-history: an earlier record could not be fetched");
+                HistoryError::Fetch {
+                    hash: hash.clone(),
+                    source,
+                }
+            })?;
+        prior = prior_of(&record, &hash)?;
+        tracing::debug!(%hash, bytes = record.len(), at_create = prior.is_none(), "sync-history: an earlier record fetched");
+        history.push(record);
+    }
+    history.reverse();
+    tracing::info!(
+        records = history.len(),
+        "sync-history: the chain was walked back to its create"
+    );
+    Ok(history)
+}
+
+/// The `prior_provenance_hash` of the record `bytes`, read off its decode.
+fn prior_of(
+    bytes: &[u8],
+    hash: &str,
+) -> Result<Option<capsule_core::crypto::hash::Hash32>, HistoryError> {
+    capsule_core::crypto::provenance::ProvenanceRecord::decode(bytes)
+        .map(|record| record.prior_provenance_hash)
+        .map_err(|error| HistoryError::Malformed {
+            hash: hash.to_owned(),
+            detail: error.to_string(),
+        })
 }
 
 /// Lossy UTF-8 of an id byte string, for error display only.

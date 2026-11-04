@@ -184,6 +184,35 @@ const ASSET_COLUMNS: &str = "asset_id, owner_id, album_id, protocol_version, cry
                              state, hold, sync_seq, first_seq, chain_head, amk_version, \
                              retention_until, created_at, updated_at";
 
+/// Every holder of the address `$1`, for [`PostgresAssetIndex::find_references`].
+///
+/// The holders are chosen by `asset_id IN (… UNION …)` over `asset_blobs` and
+/// `asset_superseded`, each probed through its own index on `address`
+/// (`idx_asset_blobs_address`, `idx_asset_superseded_address`), so the read costs the holders
+/// it finds rather than the table: the serving path runs it on every `GET /v1/blob`, for any
+/// authenticated caller. Two correlated `EXISTS` joined by `OR` cannot be pulled up into a
+/// join, so Postgres would evaluate them per row of a full scan of `assets`. A test asserts
+/// the plan (`find_references_probes_the_address_indexes`).
+///
+/// The role subquery picks the first role in `BlobRole`'s order, which is what the in-memory
+/// adapter's `find` over role-sorted blobs picks when one asset holds the same address in two
+/// roles. An asset that names the address only in its superseded chain holds it as a
+/// provenance record, so the role falls back to `provenance`.
+const FIND_REFERENCES_SQL: &str = "SELECT a.asset_id, a.owner_id, a.album_id, a.state, a.hold, \
+       COALESCE((SELECT b.role FROM asset_blobs b \
+        WHERE b.asset_id = a.asset_id AND b.address = $1 \
+        ORDER BY CASE b.role WHEN 'original' THEN 0 WHEN 'derivative' THEN 1 \
+          WHEN 'metadata' THEN 2 WHEN 'provenance' THEN 3 WHEN 'backup' THEN 4 \
+          ELSE 5 END \
+        LIMIT 1), 'provenance') AS role, \
+       EXISTS (SELECT 1 FROM asset_blobs o \
+        WHERE o.asset_id = a.asset_id AND o.role = 'original') AS original_held \
+     FROM assets a \
+     WHERE a.state IN ('visible', 'tombstoned') AND a.asset_id IN ( \
+       SELECT b.asset_id FROM asset_blobs b WHERE b.address = $1 \
+       UNION SELECT s.asset_id FROM asset_superseded s WHERE s.address = $1) \
+     ORDER BY a.state = 'tombstoned', a.asset_id COLLATE \"C\"";
+
 /// Turn one `assets` row into an [`AssetRow`] with empty collections.
 ///
 /// The blobs and the superseded chain are loaded separately, so a page of rows costs three
@@ -1066,28 +1095,11 @@ impl AssetIndex for PostgresAssetIndex {
             // the reference needs from `asset_blobs`, so they are subqueries here rather than a
             // per-holder `load_collections`: that cost one extra round trip per holder on every
             // fetch, for a list the fold usually stops reading at its first entry.
-            //
-            // The role subquery picks the first role in `BlobRole`'s order, which is what the
-            // in-memory adapter's `find` over role-sorted blobs picks when one asset holds the
-            // same address in two roles.
             let found = self
                 .connection
                 .query_all_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
-                    "SELECT a.asset_id, a.owner_id, a.album_id, a.state, a.hold, \
-                       (SELECT b.role FROM asset_blobs b \
-                        WHERE b.asset_id = a.asset_id AND b.address = $1 \
-                        ORDER BY CASE b.role WHEN 'original' THEN 0 WHEN 'derivative' THEN 1 \
-                          WHEN 'metadata' THEN 2 WHEN 'provenance' THEN 3 WHEN 'backup' THEN 4 \
-                          ELSE 5 END \
-                        LIMIT 1) AS role, \
-                       EXISTS (SELECT 1 FROM asset_blobs o \
-                        WHERE o.asset_id = a.asset_id AND o.role = 'original') AS original_held \
-                     FROM assets a \
-                     WHERE a.state IN ('visible', 'tombstoned') AND EXISTS ( \
-                       SELECT 1 FROM asset_blobs b \
-                       WHERE b.asset_id = a.asset_id AND b.address = $1) \
-                     ORDER BY a.state = 'tombstoned', a.asset_id COLLATE \"C\"",
+                    FIND_REFERENCES_SQL,
                     [Value::from(address.as_str().to_owned())],
                 ))
                 .await

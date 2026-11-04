@@ -460,8 +460,12 @@ impl AssetIndex for InMemoryAssetIndex {
         Box::pin(async move {
             let inner = lock(&self.inner);
             // Two passes rather than a sort: live references come before tombstoned ones, each
-            // in the map's asset-id order, and pending rows are not references at all.
-            let holds = |row: &&AssetRow| row.blobs.iter().any(|blob| &blob.address == address);
+            // in the map's asset-id order, and pending rows are not references at all. A
+            // superseded manifest is a provenance reference of the asset it was superseded in.
+            let holds = |row: &&AssetRow| {
+                row.blobs.iter().any(|blob| &blob.address == address)
+                    || row.superseded.contains(address)
+            };
             let reference = |row: &AssetRow| super::BlobReference {
                 asset_id: row.asset_id.clone(),
                 album_id: row.album_id.clone(),
@@ -470,7 +474,7 @@ impl AssetIndex for InMemoryAssetIndex {
                     .blobs
                     .iter()
                     .find(|blob| &blob.address == address)
-                    .map_or(BlobRole::Original, |blob| blob.role),
+                    .map_or(BlobRole::Provenance, |blob| blob.role),
                 state: row.state,
                 original_held: row.original_held(),
                 hold: row.hold,

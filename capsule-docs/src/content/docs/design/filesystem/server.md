@@ -52,6 +52,8 @@ Commit discipline ([`capsule-server::blob::fs`](https://github.com/Capsulsaurus/
 
 An asset is a **bundle** of blobs ([Transfer — Upload](/design/transfer/upload/#what-gets-uploaded)): encrypted original, derivatives, metadata blob, and the signed manifest stored as the provenance blob. The store does not distinguish them; roles live in PostgreSQL, with the manifest envelopes and the [owner ledger](#the-owner-ledger) as the key-free durable fallback.
 
+A lifecycle op moves the provenance role to its new record, and the record it moved past stays referenced in the asset's **superseded chain** until a purge closes the retention window. `GET /v1/blob/{hash}` serves each superseded record as a provenance blob of the asset that holds it: byte for byte as uploaded, under the read authority of the live record, and with the same refusals (a deleted or held asset's records are `410`). A device that first sees an asset past its `create` fetches the record each `prior_provenance_hash` names, back to the create, verifies the chain in order and holds the asset from its start; the sidecar comes from the asset's live metadata blob, since a superseded metadata blob is collected.
+
 ## Recovering the Index from Blobs Alone
 
 PostgreSQL's asset index is a **projection** of the blob store, never the only copy. Losing

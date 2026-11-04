@@ -3558,3 +3558,210 @@ fn ffi_an_entry_past_an_unheld_create_is_applied_but_not_adopted() {
     );
     assert!(workspace.provenance_head(asset.to_string()).is_err());
 }
+
+/// A mock serving each of `records` at `/v1/blob/{its content address}` by `Range`, as the
+/// server serves an asset's superseded provenance records, and `404` for anything else.
+async fn records_server(records: Vec<Vec<u8>>) -> MockServer {
+    let held: std::collections::HashMap<String, Vec<u8>> = records
+        .into_iter()
+        .map(|bytes| {
+            (
+                capsule_core::crypto::hash::hash_bytes(&bytes).to_hex(),
+                bytes,
+            )
+        })
+        .collect();
+    MockServer::start(move |req: &MockRequest| {
+        let blob = req
+            .path
+            .strip_prefix("/v1/blob/")
+            .and_then(|hash| held.get(hash));
+        match (req.method.as_str(), blob) {
+            ("POST", _) if req.path == "/auth/login" => {
+                MockResponse::new(200, "OK").json_body(token_json())
+            }
+            ("GET", Some(blob)) => {
+                let range = req
+                    .header("Range")
+                    .and_then(|r| r.strip_prefix("bytes="))
+                    .and_then(|r| r.split_once('-'))
+                    .unwrap_or(("0", ""));
+                let start: usize = range.0.parse().unwrap_or(0);
+                let end = range
+                    .1
+                    .parse::<usize>()
+                    .ok()
+                    .map_or(blob.len(), |e| (e + 1).min(blob.len()));
+                let mut response = MockResponse::new(206, "Partial Content")
+                    .header("Content-Type", "application/octet-stream");
+                response.body = blob[start.min(end)..end].to_vec();
+                response
+            }
+            _ => MockResponse::new(404, "Not Found").json_body(r#"{"error":"no route"}"#),
+        }
+    })
+    .await
+}
+
+/// **An asset first seen at a `delete` is adopted from its fetched history.** The session walks
+/// the delete's links back to the create through the blob route, and the workspace verifies the
+/// records in order, opens the original, and holds the asset from its create with its live
+/// sidecar: the asset is in this device's trash with the tags its edit added, and restores. A
+/// history missing its create is refused and places nothing, and a record the server will not
+/// serve is a fetch error naming it.
+#[tokio::test]
+async fn ffi_an_asset_first_seen_at_a_delete_is_adopted_from_its_fetched_history() {
+    use capsule_library::lifecycle::{SidecarEnrichment, SignedImportOptions};
+
+    let (lib, other_lib, blobs, out) = (
+        tempfile::TempDir::new().unwrap(),
+        tempfile::TempDir::new().unwrap(),
+        tempfile::TempDir::new().unwrap(),
+        tempfile::TempDir::new().unwrap(),
+    );
+    let workspace = enroll(lib.path());
+    let album = workspace.create_album("Trip".into()).unwrap();
+    let mut other = other_device(&workspace, &album, other_lib.path());
+
+    let photo = blobs.path().join("IMG_0003.JPG");
+    std::fs::write(&photo, original_plaintext(4096)).unwrap();
+    let options = SignedImportOptions {
+        enrichment: Some(SidecarEnrichment {
+            tags: vec!["harbour".into()],
+            ..SidecarEnrichment::default()
+        }),
+        ..SignedImportOptions::default()
+    };
+    let asset = other
+        .import_asset_with(uuid::Uuid::parse_str(&album).unwrap(), &photo, &options)
+        .unwrap()
+        .asset_id;
+    other.tag_add(&asset, "dusk").unwrap();
+    other.soft_delete(&asset, 30).unwrap();
+    let records: Vec<Vec<u8>> = other
+        .asset(&asset)
+        .unwrap()
+        .chain
+        .records()
+        .iter()
+        .map(|record| capsule_core::cbor::to_canonical_vec(record).unwrap())
+        .collect();
+    let history = records[..records.len() - 1].to_vec();
+
+    // The feed entry of the delete, carrying the asset's live metadata blob.
+    let (mut head, ciphertext) = remote_head(&other, asset, None, blobs.path());
+    head.metadata_blob = other.asset(&asset).unwrap().metadata_blob.clone();
+
+    let server = records_server(history.clone()).await;
+    let session = login(&server).await;
+    let fetched = session
+        .fetch_provenance_history(
+            format!("{}/v1", server.base_url()),
+            head.manifest_cbor.clone(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(fetched, history, "oldest first, byte for byte");
+
+    // Missing its create: refused, and nothing placed or held.
+    let destination = out.path().join("opened");
+    match workspace
+        .open_synced_history(
+            head.clone(),
+            fetched[1..].to_vec(),
+            path_string(&ciphertext),
+            path_string(&destination),
+        )
+        .unwrap()
+    {
+        FfiOpenedOriginal::Refused {
+            outcome: FfiSyncApplyOutcome::Quarantined { reason, .. },
+        } => assert_eq!(reason, "Rejected.ForgedChain"),
+        other => panic!("expected the history to be refused, got {other:?}"),
+    }
+    assert!(dir_names(out.path()).is_empty(), "nothing placed or staged");
+    assert!(workspace.provenance_head(asset.to_string()).is_err());
+
+    match workspace
+        .open_synced_history(
+            head.clone(),
+            fetched,
+            path_string(&ciphertext),
+            path_string(&destination),
+        )
+        .unwrap()
+    {
+        FfiOpenedOriginal::Opened { facts } => {
+            assert!(facts.adopted, "the asset is held from its create");
+            assert_eq!(facts.action, "delete");
+        }
+        other => panic!("expected the delete to open, got {other:?}"),
+    }
+
+    // Held now: the same entry is opened as `open_synced_original` opens it, against its own
+    // head, and a history that would not even decode is not read.
+    let again = out.path().join("again");
+    let held_entry = FfiSyncHead {
+        local_chain_head: Some(
+            capsule_core::crypto::hash::hash_bytes(&history[1])
+                .as_bytes()
+                .to_vec(),
+        ),
+        ..head
+    };
+    match workspace
+        .open_synced_history(
+            held_entry,
+            vec![b"not a record".to_vec()],
+            path_string(&ciphertext),
+            path_string(&again),
+        )
+        .unwrap()
+    {
+        FfiOpenedOriginal::Opened { facts } => {
+            assert!(facts.adopted, "the held chain already contains the delete");
+            assert_eq!(facts.action, "delete");
+        }
+        other => panic!("expected the held asset's entry to open, got {other:?}"),
+    }
+    assert_eq!(
+        std::fs::read(&destination).unwrap(),
+        original_plaintext(4096)
+    );
+    assert_eq!(
+        workspace.provenance_head(asset.to_string()).unwrap(),
+        records[records.len() - 1]
+    );
+    assert_eq!(
+        workspace
+            .trash()
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.asset_id)
+            .collect::<Vec<_>>(),
+        vec![asset.to_string()]
+    );
+    let tags = workspace
+        .with(|ws| Ok(ws.db().tags_for(&asset.to_string()).unwrap()))
+        .unwrap();
+    assert_eq!(tags, vec!["dusk".to_string(), "harbour".to_string()]);
+    workspace.restore_asset(asset.to_string()).unwrap();
+    assert!(workspace.trash().unwrap().is_empty());
+
+    // A record the server does not serve stops the walk.
+    let server = records_server(history[1..].to_vec()).await;
+    let session = login(&server).await;
+    match session
+        .fetch_provenance_history(
+            format!("{}/v1", server.base_url()),
+            records[records.len() - 1].clone(),
+        )
+        .await
+    {
+        Err(FfiError::Fetch { detail, .. }) => {
+            let create = capsule_core::crypto::hash::hash_bytes(&history[0]).to_hex();
+            assert!(detail.contains(&create), "{detail}");
+        }
+        other => panic!("expected a fetch error, got {other:?}"),
+    }
+}
