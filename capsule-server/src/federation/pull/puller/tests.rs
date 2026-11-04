@@ -490,6 +490,40 @@ async fn a_metadata_blob_that_is_not_its_address_writes_nothing() {
     assert_eq!(harness.state().await, PulledAlbum::default());
 }
 
+/// A delete that names a metadata blob — the shape the owner's own feed gives a tombstone —
+/// is accepted and the blob is never asked for, so one the home server no longer serves (a
+/// `410` past the window, here any refusal) never aborts the pull.
+#[tokio::test]
+async fn a_delete_naming_a_metadata_blob_is_written_without_fetching_it() {
+    let harness = Harness::new().await;
+    let one = create(1);
+    let delete = record(core(asset(1), Action::Delete, Some(hash_bytes(&one)), 1));
+    let gone = hash_bytes(b"a metadata blob past its window").to_hex();
+    let mut tombstone = entry(asset(1), 2, "deleted", Some(&delete));
+    tombstone["metadata_blob"] = serde_json::json!(gone);
+    harness.home.serve_page(a_page(
+        vec![entry(asset(1), 1, "created", Some(&one)), tombstone],
+        "c2",
+        false,
+    ));
+    harness.home.serve_blob(METADATA);
+
+    let report = harness.pull(PeerTier::Established).await;
+    assert_eq!(report.result, Ok(()));
+    assert_eq!(harness.pulled.entries(&job()).len(), 2);
+    assert!(
+        harness.home.seen_at(&format!("/v1/blob/{gone}")).is_empty(),
+        "a delete's named metadata blob is never fetched"
+    );
+    let state = harness.state().await;
+    assert_eq!(state.high_water, Some(2));
+    assert_eq!(
+        state.assets[&asset(1).to_string()].metadata_blob,
+        Some(hash_bytes(METADATA)),
+        "the asset keeps the blob its create bound"
+    );
+}
+
 #[tokio::test]
 async fn a_response_past_its_bound_is_a_validation_failure() {
     let harness = Harness::new().await;
