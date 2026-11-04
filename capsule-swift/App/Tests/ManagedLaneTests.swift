@@ -330,3 +330,63 @@ struct ManagedLaneTests {
         return ImportSource(url: url, originalFilename: "picked.jpg")
     }
 }
+
+/// The managed lane's sync is opened over the store it syncs and the provider
+/// whose redelivery walk its drains feed.
+@MainActor
+@Suite("Managed lane sync composition")
+struct ManagedLaneSyncTests {
+    @Test("a lane's sync is opened over the store's layout and the provider it hands drains to")
+    func syncOpensOverTheLane() async {
+        let root = ManagedLaneTests.temporaryRoot().appending(path: "Library", directoryHint: .isDirectory)
+        let probe = SyncProbe()
+        let lane = AppEnvironment.makeManagedLane(root: root, openSync: { layout, provider in
+            probe.opened(root: layout.root, provider: provider)
+            return { probe.ran() }
+        })
+
+        await lane.sync?()
+
+        #expect(probe.root == root)
+        #expect(probe.provider === lane.provider)
+        #expect(probe.runs == 1)
+    }
+
+    @Test("a lane opened with no sync has none")
+    func noSyncWithoutOne() {
+        let root = ManagedLaneTests.temporaryRoot().appending(path: "Library", directoryHint: .isDirectory)
+
+        #expect(AppEnvironment.makeManagedLane(root: root).sync == nil)
+    }
+}
+
+/// Records what a lane's sync was opened over and how often it ran.
+private final class SyncProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var openedRoot: URL?
+    private var openedProvider: ManagedProvider?
+    private var runCount = 0
+
+    var root: URL? {
+        lock.withLock { openedRoot }
+    }
+
+    var provider: ManagedProvider? {
+        lock.withLock { openedProvider }
+    }
+
+    var runs: Int {
+        lock.withLock { runCount }
+    }
+
+    func opened(root: URL, provider: ManagedProvider) {
+        lock.withLock {
+            openedRoot = root
+            openedProvider = provider
+        }
+    }
+
+    func ran() {
+        lock.withLock { runCount += 1 }
+    }
+}
