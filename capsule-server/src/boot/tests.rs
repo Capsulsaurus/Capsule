@@ -892,6 +892,170 @@ async fn the_in_memory_collector_keeps_the_blobs_pulled_albums_hold() {
     a_pulled_blob_outlives_the_assembled_collector(&stores, &clock).await;
 }
 
+/// A quota ledger whose drift audit names `drift`, delegating everything else to `inner`.
+///
+/// The in-memory ledger derives its pulled total and cannot drift, so only an injected audit
+/// tells a scrub that runs check 8 from one that never asked.
+#[derive(Debug, Default)]
+struct DriftedQuota {
+    inner: crate::quota::InMemoryQuota,
+    drift: Vec<crate::quota::PulledDrift>,
+}
+
+impl crate::quota::QuotaStore for DriftedQuota {
+    fn usage<'a>(
+        &'a self,
+        user: &'a crate::store::UserId,
+    ) -> crate::store::StoreFuture<'a, crate::quota::StoredUsage> {
+        self.inner.usage(user)
+    }
+
+    fn charge<'a>(
+        &'a self,
+        user: &'a crate::store::UserId,
+        address: &'a crate::blob::ContentAddress,
+        size: u64,
+        at: jiff::Timestamp,
+        limits: crate::quota::QuotaLimits,
+    ) -> crate::store::StoreFuture<'a, crate::quota::ChargeOutcome> {
+        self.inner.charge(user, address, size, at, limits)
+    }
+
+    fn reserve<'a>(
+        &'a self,
+        user: &'a crate::store::UserId,
+        address: &'a crate::blob::ContentAddress,
+        size: u64,
+        at: jiff::Timestamp,
+        until: jiff::Timestamp,
+        limits: crate::quota::QuotaLimits,
+    ) -> crate::store::StoreFuture<'a, crate::quota::ChargeOutcome> {
+        self.inner.reserve(user, address, size, at, until, limits)
+    }
+
+    fn settle<'a>(
+        &'a self,
+        address: &'a crate::blob::ContentAddress,
+    ) -> crate::store::StoreFuture<'a, bool> {
+        self.inner.settle(address)
+    }
+
+    fn expired_reservations(
+        &self,
+        now: jiff::Timestamp,
+        limit: usize,
+    ) -> crate::store::StoreFuture<'_, Vec<crate::quota::ExpiredReservation>> {
+        self.inner.expired_reservations(now, limit)
+    }
+
+    fn extend_reservation<'a>(
+        &'a self,
+        address: &'a crate::blob::ContentAddress,
+        until: jiff::Timestamp,
+    ) -> crate::store::StoreFuture<'a, bool> {
+        self.inner.extend_reservation(address, until)
+    }
+
+    fn release_expired<'a>(
+        &'a self,
+        user: &'a crate::store::UserId,
+        address: &'a crate::blob::ContentAddress,
+        now: jiff::Timestamp,
+    ) -> crate::store::StoreFuture<'a, bool> {
+        self.inner.release_expired(user, address, now)
+    }
+
+    fn release<'a>(
+        &'a self,
+        user: &'a crate::store::UserId,
+        address: &'a crate::blob::ContentAddress,
+    ) -> crate::store::StoreFuture<'a, bool> {
+        self.inner.release(user, address)
+    }
+
+    fn release_attribution<'a>(
+        &'a self,
+        address: &'a crate::blob::ContentAddress,
+    ) -> crate::store::StoreFuture<'a, Option<(crate::store::UserId, u64)>> {
+        self.inner.release_attribution(address)
+    }
+
+    fn suspend<'a>(
+        &'a self,
+        user: &'a crate::store::UserId,
+        at: jiff::Timestamp,
+    ) -> crate::store::StoreFuture<'a, bool> {
+        self.inner.suspend(user, at)
+    }
+
+    fn unsuspend<'a>(
+        &'a self,
+        user: &'a crate::store::UserId,
+    ) -> crate::store::StoreFuture<'a, bool> {
+        self.inner.unsuspend(user)
+    }
+
+    fn pulled_drift(&self) -> crate::store::StoreFuture<'_, Vec<crate::quota::PulledDrift>> {
+        let drift = self.drift.clone();
+        Box::pin(async move { Ok(drift) })
+    }
+
+    fn reconcile_pulled(&self) -> crate::store::StoreFuture<'_, Vec<crate::quota::PulledDrift>> {
+        let drift = self.drift.clone();
+        Box::pin(async move { Ok(drift) })
+    }
+}
+
+/// The assembled maintenance scrub audits the stores' own quota ledger (#1183).
+///
+/// Check 8 rides `ScrubContext::with_quotas`, so an assembly that dropped it would keep every
+/// scrub unit test green while `capsule-server scrub` silently stopped reporting drift. Only a
+/// case over `Stores::maintenance` sees it: the stores' ledger is swapped for one whose audit
+/// names a drifted account, and the assembled scrub must report exactly that account.
+#[tokio::test]
+async fn the_assembled_scrub_reports_the_drift_the_stores_quota_ledger_audits() {
+    let root = tempfile::tempdir().expect("a scratch directory");
+    let config = memory_config(root.path());
+    let mut stores = super::base(&config, std::sync::Arc::new(ManualClock::default()))
+        .await
+        .expect("the base opens")
+        .in_memory(std::sync::Arc::new(super::InMemoryReceipts::new()));
+    let user = crate::store::UserId::new("drifted");
+    stores.quotas = std::sync::Arc::new(DriftedQuota {
+        drift: vec![crate::quota::PulledDrift {
+            user: user.clone(),
+            stored: 11,
+            derived: 8,
+            holdings: true,
+        }],
+        ..DriftedQuota::default()
+    });
+
+    let maintenance = stores.maintenance(
+        crate::gc::DEFAULT_GRACE_WINDOW,
+        crate::ledger::replay::LedgerKeys::default(),
+        None,
+    );
+    let scrubbed = crate::scrub::scrub(&maintenance.scrub, crate::scrub::Depth::Structural)
+        .await
+        .expect("a scrub pass");
+    assert_eq!(
+        scrubbed.count("pulled_quota_drift"),
+        1,
+        "the assembled scrub must audit the stores' quota ledger: {:?}",
+        scrubbed.findings
+    );
+    assert!(
+        scrubbed.findings.iter().any(|finding| matches!(
+            finding,
+            crate::scrub::Finding::PulledQuotaDrift { user: drifted, stored: 11, derived: 8, holdings: true }
+                if *drifted == user
+        )),
+        "{:?}",
+        scrubbed.findings
+    );
+}
+
 /// The in-memory arm's pulled albums are assembled with the configured caching budget.
 #[tokio::test]
 async fn the_in_memory_pulled_albums_charge_the_configured_peer_budget() {

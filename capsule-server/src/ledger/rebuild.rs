@@ -21,6 +21,9 @@
 //!    a query over rows, so restoring the rows is recomputing them.
 //! 4. Report blobs nothing names, entries naming a missing blob, and provenance blobs that fail
 //!    structural validation (moved to `quarantine/` with their reason, never dropped).
+//! 5. Rebuild every account's stored pulled quota total that drifted from what its holdings
+//!    derive ([`QuotaStore::reconcile_pulled`], #1183): the drift `capsule-server scrub`
+//!    reports and does not repair.
 //!
 //! When the ledger cannot prove an owner's sequence — the chain breaks, a custody entry was
 //! never resolved because the process stopped between it and the index write, or a lifecycle
@@ -38,9 +41,9 @@
 //!
 //! # Dry run by default
 //!
-//! [`Mode::DryRun`] reads everything and writes nothing: no row, no quota charge, no epoch, no
-//! quarantine move. The report is the same shape either way, so an operator reads what a rebuild
-//! would do before doing it.
+//! [`Mode::DryRun`] reads everything and writes nothing: no row, no quota charge, no pulled
+//! total rebuilt, no epoch, no quarantine move. The report is the same shape either way, so an
+//! operator reads what a rebuild would do before doing it.
 //!
 //! # Idempotent
 //!
@@ -85,7 +88,7 @@ use super::{ChainFault, LedgerError, OwnerLedger};
 use crate::blob::{BlobError, BlobStore, ContentAddress, QuarantineReason};
 use crate::gc::Mode;
 use crate::index::{AssetIndex, AssetRow, AssetState, BlobRef, OpAction, RestoreOutcome};
-use crate::quota::{QuotaLimits, QuotaStore};
+use crate::quota::{PulledDrift, QuotaLimits, QuotaStore};
 use crate::store::{AlbumId, AssetId, BlobRole, Clock, OwnerId, StoreError, UserId};
 
 /// Why a rebuild could not finish.
@@ -235,6 +238,10 @@ pub struct RebuildReport {
     pub owners: Vec<OwnerReport>,
     /// Blobs no verified ledger entry names and no index row references: left for GC.
     pub orphans: Vec<ContentAddress>,
+    /// Accounts whose stored pulled quota total drifted from what their holdings derive
+    /// (#1183): rebuilt under `--apply`, and what would be in a dry run. Not a fault: the
+    /// derivation is the authority, so rebuilding it is a repair, like restoring a row.
+    pub pulled_drift: Vec<PulledDrift>,
 }
 
 impl RebuildReport {
@@ -304,10 +311,17 @@ pub async fn rebuild(context: &RebuildContext, mode: Mode) -> Result<RebuildRepo
     }
 
     report.orphans = orphans(context, &named).await?;
+    // After every owner's replay: a restored row's re-charge moves the attributions the pulled
+    // total is derived against, so the audit reads the ledger the replay left.
+    report.pulled_drift = match mode {
+        Mode::Apply => context.quotas.reconcile_pulled().await?,
+        Mode::DryRun => context.quotas.pulled_drift().await?,
+    };
     tracing::info!(
         applied = report.applied,
         owners = report.owners.len(),
         orphans = report.orphans.len(),
+        pulled_drift = report.pulled_drift.len(),
         faults = report.has_faults(),
         "an index rebuild finished"
     );
