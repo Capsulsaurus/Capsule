@@ -1001,12 +1001,57 @@ async fn ffi_push_asset_plans_from_the_reported_path() {
         "the original waits for an unmetered path"
     );
     assert_eq!(report.deferred, 1);
+    assert!(
+        has_upload_guard(&workspace, &asset),
+        "a deferred original keeps its source guard: it is still to be sent under its nonces"
+    );
 
     assert_eq!(session.set_path(desktop), 3);
-    let report = session.push_asset(workspace, asset).await.unwrap();
+    let report = session
+        .push_asset(workspace.clone(), asset.clone())
+        .await
+        .unwrap();
     assert!(
         report.pushed.iter().any(|b| b.tier == "original"),
         "the original goes once the path allows it"
+    );
+    assert_eq!(report.deferred, 0);
+    assert!(
+        !has_upload_guard(&workspace, &asset),
+        "a push with every blob completed and none deferred releases the source guard"
+    );
+}
+
+/// Whether `asset`'s original has an upload source guard recorded in `workspace`'s catalog.
+fn has_upload_guard(workspace: &FfiWorkspace, asset: &str) -> bool {
+    let asset_id = uuid::Uuid::parse_str(asset).unwrap();
+    workspace
+        .with(|ws| Ok(ws.has_upload_guard(&asset_id)?))
+        .unwrap()
+}
+
+/// **`upload_blobs` leaves no guard behind.** It materialises every blob, so nothing
+/// re-derives the original from that bundle again, and the guard its build recorded is
+/// released before the blobs are returned.
+#[tokio::test]
+async fn ffi_upload_blobs_releases_the_source_guard() {
+    let lib = tempfile::TempDir::new().unwrap();
+    let workspace = enroll(lib.path());
+    let album = workspace.create_album("Trip".into()).unwrap();
+    let asset = workspace
+        .seal_asset(album, "shot.jpg".into(), original_plaintext(64 * 1024))
+        .unwrap();
+    workspace.bundle(&asset).unwrap();
+    assert!(
+        has_upload_guard(&workspace, &asset),
+        "building a bundle records the guard"
+    );
+
+    let blobs = workspace.upload_blobs(asset.clone()).unwrap();
+    assert!(blobs.iter().any(|blob| blob.tier == "original"));
+    assert!(
+        !has_upload_guard(&workspace, &asset),
+        "the materialised blobs need no guard"
     );
 }
 

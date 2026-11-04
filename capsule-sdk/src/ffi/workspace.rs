@@ -1063,6 +1063,20 @@ impl FfiWorkspace {
         self.with(|ws| Ok(ws.upload_bundle(&asset_id)?))
     }
 
+    /// Forget `asset_id`'s upload source guard, under the lock: every blob of its bundle is
+    /// `Completed`, or nothing will re-derive its original again. Forgetting it is
+    /// housekeeping, so a refusal costs a log line, never the push it follows.
+    pub(super) fn release_upload_guard(&self, asset_id: &Uuid) {
+        match self.with(|ws| Ok(ws.release_upload_guard(asset_id)?)) {
+            Ok(released) => {
+                tracing::debug!(%asset_id, released, "ffi: the original's upload guard released");
+            }
+            Err(error) => {
+                tracing::warn!(%asset_id, %error, "ffi: the original's upload guard could not be released");
+            }
+        }
+    }
+
     /// Re-seal a create the server `refused` at the album's current epoch, under the lock
     /// (issue #822).
     ///
@@ -1450,11 +1464,16 @@ impl FfiWorkspace {
     ///
     /// Every blob comes back whole, the original included. To push without holding the
     /// original in memory, use [`FfiSession::push_asset`](crate::ffi::FfiSession::push_asset).
+    ///
+    /// Building the bundle records the original's upload source guard; once every blob is
+    /// materialised nothing re-derives the original from this bundle again, so the guard is
+    /// released before the blobs are returned. A later call re-verifies the plaintext against
+    /// the signed content address and records it afresh.
     pub fn upload_blobs(&self, asset_id: String) -> Result<Vec<FfiUploadBlob>, FfiError> {
         let asset_id = parse_uuid("asset_id", &asset_id)?;
         self.with(|ws| {
             let bundle = ws.upload_bundle(&asset_id)?;
-            crate::push::bundle_blobs(&bundle)
+            let blobs = crate::push::bundle_blobs(&bundle)
                 .into_iter()
                 .map(|(blob, hash)| {
                     // The FFI hands each blob across as one buffer, so the original is
@@ -1469,7 +1488,21 @@ impl FfiWorkspace {
                         hash,
                     })
                 })
-                .collect()
+                .collect::<Result<Vec<_>, FfiError>>()?;
+            // Released under the same lock, so no bundle built in between loses its guard.
+            match ws.release_upload_guard(&asset_id) {
+                Ok(released) => tracing::debug!(
+                    %asset_id,
+                    released,
+                    "ffi: every blob materialised; the original's upload guard released"
+                ),
+                Err(error) => tracing::warn!(
+                    %asset_id,
+                    %error,
+                    "ffi: the original's upload guard could not be released"
+                ),
+            }
+            Ok(blobs)
         })
     }
 

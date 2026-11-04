@@ -1385,7 +1385,10 @@ impl FfiSession {
 
     /// Push the assets `asset_ids` names — at most one batch — and return how each ended, in
     /// the order of `asset_ids`. The workspace lock is held only while a bundle is built or
-    /// re-sealed, never across the network.
+    /// re-sealed, or its upload guard released, never across the network.
+    ///
+    /// A bundle whose push ends with every blob `Completed` or already held, and no tier
+    /// deferred, has its original's upload source guard released.
     ///
     /// Every bundle that builds goes through one [`push_bundles`](Self::push_bundles) run. A
     /// create the server refused for good is re-sealed at the album's current epoch (issue
@@ -1423,6 +1426,7 @@ impl FfiSession {
             let refused = match pushed {
                 Err(PushError::CreateRefused { source, .. }) => source,
                 other => {
+                    release_if_complete(workspace, &bundle, &other);
                     outcomes[at] = Some(other.map_err(FfiError::from));
                     continue;
                 }
@@ -1451,7 +1455,8 @@ impl FfiSession {
                 "ffi: pushing the re-sealed creates again, once"
             );
             let retried = self.push_bundles(&resealed).await;
-            for (at, pushed) in resealed_at.into_iter().zip(retried) {
+            for ((bundle, at), pushed) in resealed.iter().zip(resealed_at).zip(retried) {
+                release_if_complete(workspace, bundle, &pushed);
                 outcomes[at] = Some(pushed.map_err(FfiError::from));
             }
         }
@@ -1532,6 +1537,21 @@ impl FfiSession {
             }
         }
         pushed
+    }
+}
+
+/// Release `bundle`'s upload source guard once `pushed` shows every blob of it `Completed` or
+/// already held. A deferred tier keeps it, since the original is still to be sent under its
+/// nonces, and so does a failed push, which a retry resumes under the same ones.
+fn release_if_complete(
+    workspace: &FfiWorkspace,
+    bundle: &UploadBundle,
+    pushed: &Result<AssetPushReport, PushError>,
+) {
+    if let Ok(report) = pushed
+        && report.deferred == 0
+    {
+        workspace.release_upload_guard(&bundle.asset_id);
     }
 }
 
