@@ -19,26 +19,38 @@ private struct ApplyCall: Equatable {
     let ciphertext: Data
 }
 
+/// The plaintext the double opens every original to.
+private let plaintextBytes = Data("verified plaintext".utf8)
+
 /// A session double: serves scripted feed pages in order, writes each fetched
-/// blob as its hash's bytes, answers each apply with the verdict scripted for
-/// the manifest, and records every call.
+/// blob as its hash's bytes, answers each apply or open with the verdict
+/// scripted for the manifest, and records every call. An open that answers
+/// `opened` writes ``plaintextBytes`` at its destination, as the workspace does.
 private final class ScriptedVerbs: FFISyncDriverVerbs, @unchecked Sendable {
     private let lock = NSLock()
     private var pages: [Result<FfiSyncPage, any Error>]
     private var pulledFrom: [Data] = []
     private var fetched: [String] = []
     private var applyCalls: [ApplyCall] = []
+    private var openCalls: [ApplyCall] = []
     private let verdicts: [Data: FfiSyncApplyOutcome]
+    private let openings: [Data: FfiOpenedOriginal]
     private let chainHeads: [String: Data]
 
     init(
         pages: [Result<FfiSyncPage, any Error>],
         verdicts: [Data: FfiSyncApplyOutcome] = [:],
+        openings: [Data: FfiOpenedOriginal] = [:],
         chainHeads: [String: Data] = [:]
     ) {
         self.pages = pages
         self.verdicts = verdicts
+        self.openings = openings
         self.chainHeads = chainHeads
+    }
+
+    var opens: [ApplyCall] {
+        lock.withLock { openCalls }
     }
 
     var cursors: [Data] {
@@ -81,6 +93,23 @@ private final class ScriptedVerbs: FFISyncDriverVerbs, @unchecked Sendable {
             ))
             return verdicts[head.manifestCbor] ?? .applied(facts: facts(head.manifestCbor))
         }
+    }
+
+    func openSyncedOriginal(_ head: FfiSyncHead, ciphertextAt path: URL, to destination: URL) throws -> FfiOpenedOriginal {
+        let ciphertext = try Data(contentsOf: path)
+        let opened = lock.withLock {
+            openCalls.append(ApplyCall(
+                manifest: head.manifestCbor,
+                metadata: head.metadataBlob,
+                localChainHead: head.localChainHead,
+                ciphertext: ciphertext
+            ))
+            return openings[head.manifestCbor] ?? .opened(facts: facts(head.manifestCbor, metadata: metadataFacts))
+        }
+        if case .opened = opened {
+            try plaintextBytes.write(to: destination)
+        }
+        return opened
     }
 
     func provenanceHead(assetId: String) throws -> Data {
@@ -134,20 +163,77 @@ private actor DrainSink {
     }
 }
 
+/// One write the catalog double was handed, with what the staged plaintext
+/// held at that moment.
+private struct CatalogCall: Equatable {
+    let action: String
+    let hasMetadata: Bool
+    /// The plaintext's bytes, `nil` when no original was handed over.
+    let original: Data?
+    let originalPath: URL?
+}
+
+/// A catalog writer double: records each write and answers it as scripted,
+/// throwing for the asset ids it is told to.
+private final class RecordingCatalog: FFISyncCatalogWriting, @unchecked Sendable {
+    private let lock = NSLock()
+    private var calls: [CatalogCall] = []
+    private let failing: Set<String>
+
+    init(failing: Set<String> = []) {
+        self.failing = failing
+    }
+
+    var writes: [CatalogCall] {
+        lock.withLock { calls }
+    }
+
+    func write(_ facts: FfiAssetFacts, original: URL?) throws -> FFISyncCatalogWrite {
+        let bytes = try original.map { try Data(contentsOf: $0) }
+        lock.withLock {
+            calls.append(CatalogCall(
+                action: facts.action,
+                hasMetadata: facts.metadata != nil,
+                original: bytes,
+                originalPath: original
+            ))
+        }
+        if failing.contains(facts.assetId) {
+            throw FfiError.Workspace(detail: "catalog write refused")
+        }
+        return facts.metadata == nil ? .unwritten : .upserted(placedOriginal: original != nil)
+    }
+}
+
+/// The metadata an opened entry carries.
+private let metadataFacts = FfiAssetMetadata(
+    sidecarSchema: 1,
+    contentType: "image/jpeg",
+    captureTimestamp: "2026-01-01T00:00:00Z",
+    width: 4,
+    height: 3,
+    lqipChromahash: nil,
+    lqipDominantColor: nil,
+    caption: nil,
+    tags: [],
+    rating: nil,
+    hidden: false
+)
+
 /// The facts the double answers an applied entry with: its provenance head is
 /// the record hash of `manifest`, as the chokepoint's is.
-private func facts(_ manifest: Data) -> FfiAssetFacts {
+private func facts(_ manifest: Data, action: String = "create", metadata: FfiAssetMetadata? = nil) -> FfiAssetFacts {
     FfiAssetFacts(
         assetId: assetA,
         albumId: assetA,
         amkVersion: 1,
         ciphertextHash: originalHash,
         plaintextSize: 1,
-        action: "create",
+        action: action,
         timestamp: "2026-01-01T00:00:00Z",
         createdByDevice: assetA,
         provenanceHead: FFIPurgeDelivery.headHash(manifest),
-        metadata: nil
+        metadata: metadata
     )
 }
 
@@ -185,8 +271,19 @@ private func stagingDirectory() -> URL {
     URL.temporaryDirectory.appending(path: "ffi-sync-\(UUID().uuidString)", directoryHint: .isDirectory)
 }
 
-private func driver(_ verbs: ScriptedVerbs, store: MemoryStore = MemoryStore(), sink: DrainSink) -> FFISyncDriver {
-    FFISyncDriver(verbs: verbs, store: store, stagingDirectory: stagingDirectory()) { await sink.record($0) }
+private func driver(
+    _ verbs: ScriptedVerbs,
+    store: MemoryStore = MemoryStore(),
+    catalog: RecordingCatalog = RecordingCatalog(),
+    staging: URL = stagingDirectory(),
+    sink: DrainSink
+) -> FFISyncDriver {
+    FFISyncDriver(verbs: verbs, store: store, stagingDirectory: staging, catalog: catalog) { await sink.record($0) }
+}
+
+/// The files left in `directory`, hidden ones included.
+private func leftovers(in directory: URL) throws -> [URL] {
+    try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
 }
 
 @Suite("FFISyncDriver — the managed lane's sync over a persisted cursor")
@@ -317,9 +414,11 @@ struct FFISyncDriverTests {
             verdicts: [Data([1]): .quarantined(reason: "Rejected.ForgedChain", detail: nil)]
         )
         let store = MemoryStore()
+        let catalog = RecordingCatalog()
 
-        let drain = try await driver(verbs, store: store, sink: DrainSink()).sync()
+        let drain = try await driver(verbs, store: store, catalog: catalog, sink: DrainSink()).sync()
 
+        #expect(catalog.writes.isEmpty)
         #expect(drain.quarantined == 1)
         #expect(drain.awaitingOriginal == 1)
         #expect(drain.newlyIndexed == [assetA, assetB])
@@ -328,14 +427,105 @@ struct FFISyncDriverTests {
         #expect(store.state?.heads.isEmpty == true)
     }
 
-    @Test("an entry naming a metadata blob is applied with the blob's fetched bytes")
+    @Test("an entry naming a metadata blob is opened with the blob's fetched bytes")
     func fetchesTheMetadataBlob() async throws {
         let verbs = ScriptedVerbs(pages: [.success(page([entry(assetA, record: Data([1]), metadata: true)], next: Data([1])))])
 
         try await driver(verbs, sink: DrainSink()).sync()
 
         #expect(verbs.fetches == [metadataHash, originalHash])
-        #expect(verbs.applies.first?.metadata == Data(metadataHash.utf8))
+        #expect(verbs.opens.first?.metadata == Data(metadataHash.utf8))
+        #expect(verbs.opens.first?.ciphertext == Data(originalHash.utf8))
+        #expect(verbs.applies.isEmpty)
+    }
+
+    @Test("an applied entry with metadata hands the catalog its facts and the verified plaintext, removed after")
+    func writesAnOpenedEntry() async throws {
+        let verbs = ScriptedVerbs(pages: [.success(page([entry(assetA, record: Data([1]), metadata: true)], next: Data([1])))])
+        let catalog = RecordingCatalog()
+        let store = MemoryStore()
+        let staging = stagingDirectory()
+
+        let drain = try await driver(verbs, store: store, catalog: catalog, staging: staging, sink: DrainSink()).sync()
+
+        #expect(drain.applied == 1)
+        #expect(catalog.writes.map(\.action) == ["create"])
+        #expect(catalog.writes.first?.hasMetadata == true)
+        #expect(catalog.writes.first?.original == plaintextBytes)
+        #expect(store.state?.heads[assetA] == FFIPurgeDelivery.headHash(Data([1])))
+        #expect(try leftovers(in: staging).isEmpty)
+    }
+
+    @Test("an applied delete is only verified, and the catalog is handed its facts with no original")
+    func writesAVerifiedLifecycleEntry() async throws {
+        let verbs = ScriptedVerbs(
+            pages: [.success(page([entry(assetA, record: Data([1]), kind: .deleted)], next: Data([1])))],
+            verdicts: [Data([1]): .applied(facts: facts(Data([1]), action: "delete"))]
+        )
+        let catalog = RecordingCatalog()
+
+        let drain = try await driver(verbs, catalog: catalog, sink: DrainSink()).sync()
+
+        #expect(drain.applied == 1)
+        #expect(verbs.opens.isEmpty)
+        #expect(verbs.applies.count == 1)
+        #expect(catalog.writes == [CatalogCall(action: "delete", hasMetadata: false, original: nil, originalPath: nil)])
+    }
+
+    @Test("an opened entry the chokepoint refuses is passed as its verdict and writes nothing")
+    func refusedOpenWritesNothing() async throws {
+        let verbs = ScriptedVerbs(
+            pages: [.success(page([entry(assetA, record: Data([1]), metadata: true)], next: Data([1])))],
+            openings: [Data([1]): .refused(outcome: .quarantined(reason: "Rejected.ForgedChain", detail: nil))]
+        )
+        let catalog = RecordingCatalog()
+        let staging = stagingDirectory()
+
+        let drain = try await driver(verbs, catalog: catalog, staging: staging, sink: DrainSink()).sync()
+
+        #expect(drain.quarantined == 1)
+        #expect(drain.applied == 0)
+        #expect(catalog.writes.isEmpty)
+        #expect(try leftovers(in: staging).isEmpty)
+    }
+
+    @Test(
+        "an applied entry whose original does not open is quarantined and writes nothing",
+        arguments: [
+            FfiOpenedOriginal.undecryptable(facts: facts(Data([1]), metadata: metadataFacts)),
+            FfiOpenedOriginal.digestMismatch(facts: facts(Data([1]), metadata: metadataFacts)),
+        ]
+    )
+    func unopenedOriginalWritesNothing(opened: FfiOpenedOriginal) async throws {
+        let verbs = ScriptedVerbs(
+            pages: [.success(page([entry(assetA, record: Data([1]), metadata: true)], next: Data([1])))],
+            openings: [Data([1]): opened]
+        )
+        let catalog = RecordingCatalog()
+        let store = MemoryStore()
+
+        let drain = try await driver(verbs, store: store, catalog: catalog, sink: DrainSink()).sync()
+
+        #expect(drain.quarantined == 1)
+        #expect(catalog.writes.isEmpty)
+        #expect(store.state?.heads.isEmpty == true)
+        #expect(store.state?.cursor == Data([1]))
+    }
+
+    @Test("a catalog write that fails keeps nothing of its page, and removes the staged plaintext")
+    func failedWriteKeepsNothingOfItsPage() async throws {
+        let verbs = ScriptedVerbs(pages: [.success(page([entry(assetA, record: Data([1]), metadata: true)], next: Data([1])))])
+        let catalog = RecordingCatalog(failing: [assetA])
+        let store = MemoryStore()
+        let staging = stagingDirectory()
+
+        await #expect(throws: FfiError.self) {
+            try await driver(verbs, store: store, catalog: catalog, staging: staging, sink: DrainSink()).sync()
+        }
+
+        #expect(catalog.writes.count == 1)
+        #expect(store.saves == 0)
+        #expect(try leftovers(in: staging).isEmpty)
     }
 
     @Test("a stale cursor restarts the drain from the feed's start once, keeping the heads")
