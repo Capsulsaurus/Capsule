@@ -37,7 +37,7 @@ private func metadata(
     )
 }
 
-private func facts(action: String, metadata: FfiAssetMetadata?) -> FfiAssetFacts {
+private func facts(action: String, metadata: FfiAssetMetadata?, adopted: Bool = false) -> FfiAssetFacts {
     FfiAssetFacts(
         assetId: assetID,
         albumId: albumID,
@@ -48,7 +48,8 @@ private func facts(action: String, metadata: FfiAssetMetadata?) -> FfiAssetFacts
         timestamp: "2026-02-03T04:05:06Z",
         createdByDevice: albumID,
         provenanceHead: Data(repeating: 7, count: 32),
-        metadata: metadata
+        metadata: metadata,
+        adopted: adopted
     )
 }
 
@@ -173,6 +174,27 @@ struct FFISyncCatalogWriterTests {
         #expect(row.isHidden)
         #expect(try Data(contentsOf: held) == Data("held original".utf8))
         #expect(try store.files(in: store.capturePartition).count == 1)
+        #expect(FileManager.default.fileExists(atPath: staged.path))
+    }
+
+    @Test(
+        "an entry the workspace adopted writes no row and places no original",
+        arguments: ["create", "delete"]
+    )
+    func adoptedEntryWritesNothing(action: String) async throws {
+        let catalog = try FFIAssetCatalog.inMemory()
+        let store = StoreRoot()
+        let staged = try store.stage()
+        let carried = action == "create" ? metadata() : nil
+
+        let write = try await writer(catalog, store).write(
+            facts(action: action, metadata: carried, adopted: true),
+            original: staged
+        )
+
+        #expect(write == .adopted)
+        #expect(try await catalog.asset(id: assetID) == nil)
+        #expect(try store.files(in: store.capturePartition).isEmpty)
         #expect(FileManager.default.fileExists(atPath: staged.path))
     }
 
