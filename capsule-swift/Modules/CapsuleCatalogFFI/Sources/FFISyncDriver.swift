@@ -82,9 +82,10 @@ struct FFISessionSyncVerbs: FFISyncDriverVerbs {
 /// workspace's own chain. An entry whose record is that head is level and
 /// costs nothing; any other has its metadata blob and original fetched into
 /// the staging directory, is applied with that head as its local chain head,
-/// and its staged files are removed. An applied entry's provenance head is
-/// kept for the asset's next entry. A quarantined entry is logged and passed;
-/// an entry whose original the server does not hold yet is passed, since the
+/// and its staged files are removed; each drain first empties the staging
+/// directory of what a drain the process was killed in left. An applied
+/// entry's provenance head is kept for the asset's next entry. A quarantined
+/// entry is logged and passed; an entry whose original the server does not hold yet is passed, since the
 /// feed lists the asset again once it lands; a pending one (its epoch key not
 /// here yet) stops the drain before its page is kept, so the next sync
 /// retries it. A page that fails for any reason keeps the cursor and heads
@@ -116,6 +117,8 @@ public actor FFISyncDriver {
     private var listed: Set<String> = []
     /// The drain in flight, which a concurrent sync joins.
     private var drain: Task<FFISyncDrain, any Error>?
+    /// How many syncs joined a drain in flight rather than starting one.
+    private(set) var joins = 0
 
     /// Sync the lane `workspace` holds over `session` against the server at
     /// `apiBaseURL` (`http[s]://host:port`), keeping its state and staging
@@ -161,6 +164,7 @@ public actor FFISyncDriver {
     public func sync() async throws -> FFISyncDrain {
         if let drain {
             syncLog.trace("joining the sync drain in flight")
+            joins += 1
             return try await drain.value
         }
         let task = Task { try await self.drainFeed() }
@@ -191,7 +195,7 @@ public actor FFISyncDriver {
 
     private func applyPages(into tally: inout FFISyncDrain) async throws {
         var kept = loadState()
-        try FileManager.default.createDirectory(at: stagingDirectory, withIntermediateDirectories: true)
+        try clearStaging()
         var heldIDs: [String: String] = [:]
         for id in try verbs.assetIds() {
             if let key = FFIPurgeDelivery.feedKey(id) { heldIDs[key] = id }
@@ -322,6 +326,21 @@ public actor FFISyncDriver {
             throw error
         }
         return staged
+    }
+
+    /// Empty the staging directory, creating it where it is missing. A drain
+    /// runs this before its first fetch: no other drain is in flight then, so
+    /// whatever the directory holds was left by one the process was killed in.
+    private func clearStaging() throws {
+        let fileManager = FileManager.default
+        if fileManager.fileExists(atPath: stagingDirectory.path) {
+            let leftovers = try fileManager.contentsOfDirectory(at: stagingDirectory, includingPropertiesForKeys: nil)
+            if !leftovers.isEmpty {
+                syncLog.info("removing \(leftovers.count, privacy: .public) staged sync files a stopped drain left")
+            }
+            leftovers.forEach(removeStaged)
+        }
+        try fileManager.createDirectory(at: stagingDirectory, withIntermediateDirectories: true)
     }
 
     private func removeStaged(_ url: URL) {
