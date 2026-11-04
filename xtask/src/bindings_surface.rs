@@ -86,6 +86,9 @@ const NAMESPACE: &str = "capsule_sdk";
 /// - Purge delivery: the feed read that names the server's head, the session verbs that send a
 ///   purged asset's kept chain (from the listed head or its hash), its outcome, the kept chain's
 ///   head a delivery compares with the feed, and the list of kept purges a relaunch walks.
+/// - Lifecycle delivery: the session verb that sends a live or trashed asset's held stretch
+///   (its outcome is the purge's), the chain head a delivery compares with the feed, and the
+///   list of held assets a relaunch walks.
 /// - Alerts: the shared predicate and the per-class pre-arm deadlines a client schedules its
 ///   alarms from. The arm call must not go missing: without it a client can only ask "what is
 ///   true now?", which is the question pre-arming exists to stop it having to ask.
@@ -129,6 +132,9 @@ pub(crate) const REQUIRED: &[(&str, &str)] = &[
     ("purgedRecord", "purgedRecord"),
     ("purgedAssetIds", "purgedAssetIds"),
     ("FfiLifecycleOpOutcome", "FfiLifecycleOpOutcome"),
+    ("deliverLifecycleAtHash", "deliverLifecycleAtHash"),
+    ("provenanceHead", "provenanceHead"),
+    ("assetIds", "assetIds"),
 ];
 
 /// The committed dump.
