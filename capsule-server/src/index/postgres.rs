@@ -1069,24 +1069,27 @@ impl AssetIndex for PostgresAssetIndex {
             //
             // The role subquery picks the first role in `BlobRole`'s order, which is what the
             // in-memory adapter's `find` over role-sorted blobs picks when one asset holds the
-            // same address in two roles.
+            // same address in two roles. An asset that names the address only in its superseded
+            // chain holds it as a provenance record, so the role falls back to `provenance`.
             let found = self
                 .connection
                 .query_all_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "SELECT a.asset_id, a.owner_id, a.album_id, a.state, a.hold, \
-                       (SELECT b.role FROM asset_blobs b \
+                       COALESCE((SELECT b.role FROM asset_blobs b \
                         WHERE b.asset_id = a.asset_id AND b.address = $1 \
                         ORDER BY CASE b.role WHEN 'original' THEN 0 WHEN 'derivative' THEN 1 \
                           WHEN 'metadata' THEN 2 WHEN 'provenance' THEN 3 WHEN 'backup' THEN 4 \
                           ELSE 5 END \
-                        LIMIT 1) AS role, \
+                        LIMIT 1), 'provenance') AS role, \
                        EXISTS (SELECT 1 FROM asset_blobs o \
                         WHERE o.asset_id = a.asset_id AND o.role = 'original') AS original_held \
                      FROM assets a \
-                     WHERE a.state IN ('visible', 'tombstoned') AND EXISTS ( \
+                     WHERE a.state IN ('visible', 'tombstoned') AND (EXISTS ( \
                        SELECT 1 FROM asset_blobs b \
                        WHERE b.asset_id = a.asset_id AND b.address = $1) \
+                       OR EXISTS (SELECT 1 FROM asset_superseded s \
+                       WHERE s.asset_id = a.asset_id AND s.address = $1)) \
                      ORDER BY a.state = 'tombstoned', a.asset_id COLLATE \"C\"",
                     [Value::from(address.as_str().to_owned())],
                 ))
