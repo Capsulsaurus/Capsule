@@ -1164,11 +1164,7 @@ impl FfiSession {
         size: u64,
         path: String,
     ) -> Result<(), FfiError> {
-        if hash.len() != 64 || !hash.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
-            return Err(FfiError::InvalidArgument {
-                detail: format!("hash: {hash:?} is not a lowercase hex SHA-256"),
-            });
-        }
+        check_content_address(&hash)?;
         let path = PathBuf::from(path);
         tracing::info!(%hash, size, path = %path.display(), "ffi: fetching a blob to disk");
         let source = HttpBlobSource::new(self.path_session(), blob_base_url);
@@ -1182,6 +1178,40 @@ impl FfiSession {
             let _ = std::fs::remove_file(&path);
         }
         result
+    }
+
+    /// **Fetch the metadata blob** at content address `hash`, which a sync feed entry names by
+    /// address only (its `metadata_blob`): the feed lists no size for it, so it is read in
+    /// bounded `Range` windows until the server's answer ends, and returned whole once it hashes
+    /// to `hash`. This is the bytes [`FfiSyncHead::metadata_blob`] carries into
+    /// [`FfiWorkspace::open_synced_original`] or [`FfiWorkspace::open_synced_history`].
+    ///
+    /// A sealed sidecar is a few KiB; a blob that grows past [`MAX_METADATA_BLOB_BYTES`] is
+    /// refused rather than buffered without bound. On a `delete` in trash the server serves the
+    /// asset's live metadata blob to its readers until the retention window closes, so an asset
+    /// first seen at its delete can be adopted and restored.
+    ///
+    /// `blob_base_url` is as for [`fetch_blob_to_path`](Self::fetch_blob_to_path). A `hash` that
+    /// is not a lowercase hex SHA-256 is [`FfiError::InvalidArgument`] and reaches no network; a
+    /// session that cannot authorize the fetch is [`FfiError::Auth`]; a blob the server refuses,
+    /// that does not hash to its address, or that runs past the bound is [`FfiError::Fetch`].
+    pub async fn fetch_metadata_blob(
+        &self,
+        blob_base_url: String,
+        hash: String,
+    ) -> Result<Vec<u8>, FfiError> {
+        check_content_address(&hash)?;
+        tracing::info!(%hash, "ffi: fetching a metadata blob of unlisted size");
+        let source = HttpBlobSource::new(self.path_session(), blob_base_url);
+        let fetcher = RangedFetcher::new(self.path.plan().class).with_events(self.events.clone());
+        let fetched = fetcher
+            .fetch_unsized(&source, &hash, MAX_METADATA_BLOB_BYTES)
+            .await;
+        match &fetched {
+            Ok(bytes) => tracing::debug!(%hash, bytes = bytes.len(), "ffi: metadata blob fetched"),
+            Err(error) => tracing::warn!(%hash, %error, "ffi: metadata blob fetch failed"),
+        }
+        Ok(fetched?)
     }
 
     /// **Fetch the earlier provenance records** of the asset whose latest record is
@@ -1613,6 +1643,22 @@ fn release_if_complete(
     {
         workspace.release_upload_guard(&bundle.asset_id);
     }
+}
+
+/// The most [`FfiSession::fetch_metadata_blob`] reads of a metadata blob whose size the feed
+/// does not list (16 MiB, the upload protocol's largest chunk), the bound the CLI's restore
+/// reads one under. A sealed sidecar is a few KiB; the cap only stops a server that keeps
+/// answering full windows from growing the buffer without bound.
+pub const MAX_METADATA_BLOB_BYTES: u64 = crate::upload::PROTOCOL_MAX_CHUNK;
+
+/// Refuse a `hash` that is not a lowercase hex SHA-256 before it reaches a blob route.
+fn check_content_address(hash: &str) -> Result<(), FfiError> {
+    if hash.len() != 64 || !hash.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
+        return Err(FfiError::InvalidArgument {
+            detail: format!("hash: {hash:?} is not a lowercase hex SHA-256"),
+        });
+    }
+    Ok(())
 }
 
 /// Stream the blob at `hash` from `source` into a fresh file at `path`, synced to disk once

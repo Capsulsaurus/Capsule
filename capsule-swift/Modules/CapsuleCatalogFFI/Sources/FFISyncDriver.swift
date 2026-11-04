@@ -10,7 +10,7 @@ private let syncLog = Logger(subsystem: CapsuleLog.subsystem, category: "sync-dr
 
 /// The session and workspace verbs a sync of the managed lane drives, bound
 /// to one server: `FfiSession.syncPull`, `FfiSession.fetchBlobToPath`,
-/// `FfiSession.fetchProvenanceHistory`, `FfiWorkspace.applySyncEntryFromFile`,
+/// `FfiSession.fetchMetadataBlob`, `FfiSession.fetchProvenanceHistory`, `FfiWorkspace.applySyncEntryFromFile`,
 /// `FfiWorkspace.openSyncedOriginal`, `FfiWorkspace.openSyncedHistory`,
 /// `FfiWorkspace.provenanceHead` and `FfiWorkspace.assetIds`, and nothing else
 /// of either.
@@ -23,6 +23,9 @@ protocol FFISyncDriverVerbs: Sendable {
     /// Fetch the blob at content address `hash` (`size` bytes) into the file
     /// at `path`, which holds exactly the verified ciphertext once this returns.
     func fetchBlob(hash: String, size: UInt64, to path: URL) async throws
+    /// The metadata blob at content address `hash`, which the feed names
+    /// without a size: read in bounded windows and verified against `hash`.
+    func fetchMetadataBlob(hash: String) async throws -> Data
     /// The records before `manifestCbor` (a feed entry's latest record) back
     /// to its asset's `create`, oldest first; empty for a `create`. Nothing is
     /// verified: the walk only follows links.
@@ -78,6 +81,13 @@ struct FFISessionSyncVerbs: FFISyncDriverVerbs {
         )
     }
 
+    func fetchMetadataBlob(hash: String) async throws -> Data {
+        try await session.fetchMetadataBlob(
+            blobBaseUrl: Self.blobBaseURL(apiBaseURL: apiBaseURL),
+            hash: hash
+        )
+    }
+
     func fetchProvenanceHistory(manifestCbor: Data) async throws -> [Data] {
         try await session.fetchProvenanceHistory(
             blobBaseUrl: Self.blobBaseURL(apiBaseURL: apiBaseURL),
@@ -126,9 +136,11 @@ struct FFISessionSyncVerbs: FFISyncDriverVerbs {
 /// Each entry is judged against the head this device holds for its asset:
 /// the head the last applied entry established, else the head of the
 /// workspace's own chain. An entry whose record is that head is level and
-/// costs nothing; any other has its metadata blob and original fetched into
-/// the staging directory and is applied with that head as its local chain
-/// head. An entry that names a metadata blob is opened
+/// costs nothing; any other has its original fetched into the staging
+/// directory, and the metadata blob it names fetched by address without a
+/// size (`FfiSession.fetchMetadataBlob`, as the feed lists none), and is
+/// applied with that head as its local chain head. An entry that names a
+/// metadata blob is opened
 /// (`FfiWorkspace.openSyncedOriginal`): verified, and its original decrypted
 /// to a staged plaintext that hashes to the signed sidecar's digest, which
 /// the catalog writer keeps in the store. An opened entry of an asset the
@@ -137,11 +149,14 @@ struct FFISessionSyncVerbs: FFISyncDriverVerbs {
 /// first seen past its create, and the entry is opened against them
 /// (`FfiWorkspace.openSyncedHistory`), which verifies the chain from its
 /// create and adopts the asset, so its trash verbs and tag edits work here.
-/// An adopted asset is held for the rest of the drain. A history fetch that
+/// A `delete` in trash names its asset's live metadata blob, so one of an
+/// asset first seen at its delete is adopted into this device's trash and
+/// can be restored. An adopted asset is held for the rest of the drain. A
+/// history fetch that
 /// fails is thrown as a blob fetch is; one whose records do not decode, or
 /// run past the walk's bound, quarantines the entry as
-/// ``SyncVerdict/malformedHistoryReason``. One that names none (a `delete` or
-/// `trash-restore`) is only verified (`FfiWorkspace.applySyncEntryFromFile`).
+/// ``SyncVerdict/malformedHistoryReason``. One that names none is only
+/// verified (`FfiWorkspace.applySyncEntryFromFile`).
 /// Every staged file the writer does not keep is removed; each drain first
 /// empties the staging directory of what a drain the process was killed in
 /// left. An applied entry's facts go to the catalog writer, and its
@@ -382,11 +397,12 @@ public actor FFISyncDriver {
     /// chokepoint over them, removing the fetched ciphertext after. An entry
     /// naming a metadata blob is opened, and an `opened` verdict hands back
     /// the staged plaintext, which the caller removes once the catalog has
-    /// written it; one naming none (a `delete` or `trash-restore`) is only
-    /// verified. An opened entry of an asset not `held` here is opened against
-    /// its fetched history when it has one. `nil`, logged, for an entry naming
-    /// a metadata blob it does not list, which cannot be fetched without its
-    /// size.
+    /// written it; one naming none is only verified. An opened entry of an asset not `held` here is opened against
+    /// its fetched history when it has one. The feed names the metadata blob
+    /// by address only, so it is fetched without a size
+    /// (``FFISyncDriverVerbs/fetchMetadataBlob(hash:)``). `nil`, logged, for
+    /// an entry whose metadata blob address is not a content address, which
+    /// no blob route serves.
     private func verify(
         _ entry: FfiFeedEntry,
         key: String,
@@ -397,9 +413,8 @@ public actor FFISyncDriver {
         var metadata = Data()
         var history: [Data] = []
         if !entry.metadataBlob.isEmpty {
-            let address = String(data: entry.metadataBlob, encoding: .utf8)
-            guard let blob = entry.blobs.derivatives.first(where: { $0.ciphertextHash == address }) else {
-                syncLog.error("entry of \(key, privacy: .public) names a metadata blob it does not list")
+            guard let address = Self.contentAddress(entry.metadataBlob) else {
+                syncLog.error("entry of \(key, privacy: .public) names a metadata blob address that is not a content address")
                 return nil
             }
             if !held {
@@ -408,9 +423,8 @@ public actor FFISyncDriver {
                 case let .refused(verdict): return verdict
                 }
             }
-            let staged = try await fetchStaged(blob)
-            defer { removeStaged(staged) }
-            metadata = try Data(contentsOf: staged)
+            metadata = try await verbs.fetchMetadataBlob(hash: address)
+            syncLog.debug("entry of \(key, privacy: .public) metadata blob fetched: \(metadata.count, privacy: .public) bytes")
         }
         let staged = try await fetchStaged(original)
         defer { removeStaged(staged) }
@@ -512,6 +526,15 @@ public actor FFISyncDriver {
         }
         state = loaded
         return loaded
+    }
+
+    /// The lowercase hex SHA-256 the feed's UTF-8 `address` bytes spell, or
+    /// `nil` for bytes that spell none, which the blob route refuses.
+    static func contentAddress(_ address: Data) -> String? {
+        guard address.count == 64,
+              address.allSatisfy({ (0x30 ... 0x39).contains($0) || (0x61 ... 0x66).contains($0) })
+        else { return nil }
+        return String(decoding: address, as: UTF8.self)
     }
 
     static func isStaleCursor(_ error: any Error) -> Bool {
