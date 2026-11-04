@@ -1619,16 +1619,17 @@ fn a_released_guard_is_forgotten_and_recorded_again_by_the_next_bundle() {
     let src = TempDir::new().unwrap();
     let (_, asset_id) = library_with_one_asset(&lib, &src);
     let ws = Workspace::open(lib.path(), b"passphrase", FAST).unwrap();
-    let id = asset_id.to_string();
+    assert!(!ws.has_upload_guard(&asset_id).unwrap());
     assert!(
         !ws.release_upload_guard(&asset_id).unwrap(),
         "no bundle built yet"
     );
     ws.upload_bundle(&asset_id).unwrap();
+    assert!(ws.has_upload_guard(&asset_id).unwrap());
     assert!(ws.release_upload_guard(&asset_id).unwrap());
-    assert_eq!(ws.db().upload_guard(&id).unwrap(), None);
+    assert!(!ws.has_upload_guard(&asset_id).unwrap());
     ws.upload_bundle(&asset_id).unwrap();
-    assert!(ws.db().upload_guard(&id).unwrap().is_some());
+    assert!(ws.has_upload_guard(&asset_id).unwrap());
 }
 
 /// A recorded guard whose tags are not the verified ciphertext's is replaced by the verified

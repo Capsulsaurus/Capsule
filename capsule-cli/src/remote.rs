@@ -2553,6 +2553,14 @@ impl AssetPusher<'_> {
             checked_at = %custody.checked_at,
             "push: custody verified and receipts persisted"
         );
+        // Every blob of the bundle is held: the original's source guard has done its work.
+        // A deferred tier keeps it, since the original is still to be sent under its nonces.
+        // Forgetting it is housekeeping, so a refusal costs a log line, never the push.
+        if report.deferred == 0
+            && let Err(error) = self.workspace.release_upload_guard(&bundle.asset_id)
+        {
+            tracing::warn!(%error, "push: the original's upload guard could not be released");
+        }
         Ok(())
     }
 }

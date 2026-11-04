@@ -758,6 +758,12 @@ async fn e2e_case_15_a_delegate_that_dies_mid_upload_is_re_queued_and_the_origin
     assert_eq!(pushed.verified_assets, 1, "{pushed:#?}");
     assert_eq!(pushed.delegated_assets, 0);
     assert_eq!(pushed.outcomes[0].status, AssetPushStatus::Verified);
+    assert!(
+        !a.workspace
+            .has_upload_guard(&asset)
+            .expect("the catalog reads"),
+        "a custody-confirmed push releases the original's source guard"
+    );
     let released = peer::status(
         &remote,
         &cli_a.store,

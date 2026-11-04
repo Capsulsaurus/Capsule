@@ -192,7 +192,7 @@ impl UploadSource for BlobBytes<'_> {
 
 /// A failed read of an original, with an [`OriginalChanged`] it carries re-carried as the
 /// SDK's [`SourceChanged`], which the upload client types as
-/// [`UploadError::SourceChanged`](crate::upload::UploadError::SourceChanged).
+/// [`UploadError::SourceChanged`].
 fn source_change_of(error: std::io::Error) -> std::io::Error {
     if !matches!(error.get_ref(), Some(inner) if inner.is::<OriginalChanged>()) {
         return error;

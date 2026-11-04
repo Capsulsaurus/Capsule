@@ -819,6 +819,20 @@ impl Workspace {
         Ok(released)
     }
 
+    /// Whether `asset_id` has an upload source guard recorded: a bundle of it was built and
+    /// has not been custody-confirmed or abandoned since.
+    ///
+    /// # Errors
+    ///
+    /// [`LifecycleError::Db`] when the catalog cannot be read.
+    pub fn has_upload_guard(&self, asset_id: &Uuid) -> Result<bool> {
+        self.library
+            .db
+            .upload_guard(&asset_id.to_string())
+            .map(|guard| guard.is_some())
+            .map_err(|e| LifecycleError::Db(format!("reading the upload guard of {asset_id}: {e}")))
+    }
+
     /// The original's ciphertext as `core` pins it, checked against `core`'s content address.
     ///
     /// The re-derivation is deterministic, so a mismatch means the library's bytes and its own
