@@ -846,8 +846,9 @@ impl Workspace {
     /// that original as its library copy.
     ///
     /// The file is not trusted for being handed over. It is placed only if it hashes to the
-    /// digest the entry's signed sidecar commits to, and is hard-linked into `media/` where it
-    /// can be (copied where it cannot), so `plaintext` is left in place for its owner to remove.
+    /// digest the entry's signed sidecar commits to, and is copied into `media/` (never
+    /// hard-linked), so `plaintext` is left in place for its owner to keep or remove, and
+    /// nothing later written to it reaches the library original.
     /// An entry that does not need the original adopts as
     /// [`adopt_remote_head`](Self::adopt_remote_head) would, without reading the file.
     ///

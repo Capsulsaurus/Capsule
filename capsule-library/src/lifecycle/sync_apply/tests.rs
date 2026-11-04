@@ -1163,6 +1163,45 @@ fn an_original_already_under_the_assets_name_is_kept_only_when_it_is_the_signed_
     }
 }
 
+/// The library original is the workspace's own copy, not a second name for the handed-over
+/// plaintext: an in-place write to the kept file afterwards leaves the library original as the
+/// signed bytes.
+#[test]
+fn an_adopted_original_does_not_share_the_handed_over_file() {
+    use std::io::Write as _;
+
+    let mut pair = pair();
+    let (asset, album) = (pair.asset, pair.album);
+    let wire = head_wire(&pair.a, asset);
+    let plaintext = pair.open_on_b(&wire, None);
+    let (_, adoption) = pair
+        .b
+        .adopt_remote_original(entry(album, &wire, None).head(), &plaintext)
+        .unwrap();
+    assert_eq!(adoption, Some(Adoption::Adopted));
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        let placed = std::fs::metadata(pair.b.original_path(&asset).unwrap()).unwrap();
+        let kept = std::fs::metadata(&plaintext).unwrap();
+        assert_ne!(
+            (placed.dev(), placed.ino()),
+            (kept.dev(), kept.ino()),
+            "the library original is its own inode"
+        );
+    }
+
+    let mut kept = std::fs::OpenOptions::new()
+        .write(true)
+        .open(&plaintext)
+        .unwrap();
+    kept.write_all(b"overwritten in place").unwrap();
+    kept.sync_all().unwrap();
+    drop(kept);
+    assert_eq!(pair.b.read_plaintext(&asset).unwrap(), pair.original);
+}
+
 /// The media types the import path writes take the extension the Apple lane names them by.
 #[test]
 fn an_adopted_original_is_named_for_its_media_type() {

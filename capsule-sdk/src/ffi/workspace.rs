@@ -1695,7 +1695,7 @@ impl FfiWorkspace {
     ///
     /// An opened entry is then **adopted**: a `create` of an asset this workspace does not hold
     /// makes it held, with its chain, sidecar and sealed metadata written under `media/`, the
-    /// opened original hard-linked (or copied) there as its library copy, and its row and user
+    /// opened original copied there as its own library copy, and its row and user
     /// tags indexed; a later record of a held asset is appended as
     /// [`apply_sync_entry_from_file`](Self::apply_sync_entry_from_file) appends one. The facts
     /// say whether it was ([`FfiAssetFacts::adopted`]). `destination_path` still holds the

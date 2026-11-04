@@ -517,11 +517,14 @@ impl Workspace {
     /// Place the plaintext original at `src` as `asset`'s library original, durably, and only if
     /// it hashes to `expected`. Returns its length.
     ///
-    /// The file is hard-linked to `{media}.tmp` (copied where the two paths are on different
-    /// volumes), the staged copy is hashed, and it is renamed over the media path only once its
-    /// SHA-256 is `expected`, then fsynced with its directory. Hashing the staged copy rather
-    /// than `src` means the bytes checked are the bytes placed, whatever happens to `src`. `src`
-    /// itself is left where it is. On a mismatch the staged copy is removed and
+    /// The file is copied to `{media}.tmp`, the staged copy is hashed, and it is renamed over
+    /// the media path only once its SHA-256 is `expected`, then fsynced with its directory.
+    /// Hashing the staged copy rather than `src` means the bytes checked are the bytes placed.
+    /// The copy is never a hard link: `src` stays where it is for the caller to keep, and a
+    /// linked original would share its inode, so a later in-place write to `src` would change
+    /// the library original unchecked. `fs::copy` clones the extents where the filesystem can
+    /// (`clonefile` on APFS, `copy_file_range` on Btrfs and XFS), which is copy-on-write and
+    /// so equally independent of `src`. On a mismatch the staged copy is removed and
     /// [`LifecycleError::OriginalMismatch`] returned; nothing reaches the media path.
     pub(super) fn place_original_from(
         &self,
@@ -534,12 +537,9 @@ impl Workspace {
         let target = self.media_path(asset);
         let tmp = tmp_path(&target);
         let _ = fs::remove_file(&tmp);
-        let linked = fs::hard_link(src, &tmp).is_ok();
-        if !linked {
-            fs::copy(src, &tmp).map_err(|e| {
-                LifecycleError::Io(format!("copy {} to {}: {e}", src.display(), tmp.display()))
-            })?;
-        }
+        fs::copy(src, &tmp).map_err(|e| {
+            LifecycleError::Io(format!("copy {} to {}: {e}", src.display(), tmp.display()))
+        })?;
         let staged = StagedOriginal(Some(Staged {
             tmp: tmp.clone(),
             target: target.clone(),
@@ -564,8 +564,7 @@ impl Workspace {
         tracing::debug!(
             asset_id = %asset.asset_id,
             bytes = len,
-            linked,
-            "verified original placed in the library"
+            "verified original copied into the library"
         );
         Ok(len)
     }
