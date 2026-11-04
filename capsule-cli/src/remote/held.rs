@@ -23,14 +23,20 @@
 //! the library keeps every record. The chain is hash-linked, so nothing after the pair can be
 //! sent either: a later delete of the asset never reaches the server, which keeps it live, and
 //! only the library's own trash holds it.
+//!
+//! Both rules are the SDK's, defined once for every client that sends a lifecycle record
+//! ([`capsule_sdk::albums::plan_delivery`]): the CLI and the FFI lane hold and withhold the
+//! same stretches. What this module adds is the CLI's reading of the library and the feed.
 
 use std::collections::HashMap;
 
 use capsule_core::crypto::hash::{Hash32, hash_bytes};
-use capsule_core::crypto::provenance::{Action, ProvenanceRecord};
+use capsule_core::crypto::provenance::ProvenanceRecord;
 use capsule_library::lifecycle::Workspace;
+pub use capsule_sdk::albums::HoldReason;
+// What a run does with one asset's chain, and the rule that decides it.
+pub(crate) use capsule_sdk::albums::{HeldDelivery as Delivery, plan_delivery as plan};
 use capsule_sdk::sync::FeedEntry;
-use serde::Serialize;
 use uuid::Uuid;
 
 /// An asset's provenance chain as a delivery reads it from the library.
@@ -112,72 +118,10 @@ impl ServerChains {
     }
 
     /// The clock a held stretch is judged by: this device's, floored by the latest server
-    /// `changed_at` the drain saw, so a restore is withheld whenever either clock says the
-    /// server would refuse it. Only this rule uses it: the retention sweep judges expiry by
-    /// the server's `changed_at` alone, since a device clock running ahead would purge early.
+    /// `changed_at` the drain saw ([`capsule_sdk::albums::judging_clock`]).
     pub(crate) fn judging_clock(&self, now: jiff::Timestamp) -> jiff::Timestamp {
-        self.latest_changed_at.map_or(now, |seen| now.max(seen))
+        capsule_sdk::albums::judging_clock(now, self.latest_changed_at)
     }
-}
-
-/// Why an asset's records were not sent.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum HoldReason {
-    /// The server's feed does not list the asset: its create is not indexed there, so no
-    /// lifecycle record of it may be sent yet. Sent by the first run that finds it indexed.
-    NotIndexed,
-    /// A restore undoes a delete the server has not seen, and that delete's window has closed:
-    /// sent, the server would apply the delete and refuse the restore. Withheld for good; the
-    /// server keeps the asset live at the head it holds.
-    RestoreTooLate,
-}
-
-/// What a run does with one asset's chain.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Delivery<'a> {
-    /// Nothing is sent, for this reason; `retention_until` is the closed window of a
-    /// [`HoldReason::RestoreTooLate`].
-    Held {
-        reason: HoldReason,
-        retention_until: Option<String>,
-    },
-    /// Send these records, in order, each once the one before it was applied.
-    Send(&'a [ProvenanceRecord]),
-}
-
-/// Decide what of `records` (an asset's chain, oldest first) goes to the server, given the
-/// head the server holds for it (`server`: `None` when it has not indexed the asset) and the
-/// judging clock.
-///
-/// - Not indexed: held ([`HoldReason::NotIndexed`]).
-/// - The server's head is in the chain: the records after it. Where it already is the local
-///   head, the head alone, which the server answers as a replay: a send whose answer was lost.
-/// - The server's head is unknown or not in the chain: the head alone, which the server judges
-///   (a stale chain is refused, never applied).
-///
-/// A stretch in which a `trash-restore` undoes a `delete` of the same stretch whose
-/// `retention_until` is at or before `judge` is held ([`HoldReason::RestoreTooLate`]).
-pub(crate) fn plan(
-    records: &[ProvenanceRecord],
-    server: Option<Option<Hash32>>,
-    judge: jiff::Timestamp,
-) -> Delivery<'_> {
-    let Some(server_head) = server else {
-        return Delivery::Held {
-            reason: HoldReason::NotIndexed,
-            retention_until: None,
-        };
-    };
-    // Level with the server: the head alone, as a replay.
-    let stretch = capsule_sdk::albums::stretch_after(records, server_head);
-    if let Some(until) = restore_too_late(stretch, judge) {
-        return Delivery::Held {
-            reason: HoldReason::RestoreTooLate,
-            retention_until: Some(until),
-        };
-    }
-    Delivery::Send(stretch)
 }
 
 /// The records of `records` (a chain, oldest first) the server lacks when it holds `head`, by
@@ -185,32 +129,6 @@ pub(crate) fn plan(
 /// it, and the delegation ledger holds it until a hand-off's custody
 /// ([`super::lifecycle_ops_after`]).
 pub(crate) use capsule_sdk::albums::chain_after as after_head;
-
-/// The closed window of a `delete` in `stretch` that a later `trash-restore` of the same
-/// stretch undoes, when there is one.
-fn restore_too_late(stretch: &[ProvenanceRecord], judge: jiff::Timestamp) -> Option<String> {
-    let mut undone: Option<&ProvenanceRecord> = None;
-    for record in stretch {
-        match record.manifest.core.action {
-            Action::Delete => undone = Some(record),
-            Action::TrashRestore => {
-                let closed = undone
-                    .and_then(|delete| delete.manifest.core.retention_until.clone())
-                    .filter(|until| {
-                        until
-                            .parse::<jiff::Timestamp>()
-                            .is_ok_and(|until| judge >= until)
-                    });
-                if closed.is_some() {
-                    return closed;
-                }
-                undone = None;
-            }
-            _ => {}
-        }
-    }
-    None
-}
 
 #[cfg(test)]
 mod tests;
