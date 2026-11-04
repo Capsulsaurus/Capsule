@@ -18,9 +18,11 @@
 //!   — the portable artifact round-trip; the client stores plaintext, so ciphertext is
 //!   regenerated deterministically from the manifest's recorded nonce prefix.
 //! - [`adopt_remote_head`](Workspace::adopt_remote_head) /
-//!   [`adopt_remote_original`](Workspace::adopt_remote_original) — hold an asset another
-//!   device wrote, from a verified sync entry: its chain, sidecar, sealed metadata blob and
-//!   original under `media/`, indexed, so the verbs above work on it as on an import.
+//!   [`adopt_remote_original`](Workspace::adopt_remote_original) /
+//!   [`adopt_remote_history`](Workspace::adopt_remote_history) — hold an asset another
+//!   device wrote, from a verified sync entry (and, for an asset first seen past its create,
+//!   its fetched earlier records): its chain, sidecar, sealed metadata blob and original under
+//!   `media/`, indexed, so the verbs above work on it as on an import.
 //!
 //! Clients store **plaintext** locally (original + signed sidecar + provenance chain);
 //! encryption produces the artifacts that cross a boundary. Offline epoch rotation is supported
