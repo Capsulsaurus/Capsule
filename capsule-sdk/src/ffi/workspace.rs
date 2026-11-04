@@ -1796,7 +1796,10 @@ impl FfiWorkspace {
     /// A history that does not verify, or a live metadata blob that does not bind, is
     /// [`FfiOpenedOriginal::Refused`] with the verdict that refused it, and
     /// `destination_path` is untouched: the original is placed there only once the asset it
-    /// belongs to verifies from its create. An empty `history` is `open_synced_original`.
+    /// belongs to verifies from its create. An empty `history` is `open_synced_original`, and so
+    /// is an entry of an asset this workspace already holds: its history is not read, so none of
+    /// its records can refuse the entry, and the entry is applied against its own
+    /// `local_chain_head`.
     ///
     /// # Errors
     ///
@@ -1809,7 +1812,14 @@ impl FfiWorkspace {
         ciphertext_path: String,
         destination_path: String,
     ) -> Result<FfiOpenedOriginal, FfiError> {
-        if history.is_empty() {
+        // An asset held here already extends its own chain, so its history is not read:
+        // `adopt_remote_history` adopts it as `adopt_remote_original` does, and the entry is
+        // opened against its own `local_chain_head`, as `open_synced_original` opens it.
+        let held = ProvenanceRecord::decode(&entry.manifest_cbor).is_ok_and(|record| {
+            self.with(|ws| Ok(ws.asset(&record.manifest.core.file_id).is_some()))
+                .unwrap_or(false)
+        });
+        if history.is_empty() || held {
             return self.open_synced_original(entry, ciphertext_path, destination_path);
         }
         // The head chains onto the last record handed over; the adoption verifies that record,

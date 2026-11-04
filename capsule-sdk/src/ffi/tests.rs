@@ -3684,7 +3684,7 @@ async fn ffi_an_asset_first_seen_at_a_delete_is_adopted_from_its_fetched_history
 
     match workspace
         .open_synced_history(
-            head,
+            head.clone(),
             fetched,
             path_string(&ciphertext),
             path_string(&destination),
@@ -3696,6 +3696,33 @@ async fn ffi_an_asset_first_seen_at_a_delete_is_adopted_from_its_fetched_history
             assert_eq!(facts.action, "delete");
         }
         other => panic!("expected the delete to open, got {other:?}"),
+    }
+
+    // Held now: the same entry is opened as `open_synced_original` opens it, against its own
+    // head, and a history that would not even decode is not read.
+    let again = out.path().join("again");
+    let held_entry = FfiSyncHead {
+        local_chain_head: Some(
+            capsule_core::crypto::hash::hash_bytes(&history[1])
+                .as_bytes()
+                .to_vec(),
+        ),
+        ..head
+    };
+    match workspace
+        .open_synced_history(
+            held_entry,
+            vec![b"not a record".to_vec()],
+            path_string(&ciphertext),
+            path_string(&again),
+        )
+        .unwrap()
+    {
+        FfiOpenedOriginal::Opened { facts } => {
+            assert!(facts.adopted, "the held chain already contains the delete");
+            assert_eq!(facts.action, "delete");
+        }
+        other => panic!("expected the held asset's entry to open, got {other:?}"),
     }
     assert_eq!(
         std::fs::read(&destination).unwrap(),
