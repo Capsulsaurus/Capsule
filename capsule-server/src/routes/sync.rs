@@ -38,14 +38,22 @@
 //!
 //! # What a tombstone discloses
 //!
-//! A `deleted` entry names what a **restore** needs and nothing more (#1192): its live metadata
-//! reference and its original, with `original_held` as for a live asset, and no derivative or
-//! derivative manifest. Trash is a signed delete restorable until its retention window closes,
-//! and a device that first sees the asset at its delete adopts it from those blobs and its
-//! records before it can sign the `trash-restore`; the serving path hands them to the asset's
-//! readers for exactly that window. Applying the deletion needs none of it. A purge drops every
-//! reference, so a purged entry names none, and a fetch of one named before the purge is a `410`
-//! once the window has closed and a `404` after the purge — never bytes about to be collected.
+//! On the owner's own feed, a `deleted` entry names what a **restore** needs and nothing more
+//! (#1192): its live metadata reference and its original, with `original_held` as for a live
+//! asset, and no derivative or derivative manifest. Trash is a signed delete restorable until its
+//! retention window closes, and a device that first sees the asset at its delete adopts it from
+//! those blobs and its records before it can sign the `trash-restore`; the serving path hands
+//! them to the asset's readers for exactly that window. Applying the deletion needs none of it.
+//! A purge drops every reference, so a purged entry names none, and a fetch of one named before
+//! the purge is a `410` once the window has closed and a `404` after the purge — never bytes
+//! about to be collected.
+//!
+//! Every other surface — an album page, an account's or a peer's — names no byte reference on a
+//! tombstone: no metadata blob, an empty blob list and `original_held: false`. A peer's puller on
+//! an older server binds a `delete` to no metadata blob (invariant 25) and would refuse a page
+//! that named one, and an album page has one shape whoever reads it, so the page a member's
+//! account reads is the page a peer pulls. Protocol evolution stays additive: no peer stalls on
+//! this feed. The owner's own feed is the surface a restoring device reads.
 //!
 //! It also carries its asset manifest, inline: the signed `delete` record that moved the asset to
 //! trash. That is no byte reference, and it is what tells a client the asset's retention window,
@@ -176,13 +184,14 @@ pub struct SyncEntry {
     pub manifest_cbor: Option<String>,
     /// The encrypted metadata blob's content address.
     ///
-    /// On a tombstone, the asset's live metadata blob, which a restore needs; absent once a
-    /// purge has dropped it.
+    /// On a tombstone in the owner's own feed, the asset's live metadata blob, which a restore
+    /// needs; absent once a purge has dropped it. Absent on a tombstone in any album page, an
+    /// account's or a peer's.
     pub metadata_blob: Option<String>,
     /// The asset's original and derivative blobs.
     ///
-    /// On a tombstone, only its original, which a restore needs; empty once a purge has dropped
-    /// it.
+    /// On a tombstone in the owner's own feed, only its original, which a restore needs; empty
+    /// once a purge has dropped it. Empty on a tombstone in any album page.
     pub blobs: Vec<SyncBlobRef>,
     /// The asset's signed derivative manifests, each base64 of its `derivative_manifest`
     /// blob's exact bytes, in address order (#556).
@@ -195,8 +204,8 @@ pub struct SyncEntry {
     pub derivative_manifests: Vec<String>,
     /// Whether the original has landed. `false` is the derived `awaiting-original` state.
     ///
-    /// On a tombstone, whether the original a restore needs is held; `false` once a purge has
-    /// dropped it.
+    /// On a tombstone in the owner's own feed, whether the original a restore needs is held;
+    /// `false` once a purge has dropped it. Always `false` on a tombstone in any album page.
     pub original_held: bool,
     /// Whether the asset has been purged: its retention window closed and the server dropped
     /// its references, so no `trash-restore` can bring it back (#885).
@@ -535,10 +544,15 @@ pub async fn sync_feed(
         SyncRejection::unavailable()
     })?;
 
+    // What a tombstone names is the caller's surface, not the row's: see the module docs.
+    let disclosure = match (&reader, &album) {
+        (Reader::Account(_), None) => TombstoneDisclosure::Restore,
+        _ => TombstoneDisclosure::Record,
+    };
     let position = rows.last().map_or(after, |entry| entry.sync_seq);
     let mut entries = Vec::with_capacity(rows.len());
     for row in rows {
-        entries.push(render(&sync, row).await);
+        entries.push(render(&sync, row, disclosure).await);
     }
 
     tracing::debug!(
@@ -669,9 +683,28 @@ async fn album_read_access(
     }
 }
 
+/// What a tombstone names beyond its signed delete record, decided by the surface serving it.
+///
+/// See the module docs on what a tombstone discloses: the owner's own feed is the surface a
+/// restoring device reads, and every other surface keeps the record-only tombstone a peer on an
+/// older server validates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TombstoneDisclosure {
+    /// The owner's own feed: the live metadata blob and the original a restore needs.
+    Restore,
+    /// An album page, an account's or a peer's: the delete record and no byte reference.
+    Record,
+}
+
 /// Render one index entry onto the wire, reading its manifest bytes.
-async fn render(sync: &SyncContext, entry: FeedEntry) -> SyncEntry {
+async fn render(
+    sync: &SyncContext,
+    entry: FeedEntry,
+    disclosure: TombstoneDisclosure,
+) -> SyncEntry {
     let deleted = entry.change == ChangeKind::Deleted;
+    // A tombstone naming no byte reference: one served on any surface but the owner's own feed.
+    let bare = deleted && disclosure == TombstoneDisclosure::Record;
     // A tombstone's manifest is its signed delete record, the one thing a client needs to know
     // the retention window by; see the module docs on what a tombstone discloses.
     let manifest = match entry.provenance.as_ref() {
@@ -696,15 +729,21 @@ async fn render(sync: &SyncContext, entry: FeedEntry) -> SyncEntry {
         sync_seq: entry.sync_seq,
         change: entry.change.into(),
         manifest_cbor: manifest,
-        // On a tombstone too: the live metadata blob is what a device that first sees the asset
-        // at its delete opens the sidecar from. A purged row holds none, so its entry names none.
-        metadata_blob: entry.metadata.map(|address| address.to_string()),
+        // On the owner's own tombstone too: the live metadata blob is what a device that first
+        // sees the asset at its delete opens the sidecar from. A purged row holds none, so its
+        // entry names none. A peer's puller binds a delete to no metadata blob (invariant 25),
+        // so every other surface names none either.
+        metadata_blob: if bare {
+            None
+        } else {
+            entry.metadata.map(|address| address.to_string())
+        },
         blobs: entry
             .blobs
             .into_iter()
-            // A tombstone names only its original, the one blob a restore needs beyond its
-            // records and metadata; the restore's own entry names the derivatives again.
-            .filter(|blob| !deleted || blob.role == crate::store::BlobRole::Original)
+            // The owner's tombstone names only its original, the one blob a restore needs beyond
+            // its records and metadata; the restore's own entry names the derivatives again.
+            .filter(|blob| !deleted || (!bare && blob.role == crate::store::BlobRole::Original))
             .map(|blob| SyncBlobRef {
                 role: blob.role.into(),
                 hash: blob.address.to_string(),
@@ -712,7 +751,7 @@ async fn render(sync: &SyncContext, entry: FeedEntry) -> SyncEntry {
             })
             .collect(),
         derivative_manifests,
-        original_held: entry.original_held,
+        original_held: !bare && entry.original_held,
         purged: deleted && entry.purged,
         changed_at: entry.at.to_string(),
     }
